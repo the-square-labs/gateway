@@ -1,3 +1,4 @@
+import { formatDateTime } from "@/lib/utils";
 import type { PageDeploymentStatus } from "@/types";
 
 export function formatPageBytes(bytes: number): string {
@@ -10,12 +11,6 @@ export function formatPageBytes(bytes: number): string {
     unit += 1;
   }
   return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-export function formatPageDate(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }
 
 export function pageStatusVariant(status: PageDeploymentStatus | string) {
@@ -75,5 +70,5 @@ export function formatPageExpiry(
   if (!value) return null;
   const expiresAt = new Date(value).getTime();
   if (Number.isNaN(expiresAt)) return null;
-  return expiresAt <= now ? "Expired" : `Expires ${new Date(value).toLocaleString()}`;
+  return expiresAt <= now ? "Expired" : `Expires ${formatDateTime(value)}`;
 }

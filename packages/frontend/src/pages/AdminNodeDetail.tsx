@@ -31,6 +31,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { EmptyState } from "@/components/common/EmptyState";
+import { Notice } from "@/components/common/Notice";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -1220,12 +1221,14 @@ export function AdminNodeDetail({
           </TabsList>
 
           {isNodeIncompatible(node) && (
-            <div className="bg-destructive/10 border border-destructive/20 p-3 mt-2 rounded-md">
-              <p className="text-sm text-destructive font-medium">
-                This node's daemon version is incompatible with the gateway. Update the daemon to
-                restore full functionality.
-              </p>
-            </div>
+            <Notice
+              tone="destructive"
+              role="alert"
+              className="mt-2"
+              title="This node's daemon version is incompatible with the gateway"
+            >
+              Update the daemon to restore full functionality.
+            </Notice>
           )}
 
           <div className={usesFillLayout ? "relative flex flex-col flex-1 min-h-0" : "relative"}>

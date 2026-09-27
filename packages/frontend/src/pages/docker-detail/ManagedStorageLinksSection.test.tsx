@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
@@ -135,5 +136,78 @@ describe("ManagedStorageLinksSection", () => {
     expect(remove).toHaveBeenCalledWith(storage.id, "binding-1", {
       targetEnvironment: { APP_ENV: "production" },
     });
+  });
+  it("shows a link saved into a workload that does not run it yet as pending", async () => {
+    vi.spyOn(api, "listManagedObjectStorages").mockResolvedValue([storage]);
+    vi.spyOn(api, "listManagedStorageBindings").mockResolvedValue([
+      {
+        id: "binding-1",
+        clusterId: storage.id,
+        targetNodeId: "node-1",
+        targetType: "deployment",
+        targetResourceId: "deployment-1",
+        connectorAlias: "storage-link",
+        environment: { endpoint: "S3_ENDPOINT" },
+        buckets: ["uploads"],
+        accessKeyId: null,
+        status: "ready",
+        observedState: "target_applied",
+        lastError: null,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z",
+      },
+    ]);
+    const user = userEvent.setup();
+
+    render(
+      <ManagedStorageLinksSection
+        nodeId="node-1"
+        targetType="deployment"
+        targetResourceId="deployment-1"
+        containerName="web"
+        canManage
+      />
+    );
+
+    await user.hover(await screen.findByText("pending"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Saved in the workload's configuration. It takes effect when the workload next starts or finishes its current rollout."
+    );
+    expect(screen.queryByText("ready")).not.toBeInTheDocument();
+  });
+
+  it("shows a link that the workload runs as ready", async () => {
+    vi.spyOn(api, "listManagedObjectStorages").mockResolvedValue([storage]);
+    vi.spyOn(api, "listManagedStorageBindings").mockResolvedValue([
+      {
+        id: "binding-1",
+        clusterId: storage.id,
+        targetNodeId: "node-1",
+        targetType: "deployment",
+        targetResourceId: "deployment-1",
+        connectorAlias: "storage-link",
+        environment: { endpoint: "S3_ENDPOINT" },
+        buckets: ["uploads"],
+        accessKeyId: null,
+        status: "ready",
+        observedState: "active",
+        lastError: null,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z",
+      },
+    ]);
+
+    render(
+      <ManagedStorageLinksSection
+        nodeId="node-1"
+        targetType="deployment"
+        targetResourceId="deployment-1"
+        containerName="web"
+        canManage
+      />
+    );
+
+    expect(await screen.findByText("ready")).toBeInTheDocument();
+    expect(screen.queryByText("pending")).not.toBeInTheDocument();
   });
 });

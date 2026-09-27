@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +38,8 @@ import type {
   DockerAvailabilityResource,
   Node,
 } from "@/types";
+import { AvailabilityPriorityControls } from "./AvailabilityPriorityControls";
+import { effectivePriorityOrder } from "./availability-priority";
 import { resolveAvailabilitySurfaceStatus } from "./availability-status";
 import { useStableAvailabilityResource } from "./use-stable-availability-resource";
 
@@ -69,12 +72,6 @@ function statusVariant(status: string) {
 
 function label(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function time(value: string | null | undefined) {
-  if (!value) return "—";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString();
 }
 
 function nodeName(nodeId: string, nodes: Node[]) {
@@ -166,7 +163,10 @@ function PlacementRows({
               · App {shouldRun ? label(placement.applicationHealth) : "Stopped"}
             </p>
           </div>
-          <span className="text-xs text-muted-foreground">{time(placement.lastObservedAt)}</span>
+          <RelativeTime
+            value={placement.lastObservedAt}
+            className="text-xs text-muted-foreground"
+          />
         </div>
       ))}
     </div>
@@ -198,6 +198,9 @@ export function AvailabilitySection({
   const [maxUnavailable, setMaxUnavailable] = useState("0");
   const [maxSurge, setMaxSurge] = useState("1");
   const [drainSeconds, setDrainSeconds] = useState("30");
+  const [priorityMode, setPriorityMode] = useState(false);
+  const [nodePriority, setNodePriority] = useState<string[]>([]);
+  const [failbackDelay, setFailbackDelay] = useState("300");
   const [disableOpen, setDisableOpen] = useState(false);
   const [survivorId, setSurvivorId] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -238,6 +241,9 @@ export function AvailabilitySection({
             setMaxUnavailable(String(nextPolicy.rolloutPolicy.maxUnavailable));
             setMaxSurge(String(nextPolicy.rolloutPolicy.maxSurge));
             setDrainSeconds(String(nextPolicy.rolloutPolicy.drainSeconds));
+            setPriorityMode(nextPolicy.mode !== "single" && nextPolicy.priorityMode);
+            setNodePriority(nextPolicy.nodePriority);
+            setFailbackDelay(String(nextPolicy.failbackDelaySeconds));
           }
         }
       } catch (error) {
@@ -257,6 +263,22 @@ export function AvailabilitySection({
   useRealtime("docker.availability.changed", () => void load());
   useRealtime("docker.availability.operation.changed", () => void load());
 
+  // The priority list shows every eligible node: the selected ones, or every Docker node.
+  const eligibleNodeIds = useMemo(
+    () =>
+      nodes
+        .filter(
+          (node) =>
+            node.type === "docker" &&
+            (selectionMode === "all_compatible" || selectedNodeIds.includes(node.id))
+        )
+        .map((node) => node.id),
+    [nodes, selectionMode, selectedNodeIds]
+  );
+  const priorityOrder = useMemo(
+    () => effectivePriorityOrder(nodePriority, eligibleNodeIds),
+    [eligibleNodeIds, nodePriority]
+  );
   const input = useMemo<DockerAvailabilityPolicyInput>(
     () => ({
       resource: stableResource,
@@ -270,13 +292,21 @@ export function AvailabilitySection({
         drainSeconds: Math.min(3600, Math.max(0, Number(drainSeconds) || 0)),
       },
       offlineReplacementGraceSeconds: Math.max(0, Number(graceSeconds) || 0),
+      priorityMode,
+      // Off keeps the stored order untouched; on saves the order shown.
+      nodePriority: priorityMode ? priorityOrder : nodePriority,
+      failbackDelaySeconds: Math.min(3600, Math.max(0, Number(failbackDelay) || 0)),
     }),
     [
       drainSeconds,
+      failbackDelay,
       graceSeconds,
       maxSurge,
       maxUnavailable,
       mode,
+      nodePriority,
+      priorityMode,
+      priorityOrder,
       replicas,
       stableResource,
       selectedNodeIds,
@@ -320,7 +350,12 @@ export function AvailabilitySection({
       Number(graceSeconds) !== policy.offlineReplacementGraceSeconds ||
       Number(maxUnavailable) !== policy.rolloutPolicy.maxUnavailable ||
       Number(maxSurge) !== policy.rolloutPolicy.maxSurge ||
-      Number(drainSeconds) !== policy.rolloutPolicy.drainSeconds);
+      Number(drainSeconds) !== policy.rolloutPolicy.drainSeconds ||
+      priorityMode !== policy.priorityMode ||
+      (priorityMode &&
+        (Number(failbackDelay) !== policy.failbackDelaySeconds ||
+          priorityOrder.join() !==
+            effectivePriorityOrder(policy.nodePriority, eligibleNodeIds).join())));
   const dirty = enabledDraft !== enabled || (enabledDraft && configurationDirty);
   dirtyRef.current = dirty;
 
@@ -574,6 +609,17 @@ export function AvailabilitySection({
               })}
           </div>
         )}
+        <AvailabilityPriorityControls
+          nodes={nodes}
+          compatibleNodeIds={compatibleNodeIds}
+          priorityMode={priorityMode}
+          onPriorityModeChange={setPriorityMode}
+          order={priorityOrder}
+          onOrderChange={setNodePriority}
+          failbackDelay={failbackDelay}
+          onFailbackDelayChange={setFailbackDelay}
+          disabled={!canManage || !enabledDraft}
+        />
         <SettingsControlRow
           title="Replacement grace"
           description="Wait briefly for a disconnected node before creating a replacement."

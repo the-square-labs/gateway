@@ -2,9 +2,10 @@ import { KeyRound, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
+import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +19,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
-import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { inferenceTokenChangedChannel } from "@/services/user-resource-events";
 import { useAuthStore } from "@/stores/auth";
@@ -135,10 +135,16 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
                     <p className="text-sm font-medium">{token.name}</p>
                     <p className="text-xs text-muted-foreground">
                       <span className="font-mono">{token.tokenPrefix}...</span>
-                      {` · Created ${formatDate(token.createdAt)}`}
-                      {token.lastUsedAt
-                        ? ` · Last used ${formatRelativeDate(token.lastUsedAt)}`
-                        : " · Never used"}
+                      {" · Created "}
+                      <RelativeTime value={token.createdAt} />
+                      {token.lastUsedAt ? (
+                        <>
+                          {" · Last used "}
+                          <RelativeTime value={token.lastUsedAt} />
+                        </>
+                      ) : (
+                        " · Never used"
+                      )}
                     </p>
                   </div>
                 </div>
@@ -188,30 +194,13 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={secretOpen} onOpenChange={setSecretOpen}>
-        <DialogContent
-          className="sm:max-w-lg"
-          onAnimationEnd={(event) => {
-            if (
-              event.target === event.currentTarget &&
-              event.currentTarget.dataset.state === "closed"
-            ) {
-              setSecret(null);
-            }
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Inference Token Created</DialogTitle>
-            <DialogDescription>Copy this token now. It will not be shown again.</DialogDescription>
-          </DialogHeader>
-          {secret && (
-            <CopyValueField label="Inference token" value={secret} valueClassName="font-mono" />
-          )}
-          <DialogFooter>
-            <Button onClick={() => setSecretOpen(false)}>Done</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <OneTimeSecretDialog
+        open={secretOpen}
+        onOpenChange={setSecretOpen}
+        title="Inference Token Created"
+        fields={secret ? [{ label: "Inference token", value: secret }] : null}
+        onClosed={() => setSecret(null)}
+      />
     </>
   );
 }

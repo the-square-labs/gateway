@@ -52,7 +52,7 @@ function EquivalentTargetRerenderHarness() {
       <button type="button" onClick={() => setRenderCount((count) => count + 1)}>
         Parent rerender
       </button>
-      <DockerResourceGitTabs target={{ ...target }} view="source" includeBuilds />
+      <DockerResourceGitTabs target={{ ...target }} view="source" />
     </>
   );
 }
@@ -101,22 +101,12 @@ describe("DockerResourceGitTabs source loading", () => {
     expect(history).not.toHaveBeenCalled();
   });
 
-  it("loads recent builds below repository settings when they share the Source view", async () => {
-    vi.spyOn(api, "getDockerSource").mockResolvedValue(source);
-    const listBuilds = vi.spyOn(api, "listDockerBuilds").mockResolvedValue([]);
-
-    renderWithRouter(<DockerResourceGitTabs target={target} view="source" includeBuilds />);
-
-    expect(await screen.findByText("Builds")).toBeInTheDocument();
-    expect(listBuilds).toHaveBeenCalledWith({ sourceBindingId: "source-1", limit: 5 });
-  });
-
   it.each([
     target,
     pagesTarget,
     { kind: "deployment" as const, nodeId: "node-1", deploymentId: "deployment-1" },
     { kind: "compose_project" as const, nodeId: "node-1", composeProjectId: "compose-1" },
-  ])("loads $kind build history using the same inline Pages table", async (resourceTarget) => {
+  ])("loads $kind build history into the shared build table", async (resourceTarget) => {
     vi.spyOn(api, "getDockerSource").mockResolvedValue({ ...source, target: resourceTarget });
     const listRecent = vi.spyOn(api, "listDockerBuilds").mockResolvedValue([]);
     const listPage = vi.spyOn(api, "listDockerBuildPage").mockResolvedValue({
@@ -140,34 +130,34 @@ describe("DockerResourceGitTabs source loading", () => {
     expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
   });
 
-  it("keeps the Source layout mounted during a background build refresh", async () => {
+  it("keeps the Source layout mounted while Build now queues a build", async () => {
     const user = userEvent.setup();
-    let resolveRefresh: ((value: DockerBuild[]) => void) | undefined;
-    const refresh = new Promise<DockerBuild[]>((resolve) => {
-      resolveRefresh = resolve;
-    });
+    let resolveBuild: ((value: DockerBuild) => void) | undefined;
     vi.spyOn(api, "getDockerSource").mockResolvedValue(source);
-    vi.spyOn(api, "listDockerBuilds").mockResolvedValueOnce([]).mockReturnValueOnce(refresh);
-    vi.spyOn(api, "createDockerSourceBuild").mockResolvedValue({} as never);
+    vi.spyOn(api, "listDockerBuildSecrets").mockResolvedValue([]);
+    vi.spyOn(api, "createDockerSourceBuild").mockReturnValue(
+      new Promise<DockerBuild>((resolve) => {
+        resolveBuild = resolve;
+      })
+    );
 
-    renderWithRouter(<DockerResourceGitTabs target={target} view="source" includeBuilds />);
+    renderWithRouter(<DockerResourceGitTabs target={target} view="source" />);
 
     await user.click(await screen.findByRole("button", { name: "Build now" }));
     await waitFor(() => expect(api.createDockerSourceBuild).toHaveBeenCalled());
     expect(screen.getByText("platform/api")).toBeInTheDocument();
     expect(screen.queryByText("Loading repository delivery settings…")).not.toBeInTheDocument();
 
-    resolveRefresh?.([]);
+    resolveBuild?.({} as DockerBuild);
   });
 
   it("does not reload when the parent rerenders with an equivalent target", async () => {
     const user = userEvent.setup();
     const request = vi.spyOn(api, "getDockerSource").mockResolvedValue(source);
-    vi.spyOn(api, "listDockerBuilds").mockResolvedValue([]);
     vi.spyOn(api, "listDockerBuildSecrets").mockResolvedValue([]);
     renderWithRouter(<EquivalentTargetRerenderHarness />);
 
-    expect(await screen.findByText("Builds")).toBeInTheDocument();
+    expect(await screen.findByText("platform/api")).toBeInTheDocument();
     const initialRequestCount = request.mock.calls.length;
     await user.click(screen.getByRole("button", { name: "Parent rerender" }));
 

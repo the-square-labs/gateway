@@ -37,11 +37,16 @@ const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
 );
 DialogHeader.displayName = "DialogHeader";
 
+// Footer buttons always sit together on the right, secondary first and the
+// primary action last; a footer never spreads them to both edges.
+const DIALOG_FOOTER_JUSTIFY_CLASS_RE =
+  /(?:^|\s)(?:[^\s:]+:)*justify-(?:start|center|between|around|evenly|stretch|normal)(?=\s|$)/g;
+
 const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
       "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:space-x-2 sm:gap-0",
-      className
+      className?.replace(DIALOG_FOOTER_JUSTIFY_CLASS_RE, " ")
     )}
     {...props}
   />
@@ -99,15 +104,24 @@ if (typeof document !== "undefined") {
   );
 }
 
-/** The control that opened this dialog: the one just clicked, or the one focused (keyboard). */
+/**
+ * Only a `Button` takes the spinner (in place of its leading icon). Table rows, cards and text
+ * links have no room for it: a pseudo-element on a row becomes an extra cell and shifts every
+ * column, so for them the screen dims with a spinner instead.
+ */
+const takesOpenerSpinner = (element: HTMLElement) => element.matches("[data-button]");
+
+/** The Button that opened this dialog: the one just clicked, or the one focused (keyboard). */
 function findDialogOpener(panel: HTMLElement | null): HTMLElement | null {
   const clicked = lastPointerTarget;
   if (clicked && Date.now() - clicked.at < OPENER_CLICK_WINDOW_MS && clicked.element.isConnected) {
-    if (!panel?.contains(clicked.element)) return clicked.element;
+    if (!panel?.contains(clicked.element)) {
+      return takesOpenerSpinner(clicked.element) ? clicked.element : null;
+    }
   }
   const active = document.activeElement;
   if (active instanceof HTMLElement && active !== document.body && !panel?.contains(active)) {
-    if (active.matches("button, a, [role='button']")) return active;
+    if (active.matches("button, a, [role='button']") && takesOpenerSpinner(active)) return active;
   }
   return null;
 }

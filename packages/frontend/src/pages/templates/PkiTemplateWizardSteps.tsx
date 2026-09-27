@@ -1,4 +1,6 @@
 import { Minus, Plus } from "lucide-react";
+import { CheckboxCard } from "@/components/common/CheckboxCard";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NumericInput } from "@/components/ui/numeric-input";
@@ -9,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import type { CertificatePolicy, CertificateType, CustomExtension, KeyAlgorithm } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -202,21 +203,13 @@ export function StepKeyUsage({
       </p>
       <div className="space-y-2">
         {KEY_USAGE_OPTIONS.map((opt) => (
-          <label
+          <CheckboxCard
             key={opt.value}
-            className="flex items-start gap-3 p-3 border border-border hover:bg-accent/50 transition-colors cursor-pointer"
-          >
-            <input
-              type="checkbox"
-              checked={keyUsage.includes(opt.value)}
-              onChange={() => setKeyUsage(toggleInArray(keyUsage, opt.value))}
-              className="h-4 w-4 mt-0.5 shrink-0"
-            />
-            <div>
-              <p className="text-sm font-medium">{opt.label}</p>
-              <p className="text-xs text-muted-foreground">{opt.desc}</p>
-            </div>
-          </label>
+            checked={keyUsage.includes(opt.value)}
+            onCheckedChange={() => setKeyUsage(toggleInArray(keyUsage, opt.value))}
+            label={opt.label}
+            description={opt.desc}
+          />
         ))}
       </div>
       {keyUsage.length === 0 && (
@@ -251,21 +244,13 @@ export function StepExtKeyUsage({
       </p>
       <div className="space-y-2">
         {EXT_KEY_USAGE_OPTIONS.map((opt) => (
-          <label
+          <CheckboxCard
             key={opt.value}
-            className="flex items-start gap-3 p-3 border border-border hover:bg-accent/50 transition-colors cursor-pointer"
-          >
-            <input
-              type="checkbox"
-              checked={extKeyUsage.includes(opt.value)}
-              onChange={() => setExtKeyUsage(toggleInArray(extKeyUsage, opt.value))}
-              className="h-4 w-4 mt-0.5 shrink-0"
-            />
-            <div>
-              <p className="text-sm font-medium">{opt.label}</p>
-              <p className="text-xs text-muted-foreground">{opt.desc}</p>
-            </div>
-          </label>
+            checked={extKeyUsage.includes(opt.value)}
+            onCheckedChange={() => setExtKeyUsage(toggleInArray(extKeyUsage, opt.value))}
+            label={opt.label}
+            description={opt.desc}
+          />
         ))}
       </div>
 
@@ -339,34 +324,23 @@ export function StepSAN({
         IPs, or email addresses. Modern browsers <strong>require</strong> SANs for TLS certificates
         and ignore the Common Name field.
       </p>
-      <div className="flex items-center gap-3 p-3 border border-border">
-        <Switch checked={requireSans} onChange={setRequireSans} />
-        <div>
-          <p className="text-sm font-medium">Require SANs</p>
-          <p className="text-xs text-muted-foreground">
-            When enabled, certificates using this template must include at least one SAN.
-          </p>
-        </div>
-      </div>
+      <SwitchCard
+        label="Require SANs"
+        description="When enabled, certificates using this template must include at least one SAN."
+        checked={requireSans}
+        onCheckedChange={setRequireSans}
+      />
       <div>
         <p className="text-sm font-medium mb-2">Allowed SAN types</p>
         <div className="space-y-2">
           {SAN_TYPE_OPTIONS.map((opt) => (
-            <label
+            <CheckboxCard
               key={opt.value}
-              className="flex items-start gap-3 p-3 border border-border hover:bg-accent/50 transition-colors cursor-pointer"
-            >
-              <input
-                type="checkbox"
-                checked={sanTypes.includes(opt.value)}
-                onChange={() => setSanTypes(toggleInArray(sanTypes, opt.value))}
-                className="h-4 w-4 mt-0.5 shrink-0"
-              />
-              <div>
-                <p className="text-sm font-medium">{opt.label}</p>
-                <p className="text-xs text-muted-foreground">{opt.desc}</p>
-              </div>
-            </label>
+              checked={sanTypes.includes(opt.value)}
+              onCheckedChange={() => setSanTypes(toggleInArray(sanTypes, opt.value))}
+              label={opt.label}
+              description={opt.desc}
+            />
           ))}
         </div>
       </div>

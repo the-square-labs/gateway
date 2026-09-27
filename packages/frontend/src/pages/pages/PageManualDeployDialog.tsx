@@ -94,13 +94,15 @@ export function PageManualDeployDialog({
 
   const upload = async () => {
     if (!prepared || tagError || busy) return;
+    // Names the build being sent, so the progress row says what is uploading.
+    const uploadingPhase = `Uploading ${prepared.sourceLabel} (${formatBytes(prepared.archive.size)})…`;
     setUploading(true);
     setProgress(0);
     setPhase("Calculating checksum…");
     let succeeded = false;
     try {
       const sha256 = await sha256Hex(prepared.archive);
-      setPhase("Uploading build…");
+      setPhase(uploadingPhase);
       const deployment = await api.uploadPageBuild(
         projectId,
         prepared.archive,
@@ -108,7 +110,7 @@ export function PageManualDeployDialog({
         normalizedTag || undefined,
         (nextProgress, nextPhase) => {
           setProgress(nextProgress);
-          setPhase(nextPhase === "finalizing" ? "Validating and publishing…" : "Uploading build…");
+          setPhase(nextPhase === "finalizing" ? "Validating and publishing…" : uploadingPhase);
         }
       );
       succeeded = true;
@@ -187,12 +189,14 @@ export function PageManualDeployDialog({
             <div
               aria-labelledby="page-build-label"
               className={cn(
-                "flex min-h-11 min-w-0 items-stretch border bg-background",
+                // The standard control height, like Input and Select; the pickers sit inside it.
+                "flex h-9 min-w-0 items-stretch border bg-background",
                 sourceError ? "border-destructive" : "border-input"
               )}
             >
               <div className="flex min-w-0 flex-1 items-center px-3">
-                {prepared && !sourceError && !phase ? (
+                {/* The chosen build stays named while it uploads; the phase shows only while inspecting. */}
+                {prepared && !sourceError ? (
                   <p className="flex min-w-0 items-center text-sm">
                     <span className="truncate">{prepared.sourceLabel}</span>
                     <span className="shrink-0">
@@ -205,7 +209,7 @@ export function PageManualDeployDialog({
                   </p>
                 )}
               </div>
-              <div className="flex shrink-0 items-stretch border-l border-border max-sm:flex-col">
+              <div className="flex shrink-0 items-stretch border-l border-border">
                 <Button
                   type="button"
                   variant="secondary"
@@ -222,7 +226,7 @@ export function PageManualDeployDialog({
                 <Button
                   type="button"
                   variant="secondary"
-                  className="h-full rounded-none border-0 border-l border-border max-sm:border-l-0 max-sm:border-t"
+                  className="h-full rounded-none border-0 border-l border-border"
                   onClick={() => {
                     if (!folderInputRef.current) return;
                     folderInputRef.current.value = "";
@@ -260,8 +264,8 @@ export function PageManualDeployDialog({
           {uploading ? (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
-                <span>{phase}</span>
-                <span>{progress}%</span>
+                <span className="min-w-0 truncate">{phase}</span>
+                <span className="shrink-0">{progress}%</span>
               </div>
               <ProgressBar value={progress} aria-label="Build upload progress" />
             </div>

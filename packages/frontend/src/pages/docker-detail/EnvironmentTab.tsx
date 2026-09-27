@@ -47,6 +47,7 @@ export function EnvironmentTab({
   scopeResourceId,
   containerState,
   disabled,
+  managedLinksDisabled,
   onMutationStart,
   onMutationEnd,
   onRecreating,
@@ -69,6 +70,8 @@ export function EnvironmentTab({
   scopeResourceId?: string;
   containerState?: string;
   disabled?: boolean;
+  /** Managed links may stay editable while the rest is locked (a build rollout picks them up). */
+  managedLinksDisabled?: boolean;
   onMutationStart?: (transition: "updating" | "recreating") => void;
   onMutationEnd?: () => void;
   onRecreating?: () => void | Promise<void>;
@@ -128,7 +131,9 @@ export function EnvironmentTab({
     databaseTargetType !== "deployment" ||
     (hasScope(`docker:containers:edit:${scopeSuffix}`) &&
       hasScope(`docker:containers:manage:${scopeSuffix}`));
-  const recreatesRunningContainer = containerState === "running";
+  // A crash-looping (restarting) workload is recreated running, like a running one.
+  const recreatesRunningContainer = containerState === "running" || containerState === "restarting";
+  const linksDisabled = managedLinksDisabled ?? disabled;
   const resolvedServiceSaveLabel =
     serviceSaveLabel ?? (recreatesRunningContainer ? "Save & Recreate" : "Save");
   const isServiceEnv = !!onSaveServiceEnv;
@@ -503,7 +508,8 @@ export function EnvironmentTab({
   // ── Save handler ─────────────────────────────────────────────────
 
   const handleSave = async () => {
-    if (disabled || isSaving) return;
+    // With only the links editable, a save carries link changes and no environment edits.
+    if (isSaving || (disabled && (linksDisabled || hasChanges))) return;
     const vars = rawMode
       ? rawText
           .split("\n")
@@ -859,7 +865,7 @@ export function EnvironmentTab({
             targetType={databaseTargetType}
             targetResourceId={resolvedDatabaseTargetResourceId}
             containerName={containerName}
-            disabled={disabled || isSaving || hasErrors || !canChangeManagedLinks}
+            disabled={linksDisabled || isSaving || hasErrors || !canChangeManagedLinks}
             existingVariableNames={[...existingVariableNames, ...managedStorageVariableNames]}
             onInitialLoadingChange={setDatabaseLinksLoading}
             onDraftChange={handleDatabaseLinkDraftChange}
@@ -877,7 +883,7 @@ export function EnvironmentTab({
           containerName={containerName}
           canManage={canManageManagedStorage}
           canManageCluster={canManageStorageCluster}
-          disabled={disabled || isSaving || hasErrors || !canChangeManagedLinks}
+          disabled={linksDisabled || isSaving || hasErrors || !canChangeManagedLinks}
           existingVariableNames={[...existingVariableNames, ...managedDatabaseVariableNames]}
           onInitialLoadingChange={setStorageLinksLoading}
           onDraftChange={handleStorageLinkDraftChange}
@@ -968,7 +974,7 @@ export function EnvironmentTab({
                   transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
                 >
                   {visibleEnvRows.length > 0 && (
-                    <div className="grid grid-cols-[1fr_1fr] border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    <div className="grid grid-cols-[1fr_1fr] border-b border-border bg-header text-xs font-medium text-muted-foreground uppercase tracking-wider">
                       <div className="px-3 py-2">Key</div>
                       <div className="px-3 py-2 border-l border-border">Value</div>
                     </div>

@@ -17,6 +17,7 @@ import type {
   DockerSourceConnector,
   DockerSourceResourceCreateRequest,
   DockerSourceResourceCreateResult,
+  DockerSourceSyncResult,
   DockerSourceTarget,
   DockerTask,
   DockerVolume,
@@ -941,6 +942,18 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
         })
       );
       return result.build;
+    }
+
+    /**
+     * Checks the source branch for new commits now instead of waiting for the next poll or webhook,
+     * and queues the automatic build of a new head when the source builds automatically.
+     */
+    async syncDockerSource(target: DockerSourceTarget): Promise<DockerSourceSyncResult> {
+      return this.unwrapData(
+        this.request<{ data: DockerSourceSyncResult }>(`${dockerSourcePath(target)}/sync`, {
+          method: "POST",
+        })
+      );
     }
 
     async createDockerSourceResource(

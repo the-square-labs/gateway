@@ -1,6 +1,6 @@
 import { Truck } from "lucide-react";
+import { CheckboxCard } from "@/components/common/CheckboxCard";
 import { ContentLoading } from "@/components/common/ContentLoading";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,7 +17,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import type { Node } from "@/types";
 import type { MigrationResource } from "./DockerMigrationDialog";
 
@@ -80,19 +79,12 @@ export function DockerMigrationSetupDialog({
             ) : null}
           </div>
 
-          <div className="border border-border">
-            <SettingsControlRow
-              title="Keep source resource"
-              description="Leave the source stopped with restart disabled after cutover."
-              controlsClassName="sm:min-w-0"
-            >
-              <Switch
-                checked={keepSource}
-                onChange={onKeepSourceChange}
-                ariaLabel="Keep source resource after migration"
-              />
-            </SettingsControlRow>
-          </div>
+          <CheckboxCard
+            label="Keep source resource"
+            description="Leave the source stopped with restart disabled after cutover."
+            checked={keepSource}
+            onCheckedChange={onKeepSourceChange}
+          />
         </div>
 
         <DialogFooter>

@@ -220,16 +220,18 @@ export function CADetail() {
       render: (cert) => <Badge variant="secondary">{cert.type}</Badge>,
     },
     {
-      id: "expires",
-      header: "Expires",
-      render: (cert) => (
-        <span className="text-sm text-muted-foreground">{formatDate(cert.notAfter)}</span>
-      ),
-    },
-    {
       id: "status",
       header: "Status",
       render: (cert) => <StatusBadge status={cert.status} />,
+    },
+    {
+      id: "expires",
+      header: "Expires",
+      align: "right",
+      cellClassName: "whitespace-nowrap",
+      render: (cert) => (
+        <span className="text-sm text-muted-foreground">{formatDate(cert.notAfter)}</span>
+      ),
     },
   ];
   const childCAColumns: SimpleTableColumn<(typeof childCAs)[number]>[] = [
@@ -486,9 +488,7 @@ export function CADetail() {
                 tone="warning"
                 title={`This CA expires in ${expiryDays > 0 ? `${expiryDays} days` : `${hoursUntil(ca.notAfter)} hours`}`}
               >
-                <p className="text-sm text-muted-foreground">
-                  Certificates it issued stop being trusted when it expires.
-                </p>
+                <p>Certificates it issued stop being trusted when it expires.</p>
               </Notice>
             )}
 

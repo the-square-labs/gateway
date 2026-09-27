@@ -35,6 +35,7 @@ import {
 } from "@/components/docker/availability/AvailabilityProgress";
 import { resolveAvailabilitySurfaceStatus } from "@/components/docker/availability/availability-status";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
+import { ImageReference } from "@/components/docker/ImageReference";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -1198,10 +1199,9 @@ export function DockerDeploymentDetail({
                 <span className="shrink-0">&middot; active {deployment.activeSlot}</span>
               </span>
             ) : (
-              <span className="break-all">
-                {displayImage}
-                {" \u00b7 active "}
-                {deployment.activeSlot}
+              <span className="flex min-w-0 items-center gap-1.5">
+                <ImageReference value={displayImage} copyable={false} className="justify-start" />
+                <span className="shrink-0">&middot; active {deployment.activeSlot}</span>
               </span>
             )
           }

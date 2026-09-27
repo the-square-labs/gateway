@@ -26,6 +26,8 @@ interface ComboboxProps {
   className?: string;
   inputClassName?: string;
   contentClassName?: string;
+  /** Id of the input, so a form label can point at it. */
+  id?: string;
   ariaLabel?: string;
   renderOption?: (option: ComboboxOption) => ReactNode;
 }
@@ -50,6 +52,7 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
     className,
     inputClassName,
     contentClassName,
+    id,
     ariaLabel,
     renderOption,
   } = props;
@@ -148,6 +151,7 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
       >
         <PopoverAnchor asChild>
           <Input
+            id={id}
             role="combobox"
             aria-label={ariaLabel}
             aria-expanded={contentOpen}

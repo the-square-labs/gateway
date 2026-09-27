@@ -10,6 +10,7 @@ import {
   Webhook,
 } from "lucide-react";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
@@ -121,6 +122,7 @@ export function AuthProvisioningSection({
     skipNextWebhookCidrsBlur,
     selectedGroup,
     handleToggleAutoCreate,
+    handleToggleInvitationOnCreate,
     handleChangeGroup,
     handleToggleRequireVerifiedEmail,
     handleToggleWebTls,
@@ -769,7 +771,7 @@ export function AuthProvisioningSection({
         icon={<UserCog className="h-4 w-4" />}
         hidden={section !== "all" && section !== "advanced"}
         title="Identity provisioning"
-        description="OIDC sign-in behavior for Gateway users"
+        description="Account creation and OIDC sign-in behavior for Gateway users"
       >
         <div className="divide-y divide-border">
           <div className="flex items-center justify-between gap-4 px-4 py-3">
@@ -849,6 +851,22 @@ export function AuthProvisioningSection({
               </Select>
             </div>
           </div>
+          <SettingsControlRow
+            title="Send an invitation email when an account is created"
+            help="Emails every account created in Users, the API or MCP that an administrator created it, with a sign-in link. If sending fails the account is still created, and the invitation can be sent later from the user's settings."
+            description={
+              settings.smtp?.verifiedAt
+                ? "Off by default. Sent over verified SMTP right after creation"
+                : "Requires verified SMTP"
+            }
+          >
+            <Switch
+              ariaLabel="Send an invitation email when an account is created"
+              checked={settings.generalSettings.sendInvitationOnUserCreate ?? false}
+              disabled={!canEdit || isSavingGeneral}
+              onChange={(checked) => void handleToggleInvitationOnCreate(checked)}
+            />
+          </SettingsControlRow>
         </div>
       </PanelShell>
 
@@ -944,7 +962,9 @@ export function AuthProvisioningSection({
           identityTrustLocked ? (
             <IdentityTrustHint />
           ) : settings.smtp?.verifiedAt ? (
-            `Verified ${new Date(settings.smtp.verifiedAt).toLocaleString()}`
+            <>
+              Verified <RelativeTime value={settings.smtp.verifiedAt} />
+            </>
           ) : (
             "Configure and send a test before enabling email-based sign-in"
           )

@@ -31,7 +31,7 @@ export function ReferenceTable({
       <div className="overflow-hidden border border-border">
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-border bg-muted/50">
+            <tr className="border-b border-border bg-header">
               <th scope="col" className="px-3 py-1.5 text-left font-medium">
                 {termLabel}
               </th>

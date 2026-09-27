@@ -1,5 +1,5 @@
 import { Network, Save } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -7,6 +7,11 @@ import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { PagesFeatureDisabledDialog } from "@/components/pages/PagesFeatureDisabledDialog";
 import { PagesTargetPicker } from "@/components/proxy/PagesTargetPicker";
+import {
+  UpstreamField,
+  type UpstreamFieldLayout,
+  UpstreamFieldPair,
+} from "@/components/proxy/upstream-field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -230,6 +235,7 @@ export function ProxyUpstreamFields({
   disabled = false,
   allowManual = true,
   showTargetSelect = true,
+  layout = "rows",
 }: {
   value: ProxyUpstreamSelection;
   onChange: (value: ProxyUpstreamSelection) => void;
@@ -237,7 +243,10 @@ export function ProxyUpstreamFields({
   disabled?: boolean;
   allowManual?: boolean;
   showTargetSelect?: boolean;
+  /** Settings rows (default) or stacked form fields for form dialogs. */
+  layout?: UpstreamFieldLayout;
 }) {
+  const fieldId = useId();
   const [composeProjects, setComposeProjects] = useState<DockerComposeProject[]>([]);
   const selectedContainer = useMemo(
     () => containers.find((container) => targetKey(container) === selectedTargetKey(value)) ?? null,
@@ -434,7 +443,12 @@ export function ProxyUpstreamFields({
   return (
     <>
       {showTargetSelect ? (
-        <SettingsControlRow title="Target" description="Choose how requests reach the upstream">
+        <UpstreamField
+          layout={layout}
+          id={`${fieldId}-target`}
+          title="Target"
+          description="Choose how requests reach the upstream"
+        >
           <Select
             value={value.kind}
             onValueChange={(kind) => {
@@ -450,7 +464,7 @@ export function ProxyUpstreamFields({
             }}
             disabled={disabled}
           >
-            <SelectTrigger>
+            <SelectTrigger id={`${fieldId}-target`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -460,7 +474,7 @@ export function ProxyUpstreamFields({
               <SelectItem value="pages">Pages</SelectItem>
             </SelectContent>
           </Select>
-        </SettingsControlRow>
+        </UpstreamField>
       ) : null}
 
       {value.kind === "pages" ? (
@@ -476,50 +490,69 @@ export function ProxyUpstreamFields({
           disabled={disabled || !pagesEnabled}
           selectedProjectLabel={value.pageProjectLabel}
           selectedTagLabel={value.pageTagLabel}
+          layout={layout}
         />
       ) : value.kind === "manual" ? (
         <>
-          <SettingsControlRow
+          <UpstreamField
+            layout={layout}
+            id={`${fieldId}-host`}
             title="Forward Host"
             description="Hostname or IP address of the upstream"
             controlsClassName="sm:w-full"
           >
             <Input
+              id={`${fieldId}-host`}
               value={value.manualHost}
               onChange={(event) => onChange({ ...value, manualHost: event.target.value })}
               placeholder="192.168.1.100"
               disabled={disabled}
             />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Forward Port"
-            description="Upstream service port"
-            controlsClassName="sm:w-full"
-          >
-            <NumericInput
-              value={value.manualPort}
-              onChange={(manualPort) => onChange({ ...value, manualPort })}
-              min={1}
-              max={65535}
-              disabled={disabled}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Scheme"
-            description="Protocol used to reach the upstream"
-            controlsClassName="sm:w-full"
-          >
-            <SchemeSelect value={value} onChange={onChange} disabled={disabled} />
-          </SettingsControlRow>
+          </UpstreamField>
+          <UpstreamFieldPair layout={layout}>
+            <UpstreamField
+              layout={layout}
+              id={`${fieldId}-port`}
+              title="Forward Port"
+              description="Upstream service port"
+              controlsClassName="sm:w-full"
+            >
+              <NumericInput
+                id={`${fieldId}-port`}
+                value={value.manualPort}
+                onChange={(manualPort) => onChange({ ...value, manualPort })}
+                min={1}
+                max={65535}
+                disabled={disabled}
+              />
+            </UpstreamField>
+            <UpstreamField
+              layout={layout}
+              id={`${fieldId}-scheme`}
+              title="Scheme"
+              description="Protocol used to reach the upstream"
+              controlsClassName="sm:w-full"
+            >
+              <SchemeSelect
+                id={`${fieldId}-scheme`}
+                value={value}
+                onChange={onChange}
+                disabled={disabled}
+              />
+            </UpstreamField>
+          </UpstreamFieldPair>
         </>
       ) : (
         <>
-          <SettingsControlRow
+          <UpstreamField
+            layout={layout}
+            id={`${fieldId}-resource`}
             title="Docker Resource"
             description="Container or deployment reached through Secure Link"
             controlsClassName="sm:w-full"
           >
             <Combobox
+              id={`${fieldId}-resource`}
               value={selectedTargetKey(value)}
               options={resourceOptions}
               onValueChange={chooseTarget}
@@ -594,35 +627,47 @@ export function ProxyUpstreamFields({
                 );
               }}
             />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Application Port"
-            description="Declared TCP port or a manually entered container port"
-            controlsClassName="sm:w-full"
-          >
-            <Input
-              type="number"
-              min={1}
-              max={65535}
-              value={value.containerPort ?? ""}
-              onChange={(event) => {
-                const parsed = Number(event.target.value);
-                onChange({
-                  ...value,
-                  containerPort: Number.isInteger(parsed) && parsed > 0 ? parsed : null,
-                });
-              }}
-              placeholder="8080"
-              disabled={disabled || (!effectiveSelectedContainer && !selectedCompose)}
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Scheme"
-            description="Protocol used to reach the upstream"
-            controlsClassName="sm:w-full"
-          >
-            <SchemeSelect value={value} onChange={onChange} disabled={disabled} />
-          </SettingsControlRow>
+          </UpstreamField>
+          <UpstreamFieldPair layout={layout}>
+            <UpstreamField
+              layout={layout}
+              id={`${fieldId}-container-port`}
+              title="Application Port"
+              description="Declared TCP port or a manually entered container port"
+              controlsClassName="sm:w-full"
+            >
+              <Input
+                id={`${fieldId}-container-port`}
+                type="number"
+                min={1}
+                max={65535}
+                value={value.containerPort ?? ""}
+                onChange={(event) => {
+                  const parsed = Number(event.target.value);
+                  onChange({
+                    ...value,
+                    containerPort: Number.isInteger(parsed) && parsed > 0 ? parsed : null,
+                  });
+                }}
+                placeholder="8080"
+                disabled={disabled || (!effectiveSelectedContainer && !selectedCompose)}
+              />
+            </UpstreamField>
+            <UpstreamField
+              layout={layout}
+              id={`${fieldId}-scheme`}
+              title="Scheme"
+              description="Protocol used to reach the upstream"
+              controlsClassName="sm:w-full"
+            >
+              <SchemeSelect
+                id={`${fieldId}-scheme`}
+                value={value}
+                onChange={onChange}
+                disabled={disabled}
+              />
+            </UpstreamField>
+          </UpstreamFieldPair>
         </>
       )}
       <PagesFeatureDisabledDialog
@@ -634,10 +679,12 @@ export function ProxyUpstreamFields({
 }
 
 function SchemeSelect({
+  id,
   value,
   onChange,
   disabled,
 }: {
+  id?: string;
   value: ProxyUpstreamSelection;
   onChange: (value: ProxyUpstreamSelection) => void;
   disabled?: boolean;
@@ -648,7 +695,7 @@ function SchemeSelect({
       onValueChange={(scheme) => onChange({ ...value, scheme: scheme as ForwardScheme })}
       disabled={disabled}
     >
-      <SelectTrigger>
+      <SelectTrigger id={id}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

@@ -1,4 +1,4 @@
-import { Box, Boxes, Database, Hammer } from "lucide-react";
+import { Box, Boxes, Database } from "lucide-react";
 import { Link } from "react-router-dom";
 import { databaseHealthTone, dockerStateTone } from "@/components/common/resource-status";
 import { Badge } from "@/components/ui/badge";
@@ -39,10 +39,8 @@ export function PinnedDockerResourceCard({ resource }: { resource: DockerResourc
       ? dockerDeploymentRoute(resource.nodeSlug, resource.name)
       : resource.kind === "compose"
         ? dockerComposeProjectRoute(resource.id)
-        : resource.kind === "build"
-          ? `/docker/builds?build=${encodeURIComponent(resource.id)}`
-          : dockerContainerRoute(resource.nodeSlug, resource.name);
-  const Icon = resource.kind === "build" ? Hammer : resource.kind === "compose" ? Boxes : Box;
+        : dockerContainerRoute(resource.nodeSlug, resource.name);
+  const Icon = resource.kind === "compose" ? Boxes : Box;
   return (
     <Link
       to={route}

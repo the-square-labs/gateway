@@ -546,7 +546,8 @@ describe("DockerDeploymentDetail", () => {
 
     expect(await screen.findByDisplayValue("nginx")).toBeInTheDocument();
     expect(screen.getByDisplayValue("alpine")).toBeInTheDocument();
-    expect(screen.getByText(/nginx:alpine.*active blue/i)).toBeInTheDocument();
+    expect(screen.getByTitle("nginx:alpine")).toBeInTheDocument();
+    expect(screen.getByText(/active blue/i)).toBeInTheDocument();
     expect(screen.queryByDisplayValue(`sha256:${"a".repeat(64)}`)).not.toBeInTheDocument();
   });
 
@@ -646,6 +647,17 @@ describe("DockerDeploymentDetail", () => {
       makeDeployment({ availability: "unavailable" })
     );
     vi.spyOn(api, "inspectContainer").mockRejectedValue(new Error("Node is offline"));
+    // The Availability block shows only to callers who may manage it.
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: [
+          "docker:containers:view",
+          "docker:containers:edit",
+          "docker:containers:manage",
+          "docker:availability:manage",
+        ],
+      }),
+    });
 
     renderWithRouter(<DockerDeploymentDetail />, {
       path: "/docker/deployments/:nodeId/:deploymentId/:tab",

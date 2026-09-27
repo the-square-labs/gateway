@@ -1,5 +1,7 @@
-import { GitBranch, Hammer } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { GitBranch, Hammer, KeyRound } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { confirm } from "@/components/common/ConfirmDialog";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -9,12 +11,23 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
+import { listManagedDatabaseCandidateNodes } from "@/lib/managed-database-nodes";
 import { dockerContainerRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { DockerContainerDetail } from "../DockerContainerDetail";
 import { DockerResourceGitTabs } from "./DockerResourceGitTabs";
 import type { InspectData } from "./helpers";
+import {
+  type ManagedDatabaseLinkDraft,
+  ManagedDatabaseLinksSection,
+  type ManagedDatabaseLinksSectionHandle,
+} from "./ManagedDatabaseLinksSection";
+import {
+  type ManagedStorageLinkDraft,
+  ManagedStorageLinksSection,
+  type ManagedStorageLinksSectionHandle,
+} from "./ManagedStorageLinksSection";
 
 export async function resolveContainerOrPendingSource(
   nodeId: string,
@@ -54,7 +67,7 @@ export function DockerPendingContainerDetail({
   const resourceScope = `${nodeId}/${snapshot.scopeResourceId}`;
   const canEdit = hasScope(`docker:containers:edit:${resourceScope}`);
   const canBuild = hasScope(`docker:containers:manage:${resourceScope}`);
-  const [tab, setTab] = useUrlTab(["source", "builds"], "source", (next) =>
+  const [tab, setTab] = useUrlTab(["source", "builds", "environment"], "source", (next) =>
     dockerContainerRoute(nodeSlug, containerName, next)
   );
   const refresh = useCallback(async () => {
@@ -133,6 +146,10 @@ export function DockerPendingContainerDetail({
               <Hammer className="h-3.5 w-3.5" />
               Builds
             </TabsTrigger>
+            <TabsTrigger value="environment" className="gap-1.5">
+              <KeyRound className="h-3.5 w-3.5" />
+              Environment
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="source">
             <DockerResourceGitTabs
@@ -151,8 +168,136 @@ export function DockerPendingContainerDetail({
               canBuild={canBuild}
             />
           </TabsContent>
+          <TabsContent value="environment">
+            <PendingContainerLinks
+              nodeId={nodeId}
+              containerName={containerName}
+              resourceScope={resourceScope}
+            />
+          </TabsContent>
         </Tabs>
       </div>
     </PageTransition>
+  );
+}
+
+const NO_DATABASE_LINK_CHANGES: ManagedDatabaseLinkDraft = {
+  hasChanges: false,
+  managedVariableNames: [],
+  pendingAdditionVariableNames: [],
+  replacementVariableNames: [],
+};
+const NO_STORAGE_LINK_CHANGES: ManagedStorageLinkDraft = {
+  hasChanges: false,
+  managedVariableNames: [],
+  pendingAdditionVariableNames: [],
+};
+
+/**
+ * The Environment tab's managed links for a container its first build has not created yet. Links save pending into
+ * the reservation and the first build creates the container with them. The container has no environment to edit
+ * before then, so only the links are shown.
+ */
+function PendingContainerLinks({
+  nodeId,
+  containerName,
+  resourceScope,
+}: {
+  nodeId: string;
+  containerName: string;
+  resourceScope: string;
+}) {
+  const { hasScope, hasScopedAccess } = useAuthStore();
+  // The link API requires the container's environment and secrets permissions, as on the Environment tab.
+  const canLink =
+    hasScope(`docker:containers:environment:${resourceScope}`) &&
+    hasScope(`docker:containers:secrets:${resourceScope}`);
+  const canViewStorage = hasScopedAccess("storage:view");
+  const canManageStorage = hasScopedAccess("storage:iam");
+  const canManageStorageCluster = useCallback(
+    (connectionId: string | null) =>
+      hasScope("storage:iam") || Boolean(connectionId && hasScope(`storage:iam:${connectionId}`)),
+    [hasScope]
+  );
+  const [hasDatabaseNode, setHasDatabaseNode] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const databaseLinksRef = useRef<ManagedDatabaseLinksSectionHandle>(null);
+  const storageLinksRef = useRef<ManagedStorageLinksSectionHandle>(null);
+  const [databaseDraft, setDatabaseDraft] = useState(NO_DATABASE_LINK_CHANGES);
+  const [storageDraft, setStorageDraft] = useState(NO_STORAGE_LINK_CHANGES);
+
+  useEffect(() => {
+    if (!canLink) return;
+    let active = true;
+    void listManagedDatabaseCandidateNodes(1)
+      .then((nodes) => {
+        if (active) setHasDatabaseNode(nodes.length > 0);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [canLink]);
+
+  const save = async () => {
+    if (saving || (!databaseDraft.hasChanges && !storageDraft.hasChanges)) return;
+    const ok = await confirm({
+      title: "Save",
+      description: `Save managed link changes for “${containerName}”? They apply when the first build creates the container.`,
+      confirmLabel: "Save",
+    });
+    if (!ok) return;
+    setSaving(true);
+    try {
+      if (databaseDraft.hasChanges) await databaseLinksRef.current?.applyChanges();
+      if (storageDraft.hasChanges) await storageLinksRef.current?.applyChanges();
+      toast.success("Managed links saved — they apply when the first build creates the container");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save managed links");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!canLink) {
+    return (
+      <div className="py-12 text-center text-muted-foreground">
+        You don't have permission to access environment variables or secrets.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4 pb-6">
+      {hasDatabaseNode && (
+        <ManagedDatabaseLinksSection
+          ref={databaseLinksRef}
+          nodeId={nodeId}
+          targetType="container"
+          targetResourceId={containerName}
+          containerName={containerName}
+          disabled={saving}
+          existingVariableNames={storageDraft.managedVariableNames}
+          onDraftChange={setDatabaseDraft}
+          onSaveRequested={() => void save()}
+          recreatesRunningWorkload={false}
+        />
+      )}
+      {canViewStorage && (
+        <ManagedStorageLinksSection
+          ref={storageLinksRef}
+          nodeId={nodeId}
+          targetType="container"
+          targetResourceId={containerName}
+          containerName={containerName}
+          canManage={canManageStorage}
+          canManageCluster={canManageStorageCluster}
+          disabled={saving}
+          existingVariableNames={databaseDraft.managedVariableNames}
+          onDraftChange={setStorageDraft}
+          onSaveRequested={() => void save()}
+          recreatesRunningWorkload={false}
+        />
+      )}
+    </div>
   );
 }

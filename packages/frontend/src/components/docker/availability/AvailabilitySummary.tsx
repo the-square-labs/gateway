@@ -10,6 +10,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { DockerAvailabilityPolicy, DockerAvailabilityResource } from "@/types";
 import { AvailabilityOperationsPanel } from "./AvailabilityOperationsPanel";
+import { AvailabilityPrioritySummaryRows } from "./AvailabilityPrioritySummaryRows";
 import { resolveAvailabilitySurfaceStatus } from "./availability-status";
 import { useStableAvailabilityResource } from "./use-stable-availability-resource";
 
@@ -151,6 +152,7 @@ export function AvailabilitySummary({
             label="Serving"
             value={stopped ? "Stopped" : `${serving || (mode === "single" ? 1 : 0)}/${desired}`}
           />
+          {policy && !stopped ? <AvailabilityPrioritySummaryRows policy={policy} /> : null}
           <DetailRow
             label="Placement health"
             value={stopped ? "Stopped" : unhealthy > 0 ? `${unhealthy} need attention` : "Healthy"}

@@ -8,6 +8,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { makeNode, makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
+import { expandScopeRestrictions } from "@/test/scope-restrictions";
 import type { Node, PermissionGroup } from "@/types";
 
 const mocks = vi.hoisted(() => ({
@@ -218,6 +219,7 @@ describe("AdminGroups characterization", () => {
     await user.type(within(dialog).getByPlaceholderText("Search scopes..."), "Node Console");
     await user.click(rowCheckbox("Node Console"));
 
+    await expandScopeRestrictions();
     const resourceCheckbox = await findRowCheckbox("Edge 1");
     expect(resourceCheckbox).toBeChecked();
     await user.click(resourceCheckbox);
@@ -261,6 +263,7 @@ describe("AdminGroups characterization", () => {
     await user.click(await screen.findByRole("button", { name: "node-operators" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit Group" });
     expect(within(dialog).getByPlaceholderText("e.g. cert-operator")).toHaveValue("node-operators");
+    await expandScopeRestrictions();
     expect(await findRowCheckbox("Edge 1")).toBeChecked();
 
     const nameInput = within(dialog).getByPlaceholderText("e.g. cert-operator");

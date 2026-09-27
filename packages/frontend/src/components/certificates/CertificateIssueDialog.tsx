@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
@@ -308,8 +309,8 @@ export function CertificateIssueDialog({
                   />
                   {validityOutlivesCA && selectedCAEnd && (
                     <p className="text-xs text-muted-foreground">
-                      The CA expires on {selectedCAEnd.toLocaleDateString()}. The certificate will
-                      end with the CA.
+                      The CA expires on {formatDate(selectedCAEnd)}. The certificate will end with
+                      the CA.
                     </p>
                   )}
                 </div>
@@ -416,13 +417,16 @@ export function CertificateIssueDialog({
         </AnimatedHeight>
 
         <DialogFooter>
-          {step > 1 && (
+          {step === 1 ? (
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+          ) : (
             <Button variant="outline" onClick={() => setStep(step - 1)}>
               <ChevronLeft className="h-4 w-4" />
               Back
             </Button>
           )}
-          <div className="flex-1" />
           {step < 3 ? (
             <Button
               disabled={(step === 1 && !selectedCAId) || (step === 2 && !step2Valid)}

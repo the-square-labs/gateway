@@ -450,13 +450,10 @@ export function IntegrationsSetupWizard({
       backDisabled={saving}
       onSkip={isDirectSetup || completedIntegration ? undefined : skipCurrent}
       skipDisabled={saving || currentStatus === "configured"}
-      footerLeft={
-        isDirectSetup && !completedIntegration ? (
-          <Button variant="outline" onClick={() => onFinished?.("cancelled")} disabled={saving}>
-            Cancel
-          </Button>
-        ) : undefined
+      onCancel={
+        isDirectSetup && !completedIntegration ? () => onFinished?.("cancelled") : undefined
       }
+      cancelDisabled={saving}
       footer={footer}
     >
       <ContentLoading loading={directSetup?.connector === "github" && !githubOAuthChecked} />

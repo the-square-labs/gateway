@@ -7,6 +7,7 @@ import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { api } from "@/services/api";
 import type {
@@ -401,22 +402,38 @@ export const ManagedStorageLinksSection = forwardRef<
           <EmptyState message="No managed storage links" embedded />
         ) : (
           displayBindings.map((entry) => {
+            // Saved into the workload's configuration; its next start or rollout runs it.
+            const awaitingWorkload =
+              entry.pending === null &&
+              entry.binding.status === "ready" &&
+              entry.binding.observedState === "target_applied";
             const status =
               entry.pending === "remove"
                 ? "will unlink"
-                : entry.pending === "add"
+                : entry.pending === "add" || awaitingWorkload
                   ? "pending"
                   : entry.binding.status;
             const badgeVariant =
               entry.pending === "remove"
                 ? "warning"
-                : entry.pending === "add"
+                : entry.pending === "add" || awaitingWorkload
                   ? "secondary"
                   : entry.binding.status === "ready"
                     ? "success"
                     : entry.binding.status === "error"
                       ? "destructive"
                       : "secondary";
+            const statusDetail =
+              entry.binding.lastError ??
+              (awaitingWorkload
+                ? "Saved in the workload's configuration. It takes effect when the workload next starts or finishes its current rollout."
+                : entry.binding.status === "ready"
+                  ? "Storage link is ready."
+                  : entry.binding.status === "creating"
+                    ? "Storage link is being created."
+                    : entry.binding.status === "deleting"
+                      ? "Storage link is being removed."
+                      : "Storage link failed.");
             const description = [
               entry.binding.buckets.join(", "),
               environmentNames(entry.binding.environment).join(", "),
@@ -430,7 +447,22 @@ export const ManagedStorageLinksSection = forwardRef<
                 description={description || "Storage credentials injected"}
               >
                 <div className="flex items-center gap-2">
-                  <Badge variant={badgeVariant}>{status}</Badge>
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant={badgeVariant} tabIndex={0}>
+                          {status}
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-sm">
+                        {entry.pending === "add"
+                          ? "Created when the changes are saved."
+                          : entry.pending === "remove"
+                            ? "Removed when the changes are saved."
+                            : statusDetail}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   {canManage &&
                     (canManageCluster?.(entry.cluster.objectStorageConnectionId) ?? true) && (
                       <Button

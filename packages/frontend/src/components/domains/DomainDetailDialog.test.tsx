@@ -75,7 +75,10 @@ const domain: DomainWithUsage = {
 
 describe("DomainDetailDialog", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.mocked(useRealtime).mockReset();
+    // Editors' dialogs check DNS on open; unless a test cares, that check stays in flight.
+    vi.spyOn(api, "checkDomainDns").mockReturnValue(new Promise(() => {}));
   });
 
   it("keeps the details hidden until they arrive to avoid resizing the dialog", () => {
@@ -129,11 +132,10 @@ describe("DomainDetailDialog", () => {
     expect(screen.getByText("Route")).toBeInTheDocument();
     expect(screen.getByText("SSL Certificate")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toHaveClass("sm:max-w-xl");
-    expect(screen.getByRole("button", { name: "Check" })).toHaveClass(
-      "bg-primary",
-      "text-primary-foreground",
-      "text-sm"
-    );
+    // Record values use the plain row value style; the dialog checks DNS by itself.
+    expect(screen.getByText("104.16.1.1, 104.16.2.1")).toHaveClass("text-sm");
+    expect(screen.getByText("104.16.1.1, 104.16.2.1")).not.toHaveClass("font-mono");
+    expect(screen.queryByRole("button", { name: "Check" })).not.toBeInTheDocument();
   });
 
   it("omits Cloudflare Target when the domain is not proxied", async () => {
@@ -155,10 +157,13 @@ describe("DomainDetailDialog", () => {
   });
 
   it("keeps a completed DNS check when an older realtime refresh resolves later", async () => {
-    const user = userEvent.setup();
     let resolveStaleLoad!: (value: DomainWithUsage) => void;
     const staleLoad = new Promise<DomainWithUsage>((resolve) => {
       resolveStaleLoad = resolve;
+    });
+    let resolveCheck!: (value: DomainWithUsage) => void;
+    const check = new Promise<DomainWithUsage>((resolve) => {
+      resolveCheck = resolve;
     });
     let domainChanged: ((payload: unknown) => void) | undefined;
     vi.mocked(useRealtime).mockImplementation((channel, handler) => {
@@ -180,7 +185,7 @@ describe("DomainDetailDialog", () => {
       dnsRecords: { ...emptyRecords.dnsRecords!, a: ["8.8.8.8"] },
     };
     vi.spyOn(api, "getDomain").mockResolvedValueOnce(emptyRecords).mockReturnValueOnce(staleLoad);
-    vi.spyOn(api, "checkDomainDns").mockResolvedValue(checkedDomain);
+    vi.spyOn(api, "checkDomainDns").mockReturnValue(check);
 
     render(
       <MemoryRouter>
@@ -189,15 +194,90 @@ describe("DomainDetailDialog", () => {
     );
 
     expect(await screen.findByText("No DNS records found")).toHaveClass("text-sm");
+    expect(screen.getByRole("status")).toHaveTextContent("Checking…");
     act(() => domainChanged?.({ id: domain.id, action: "updated" }));
     await waitFor(() => expect(api.getDomain).toHaveBeenCalledTimes(2));
 
-    await user.click(screen.getByRole("button", { name: "Check" }));
+    await act(async () => resolveCheck(checkedDomain));
     expect(await screen.findByText("8.8.8.8")).toBeInTheDocument();
 
     await act(async () => resolveStaleLoad(emptyRecords));
     expect(screen.getByText("8.8.8.8")).toBeInTheDocument();
     expect(screen.queryByText("No DNS records found")).not.toBeInTheDocument();
+  });
+
+  it("checks DNS once per opening, read-only, and only for editors", async () => {
+    const onUpdated = vi.fn();
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["domains:view", "domains:edit"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getDomain").mockResolvedValue(domain);
+    const checkDomainDns = vi.spyOn(api, "checkDomainDns").mockResolvedValue(domain);
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <DomainDetailDialog
+          domainId={domain.id}
+          open
+          onOpenChange={vi.fn()}
+          onUpdated={onUpdated}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(checkDomainDns).toHaveBeenCalledWith(domain.id, { repair: false }));
+    await waitFor(() => expect(onUpdated).toHaveBeenCalled());
+    expect(checkDomainDns).toHaveBeenCalledTimes(1);
+
+    // Viewers see the last stored result; the check itself needs domains:edit.
+    checkDomainDns.mockClear();
+    useAuthStore.setState({ user: makeUser({ scopes: ["domains:view"] }) });
+    rerender(
+      <MemoryRouter>
+        <DomainDetailDialog
+          domainId={domain.id}
+          open={false}
+          onOpenChange={vi.fn()}
+          onUpdated={onUpdated}
+        />
+      </MemoryRouter>
+    );
+    rerender(
+      <MemoryRouter>
+        <DomainDetailDialog
+          domainId={domain.id}
+          open
+          onOpenChange={vi.fn()}
+          onUpdated={onUpdated}
+        />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText("104.16.1.1, 104.16.2.1")).toBeInTheDocument();
+    expect(checkDomainDns).not.toHaveBeenCalled();
+  });
+
+  it("reuses a check from the last minute instead of probing again", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["domains:view", "domains:edit"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getDomain").mockResolvedValue({
+      ...domain,
+      lastDnsCheckAt: new Date(Date.now() - 10_000).toISOString(),
+    });
+    const checkDomainDns = vi.spyOn(api, "checkDomainDns").mockResolvedValue(domain);
+
+    render(
+      <MemoryRouter>
+        <DomainDetailDialog domainId={domain.id} open onOpenChange={vi.fn()} onUpdated={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("104.16.1.1, 104.16.2.1")).toBeInTheDocument();
+    expect(checkDomainDns).not.toHaveBeenCalled();
   });
 
   it("shows Cloudflare migration state as a shared detail row for external DNS", async () => {

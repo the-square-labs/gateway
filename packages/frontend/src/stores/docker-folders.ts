@@ -82,6 +82,16 @@ function storageKey(resourceType: DockerFolderResourceType) {
     : `${EXPANDED_DOCKER_FOLDERS_STORAGE_KEY}:${resourceType}`;
 }
 
+/** Whether the user ever folded a folder in this list (the first toggle saves the set). */
+export function hasSavedFolderExpansion(type: DockerFolderResourceType): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(storageKey(type)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function loadExpandedFolderIds(resourceType: DockerFolderResourceType): string[] {
   if (typeof window === "undefined") return [];
   try {

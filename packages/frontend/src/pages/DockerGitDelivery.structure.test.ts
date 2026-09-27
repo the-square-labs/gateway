@@ -8,20 +8,27 @@ function source(path: string) {
 describe("Docker Git delivery UI structure", () => {
   it("uses the existing Docker list, filter, select, and build detail primitives", () => {
     const builds = source("./DockerBuilds.tsx");
+    const table = source("./docker-detail/DockerBuildsTable.tsx");
     expect(builds).toContain('from "@/components/common/SearchFilterBar"');
-    expect(builds).toContain('from "@/components/ui/data-table"');
+    expect(builds).toContain('from "./docker-detail/DockerBuildsTable"');
     expect(builds).toContain('from "@/components/ui/select"');
     expect(builds).toContain('from "./docker-detail/DockerBuildDetailsDialog"');
     expect(builds).not.toContain('from "@/components/common/Combobox"');
-    expect(builds).not.toContain('header: "Build Worker"');
     expect(builds).toContain("listDockerBuildPage");
-    expect(builds).toContain("Scroll to load older builds");
     expect(builds).not.toContain("View all");
-    expect(builds).not.toContain('header: "SHA"');
-    expect(builds).toContain("formatDockerBuildDuration(build, now)");
-    expect(builds).toContain('"Deployment completed"');
     expect(builds).not.toContain('size="sm"');
     expect(builds).not.toContain("embedded={embedded}");
+    expect(table).toContain('from "@/components/ui/data-table"');
+    expect(table).not.toContain('header: "Build Worker"');
+    expect(table).not.toContain('header: "SHA"');
+    expect(table).toContain("Scroll to load older builds");
+    expect(table).toContain("formatDockerBuildDuration(build, now)");
+    expect(table).toContain('"Deployment completed"');
+    expect(table).not.toContain('size="sm"');
+    // Rows have one deterministic height, so virtual offsets never overlap two-line cells.
+    expect(table).toContain("fixedRowHeight={ROW_HEIGHT}");
+    expect(table).toContain("<RelativeTime");
+    expect(table).toContain("value={build.createdAt}");
   });
 
   it("uses settings rows for editable source configuration and a shared details dialog", () => {
@@ -36,17 +43,21 @@ describe("Docker Git delivery UI structure", () => {
     expect(sourcePanel).not.toContain('ariaLabel="Require SBOM"');
     expect(sourcePanel).not.toContain('ariaLabel="Require provenance"');
     expect(sourcePanel).not.toContain('size="sm"');
+    expect(sourcePanel).toContain('title="Destructive actions"');
+    // Repository and Build share row tracks side by side.
+    expect(sourcePanel).toContain("xl:grid-rows-subgrid");
+    expect(sourcePanel).toContain("syncDockerSource");
+    // The Source tab has no build list; builds live in the Builds tab only.
     const resourceTabs = source("./docker-detail/DockerResourceGitTabs.tsx");
-    expect(resourceTabs).toContain("hasActiveBuilds ? 5_000 : 15_000");
-    expect(resourceTabs).toContain("if (!document.hidden) void refreshBuilds()");
-    expect(history).toContain('from "@/components/common/SimpleTable"');
-    expect(history).toContain('from "@/components/ui/data-table"');
+    expect(resourceTabs).not.toContain("listDockerBuilds");
+    // One build table everywhere: a resource's Builds tab reuses the Docker Builds page table.
+    expect(history).toContain('from "./DockerBuildsTable"');
     expect(history).toContain('from "./DockerBuildDetailsDialog"');
-    expect(history).toContain("View all");
+    expect(history).not.toContain('from "@/components/common/SimpleTable"');
+    expect(history).not.toContain('from "@/components/ui/data-table"');
+    expect(history).not.toContain("View all");
     expect(history).toContain("listDockerBuildPage");
-    expect(history).not.toContain('minWidth="54rem"');
-    expect(history).toContain("horizontalScroll={embedded}");
-    expect(history).toContain('minWidth={embedded ? "900px" : undefined}');
+    expect(history).toContain("hasActiveBuilds ? 5_000 : 15_000");
   });
 
   it("keeps separate Source and Builds tabs for containers and deployments", () => {
@@ -239,9 +250,9 @@ describe("Docker Git delivery UI structure", () => {
     expect(fields).toContain('from "@/components/common/AnimatedHeight"');
     expect(deploySurface).toContain('from "@/components/common/Combobox"');
     expect(fields).toContain('from "@/components/ui/tabs"');
-    expect(repository).toContain('from "@/components/common/ToggleField"');
-    expect(repository.match(/<ToggleField\b/g)).toHaveLength(2);
-    expect(source("../components/common/ToggleField.tsx")).toContain(
+    expect(repository).toContain('from "@/components/common/SwitchCard"');
+    expect(repository.match(/<SwitchCard\b/g)).toHaveLength(2);
+    expect(source("../components/common/SwitchCard.tsx")).toContain(
       'from "@/components/ui/switch"'
     );
     expect(fields).toContain('<SelectTrigger aria-label="Resource type">');

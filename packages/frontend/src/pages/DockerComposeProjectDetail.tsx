@@ -31,6 +31,7 @@ import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import {
   type ResponsiveHeaderAction,
   ResponsiveHeaderActions,
@@ -69,7 +70,6 @@ import {
 import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { createClientUuid } from "@/lib/client-id";
@@ -102,27 +102,6 @@ import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
 import { MultiContainerMonitoring } from "./docker-detail/MultiContainerMonitoring";
 
 const ACTIVE_STATUSES = new Set(["pending", "running", "cancelling", "reconciling"]);
-
-function formatCompactRelativeTime(value: string) {
-  const elapsedMs = Math.max(0, Date.now() - new Date(value).getTime());
-  const minutes = Math.floor(elapsedMs / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-
-  const weeks = Math.floor(days / 7);
-  if (weeks < 5) return `${weeks}w ago`;
-
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-
-  return `${Math.floor(days / 365)}y ago`;
-}
 
 type ComposeService = DockerComposeProject["services"][number];
 
@@ -441,6 +420,14 @@ export function DockerComposeProjectDetail() {
       toast.error(error instanceof Error ? error.message : "Failed to delete revision");
     }
   };
+
+  // Same gate as the Availability routes; the Settings tab holds only Availability, so it goes too.
+  const canManageAvailability =
+    !!project &&
+    scopeMatches(user?.scopes ?? [], `docker:availability:manage:${project.nodeId}/${project.id}`);
+  useEffect(() => {
+    if (project && !canManageAvailability && activeTab === "settings") setActiveTab("overview");
+  }, [activeTab, canManageAvailability, project, setActiveTab]);
 
   if (loading) return <DetailPageSkeleton label="Loading Compose project" tabs={8} />;
   if (!project) {
@@ -771,16 +758,7 @@ export function DockerComposeProjectDetail() {
       header: "Created",
       width: "110px",
       render: (revision) => (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex cursor-default text-muted-foreground" tabIndex={0}>
-              {formatCompactRelativeTime(revision.createdAt)}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            {new Date(revision.createdAt).toLocaleString()}
-          </TooltipContent>
-        </Tooltip>
+        <RelativeTime value={revision.createdAt} className="text-muted-foreground" />
       ),
     },
     {
@@ -855,16 +833,7 @@ export function DockerComposeProjectDetail() {
       id: "started",
       header: "Started",
       render: (operation) => (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="inline-flex cursor-default text-muted-foreground" tabIndex={0}>
-              {formatCompactRelativeTime(operation.createdAt)}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            {new Date(operation.createdAt).toLocaleString()}
-          </TooltipContent>
-        </Tooltip>
+        <RelativeTime value={operation.createdAt} className="text-muted-foreground" />
       ),
     },
     {
@@ -917,9 +886,7 @@ export function DockerComposeProjectDetail() {
       header: "Started",
       width: "190px",
       render: (operation) => (
-        <span className="text-muted-foreground">
-          {new Date(operation.createdAt).toLocaleString()}
-        </span>
+        <RelativeTime value={operation.createdAt} className="text-muted-foreground" />
       ),
     },
     {
@@ -1159,7 +1126,7 @@ export function DockerComposeProjectDetail() {
             className="shrink-0"
             title="The node snapshot is unavailable"
           >
-            <p className="text-sm text-muted-foreground">Last known Compose metadata is shown.</p>
+            <p>Last known Compose metadata is shown.</p>
           </Notice>
         )}
         <AvailabilityProgress policy={availabilityPolicy} fallbackOperation={currentOperation} />
@@ -1197,7 +1164,7 @@ export function DockerComposeProjectDetail() {
             <TabsTrigger value="logs" className="gap-1.5">
               Logs
             </TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
+            {canManageAvailability && <TabsTrigger value="settings">Settings</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="overview" className="pb-6">
@@ -1262,7 +1229,7 @@ export function DockerComposeProjectDetail() {
                   />
                   <DetailRow
                     label="Last seen"
-                    value={project.lastSeenAt ? new Date(project.lastSeenAt).toLocaleString() : "—"}
+                    value={<RelativeTime value={project.lastSeenAt} />}
                   />
                   <DetailRow label="Volumes" value={project.volumeNames.join(", ") || "—"} />
                   <DetailRow label="Networks" value={project.networkNames.join(", ") || "—"} />
@@ -1397,15 +1364,14 @@ export function DockerComposeProjectDetail() {
           <TabsContent value="variables" className="pb-0">
             <ComposeVariablesTab project={project} canManage={canManage} onApplied={load} />
           </TabsContent>
-          <TabsContent value="settings" className="pb-6">
-            <AvailabilitySection
-              resource={{ type: "compose", composeProjectId: project.id }}
-              canManage={scopeMatches(
-                user?.scopes ?? [],
-                `docker:availability:manage:${project.nodeId}/${project.id}`
-              )}
-            />
-          </TabsContent>
+          {canManageAvailability && (
+            <TabsContent value="settings" className="pb-6">
+              <AvailabilitySection
+                resource={{ type: "compose", composeProjectId: project.id }}
+                canManage
+              />
+            </TabsContent>
+          )}
 
           <TabsContent value="logs" className="flex min-h-0 flex-1 flex-col pb-0">
             {availabilityActive && availabilityLogSources.length > 0 ? (

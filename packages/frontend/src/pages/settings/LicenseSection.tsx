@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
+import { formatDate, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { LicensePlan, LicenseStatus, LicenseStatusView } from "@/types";
@@ -23,11 +25,6 @@ import { resolveLicensePlan } from "./license-plan";
 
 interface LicenseSectionProps {
   canManage: boolean;
-}
-
-function formatDate(value: string | null): string {
-  if (!value) return "-";
-  return new Date(value).toLocaleString();
 }
 
 function planLabel(plan: LicensePlan): string {
@@ -297,7 +294,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
               </Badge>
             }
           />
-          <DetailRow label="Last checked" value={formatDate(status.lastCheckedAt)} />
+          <DetailRow label="Last checked" value={<RelativeTime value={status.lastCheckedAt} />} />
         </div>
       </PanelShell>
 
@@ -324,10 +321,16 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
                       </Badge>
                     }
                   />
-                  <DetailRow label="Last checked" value={formatDate(status.lastCheckedAt)} />
-                  <DetailRow label="Last valid" value={formatDate(status.lastValidAt)} />
+                  <DetailRow
+                    label="Last checked"
+                    value={<RelativeTime value={status.lastCheckedAt} />}
+                  />
+                  <DetailRow
+                    label="Last valid"
+                    value={<RelativeTime value={status.lastValidAt} />}
+                  />
                   {status.graceUntil && (
-                    <DetailRow label="Grace until" value={formatDate(status.graceUntil)} />
+                    <DetailRow label="Grace until" value={formatDateTime(status.graceUntil)} />
                   )}
                   {status.activeInstallationName && (
                     <DetailRow label="Server name" value={status.activeInstallationName} />

@@ -2,9 +2,10 @@ import { Key, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
+import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useRealtime } from "@/hooks/use-realtime";
-import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { LoggingEnvironment, LoggingIngestToken } from "@/types";
@@ -40,6 +40,7 @@ export function LoggingTokenPanel({
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [createdTokenOpen, setCreatedTokenOpen] = useState(false);
   useContentLoading(!tokensLoaded);
 
   const load = useCallback(() => {
@@ -68,8 +69,11 @@ export function LoggingTokenPanel({
     setCreating(true);
     try {
       const token = await api.createLoggingToken(environment.id, { name });
-      setCreatedToken(token.token ?? null);
-      setName("");
+      setCreateDialogOpen(false);
+      if (token.token) {
+        setCreatedToken(token.token);
+        setCreatedTokenOpen(true);
+      }
       load();
     } catch (error) {
       if (!handleLicenseApiError(error, "Logging ingest tokens")) {
@@ -82,10 +86,7 @@ export function LoggingTokenPanel({
 
   const setCreateDialogOpen = (nextOpen: boolean) => {
     onCreateDialogOpenChange(nextOpen);
-    if (!nextOpen) {
-      setCreatedToken(null);
-      setName("");
-    }
+    if (!nextOpen) setName("");
   };
 
   const revoke = async (token: LoggingIngestToken) => {
@@ -121,10 +122,16 @@ export function LoggingTokenPanel({
                       </Badge>
                     </div>
                     <p className="truncate text-xs text-muted-foreground">
-                      {token.tokenPrefix}... &middot; Created {formatDate(token.createdAt)}
-                      {token.lastUsedAt
-                        ? ` · Last used ${formatRelativeDate(token.lastUsedAt)}`
-                        : " · Never used"}
+                      {token.tokenPrefix}... &middot; Created{" "}
+                      <RelativeTime value={token.createdAt} />
+                      {token.lastUsedAt ? (
+                        <>
+                          {" · Last used "}
+                          <RelativeTime value={token.lastUsedAt} />
+                        </>
+                      ) : (
+                        " · Never used"
+                      )}
                     </p>
                   </div>
                 </div>
@@ -151,43 +158,31 @@ export function LoggingTokenPanel({
             <DialogTitle>Create Ingest Token</DialogTitle>
             <DialogDescription>Generate a write-only token for this environment.</DialogDescription>
           </DialogHeader>
-          {createdToken ? (
-            <div className="min-w-0 space-y-3">
-              <p className="text-sm text-muted-foreground">This token is shown once.</p>
-              <CopyValueField
-                label="Ingest token"
-                showLabel={false}
-                value={createdToken}
-                valueClassName="font-mono text-xs"
-              />
-            </div>
-          ) : (
-            <label className="block space-y-1.5">
-              <span className="text-sm font-medium">Name</span>
-              <Input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Production collector"
-              />
-            </label>
-          )}
+          <label className="block space-y-1.5">
+            <span className="text-sm font-medium">Name</span>
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Production collector"
+            />
+          </label>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setCreateDialogOpen(false);
-              }}
-            >
-              Close
+            <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
+              Cancel
             </Button>
-            {!createdToken && (
-              <Button pending={creating} disabled={!name.trim()} onClick={() => void create()}>
-                Create
-              </Button>
-            )}
+            <Button pending={creating} disabled={!name.trim()} onClick={() => void create()}>
+              Create
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <OneTimeSecretDialog
+        open={createdTokenOpen}
+        onOpenChange={setCreatedTokenOpen}
+        title="Ingest Token Created"
+        fields={createdToken ? [{ label: "Ingest token", value: createdToken }] : null}
+        onClosed={() => setCreatedToken(null)}
+      />
     </>
   );
 }

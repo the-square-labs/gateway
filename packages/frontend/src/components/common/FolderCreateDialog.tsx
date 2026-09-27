@@ -11,23 +11,26 @@ import {
 import { Input } from "@/components/ui/input";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 
-interface FolderCreateDialogProps {
+interface FolderNameDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  title?: string;
-  description?: string;
-  initialName?: string;
-  onCreate: (name: string) => void | Promise<void>;
+  title: string;
+  description: string;
+  initialName: string;
+  submitLabel: string;
+  onSubmit: (name: string) => void | Promise<void>;
 }
 
-export function FolderCreateDialog({
+/** The folder name form shared by Create Folder and Rename Folder. */
+function FolderNameDialog({
   open,
   onOpenChange,
-  title = "Create Folder",
-  description = "Enter a name for the new folder.",
-  initialName = "",
-  onCreate,
-}: FolderCreateDialogProps) {
+  title,
+  description,
+  initialName,
+  submitLabel,
+  onSubmit,
+}: FolderNameDialogProps) {
   const [name, setName] = useState(initialName);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const displayedTitle = useRetainedDialogValue(title, open);
@@ -45,7 +48,7 @@ export function FolderCreateDialog({
     if (!trimmed) return;
     setIsSubmitting(true);
     try {
-      await onCreate(trimmed);
+      await onSubmit(trimmed);
       onOpenChange(false);
     } finally {
       setIsSubmitting(false);
@@ -68,6 +71,7 @@ export function FolderCreateDialog({
               void handleSubmit();
             }
           }}
+          aria-label="Folder name"
           placeholder="Folder name"
           autoFocus
         />
@@ -80,10 +84,67 @@ export function FolderCreateDialog({
             pending={isSubmitting}
             disabled={!name.trim()}
           >
-            Create
+            {submitLabel}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+interface FolderCreateDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title?: string;
+  description?: string;
+  initialName?: string;
+  onCreate: (name: string) => void | Promise<void>;
+}
+
+export function FolderCreateDialog({
+  open,
+  onOpenChange,
+  title = "Create Folder",
+  description = "Enter a name for the new folder.",
+  initialName = "",
+  onCreate,
+}: FolderCreateDialogProps) {
+  return (
+    <FolderNameDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      description={description}
+      initialName={initialName}
+      submitLabel="Create"
+      onSubmit={onCreate}
+    />
+  );
+}
+
+interface FolderRenameDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The folder's current name; the field opens with it. */
+  folderName: string;
+  onRename: (name: string) => void | Promise<void>;
+}
+
+export function FolderRenameDialog({
+  open,
+  onOpenChange,
+  folderName,
+  onRename,
+}: FolderRenameDialogProps) {
+  return (
+    <FolderNameDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Rename Folder"
+      description="Enter a new name for this folder."
+      initialName={folderName}
+      submitLabel="Save"
+      onSubmit={onRename}
+    />
   );
 }

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ScopeList } from "@/components/common/ScopeList";
 import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
+import { expandScopeRestrictions } from "@/test/scope-restrictions";
 import { type Node, TOKEN_SCOPES } from "@/types";
 
 const apiMocks = vi.hoisted(() => ({
@@ -50,7 +51,7 @@ describe("ScopeList", () => {
       config: { ...config, features: { ...config.features, loggingEnabled: true } },
     });
   });
-  it("shows only Docker nodes for resource-scoped Docker permissions", () => {
+  it("shows only Docker nodes for resource-scoped Docker permissions", async () => {
     render(
       <ScopeList
         scopes={[
@@ -70,12 +71,13 @@ describe("ScopeList", () => {
         restrictableScopes={["docker:containers:view"]}
       />
     );
+    await expandScopeRestrictions();
 
     expect(screen.getByText("Docker Node")).toBeInTheDocument();
     expect(screen.queryByText("Nginx Node")).not.toBeInTheDocument();
   });
 
-  it("keeps all nodes available for node-scoped node permissions", () => {
+  it("keeps all nodes available for node-scoped node permissions", async () => {
     render(
       <ScopeList
         scopes={[
@@ -95,12 +97,13 @@ describe("ScopeList", () => {
         restrictableScopes={["nodes:details"]}
       />
     );
+    await expandScopeRestrictions();
 
     expect(screen.getByText("Docker Node")).toBeInTheDocument();
     expect(screen.getByText("Nginx Node")).toBeInTheDocument();
   });
 
-  it("restricts route creation to Ingress nodes", () => {
+  it("restricts route creation to Ingress nodes", async () => {
     render(
       <ScopeList
         scopes={[
@@ -120,6 +123,7 @@ describe("ScopeList", () => {
         restrictableScopes={["proxy:create"]}
       />
     );
+    await expandScopeRestrictions();
 
     expect(screen.getByText("Nginx Node")).toBeInTheDocument();
     expect(screen.queryByText("Docker Node")).not.toBeInTheDocument();
@@ -173,6 +177,7 @@ describe("ScopeList", () => {
         restrictableScopes={["proxy:view"]}
       />
     );
+    await expandScopeRestrictions();
 
     const folderLabel = await screen.findByText("Production");
     fireEvent.click(folderLabel.closest("label")!.querySelector("input")!);
@@ -223,12 +228,16 @@ describe("ScopeList", () => {
         restrictableScopes={["docker:containers:view"]}
       />
     );
+    await expandScopeRestrictions();
 
     const folder = await screen.findByText("Apps/Production");
     const resource = await screen.findByText("gateway-api");
-    expect(screen.getByText("Docker Node").closest("label")).not.toHaveClass("pl-5", "pl-10");
-    expect(folder.closest("label")).toHaveClass("pl-5");
-    expect(resource.closest("label")).toHaveClass("pl-10");
+    expect(screen.getByText("Docker Node").closest("label")?.parentElement).not.toHaveClass(
+      "pl-5",
+      "pl-10"
+    );
+    expect(folder.closest("label")?.parentElement).toHaveClass("pl-5");
+    expect(resource.closest("label")?.parentElement).toHaveClass("pl-10");
   });
 
   it("shows an entire group when the query matches only the group name", () => {

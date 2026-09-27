@@ -4,12 +4,13 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ProgressBar } from "@/components/ui/progress-bar";
-import { formatBytes, formatDateTime } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { InferenceCoreOperationPhase, InferenceCoreStatus } from "@/types/inference-core";
 
@@ -527,7 +528,7 @@ export function InferenceCoreLifecyclePanel({
               />
               <DetailRow
                 label="Last check"
-                value={status.health.checkedAt ? formatDateTime(status.health.checkedAt) : "Never"}
+                value={<RelativeTime value={status.health.checkedAt} fallback="Never" />}
               />
             </>
           )}

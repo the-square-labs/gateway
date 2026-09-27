@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import {
   ResourceListCell,
   type ResourceListColumn,
@@ -33,6 +34,7 @@ import {
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
+import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { SiemDelivery, SiemDeliveryStatus, SiemDestination } from "@/types";
@@ -381,9 +383,10 @@ export function SiemDeliveryLogTab({
                       </span>
                     </ResourceListCell>
                     <ResourceListCell>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(delivery.createdAt).toLocaleString()}
-                      </span>
+                      <RelativeTime
+                        value={delivery.createdAt}
+                        className="text-xs text-muted-foreground"
+                      />
                     </ResourceListCell>
                   </ResourceListRow>
                 ))
@@ -454,10 +457,10 @@ export function SiemDeliveryLogTab({
                   {detail.attempt}/{detail.maxAttempts}
                 </ValueTile>
                 <ValueTile className="sm:col-span-3" label="Created">
-                  {new Date(detail.createdAt).toLocaleString()}
+                  {formatDateTime(detail.createdAt)}
                 </ValueTile>
                 <ValueTile className="sm:col-span-3" label="Next retry">
-                  {detail.nextRetryAt ? new Date(detail.nextRetryAt).toLocaleString() : "—"}
+                  {formatDateTime(detail.nextRetryAt)}
                 </ValueTile>
               </div>
               {detail.payload && (

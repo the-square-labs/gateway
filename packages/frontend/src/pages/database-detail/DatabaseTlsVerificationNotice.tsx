@@ -64,7 +64,7 @@ export function DatabaseTlsVerificationNotice({
         ) : undefined
       }
     >
-      <p className="text-sm text-muted-foreground">
+      <p>
         The connection is encrypted, but Gateway does not check the server identity, so the database
         could be impersonated on the network path.
       </p>

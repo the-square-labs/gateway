@@ -19,6 +19,7 @@ import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import {
   type ResponsiveHeaderAction,
   ResponsiveHeaderActions,
@@ -142,7 +143,7 @@ export function LoggingSchemaDetail({
           }
           description={
             <span className="block truncate">
-              {schema.slug} · Updated {new Date(schema.updatedAt).toLocaleString()}
+              {schema.slug} · Updated <RelativeTime value={schema.updatedAt} />
             </span>
           }
           actions={

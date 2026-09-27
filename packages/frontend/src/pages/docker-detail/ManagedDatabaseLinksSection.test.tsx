@@ -263,6 +263,22 @@ describe("ManagedDatabaseLinksSection", () => {
     );
   });
 
+  it("shows a link saved into a workload that has not run it yet as pending", async () => {
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([
+      { ...binding, observedState: "target_applied" },
+    ]);
+    const user = userEvent.setup();
+
+    renderLinks();
+
+    await user.hover(await screen.findByText("pending"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Saved in the workload's configuration. It takes effect when the workload next starts or finishes its current rollout."
+    );
+    expect(screen.queryByText("reconciling")).not.toBeInTheDocument();
+  });
+
   it("keeps links visible but unavailable when their databases node is offline", async () => {
     vi.spyOn(api, "listNodes").mockResolvedValue({
       data: [
@@ -397,6 +413,69 @@ describe("ManagedDatabaseLinksSection", () => {
         targetResourceId: "project-1:worker",
       })
     );
+  });
+
+  it("links a Compose project before its first revision to a typed service, checked when that revision lands", async () => {
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([]);
+    const create = vi.spyOn(api, "createManagedDatabaseBinding").mockResolvedValue({
+      ...binding,
+      targetType: "compose_service",
+      targetResourceId: "project-1:worker",
+    });
+    vi.mocked(confirm).mockResolvedValue(true);
+
+    renderLinks({
+      targetType: "compose_service",
+      targetResourceId: "project-1",
+      containerName: "shop",
+      composeServices: [],
+      composeBeforeFirstRevision: true,
+      recreatesRunningWorkload: false,
+    });
+
+    expect(
+      await screen.findByText(
+        "Private sidecar connections. Saved now and added to the selected services by the project's first revision."
+      )
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const service = await screen.findByRole("textbox", { name: "Compose service" });
+    expect(screen.getByText(/Checked when the first revision lands/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add link" })).toBeDisabled();
+
+    fireEvent.change(service, { target: { value: "worker" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add link" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(
+        database.id,
+        expect.objectContaining({
+          targetType: "compose_service",
+          targetResourceId: "project-1:worker",
+        })
+      )
+    );
+  });
+
+  it("offers the services of the source's Compose file before the first revision", async () => {
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([]);
+
+    renderLinks({
+      targetType: "compose_service",
+      targetResourceId: "project-1",
+      containerName: "shop",
+      composeServices: [{ name: "api", existingVariableNames: [] }],
+      composeBeforeFirstRevision: true,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("combobox", { name: "Compose service" })).toHaveTextContent(
+      "api"
+    );
+    expect(screen.queryByRole("textbox", { name: "Compose service" })).not.toBeInTheDocument();
   });
 
   it("does not submit an enclosing form", async () => {

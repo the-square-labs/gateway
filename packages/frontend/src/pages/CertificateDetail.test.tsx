@@ -75,7 +75,7 @@ describe("CertificateDetail", () => {
           ? 40
           : this.hasAttribute("data-header-action-item")
             ? 120
-            : 1_200;
+            : 1_000;
         return {
           width,
           height: 0,

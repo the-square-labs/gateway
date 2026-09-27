@@ -86,7 +86,8 @@ function Harness({
         }
         restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
         allowedResourceIds={allowedResourceIds}
-        collapsedRestrictions={collapsedRestrictions}
+        // These tests work on the open restriction panel; one test covers the collapsed summary.
+        collapsedRestrictions={collapsedRestrictions ?? false}
       />
       <output data-testid="final">{buildFinalScopes(selected, resources).join(" ")}</output>
     </>

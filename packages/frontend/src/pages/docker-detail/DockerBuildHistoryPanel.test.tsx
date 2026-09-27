@@ -1,5 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode, Ref } from "react";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -19,6 +18,7 @@ vi.mock("@/components/ui/data-table", async () => {
       footer,
       keyFn,
       loading,
+      onRowClick,
       scrollRef,
     }: {
       className?: string;
@@ -32,6 +32,7 @@ vi.mock("@/components/ui/data-table", async () => {
       footer?: ReactNode;
       keyFn: (row: unknown) => string;
       loading?: boolean;
+      onRowClick?: (row: unknown) => void;
       scrollRef?: Ref<HTMLDivElement>;
     }) => {
       // Like the real table, an empty first load is reported to the enclosing gate.
@@ -47,7 +48,7 @@ vi.mock("@/components/ui/data-table", async () => {
           </div>
           <div ref={scrollRef} data-route-scroll-container="" className="overflow-y-auto">
             {data.map((row) => (
-              <div key={keyFn(row)} role="row">
+              <div key={keyFn(row)} role="row" onClick={() => onRowClick?.(row)}>
                 {columns.map((column) => (
                   <div key={column.key}>{column.render?.(row)}</div>
                 ))}
@@ -72,7 +73,7 @@ describe("DockerBuildHistoryPanel", () => {
     vi.useRealTimers();
   });
 
-  it("ticks inline history every second without refetching and freezes completed rows", async () => {
+  it("ticks the history every second without refetching and freezes completed rows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-10T12:00:10Z"));
     const active = {
@@ -90,9 +91,7 @@ describe("DockerBuildHistoryPanel", () => {
     const request = vi
       .spyOn(api, "listDockerBuildPage")
       .mockResolvedValue({ data: [active, completed], nextCursor: null });
-    renderWithRouter(
-      <DockerBuildHistoryPanel builds={[]} sourceBindingId="source-1" inlineHistory />
-    );
+    renderWithRouter(<DockerBuildHistoryPanel sourceBindingId="source-1" />);
     await act(async () => undefined);
     expect(screen.getByText("10s")).toBeInTheDocument();
     expect(screen.getByText("4s")).toBeInTheDocument();
@@ -102,47 +101,6 @@ describe("DockerBuildHistoryPanel", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("shows 5 recent builds and opens the full history from View all", async () => {
-    const builds = Array.from({ length: 12 }, (_, index) => build(index));
-    let resolveBuilds:
-      | ((page: { data: DockerBuild[]; nextCursor: string | null }) => void)
-      | undefined;
-    vi.spyOn(api, "listDockerBuildPage").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveBuilds = resolve;
-        })
-    );
-    vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
-    renderWithRouter(
-      <DockerBuildHistoryPanel
-        builds={builds}
-        sourceBindingId="11111111-1111-4111-8111-111111111111"
-      />
-    );
-
-    expect(screen.getAllByRole("row")).toHaveLength(6);
-    fireEvent.click(screen.getByRole("button", { name: "View all" }));
-
-    const dialog = screen.getByRole("dialog", { name: "Build History" });
-    expect(dialog).toBeInTheDocument();
-    // The dialog waits for the first history page before it reveals its body.
-    expect(dialog).toHaveAttribute("data-reveal-phase", "pending");
-    await act(async () => {
-      resolveBuilds?.({ data: builds, nextCursor: null });
-    });
-    await waitFor(() => expect(dialog).toHaveAttribute("data-reveal-phase", "revealed"));
-    const scrollContainer = dialog.querySelector('[data-route-scroll-container=""]');
-    expect(scrollContainer).toHaveClass("overflow-y-auto");
-    expect(scrollContainer).not.toHaveClass("overflow-auto");
-    expect(api.listDockerBuildPage).toHaveBeenCalledWith({
-      sourceBindingId: "11111111-1111-4111-8111-111111111111",
-      cursor: undefined,
-      limit: 50,
-    });
-    expect(screen.queryByText("End of build history")).not.toBeInTheDocument();
-  });
-
   it("shows a failed build reason in details and keeps metadata rows vertically centered", async () => {
     const failedBuild: DockerBuild = {
       ...build(0),
@@ -150,26 +108,33 @@ describe("DockerBuildHistoryPanel", () => {
       errorCode: "BUILD_DISPATCH_FAILED",
       errorMessage: "relay grant revision 3 is older than 177",
     };
+    vi.spyOn(api, "listDockerBuildPage").mockResolvedValue({
+      data: [failedBuild],
+      nextCursor: null,
+    });
     vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
     renderWithRouter(
-      <DockerBuildHistoryPanel
-        builds={[failedBuild]}
-        sourceBindingId="11111111-1111-4111-8111-111111111111"
-      />
+      <DockerBuildHistoryPanel sourceBindingId="11111111-1111-4111-8111-111111111111" />
     );
 
-    fireEvent.click(screen.getByText(failedBuild.commitSha.slice(0, 10)));
+    // A finished build without an artifact says so instead of waiting for one.
+    expect(await screen.findByText("No artifact")).toBeInTheDocument();
+    fireEvent.click(screen.getByText(failedBuild.commitSha.slice(0, 8)));
 
-    expect(await screen.findByText(failedBuild.errorMessage!)).toBeInTheDocument();
-    const buildWorkerLabel = screen
+    // The table row shows the reason too; the details dialog repeats it.
+    const details = within(await screen.findByRole("dialog"));
+    expect(await details.findByText(failedBuild.errorMessage!)).toBeInTheDocument();
+    const buildWorkerLabel = details
       .getAllByText("Build Worker")
       .find((element) => element.tagName === "SPAN");
-    const statusLabel = screen.getAllByText("Status").find((element) => element.tagName === "SPAN");
+    const statusLabel = details
+      .getAllByText("Status")
+      .find((element) => element.tagName === "SPAN");
     expect(buildWorkerLabel?.parentElement).toHaveClass("items-center");
     expect(statusLabel?.parentElement).toHaveClass("items-center");
   });
 
-  it("loads Pages build history inline and requests older rows on scroll", async () => {
+  it("loads the history in the shared build table and requests older rows on scroll", async () => {
     let intersectionCallback: IntersectionObserverCallback | undefined;
     vi.stubGlobal(
       "IntersectionObserver",
@@ -188,11 +153,7 @@ describe("DockerBuildHistoryPanel", () => {
     );
 
     renderWithRouter(
-      <DockerBuildHistoryPanel
-        builds={[]}
-        sourceBindingId="11111111-1111-4111-8111-111111111111"
-        inlineHistory
-      />
+      <DockerBuildHistoryPanel sourceBindingId="11111111-1111-4111-8111-111111111111" />
     );
 
     await waitFor(() =>
@@ -202,15 +163,19 @@ describe("DockerBuildHistoryPanel", () => {
         limit: 50,
       })
     );
-    expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
     expect(await screen.findByText("Scroll to load older builds")).toBeInTheDocument();
     const scrollContainer = document.querySelector('[data-route-scroll-container=""]');
     expect(scrollContainer).toHaveClass("overflow-y-auto");
     expect(scrollContainer?.parentElement).toHaveClass("[&_[data-route-scroll-container]]:flex-1");
-    expect(screen.getByText("Status")).toHaveAttribute("data-align", "center");
-    expect(screen.getByText("Build Worker")).toHaveAttribute("data-align", "center");
-    expect(screen.getByText("Result")).toHaveAttribute("data-align", "center");
-    expect(screen.getByText("Time")).toHaveAttribute("data-align", "center");
+    // The Docker Builds page table without the Source / resource column, which would repeat
+    // this one resource; the commit leads.
+    expect(screen.queryByText("Source / resource")).not.toBeInTheDocument();
+    expect(screen.queryByText("Service")).not.toBeInTheDocument();
+    expect(screen.getByText("Commit / ref")).toHaveAttribute("data-align", "left");
+    expect(screen.getByText("Status")).toHaveAttribute("data-align", "right");
+    expect(screen.getByText("Result")).toHaveAttribute("data-align", "right");
+    expect(screen.getByText("Duration / created")).toHaveAttribute("data-align", "right");
+    expect(screen.queryByText("Build Worker")).not.toBeInTheDocument();
     expect(screen.getAllByText("10s").length).toBeGreaterThan(0);
 
     await waitFor(() => expect(intersectionCallback).toBeDefined());
@@ -229,6 +194,33 @@ describe("DockerBuildHistoryPanel", () => {
     );
   });
 
+  it("leads Compose build history with the service instead of the resource", async () => {
+    const serviceBuild = (index: number, serviceName: string): DockerBuild => ({
+      ...build(index),
+      serviceName,
+      target: {
+        kind: "compose_project",
+        nodeId: "33333333-3333-4333-8333-333333333333",
+        composeProjectId: "44444444-4444-4444-8444-444444444444",
+        name: "stack",
+        serviceName,
+      },
+    });
+    vi.spyOn(api, "listDockerBuildPage").mockResolvedValue({
+      data: [serviceBuild(0, "api"), serviceBuild(1, "worker")],
+      nextCursor: null,
+    });
+
+    renderWithRouter(
+      <DockerBuildHistoryPanel sourceBindingId="11111111-1111-4111-8111-111111111111" />
+    );
+
+    expect(await screen.findByText("worker")).toBeInTheDocument();
+    expect(screen.getByText("Service")).toHaveAttribute("data-align", "left");
+    expect(screen.getByText("Commit / ref")).toHaveAttribute("data-align", "right");
+    expect(screen.queryByText("Source / resource")).not.toBeInTheDocument();
+  });
+
   it("does not let an older initial page overwrite a newer realtime refresh", async () => {
     let resolveInitial!: (page: { data: DockerBuild[]; nextCursor: string | null }) => void;
     const initialPage = new Promise<{ data: DockerBuild[]; nextCursor: string | null }>(
@@ -243,11 +235,7 @@ describe("DockerBuildHistoryPanel", () => {
       .mockResolvedValueOnce({ data: [fresh], nextCursor: null });
 
     renderWithRouter(
-      <DockerBuildHistoryPanel
-        builds={[]}
-        sourceBindingId="11111111-1111-4111-8111-111111111111"
-        inlineHistory
-      />
+      <DockerBuildHistoryPanel sourceBindingId="11111111-1111-4111-8111-111111111111" />
     );
     await waitFor(() => expect(api.listDockerBuildPage).toHaveBeenCalledTimes(1));
     const realtimeHandler = [...vi.mocked(useRealtime).mock.calls].find(
@@ -293,11 +281,7 @@ describe("DockerBuildHistoryPanel", () => {
       .mockResolvedValueOnce({ data: head, nextCursor: "older" });
 
     renderWithRouter(
-      <DockerBuildHistoryPanel
-        builds={[]}
-        sourceBindingId="11111111-1111-4111-8111-111111111111"
-        inlineHistory
-      />
+      <DockerBuildHistoryPanel sourceBindingId="11111111-1111-4111-8111-111111111111" />
     );
     await screen.findByText("Scroll to load older builds");
     act(() => {
@@ -319,7 +303,7 @@ describe("DockerBuildHistoryPanel", () => {
       resolveCursor({ data: [build(51)], nextCursor: null });
       await cursorPage;
     });
-    expect(screen.queryByText(build(51).commitSha.slice(0, 10))).not.toBeInTheDocument();
+    expect(screen.queryByText(build(51).commitSha.slice(0, 8))).not.toBeInTheDocument();
   });
 
   it("keeps an older active build and merges its terminal realtime update", async () => {
@@ -342,13 +326,9 @@ describe("DockerBuildHistoryPanel", () => {
     vi.spyOn(api, "getDockerBuild").mockResolvedValue(terminal);
 
     renderWithRouter(
-      <DockerBuildHistoryPanel
-        builds={[]}
-        sourceBindingId="11111111-1111-4111-8111-111111111111"
-        inlineHistory
-      />
+      <DockerBuildHistoryPanel sourceBindingId="11111111-1111-4111-8111-111111111111" />
     );
-    expect(await screen.findByText(olderActive.commitSha.slice(0, 10))).toBeInTheDocument();
+    expect(await screen.findByText(olderActive.commitSha.slice(0, 8))).toBeInTheDocument();
     const realtimeHandler = [...vi.mocked(useRealtime).mock.calls].find(
       ([channel]) => channel === "docker.build.changed"
     )?.[1];
@@ -362,7 +342,7 @@ describe("DockerBuildHistoryPanel", () => {
 
     await waitFor(() => expect(api.getDockerBuild).toHaveBeenCalledWith(olderActive.id));
     expect(await screen.findByText("failed")).toBeInTheDocument();
-    expect(screen.getByText(olderActive.commitSha.slice(0, 10))).toBeInTheDocument();
+    expect(screen.getByText(olderActive.commitSha.slice(0, 8))).toBeInTheDocument();
   });
 
   it("ignores an older point response that resolves after a newer build update", async () => {
@@ -388,11 +368,7 @@ describe("DockerBuildHistoryPanel", () => {
       .mockReturnValueOnce(newerResponse);
 
     renderWithRouter(
-      <DockerBuildHistoryPanel
-        builds={[]}
-        sourceBindingId="11111111-1111-4111-8111-111111111111"
-        inlineHistory
-      />
+      <DockerBuildHistoryPanel sourceBindingId="11111111-1111-4111-8111-111111111111" />
     );
     await screen.findByText("building");
     const realtimeHandler = [...vi.mocked(useRealtime).mock.calls].find(
@@ -419,7 +395,7 @@ describe("DockerBuildHistoryPanel", () => {
     expect(screen.queryByText("building")).not.toBeInTheDocument();
   });
 
-  it("moves the result detail into the badge tooltip", async () => {
+  it("shows the result detail under the result badge", async () => {
     const completed = build(0);
     completed.artifact = {
       id: "artifact-1",
@@ -437,14 +413,15 @@ describe("DockerBuildHistoryPanel", () => {
       verifiedAt: "2026-08-25T14:00:00.000Z",
       createdAt: "2026-08-25T14:00:00.000Z",
     };
-    vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
-    const user = userEvent.setup();
+    vi.spyOn(api, "listDockerBuildPage").mockResolvedValue({ data: [completed], nextCursor: null });
 
-    renderWithRouter(<DockerBuildHistoryPanel builds={[completed]} />);
+    renderWithRouter(
+      <DockerBuildHistoryPanel sourceBindingId="11111111-1111-4111-8111-111111111111" />
+    );
 
-    expect(screen.queryByText("Deployment completed")).not.toBeInTheDocument();
-    await user.hover(screen.getByText("Deployed").parentElement!);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("Deployment completed");
+    expect(await screen.findByText("Deployed")).toBeInTheDocument();
+    expect(screen.getByText("Deployment completed")).toBeInTheDocument();
+    expect(screen.queryByText(/sha256:/)).not.toBeInTheDocument();
   });
 });
 

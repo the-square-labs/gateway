@@ -46,6 +46,8 @@ export interface DockerSourceBinding {
   composeFilePath: string | null;
   composeVariables: Record<string, string>;
   composeSecretKeys: string[];
+  /** Services of the Compose file the source last resolved; null for other targets or before it resolved. */
+  composeServiceNames?: string[] | null;
   autoBuild: boolean;
   autoDeploy: boolean;
   buildArgs: Record<string, string>;
@@ -71,6 +73,15 @@ export interface DockerSourceBinding {
   lastWebhookError: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Answer of a manual repository check (Sync now). */
+export interface DockerSourceSyncResult {
+  source: DockerSourceBinding;
+  /** The branch head moved since the previous check. */
+  changed: boolean;
+  /** Automatic build queued for the head; null when the source does not build automatically or already built it. */
+  build: DockerBuild | null;
 }
 
 export interface DockerSourceBindingConfig {

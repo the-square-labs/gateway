@@ -12,6 +12,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Button } from "@/components/ui/button";
@@ -37,7 +38,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { PageProject, PageProjectPlacementOption } from "@/types";
-import { formatPageBytes, formatPageDate } from "./page-format";
+import { formatPageBytes } from "./page-format";
 
 function CreateProjectDialog({
   open,
@@ -237,7 +238,7 @@ const projectColumns: ResourceListColumn<PageProject>[] = [
     width: "22%",
     align: "right",
     cellContentClassName: "text-sm text-muted-foreground",
-    renderCell: (project) => formatPageDate(project.updatedAt),
+    renderCell: (project) => <RelativeTime value={project.updatedAt} />,
   },
 ];
 

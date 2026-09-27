@@ -1,24 +1,28 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Braces,
   GitBranch,
+  Hammer,
   History,
   KeyRound,
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   Save,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -53,7 +57,6 @@ interface DockerGitSourcePanelProps {
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
-  onBuildQueued?: () => void;
   onSourceChange?: (source: DockerSourceBinding | null) => void;
   composeVariables?: Record<string, string>;
   composeSecretKeys?: string[];
@@ -63,6 +66,89 @@ interface DockerGitSourcePanelProps {
 }
 
 type VulnerabilityThreshold = "critical" | "high" | "medium" | "low" | "none" | "disabled";
+type PackageManager = "npm" | "pnpm" | "yarn";
+type NodeVersion = "20" | "22" | "24";
+
+/** Editable settings of a connected source. */
+interface SourceSettings {
+  branch: string;
+  applicationRoot: string;
+  autoBuild: boolean;
+  dockerfilePath: string;
+  contextPath: string;
+  composeFilePath: string;
+  autoDeploy: boolean;
+  vulnerabilityThreshold: VulnerabilityThreshold;
+  vulnerabilityScope: "all" | "application";
+  packageManager: PackageManager;
+  packageManagerVersion: string;
+  nodeVersion: NodeVersion;
+  buildScript: string;
+  artifactDirectory: string;
+  publishTag: string;
+  buildVariables: Record<string, string>;
+}
+
+type SettingsSection = "repository" | "build" | "variables";
+
+/**
+ * Each section saves only its own settings. Repository: where the code comes from and when it
+ * builds. Build: how it is built, checked and shipped. Variables: the Pages Build Variables.
+ */
+const SECTION_SETTINGS: Record<SettingsSection, Array<keyof SourceSettings>> = {
+  repository: ["branch", "applicationRoot", "autoBuild"],
+  build: [
+    "dockerfilePath",
+    "contextPath",
+    "composeFilePath",
+    "autoDeploy",
+    "vulnerabilityThreshold",
+    "vulnerabilityScope",
+    "packageManager",
+    "packageManagerVersion",
+    "nodeVersion",
+    "buildScript",
+    "artifactDirectory",
+    "publishTag",
+  ],
+  variables: ["buildVariables"],
+};
+
+const SECTION_SAVED: Record<SettingsSection, string> = {
+  repository: "Repository settings updated",
+  build: "Build settings updated",
+  variables: "Build Variables updated",
+};
+
+function sourceSettings(source: DockerSourceBinding | null | undefined): SourceSettings {
+  return {
+    branch: source?.branch ?? "main",
+    applicationRoot: source?.applicationRoot || ".",
+    autoBuild: source?.autoBuild ?? true,
+    dockerfilePath: source?.dockerfilePath ?? "Dockerfile",
+    contextPath: source?.contextPath ?? ".",
+    composeFilePath: source?.composeFilePath ?? "compose.yaml",
+    autoDeploy: source?.autoDeploy ?? true,
+    vulnerabilityThreshold: source?.policy?.vulnerabilityThreshold ?? "critical",
+    vulnerabilityScope: source?.policy?.vulnerabilityScope ?? "all",
+    packageManager: source?.packageManager ?? "npm",
+    packageManagerVersion: source?.packageManagerVersion ?? "",
+    nodeVersion: source?.nodeVersion ?? "24",
+    buildScript: source?.buildScript ?? "build",
+    artifactDirectory: source?.artifactDirectory ?? "dist",
+    publishTag: source?.publishTag ?? "production",
+    buildVariables: source?.buildArgs ?? {},
+  };
+}
+
+const SETTING_KEYS = Object.keys(sourceSettings(null)) as Array<keyof SourceSettings>;
+
+function sameSetting(
+  left: SourceSettings[keyof SourceSettings],
+  right: SourceSettings[keyof SourceSettings]
+) {
+  return typeof left === "object" ? JSON.stringify(left) === JSON.stringify(right) : left === right;
+}
 
 const CONNECT_STEP_ANIMATION = {
   initial: { opacity: 0, y: 8 },
@@ -87,7 +173,6 @@ export function DockerGitSourcePanel({
   loading: suppliedLoading,
   error,
   onRetry,
-  onBuildQueued,
   onSourceChange,
   composeVariables = {},
   composeSecretKeys = [],
@@ -98,7 +183,8 @@ export function DockerGitSourcePanel({
   const navigate = useNavigate();
   const [source, setSource] = useState<DockerSourceBinding | null>(suppliedSource ?? null);
   const [loading, setLoading] = useState(suppliedSource === undefined);
-  const [saving, setSaving] = useState(false);
+  const [savingSection, setSavingSection] = useState<SettingsSection | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [building, setBuilding] = useState(false);
   const [buildWorkerRequiredOpen, setBuildWorkerRequiredOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -107,40 +193,9 @@ export function DockerGitSourcePanel({
   useEffect(() => {
     if (connectError) connectErrorRef.current?.scrollIntoView({ block: "nearest" });
   }, [connectError]);
-  const [branch, setBranch] = useState(suppliedSource?.branch ?? "main");
-  const [dockerfilePath, setDockerfilePath] = useState(
-    suppliedSource?.dockerfilePath ?? "Dockerfile"
-  );
-  const [contextPath, setContextPath] = useState(suppliedSource?.contextPath ?? ".");
-  const [composeFilePath, setComposeFilePath] = useState(
-    suppliedSource?.composeFilePath ?? "compose.yaml"
-  );
-  const [autoBuild, setAutoBuild] = useState(suppliedSource?.autoBuild ?? true);
-  const [autoDeploy, setAutoDeploy] = useState(suppliedSource?.autoDeploy ?? true);
-  const [vulnerabilityThreshold, setVulnerabilityThreshold] = useState<VulnerabilityThreshold>(
-    suppliedSource?.policy?.vulnerabilityThreshold ?? "critical"
-  );
-  const [vulnerabilityScope, setVulnerabilityScope] = useState<"all" | "application">(
-    suppliedSource?.policy?.vulnerabilityScope ?? "all"
-  );
-  const [applicationRoot, setApplicationRoot] = useState(suppliedSource?.applicationRoot ?? ".");
-  const [packageManager, setPackageManager] = useState<"npm" | "pnpm" | "yarn">(
-    suppliedSource?.packageManager ?? "npm"
-  );
-  const [packageManagerVersion, setPackageManagerVersion] = useState(
-    suppliedSource?.packageManagerVersion ?? ""
-  );
-  const [nodeVersion, setNodeVersion] = useState<"20" | "22" | "24">(
-    suppliedSource?.nodeVersion ?? "24"
-  );
-  const [buildScript, setBuildScript] = useState(suppliedSource?.buildScript ?? "build");
-  const [artifactDirectory, setArtifactDirectory] = useState(
-    suppliedSource?.artifactDirectory ?? "dist"
-  );
-  const [publishTag, setPublishTag] = useState(suppliedSource?.publishTag ?? "production");
-  const [buildVariables, setBuildVariables] = useState<Record<string, string>>(
-    suppliedSource?.buildArgs ?? {}
-  );
+  const [settings, setSettings] = useState<SourceSettings>(() => sourceSettings(suppliedSource));
+  // The saved settings the draft was last reconciled with.
+  const reconciledRef = useRef<{ sourceId: string; settings: SourceSettings } | null>(null);
   const [variableDialogOpen, setVariableDialogOpen] = useState(false);
   const [variableName, setVariableName] = useState("");
   const [variableValue, setVariableValue] = useState("");
@@ -264,94 +319,104 @@ export function DockerGitSourcePanel({
   }, [sourceId, targetKind, targetNodeId, targetResourceId]);
 
   useEffect(() => {
+    const previous = reconciledRef.current;
+    reconciledRef.current = source
+      ? { sourceId: source.id, settings: sourceSettings(source) }
+      : null;
     if (!source) return;
-    setBranch(source.branch);
-    setDockerfilePath(source.dockerfilePath);
-    setContextPath(source.contextPath);
-    setComposeFilePath(source.composeFilePath ?? "compose.yaml");
-    setAutoBuild(source.autoBuild);
-    setAutoDeploy(source.autoDeploy);
-    setVulnerabilityThreshold(source.policy?.vulnerabilityThreshold ?? "critical");
-    setVulnerabilityScope(source.policy?.vulnerabilityScope ?? "all");
-    setApplicationRoot(source.applicationRoot || ".");
-    setPackageManager(source.packageManager ?? "npm");
-    setPackageManagerVersion(source.packageManagerVersion ?? "");
-    setNodeVersion(source.nodeVersion ?? "24");
-    setBuildScript(source.buildScript ?? "build");
-    setArtifactDirectory(source.artifactDirectory ?? "dist");
-    setPublishTag(source.publishTag ?? "production");
-    setBuildVariables(source.buildArgs);
+    const next = sourceSettings(source);
+    // A refreshed source (a saved section, Sync now, a reload) replaces every setting the
+    // operator has not changed; edits of the other sections stay unsaved.
+    setSettings((current) =>
+      previous?.sourceId === source.id
+        ? (Object.fromEntries(
+            SETTING_KEYS.map((key) => [
+              key,
+              sameSetting(current[key], previous.settings[key]) ? next[key] : current[key],
+            ])
+          ) as unknown as SourceSettings)
+        : next
+    );
   }, [source]);
 
-  const dirty = Boolean(
-    source &&
-      (branch !== source.branch ||
-        (composeTarget
-          ? composeFilePath !== (source.composeFilePath ?? "compose.yaml")
-          : dockerfilePath !== source.dockerfilePath || contextPath !== source.contextPath) ||
-        autoBuild !== source.autoBuild ||
-        autoDeploy !== source.autoDeploy ||
-        vulnerabilityThreshold !== (source.policy?.vulnerabilityThreshold ?? "critical") ||
-        vulnerabilityScope !== (source.policy?.vulnerabilityScope ?? "all") ||
-        (pagesTarget &&
-          (applicationRoot !== source.applicationRoot ||
-            packageManager !== source.packageManager ||
-            packageManagerVersion !== (source.packageManagerVersion ?? "") ||
-            nodeVersion !== source.nodeVersion ||
-            buildScript !== source.buildScript ||
-            artifactDirectory !== source.artifactDirectory ||
-            publishTag !== source.publishTag ||
-            JSON.stringify(buildVariables) !== JSON.stringify(source.buildArgs))))
-  );
+  const savedSettings = useMemo(() => sourceSettings(source), [source]);
+  const sectionDirty = (section: SettingsSection) =>
+    Boolean(source) &&
+    SECTION_SETTINGS[section].some((key) => !sameSetting(settings[key], savedSettings[key]));
+  const dirtySections: Record<SettingsSection, boolean> = {
+    repository: sectionDirty("repository"),
+    build: sectionDirty("build"),
+    variables: sectionDirty("variables"),
+  };
+  const dirty = dirtySections.repository || dirtySections.build || dirtySections.variables;
+  const updateSetting = <Key extends keyof SourceSettings>(key: Key, value: SourceSettings[Key]) =>
+    setSettings((current) => ({ ...current, [key]: value }));
 
-  const save = async () => {
-    if (!canEdit) return;
-    if (
-      !source ||
-      !branch.trim() ||
-      (composeTarget
-        ? !composeFilePath.trim()
-        : pagesTarget
-          ? !applicationRoot.trim() ||
-            !buildScript.trim() ||
-            !artifactDirectory.trim() ||
-            !publishTag.trim()
-          : !dockerfilePath.trim() || !contextPath.trim())
-    )
-      return;
-    setSaving(true);
+  /** The saved settings with one section's edits applied. */
+  const sectionSettings = (section: SettingsSection): SourceSettings => ({
+    ...savedSettings,
+    ...(Object.fromEntries(
+      SECTION_SETTINGS[section].map((key) => [key, settings[key]])
+    ) as Partial<SourceSettings>),
+  });
+
+  const settingsInvalid = (next: SourceSettings) =>
+    !next.branch.trim() ||
+    (composeTarget
+      ? !next.composeFilePath.trim()
+      : pagesTarget
+        ? !next.applicationRoot.trim() ||
+          !next.buildScript.trim() ||
+          !next.artifactDirectory.trim() ||
+          !next.publishTag.trim()
+        : !next.dockerfilePath.trim() || !next.contextPath.trim());
+
+  const saveSection = async (section: SettingsSection) => {
+    if (!canEdit || !target || !source) return;
+    const next = sectionSettings(section);
+    if (settingsInvalid(next)) return;
+    setSavingSection(section);
     try {
-      if (!target) return;
       const updated = await api.upsertDockerSource(target, {
         connectorId: source.connectorId,
         projectId: source.projectId,
-        branch: branch.trim(),
-        dockerfilePath: dockerfilePath.trim(),
-        contextPath: contextPath.trim(),
-        composeFilePath: composeTarget ? composeFilePath.trim() : undefined,
+        branch: next.branch.trim(),
+        dockerfilePath: next.dockerfilePath.trim(),
+        contextPath: next.contextPath.trim(),
+        composeFilePath: composeTarget ? next.composeFilePath.trim() : undefined,
         composeVariables: source.composeVariables,
         composeSecretKeys: source.composeSecretKeys,
-        autoBuild,
-        autoDeploy,
-        buildArgs: pagesTarget ? buildVariables : source.buildArgs,
+        autoBuild: next.autoBuild,
+        autoDeploy: next.autoDeploy,
+        buildArgs: pagesTarget ? next.buildVariables : source.buildArgs,
         buildSecretNames: source.buildSecretNames,
-        applicationRoot: pagesTarget ? applicationRoot.trim() : undefined,
-        packageManager: pagesTarget ? packageManager : undefined,
+        applicationRoot: pagesTarget ? next.applicationRoot.trim() : undefined,
+        packageManager: pagesTarget ? next.packageManager : undefined,
         packageManagerVersion:
-          pagesTarget && packageManagerVersion.trim() ? packageManagerVersion.trim() : undefined,
-        nodeVersion: pagesTarget ? nodeVersion : undefined,
-        buildScript: pagesTarget ? buildScript.trim() : undefined,
-        artifactDirectory: pagesTarget ? artifactDirectory.trim() : undefined,
-        publishTag: pagesTarget ? publishTag.trim() : undefined,
+          pagesTarget && next.packageManagerVersion.trim()
+            ? next.packageManagerVersion.trim()
+            : undefined,
+        nodeVersion: pagesTarget ? next.nodeVersion : undefined,
+        buildScript: pagesTarget ? next.buildScript.trim() : undefined,
+        artifactDirectory: pagesTarget ? next.artifactDirectory.trim() : undefined,
+        publishTag: pagesTarget ? next.publishTag.trim() : undefined,
         policy: {
           ...source.policy,
-          vulnerabilityThreshold: pagesTarget ? "none" : vulnerabilityThreshold,
-          vulnerabilityScope,
+          vulnerabilityThreshold: pagesTarget ? "none" : next.vulnerabilityThreshold,
+          vulnerabilityScope: next.vulnerabilityScope,
         },
       });
+      // The saved section takes the server's values (trimmed); the other sections keep their edits.
+      const saved = sourceSettings(updated);
+      setSettings((current) => ({
+        ...current,
+        ...(Object.fromEntries(
+          SECTION_SETTINGS[section].map((key) => [key, saved[key]])
+        ) as Partial<SourceSettings>),
+      }));
       setSource(updated);
       onSourceChange?.(updated);
-      toast.success("Repository settings updated");
+      toast.success(SECTION_SAVED[section]);
     } catch (error) {
       if (!handleLicenseApiError(error, "Git push-to-deploy")) {
         toast.error(
@@ -359,7 +424,7 @@ export function DockerGitSourcePanel({
         );
       }
     } finally {
-      setSaving(false);
+      setSavingSection(null);
     }
   };
 
@@ -474,16 +539,14 @@ export function DockerGitSourcePanel({
       toast.error("Variable name must be a valid environment variable name");
       return;
     }
-    setBuildVariables((current) => ({ ...current, [name]: variableValue }));
+    updateSetting("buildVariables", { ...settings.buildVariables, [name]: variableValue });
     setVariableDialogOpen(false);
   };
 
   const removeBuildVariable = (name: string) => {
-    setBuildVariables((current) => {
-      const next = { ...current };
-      delete next[name];
-      return next;
-    });
+    const next = { ...settings.buildVariables };
+    delete next[name];
+    updateSetting("buildVariables", next);
   };
 
   const saveBuildSecret = async () => {
@@ -568,7 +631,6 @@ export function DockerGitSourcePanel({
     try {
       await api.createDockerSourceBuild(target, { force: true });
       toast.success("Build queued");
-      onBuildQueued?.();
     } catch (error) {
       if (error instanceof ApiRequestError && error.code === "NO_BUILD_WORKER_AVAILABLE") {
         setBuildWorkerRequiredOpen(true);
@@ -579,6 +641,37 @@ export function DockerGitSourcePanel({
       }
     } finally {
       setBuilding(false);
+    }
+  };
+
+  /** Checks the branch for new commits now; the server queues the automatic build of a new head. */
+  const syncSource = async () => {
+    if (!canBuild || !target || !source) return;
+    setSyncing(true);
+    try {
+      const result = await api.syncDockerSource(target);
+      setSource(result.source);
+      onSourceChange?.(result.source);
+      const head = result.source.desiredCommitSha?.slice(0, 8);
+      if (result.build) {
+        toast.success(
+          result.changed ? `New commit ${head} found, build queued` : `Build queued for ${head}`
+        );
+      } else if (result.changed) {
+        toast.success(
+          result.source.autoBuild
+            ? `New commit ${head} found`
+            : `New commit ${head} found. Automatic builds are off; use Build now to build it.`
+        );
+      } else {
+        toast.success(head ? `Repository is up to date at ${head}` : "Repository is up to date");
+      }
+    } catch (error) {
+      if (!handleLicenseApiError(error, "Git push-to-deploy")) {
+        toast.error(error instanceof Error ? error.message : "Failed to sync repository");
+      }
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -908,349 +1001,396 @@ export function DockerGitSourcePanel({
   }
 
   const lastSync = source.lastWebhookAt ?? source.lastResolvedAt;
+  // Two sections share a row on wide screens; the controls stay narrow enough for half the content width.
+  const controlWidth = "sm:w-56";
+  // Side by side, both sections sit on the same row tracks (CSS subgrid): the header and up to
+  // five rows, so every left/right pair of rows lines up whatever its text wraps to.
+  const pairedPanel = "xl:row-span-6 xl:grid xl:grid-rows-subgrid";
+  const pairedBody = "xl:row-span-5 xl:grid xl:grid-rows-subgrid";
+  const saveButton = (section: SettingsSection, label: string) =>
+    canEdit ? (
+      <Button
+        aria-label={label}
+        onClick={() => void saveSection(section)}
+        pending={savingSection === section}
+        disabled={
+          savingSection !== null ||
+          !dirtySections[section] ||
+          settingsInvalid(sectionSettings(section))
+        }
+      >
+        <Save className="h-4 w-4" />
+        Save
+      </Button>
+    ) : null;
 
   return (
     <div className="flex flex-col gap-4">
-      <PanelShell
-        icon={<GitBranch className="h-4 w-4" />}
-        title="Repository"
-        description={
-          pagesTarget
-            ? "Source and build settings used by this Pages Project."
-            : "Source and build settings used by this Docker resource."
-        }
-        dirty={dirty}
-        actions={
-          <div className="flex items-center gap-2">
-            {canEdit && (
-              <Button
-                onClick={() => void save()}
-                pending={saving}
-                disabled={
-                  !dirty ||
-                  !branch.trim() ||
-                  (composeTarget
-                    ? !composeFilePath.trim()
-                    : pagesTarget
-                      ? !applicationRoot.trim() ||
-                        !buildScript.trim() ||
-                        !artifactDirectory.trim() ||
-                        !publishTag.trim()
-                      : !dockerfilePath.trim() || !contextPath.trim())
-                }
-              >
-                <Save className="h-4 w-4" />
-                Save
-              </Button>
-            )}
-            {canBuild && (
-              <Button onClick={() => void triggerBuild()} pending={building} disabled={dirty}>
-                <Play className="h-4 w-4" />
-                Build now
-              </Button>
-            )}
-            {canEdit && (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Disconnect repository"
-                title="Disconnect repository"
-                pending={disconnecting}
-                onClick={() => void disconnectSource()}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-        }
-      >
-        <SettingsControlRow
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 xl:gap-y-0">
+        <PanelShell
+          icon={<GitBranch className="h-4 w-4" />}
           title="Repository"
-          description="Allowlisted project selected from the connected Git provider."
-          help="The repository Gateway checks out when it builds this Pages Project. Access is provided by the selected Git integration."
+          description="Where the code comes from and when it builds."
+          dirty={dirtySections.repository}
+          className={pairedPanel}
+          bodyClassName={pairedBody}
+          actions={
+            canBuild || canEdit ? (
+              <div className="flex items-center gap-2">
+                {canBuild && (
+                  <Button
+                    variant="outline"
+                    onClick={() => void syncSource()}
+                    pending={syncing}
+                    disabled={dirtySections.repository}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Sync now
+                  </Button>
+                )}
+                {saveButton("repository", "Save repository settings")}
+              </div>
+            ) : undefined
+          }
         >
-          <span className="flex min-w-0 items-center gap-2 text-sm">
-            <GitBranch className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="truncate">{source.repositoryFullPath}</span>
-          </span>
-        </SettingsControlRow>
-        <SettingsControlRow
-          title="Git integration"
-          description="Connection and credentials used for unattended checkout."
-          help="The saved Git provider connection Gateway uses to read the repository, resolve commits, receive webhooks, and download source code without an interactive login."
-        >
-          <Badge variant="secondary">{source.provider} integration</Badge>
-        </SettingsControlRow>
-        <SettingsControlRow
-          title="Branch"
-          description="New commits on this branch are eligible for build and deployment."
-          help="Gateway watches this branch for new commits. Automatic builds use its latest accepted commit; manual builds also start from this branch."
-        >
-          <Input
-            value={branch}
-            onChange={(event) => setBranch(event.target.value)}
-            className="sm:w-72"
-            placeholder="main"
-            disabled={!canEdit}
-          />
-        </SettingsControlRow>
-        {composeTarget ? (
           <SettingsControlRow
-            title="Compose file"
-            description="Repository-relative Compose file used to resolve all service builds."
+            title="Repository"
+            description="Allowlisted project from the Git provider."
+            help="The repository Gateway checks out for every build of this resource. Access comes from the selected Git integration."
+          >
+            <span className="flex min-w-0 items-center gap-2 text-sm">
+              <GitBranch className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">{source.repositoryFullPath}</span>
+            </span>
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Git integration"
+            description="Credentials used for unattended checkout."
+            help="The saved Git provider connection Gateway uses to read the repository, resolve commits, receive webhooks, and download source code without an interactive login."
+          >
+            <Badge variant="secondary">{source.provider} integration</Badge>
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Branch"
+            description="Gateway follows new commits on this branch."
+            help="Gateway watches this branch for new commits. Automatic builds use its latest accepted commit; manual builds also start from this branch."
           >
             <Input
-              value={composeFilePath}
-              onChange={(event) => setComposeFilePath(event.target.value)}
-              className="sm:w-72"
-              placeholder="compose.yaml"
+              value={settings.branch}
+              onChange={(event) => updateSetting("branch", event.target.value)}
+              className={controlWidth}
+              placeholder="main"
               disabled={!canEdit}
             />
           </SettingsControlRow>
-        ) : pagesTarget ? (
-          <>
+          {pagesTarget && (
             <SettingsControlRow
               title="Application root"
-              description="Repository-relative directory containing package.json."
+              description="Directory holding package.json in the repo."
               help="The builder changes into this directory before installing dependencies and running the build script. Use a repository-relative path such as . or apps/web."
             >
               <Input
-                value={applicationRoot}
-                onChange={(event) => setApplicationRoot(event.target.value)}
-                className="sm:w-72"
+                value={settings.applicationRoot}
+                onChange={(event) => updateSetting("applicationRoot", event.target.value)}
+                className={controlWidth}
                 placeholder="."
                 disabled={!canEdit}
               />
             </SettingsControlRow>
-            <SettingsControlRow
-              title="Package manager"
-              description="Dependency installer and package.json script executor."
-              help="Gateway uses this tool for dependency installation and to run the selected package.json build script inside the isolated builder."
-            >
-              <Select
-                value={packageManager}
-                onValueChange={(value) => setPackageManager(value as "npm" | "pnpm" | "yarn")}
-                disabled={!canEdit}
-              >
-                <SelectTrigger className="sm:w-72" aria-label="Package manager">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="npm">npm</SelectItem>
-                  <SelectItem value="pnpm">pnpm</SelectItem>
-                  <SelectItem value="yarn">yarn</SelectItem>
-                </SelectContent>
-              </Select>
-            </SettingsControlRow>
-            <SettingsControlRow
-              title="Node.js"
-              description="Managed Node.js runtime used by the isolated builder."
-              help="The Node.js major version available while dependencies are installed and the Pages application is built. It does not control the browser runtime."
-            >
-              <Select
-                value={nodeVersion}
-                onValueChange={(value) => setNodeVersion(value as "20" | "22" | "24")}
-                disabled={!canEdit}
-              >
-                <SelectTrigger className="sm:w-72" aria-label="Node.js version">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="20">Node.js 20</SelectItem>
-                  <SelectItem value="22">Node.js 22</SelectItem>
-                  <SelectItem value="24">Node.js 24</SelectItem>
-                </SelectContent>
-              </Select>
-            </SettingsControlRow>
-            <SettingsControlRow
-              title="Build script"
-              description="package.json script executed after dependency installation."
-              help="The script name from package.json scripts, without the package-manager command. For example, enter build for npm run build."
-            >
-              <Input
-                value={buildScript}
-                onChange={(event) => setBuildScript(event.target.value)}
-                className="sm:w-72"
-                placeholder="build"
-                disabled={!canEdit}
-              />
-            </SettingsControlRow>
-            <SettingsControlRow
-              title="Artifact directory"
-              description="Directory published relative to the Application root."
-              help="The build output Gateway packages and serves as the Pages deployment. Typical values are dist, build, or out."
-            >
-              <Input
-                value={artifactDirectory}
-                onChange={(event) => setArtifactDirectory(event.target.value)}
-                className="sm:w-72"
-                placeholder="dist"
-                disabled={!canEdit}
-              />
-            </SettingsControlRow>
-            <SettingsControlRow
-              title="Publish Tag"
-              description="Successful builds move this existing Pages Tag."
-              help="After a successful build, Gateway publishes the new immutable deployment to this Tag. Routes and runtime configuration can target the Tag by name."
-            >
-              <Input
-                value={publishTag}
-                onChange={(event) => setPublishTag(event.target.value)}
-                className="sm:w-72"
-                placeholder="production"
-                disabled={!canEdit}
-              />
-            </SettingsControlRow>
-          </>
-        ) : (
-          <>
-            <SettingsControlRow
-              title="Dockerfile"
-              description="Path to the Dockerfile relative to the repository root."
-            >
-              <Input
-                value={dockerfilePath}
-                onChange={(event) => setDockerfilePath(event.target.value)}
-                className="sm:w-72"
-                placeholder="Dockerfile"
-                disabled={!canEdit}
-              />
-            </SettingsControlRow>
-            <SettingsControlRow
-              title="Build context"
-              description="Directory sent to BuildKit, relative to the repository root."
-            >
-              <Input
-                value={contextPath}
-                onChange={(event) => setContextPath(event.target.value)}
-                className="sm:w-72"
-                placeholder="."
-                disabled={!canEdit}
-              />
-            </SettingsControlRow>
-          </>
-        )}
-        <SettingsControlRow
-          title="Automatic builds"
-          description="Queue a build when a new commit is detected by webhook or polling."
-          help="When enabled, Gateway queues a build after the configured branch advances. Disabling it keeps the repository connected but requires manual builds."
-        >
-          <Switch
-            checked={autoBuild}
-            onChange={setAutoBuild}
-            ariaLabel="Automatic builds"
-            disabled={!canEdit}
-          />
-        </SettingsControlRow>
-        {!pagesTarget && (
+          )}
           <SettingsControlRow
-            title="Automatic deployment"
-            description="Roll out an approved artifact after its build succeeds."
+            title="Automatic builds"
+            description="Build each new commit found on the branch."
+            help="When enabled, Gateway queues a build as soon as a webhook, the poll or Sync now finds a new commit on the branch. When disabled, the repository stays connected and builds start only from Build now."
           >
             <Switch
-              checked={autoDeploy}
-              onChange={setAutoDeploy}
-              ariaLabel="Automatic deployment"
+              checked={settings.autoBuild}
+              onChange={(value) => updateSetting("autoBuild", value)}
+              ariaLabel="Automatic builds"
               disabled={!canEdit}
             />
           </SettingsControlRow>
-        )}
-        {!pagesTarget && (
-          <SettingsControlRow
-            title="Vulnerability policy"
-            description="Minimum vulnerability severity that blocks an artifact from deployment."
-          >
-            <Select
-              value={vulnerabilityThreshold}
-              onValueChange={(value) => setVulnerabilityThreshold(value as VulnerabilityThreshold)}
-              disabled={!canEdit}
+        </PanelShell>
+
+        <PanelShell
+          icon={<Hammer className="h-4 w-4" />}
+          title="Build"
+          description={
+            pagesTarget
+              ? "How the Pages artifact is built and published."
+              : "How it is built, checked and rolled out."
+          }
+          dirty={dirtySections.build}
+          className={pairedPanel}
+          bodyClassName={pairedBody}
+          actions={
+            canBuild || canEdit ? (
+              <div className="flex items-center gap-2">
+                {canBuild && (
+                  <Button
+                    variant="outline"
+                    onClick={() => void triggerBuild()}
+                    pending={building}
+                    disabled={dirty}
+                  >
+                    <Play className="h-4 w-4" />
+                    Build now
+                  </Button>
+                )}
+                {saveButton("build", "Save build settings")}
+              </div>
+            ) : undefined
+          }
+        >
+          {composeTarget ? (
+            <SettingsControlRow
+              title="Compose file"
+              description="Compose file path from the repository root."
+              help="The Compose file Gateway reads to find every service that declares build. All of them are built before the project is applied."
             >
-              <SelectTrigger className="sm:w-72" aria-label="Vulnerability policy">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="max-w-[min(var(--container-md),var(--radix-select-content-available-width))]">
-                <SelectItem value="critical" description="Block critical findings.">
-                  Critical
-                </SelectItem>
-                <SelectItem value="high" description="Block high and critical findings.">
-                  High
-                </SelectItem>
-                <SelectItem value="medium" description="Block medium, high, and critical findings.">
-                  Medium
-                </SelectItem>
-                <SelectItem value="low" description="Block every known vulnerability severity.">
-                  Low
-                </SelectItem>
-                <SelectItem value="none" description="Report findings without blocking deployment.">
-                  Report only
-                </SelectItem>
-                <SelectItem
-                  value="disabled"
-                  description="Skip vulnerability scanning and SBOM generation. Requires an updated Build Worker."
+              <Input
+                value={settings.composeFilePath}
+                onChange={(event) => updateSetting("composeFilePath", event.target.value)}
+                className={controlWidth}
+                placeholder="compose.yaml"
+                disabled={!canEdit}
+              />
+            </SettingsControlRow>
+          ) : pagesTarget ? (
+            <>
+              <SettingsControlRow
+                title="Package manager"
+                description="Installs dependencies and runs the script."
+                help="Gateway uses this tool for dependency installation and to run the selected package.json build script inside the isolated builder."
+              >
+                <Select
+                  value={settings.packageManager}
+                  onValueChange={(value) =>
+                    updateSetting("packageManager", value as PackageManager)
+                  }
+                  disabled={!canEdit}
                 >
-                  Disabled
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingsControlRow>
-        )}
-        {!pagesTarget && (
-          <SettingsControlRow
-            title="Vulnerability scope"
-            description="Choose which packages can block deployment and appear by default in the report."
-          >
-            <Select
-              value={vulnerabilityScope}
-              onValueChange={(value) => setVulnerabilityScope(value as "all" | "application")}
-              disabled={!canEdit}
+                  <SelectTrigger className={controlWidth} aria-label="Package manager">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="npm">npm</SelectItem>
+                    <SelectItem value="pnpm">pnpm</SelectItem>
+                    <SelectItem value="yarn">yarn</SelectItem>
+                  </SelectContent>
+                </Select>
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Node.js"
+                description="Node.js runtime of the isolated builder."
+                help="The Node.js major version available while dependencies are installed and the Pages application is built. It does not control the browser runtime."
+              >
+                <Select
+                  value={settings.nodeVersion}
+                  onValueChange={(value) => updateSetting("nodeVersion", value as NodeVersion)}
+                  disabled={!canEdit}
+                >
+                  <SelectTrigger className={controlWidth} aria-label="Node.js version">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="20">Node.js 20</SelectItem>
+                    <SelectItem value="22">Node.js 22</SelectItem>
+                    <SelectItem value="24">Node.js 24</SelectItem>
+                  </SelectContent>
+                </Select>
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Build script"
+                description="package.json script run after the install."
+                help="The script name from package.json scripts, without the package-manager command. For example, enter build for npm run build."
+              >
+                <Input
+                  value={settings.buildScript}
+                  onChange={(event) => updateSetting("buildScript", event.target.value)}
+                  className={controlWidth}
+                  placeholder="build"
+                  disabled={!canEdit}
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Artifact directory"
+                description="Output folder to publish, from the app root."
+                help="The build output Gateway packages and serves as the Pages deployment, relative to the Application root. Typical values are dist, build, or out."
+              >
+                <Input
+                  value={settings.artifactDirectory}
+                  onChange={(event) => updateSetting("artifactDirectory", event.target.value)}
+                  className={controlWidth}
+                  placeholder="dist"
+                  disabled={!canEdit}
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Publish Tag"
+                description="Pages Tag that each successful build moves."
+                help="After a successful build, Gateway publishes the new immutable deployment to this existing Tag. Routes and runtime configuration can target the Tag by name."
+              >
+                <Input
+                  value={settings.publishTag}
+                  onChange={(event) => updateSetting("publishTag", event.target.value)}
+                  className={controlWidth}
+                  placeholder="production"
+                  disabled={!canEdit}
+                />
+              </SettingsControlRow>
+            </>
+          ) : (
+            <>
+              <SettingsControlRow
+                title="Dockerfile"
+                description="Dockerfile path from the repository root."
+              >
+                <Input
+                  value={settings.dockerfilePath}
+                  onChange={(event) => updateSetting("dockerfilePath", event.target.value)}
+                  className={controlWidth}
+                  placeholder="Dockerfile"
+                  disabled={!canEdit}
+                />
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Build context"
+                description="Repository directory sent to BuildKit."
+              >
+                <Input
+                  value={settings.contextPath}
+                  onChange={(event) => updateSetting("contextPath", event.target.value)}
+                  className={controlWidth}
+                  placeholder="."
+                  disabled={!canEdit}
+                />
+              </SettingsControlRow>
+            </>
+          )}
+          {!pagesTarget && (
+            <SettingsControlRow
+              title="Vulnerability policy"
+              description="Lowest severity that blocks a deployment."
             >
-              <SelectTrigger className="sm:w-72" aria-label="Vulnerability scope">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="max-w-[min(var(--container-md),var(--radix-select-content-available-width))]">
-                <SelectItem
-                  value="all"
-                  description="Apply the severity threshold to all packages in the image."
-                >
-                  All packages
-                </SelectItem>
-                <SelectItem
-                  value="application"
-                  description="System packages are report-only. Application dependencies, runtime binaries and unclassified packages still count."
-                >
-                  Application dependencies
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingsControlRow>
-        )}
-      </PanelShell>
+              <Select
+                value={settings.vulnerabilityThreshold}
+                onValueChange={(value) =>
+                  updateSetting("vulnerabilityThreshold", value as VulnerabilityThreshold)
+                }
+                disabled={!canEdit}
+              >
+                <SelectTrigger className={controlWidth} aria-label="Vulnerability policy">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="max-w-[min(var(--container-md),var(--radix-select-content-available-width))]">
+                  <SelectItem value="critical" description="Block critical findings.">
+                    Critical
+                  </SelectItem>
+                  <SelectItem value="high" description="Block high and critical findings.">
+                    High
+                  </SelectItem>
+                  <SelectItem
+                    value="medium"
+                    description="Block medium, high, and critical findings."
+                  >
+                    Medium
+                  </SelectItem>
+                  <SelectItem value="low" description="Block every known vulnerability severity.">
+                    Low
+                  </SelectItem>
+                  <SelectItem
+                    value="none"
+                    description="Report findings without blocking deployment."
+                  >
+                    Report only
+                  </SelectItem>
+                  <SelectItem
+                    value="disabled"
+                    description="Skip vulnerability scanning and SBOM generation. Requires an updated Build Worker."
+                  >
+                    Disabled
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsControlRow>
+          )}
+          {!pagesTarget && (
+            <SettingsControlRow
+              title="Vulnerability scope"
+              description="Packages that can block a deployment."
+            >
+              <Select
+                value={settings.vulnerabilityScope}
+                onValueChange={(value) =>
+                  updateSetting("vulnerabilityScope", value as "all" | "application")
+                }
+                disabled={!canEdit}
+              >
+                <SelectTrigger className={controlWidth} aria-label="Vulnerability scope">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="max-w-[min(var(--container-md),var(--radix-select-content-available-width))]">
+                  <SelectItem
+                    value="all"
+                    description="Apply the severity threshold to all packages in the image."
+                  >
+                    All packages
+                  </SelectItem>
+                  <SelectItem
+                    value="application"
+                    description="System packages are report-only. Application dependencies, runtime binaries and unclassified packages still count."
+                  >
+                    Application dependencies
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsControlRow>
+          )}
+          {!pagesTarget && (
+            <SettingsControlRow
+              title="Automatic deployment"
+              description="Roll out each approved artifact once built."
+            >
+              <Switch
+                checked={settings.autoDeploy}
+                onChange={(value) => updateSetting("autoDeploy", value)}
+                ariaLabel="Automatic deployment"
+                disabled={!canEdit}
+              />
+            </SettingsControlRow>
+          )}
+        </PanelShell>
+      </div>
 
       {pagesTarget && (
         <PanelShell
           icon={<Braces className="h-4 w-4" />}
           title="Build Variables"
           description="Build-time environment values. VITE_* values are embedded in the published client bundle."
-          dirty={JSON.stringify(buildVariables) !== JSON.stringify(source.buildArgs)}
+          dirty={dirtySections.variables}
           actions={
             canEdit ? (
-              <Button
-                onClick={() => {
-                  setVariableName("");
-                  setVariableValue("");
-                  setVariableDialogOpen(true);
-                }}
-              >
-                <Plus className="h-4 w-4" />
-                Add variable
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={() => {
+                    setVariableName("");
+                    setVariableValue("");
+                    setVariableDialogOpen(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add variable
+                </Button>
+                {saveButton("variables", "Save Build Variables")}
+              </div>
             ) : undefined
           }
         >
-          {Object.keys(buildVariables).length === 0 ? (
+          {Object.keys(settings.buildVariables).length === 0 ? (
             <EmptyState message="No Build Variables configured." embedded />
           ) : (
-            Object.entries(buildVariables)
+            Object.entries(settings.buildVariables)
               .sort(([left], [right]) => left.localeCompare(right))
               .map(([name, value]) => (
                 <SettingsControlRow
@@ -1378,7 +1518,11 @@ export function DockerGitSourcePanel({
         </SettingsControlRow>
         <SettingsControlRow
           title="Deployed commit"
-          description="Commit currently running on this Docker resource."
+          description={
+            pagesTarget
+              ? "Commit of the last build published to the Publish Tag."
+              : "Commit currently running on this resource."
+          }
         >
           {commitBadge(source.deployedCommitSha, "No build deployed")}
         </SettingsControlRow>
@@ -1386,8 +1530,15 @@ export function DockerGitSourcePanel({
           title="Update detection"
           description="Gateway-managed trigger used to discover new commits."
         >
+          {/* Gateway polls only sources that build automatically; the rest wait for a webhook or Sync now. */}
           <Badge variant="secondary">
-            {source.webhookConfiguredAt ? "Webhook + polling" : "Polling"}
+            {source.webhookConfiguredAt
+              ? source.autoBuild
+                ? "Webhook + polling"
+                : "Webhook"
+              : source.autoBuild
+                ? "Polling"
+                : "Manual"}
           </Badge>
         </SettingsControlRow>
         <SettingsControlRow
@@ -1397,7 +1548,7 @@ export function DockerGitSourcePanel({
           {source.lastPollError ? (
             <span className="text-sm text-destructive">Sync requires attention</span>
           ) : lastSync ? (
-            <span className="text-sm">{new Date(lastSync).toLocaleString()}</span>
+            <RelativeTime value={lastSync} className="text-sm" />
           ) : (
             <span className="text-sm text-muted-foreground">Waiting for first update</span>
           )}
@@ -1407,13 +1558,41 @@ export function DockerGitSourcePanel({
           description="Non-secret arguments and protected secrets supplied to the build."
         >
           <span className="text-right text-sm">
-            <span className="block">{Object.keys(source.buildArgs).length} arguments</span>
+            <span className="block">
+              {countLabel(Object.keys(source.buildArgs).length, "argument")}
+            </span>
             <span className="block text-xs text-muted-foreground">
-              {source.buildSecretNames.length} protected secrets
+              {countLabel(source.buildSecretNames.length, "protected secret")}
             </span>
           </span>
         </SettingsControlRow>
       </PanelShell>
+
+      {canEdit && (
+        <PanelShell
+          icon={<AlertTriangle className="h-4 w-4" />}
+          title="Destructive actions"
+          description="These actions stop delivery from the repository."
+        >
+          <SettingsControlRow
+            title="Disconnect repository"
+            description={
+              pendingContainer
+                ? "Removes this pending container and its creation settings."
+                : "Stops polling, webhooks, builds and automatic deployment. Runtime state and build history are kept."
+            }
+          >
+            <Button
+              variant="destructive"
+              pending={disconnecting}
+              onClick={() => void disconnectSource()}
+            >
+              <Trash2 className="h-4 w-4" />
+              Disconnect repository
+            </Button>
+          </SettingsControlRow>
+        </PanelShell>
+      )}
 
       <Dialog open={secretDialogOpen} onOpenChange={setSecretDialogOpen}>
         <DialogContent>
@@ -1472,7 +1651,7 @@ export function DockerGitSourcePanel({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {Object.hasOwn(buildVariables, variableName) ? "Edit" : "Add"} Build Variable
+              {Object.hasOwn(settings.buildVariables, variableName) ? "Edit" : "Add"} Build Variable
             </DialogTitle>
             <DialogDescription>
               Build Variables are readable configuration. VITE_* values are embedded in the static
@@ -1538,4 +1717,8 @@ export function DockerGitSourcePanel({
       </Dialog>
     </div>
   );
+}
+
+function countLabel(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }

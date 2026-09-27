@@ -1,12 +1,13 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route } from "react-router-dom";
+import { toast } from "sonner";
 import { vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { renderWithRouter } from "@/test/render";
-import type { DockerSourceBinding } from "@/types";
+import type { DockerBuild, DockerSourceBinding } from "@/types";
 import { DockerGitSourcePanel } from "./DockerGitSourcePanel";
 
 vi.mock("@/components/common/ConfirmDialog", () => ({ confirm: vi.fn() }));
@@ -180,7 +181,7 @@ describe("DockerGitSourcePanel Build Secrets", () => {
       "max-w-[min(var(--container-md),var(--radix-select-content-available-width))]"
     );
     await user.click(screen.getByRole("option", { name: /Application dependencies/ }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "Save build settings" }));
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith(
         source.target,
@@ -189,7 +190,9 @@ describe("DockerGitSourcePanel Build Secrets", () => {
         })
       )
     );
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeDisabled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save build settings" })).toBeDisabled()
+    );
   });
 
   it("keeps the saved scope visible but read-only without edit access", () => {
@@ -223,7 +226,7 @@ describe("DockerGitSourcePanel Build Secrets", () => {
     renderWithRouter(<DockerGitSourcePanel target={source.target} source={source} />);
     await user.click(screen.getByRole("combobox", { name: "Vulnerability policy" }));
     await user.click(screen.getByRole("option", { name: new RegExp(label) }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "Save build settings" }));
     await waitFor(() =>
       expect(save).toHaveBeenCalledWith(
         source.target,
@@ -232,6 +235,85 @@ describe("DockerGitSourcePanel Build Secrets", () => {
         })
       )
     );
+  });
+
+  it("splits Repository and Build settings and saves each section without dropping the other's edits", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "listDockerBuildSecrets").mockResolvedValue([]);
+    const save = vi
+      .spyOn(api, "upsertDockerSource")
+      .mockImplementation(async (_target, config) => ({ ...source, branch: config.branch }));
+    renderWithRouter(<DockerGitSourcePanel target={source.target} source={source} />);
+
+    const branch = screen.getByDisplayValue("main");
+    await user.clear(branch);
+    await user.type(branch, "release");
+    const dockerfile = screen.getByDisplayValue("Dockerfile");
+    await user.clear(dockerfile);
+    await user.type(dockerfile, "apps/api/Dockerfile");
+    expect(screen.getByRole("button", { name: "Build now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sync now" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Save repository settings" }));
+
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        source.target,
+        expect.objectContaining({ branch: "release", dockerfilePath: "Dockerfile" })
+      )
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save repository settings" })).toBeDisabled()
+    );
+    expect(screen.getByDisplayValue("release")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("apps/api/Dockerfile")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save build settings" })).toBeEnabled();
+  });
+
+  it("checks the repository now and reports a queued automatic build", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "listDockerBuildSecrets").mockResolvedValue([]);
+    const head = "b".repeat(40);
+    const sync = vi.spyOn(api, "syncDockerSource").mockResolvedValue({
+      source: { ...source, desiredCommitSha: head },
+      changed: true,
+      build: { id: "build-1", commitSha: head } as DockerBuild,
+    });
+    const success = vi.spyOn(toast, "success");
+    const onSourceChange = vi.fn();
+    renderWithRouter(
+      <DockerGitSourcePanel
+        target={source.target}
+        source={source}
+        onSourceChange={onSourceChange}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "Sync now" }));
+
+    await waitFor(() => expect(sync).toHaveBeenCalledWith(source.target));
+    expect(onSourceChange).toHaveBeenCalledWith(
+      expect.objectContaining({ desiredCommitSha: head })
+    );
+    expect(success).toHaveBeenCalledWith("New commit bbbbbbbb found, build queued");
+  });
+
+  it("offers Disconnect only in the Destructive actions section and hides it without edit access", () => {
+    vi.spyOn(api, "listDockerBuildSecrets").mockResolvedValue([]);
+    const { unmount } = renderWithRouter(
+      <DockerGitSourcePanel target={source.target} source={source} />
+    );
+    const destructive = screen.getByText("Destructive actions").closest(".border");
+    expect(destructive).toContainElement(
+      screen.getByRole("button", { name: "Disconnect repository" })
+    );
+    unmount();
+
+    renderWithRouter(
+      <DockerGitSourcePanel target={source.target} source={source} canEdit={false} />
+    );
+    expect(screen.queryByText("Destructive actions")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Disconnect repository" })).not.toBeInTheDocument();
   });
 
   it("warns that disconnecting removes a pending container and leaves its deleted detail page", async () => {

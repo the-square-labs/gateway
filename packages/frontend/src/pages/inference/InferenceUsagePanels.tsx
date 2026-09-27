@@ -7,9 +7,9 @@ import {
   Plus,
   Server,
   Sigma,
-  TriangleAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Notice } from "@/components/common/Notice";
 import { PanelShell } from "@/components/common/PanelShell";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
@@ -218,35 +218,24 @@ export function DashboardInferenceUsage({
       {lowWindows.map(({ label, value }) => {
         const remaining = remainingPercentage(value.percentage);
         return (
-          <div
+          <Notice
             key={label}
+            tone="warning"
             role="status"
             aria-label={`${label} inference quota warning`}
-            className="border border-warning/60 bg-card"
-          >
-            <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center bg-warning/10 text-warning-text">
-                  <TriangleAlert className="h-4 w-4" aria-hidden="true" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-foreground">
-                    {label} inference quota is running low
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Recovers {formatDateTime(value.recoveryAt)}.
-                  </p>
-                </div>
-              </div>
-              <div className="w-full shrink-0 sm:w-48">
+            title={`${label} inference quota is running low`}
+            actions={
+              <div className="w-full sm:w-48">
                 <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
                   <span className="text-muted-foreground">Remaining</span>
                   <span className="font-semibold text-warning-text">{remaining}%</span>
                 </div>
                 <ProgressBar value={remaining} className="h-2" indicatorClassName="bg-warning" />
               </div>
-            </div>
-          </div>
+            }
+          >
+            Recovers {formatDateTime(value.recoveryAt)}.
+          </Notice>
         );
       })}
     </div>

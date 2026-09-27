@@ -7,6 +7,7 @@ import { Combobox } from "@/components/common/Combobox";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
 import {
   DEFAULT_PROXY_UPSTREAM,
@@ -16,6 +17,7 @@ import {
   proxyUpstreamFromHost,
   proxyUpstreamRequest,
 } from "@/components/proxy/ProxyUpstreamEditor";
+import { REDIRECT_STATUS_OPTIONS } from "@/components/proxy/redirect-status-options";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -724,19 +726,13 @@ export function CreateProxyHostDialog({
 
                 {/* Raw mode toggle — only when editing with the raw toggle scope */}
                 {isEditing && canToggleRawConfig && (
-                  <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-                    <div>
-                      <p className="text-sm font-medium">Raw Config Mode</p>
-                      <p className="text-xs text-muted-foreground">
-                        Bypass template rendering and edit nginx config directly
-                      </p>
-                    </div>
-                    <Switch
-                      checked={rawConfigEnabled}
-                      onChange={setRawConfigEnabled}
-                      disabled={maintenanceLocked}
-                    />
-                  </div>
+                  <SwitchCard
+                    label="Raw Config Mode"
+                    description="Bypass template rendering and edit nginx config directly"
+                    checked={rawConfigEnabled}
+                    onCheckedChange={setRawConfigEnabled}
+                    disabled={maintenanceLocked}
+                  />
                 )}
               </motion.div>
             )}
@@ -765,32 +761,40 @@ export function CreateProxyHostDialog({
                 )}
 
                 {type === "redirect" && (
-                  <PanelShell title="Redirect" bodyClassName="p-4">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div className="space-y-1.5">
-                        <label className="text-xs text-muted-foreground">Redirect URL</label>
-                        <Input
-                          value={redirectUrl}
-                          onChange={(e) => setRedirectUrl(e.target.value)}
-                          placeholder="https://example.com"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs text-muted-foreground">Status Code</label>
-                        <Select
-                          value={String(redirectStatusCode)}
-                          onValueChange={(v) => setRedirectStatusCode(Number(v))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="301">301 - Permanent</SelectItem>
-                            <SelectItem value="302">302 - Temporary</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
+                  <PanelShell title="Redirect">
+                    <SettingsControlRow
+                      title="Redirect URL"
+                      description="Target URL for incoming requests"
+                      controlsClassName="sm:w-full"
+                    >
+                      <Input
+                        value={redirectUrl}
+                        onChange={(e) => setRedirectUrl(e.target.value)}
+                        placeholder="https://example.com"
+                        aria-label="Redirect URL"
+                      />
+                    </SettingsControlRow>
+                    <SettingsControlRow
+                      title="Status Code"
+                      description="HTTP redirect response status"
+                      controlsClassName="sm:w-full"
+                    >
+                      <Select
+                        value={String(redirectStatusCode)}
+                        onValueChange={(v) => setRedirectStatusCode(Number(v))}
+                      >
+                        <SelectTrigger aria-label="Redirect status code">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {REDIRECT_STATUS_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={String(option.value)}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </SettingsControlRow>
                   </PanelShell>
                 )}
 
@@ -886,16 +890,26 @@ export function CreateProxyHostDialog({
 
         <DialogFooter>
           {isEditing ? (
-            <Button onClick={handleSave} disabled={!isStep1Valid} pending={isSaving}>
-              Save
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={isSaving}>
+                Cancel
+              </Button>
+              <Button onClick={handleSave} disabled={!isStep1Valid} pending={isSaving}>
+                Save
+              </Button>
+            </>
           ) : step === 1 ? (
-            <Button onClick={goNext} disabled={!isStep1Valid}>
-              Next
-              <ArrowRight className="h-4 w-4" />
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => handleOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button onClick={goNext} disabled={!isStep1Valid}>
+                Next
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </>
           ) : (
-            <div className="flex w-full items-center justify-between">
+            <>
               <Button variant="outline" onClick={goBack}>
                 <ArrowLeft className="h-4 w-4" />
                 Back
@@ -903,7 +917,7 @@ export function CreateProxyHostDialog({
               <Button onClick={handleSave} disabled={!isStep2Valid} pending={isSaving}>
                 Create
               </Button>
-            </div>
+            </>
           )}
         </DialogFooter>
       </DialogContent>

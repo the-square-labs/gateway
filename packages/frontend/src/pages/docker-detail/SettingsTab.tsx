@@ -1173,11 +1173,14 @@ export function SettingsTab({
         </PanelShell>
       </div>
 
-      <AvailabilitySection
-        resource={{ type: "container", nodeId, containerName }}
-        canManage={!readOnly && hasScope(`docker:availability:manage:${scopeSuffix}`)}
-        onDisableQueued={onAvailabilityDisableQueued}
-      />
+      {/* Without docker:availability:manage the block is hidden rather than shown disabled. */}
+      {hasScope(`docker:availability:manage:${scopeSuffix}`) && (
+        <AvailabilitySection
+          resource={{ type: "container", nodeId, containerName }}
+          canManage={!readOnly}
+          onDisableQueued={onAvailabilityDisableQueued}
+        />
+      )}
 
       {savedRuntimeProfile !== "secure" && (
         <GpuSettingsSection

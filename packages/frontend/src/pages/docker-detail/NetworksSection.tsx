@@ -93,6 +93,13 @@ export function NetworksSection({
     [allNetworks, selectedNetworkIds]
   );
   const hasEmptyNetworkRow = networks.some(isNetworkDraft);
+  const addDisabledReason = networksLoading
+    ? null
+    : hasEmptyNetworkRow
+      ? "Choose a network for the empty row first"
+      : !hasAvailableNetwork
+        ? "This container is already attached to every network on this node. Create a network on the Networks page to attach another."
+        : null;
 
   const loadNetworks = useCallback(async () => {
     if (!canListNetworks) return;
@@ -161,13 +168,13 @@ export function NetworksSection({
       dirty={networksChanged}
       actions={
         canManageNetworks && canListNetworks ? (
-          <Button
-            onClick={addNetwork}
-            disabled={networksLoading || !hasAvailableNetwork || hasEmptyNetworkRow}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add
-          </Button>
+          // The wrapper carries the reason: a disabled button shows no tooltip of its own.
+          <span title={addDisabledReason ?? undefined}>
+            <Button onClick={addNetwork} disabled={networksLoading || !!addDisabledReason}>
+              <Plus className="h-3.5 w-3.5" />
+              Add
+            </Button>
+          </span>
         ) : null
       }
     >
@@ -178,7 +185,7 @@ export function NetworksSection({
               canManageNetworks
                 ? "grid-cols-[minmax(0,1fr)_120px_120px_36px]"
                 : "grid-cols-[minmax(0,1fr)_120px_120px]"
-            } border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider`}
+            } border-b border-border bg-header text-xs font-medium text-muted-foreground uppercase tracking-wider`}
           >
             <div className="px-3 py-2">Network</div>
             <div className="px-3 py-2 border-l border-border">IP</div>

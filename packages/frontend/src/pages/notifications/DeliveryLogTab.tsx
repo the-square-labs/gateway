@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import {
   ResourceListCell,
   type ResourceListColumn,
@@ -24,6 +25,7 @@ import {
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
+import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { WebhookDelivery } from "@/types";
 import {
@@ -317,9 +319,7 @@ export function DeliveryLogTab({
                       </span>
                     </ResourceListCell>
                     <ResourceListCell>
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(d.createdAt).toLocaleString()}
-                      </span>
+                      <RelativeTime value={d.createdAt} className="text-xs text-muted-foreground" />
                     </ResourceListCell>
                   </ResourceListRow>
                 ))
@@ -390,7 +390,7 @@ export function DeliveryLogTab({
                 </div>
                 <div>
                   <span className="text-muted-foreground">Created:</span>{" "}
-                  {new Date(detail.createdAt).toLocaleString()}
+                  {formatDateTime(detail.createdAt)}
                 </div>
               </div>
               {detail.error && (

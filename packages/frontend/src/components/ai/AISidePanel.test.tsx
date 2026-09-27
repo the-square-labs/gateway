@@ -1802,7 +1802,7 @@ describe("AISidePanel autoscroll", () => {
       top: 0,
       bottom: 36,
     } as DOMRect);
-    const secondDateBefore = within(secondRowBefore).getByText("now");
+    const secondDateBefore = within(secondRowBefore).getByText("Just now");
     const firstTitleButton = screen.getByText("First chat").closest("button");
     expect(firstTitleButton).toHaveClass("pr-1");
     expect(firstTitleButton).not.toHaveClass("pr-20");
@@ -1816,7 +1816,7 @@ describe("AISidePanel autoscroll", () => {
     await waitFor(() => expect(screen.queryByText("First chat")).not.toBeInTheDocument());
     const secondRowAfter = screen.getByText("Second chat").closest(".group") as HTMLElement;
     await waitFor(() => expect(secondDateBefore).not.toBeInTheDocument());
-    expect(within(secondRowAfter).queryByText("now")).not.toBeInTheDocument();
+    expect(within(secondRowAfter).queryByText("Just now")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete Second chat" })).toBeInTheDocument();
   });
 

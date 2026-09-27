@@ -34,7 +34,7 @@ export function ManagedStorageLegacyEngineBanner({
         </NoticeAction>
       }
     >
-      <div className="space-y-1.5 text-sm text-muted-foreground">
+      <div className="space-y-1.5">
         <p>
           MinIO is no longer distributed by its vendor. This cluster keeps running; new managed
           storage clusters use SeaweedFS.

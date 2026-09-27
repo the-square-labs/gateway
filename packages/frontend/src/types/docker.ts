@@ -638,6 +638,9 @@ export interface DockerWebhook {
   enabled: boolean;
   targetType?: "container" | "deployment";
   deploymentId?: string | null;
+  /** Who created the webhook, and who last saved it: its calls act with that account's current permissions. */
+  createdById?: string | null;
+  updatedById?: string | null;
   createdAt: string;
   updatedAt: string;
 }

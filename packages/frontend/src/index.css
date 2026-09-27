@@ -10,6 +10,7 @@
   --color-background: #f5f5f5;
   --color-foreground: #1a1a1a;
   --color-muted: #ebebeb;
+  --color-header: #f3f3f3;
   --color-muted-foreground: #666666;
   --color-border: #d4d4d4;
   --color-input: #d4d4d4;
@@ -95,6 +96,7 @@
     --color-background: #0e0e0e;
     --color-foreground: #e5e5e5;
     --color-muted: #1a1a1a;
+    --color-header: #1a1a1a;
     --color-muted-foreground: #a3a3a3;
     --color-border: #2a2a2a;
     --color-input: #2a2a2a;
@@ -138,6 +140,7 @@
   --color-background: #f5f5f5;
   --color-foreground: #1a1a1a;
   --color-muted: #ebebeb;
+  --color-header: #f3f3f3;
   --color-muted-foreground: #666666;
   --color-border: #d4d4d4;
   --color-input: #d4d4d4;
@@ -179,6 +182,7 @@
   --color-background: #0e0e0e;
   --color-foreground: #e5e5e5;
   --color-muted: #1a1a1a;
+  --color-header: #1a1a1a;
   --color-muted-foreground: #a3a3a3;
   --color-border: #2a2a2a;
   --color-input: #2a2a2a;

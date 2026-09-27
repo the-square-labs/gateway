@@ -1198,6 +1198,17 @@ export function HostingConnectorDialog({
           </AnimatedHeight>
         )}
         <DialogFooter>
+          {step === connectionStep && (
+            <Button
+              variant="outline"
+              pending={pendingAction === "test"}
+              disabled={locked || stepInvalid}
+              onClick={() => void advance(true)}
+            >
+              {pendingAction !== "test" && connectionTested ? <Check /> : null}
+              Test Connection
+            </Button>
+          )}
           {step === 1 ? (
             <Button variant="outline" disabled={busy} onClick={onClose}>
               Cancel
@@ -1212,17 +1223,6 @@ export function HostingConnectorDialog({
             >
               <ArrowLeft />
               Back
-            </Button>
-          )}
-          {step === connectionStep && (
-            <Button
-              variant="outline"
-              pending={pendingAction === "test"}
-              disabled={locked || stepInvalid}
-              onClick={() => void advance(true)}
-            >
-              {pendingAction !== "test" && connectionTested ? <Check /> : null}
-              Test Connection
             </Button>
           )}
           <Button

@@ -217,7 +217,7 @@ export function NodeSetupWizard({
       stepKey={stepKey}
       onBack={enrollment ? undefined : onBack}
       onSkip={enrollment && !online ? skipEnrollment : undefined}
-      footerLeft={
+      footerStatus={
         enrollment && !online ? (
           <span className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />

@@ -525,6 +525,43 @@ describe("EnvironmentTab managed database links", () => {
     expect(screen.getByTitle("Raw view")).toBeDisabled();
   });
 
+  it("keeps managed links editable while a build rollout locks the environment", async () => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["docker:containers:environment", "docker:containers:secrets", "databases:edit"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useDockerStore.setState({ invalidate: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "getContainerEnv").mockResolvedValue(["PATH=/usr/bin"]);
+    vi.spyOn(api, "listDockerSecrets").mockResolvedValue([]);
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [makeNode({ id: database.nodeId, type: "databases" })],
+      total: 1,
+      page: 1,
+      limit: 1,
+      totalPages: 1,
+    });
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <EnvironmentTab
+          nodeId="node-1"
+          containerId="container-1"
+          containerName="app"
+          disabled
+          managedLinksDisabled={false}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("button", { name: "Add" })).toBeEnabled();
+    expect(screen.getByTitle("Add variable")).toBeDisabled();
+  });
+
   it("does not re-fetch the old container after saving a managed database link", async () => {
     useAuthStore.setState({
       user: makeUser({

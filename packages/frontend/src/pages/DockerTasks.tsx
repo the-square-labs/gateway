@@ -14,8 +14,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
+import { Notice } from "@/components/common/Notice";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
@@ -119,15 +121,6 @@ function formatDuration(start: string, end?: string): string {
   if (diff < 3600_000)
     return `${Math.floor(diff / 60_000)}m ${Math.floor((diff % 60_000) / 1000)}s`;
   return `${Math.floor(diff / 3600_000)}h ${Math.floor((diff % 3600_000) / 60_000)}m`;
-}
-
-function formatTime(dateStr: string): string {
-  const d = new Date(dateStr);
-  const diff = Date.now() - d.getTime();
-  if (diff < 60_000) return "Just now";
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
-  return d.toLocaleDateString();
 }
 
 export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
@@ -334,7 +327,7 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
         width: "110px",
         align: "right",
         render: (t) => (
-          <span className="text-muted-foreground whitespace-nowrap">{formatTime(t.createdAt)}</span>
+          <RelativeTime value={t.createdAt} className="text-muted-foreground whitespace-nowrap" />
         ),
       },
       {
@@ -618,16 +611,18 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
                 )}
                 <div className="flex items-center justify-between px-4 py-3 min-w-0">
                   <span className="text-sm text-muted-foreground shrink-0">Started</span>
-                  <span className="text-sm truncate ml-4 min-w-0">
-                    {new Date(selectedTask.createdAt).toLocaleString()}
-                  </span>
+                  <RelativeTime
+                    value={selectedTask.createdAt}
+                    className="text-sm truncate ml-4 min-w-0"
+                  />
                 </div>
                 {selectedTask.completedAt && (
                   <div className="flex items-center justify-between px-4 py-3 min-w-0">
                     <span className="text-sm text-muted-foreground shrink-0">Finished</span>
-                    <span className="text-sm truncate ml-4 min-w-0">
-                      {new Date(selectedTask.completedAt).toLocaleString()}
-                    </span>
+                    <RelativeTime
+                      value={selectedTask.completedAt}
+                      className="text-sm truncate ml-4 min-w-0"
+                    />
                   </div>
                 )}
                 <div className="flex items-center justify-between px-4 py-3 min-w-0">
@@ -638,11 +633,11 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
                 </div>
               </div>
               {selectedTask.error && (
-                <div className="mt-3 bg-destructive/10 p-3 text-destructive">
-                  <pre className="text-xs whitespace-pre-wrap break-words font-mono">
+                <Notice tone="destructive" className="mt-3" title="Task error">
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
                     {selectedTask.error}
                   </pre>
-                </div>
+                </Notice>
               )}
             </div>
           )}

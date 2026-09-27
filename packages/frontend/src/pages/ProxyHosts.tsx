@@ -419,7 +419,6 @@ export function ProxyHosts({
     {
       id: "domain-names",
       label: "Domains",
-      width: "25%",
       renderCell: (host) => (
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{host.domainNames[0]}</p>
@@ -434,7 +433,7 @@ export function ProxyHosts({
     {
       id: "upstream",
       label: "Target",
-      width: "18%",
+      width: "22%",
       cellContentClassName: "text-sm text-muted-foreground",
       renderCell: (host) =>
         host.type === "proxy" ? (
@@ -448,7 +447,7 @@ export function ProxyHosts({
     {
       id: "ingress-node",
       label: "Ingress Node",
-      width: "13%",
+      width: "10rem",
       renderCell: (host) => {
         const node = host.nodeId ? ingressNodeById.get(host.nodeId) : undefined;
         return (
@@ -461,13 +460,13 @@ export function ProxyHosts({
     {
       id: "type",
       label: "Type",
-      width: "10%",
+      width: "6.5rem",
       renderCell: (host) => <TypeBadge type={host.type} />,
     },
     {
       id: "ssl",
       label: "TLS",
-      width: "8%",
+      width: "4.5rem",
       renderCell: (host) =>
         host.sslEnabled ? (
           <Badge variant="success">SSL</Badge>

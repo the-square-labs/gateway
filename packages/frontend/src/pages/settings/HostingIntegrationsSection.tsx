@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { createReturnNavigationState } from "@/lib/return-navigation";
-import { cn, formatRelativeDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { HOSTING_PROVIDER_LABELS, type HostingConnector } from "@/types/hosting";
@@ -219,12 +220,19 @@ export function HostingIntegrationsSection({
                       </Badge>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {connector.syncedAt
-                        ? `Synced ${formatRelativeDate(connector.syncedAt)}`
-                        : "Never synced"}
-                      {connector.testedAt
-                        ? ` · Tested ${formatRelativeDate(connector.testedAt)}`
-                        : ""}
+                      {connector.syncedAt ? (
+                        <>
+                          Synced <RelativeTime value={connector.syncedAt} />
+                        </>
+                      ) : (
+                        "Never synced"
+                      )}
+                      {connector.testedAt && (
+                        <>
+                          {" · Tested "}
+                          <RelativeTime value={connector.testedAt} />
+                        </>
+                      )}
                       {connector.syncLastError ? ` · ${connector.syncLastError}` : ""}
                     </p>
                   </div>

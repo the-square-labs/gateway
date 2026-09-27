@@ -18,6 +18,7 @@ import { ContentLoading } from "@/components/common/ContentLoading";
 import { EditableStringList } from "@/components/common/EditableStringList";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +42,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
-import { cn, formatRelativeDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { GitConnector, GitConnectorProvider, GitConnectorRequest } from "@/types/integrations";
@@ -740,6 +741,9 @@ function GitConnectorPanel({
           )}
 
           <DialogFooter>
+            <Button variant="outline" onClick={() => closeForm()}>
+              Cancel
+            </Button>
             {oauthStep ? (
               <Button variant="outline" onClick={() => setOAuthStep(false)}>
                 <ArrowLeft className="h-4 w-4" />
@@ -752,9 +756,6 @@ function GitConnectorPanel({
                 Back
               </Button>
             ) : null}
-            <Button variant="outline" onClick={() => closeForm()}>
-              Cancel
-            </Button>
             {editingConnector && provider === "github" && authMode === "oauth" && !oauthStep ? (
               <Button disabled={!form.name.trim()} onClick={() => setOAuthStep(true)}>
                 {switchingToOAuth ? "Continue" : "Reauthorize"}
@@ -806,12 +807,13 @@ function GitConnectorRow({
     connector.provider === "github"
       ? "All visible"
       : `${selectedRepositoryCount} ${selectedRepositoryCount === 1 ? "repository" : "repositories"}`;
-  const testedLabel = connector.testedAt
-    ? `Tested ${formatRelativeDate(connector.testedAt)}`
-    : "Never tested";
-  const syncedLabel = connector.syncFinishedAt
-    ? `Synced ${formatRelativeDate(connector.syncFinishedAt)}`
-    : null;
+  const testedLabel = connector.testedAt ? (
+    <>
+      Tested <RelativeTime value={connector.testedAt} />
+    </>
+  ) : (
+    "Never tested"
+  );
   const status =
     connector.syncStatus === "error"
       ? "error"
@@ -851,7 +853,12 @@ function GitConnectorRow({
                 : ""}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {syncedLabel ? `${syncedLabel} · ` : ""}
+            {connector.syncFinishedAt && (
+              <>
+                Synced <RelativeTime value={connector.syncFinishedAt} />
+                {" · "}
+              </>
+            )}
             {testedLabel}
             {connector.syncLastError ? ` · ${connector.syncLastError}` : ""}
           </p>

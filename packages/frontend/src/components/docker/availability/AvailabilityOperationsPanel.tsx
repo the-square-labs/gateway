@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,6 @@ import {
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
-import { formatDateTime, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { DockerAvailabilityOperation } from "@/types";
@@ -225,7 +225,7 @@ export function AvailabilityOperationsPanel({
         header: "Time",
         align: "right",
         cellClassName: "text-muted-foreground",
-        render: (operation) => formatRelativeDate(operation.createdAt),
+        render: (operation) => <RelativeTime value={operation.createdAt} />,
       },
     ],
     [desiredGeneration]
@@ -237,7 +237,7 @@ export function AvailabilityOperationsPanel({
         key: "time",
         header: "Time",
         width: "11rem",
-        render: (row) => formatDateTime(row.createdAt),
+        render: (row) => <RelativeTime value={row.createdAt} />,
       },
       {
         key: "operation",

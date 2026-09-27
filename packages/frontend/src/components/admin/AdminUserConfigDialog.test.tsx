@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdminUserConfigDialog } from "@/components/admin/AdminUserConfigDialog";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import { renderWithRouter } from "@/test/render";
 import { waitForReveal } from "@/test/reveal";
 import type { User } from "@/types";
@@ -24,7 +25,21 @@ const passwordUser: User = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  useAuthStore.setState({ user: null, isAuthenticated: false });
 });
+
+function renderDialog(user: User, onUserUpdated = vi.fn()) {
+  return renderWithRouter(
+    <AdminUserConfigDialog
+      open
+      user={user}
+      canResetMfa
+      onOpenChange={vi.fn()}
+      onUserUpdated={onUserUpdated}
+      onUserDeleted={vi.fn()}
+    />
+  );
+}
 
 describe("AdminUserConfigDialog", () => {
   it("shows local account controls and disables the session link when there are no sessions", async () => {
@@ -137,5 +152,64 @@ describe("AdminUserConfigDialog", () => {
 
     await vi.waitFor(() => expect(resetAvatar).toHaveBeenCalledWith(userWithAvatar.id));
     expect(onUserUpdated).toHaveBeenCalledWith(expect.objectContaining({ avatarUrl: null }));
+  });
+});
+
+describe("AdminUserConfigDialog invitation email", () => {
+  const newUser: User = { ...passwordUser, lastLoginAt: null, invitationSentAt: null };
+
+  it("offers the invitation once for a user who never signed in", async () => {
+    vi.spyOn(api, "listAdminUserSessions").mockResolvedValue([]);
+    const sentAt = new Date().toISOString();
+    const sendInvitation = vi
+      .spyOn(api, "sendUserInvitation")
+      .mockResolvedValue({ ...newUser, invitationSentAt: sentAt });
+    const onUserUpdated = vi.fn();
+
+    renderDialog(newUser, onUserUpdated);
+    await waitForReveal();
+    fireEvent.click(screen.getByRole("button", { name: "Send invitation email" }));
+
+    await vi.waitFor(() =>
+      expect(onUserUpdated).toHaveBeenCalledWith({ ...newUser, invitationSentAt: sentAt })
+    );
+    expect(sendInvitation).toHaveBeenCalledWith(newUser.id);
+  });
+
+  it("shows when the invitation was sent instead of the action", async () => {
+    vi.spyOn(api, "listAdminUserSessions").mockResolvedValue([]);
+
+    renderDialog({ ...newUser, invitationSentAt: new Date().toISOString() });
+    await waitForReveal();
+
+    expect(screen.getByText(/Invitation sent/)).toHaveTextContent("Invitation sent Just now");
+    expect(screen.queryByRole("button", { name: "Send invitation email" })).not.toBeInTheDocument();
+  });
+
+  it("hides the invitation for a user who has already signed in", async () => {
+    vi.spyOn(api, "listAdminUserSessions").mockResolvedValue([]);
+
+    renderDialog({ ...newUser, lastLoginAt: "2026-09-20T10:00:00.000Z" });
+    await waitForReveal();
+
+    expect(screen.queryByText("Invitation email")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send invitation email" })).not.toBeInTheDocument();
+  });
+
+  it("disables the action with a reason while SMTP is not verified", async () => {
+    vi.spyOn(api, "listAdminUserSessions").mockResolvedValue([]);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue({
+      smtp: { verifiedAt: null },
+    } as never);
+    useAuthStore.setState({
+      user: { id: "admin-1", scopes: ["settings:gateway:view"] } as never,
+      isAuthenticated: true,
+    });
+
+    renderDialog(newUser);
+    await waitForReveal();
+
+    expect(screen.getByRole("button", { name: "Send invitation email" })).toBeDisabled();
+    expect(screen.getByText("Sending requires verified SMTP.")).toBeInTheDocument();
   });
 });

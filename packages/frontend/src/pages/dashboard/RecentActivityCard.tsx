@@ -1,11 +1,11 @@
 import { Link } from "react-router-dom";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { formatRelativeDate } from "@/lib/utils";
-import { getAuditEntryUserLabel } from "@/pages/audit-log/audit-format";
+import { getAuditEntryUserLabel, getAuditResourceDisplay } from "@/pages/audit-log/audit-format";
 import type { AuditLogEntry } from "@/types";
 
 interface RecentActivityCardProps {
@@ -52,15 +52,22 @@ export function RecentActivityCard({ activity, hasScope }: RecentActivityCardPro
     {
       id: "resource",
       header: "Resource",
-      cellClassName: "text-muted-foreground",
-      render: (entry) =>
-        `${entry.resourceType}${entry.resourceId ? ` / ${entry.resourceId.slice(0, 8)}...` : ""}`,
+      cellClassName: "max-w-0 w-full text-muted-foreground",
+      render: (entry) => {
+        const resource = getAuditResourceDisplay(entry);
+        return (
+          <span className="block truncate" title={resource.title}>
+            {resource.label}
+          </span>
+        );
+      },
     },
     {
       id: "time",
       header: "Time",
-      cellClassName: "text-muted-foreground",
-      render: (entry) => formatRelativeDate(entry.createdAt),
+      align: "right",
+      cellClassName: "whitespace-nowrap text-muted-foreground",
+      render: (entry) => <RelativeTime value={entry.createdAt} />,
     },
   ];
 

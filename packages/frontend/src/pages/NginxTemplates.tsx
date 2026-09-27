@@ -1,16 +1,17 @@
-import { Copy, FileCode, MoreVertical, Pencil, Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Copy, FileCode, FolderPlus, MoreVertical, Pencil, Plus, Trash2 } from "lucide-react";
+import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
+import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CodeEditor } from "@/components/ui/code-editor";
+import { CodeEditor, codeEditorHeightForLines } from "@/components/ui/code-editor";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -27,16 +28,23 @@ import type { NginxTemplate } from "@/types";
 
 export function getTemplatePreviewEditorHeight(content: string): string {
   const lineCount = Math.max(1, content.split("\n").length);
-  const height = Math.min(Math.max(lineCount * 18 + 16, 120), 640);
+  const height = Math.min(Math.max(codeEditorHeightForLines(lineCount), 120), 640);
   return `min(64dvh, ${height}px)`;
 }
+
+/** Read-only folder that holds the built-in templates above the operator's folders. */
+const BUILTIN_FOLDER_ID = "nginx-templates-builtin";
+
+const stopRowEvent = (event: SyntheticEvent) => event.stopPropagation();
 
 export function NginxTemplates({
   embedded,
   onCreateRef,
+  onCreateFolderRef,
 }: {
   embedded?: boolean;
   onCreateRef?: (fn: () => void) => void;
+  onCreateFolderRef?: (fn: () => void) => void;
 }) {
   const navigate = useNavigate();
   const { hasScope, hasScopedAccess } = useAuthStore();
@@ -53,6 +61,8 @@ export function NginxTemplates({
     onOpenChange: onPreviewOpenChange,
   } = useDeferredDialogState<NginxTemplate>();
   const [previewContent, setPreviewContent] = useState("");
+  const [search, setSearch] = useState("");
+  const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
   const previewEditorHeight = useMemo(
     () => getTemplatePreviewEditorHeight(previewContent),
     [previewContent]
@@ -79,6 +89,11 @@ export function NginxTemplates({
   }, [load]);
 
   useRealtime("nginx.template.changed", () => {
+    load();
+  });
+
+  // Deleting a folder moves its templates to ungrouped.
+  useRealtime("nginx.template.folder.changed", () => {
     load();
   });
 
@@ -125,6 +140,112 @@ export function NginxTemplates({
     }
   };
 
+  const canManageTemplates = hasScope("proxy:templates:manage");
+  const canManageFolders = hasScope("proxy:templates:folders:manage");
+  // Mirrors the template routes: manage:<id> edits and deletes, clone reads the
+  // source and creates a new template (broad manage).
+  const templateAccess = (template: NginxTemplate) => {
+    const canManageTemplate = hasScope(`proxy:templates:manage:${template.id}`);
+    const canView = hasScope(`proxy:templates:view:${template.id}`);
+    return {
+      canView,
+      canEdit: canManageTemplate && !template.isBuiltin,
+      canClone: canManageTemplates && canView,
+      canDelete: canManageTemplate && !template.isBuiltin,
+    };
+  };
+  const openTemplate = (template: NginxTemplate) => {
+    const access = templateAccess(template);
+    if (access.canEdit) navigate(`/nginx-templates/${template.id}`);
+    else if (access.canView) void handlePreview(template);
+  };
+
+  const query = search.trim().toLowerCase();
+  const visibleTemplates = query
+    ? templates.filter((template) =>
+        [template.name, template.description].some((value) => value?.toLowerCase().includes(query))
+      )
+    : templates;
+  // Built-in templates keep the server's order.
+  const builtinTemplates = visibleTemplates
+    .filter((template) => template.isBuiltin)
+    .map((template, index) => ({ ...template, sortOrder: index }));
+  const customTemplates = visibleTemplates.filter((template) => !template.isBuiltin);
+
+  const columns: ResourceListColumn<NginxTemplate>[] = [
+    {
+      id: "name",
+      label: "Name",
+      renderCell: (template) => (
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <FileCode className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate text-sm font-medium">{template.name}</span>
+            {template.isBuiltin && <Badge size="inline">Built-in</Badge>}
+          </div>
+          {template.description && (
+            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+              {template.description}
+            </p>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: "type",
+      label: "Type",
+      width: "8rem",
+      renderCell: (template) => <Badge variant="secondary">{template.type}</Badge>,
+    },
+    {
+      id: "actions",
+      label: "Actions",
+      align: "right",
+      width: "5rem",
+      renderCell: (template) => {
+        const access = templateAccess(template);
+        if (!access.canEdit && !access.canClone && !access.canDelete) return null;
+        return (
+          <div className="flex justify-end" onClick={stopRowEvent} onPointerDown={stopRowEvent}>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${template.name}`}>
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {access.canEdit && (
+                  <DropdownMenuItem onClick={() => navigate(`/nginx-templates/${template.id}`)}>
+                    <Pencil className="h-4 w-4" />
+                    Edit
+                  </DropdownMenuItem>
+                )}
+                {access.canClone && (
+                  <DropdownMenuItem onClick={() => handleClone(template.id)}>
+                    <Copy className="h-4 w-4" />
+                    Clone
+                  </DropdownMenuItem>
+                )}
+                {access.canDelete && (
+                  <>
+                    {(access.canEdit || access.canClone) && <DropdownMenuSeparator />}
+                    <DropdownMenuItem
+                      onClick={() => handleDelete(template)}
+                      className="text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        );
+      },
+    },
+  ];
+
   if (!canViewTemplates) {
     return null;
   }
@@ -138,8 +259,17 @@ export function NginxTemplates({
             description="Nginx server block templates for proxy hosts"
             actions={
               <ResponsiveHeaderActions
-                actions={
-                  hasScope("proxy:templates:manage")
+                actions={[
+                  ...(canManageFolders && createFolderAction
+                    ? [
+                        {
+                          label: "Add Folder",
+                          icon: <FolderPlus className="h-4 w-4" />,
+                          onClick: createFolderAction,
+                        },
+                      ]
+                    : []),
+                  ...(canManageTemplates
                     ? [
                         {
                           label: "Create Template",
@@ -147,10 +277,16 @@ export function NginxTemplates({
                           onClick: () => navigate("/nginx-templates/new"),
                         },
                       ]
-                    : []
-                }
+                    : []),
+                ]}
               >
-                {hasScope("proxy:templates:manage") && (
+                {canManageFolders && (
+                  <Button variant="outline" onClick={() => createFolderAction?.()}>
+                    <FolderPlus className="h-4 w-4" />
+                    Add Folder
+                  </Button>
+                )}
+                {canManageTemplates && (
                   <Button onClick={() => navigate("/nginx-templates/new")}>
                     <Plus className="h-4 w-4" />
                     Create Template
@@ -161,98 +297,49 @@ export function NginxTemplates({
           />
         )}
 
-        <ContentLoading loading={isLoading} />
-        {isLoading ? null : templates.length > 0 ? (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {templates.map((t) => {
-              // Mirrors the template routes: manage:<id> edits and deletes, clone reads
-              // the source and creates a new template (broad manage).
-              const canManageTemplate = hasScope(`proxy:templates:manage:${t.id}`);
-              const canViewTemplate = hasScope(`proxy:templates:view:${t.id}`);
-              const canEditTemplate = canManageTemplate && !t.isBuiltin;
-              const canCloneTemplate = hasScope("proxy:templates:manage") && canViewTemplate;
-              const canDeleteTemplate = canManageTemplate && !t.isBuiltin;
-              const hasActions = canEditTemplate || canCloneTemplate || canDeleteTemplate;
-              const canOpenTemplate = canEditTemplate || canViewTemplate;
-
-              return (
-                <div key={t.id} className="border border-border bg-card p-4 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div
-                      className={`flex items-center gap-2 ${
-                        canOpenTemplate ? "cursor-pointer hover:opacity-80" : ""
-                      }`}
-                      onClick={() => {
-                        if (canEditTemplate) {
-                          navigate(`/nginx-templates/${t.id}`);
-                        } else if (canViewTemplate) {
-                          void handlePreview(t);
-                        }
-                      }}
-                    >
-                      <FileCode className="h-4 w-4 text-muted-foreground" />
-                      <h3 className="font-semibold text-sm">{t.name}</h3>
-                    </div>
-                    {hasActions && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`Actions for ${t.name}`}
-                          >
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          {canEditTemplate && (
-                            <DropdownMenuItem onClick={() => navigate(`/nginx-templates/${t.id}`)}>
-                              <Pencil className="h-4 w-4" />
-                              Edit
-                            </DropdownMenuItem>
-                          )}
-                          {canCloneTemplate && (
-                            <DropdownMenuItem onClick={() => handleClone(t.id)}>
-                              <Copy className="h-4 w-4" />
-                              Clone
-                            </DropdownMenuItem>
-                          )}
-                          {canDeleteTemplate && (
-                            <>
-                              {(canEditTemplate || canCloneTemplate) && <DropdownMenuSeparator />}
-                              <DropdownMenuItem
-                                onClick={() => handleDelete(t)}
-                                className="text-destructive"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                                Delete
-                              </DropdownMenuItem>
-                            </>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )}
-                  </div>
-                  <p className="text-sm text-muted-foreground line-clamp-2">
-                    {t.description || "No description"}
-                  </p>
-                  <div className="flex flex-wrap gap-1">
-                    <Badge variant="secondary" className="uppercase">
-                      {t.type}
-                    </Badge>
-                    {t.isBuiltin && <Badge>Built-in</Badge>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <EmptyState
-            message="No config templates."
-            actionLabel={hasScope("proxy:templates:manage") ? "Create one" : undefined}
-            actionHref={hasScope("proxy:templates:manage") ? "/nginx-templates/new" : undefined}
-          />
-        )}
+        <FolderedResourceList<NginxTemplate>
+          resourceType="nginx-template"
+          realtimeChannel="nginx.template.folder.changed"
+          resources={customTemplates}
+          systemFolders={[{ id: BUILTIN_FOLDER_ID, name: "Built-in", items: builtinTemplates }]}
+          columns={columns}
+          search={{
+            placeholder: "Search templates...",
+            search,
+            onSearchChange: setSearch,
+            hasActiveFilters: search !== "",
+            onReset: () => setSearch(""),
+          }}
+          loading={isLoading}
+          loadingLabel="Loading config templates..."
+          emptyState={
+            <EmptyState
+              message="No config templates."
+              actionLabel={canManageTemplates ? "Create one" : undefined}
+              actionHref={canManageTemplates ? "/nginx-templates/new" : undefined}
+              hasActiveFilters={search !== ""}
+              onReset={() => setSearch("")}
+            />
+          }
+          minWidth={600}
+          canManageFolders={canManageFolders}
+          canViewItem={(template) => {
+            const access = templateAccess(template);
+            return access.canEdit || access.canView;
+          }}
+          canReorganizeItem={(template) =>
+            canManageFolders &&
+            !template.isBuiltin &&
+            hasScope(`proxy:templates:manage:${template.id}`)
+          }
+          getResourceLabel={(template) => template.name}
+          onItemClick={openTemplate}
+          onRefresh={load}
+          onCreateFolderRef={(fn) => {
+            setCreateFolderAction(() => fn);
+            onCreateFolderRef?.(fn);
+          }}
+        />
       </div>
       <Dialog open={previewOpen} onOpenChange={onPreviewOpenChange}>
         <DialogContent className="w-[92vw] sm:max-w-[64rem]">

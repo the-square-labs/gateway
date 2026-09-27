@@ -64,7 +64,7 @@ describe("SiemDestinationDialog", () => {
       <SiemDestinationDialog open onOpenChange={vi.fn()} destination={null} onSaved={vi.fn()} />
     );
 
-    const deliveryRow = screen.getByText("Delivery enabled").closest(".flex");
+    const deliveryRow = screen.getByText("Delivery enabled").closest("label");
     if (!deliveryRow?.parentElement) throw new Error("Delivery control container is missing");
 
     expect(deliveryRow.parentElement).toHaveClass("pt-4");

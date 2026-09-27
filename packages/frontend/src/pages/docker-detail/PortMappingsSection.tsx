@@ -90,7 +90,7 @@ export function PortMappingsSection({
       {ports.length > 0 ? (
         <>
           <div
-            className={`grid ${gridColumns} border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider`}
+            className={`grid ${gridColumns} border-b border-border bg-header text-xs font-medium text-muted-foreground uppercase tracking-wider`}
           >
             {showBindAddress && <div className="px-3 py-2">Publish On</div>}
             <div className={showBindAddress ? "px-3 py-2 border-l border-border" : "px-3 py-2"}>

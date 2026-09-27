@@ -13,7 +13,7 @@ import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Toaster } from "@/components/ui/sonner";
-import { imageMimeForFile } from "@/lib/file-types";
+import { codeEditorLanguageForFile, imageMimeForFile } from "@/lib/file-types";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 
@@ -460,6 +460,7 @@ export function DockerFilePopout() {
               value={content ?? ""}
               onChange={isWritable ? setContent : () => {}}
               readOnly={!isWritable}
+              language={codeEditorLanguageForFile(filePath)}
             />
           )}
         </div>

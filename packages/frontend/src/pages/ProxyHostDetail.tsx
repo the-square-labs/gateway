@@ -1169,18 +1169,14 @@ export function ProxyHostDetail({
 
         {host.maintenanceEnabled && (
           <Notice tone="warning" title="Maintenance mode is active">
-            <p className="text-sm text-muted-foreground">
-              User requests receive HTTP 503 and managed health checks are paused.
-            </p>
+            <p>User requests receive HTTP 503 and managed health checks are paused.</p>
           </Notice>
         )}
 
         {/* ── Raw mode warning banner ────────────────────────── */}
         {isRawMode && (
           <Notice tone="warning" title="Raw mode is active">
-            <p className="text-sm text-muted-foreground">
-              Template rendering is bypassed; the config is sent directly to the daemon.
-            </p>
+            <p>Template rendering is bypassed; the config is sent directly to the daemon.</p>
           </Notice>
         )}
 

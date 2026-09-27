@@ -53,7 +53,7 @@ export function LabelsSection({
     >
       {labels.length > 0 ? (
         <>
-          <div className="grid grid-cols-[1fr_1fr] border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          <div className="grid grid-cols-[1fr_1fr] border-b border-border bg-header text-xs font-medium text-muted-foreground uppercase tracking-wider">
             <div className="px-3 py-2">Key</div>
             <div className="px-3 py-2 border-l border-border">Value</div>
           </div>

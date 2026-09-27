@@ -1,7 +1,8 @@
-import { ArrowRight, Bot, Cpu, ExternalLink, Loader2 } from "lucide-react";
+import { Bot, Cpu, ExternalLink, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChoiceCard } from "@/components/common/ChoiceCard";
+import { Notice, NoticeAction } from "@/components/common/Notice";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -300,23 +301,18 @@ export function AssistantSetupWizard({
           <Loader2 className="mr-2 animate-spin" /> Checking Gateway Inference…
         </div>
       ) : inferenceModels.length === 0 ? (
-        <div className="space-y-3 border border-warning/60 p-4">
-          <div>
-            <p className="text-sm font-semibold text-warning-text">Gateway Inference needs setup</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Connect a provider and make at least one model available before AI Workspace can use
-              Gateway Inference.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="flex items-center gap-1 text-sm font-medium text-warning-text hover:underline"
-            onClick={onNeedInference}
-          >
-            Configure Gateway Inference
-            <ArrowRight className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        <Notice
+          tone="warning"
+          title="Gateway Inference needs setup"
+          actions={
+            <NoticeAction tone="warning" onClick={onNeedInference}>
+              Configure Gateway Inference
+            </NoticeAction>
+          }
+        >
+          Connect a provider and make at least one model available before AI Workspace can use
+          Gateway Inference.
+        </Notice>
       ) : (
         <PanelShell
           title="Gateway Inference"

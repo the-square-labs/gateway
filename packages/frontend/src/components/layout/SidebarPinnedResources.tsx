@@ -1,4 +1,4 @@
-import { Box, Boxes, Database, GitBranch, Globe, Hammer, Server } from "lucide-react";
+import { Box, Boxes, Database, GitBranch, Globe, Server } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
@@ -266,17 +266,9 @@ export function SidebarPinnedResources({
               ? dockerDeploymentRoute(meta.nodeSlug, meta.name)
               : meta.kind === "compose"
                 ? dockerComposeProjectRoute(id)
-                : meta.kind === "build"
-                  ? `/docker/builds?build=${encodeURIComponent(id)}`
-                  : dockerContainerRoute(meta.nodeSlug, meta.name);
+                : dockerContainerRoute(meta.nodeSlug, meta.name);
           const Icon =
-            meta.kind === "deployment"
-              ? GitBranch
-              : meta.kind === "compose"
-                ? Boxes
-                : meta.kind === "build"
-                  ? Hammer
-                  : Box;
+            meta.kind === "deployment" ? GitBranch : meta.kind === "compose" ? Boxes : Box;
           return (
             <Link
               key={id}

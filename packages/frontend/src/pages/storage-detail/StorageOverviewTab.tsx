@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
 import { ManagedCertificateDetailRow } from "@/components/common/ManagedCertificateStatus";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
@@ -188,11 +189,7 @@ export function StorageOverviewTab({
           )}
           <DetailRow
             label="Last Check"
-            value={
-              storage.lastHealthCheckAt
-                ? new Date(storage.lastHealthCheckAt).toLocaleTimeString()
-                : "Never"
-            }
+            value={<RelativeTime value={storage.lastHealthCheckAt} fallback="Never" />}
           />
           {storage.lastError && (
             <DetailRow

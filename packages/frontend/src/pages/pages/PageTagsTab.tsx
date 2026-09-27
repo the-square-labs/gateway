@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyButton } from "@/components/common/CopyButton";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,15 +26,11 @@ import {
 } from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
 import { loadPageDeployments } from "@/lib/page-deployments";
+import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PageDeployment, PageTag } from "@/types";
-import {
-  formatPageDate,
-  pagePreviewLinkReason,
-  pageStatusLabel,
-  pageStatusVariant,
-} from "./page-format";
+import { pagePreviewLinkReason, pageStatusLabel, pageStatusVariant } from "./page-format";
 
 export function PageTagsTab({ projectId }: { projectId: string }) {
   const canManage = useAuthStore((state) =>
@@ -124,10 +121,10 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
       id: "tag",
       header: "Tag",
       render: (tag) => (
-        <div>
-          <span>{tag.name}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate">{tag.name}</span>
           {tag.system && (
-            <Badge className="ml-2" variant="secondary">
+            <Badge variant="outline" size="inline">
               System
             </Badge>
           )}
@@ -141,9 +138,12 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
         tag.deployment ? (
           <div className="flex items-center gap-2">
             <Badge variant="outline">{tag.deployment.publicSlug}</Badge>
-            <Badge variant={pageStatusVariant(tag.deployment.status)} size="inline">
-              {pageStatusLabel(tag.deployment.status)}
-            </Badge>
+            {/* A tag normally points at a ready deployment; only a transient or broken state is shown. */}
+            {tag.deployment.status !== "ready" && (
+              <Badge variant={pageStatusVariant(tag.deployment.status)} size="inline">
+                {pageStatusLabel(tag.deployment.status)}
+              </Badge>
+            )}
           </div>
         ) : (
           <Badge variant="secondary">No Deployment</Badge>
@@ -192,7 +192,8 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
     {
       id: "updated",
       header: "Updated",
-      render: (tag) => <span>{formatPageDate(tag.updatedAt)}</span>,
+      cellClassName: "whitespace-nowrap text-muted-foreground",
+      render: (tag) => <RelativeTime value={tag.updatedAt} />,
     },
     {
       id: "actions",
@@ -278,7 +279,7 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
                 <SelectContent>
                   {readyDeployments.map((deployment) => (
                     <SelectItem key={deployment.id} value={deployment.id}>
-                      {deployment.publicSlug} · {formatPageDate(deployment.createdAt)}
+                      {deployment.publicSlug} · {formatRelativeDate(deployment.createdAt)}
                     </SelectItem>
                   ))}
                 </SelectContent>

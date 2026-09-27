@@ -40,6 +40,7 @@ import {
 } from "@/components/docker/availability/AvailabilityProgress";
 import { resolveAvailabilitySurfaceStatus } from "@/components/docker/availability/availability-status";
 import { DockerMigrationDialog } from "@/components/docker/DockerMigrationDialog";
+import { ImageReference } from "@/components/docker/ImageReference";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,7 +65,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { projectComposeServicePolicy } from "@/lib/compose-service-availability";
-import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
+import { resolveContainerImageReference } from "@/lib/docker-image-ref";
 import {
   isDockerMigrationOwnedByTab,
   resolveMigrationTarget,
@@ -1664,9 +1665,11 @@ export function DockerContainerDetail({
                 ) : null}
               </span>
             ) : (
-              <span className="break-all">
-                {formatDisplayImageRef(image)} &middot;{" "}
-                {(container.Id ?? containerId ?? "").slice(0, 12)}
+              <span className="flex min-w-0 items-center gap-1.5">
+                <ImageReference value={image} copyable={false} className="justify-start" />
+                <span className="shrink-0">
+                  &middot; {(container.Id ?? containerId ?? "").slice(0, 12)}
+                </span>
               </span>
             )
           }
@@ -1701,7 +1704,8 @@ export function DockerContainerDetail({
           >
             <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
             <p>
-              {buildRolloutReason}. Configuration and lifecycle changes are disabled until then.
+              {buildRolloutReason}. Configuration and lifecycle changes are disabled until then;
+              managed links can still be saved and reach the new revision.
             </p>
           </div>
         )}
@@ -1912,6 +1916,7 @@ export function DockerContainerDetail({
                   scopeResourceId={scopeResourceId}
                   containerState={environmentWorkloadState}
                   disabled={!!currentTransition || !!buildRolloutReason}
+                  managedLinksDisabled={!!currentTransition}
                   onMutationStart={beginMutationTransition}
                   onMutationEnd={clearMutationTransition}
                   onRecreating={refreshAfterMutation}

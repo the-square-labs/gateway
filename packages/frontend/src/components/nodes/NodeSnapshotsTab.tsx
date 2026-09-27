@@ -1,11 +1,13 @@
 import { Camera, FolderPlus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { CheckboxCard } from "@/components/common/CheckboxCard";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +20,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
@@ -31,7 +32,6 @@ import {
   isStaleHostingOperation,
   isStaleHostingSnapshotRevision,
 } from "@/lib/hosting-status";
-import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { accessContextKey, useAuthStore } from "@/stores/auth";
@@ -574,7 +574,7 @@ export function NodeSnapshotsTab({
     {
       id: "created",
       label: "Created",
-      renderCell: (s) => (s.createdAt ? formatDateTime(s.createdAt) : "—"),
+      renderCell: (s) => <RelativeTime value={s.createdAt} />,
     },
     {
       id: "size",
@@ -760,10 +760,7 @@ export function NodeSnapshotsTab({
                 label="Provider ID"
                 value={<span className="break-all">{details.providerSnapshotId ?? "—"}</span>}
               />
-              <DetailRow
-                label="Created"
-                value={details.createdAt ? formatDateTime(details.createdAt) : "—"}
-              />
+              <DetailRow label="Created" value={<RelativeTime value={details.createdAt} />} />
               <DetailRow
                 label="Size"
                 value={
@@ -835,22 +832,17 @@ export function NodeSnapshotsTab({
             disabled={busy}
           />
           {view?.provider === "proxmox" && (
-            <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-              <div>
-                <p className="text-sm font-medium">Include RAM</p>
-                <p className="text-xs text-muted-foreground">
-                  {view.powerState === "running"
-                    ? "Save memory and device state as well as disks. Uses additional storage and may briefly pause the VM."
-                    : "The VM must be running to capture its memory."}
-                </p>
-              </div>
-              <Switch
-                checked={includeRam}
-                onChange={setIncludeRam}
-                disabled={busy || (view.powerState !== "running" && !includeRam)}
-                ariaLabel="Include RAM"
-              />
-            </div>
+            <CheckboxCard
+              label="Include RAM"
+              description={
+                view.powerState === "running"
+                  ? "Save memory and device state as well as disks. Uses additional storage and may briefly pause the VM."
+                  : "The VM must be running to capture its memory."
+              }
+              checked={includeRam}
+              onCheckedChange={setIncludeRam}
+              disabled={busy || (view.powerState !== "running" && !includeRam)}
+            />
           )}
           <DialogFooter>
             <Button variant="outline" disabled={busy} onClick={() => setCreateOpen(false)}>

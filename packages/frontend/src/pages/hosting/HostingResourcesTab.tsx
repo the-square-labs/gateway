@@ -13,6 +13,7 @@ import { Combobox } from "@/components/common/Combobox";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { HostingResizeDialog } from "@/components/nodes/HostingResizeDialog";
@@ -37,7 +38,6 @@ import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { createClientUuid } from "@/lib/client-id";
 import { performHostingAction } from "@/lib/hosting-intents";
 import { hostingNodeLabel, hostingOperationPending, hostingPowerLabel } from "@/lib/hosting-status";
-import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type {
@@ -121,7 +121,7 @@ function nameCell(resource: HostingResource): ReactNode {
     <div className="min-w-0">
       <p className="truncate font-medium">{resource.name}</p>
       <p className="truncate text-xs text-muted-foreground">
-        {resource.kind.toUpperCase()} · seen {formatRelativeDate(resource.observedAt)}
+        {resource.kind.toUpperCase()} · seen <RelativeTime value={resource.observedAt} />
       </p>
       <p className="truncate text-xs text-muted-foreground">
         {resource.cpu ?? "—"} vCPU · {resource.memoryMb ?? "—"} MB · {resource.diskGb ?? "—"} GB

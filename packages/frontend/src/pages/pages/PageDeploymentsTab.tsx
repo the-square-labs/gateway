@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyButton } from "@/components/common/CopyButton";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +23,6 @@ import { useAuthStore } from "@/stores/auth";
 import type { PageDeployment } from "@/types";
 import {
   formatPageBytes,
-  formatPageDate,
   formatPageExpiry,
   pagePreviewUrl,
   pageStatusLabel,
@@ -119,7 +119,11 @@ export function PageDeploymentsTab({
       render: (deployment) => (
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate">{deployment.publicSlug}</span>
-          {deployment.pinned && <Badge variant="outline">Pinned</Badge>}
+          {deployment.pinned && (
+            <Badge variant="outline" size="inline">
+              Pinned
+            </Badge>
+          )}
           {deployment.expiresAt && (
             <Badge
               variant="warning"
@@ -147,7 +151,7 @@ export function PageDeploymentsTab({
       header: "Created",
       className: "w-[22%]",
       render: (deployment) => (
-        <span className="whitespace-nowrap">{formatPageDate(deployment.createdAt)}</span>
+        <RelativeTime value={deployment.createdAt} className="whitespace-nowrap" />
       ),
     },
     {
@@ -254,7 +258,7 @@ export function PageDeploymentsTab({
                 </Badge>
               </SettingsControlRow>
               <SettingsControlRow title="Created" controlsClassName="sm:min-w-0">
-                <span className="text-sm">{formatPageDate(selectedDeployment.createdAt)}</span>
+                <RelativeTime value={selectedDeployment.createdAt} className="text-sm" />
               </SettingsControlRow>
               <SettingsControlRow title="Artifact" controlsClassName="sm:min-w-0">
                 <span className="text-right text-sm">

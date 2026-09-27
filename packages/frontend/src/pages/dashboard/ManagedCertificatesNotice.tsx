@@ -40,7 +40,7 @@ export function ManagedCertificatesNotice({
           : `${certificates.length} managed TLS certificates need attention`
       }
     >
-      <ul className="mt-1 space-y-0.5 text-sm">
+      <ul className="space-y-0.5">
         {certificates.map((certificate) => (
           <li key={`${certificate.kind}:${certificate.id}`} className="min-w-0">
             <Link
@@ -53,7 +53,7 @@ export function ManagedCertificatesNotice({
             >
               {certificate.name}
             </Link>
-            <span className="text-muted-foreground"> · {reasonLabel(certificate)}</span>
+            <span> · {reasonLabel(certificate)}</span>
           </li>
         ))}
       </ul>

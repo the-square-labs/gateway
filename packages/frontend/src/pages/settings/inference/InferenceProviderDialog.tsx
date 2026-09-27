@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { formatDateTime, formatRelativeDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
   InferenceProviderCatalogItem,
@@ -346,16 +347,16 @@ export function InferenceProviderDialog({
             </SettingsControlRow>
           )}
           <SettingsControlRow title="Last synchronized">
-            <span className="text-sm">
-              {displayedConnection.lastSyncedAt
-                ? formatRelativeDate(displayedConnection.lastSyncedAt)
-                : "Never"}
-            </span>
+            <RelativeTime
+              value={displayedConnection.lastSyncedAt}
+              fallback="Never"
+              className="text-sm"
+            />
           </SettingsControlRow>
         </PanelShell>
 
         {canManage && (
-          <DialogFooter className="sm:justify-between sm:space-x-0">
+          <DialogFooter>
             <Button
               variant="destructive"
               onClick={() => void disconnect()}
@@ -365,31 +366,29 @@ export function InferenceProviderDialog({
               <Trash2 />
               Disconnect
             </Button>
-            <div className="flex flex-col-reverse gap-2 sm:flex-row">
-              <Button
-                variant="outline"
-                onClick={() => void sync()}
-                disabled={saving || disconnecting}
-                pending={syncing}
-              >
-                <RefreshCw />
-                Sync now
-              </Button>
-              <Button
-                onClick={() => void save()}
-                disabled={
-                  !dirty ||
-                  !name.trim() ||
-                  !minimumRemainingPercentValid ||
-                  !apiMonthlyLimitValid ||
-                  syncing ||
-                  disconnecting
-                }
-                pending={saving}
-              >
-                Save settings
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              onClick={() => void sync()}
+              disabled={saving || disconnecting}
+              pending={syncing}
+            >
+              <RefreshCw />
+              Sync now
+            </Button>
+            <Button
+              onClick={() => void save()}
+              disabled={
+                !dirty ||
+                !name.trim() ||
+                !minimumRemainingPercentValid ||
+                !apiMonthlyLimitValid ||
+                syncing ||
+                disconnecting
+              }
+              pending={saving}
+            >
+              Save settings
+            </Button>
           </DialogFooter>
         )}
       </DialogContent>

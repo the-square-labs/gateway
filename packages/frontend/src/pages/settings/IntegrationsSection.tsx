@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { type ScopeItem, ScopeList } from "@/components/common/ScopeList";
 import {
   ScopeSearchFilter,
@@ -41,7 +42,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
-import { cn, formatRelativeDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type {
@@ -1013,7 +1014,7 @@ function GitLabIntegrationsContent() {
                 )}
               </>
             ) : (
-              <div className="flex w-full justify-between">
+              <>
                 <Button variant="ghost" onClick={goBack} disabled={saving}>
                   <ArrowLeft className="mr-1 h-4 w-4" /> Back
                 </Button>
@@ -1033,7 +1034,7 @@ function GitLabIntegrationsContent() {
                     {editingConnector ? "Save" : "Create Connector"}
                   </Button>
                 )}
-              </div>
+              </>
             )}
           </DialogFooter>
         </DialogContent>
@@ -1064,9 +1065,13 @@ function ConnectorRow({
   onDelete: () => void;
 }) {
   const statusVariant = connector.enabled ? "secondary" : "outline";
-  const lastSync = connector.syncFinishedAt
-    ? `Synced ${formatRelativeDate(connector.syncFinishedAt)}`
-    : "Never synced";
+  const lastSync = connector.syncFinishedAt ? (
+    <>
+      Synced <RelativeTime value={connector.syncFinishedAt} />
+    </>
+  ) : (
+    "Never synced"
+  );
 
   return (
     <div
@@ -1100,7 +1105,12 @@ function ConnectorRow({
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {lastSync}
-            {connector.testedAt ? ` · Tested ${formatRelativeDate(connector.testedAt)}` : ""}
+            {connector.testedAt && (
+              <>
+                {" · Tested "}
+                <RelativeTime value={connector.testedAt} />
+              </>
+            )}
             {connector.syncLastError ? ` · ${connector.syncLastError}` : ""}
           </p>
           <CapabilityBadges capabilities={connector.capabilities} className="mt-2" />

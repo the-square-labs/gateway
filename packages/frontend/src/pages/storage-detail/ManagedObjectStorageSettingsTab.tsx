@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
-import { ToggleField } from "@/components/common/ToggleField";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Button } from "@/components/ui/button";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -173,13 +173,12 @@ export function ManagedObjectStorageSettingsTab({
           </div>
         </div>
 
-        <ToggleField
-          title="Publish S3 endpoint"
+        <SwitchCard
+          label="Publish S3 endpoint"
           description="Private access remains available through Gateway relay."
           checked={publishS3}
-          onChange={setPublishS3}
+          onCheckedChange={setPublishS3}
           disabled={saving}
-          ariaLabel="Publish S3 endpoint"
         />
         <div className="space-y-1.5">
           <label htmlFor="managed-storage-published-port" className="text-sm font-medium">

@@ -32,6 +32,7 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { PoweredByFooter } from "@/components/common/PoweredByFooter";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import {
@@ -646,7 +647,7 @@ function BrowserSessionsPanel() {
                   </p>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
                     {session.authMethod.replace("_", " ")} · {session.ipAddress || "Unknown IP"} ·
-                    Last active {new Date(session.lastSeenAt).toLocaleString()}
+                    Last active <RelativeTime value={session.lastSeenAt} />
                   </p>
                 </div>
               </div>
@@ -1058,9 +1059,15 @@ function LocalAccountSecurityPanel() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{passkey.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        {passkey.lastUsedAt
-                          ? `Last used ${new Date(passkey.lastUsedAt).toLocaleString()}`
-                          : `Added ${new Date(passkey.createdAt).toLocaleString()}`}
+                        {passkey.lastUsedAt ? (
+                          <>
+                            Last used <RelativeTime value={passkey.lastUsedAt} />
+                          </>
+                        ) : (
+                          <>
+                            Added <RelativeTime value={passkey.createdAt} />
+                          </>
+                        )}
                       </p>
                     </div>
                     <Button

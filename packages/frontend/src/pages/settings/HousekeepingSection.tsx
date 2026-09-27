@@ -2,6 +2,7 @@ import { Archive, Play, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
@@ -11,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
-import { cn, formatBytes, formatRelativeDate } from "@/lib/utils";
+import { cn, formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { HousekeepingConfig, HousekeepingRunResult, HousekeepingStats } from "@/types";
 
@@ -157,7 +158,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
       header: "Time",
       className: "w-[28%]",
       cellClassName: "text-muted-foreground whitespace-nowrap",
-      render: (run) => formatRelativeDate(run.startedAt),
+      render: (run) => <RelativeTime value={run.startedAt} />,
     },
     {
       id: "trigger",
@@ -669,7 +670,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
             <div className="text-sm text-muted-foreground">
               {hkStats?.lastRun ? (
                 <span>
-                  Last run {formatRelativeDate(hkStats.lastRun.startedAt)}
+                  Last run <RelativeTime value={hkStats.lastRun.startedAt} />
                   {" — "}
                   {hkStats.lastRun.overallSuccess
                     ? "completed successfully"

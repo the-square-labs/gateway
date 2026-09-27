@@ -1,8 +1,10 @@
-import { ExternalLink, Globe, Save, TriangleAlert } from "lucide-react";
+import { ExternalLink, Globe, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { Notice } from "@/components/common/Notice";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Badge } from "@/components/ui/badge";
@@ -323,7 +325,17 @@ export function PagesSettingsSection() {
             {profile?.isolation?.overrideCurrent && (
               <SettingsControlRow
                 title="Isolation override acknowledged"
-                description={`Acknowledged ${profile.overrideAcknowledgedAt ? new Date(profile.overrideAcknowledgedAt).toLocaleString() : "previously"}. Re-evaluate it after changing the Domain.`}
+                description={
+                  <>
+                    Acknowledged{" "}
+                    {profile.overrideAcknowledgedAt ? (
+                      <RelativeTime value={profile.overrideAcknowledgedAt} />
+                    ) : (
+                      "previously"
+                    )}
+                    . Re-evaluate it after changing the Domain.
+                  </>
+                }
                 help="This acknowledgement allows Pages and Gateway to share a registrable parent domain even though deployed JavaScript may then affect parent-domain cookies."
               >
                 <Badge variant="warning">Cookie isolation warning accepted</Badge>
@@ -332,12 +344,10 @@ export function PagesSettingsSection() {
           </PanelShell>
 
           {sameRegistrableDomain && (
-            <PanelShell
-              title="Separate registrable domain recommended"
-              description="Deployed JavaScript can affect parent-domain cookies when Gateway and Pages share a registrable domain. Saving requires explicit acknowledgement."
-              icon={<TriangleAlert className="h-4 w-4" />}
-              actions={<Badge variant="warning">Review required</Badge>}
-            />
+            <Notice tone="warning" title="Separate registrable domain recommended">
+              Deployed JavaScript can affect parent-domain cookies when Gateway and Pages share a
+              registrable domain. Saving requires explicit acknowledgement.
+            </Notice>
           )}
 
           <Dialog open={warningOpen} onOpenChange={setWarningOpen}>
@@ -348,11 +358,10 @@ export function PagesSettingsSection() {
                   This override requires explicit acknowledgement.
                 </DialogDescription>
               </DialogHeader>
-              <PanelShell
-                title="Why confirmation is required"
-                description="Pages should use a separate registrable domain. Deployed JavaScript may affect Gateway cookies on the shared parent domain."
-                icon={<TriangleAlert className="h-4 w-4" />}
-              />
+              <Notice tone="warning" title="Why confirmation is required">
+                Pages should use a separate registrable domain. Deployed JavaScript may affect
+                Gateway cookies on the shared parent domain.
+              </Notice>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setWarningOpen(false)}>
                   Choose another Domain

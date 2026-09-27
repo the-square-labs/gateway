@@ -1,15 +1,12 @@
 import { ExternalLink, ShieldCheck, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { ScopeList } from "@/components/common/ScopeList";
-import {
-  ScopeSearchFilter,
-  type ScopeSelectionFilter,
-} from "@/components/common/ScopeSearchFilter";
+import { ScopePicker } from "@/components/common/ScopePicker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,7 +26,7 @@ import {
   parseScopesForForm,
   requiresResourceSelection,
 } from "@/lib/scope-utils";
-import { formatDate, formatRelativeDate } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { oauthAuthorizationChangedChannel } from "@/services/user-resource-events";
 import { useAuthStore } from "@/stores/auth";
@@ -115,8 +112,6 @@ export function OAuthApplicationsSection({
   );
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
   const [savingScopes, setSavingScopes] = useState(false);
-  const [scopeSearch, setScopeSearch] = useState("");
-  const [scopeFilter, setScopeFilter] = useState<ScopeSelectionFilter>("all");
   const userScopes = useMemo(() => user?.scopes ?? [], [user?.scopes]);
   const allowedResourceIdsByScope = useMemo(
     () => deriveAllowedResourceIdsByScope(userScopes),
@@ -182,8 +177,6 @@ export function OAuthApplicationsSection({
     setEditableBaseScopes(parsed.baseScopes);
     setEditableResourceScopes(parsed.resources);
     setInitialResourceLimitedScopes(Object.keys(parsed.resources));
-    setScopeSearch("");
-    setScopeFilter("all");
   };
 
   const toggleScope = (scope: string) => {
@@ -344,10 +337,13 @@ export function OAuthApplicationsSection({
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Authorized {formatRelativeDate(authorization.createdAt)}
-                      {authorization.lastUsedAt
-                        ? ` · Last used ${formatRelativeDate(authorization.lastUsedAt)}`
-                        : ""}
+                      Authorized <RelativeTime value={authorization.createdAt} />
+                      {authorization.lastUsedAt && (
+                        <>
+                          {" · Last used "}
+                          <RelativeTime value={authorization.lastUsedAt} />
+                        </>
+                      )}
                       {authorization.expiresAt
                         ? ` · Expires ${formatDate(authorization.expiresAt)}`
                         : " · No expiry"}
@@ -403,14 +399,13 @@ export function OAuthApplicationsSection({
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <InfoItem label="Authorized" value={formatDate(selectedAuthorization.createdAt)} />
+                <InfoItem
+                  label="Authorized"
+                  value={<RelativeTime value={selectedAuthorization.createdAt} />}
+                />
                 <InfoItem
                   label="Last used"
-                  value={
-                    selectedAuthorization.lastUsedAt
-                      ? formatRelativeDate(selectedAuthorization.lastUsedAt)
-                      : "Never"
-                  }
+                  value={<RelativeTime value={selectedAuthorization.lastUsedAt} fallback="Never" />}
                 />
                 <InfoItem
                   label="Expires"
@@ -438,31 +433,24 @@ export function OAuthApplicationsSection({
                 ))}
               </div>
 
-              <div className="border border-border">
-                <ScopeSearchFilter
-                  search={scopeSearch}
-                  onSearchChange={setScopeSearch}
-                  filter={scopeFilter}
-                  onFilterChange={setScopeFilter}
-                  placeholder="Search scopes..."
-                />
-                <ScopeList
-                  scopes={visibleScopes}
-                  search={scopeSearch}
-                  selectionFilter={scopeFilter}
-                  selected={editableBaseScopes}
-                  onToggle={toggleScope}
-                  resources={editableResourceScopes}
-                  onToggleResource={toggleResourceScope}
-                  cas={cas}
-                  nodes={nodesList}
-                  proxyHosts={proxyHostsList}
-                  databases={databasesList}
-                  loggingSchemas={loggingSchemasList}
-                  restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-                  allowedResourceIds={allowedResourceIdsByScope}
-                  viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
-                />
+              <ScopePicker
+                header={<span className="text-sm font-medium">Scopes</span>}
+                scopes={visibleScopes}
+                selected={editableBaseScopes}
+                onToggle={toggleScope}
+                resources={editableResourceScopes}
+                onResourcesChange={setEditableResourceScopes}
+                onToggleResource={toggleResourceScope}
+                cas={cas}
+                nodes={nodesList}
+                proxyHosts={proxyHostsList}
+                databases={databasesList}
+                loggingSchemas={loggingSchemasList}
+                restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
+                allowedResourceIds={allowedResourceIdsByScope}
+                viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
+                footer={`${finalEditableScopes.length} scope${finalEditableScopes.length !== 1 ? "s" : ""}`}
+              >
                 {unknownScopes.length > 0 && (
                   <div className="border-t border-border p-3">
                     <p className="mb-2 text-xs font-medium text-muted-foreground">
@@ -477,13 +465,7 @@ export function OAuthApplicationsSection({
                     </div>
                   </div>
                 )}
-                <div className="border-t border-border px-3 py-2">
-                  <p className="text-xs text-muted-foreground">
-                    {finalEditableScopes.length} scope
-                    {finalEditableScopes.length !== 1 ? "s" : ""}
-                  </p>
-                </div>
-              </div>
+              </ScopePicker>
             </div>
           )}
           {selectedAuthorization && (
@@ -506,7 +488,7 @@ export function OAuthApplicationsSection({
   );
 }
 
-function InfoItem({ label, value }: { label: string; value: string }) {
+function InfoItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="border border-border p-3">
       <p className="text-xs text-muted-foreground">{label}</p>

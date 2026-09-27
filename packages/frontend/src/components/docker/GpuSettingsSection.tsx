@@ -180,7 +180,7 @@ export function GpuSettingsSection({
         ) : !gpuInventoryLoaded ? null : deviceIds.length > 0 ? (
           <>
             <div
-              className={`grid ${tableGridColumns} border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider`}
+              className={`grid ${tableGridColumns} border-b border-border bg-header text-xs font-medium text-muted-foreground uppercase tracking-wider`}
             >
               <div className="px-3 py-2">GPU</div>
               <div className="border-l border-border px-3 py-2">VRAM</div>

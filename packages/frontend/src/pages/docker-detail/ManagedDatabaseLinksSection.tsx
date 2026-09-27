@@ -185,6 +185,11 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onRecreating?: () => void | Promise<void>;
     recreatesRunningWorkload?: boolean;
     composeServices?: Array<{ name: string; existingVariableNames: string[] }>;
+    /**
+     * A Compose project before its first revision: links are saved pending. Without known services (from the
+     * source's Compose file) the service is typed and checked when the first revision lands.
+     */
+    composeBeforeFirstRevision?: boolean;
   }
 >(function ManagedDatabaseLinksSection(
   {
@@ -202,6 +207,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     onRecreating,
     recreatesRunningWorkload = true,
     composeServices = [],
+    composeBeforeFirstRevision = false,
   },
   ref
 ) {
@@ -367,10 +373,13 @@ export const ManagedDatabaseLinksSection = forwardRef<
       !!database && hasScope(`databases:edit:${database.databaseConnectionId}`),
     [hasScope]
   );
+  // No known services before the first revision: the service name is typed, not picked.
+  const composeServiceTyped =
+    targetType === "compose_service" && composeBeforeFirstRevision && composeServices.length === 0;
   const selectedTargetResourceId =
     targetType === "compose_service"
-      ? selectedComposeServiceName
-        ? composeServiceTarget(targetResourceId, selectedComposeServiceName)
+      ? selectedComposeServiceName.trim()
+        ? composeServiceTarget(targetResourceId, selectedComposeServiceName.trim())
         : ""
       : targetResourceId;
   const available = useMemo(
@@ -379,10 +388,18 @@ export const ManagedDatabaseLinksSection = forwardRef<
         (database) =>
           databaseIsAvailable(database) &&
           canEditDatabase(database) &&
-          !!selectedTargetResourceId &&
-          !linkedTargets.has(`${database.id}:${selectedTargetResourceId}`)
+          (selectedTargetResourceId
+            ? !linkedTargets.has(`${database.id}:${selectedTargetResourceId}`)
+            : composeServiceTyped)
       ),
-    [canEditDatabase, databaseIsAvailable, databases, linkedTargets, selectedTargetResourceId]
+    [
+      canEditDatabase,
+      composeServiceTyped,
+      databaseIsAvailable,
+      databases,
+      linkedTargets,
+      selectedTargetResourceId,
+    ]
   );
   const selected = available.find((database) => database.id === selectedDatabaseId) ?? available[0];
   const hasChanges = changes.additions.length > 0 || changes.removals.length > 0;
@@ -422,11 +439,11 @@ export const ManagedDatabaseLinksSection = forwardRef<
   );
 
   useEffect(() => {
-    if (targetType !== "compose_service") return;
+    if (targetType !== "compose_service" || composeServiceTyped) return;
     if (!composeServices.some((service) => service.name === selectedComposeServiceName)) {
       setSelectedComposeServiceName(composeServices[0]?.name ?? "");
     }
-  }, [composeServices, selectedComposeServiceName, targetType]);
+  }, [composeServiceTyped, composeServices, selectedComposeServiceName, targetType]);
 
   useEffect(() => {
     onDraftChange?.({
@@ -725,6 +742,17 @@ export const ManagedDatabaseLinksSection = forwardRef<
 
   const credentialFields = selected ? CREDENTIAL_VARIABLES[selected.type] : [];
   const openAddDialog = () => {
+    if (composeServiceTyped) {
+      if (
+        !databases.some((database) => databaseIsAvailable(database) && canEditDatabase(database))
+      ) {
+        setNoAvailableDatabasesOpen(true);
+        return;
+      }
+      setSelectedComposeServiceName("");
+      setAddOpen(true);
+      return;
+    }
     if (targetType === "compose_service") {
       const firstAvailableService = composeServices.find((service) => {
         const serviceTarget = composeServiceTarget(targetResourceId, service.name);
@@ -759,7 +787,9 @@ export const ManagedDatabaseLinksSection = forwardRef<
         icon={<Link2 className="h-4 w-4" />}
         description={
           targetType === "compose_service"
-            ? "Private sidecar connections stored in each selected service's Compose revision."
+            ? composeBeforeFirstRevision
+              ? "Private sidecar connections. Saved now and added to the selected services by the project's first revision."
+              : "Private sidecar connections stored in each selected service's Compose revision."
             : recreatesRunningWorkload
               ? "Private sidecar connections. Changes apply with Save & Recreate."
               : "Private sidecar connections. Changes apply on next start."
@@ -794,15 +824,21 @@ export const ManagedDatabaseLinksSection = forwardRef<
             const canChangeLink = entry.pending === "add" || canEditDatabase(database);
             const databaseNode = database ? databaseNodeById.get(database.nodeId) : undefined;
             const unavailable = !!database && !!databaseNode && !databaseIsAvailable(database);
+            // Saved into the workload's configuration; its next start or rollout runs it.
+            const awaitingWorkload =
+              entry.pending === null &&
+              entry.binding.status === "ready" &&
+              entry.binding.observedState === "target_applied";
             const reconciling =
               entry.pending === null &&
               entry.binding.status === "ready" &&
               entry.binding.observedState !== undefined &&
-              entry.binding.observedState !== "active";
+              entry.binding.observedState !== "active" &&
+              !awaitingWorkload;
             const statusLabel =
               entry.pending === "remove"
                 ? "will unlink"
-                : entry.pending === "add"
+                : entry.pending === "add" || awaitingWorkload
                   ? "pending"
                   : reconciling
                     ? "reconciling"
@@ -810,7 +846,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
             const statusVariant =
               entry.pending === "remove" || reconciling
                 ? "warning"
-                : entry.pending === "add"
+                : entry.pending === "add" || awaitingWorkload
                   ? "secondary"
                   : entry.binding.status === "ready"
                     ? "success"
@@ -819,15 +855,17 @@ export const ManagedDatabaseLinksSection = forwardRef<
                       : "secondary";
             const statusDetail =
               entry.binding.lastError ??
-              (reconciling
-                ? "Database link migration or runtime reconciliation has not completed yet."
-                : entry.binding.status === "ready"
-                  ? "Database link is ready."
-                  : entry.binding.status === "creating"
-                    ? "Database link is being created."
-                    : entry.binding.status === "deleting"
-                      ? "Database link is being removed."
-                      : "Database link reconciliation failed.");
+              (awaitingWorkload
+                ? "Saved in the workload's configuration. It takes effect when the workload next starts or finishes its current rollout."
+                : reconciling
+                  ? "Database link migration or runtime reconciliation has not completed yet."
+                  : entry.binding.status === "ready"
+                    ? "Database link is ready."
+                    : entry.binding.status === "creating"
+                      ? "Database link is being created."
+                      : entry.binding.status === "deleting"
+                        ? "Database link is being removed."
+                        : "Database link reconciliation failed.");
             return (
               <SettingsControlRow
                 key={entry.binding.id}
@@ -839,7 +877,14 @@ export const ManagedDatabaseLinksSection = forwardRef<
                     <Select
                       value={composeServiceName(targetResourceId, entry.binding.targetResourceId)}
                       onValueChange={(serviceName) => stageServiceChange(entry, serviceName)}
-                      disabled={disabled || saving || entry.pending === "remove" || !canChangeLink}
+                      // A typed service cannot be moved: unlink it and add it again.
+                      disabled={
+                        disabled ||
+                        saving ||
+                        entry.pending === "remove" ||
+                        !canChangeLink ||
+                        composeServiceTyped
+                      }
                     >
                       <SelectTrigger
                         className="w-44"
@@ -848,7 +893,17 @@ export const ManagedDatabaseLinksSection = forwardRef<
                         <SelectValue placeholder="Select service" />
                       </SelectTrigger>
                       <SelectContent>
-                        {composeServices.map((service) => (
+                        {(composeServiceTyped
+                          ? [
+                              {
+                                name: composeServiceName(
+                                  targetResourceId,
+                                  entry.binding.targetResourceId
+                                ),
+                              },
+                            ]
+                          : composeServices
+                        ).map((service) => (
                           <SelectItem key={service.name} value={service.name}>
                             {service.name}
                           </SelectItem>
@@ -955,22 +1010,38 @@ export const ManagedDatabaseLinksSection = forwardRef<
                       <label className="text-sm font-medium" htmlFor="managed-db-link-service">
                         Compose service
                       </label>
-                      <Select
-                        value={selectedComposeServiceName}
-                        onValueChange={setSelectedComposeServiceName}
-                        disabled={disabled || saving}
-                      >
-                        <SelectTrigger id="managed-db-link-service">
-                          <SelectValue placeholder="Select service" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {composeServices.map((service) => (
-                            <SelectItem key={service.name} value={service.name}>
-                              {service.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {composeServiceTyped ? (
+                        <>
+                          <Input
+                            id="managed-db-link-service"
+                            value={selectedComposeServiceName}
+                            onChange={(event) => setSelectedComposeServiceName(event.target.value)}
+                            placeholder="api"
+                            disabled={disabled || saving}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Checked when the first revision lands. A link to a service it does not
+                            define is marked failed.
+                          </p>
+                        </>
+                      ) : (
+                        <Select
+                          value={selectedComposeServiceName}
+                          onValueChange={setSelectedComposeServiceName}
+                          disabled={disabled || saving}
+                        >
+                          <SelectTrigger id="managed-db-link-service">
+                            <SelectValue placeholder="Select service" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {composeServices.map((service) => (
+                              <SelectItem key={service.name} value={service.name}>
+                                {service.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                   )}
                   <div className="space-y-1.5">

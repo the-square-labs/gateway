@@ -516,6 +516,63 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
       );
     }
 
+    async listNginxTemplateFolders(): Promise<import("@/types").ResourceFolderTreeNode[]> {
+      return this.unwrapData(
+        this.request<{ data: import("@/types").ResourceFolderTreeNode[] }>(
+          "/nginx-templates/folders"
+        )
+      );
+    }
+
+    async createNginxTemplateFolder(data: {
+      name: string;
+      parentId?: string;
+    }): Promise<import("@/types").ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: import("@/types").ResourceFolder }>("/nginx-templates/folders", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updateNginxTemplateFolder(
+      id: string,
+      data: { name: string }
+    ): Promise<import("@/types").ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: import("@/types").ResourceFolder }>(`/nginx-templates/folders/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async deleteNginxTemplateFolder(id: string): Promise<void> {
+      await this.request(`/nginx-templates/folders/${id}`, { method: "DELETE" });
+    }
+
+    async reorderNginxTemplateFolders(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/nginx-templates/folders/reorder", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
+    async moveNginxTemplatesToFolder(ids: string[], folderId: string | null): Promise<void> {
+      await this.request("/nginx-templates/folders/move-templates", {
+        method: "POST",
+        body: JSON.stringify({ ids, folderId }),
+      });
+    }
+
+    async reorderNginxTemplates(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/nginx-templates/folders/reorder-templates", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
     async testNginxTemplate(
       content: string,
       templateId?: string
@@ -896,9 +953,15 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
       });
     }
 
-    async checkDomainDns(id: string): Promise<Domain> {
+    /**
+     * Re-probes the domain's DNS. `repair: false` only reads (resolver and
+     * provider records) and never rewrites a drifted Cloudflare record; the
+     * detail dialog checks this way when it opens.
+     */
+    async checkDomainDns(id: string, options: { repair?: boolean } = {}): Promise<Domain> {
+      const query = options.repair === false ? "?repair=false" : "";
       return this.unwrapData(
-        this.request<{ data: Domain }>(`/domains/${id}/check-dns`, { method: "POST" })
+        this.request<{ data: Domain }>(`/domains/${id}/check-dns${query}`, { method: "POST" })
       );
     }
 

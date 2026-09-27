@@ -4,9 +4,11 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { Notice } from "@/components/common/Notice";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
@@ -39,7 +41,7 @@ import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerContainerRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
 import { canCreateInFolder } from "@/lib/scope-utils";
-import { formatBytes, formatCreated } from "@/lib/utils";
+import { formatBytes, formatDateTime, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -432,10 +434,12 @@ export function DockerImages({
         label: "Created",
         width: "8rem",
         align: "right" as const,
-        renderCell: (img) => {
-          const created = img.created ?? 0;
-          return <span className="text-sm text-muted-foreground">{formatCreated(created)}</span>;
-        },
+        renderCell: (img) => (
+          <RelativeTime
+            value={img.created ? img.created * 1000 : null}
+            className="text-sm text-muted-foreground"
+          />
+        ),
       },
       {
         id: "actions",
@@ -618,11 +622,13 @@ export function DockerImages({
         }}
         afterSearch={
           truncatedListMeta ? (
-            <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-              Showing first {truncatedListMeta._listLimit ?? images.length} of{" "}
-              {truncatedListMeta._listTotal ?? "many"} images. Narrow the node or search filters for
-              more specific data.
-            </div>
+            <Notice
+              tone="warning"
+              role="status"
+              title={`Showing the first ${truncatedListMeta._listLimit ?? images.length} of ${truncatedListMeta._listTotal ?? "many"} images`}
+            >
+              Narrow the node or search filters for more specific data.
+            </Notice>
           ) : null
         }
         loading={images.length === 0 && (!initialFetchDone || isLoading)}
@@ -802,7 +808,12 @@ export function DockerImages({
                   ],
                   ["Image ID", detailsImage.id],
                   ["Size", formatBytes(detailsImage.size ?? 0)],
-                  ["Created", formatCreated(detailsImage.created ?? 0)],
+                  [
+                    "Created",
+                    formatRelativeDate(detailsImage.created ? detailsImage.created * 1000 : null),
+                    // The exact moment on hover, as `RelativeTime` shows it elsewhere.
+                    detailsImage.created ? formatDateTime(detailsImage.created * 1000) : undefined,
+                  ],
                   ["Node", detailsImage._nodeName || detailsImage._nodeId],
                   [
                     "Usage",
@@ -812,13 +823,16 @@ export function DockerImages({
                   ],
                   ["Tags", detailsImage.repoTags?.map(formatDisplayImageRef).join(", ") || "-"],
                   ["Digests", detailsImage.repoDigests?.join(", ") || "-"],
-                ].map(([label, value]) => (
+                ].map(([label, value, title]) => (
                   <div
                     key={label}
                     className="grid min-w-0 grid-cols-[minmax(96px,max-content)_minmax(0,1fr)] items-center gap-4 px-4 py-3"
                   >
                     <span className="text-sm text-muted-foreground">{label}</span>
-                    <span className="min-w-0 truncate text-right font-mono text-sm" title={value}>
+                    <span
+                      className="min-w-0 truncate text-right font-mono text-sm"
+                      title={title ?? value}
+                    >
                       {value}
                     </span>
                   </div>

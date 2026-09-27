@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiTokensSection } from "@/pages/settings/ApiTokensSection";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { expandScopeRestrictions } from "@/test/scope-restrictions";
 import type { Node, User } from "@/types";
 
 vi.mock("@/hooks/use-realtime", () => ({ useRealtime: vi.fn() }));
@@ -57,6 +58,7 @@ describe("ApiTokensSection", () => {
     await userEvent.click(within(dialog).getByRole("checkbox", { name: /Manage Containers/i }));
 
     // A folder-only user must restrict the scope; the folder and its container are preselected.
+    await expandScopeRestrictions();
     expect(await within(dialog).findByRole("checkbox", { name: /MyProject/ })).toBeChecked();
     expect(within(dialog).getByText("2 scopes")).toBeInTheDocument();
 

@@ -9,7 +9,7 @@ type PinnedContainerMeta = {
   name: string;
   scopeResourceId?: string;
   state?: string;
-  kind?: "container" | "deployment" | "build" | "compose";
+  kind?: "container" | "deployment" | "compose";
   scopeBase?: "docker:containers:view" | "docker:compose:view";
 };
 
@@ -42,6 +42,25 @@ interface PinnedContainersState {
   /** Remove IDs that no longer exist */
   removeOrphans: (validIds: string[]) => void;
   invalidate: () => void;
+}
+
+type PersistedPins = Pick<
+  PinnedContainersState,
+  "dashboardContainerIds" | "sidebarContainerIds" | "containerMeta"
+>;
+
+/** Pins saved before v1 may name builds (`kind: "build"`); drop them with their metadata. */
+export function dropPinnedBuilds(state: PersistedPins): PersistedPins {
+  const meta = (state.containerMeta ?? {}) as Record<string, { kind?: string }>;
+  const builds = new Set(Object.keys(meta).filter((id) => meta[id]?.kind === "build"));
+  if (builds.size === 0) return state;
+  return {
+    dashboardContainerIds: (state.dashboardContainerIds ?? []).filter((id) => !builds.has(id)),
+    sidebarContainerIds: (state.sidebarContainerIds ?? []).filter((id) => !builds.has(id)),
+    containerMeta: Object.fromEntries(
+      Object.entries(state.containerMeta ?? {}).filter(([id]) => !builds.has(id))
+    ),
+  };
 }
 
 export const usePinnedContainersStore = create<PinnedContainersState>()(
@@ -145,6 +164,9 @@ export const usePinnedContainersStore = create<PinnedContainersState>()(
     }),
     {
       name: "gateway-pinned-containers",
+      version: 1,
+      // v1: builds can no longer be pinned (a build is one finished run, so its pin went stale).
+      migrate: (persisted) => dropPinnedBuilds(persisted as PersistedPins),
       partialize: (s) => ({
         dashboardContainerIds: s.dashboardContainerIds,
         sidebarContainerIds: s.sidebarContainerIds,

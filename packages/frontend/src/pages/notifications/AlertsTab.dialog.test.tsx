@@ -229,8 +229,10 @@ describe("AlertDialog", () => {
     await screen.findByDisplayValue("CPU High");
     await user.click(screen.getByRole("button", { name: /next/i }));
 
-    const scopeToggleRow = screen.getByText("Limit to specific nodes").closest(".flex");
-    expect(scopeToggleRow).toHaveClass("border", "border-border", "bg-muted/30", "p-3");
+    expect(screen.getByRole("checkbox", { name: "Limit to specific nodes" })).toBeChecked();
+    const scopeToggleCard = screen.getByText("Limit to specific nodes").closest("label");
+    expect(scopeToggleCard).toHaveClass("border", "border-border", "p-3");
+    expect(scopeToggleCard).not.toHaveClass("bg-muted/30");
     expect(await screen.findByRole("checkbox", { name: "Primary Node" })).toHaveClass(
       "form-checkbox"
     );

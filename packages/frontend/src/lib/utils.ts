@@ -5,49 +5,55 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatDate(date: string | Date) {
-  return new Date(date).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+/** An ISO string, epoch milliseconds or a Date; missing values format as "—". */
+export type DateInput = string | number | Date | null | undefined;
+
+const MISSING_DATE = "—";
+
+// Fixed English abbreviations: ICU's en-GB data spells September "Sept",
+// which breaks the three-letter rhythm of date columns.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** The Date for a value, or null when it is missing or not a valid moment. */
+export function parseDate(date: DateInput): Date | null {
+  if (date === null || date === undefined || date === "") return null;
+  const value = date instanceof Date ? date : new Date(date);
+  return Number.isNaN(value.getTime()) ? null : value;
 }
 
-export function formatDateTime(date: string | Date) {
-  return new Date(date).toLocaleString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
+const twoDigits = (value: number) => String(value).padStart(2, "0");
+const dayMonth = (value: Date) => `${twoDigits(value.getDate())} ${MONTHS[value.getMonth()]}`;
+const clockTime = (value: Date) =>
+  `${twoDigits(value.getHours())}:${twoDigits(value.getMinutes())}`;
+
+/** A calendar date without time, "26 Feb 2026": expiry, validity windows. */
+export function formatDate(date: DateInput) {
+  const value = parseDate(date);
+  return value ? `${dayMonth(value)} ${value.getFullYear()}` : MISSING_DATE;
+}
+
+/** The exact moment, "26 Sep 2026, 07:47": tooltips, deadlines and future times. */
+export function formatDateTime(date: DateInput) {
+  const value = parseDate(date);
+  return value ? `${dayMonth(value)} ${value.getFullYear()}, ${clockTime(value)}` : MISSING_DATE;
 }
 
 /**
- * The time of day for a moment today, otherwise the date and time
- * (`formatDateTime`). For activity lists that mostly show recent entries.
+ * The one format for past events: "Just now", "14m ago", "3h ago", "2d ago"
+ * within a week, then "16 Oct 15:32" this year and "16 Oct 2025" before.
+ * Render it through `RelativeTime` to carry the exact moment in a tooltip.
  */
-export function formatTimeOrDateTime(date: string | Date, now: Date = new Date()) {
-  const value = new Date(date);
-  const isToday =
-    value.getFullYear() === now.getFullYear() &&
-    value.getMonth() === now.getMonth() &&
-    value.getDate() === now.getDate();
-  if (!isToday) return formatDateTime(value);
-  return value.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
-}
-
-export function formatRelativeDate(date: string | Date) {
-  const now = new Date();
-  const then = new Date(date);
-  const diffInSeconds = Math.floor((now.getTime() - then.getTime()) / 1000);
+export function formatRelativeDate(date: DateInput, now: Date = new Date()) {
+  const value = parseDate(date);
+  if (!value) return MISSING_DATE;
+  const diffInSeconds = Math.floor((now.getTime() - value.getTime()) / 1000);
 
   if (diffInSeconds < 60) return "Just now";
   if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
   if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
   if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
-  return formatDate(date);
+  if (value.getFullYear() === now.getFullYear()) return `${dayMonth(value)} ${clockTime(value)}`;
+  return formatDate(value);
 }
 
 export function daysUntil(date: string | Date): number {
@@ -111,14 +117,4 @@ export function formatUptime(seconds: number): string {
   if (days > 0) return `${days}d ${hours}h ${mins}m`;
   if (hours > 0) return `${hours}h ${mins}m`;
   return `${mins}m`;
-}
-
-export function formatCreated(ts: number): string {
-  const now = Date.now() / 1000;
-  const diff = now - ts;
-  if (diff < 60) return "Just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-  return new Date(ts * 1000).toLocaleDateString();
 }

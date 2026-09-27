@@ -20,6 +20,7 @@ import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import {
   type ResponsiveHeaderAction,
   ResponsiveHeaderActions,
@@ -35,7 +36,7 @@ import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { hostingOperationLabel } from "@/lib/hosting-status";
 import { getReturnNavigationTarget } from "@/lib/return-navigation";
-import { formatDateTime, formatRelativeDate } from "@/lib/utils";
+import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import {
@@ -253,7 +254,7 @@ export function HostingIntegrationDetail({
       {
         id: "updated",
         header: "Updated",
-        render: (operation) => formatDateTime(operation.updatedAt),
+        render: (operation) => <RelativeTime value={operation.updatedAt} />,
       },
     ],
     []
@@ -492,14 +493,18 @@ export function HostingIntegrationDetail({
                   </Badge>
                 </SettingsControlRow>
                 <SettingsControlRow title="Last connection test">
-                  <span className="text-sm text-muted-foreground">
-                    {connector.testedAt ? formatDateTime(connector.testedAt) : "Never"}
-                  </span>
+                  <RelativeTime
+                    value={connector.testedAt}
+                    fallback="Never"
+                    className="text-sm text-muted-foreground"
+                  />
                 </SettingsControlRow>
                 <SettingsControlRow title="Last sync">
-                  <span className="text-sm text-muted-foreground">
-                    {connector.syncedAt ? formatDateTime(connector.syncedAt) : "Never synced"}
-                  </span>
+                  <RelativeTime
+                    value={connector.syncedAt}
+                    fallback="Never synced"
+                    className="text-sm text-muted-foreground"
+                  />
                 </SettingsControlRow>
               </PanelShell>
 

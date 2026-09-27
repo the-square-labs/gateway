@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { createClientUuid } from "@/lib/client-id";
@@ -17,9 +17,33 @@ export function ComposeVariablesTab({
   onApplied: () => void | Promise<void>;
 }) {
   const activeRevision = project.activeRevision;
+  // A Git project before its first revision takes links pending; its services come from the Compose file the
+  // source resolved, when Gateway has one.
+  const beforeFirstRevision = !activeRevision && project.managementState === "managed";
+  const [sourceServiceNames, setSourceServiceNames] = useState<string[]>([]);
+  useEffect(() => {
+    if (!beforeFirstRevision) return;
+    let active = true;
+    void api
+      .getDockerSource({
+        kind: "compose_project",
+        nodeId: project.nodeId,
+        composeProjectId: project.id,
+      })
+      .then((source) => {
+        if (active) setSourceServiceNames(source?.composeServiceNames ?? []);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [beforeFirstRevision, project.id, project.nodeId]);
   const serviceNames = useMemo(
-    () => Object.keys(activeRevision?.normalizedModel.services ?? {}),
-    [activeRevision]
+    () =>
+      activeRevision
+        ? Object.keys(activeRevision.normalizedModel.services ?? {})
+        : sourceServiceNames,
+    [activeRevision, sourceServiceNames]
   );
   const recreatesRunningProject = project.status === "running" || project.status === "degraded";
   const secretApi = useMemo(
@@ -61,8 +85,9 @@ export function ComposeVariablesTab({
         targetType="compose_service"
         targetResourceId={project.id}
         containerName={project.name}
-        disabled={serviceNames.length === 0 || !canManage}
+        disabled={(!beforeFirstRevision && serviceNames.length === 0) || !canManage}
         recreatesRunningWorkload={recreatesRunningProject}
+        composeBeforeFirstRevision={beforeFirstRevision}
         composeServices={serviceNames.map((name) => ({
           name,
           existingVariableNames: Object.keys(
@@ -91,6 +116,14 @@ export function ComposeVariablesTab({
           }
           flushBottom
         />
+      ) : beforeFirstRevision ? (
+        <PanelShell
+          title="Variables"
+          description="Available once the first revision lands."
+          bodyClassName="p-6 text-sm text-muted-foreground"
+        >
+          The first build creates the project's first revision from its Git source.
+        </PanelShell>
       ) : (
         <PanelShell
           title="Variables"

@@ -1,4 +1,4 @@
-import { ArrowRight, ExternalLink, Lock, RefreshCw, Truck } from "lucide-react";
+import { ArrowRight, ExternalLink, LoaderCircle, Lock, Truck } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -7,8 +7,10 @@ import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable } from "@/components/common/SimpleTable";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,10 +29,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { proxyHostRoute } from "@/lib/resource-routes";
-import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type {
@@ -49,6 +49,13 @@ import {
   type UsageRow,
 } from "./domain-detail-helpers";
 import { getDomainPermissions } from "./domain-permissions";
+
+/** A check this recent (the list's Check DNS, a reopen) is shown instead of probing again. */
+const DNS_RECHECK_AFTER_MS = 60_000;
+
+function checkedRecently(lastDnsCheckAt: string | null) {
+  return lastDnsCheckAt !== null && Date.now() - Date.parse(lastDnsCheckAt) < DNS_RECHECK_AFTER_MS;
+}
 
 interface DomainDetailDialogProps {
   domainId: string | null;
@@ -74,6 +81,8 @@ export function DomainDetailDialog({
   const [domain, setDomain] = useState<DomainWithUsage | null>(null);
   const [description, setDescription] = useState("");
   const [isCheckingDns, setIsCheckingDns] = useState(false);
+  const [dnsCheckFailed, setDnsCheckFailed] = useState(false);
+  const autoCheckedDomainIdRef = useRef<string | null>(null);
   const [isUpdatingProxied, setIsUpdatingProxied] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [nodeOptions, setNodeOptions] = useState<DomainNginxNodeOptions | null>(null);
@@ -158,23 +167,26 @@ export function DomainDetailDialog({
     onOpenChange(v);
   };
 
-  const handleCheckDns = async () => {
-    if (!domain) return;
-    setIsCheckingDns(true);
-    try {
-      const updated = await api.checkDomainDns(domain.id);
-      domainLoadVersionRef.current += 1;
-      setDomain((current) =>
-        current?.id === updated.id ? { ...current, ...updated, usage: current.usage } : current
-      );
-      toast.success("DNS check complete");
-      onUpdated();
-    } catch {
-      toast.error("DNS check failed");
-    } finally {
-      setIsCheckingDns(false);
-    }
-  };
+  // Read-only probe: opening the details never rewrites a drifted Cloudflare record.
+  const checkDns = useCallback(
+    async (id: string) => {
+      setIsCheckingDns(true);
+      setDnsCheckFailed(false);
+      try {
+        const updated = await api.checkDomainDns(id, { repair: false });
+        domainLoadVersionRef.current += 1;
+        setDomain((current) =>
+          current?.id === updated.id ? { ...current, ...updated, usage: current.usage } : current
+        );
+        onUpdated();
+      } catch {
+        setDnsCheckFailed(true);
+      } finally {
+        setIsCheckingDns(false);
+      }
+    },
+    [onUpdated]
+  );
 
   const handleProxiedChange = async (proxied: boolean) => {
     if (!domain || !canEditDns || proxied === domain.dnsProxied) return;
@@ -358,6 +370,21 @@ export function DomainDetailDialog({
     : "";
   const detailsReady = Boolean(domain && domainId && loadedDomainIdRef.current === domainId);
   const headerDomain = detailsReady ? domain : listDomain;
+  const showsDetails = open && initialView === "details";
+
+  // The details check DNS once per opening (editors only; the check needs
+  // domains:edit), so the records shown are current without a Check button.
+  useEffect(() => {
+    if (!showsDetails) {
+      autoCheckedDomainIdRef.current = null;
+      return;
+    }
+    if (!detailsReady || !domain || !canEditDns) return;
+    if (autoCheckedDomainIdRef.current === domain.id) return;
+    autoCheckedDomainIdRef.current = domain.id;
+    if (checkedRecently(domain.lastDnsCheckAt)) return;
+    void checkDns(domain.id);
+  }, [canEditDns, checkDns, detailsReady, domain, showsDetails]);
 
   return (
     <>
@@ -369,9 +396,13 @@ export function DomainDetailDialog({
           <DialogHeader>
             <DialogTitle>{headerDomain?.domain ?? "Domain"}</DialogTitle>
             <DialogDescription>
-              {headerDomain?.lastDnsCheckAt
-                ? `Last checked ${formatRelativeDate(headerDomain.lastDnsCheckAt)}`
-                : "DNS not checked yet"}
+              {headerDomain?.lastDnsCheckAt ? (
+                <>
+                  Last checked <RelativeTime value={headerDomain.lastDnsCheckAt} />
+                </>
+              ) : (
+                "DNS not checked yet"
+              )}
             </DialogDescription>
           </DialogHeader>
 
@@ -391,15 +422,13 @@ export function DomainDetailDialog({
               )}
 
               {domain.dnsProvider === "cloudflare" && (
-                <div className="border border-border bg-card">
-                  <SettingsControlRow title="Proxied" description="Use Cloudflare proxy">
-                    <Switch
-                      checked={!!domain.dnsProxied}
-                      onChange={handleProxiedChange}
-                      disabled={!canEditDns || isUpdatingProxied}
-                    />
-                  </SettingsControlRow>
-                </div>
+                <SwitchCard
+                  label="Proxied"
+                  description="Serve the domain through the Cloudflare proxy."
+                  checked={!!domain.dnsProxied}
+                  onCheckedChange={handleProxiedChange}
+                  disabled={!canEditDns || isUpdatingProxied}
+                />
               )}
 
               <PanelShell title="DNS Management">
@@ -412,9 +441,11 @@ export function DomainDetailDialog({
                   <SettingsControlRow
                     title="Cloudflare migration"
                     description={
-                      domain.cloudflareMigrationCheckedAt
-                        ? `Last checked ${formatRelativeDate(domain.cloudflareMigrationCheckedAt)}`
-                        : undefined
+                      domain.cloudflareMigrationCheckedAt ? (
+                        <>
+                          Last checked <RelativeTime value={domain.cloudflareMigrationCheckedAt} />
+                        </>
+                      ) : undefined
                     }
                   >
                     {domain.cloudflareMigrationStatus === "dns_conflict" && canEdit ? (
@@ -443,10 +474,19 @@ export function DomainDetailDialog({
                   </div>
                 }
                 actions={
-                  <Button onClick={handleCheckDns} pending={isCheckingDns}>
-                    <RefreshCw />
-                    Check
-                  </Button>
+                  isCheckingDns ? (
+                    <span
+                      role="status"
+                      className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                    >
+                      <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      Checking…
+                    </span>
+                  ) : dnsCheckFailed ? (
+                    <span className="text-xs text-muted-foreground">
+                      Check failed; showing the last result
+                    </span>
+                  ) : null
                 }
               >
                 {domain.dnsRecords && dnsRows(domain.dnsRecords).length > 0 ? (
@@ -457,7 +497,7 @@ export function DomainDetailDialog({
                       className="sm:grid-cols-[minmax(5rem,8rem)_minmax(0,1fr)]"
                       controlsClassName="min-w-0 sm:w-full sm:max-w-none"
                     >
-                      <span className="min-w-0 max-w-full break-all text-right font-mono text-xs">
+                      <span className="min-w-0 max-w-full break-all text-right text-sm">
                         {row.values.join(", ")}
                       </span>
                     </SettingsControlRow>
@@ -465,7 +505,11 @@ export function DomainDetailDialog({
                 ) : (
                   <EmptyState
                     message={
-                      domain.dnsRecords ? "No DNS records found" : "Run a DNS check to see records"
+                      domain.dnsRecords
+                        ? "No DNS records found"
+                        : isCheckingDns
+                          ? "Checking DNS records…"
+                          : "DNS has not been checked yet"
                     }
                     embedded
                   />
@@ -486,7 +530,7 @@ export function DomainDetailDialog({
                     description={cloudflareTargetDescription(domain)}
                     controlsClassName="min-w-0 sm:w-full sm:max-w-none"
                   >
-                    <span className="min-w-0 max-w-full break-all text-right font-mono text-xs">
+                    <span className="min-w-0 max-w-full break-all text-right text-sm">
                       {domain.dnsTargetIps.length > 0
                         ? domain.dnsTargetIps.join(", ")
                         : "Not assigned"}
@@ -566,17 +610,10 @@ export function DomainDetailDialog({
           <div className="space-y-4">
             <PanelShell title="DNS conflict">
               <div className="divide-y divide-border">
-                <DetailRow
-                  label="Current DNS"
-                  value={<span className="font-mono text-xs">{currentAddress}</span>}
-                />
+                <DetailRow label="Current DNS" value={currentAddress} />
                 <DetailRow
                   label="Required target"
-                  value={
-                    <span className="font-mono text-xs">
-                      {selectedNode?.effectiveAddress || "Select a node"}
-                    </span>
-                  }
+                  value={selectedNode?.effectiveAddress || "Select a node"}
                 />
               </div>
             </PanelShell>
@@ -754,7 +791,7 @@ export function DomainDetailDialog({
                       }
                       controlsClassName="min-w-0 sm:w-full sm:max-w-none"
                     >
-                      <span className="break-all text-right font-mono text-xs">
+                      <span className="break-all text-right text-sm">
                         {ingressMigrationImpact.targetIps.join(", ")}
                       </span>
                     </SettingsControlRow>

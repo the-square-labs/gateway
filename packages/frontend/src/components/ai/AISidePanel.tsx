@@ -14,6 +14,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -178,20 +179,6 @@ const SLASH_COMMANDS = [
   { name: "compact", description: "Compact older context" },
   { name: "context", description: "Show token usage" },
 ];
-
-function formatConversationDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const now = new Date();
-  if (date.toDateString() === now.toDateString()) {
-    const diffMs = Math.max(0, now.getTime() - date.getTime());
-    const diffMinutes = Math.floor(diffMs / 60000);
-    if (diffMinutes < 1) return "now";
-    if (diffMinutes < 60) return `${diffMinutes} min ago`;
-    return `${Math.floor(diffMinutes / 60)} h ago`;
-  }
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
 
 interface AIChatSurfaceProps {
   active?: boolean;
@@ -807,11 +794,10 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                         {conversation.messageCount} messages
                       </span>
                     </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {formatConversationDate(
-                        conversation.lastUserMessageAt ?? conversation.createdAt
-                      )}
-                    </span>
+                    <RelativeTime
+                      value={conversation.lastUserMessageAt ?? conversation.createdAt}
+                      className="shrink-0 text-xs text-muted-foreground"
+                    />
                   </button>
                   <button
                     type="button"

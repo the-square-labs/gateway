@@ -3,8 +3,9 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { OneTimeTokenDialog } from "@/components/common/OneTimeTokenDialog";
+import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
-import { formatDate, formatRelativeDate } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PageDeployToken, PageDeployTokenCreated } from "@/types";
@@ -153,10 +154,16 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
                   <div className="min-w-0">
                     <p className="text-sm font-medium">{token.name}</p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {token.tokenPrefix}... &middot; Created {formatDate(token.createdAt)}
-                      {token.lastUsedAt
-                        ? ` · Last used ${formatRelativeDate(token.lastUsedAt)}`
-                        : " · Never used"}
+                      {token.tokenPrefix}... &middot; Created{" "}
+                      <RelativeTime value={token.createdAt} />
+                      {token.lastUsedAt ? (
+                        <>
+                          {" · Last used "}
+                          <RelativeTime value={token.lastUsedAt} />
+                        </>
+                      ) : (
+                        " · Never used"
+                      )}
                       {token.allowUserTag
                         ? token.allowedTagPatterns.length > 0
                           ? ` · Tags: ${token.allowedTagPatterns.join(", ")}`
@@ -253,12 +260,11 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
         </DialogContent>
       </Dialog>
 
-      <OneTimeTokenDialog
+      <OneTimeSecretDialog
         open={createdTokenOpen}
         onOpenChange={setCreatedTokenOpen}
         title="Deploy Token Created"
-        token={createdToken?.token ?? null}
-        tokenLabel="Deploy token"
+        fields={createdToken ? [{ label: "Deploy token", value: createdToken.token }] : null}
         onClosed={() => setCreatedToken(null)}
       />
     </div>

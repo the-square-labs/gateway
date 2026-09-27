@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
 import { ManagedCertificateDetailRow } from "@/components/common/ManagedCertificateStatus";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
@@ -490,11 +491,7 @@ export function DatabaseOverviewTab({
           <DetailRow label="Provider" value={<span className="capitalize">{database.type}</span>} />
           <DetailRow
             label="Last Check"
-            value={
-              database.lastHealthCheckAt
-                ? new Date(database.lastHealthCheckAt).toLocaleTimeString()
-                : "Never"
-            }
+            value={<RelativeTime value={database.lastHealthCheckAt} fallback="Never" />}
           />
           {database.lastError && (
             <DetailRow

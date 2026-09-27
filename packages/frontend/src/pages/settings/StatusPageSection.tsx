@@ -6,6 +6,7 @@ import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import {
@@ -614,15 +615,12 @@ export function ServiceDialog({
               emptyMessage="Enter a new group name."
             />
           </Field>
-          <div className="flex items-center justify-between gap-4 px-1 py-2">
-            <div className="min-w-0">
-              <p className="text-sm font-medium">Visible on public page</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Hidden services remain configured but are not shown to visitors.
-              </p>
-            </div>
-            <Switch checked={enabled} onChange={setEnabled} ariaLabel="Visible on public page" />
-          </div>
+          <SwitchCard
+            label="Visible on public page"
+            description="Hidden services remain configured but are not shown to visitors."
+            checked={enabled}
+            onCheckedChange={setEnabled}
+          />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

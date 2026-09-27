@@ -1,4 +1,4 @@
-import { formatDate } from "@/lib/utils";
+import { formatRelativeDate } from "@/lib/utils";
 import type { FileManagerOperations } from "@/pages/docker-detail/FilesTab";
 import { api } from "@/services/api";
 import type { FileEntry } from "@/types";
@@ -51,7 +51,7 @@ export function storageFileOperations(
           size: object.size,
           permissions: "—",
           isDir: false,
-          modified: object.lastModified ? formatDate(object.lastModified) : "—",
+          modified: formatRelativeDate(object.lastModified),
           isWritable: canWrite,
         });
       }

@@ -105,7 +105,7 @@ describe("ManagedCertificateNotice", () => {
     );
     expect(screen.getByText("TLS certificate renewal failed")).toBeInTheDocument();
     expect(screen.getByText(/engine refused the key/)).toBeInTheDocument();
-    expect(screen.getByText(/expires Jan 1, 2027/)).toBeInTheDocument();
+    expect(screen.getByText(/expires 01 Jan 2027/)).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -137,7 +137,7 @@ describe("ManagedCertificateDetailRow", () => {
   it("shows the expiry as a quiet detail", () => {
     render(<ManagedCertificateDetailRow status={status()} />);
     expect(screen.getByText("TLS Certificate")).toBeInTheDocument();
-    expect(screen.getByText(/Expires Jan 1, 2027 · renewed automatically/)).toBeInTheDocument();
+    expect(screen.getByText(/Expires 01 Jan 2027 · renewed automatically/)).toBeInTheDocument();
   });
 
   it("renders nothing without a certificate", () => {

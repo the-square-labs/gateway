@@ -1,33 +1,18 @@
-import { AlertTriangle, Check, FolderTree, Shield, X } from "lucide-react";
+import { Check, Shield, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { toast } from "sonner";
 import { AuthWindowLoader } from "@/components/auth/AuthShell";
-import { ScopeList } from "@/components/common/ScopeList";
-import {
-  ScopeSearchFilter,
-  type ScopeSelectionFilter,
-} from "@/components/common/ScopeSearchFilter";
+import { Notice } from "@/components/common/Notice";
+import { ScopePicker } from "@/components/common/ScopePicker";
 import {
   allResourcePages,
   canLoadScopeResource,
-  type FolderFamily,
   type FolderOption,
-  folderFamilyForScope,
-  folderTarget,
   loadScopeResourceList,
   reportScopeLoadError,
 } from "@/components/common/scope-list-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   buildFinalScopes,
   deriveAllowedResourceIdsByScope,
@@ -55,25 +40,6 @@ type OAuthScopeItem = {
 type ConsentResult = {
   kind: "approved" | "denied";
   redirectUrl: string;
-};
-
-const FOLDER_FAMILY_LABELS: Record<FolderFamily, string> = {
-  groups: "Permission groups",
-  users: "Users",
-  domains: "Domains",
-  proxy: "Routes",
-  nodes: "Nodes",
-  docker: "Docker containers",
-  "docker-network": "Docker networks",
-  "docker-volume": "Docker volumes",
-  "docker-image": "Docker images",
-  "docker-compose": "Compose projects",
-  pages: "Pages",
-  ssl: "SSL certificates",
-  databases: "Databases",
-  storage: "Storage",
-  "logging-environments": "Logging environments",
-  "logging-schemas": "Logging schemas",
 };
 
 const OAUTH_ONLY_SCOPES: Record<string, Omit<OAuthScopeItem, "value">> = {
@@ -121,8 +87,6 @@ export function OAuthConsent() {
   const [submitting, setSubmitting] = useState<"approve" | "deny" | null>(null);
   const isSubmitting = submitting !== null;
   const [result, setResult] = useState<ConsentResult | null>(null);
-  const [scopeSearch, setScopeSearch] = useState("");
-  const [scopeFilter, setScopeFilter] = useState<ScopeSelectionFilter>("all");
   const [nodes, setNodes] = useState<Node[]>([]);
   const [proxyHosts, setProxyHosts] = useState<ProxyHost[]>([]);
   const [databases, setDatabases] = useState<DatabaseConnection[]>([]);
@@ -173,8 +137,6 @@ export function OAuthConsent() {
       );
       setSelectedScopes(defaults.baseScopes);
       setResourceScopes(defaults.resources);
-      setScopeSearch("");
-      setScopeFilter("all");
     } catch (err) {
       setError(err instanceof Error ? err.message : "OAuth request could not be loaded");
     }
@@ -278,34 +240,6 @@ export function OAuthConsent() {
       return [...current, scope];
     });
   };
-
-  /** Restrict every selected scope of the folder's family to that folder (and its subfolders). */
-  const limitSelectedScopesToFolder = (folder: FolderOption) => {
-    const target = folderTarget(folder.id);
-    const limited = selectedScopes.filter((scope) => {
-      if (folderFamilyForScope(scope) !== folder.family) return false;
-      const allowedIds = allowedResourceIdsByScope[scope];
-      return !allowedIds || allowedIds.includes(target);
-    });
-    if (limited.length === 0) {
-      toast.error(`No selected scope can be limited to ${folder.label}`);
-      return;
-    }
-    setResourceScopes((current) => ({
-      ...current,
-      ...Object.fromEntries(limited.map((scope) => [scope, [target]])),
-    }));
-    toast.success(
-      `Limited ${limited.length} scope${limited.length === 1 ? "" : "s"} to ${folder.label}`
-    );
-  };
-  const folderOptionsByFamily = useMemo(() => {
-    const grouped = new Map<FolderFamily, FolderOption[]>();
-    for (const folder of folderOptions ?? []) {
-      grouped.set(folder.family, [...(grouped.get(folder.family) ?? []), folder]);
-    }
-    return [...grouped.entries()];
-  }, [folderOptions]);
 
   const approve = async () => {
     if (!requestId || finalSelectedScopes.length === 0 || hasMissingResourceSelection) return;
@@ -465,120 +399,71 @@ export function OAuthConsent() {
                 </div>
               </section>
 
-              <section className="bg-warning/15 px-5 py-3">
-                <div className="flex items-center gap-3">
-                  <AlertTriangle className="h-5 w-5 shrink-0 text-warning-foreground" />
-                  <p className="text-sm font-semibold text-warning-foreground">
-                    Only authorize tools you trust. Gateway cannot verify this client; it can only
-                    enforce the scopes you approve and the permissions your account currently has.
-                  </p>
-                </div>
+              <section className="space-y-3 p-5">
+                <Notice tone="warning" title="Only authorize tools you trust">
+                  Gateway cannot verify this client; it can only enforce the scopes you approve and
+                  the permissions your account currently has.
+                </Notice>
+
+                {preview.redirect.isExternal && (
+                  <Notice tone="destructive" title="External OAuth callback">
+                    If you authorize this request, the authorization result will be sent to{" "}
+                    {redirectHost ?? "an external callback URL"}.
+                  </Notice>
+                )}
+
+                {hasManualApprovalScopes && (
+                  <Notice tone="destructive" title="Some requested scopes are high-risk">
+                    They can reveal sensitive data, export private key material, or perform
+                    high-risk operations, and stay unchecked until you explicitly approve them.
+                  </Notice>
+                )}
               </section>
 
-              {preview.redirect.isExternal && (
-                <section className="bg-destructive/10 px-5 py-3">
-                  <div className="flex items-center gap-3">
-                    <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
-                    <p className="text-sm font-semibold text-destructive">
-                      External OAuth callback. If you authorize this request, the authorization
-                      result will be sent to {redirectHost ?? "an external callback URL"}.
-                    </p>
-                  </div>
-                </section>
-              )}
-
-              {hasManualApprovalScopes && (
-                <section className="bg-destructive/10 px-5 py-3">
-                  <div className="flex items-center gap-3">
-                    <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
-                    <p className="text-sm font-semibold text-destructive">
-                      Some requested scopes can reveal sensitive data, export private key material,
-                      or perform high-risk operations. They are unchecked until you explicitly
-                      approve them.
-                    </p>
-                  </div>
-                </section>
-              )}
-
               <section className="p-5">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Shield className="h-4 w-4 text-muted-foreground" />
-                    <h2 className="text-sm font-semibold text-foreground">Requested scopes</h2>
-                  </div>
-                  {folderOptionsByFamily.length > 0 && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="outline" disabled={isSubmitting}>
-                          <FolderTree className="h-4 w-4" />
-                          Limit selected scopes to folder…
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
-                        {folderOptionsByFamily.map(([family, folders]) => (
-                          <DropdownMenuGroup key={family}>
-                            <DropdownMenuLabel>{FOLDER_FAMILY_LABELS[family]}</DropdownMenuLabel>
-                            {folders.map((folder) => (
-                              <DropdownMenuItem
-                                key={`${family}:${folder.id}`}
-                                onSelect={() => limitSelectedScopesToFolder(folder)}
-                              >
-                                {folder.label}
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuGroup>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
-                <div className="flex min-h-0 flex-col border border-border">
-                  <ScopeSearchFilter
-                    search={scopeSearch}
-                    onSearchChange={setScopeSearch}
-                    filter={scopeFilter}
-                    onFilterChange={setScopeFilter}
-                    placeholder="Search scopes..."
-                  />
-                  <ScopeList
-                    scopes={grantableScopeItems}
-                    search={scopeSearch}
-                    selectionFilter={scopeFilter}
-                    selected={selectedScopes}
-                    onToggle={toggleScope}
-                    resources={resourceScopes}
-                    onToggleResource={(scope, resourceId) => {
-                      setResourceScopes((current) => {
-                        const selected = current[scope] ?? [];
-                        return {
-                          ...current,
-                          [scope]: selected.includes(resourceId)
-                            ? selected.filter((id) => id !== resourceId)
-                            : [...selected, resourceId],
-                        };
-                      });
-                      setSelectedScopes((current) => [...new Set([...current, scope])]);
-                    }}
-                    cas={cas}
-                    nodes={nodes}
-                    proxyHosts={proxyHosts}
-                    databases={databases}
-                    loggingSchemas={loggingSchemas}
-                    restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-                    allowedResourceIds={allowedResourceIdsByScope}
-                    readOnly={isSubmitting}
-                    viewportClassName="max-h-[24rem] overflow-y-auto overscroll-contain"
-                    collapsedRestrictions
-                    onFolderOptionsChange={setFolderOptions}
-                    onInitialLoadComplete={markScopeListLoaded}
-                  />
-                  <div className="border-t border-border px-3 py-2">
-                    <p className="text-xs text-muted-foreground" data-oauth-consent-scope-count="">
+                <ScopePicker
+                  className="space-y-3"
+                  header={
+                    <div className="flex items-center gap-2">
+                      <Shield className="h-4 w-4 text-muted-foreground" />
+                      <h2 className="text-sm font-semibold text-foreground">Requested scopes</h2>
+                    </div>
+                  }
+                  scopes={grantableScopeItems}
+                  selected={selectedScopes}
+                  onToggle={toggleScope}
+                  resources={resourceScopes}
+                  onResourcesChange={setResourceScopes}
+                  onToggleResource={(scope, resourceId) => {
+                    setResourceScopes((current) => {
+                      const selected = current[scope] ?? [];
+                      return {
+                        ...current,
+                        [scope]: selected.includes(resourceId)
+                          ? selected.filter((id) => id !== resourceId)
+                          : [...selected, resourceId],
+                      };
+                    });
+                    setSelectedScopes((current) => [...new Set([...current, scope])]);
+                  }}
+                  cas={cas}
+                  nodes={nodes}
+                  proxyHosts={proxyHosts}
+                  databases={databases}
+                  loggingSchemas={loggingSchemas}
+                  restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
+                  allowedResourceIds={allowedResourceIdsByScope}
+                  readOnly={isSubmitting}
+                  viewportClassName="max-h-[24rem] overflow-y-auto overscroll-contain"
+                  onFolderOptionsChange={setFolderOptions}
+                  onInitialLoadComplete={markScopeListLoaded}
+                  footer={
+                    <span data-oauth-consent-scope-count="">
                       {finalSelectedScopes.length} scope
                       {finalSelectedScopes.length === 1 ? "" : "s"} will be granted
-                    </p>
-                  </div>
-                </div>
+                    </span>
+                  }
+                />
               </section>
             </div>
 

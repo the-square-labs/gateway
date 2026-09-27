@@ -8,6 +8,8 @@ import type {
   IssueCertFromCSRRequest,
   IssueCertificateRequest,
   PaginatedResponse,
+  ResourceFolder,
+  ResourceFolderTreeNode,
   Template,
 } from "@/types";
 import type { ApiClientBaseConstructor } from "./api-mixins";
@@ -79,6 +81,57 @@ export function withPkiApi<TBase extends ApiClientBaseConstructor>(Base: TBase) 
         body: JSON.stringify({ passphrase }),
       });
       return new Blob([bytes], { type: "application/x-pkcs12" });
+    }
+
+    // ── CA folders ────────────────────────────────────────────────────
+    // A folder holds whole CA hierarchies: moving a root CA moves its intermediates.
+
+    async listCAFolders(): Promise<ResourceFolderTreeNode[]> {
+      return this.unwrapData(this.request<{ data: ResourceFolderTreeNode[] }>("/cas/folders"));
+    }
+
+    async createCAFolder(data: { name: string; parentId?: string }): Promise<ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: ResourceFolder }>("/cas/folders", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updateCAFolder(id: string, data: { name: string }): Promise<ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: ResourceFolder }>(`/cas/folders/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async deleteCAFolder(id: string): Promise<void> {
+      await this.request(`/cas/folders/${id}`, { method: "DELETE" });
+    }
+
+    async reorderCAFolders(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/cas/folders/reorder", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
+    /** Moves root CAs, with their intermediates, into a folder (null = ungrouped). */
+    async moveCAsToFolder(ids: string[], folderId: string | null): Promise<void> {
+      await this.request("/cas/folders/move-cas", {
+        method: "POST",
+        body: JSON.stringify({ ids, folderId }),
+      });
+    }
+
+    async reorderCAs(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/cas/folders/reorder-cas", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
     }
 
     // ── Certificates ──────────────────────────────────────────────────
@@ -169,6 +222,60 @@ export function withPkiApi<TBase extends ApiClientBaseConstructor>(Base: TBase) 
       return new Blob([bytes], { type: "application/x-pem-file" });
     }
 
+    // ── Certificate folders ───────────────────────────────────────────
+
+    async listCertificateFolders(): Promise<ResourceFolderTreeNode[]> {
+      return this.unwrapData(
+        this.request<{ data: ResourceFolderTreeNode[] }>("/certificates/folders")
+      );
+    }
+
+    async createCertificateFolder(data: {
+      name: string;
+      parentId?: string;
+    }): Promise<ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: ResourceFolder }>("/certificates/folders", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updateCertificateFolder(id: string, data: { name: string }): Promise<ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: ResourceFolder }>(`/certificates/folders/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async deleteCertificateFolder(id: string): Promise<void> {
+      await this.request(`/certificates/folders/${id}`, { method: "DELETE" });
+    }
+
+    async reorderCertificateFolders(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/certificates/folders/reorder", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
+    async moveCertificatesToFolder(ids: string[], folderId: string | null): Promise<void> {
+      await this.request("/certificates/folders/move-certificates", {
+        method: "POST",
+        body: JSON.stringify({ ids, folderId }),
+      });
+    }
+
+    async reorderCertificates(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/certificates/folders/reorder-certificates", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
     // ── Templates ─────────────────────────────────────────────────────
 
     async listTemplates(): Promise<Template[]> {
@@ -195,6 +302,60 @@ export function withPkiApi<TBase extends ApiClientBaseConstructor>(Base: TBase) 
 
     async deleteTemplate(id: string): Promise<void> {
       return this.request<void>(`/templates/${id}`, { method: "DELETE" });
+    }
+
+    // ── Template folders ──────────────────────────────────────────────
+
+    async listPkiTemplateFolders(): Promise<ResourceFolderTreeNode[]> {
+      return this.unwrapData(
+        this.request<{ data: ResourceFolderTreeNode[] }>("/templates/folders")
+      );
+    }
+
+    async createPkiTemplateFolder(data: {
+      name: string;
+      parentId?: string;
+    }): Promise<ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: ResourceFolder }>("/templates/folders", {
+          method: "POST",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async updatePkiTemplateFolder(id: string, data: { name: string }): Promise<ResourceFolder> {
+      return this.unwrapData(
+        this.request<{ data: ResourceFolder }>(`/templates/folders/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(data),
+        })
+      );
+    }
+
+    async deletePkiTemplateFolder(id: string): Promise<void> {
+      await this.request(`/templates/folders/${id}`, { method: "DELETE" });
+    }
+
+    async reorderPkiTemplateFolders(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/templates/folders/reorder", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
+    }
+
+    async movePkiTemplatesToFolder(ids: string[], folderId: string | null): Promise<void> {
+      await this.request("/templates/folders/move-templates", {
+        method: "POST",
+        body: JSON.stringify({ ids, folderId }),
+      });
+    }
+
+    async reorderPkiTemplates(items: { id: string; sortOrder: number }[]): Promise<void> {
+      await this.request("/templates/folders/reorder-templates", {
+        method: "PUT",
+        body: JSON.stringify({ items }),
+      });
     }
   };
 }

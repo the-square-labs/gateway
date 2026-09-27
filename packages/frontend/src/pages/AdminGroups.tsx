@@ -21,11 +21,8 @@ import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { ScopeList } from "@/components/common/ScopeList";
-import {
-  ScopeSearchFilter,
-  type ScopeSelectionFilter,
-} from "@/components/common/ScopeSearchFilter";
+import { ScopePicker } from "@/components/common/ScopePicker";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import {
   allResourcePages,
   canLoadScopeResource,
@@ -58,7 +55,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   buildFinalScopes,
@@ -158,8 +154,6 @@ function AdminGroupsContent({
   const [formResources, setFormResources] = useState<Record<string, string[]>>({});
   const [formRequireGateway2fa, setFormRequireGateway2fa] = useState(false);
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
-  const [scopeSearch, setScopeSearch] = useState("");
-  const [scopeFilter, setScopeFilter] = useState<ScopeSelectionFilter>("all");
   const [listSearch, setListSearch] = useState("");
   const [groupDialogMode, setGroupDialogMode] = useState<"edit" | "readonly">("edit");
   const [saving, setSaving] = useState(false);
@@ -342,8 +336,6 @@ function AdminGroupsContent({
     setFormResources({});
     setFormRequireGateway2fa(false);
     setInitialResourceLimitedScopes([]);
-    setScopeSearch("");
-    setScopeFilter("all");
     setDestinationFolders(null);
     setDialogOpen(true);
   }, []);
@@ -365,8 +357,6 @@ function AdminGroupsContent({
     setFormResources(resources);
     setFormRequireGateway2fa(group.requireGateway2fa ?? false);
     setInitialResourceLimitedScopes(Object.keys(resources));
-    setScopeSearch("");
-    setScopeFilter("all");
     setDialogOpen(true);
   };
 
@@ -832,55 +822,39 @@ function AdminGroupsContent({
                 </>
               }
             </div>
-            <div className="border border-border">
-              <ScopeSearchFilter
-                search={scopeSearch}
-                onSearchChange={setScopeSearch}
-                filter={scopeFilter}
-                onFilterChange={setScopeFilter}
-                placeholder="Search scopes..."
-              />
-              <ScopeList
-                scopes={visibleAssignableScopes}
-                search={scopeSearch}
-                selectionFilter={scopeFilter}
-                selected={formBaseScopes}
-                onToggle={toggleScope}
-                resources={formResources}
-                onToggleResource={toggleResource}
-                cas={cas}
-                nodes={nodesList}
-                proxyHosts={proxyHostsList}
-                databases={databasesList}
-                loggingSchemas={loggingSchemasList}
-                restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-                allowedResourceIds={allowedResourceIdsByScope}
-                inheritedScopes={inheritedScopes}
-                inheritedFromName={groups.find((g) => g.id === formParentId)?.name}
-                readOnly={groupDialogReadOnly || securityOnly}
-                viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
-              />
-              <div className="border-t border-border px-3 py-2">
-                <p className="text-xs text-muted-foreground">
+            <ScopePicker
+              header={<span className="text-sm font-medium">Scopes</span>}
+              scopes={visibleAssignableScopes}
+              selected={formBaseScopes}
+              onToggle={toggleScope}
+              resources={formResources}
+              onResourcesChange={groupDialogReadOnly || securityOnly ? undefined : setFormResources}
+              onToggleResource={toggleResource}
+              cas={cas}
+              nodes={nodesList}
+              proxyHosts={proxyHostsList}
+              databases={databasesList}
+              loggingSchemas={loggingSchemasList}
+              restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
+              allowedResourceIds={allowedResourceIdsByScope}
+              inheritedScopes={inheritedScopes}
+              inheritedFromName={groups.find((g) => g.id === formParentId)?.name}
+              readOnly={groupDialogReadOnly || securityOnly}
+              viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
+              footer={
+                <>
                   {selectedCount} scope{selectedCount !== 1 ? "s" : ""} selected
                   {inheritedCount > 0 && ` (${ownCount} own + ${inheritedCount} inherited)`}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-              <div>
-                <p className="text-sm font-medium">Require two-factor authentication</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Applies only to Gateway email-based sign-in. OIDC MFA stays managed by the
-                  identity provider.
-                </p>
-              </div>
-              <Switch
-                checked={formRequireGateway2fa}
-                disabled={groupDialogReadOnly}
-                onChange={setFormRequireGateway2fa}
-              />
-            </div>
+                </>
+              }
+            />
+            <SwitchCard
+              label="Require two-factor authentication"
+              description="Applies only to Gateway email-based sign-in. OIDC MFA stays managed by the identity provider."
+              checked={formRequireGateway2fa}
+              disabled={groupDialogReadOnly}
+              onCheckedChange={setFormRequireGateway2fa}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>

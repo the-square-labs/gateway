@@ -5,7 +5,8 @@ import {
   FolderedResourceListCore,
   type FolderedResourceListViewProps,
 } from "@/components/common/resource-list/FolderedResourceListCore";
-import { useDockerFolderStore } from "@/stores/docker-folders";
+import { useAuthStore } from "@/stores/auth";
+import { hasSavedFolderExpansion, useDockerFolderStore } from "@/stores/docker-folders";
 import type { DockerFolderResourceType } from "@/types";
 
 export interface DockerFolderedResourceItem {
@@ -30,6 +31,13 @@ interface DockerResourceRef {
   nodeId: string;
   resourceKey: string;
 }
+
+const DOCKER_VIEW_SCOPE: Record<Exclude<DockerFolderResourceType, "container">, string> = {
+  compose: "docker:compose:view",
+  network: "docker:networks:view",
+  volume: "docker:volumes:view",
+  image: "docker:images:view",
+};
 
 const getSortOrder = (item: DockerFolderedResourceItem) => item.folderSortOrder;
 const setSortOrder = (item: DockerFolderedResourceItem, sortOrder: number) => {
@@ -60,6 +68,12 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
     reorderResources,
     toggleFolder,
   } = useDockerFolderStore();
+
+  // Visible only through folder grants: one granted folder is shown on its own.
+  const viewScope = DOCKER_VIEW_SCOPE[resourceType];
+  const limitedToFolders = useAuthStore(
+    (state) => !state.hasScope(viewScope) && state.hasScopedAccess(viewScope)
+  );
 
   const store = useMemo<FolderedListStore<DockerResourceRef>>(
     () => ({
@@ -115,9 +129,11 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
         folders: foldersByType[resourceType],
         loading: loadingByType[resourceType],
         expandedFolderIds: expandedFolderIdsByType[resourceType],
+        expansionTouched: hasSavedFolderExpansion(resourceType),
       }}
       keys={keys}
       lockExpanded={!!fixedNodeId}
+      limitedToFolders={limitedToFolders}
     />
   );
 }

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
-import { CopyValueField } from "@/components/common/CopyValueField";
+import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { HostingNodeWizard } from "@/components/nodes/HostingNodeWizard";
 import { Button } from "@/components/ui/button";
 import {
@@ -527,77 +527,73 @@ export function NodeEnrollmentDialog({
         />
       </Dialog>
 
-      <Dialog open={resultOpen} onOpenChange={onResultOpenChange}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{result?.reissued ? "New Enrollment Token" : "Node Created"}</DialogTitle>
-            <DialogDescription>
-              This dialog closes automatically when the node completes enrollment.
-            </DialogDescription>
-          </DialogHeader>
-          {result && (
-            <div className="space-y-4">
-              <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-                <p className="font-medium">
-                  The enrollment token is single-use, expires after 7 days, and will not be shown
-                  again.
-                  {result.reissued ? " Any earlier token for this node no longer works." : ""}
-                </p>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Setup Command</label>
-                <p className="text-xs text-muted-foreground">{setupDescription}</p>
-                {targets.length > 1 && (
-                  <p className="text-xs text-muted-foreground">
-                    Use the public command for remote hosts and the local command for nodes on the
-                    private network.
-                  </p>
-                )}
-                <div className="flex flex-wrap items-center gap-2">
-                  {targets.length > 1 && (
-                    <Tabs value={selectedTarget?.id ?? "public"} onValueChange={setTargetId}>
-                      <TabsList>
-                        {targets.map((target) => (
-                          <TabsTrigger key={target.id} value={target.id}>
-                            {target.label}
-                          </TabsTrigger>
-                        ))}
-                      </TabsList>
-                    </Tabs>
-                  )}
-                  <Tabs
-                    value={transport}
-                    onValueChange={(value) => setTransport(value as "curl" | "wget")}
-                  >
-                    <TabsList>
-                      <TabsTrigger value="curl">curl</TabsTrigger>
-                      <TabsTrigger value="wget">wget</TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                </div>
-                {selectedTarget && (
-                  <CopyCodeBlock
-                    label={`${transport} command`}
-                    value={commandForTarget(selectedTarget.gateway)}
-                    copyValue={commandForTarget(selectedTarget.gateway).replace(/\s*\\\n\s*/g, " ")}
-                    className="[&>p]:hidden"
-                  />
-                )}
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Enrollment Token</label>
-                <p className="text-xs text-muted-foreground">
-                  For manual setup and troubleshooting only.
-                </p>
-                <CopyValueField label="Enrollment token" value={result.token} />
-              </div>
+      <OneTimeSecretDialog
+        open={resultOpen}
+        onOpenChange={onResultOpenChange}
+        className="sm:max-w-2xl"
+        title={result?.reissued ? "New Enrollment Token" : "Node Created"}
+        description={
+          <>
+            {result?.reissued ? "Any earlier token for this node no longer works. " : ""}
+            Run the setup command on the host; this dialog closes when the node completes
+            enrollment. The enrollment token is single-use and expires after 7 days.
+          </>
+        }
+        fields={
+          result
+            ? [
+                {
+                  label: "Enrollment token",
+                  value: result.token,
+                  hint: "For manual setup and troubleshooting only.",
+                },
+              ]
+            : null
+        }
+      >
+        {result && (
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Setup Command</label>
+            <p className="text-xs text-muted-foreground">{setupDescription}</p>
+            {targets.length > 1 && (
+              <p className="text-xs text-muted-foreground">
+                Use the public command for remote hosts and the local command for nodes on the
+                private network.
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {targets.length > 1 && (
+                <Tabs value={selectedTarget?.id ?? "public"} onValueChange={setTargetId}>
+                  <TabsList>
+                    {targets.map((target) => (
+                      <TabsTrigger key={target.id} value={target.id}>
+                        {target.label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              )}
+              <Tabs
+                value={transport}
+                onValueChange={(value) => setTransport(value as "curl" | "wget")}
+              >
+                <TabsList>
+                  <TabsTrigger value="curl">curl</TabsTrigger>
+                  <TabsTrigger value="wget">wget</TabsTrigger>
+                </TabsList>
+              </Tabs>
             </div>
-          )}
-          <DialogFooter>
-            <Button onClick={() => closeResult()}>Done</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            {selectedTarget && (
+              <CopyCodeBlock
+                label={`${transport} command`}
+                value={commandForTarget(selectedTarget.gateway)}
+                copyValue={commandForTarget(selectedTarget.gateway).replace(/\s*\\\n\s*/g, " ")}
+                className="[&>p]:hidden"
+              />
+            )}
+          </div>
+        )}
+      </OneTimeSecretDialog>
     </>
   );
 }

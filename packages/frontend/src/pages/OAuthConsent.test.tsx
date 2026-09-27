@@ -6,6 +6,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { renderWithRouter } from "@/test/render";
 import { waitForReveal } from "@/test/reveal";
+import { expandScopeRestrictions } from "@/test/scope-restrictions";
 import type { OAuthConsentPreview } from "@/types";
 
 const preview: OAuthConsentPreview = {
@@ -578,6 +579,7 @@ describe("OAuthConsent", () => {
         await screen.findByRole("button", { name: /Restrict Manage Containers/i })
       );
       expect(await screen.findByRole("checkbox", { name: /MyProject/ })).toBeInTheDocument();
+      await expandScopeRestrictions();
       expect(await screen.findByRole("checkbox", { name: /web/ })).toBeInTheDocument();
       expect(screen.getByText("2 scopes will be granted")).toBeInTheDocument();
     });

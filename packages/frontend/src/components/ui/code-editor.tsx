@@ -439,21 +439,28 @@ const sqlLang = StreamLanguage.define<{ inBlockComment: boolean }>({
 // Theme + highlighting
 // ---------------------------------------------------------------------------
 
+const EDITOR_FONT_SIZE_PX = 13;
+const EDITOR_LINE_HEIGHT = 1.4;
+const EDITOR_CONTENT_PADDING_PX = 8;
+
 const editorTheme = EditorView.theme({
   "&": {
     backgroundColor: "var(--color-background)",
     color: "var(--color-foreground)",
-    fontSize: "13px",
-    fontFamily: "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace",
+    fontSize: `${EDITOR_FONT_SIZE_PX}px`,
     height: "100%",
   },
+  // The font goes on the scroller: CodeMirror's base theme sets `monospace` there, which
+  // would override a font set on the editor root.
   ".cm-scroller": {
     backgroundColor: "var(--color-background)",
     overflow: "auto",
+    fontFamily: "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace",
+    lineHeight: EDITOR_LINE_HEIGHT,
   },
   ".cm-content": {
     caretColor: "var(--color-foreground)",
-    padding: "8px 0",
+    padding: `${EDITOR_CONTENT_PADDING_PX}px 0`,
   },
   ".cm-gutters": {
     backgroundColor: "var(--color-background)",
@@ -547,6 +554,19 @@ function makeErrorDecorations(
 // Component
 // ---------------------------------------------------------------------------
 
+/**
+ * Height of an editor that shows `lines` lines without a vertical scrollbar: the theme's
+ * line height and content padding, the 1px border on both sides when `bordered`, and one
+ * pixel for browsers that round line boxes up to their layout unit.
+ */
+export function codeEditorHeightForLines(lines: number, bordered = true) {
+  const content = lines * EDITOR_FONT_SIZE_PX * EDITOR_LINE_HEIGHT + EDITOR_CONTENT_PADDING_PX * 2;
+  // toFixed drops float noise such as 197.99999999999997 before rounding up.
+  return Math.ceil(Number(content.toFixed(3))) + (bordered ? 2 : 0) + 1;
+}
+
+export type CodeEditorLanguage = "nginx" | "env" | "json" | "plain" | "sql" | "xml" | "yaml";
+
 interface CodeEditorProps {
   value: string;
   onChange: (value: string) => void;
@@ -559,7 +579,7 @@ interface CodeEditorProps {
   /** Character ranges to highlight inline with an error background */
   errorRanges?: Array<{ from: number; to: number }>;
   /** Syntax highlighting language (default: "nginx") */
-  language?: "nginx" | "env" | "json" | "plain" | "sql" | "xml" | "yaml";
+  language?: CodeEditorLanguage;
   lineWrapping?: boolean;
   showLineNumbers?: boolean;
   showGutterBorder?: boolean;

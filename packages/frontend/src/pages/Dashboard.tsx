@@ -6,6 +6,7 @@ import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { Notice, NoticeAction } from "@/components/common/Notice";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,7 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { useLoadDashboardBootstrap } from "@/hooks/use-dashboard-bootstrap";
 import { refreshDynamicScopes } from "@/lib/live-scopes";
-import { formatRelativeDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
@@ -163,11 +164,11 @@ export function RelayHealthNotice({
     { label: "Reason", value: relayReasonLabel(relay.reason) },
     {
       label: "Last healthy",
-      value: relay.lastHealthyAt ? formatRelativeDate(relay.lastHealthyAt) : "Never",
+      value: <RelativeTime value={relay.lastHealthyAt} fallback="Never" />,
     },
     {
       label: "Last probe",
-      value: relay.lastProbeAt ? formatRelativeDate(relay.lastProbeAt) : "Not reported",
+      value: <RelativeTime value={relay.lastProbeAt} fallback="Not reported" />,
     },
     {
       label: "Versions",
@@ -207,7 +208,7 @@ export function RelayHealthNotice({
           </NoticeAction>
         }
       >
-        <p className="text-sm text-muted-foreground">{copy.summary}</p>
+        <p>{copy.summary}</p>
       </Notice>
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
@@ -313,7 +314,7 @@ export function LicenseGraceNotice({
   }, [deadline, invalidateLicense]);
 
   if (!Number.isFinite(deadline) || deadline <= now) return null;
-  const absolute = new Date(deadline).toLocaleString();
+  const absolute = formatDateTime(deadline);
 
   return (
     <Notice
@@ -333,15 +334,11 @@ export function LicenseGraceNotice({
         ) : null
       }
     >
-      <p className="text-sm text-muted-foreground">
+      <p>
         Paid features remain available until {absolute} (
         <span aria-live="off">{formatGraceRemaining(deadline, now)} remaining</span>).
       </p>
-      {!canManage ? (
-        <p className="text-sm text-muted-foreground">
-          Contact your administrator before the grace period ends.
-        </p>
-      ) : null}
+      {!canManage ? <p>Contact your administrator before the grace period ends.</p> : null}
     </Notice>
   );
 }
@@ -503,7 +500,7 @@ export function Dashboard() {
     typeof mfaStatus.graceExpiresAt === "number" &&
     Number.isFinite(mfaStatus.graceExpiresAt) &&
     mfaStatus.graceExpiresAt > Date.now()
-      ? new Date(mfaStatus.graceExpiresAt).toLocaleString()
+      ? formatDateTime(mfaStatus.graceExpiresAt)
       : null;
   const mfaGraceReauthenticationRequired = Boolean(mfaGraceDeadline);
   const mfaOnboardingReminder = Boolean(
@@ -650,9 +647,7 @@ export function Dashboard() {
                 </NoticeAction>
               }
             >
-              <p className="text-sm text-muted-foreground">
-                At least one active route has not received its current certificate.
-              </p>
+              <p>At least one active route has not received its current certificate.</p>
             </Notice>
           )}
 
@@ -676,7 +671,7 @@ export function Dashboard() {
                   </NoticeAction>
                 }
               >
-                <p className="text-sm text-muted-foreground">
+                <p>
                   {dashboardBootstrap.update.updateAvailable
                     ? `Gateway ${dashboardBootstrap.update.latestVersion} is ready to install`
                     : `Relay ${dashboardBootstrap.update.relay?.latestVersion} is ready to install`}
@@ -708,7 +703,7 @@ export function Dashboard() {
                 </NoticeAction>
               }
             >
-              <p className="truncate text-sm text-muted-foreground">
+              <p className="truncate">
                 {loggingHealth.reason ??
                   "Check ClickHouse storage health and maintenance settings."}
               </p>
@@ -736,7 +731,7 @@ export function Dashboard() {
                 </>
               }
             >
-              <p className="text-sm text-muted-foreground">
+              <p>
                 {mfaGraceDeadline
                   ? `Your group now requires MFA. Complete a fresh sign-in with a passkey or authenticator app before ${mfaGraceDeadline}. Setting up a factor alone will not preserve this current session.`
                   : "Your group requires MFA. Sign in with a passkey or authenticator app to continue."}
@@ -765,9 +760,7 @@ export function Dashboard() {
                 </>
               }
             >
-              <p className="text-sm text-muted-foreground">
-                Protect this administrator account with a passkey or authenticator app.
-              </p>
+              <p>Protect this administrator account with a passkey or authenticator app.</p>
             </Notice>
           )}
 
@@ -782,7 +775,7 @@ export function Dashboard() {
                 </NoticeAction>
               }
             >
-              <p className="text-sm text-muted-foreground">
+              <p>
                 Connect infrastructure, secure your account, and enable optional Gateway features.
               </p>
             </Notice>

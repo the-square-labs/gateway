@@ -9,6 +9,7 @@ import type { ResourceListColumn } from "@/components/common/ResourceListLayout"
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useRealtime } from "@/hooks/use-realtime";
 import { collectFolderTreeIds, findFolderTreeNode } from "@/lib/folder-tree";
+import { applySingleFolderView, defaultOpenFolderId } from "./folder-view";
 import type { ResourceListSearchProps } from "./types";
 
 /** A folder as the folder stores return it. */
@@ -54,6 +55,8 @@ export interface FolderedListFolderState {
   folders: FolderedListFolder[];
   loading: boolean;
   expandedFolderIds: Set<string>;
+  /** The user has folded a folder in this list before; until then the first folder may start open. */
+  expansionTouched?: boolean;
 }
 
 /** How list items are identified, ordered and saved. */
@@ -93,6 +96,11 @@ export interface FolderedResourceListViewProps<TItem> {
   embedded?: boolean;
   notifyOnMove?: boolean;
   canManageFolders: boolean;
+  /**
+   * The caller sees these resources only through folder grants: with one granted folder the
+   * list shows that folder alone (or just its resources, without folder management).
+   */
+  limitedToFolders?: boolean;
   canViewItem?: (item: TItem) => boolean;
   canReorganizeItem?: (item: TItem) => boolean;
   getResourceLabel: (item: TItem) => string;
@@ -218,6 +226,7 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
   embedded = false,
   notifyOnMove = true,
   canManageFolders,
+  limitedToFolders = false,
   canViewItem,
   canReorganizeItem,
   getResourceLabel,
@@ -225,7 +234,12 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
   onRefresh,
   onCreateFolderRef,
 }: FolderedResourceListCoreProps<TItem, TRef>) {
-  const { folders, loading: foldersLoading, expandedFolderIds } = folderState;
+  const {
+    folders,
+    loading: foldersLoading,
+    expandedFolderIds,
+    expansionTouched = true,
+  } = folderState;
   const { fetchFolders, toggleFolder } = store;
   const { getItemKey, getSortOrder } = keys;
   const isMobile = useIsMobile();
@@ -298,6 +312,26 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
 
   const isSearchFiltering = search.search.trim() !== "";
   const canDragFolders = canManageFolders && !isMobile && !isSearchFiltering;
+  const shown = useMemo(
+    () =>
+      isSearchFiltering || lockExpanded
+        ? { folders: folderTree, ungrouped: ungroupedResources }
+        : applySingleFolderView(folderTree, ungroupedResources, (folder) => folder.items, {
+            limitedToFolders,
+            canManageFolders,
+          }),
+    [
+      canManageFolders,
+      folderTree,
+      isSearchFiltering,
+      limitedToFolders,
+      lockExpanded,
+      ungroupedResources,
+    ]
+  );
+  const defaultOpenId = lockExpanded
+    ? null
+    : defaultOpenFolderId(shown.folders, shown.ungrouped.length, expansionTouched);
 
   const handleCreateFolder = async (name: string) => {
     try {
@@ -476,8 +510,8 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
         }}
         minWidth={minWidth}
         folders={{
-          folders: folderTree,
-          ungroupedItems: ungroupedResources,
+          folders: shown.folders,
+          ungroupedItems: shown.ungrouped,
           expandedFolderIds,
           getFolderId: (folder) => folder.id,
           getFolderName: (folder) => folder.name,
@@ -490,14 +524,18 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
             isSystem: folder.isSystem,
             folder,
           }),
-          isFolderExpanded: (folder) => lockExpanded || expandedFolderIds.has(folder.id),
+          isFolderExpanded: (folder) =>
+            lockExpanded || expandedFolderIds.has(folder.id) || folder.id === defaultOpenId,
           isFolderSystem: (folder) => !!folder.isSystem,
           isFolderCollapsible: () => !lockExpanded,
           canManageFolder: (folder) => canManageFolders && !folder.isSystem,
           canReorderFolder: (folder) => canDragFolders && !folder.isSystem,
           canCreateSubfolder: (folder) => !folder.isSystem && folder.depth < 2,
           onToggleFolder: (id) => {
-            if (!lockExpanded) toggleFolder(id);
+            if (lockExpanded) return;
+            // The first fold saves the folder that started open, so it stays as the user saw it.
+            if (defaultOpenId) toggleFolder(defaultOpenId);
+            toggleFolder(id);
           },
           onRenameFolder: handleRenameFolder,
           onDeleteFolder: handleDeleteFolder,

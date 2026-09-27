@@ -5,8 +5,10 @@ import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { Notice } from "@/components/common/Notice";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { DockerFolderedResourceList } from "@/components/docker/DockerFolderedResourceList";
@@ -398,9 +400,7 @@ export function DockerVolumes({
         width: "8rem",
         align: "right" as const,
         renderCell: (v) => (
-          <span className="text-sm text-muted-foreground">
-            {v.createdAt ? new Date(v.createdAt).toLocaleDateString() : "-"}
-          </span>
+          <RelativeTime value={v.createdAt} className="text-sm text-muted-foreground" />
         ),
       },
       {
@@ -577,11 +577,13 @@ export function DockerVolumes({
         }}
         afterSearch={
           truncatedListMeta ? (
-            <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-              Showing first {truncatedListMeta._listLimit ?? volumes.length} of{" "}
-              {truncatedListMeta._listTotal ?? "many"} volumes. Narrow the node or search filters
-              for more specific data.
-            </div>
+            <Notice
+              tone="warning"
+              role="status"
+              title={`Showing the first ${truncatedListMeta._listLimit ?? volumes.length} of ${truncatedListMeta._listTotal ?? "many"} volumes`}
+            >
+              Narrow the node or search filters for more specific data.
+            </Notice>
           ) : null
         }
         loading={volumes.length === 0 && (!initialFetchDone || isLoading)}

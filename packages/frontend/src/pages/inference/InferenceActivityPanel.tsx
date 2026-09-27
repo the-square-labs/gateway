@@ -3,6 +3,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
@@ -25,7 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatDateTime, formatRelativeDate, getInitials } from "@/lib/utils";
+import { getInitials } from "@/lib/utils";
 import { api } from "@/services/api";
 import type {
   InferenceActivity,
@@ -227,7 +228,7 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
         header: "Time",
         align: "right",
         cellClassName: "text-muted-foreground",
-        render: (row) => formatRelativeDate(row.startedAt),
+        render: (row) => <RelativeTime value={row.startedAt} />,
       },
     ],
     []
@@ -375,7 +376,12 @@ function ActivityDialogBody({
 }
 
 const activityColumns: DataTableColumn<InferenceActivity>[] = [
-  { key: "time", header: "Time", width: "11rem", render: (row) => formatDateTime(row.startedAt) },
+  {
+    key: "time",
+    header: "Time",
+    width: "11rem",
+    render: (row) => <RelativeTime value={row.startedAt} />,
+  },
   {
     key: "user",
     header: "User",

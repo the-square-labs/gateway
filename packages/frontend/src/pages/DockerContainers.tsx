@@ -15,11 +15,16 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderCreateDialog } from "@/components/common/FolderCreateDialog";
+import { Notice } from "@/components/common/Notice";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import {
+  applySingleFolderView,
+  defaultOpenFolderId,
+} from "@/components/common/resource-list/folder-view";
 import { DockerMoveToFolderDialog } from "@/components/docker/DockerMoveToFolderDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,7 +64,7 @@ import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
-import { useDockerFolderStore } from "@/stores/docker-folders";
+import { hasSavedFolderExpansion, useDockerFolderStore } from "@/stores/docker-folders";
 import type { DockerContainer, DockerFolderTreeNode, Node, NodeAppearanceColor } from "@/types";
 import { DockerDeployDialog } from "./DockerDeployDialog";
 import {
@@ -417,6 +422,23 @@ export function DockerContainers({
   const hasActiveNodeFilter = !fixedNodeId && !!selectedNodeId;
   const isSearchFiltering = filters.search.trim() !== "";
   const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
+  // Visible only through folder grants: one granted folder is shown on its own.
+  const limitedToFolders =
+    !hasScope("docker:containers:view") && hasScopedAccess("docker:containers:view");
+  const shown =
+    fixedNodeId || isSearchFiltering
+      ? { folders: folderTree, ungrouped: ungroupedContainers }
+      : applySingleFolderView(folderTree, ungroupedContainers, (folder) => folder.containers, {
+          limitedToFolders,
+          canManageFolders,
+        });
+  const defaultOpenId = fixedNodeId
+    ? null
+    : defaultOpenFolderId(
+        shown.folders,
+        shown.ungrouped.length,
+        hasSavedFolderExpansion("container")
+      );
   const canCreateOnVisibleNode =
     !!visibleNodeId &&
     canCreateDockerResourceOnNode(user?.scopes ?? [], "docker:containers:create", visibleNodeId);
@@ -1060,11 +1082,13 @@ export function DockerContainers({
         afterSearch={
           <>
             {truncatedListMeta && (
-              <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-                Showing first {truncatedListMeta._listLimit ?? visibleContainers.length} of{" "}
-                {truncatedListMeta._listTotal ?? "many"} containers. Narrow the node or search
-                filters for more specific data.
-              </div>
+              <Notice
+                tone="warning"
+                role="status"
+                title={`Showing the first ${truncatedListMeta._listLimit ?? visibleContainers.length} of ${truncatedListMeta._listTotal ?? "many"} containers`}
+              >
+                Narrow the node or search filters for more specific data.
+              </Notice>
             )}
             {!nodesLoading &&
               !embedded &&
@@ -1110,8 +1134,8 @@ export function DockerContainers({
           onDragCancel: () => setActiveDrag(null),
         }}
         folders={{
-          folders: folderTree,
-          ungroupedItems: ungroupedContainers,
+          folders: shown.folders,
+          ungroupedItems: shown.ungrouped,
           expandedFolderIds,
           getFolderId: (folder) => folder.id,
           getFolderName: (folder) => folder.name,
@@ -1124,13 +1148,20 @@ export function DockerContainers({
             isSystem: folder.isSystem,
             folder,
           }),
-          isFolderExpanded: (folder) => (fixedNodeId ? true : expandedFolderIds.has(folder.id)),
+          isFolderExpanded: (folder) =>
+            fixedNodeId ? true : expandedFolderIds.has(folder.id) || folder.id === defaultOpenId,
           isFolderSystem: (folder) => folder.isSystem,
           isFolderCollapsible: () => !fixedNodeId,
           canManageFolder: (folder) => canManageFolders && !folder.isSystem,
           canReorderFolder: (folder) => canDragFolders && !folder.isSystem,
           canCreateSubfolder: (folder) => folder.depth < 2,
-          onToggleFolder: fixedNodeId ? () => {} : (id) => toggleFolder(id),
+          onToggleFolder: fixedNodeId
+            ? () => {}
+            : (id) => {
+                // The first fold saves the folder that started open, so it stays as the user saw it.
+                if (defaultOpenId) toggleFolder(defaultOpenId);
+                toggleFolder(id);
+              },
           onRenameFolder: handleRenameFolder,
           onDeleteFolder: handleDeleteFolder,
           onRequestCreateSubfolder: (parentId) => {

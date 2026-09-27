@@ -481,20 +481,6 @@ export function InferenceProviderConnectDialog({
         <DialogFooter>
           {locked ? (
             <>
-              {onBack && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    if (oauth?.status === "pending")
-                      void api.cancelInferenceOAuth(oauth.id).catch(() => {});
-                    onBack();
-                  }}
-                  disabled={saving}
-                >
-                  <ArrowLeft />
-                  Back
-                </Button>
-              )}
               {onSkip && (
                 <Button
                   variant="outline"
@@ -507,6 +493,20 @@ export function InferenceProviderConnectDialog({
                 >
                   <MoreHorizontal />
                   Skip
+                </Button>
+              )}
+              {onBack && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (oauth?.status === "pending")
+                      void api.cancelInferenceOAuth(oauth.id).catch(() => {});
+                    onBack();
+                  }}
+                  disabled={saving}
+                >
+                  <ArrowLeft />
+                  Back
                 </Button>
               )}
             </>

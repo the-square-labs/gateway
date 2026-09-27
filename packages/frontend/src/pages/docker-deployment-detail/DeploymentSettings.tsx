@@ -754,11 +754,13 @@ export function DeploymentSettings({
         </PanelShell>
       </div>
 
-      <AvailabilitySection
-        resource={{ type: "deployment", deploymentId: deployment.id }}
-        canManage={!action && canManageAvailability}
-        onDisableQueued={onAvailabilityDisableQueued}
-      />
+      {canManageAvailability && (
+        <AvailabilitySection
+          resource={{ type: "deployment", deploymentId: deployment.id }}
+          canManage={!action}
+          onDisableQueued={onAvailabilityDisableQueued}
+        />
+      )}
 
       {savedRuntimeProfile !== "secure" &&
         (!gpuInventoryLoaded || gpuDevices.length > 0 || gpuDeviceIds.length > 0) && (

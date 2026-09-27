@@ -5,6 +5,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +29,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { CLOUDFLARE_API_TOKEN_URL } from "@/lib/cloudflare";
-import { cn, formatRelativeDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { CloudflareConnector, CloudflareConnectorSettings } from "@/types/integrations";
@@ -518,9 +519,13 @@ function CloudflareConnectorRow({
   onSync: () => void;
   onDelete: () => void;
 }) {
-  const lastSync = connector.syncFinishedAt
-    ? `Synced ${formatRelativeDate(connector.syncFinishedAt)}`
-    : "Never synced";
+  const lastSync = connector.syncFinishedAt ? (
+    <>
+      Synced <RelativeTime value={connector.syncFinishedAt} />
+    </>
+  ) : (
+    "Never synced"
+  );
   const zoneCount = connector.zones?.length ?? 0;
   const enabledCapabilities = useMemo(
     () =>
@@ -560,7 +565,12 @@ function CloudflareConnectorRow({
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {lastSync}
-            {connector.testedAt ? ` · Tested ${formatRelativeDate(connector.testedAt)}` : ""}
+            {connector.testedAt && (
+              <>
+                {" · Tested "}
+                <RelativeTime value={connector.testedAt} />
+              </>
+            )}
             {connector.tokenMasked ? ` · Token ${connector.tokenMasked}` : ""}
             {connector.syncLastError ? ` · ${connector.syncLastError}` : ""}
           </p>

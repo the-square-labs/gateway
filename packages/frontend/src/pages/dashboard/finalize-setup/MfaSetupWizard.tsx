@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ChoiceCard } from "@/components/common/ChoiceCard";
 import { CopyButton } from "@/components/common/CopyButton";
 import { CopyValueField } from "@/components/common/CopyValueField";
+import { Notice } from "@/components/common/Notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/services/api";
@@ -198,16 +199,10 @@ export function MfaSetupWizard({
         )
       ) : screen === "recovery" ? (
         <div className="space-y-4">
-          <div className="flex items-center gap-3 border border-warning p-4">
-            <ShieldCheck className="h-5 w-5 shrink-0 text-warning-text" />
-            <div className="min-w-0 space-y-1">
-              <p className="text-sm font-semibold text-warning-text">Store your recovery codes</p>
-              <p className="text-sm text-muted-foreground">
-                Each code works once if you lose access to your authenticator app. You must
-                acknowledge this step before setup is complete.
-              </p>
-            </div>
-          </div>
+          <Notice tone="warning" icon={ShieldCheck} title="Store your recovery codes">
+            Each code works once if you lose access to your authenticator app. You must acknowledge
+            this step before setup is complete.
+          </Notice>
           <div className="grid grid-cols-2 gap-2">
             {recoveryCodes.map((recoveryCode) => (
               <Input key={recoveryCode} value={recoveryCode} readOnly className="font-mono" />

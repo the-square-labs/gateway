@@ -164,7 +164,7 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
   {
     value: "docker:containers:mounts",
     label: "Container Mounts",
-    desc: "Add, remove, or change container and deployment mounts",
+    desc: "Add, remove, or change container and deployment mounts, and give a workload with host bind mounts a new image or command",
     group: "Docker: Containers",
   },
   {

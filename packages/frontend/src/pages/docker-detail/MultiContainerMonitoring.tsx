@@ -248,7 +248,7 @@ export function MultiContainerMonitoring({
               <col key={title} style={processColumnStyle(title, columnIndex, processTitles)} />
             ))}
           </colgroup>
-          <thead className="bg-muted">
+          <thead className="bg-header">
             <tr className="border-b border-border text-left">
               {processTitles.map((title) => (
                 <th

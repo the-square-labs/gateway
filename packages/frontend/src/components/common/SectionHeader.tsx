@@ -39,7 +39,7 @@ export function SectionHeader({
           ? "flex flex-wrap items-center justify-between gap-3"
           : "flex items-center justify-between",
         withBorder && "border-b border-border",
-        "bg-muted/60 p-4 dark:bg-muted",
+        "bg-header p-4",
         className
       )}
       {...props}

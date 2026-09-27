@@ -498,6 +498,10 @@ class ApiClient extends withPagesDomainsApi(
     return this.request(`/admin/users/${userId}/password-setup`, { method: "POST" });
   }
 
+  async sendUserInvitation(userId: string): Promise<User> {
+    return this.request<User>(`/admin/users/${userId}/invitation`, { method: "POST" });
+  }
+
   async listAdminUserSessions(userId: string): Promise<BrowserSession[]> {
     return this.request<BrowserSession[]>(`/admin/users/${userId}/sessions`);
   }

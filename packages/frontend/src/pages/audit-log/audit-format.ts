@@ -20,8 +20,30 @@ export function mergeAuditFilterUsers(
   return [...merged.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
+const AUDIT_TOKEN_ACRONYMS = new Set([
+  "acme",
+  "ai",
+  "api",
+  "ca",
+  "dns",
+  "ip",
+  "mcp",
+  "oauth",
+  "pki",
+  "ssl",
+  "tls",
+]);
+
 export function formatAuditToken(value: string): string {
-  return value.replace(/[._-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  return value
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((word) =>
+      AUDIT_TOKEN_ACRONYMS.has(word.toLowerCase())
+        ? word.toUpperCase()
+        : word.charAt(0).toUpperCase() + word.slice(1)
+    )
+    .join(" ");
 }
 
 export function getAuditEntryUserKey(entry: AuditLogEntry): string {
@@ -30,6 +52,46 @@ export function getAuditEntryUserKey(entry: AuditLogEntry): string {
 
 export function getAuditEntryUserLabel(entry: AuditLogEntry): string {
   return entry.userName || entry.userEmail || (entry.userId ? entry.userId : "System");
+}
+
+/** A readable name for the audited resource, from the fields its action records. */
+function getAuditResourceNameFromDetails(details: AuditLogEntry["details"]): string | null {
+  if (!details) return null;
+  for (const key of [
+    "newName",
+    "name",
+    "displayName",
+    "hostname",
+    "commonName",
+    "cn",
+    "domain",
+    "containerName",
+    "imageRef",
+    "key",
+  ]) {
+    const value = details[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  for (const key of ["domainNames", "domains"]) {
+    const value = details[key];
+    if (!Array.isArray(value)) continue;
+    const names = value.filter((item): item is string => typeof item === "string" && !!item.trim());
+    if (names.length) return names.join(", ");
+  }
+  return null;
+}
+
+/** "Type / name" for an audit entry's resource; the title adds the ID when a name hides it. */
+export function getAuditResourceDisplay(entry: AuditLogEntry): { label: string; title: string } {
+  const resourceName = entry.resourceName ?? getAuditResourceNameFromDetails(entry.details);
+  const resourceValue = resourceName ?? entry.resourceId;
+  const resourceType = formatAuditToken(entry.resourceType);
+  const label = resourceValue ? `${resourceType} / ${resourceValue}` : resourceType;
+  const title =
+    resourceName && entry.resourceId && resourceName !== entry.resourceId
+      ? `${label} (${entry.resourceId})`
+      : label;
+  return { label, title };
 }
 
 export function buildAuditExportFilename(format: AuditExportFormat): string {

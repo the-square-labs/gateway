@@ -2,6 +2,7 @@ import { Download, ExternalLink, ScrollText } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { AnsiText } from "@/components/ui/ansi-text";
 import { Button } from "@/components/ui/button";
 import { api } from "@/services/api";
@@ -730,7 +731,9 @@ function SingleLogsTab(props: SingleLogsTabProps) {
                       </div>
                     )}
                     {inspectData.State.FinishedAt && (
-                      <div>Finished: {new Date(inspectData.State.FinishedAt).toLocaleString()}</div>
+                      <div>
+                        Finished: <RelativeTime value={inspectData.State.FinishedAt} />
+                      </div>
                     )}
                     {inspectData.Config?.Cmd && (
                       <div>

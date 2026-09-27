@@ -44,7 +44,8 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
 
   const needsParentPicker = parentId === "pick";
   const resolvedParentId = needsParentPicker ? selectedParentId : parentId;
-  const isIntermediate = !!resolvedParentId;
+  // Picking a parent is always an intermediate, also before the parent is chosen.
+  const isIntermediate = needsParentPicker || !!resolvedParentId;
   const activeCAs = (cas || []).filter(
     (ca) =>
       ca.status === "active" && !ca.isSystem && hasScope(`pki:ca:create:intermediate:${ca.id}`)

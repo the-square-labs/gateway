@@ -253,12 +253,18 @@ describe("getHeaderActionOverflowIndices", () => {
     expect(getHeaderActionOverflowIndices(450, actions, 40, 320, 8)).toEqual([0, 1, 2]);
   });
 
-  it("renders no more than four buttons including the overflow trigger", () => {
-    const actions = Array.from({ length: 7 }, () => ({ width: 120 }));
-    const overflow = getHeaderActionOverflowIndices(2_400, actions, 40, 320, 8);
+  it("shows at most six direct actions next to the overflow trigger", () => {
+    const actions = Array.from({ length: 9 }, () => ({ width: 120 }));
+    const overflow = getHeaderActionOverflowIndices(4_000, actions, 40, 320, 8);
 
-    expect(overflow).toHaveLength(4);
-    expect(actions.length - overflow.length + 1).toBe(4);
+    expect(overflow).toEqual([0, 1, 2]);
+    expect(actions.length - overflow.length).toBe(6);
+  });
+
+  it("caps direct actions before the header can be measured", () => {
+    const actions = Array.from({ length: 8 }, () => ({ width: 0 }));
+
+    expect(getHeaderActionOverflowIndices(0, actions, 0)).toEqual([0, 1]);
   });
 
   it("reserves at least half of the header for identity content", () => {

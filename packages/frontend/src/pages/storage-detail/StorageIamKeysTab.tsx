@@ -1,10 +1,11 @@
 import { Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
+import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import {
   ResourceListCell,
   type ResourceListColumn,
@@ -126,7 +127,6 @@ export function StorageIamKeysTab({
     secretKey: string;
   } | null>(null);
   const [createdSecretOpen, setCreatedSecretOpen] = useState(false);
-  const createdSecretResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -144,12 +144,6 @@ export function StorageIamKeysTab({
   useEffect(() => {
     void load();
   }, [load]);
-
-  useEffect(() => {
-    return () => {
-      if (createdSecretResetTimerRef.current) clearTimeout(createdSecretResetTimerRef.current);
-    };
-  }, []);
 
   const openCreate = () => {
     setNewKeyName("");
@@ -194,15 +188,6 @@ export function StorageIamKeysTab({
     } finally {
       setCreating(false);
     }
-  };
-
-  const closeCreatedSecretDialog = () => {
-    setCreatedSecretOpen(false);
-    if (createdSecretResetTimerRef.current) clearTimeout(createdSecretResetTimerRef.current);
-    createdSecretResetTimerRef.current = setTimeout(() => {
-      setCreatedSecret(null);
-      createdSecretResetTimerRef.current = null;
-    }, 220);
   };
 
   const handleRevoke = async (key: ManagedStorageAccessKey) => {
@@ -259,7 +244,7 @@ export function StorageIamKeysTab({
                     {describeKeyScope(key)}
                   </ResourceListCell>
                   <ResourceListCell contentClassName="text-xs text-muted-foreground">
-                    {formatDate(key.createdAt)}
+                    <RelativeTime value={key.createdAt} />
                   </ResourceListCell>
                   <ResourceListCell contentClassName="text-xs text-muted-foreground">
                     {describeKeyExpiry(key)}
@@ -410,38 +395,21 @@ export function StorageIamKeysTab({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={createdSecretOpen} onOpenChange={(open) => !open && closeCreatedSecretDialog()}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Access Key Created</DialogTitle>
-            <DialogDescription>
-              Copy the secret key before closing this dialog — it will not be shown again.
-            </DialogDescription>
-          </DialogHeader>
-
-          {createdSecret && (
-            <div className="space-y-4">
-              <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-                <p className="font-medium">Save this secret key now. It will not be shown again.</p>
-              </div>
-              <CopyValueField
-                label="Access key ID"
-                value={createdSecret.accessKeyId}
-                valueClassName="font-mono"
-              />
-              <CopyValueField
-                label="Secret key"
-                value={createdSecret.secretKey}
-                valueClassName="font-mono"
-              />
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button onClick={closeCreatedSecretDialog}>Done</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <OneTimeSecretDialog
+        open={createdSecretOpen}
+        onOpenChange={setCreatedSecretOpen}
+        title="Access Key Created"
+        description="S3 clients sign their requests with this key pair."
+        fields={
+          createdSecret
+            ? [
+                { label: "Access key ID", value: createdSecret.accessKeyId },
+                { label: "Secret key", value: createdSecret.secretKey },
+              ]
+            : null
+        }
+        onClosed={() => setCreatedSecret(null)}
+      />
     </>
   );
 }

@@ -15,7 +15,6 @@ import { confirmAction } from "@/components/common/ConfirmDialog";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { PagesFeatureDisabledDialog } from "@/components/pages/PagesFeatureDisabledDialog";
 import { PagesTargetPicker } from "@/components/proxy/PagesTargetPicker";
@@ -54,6 +53,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
@@ -804,6 +804,8 @@ function AdditionalRouteWizard({
     [draft.pageTagId, tags]
   );
   const pathError = validateAdditionalRoutePath(draft.path, existingRoutes, route?.id);
+  // An empty path only disables Save; the message shows once something is typed.
+  const showPathError = Boolean(pathError) && draft.path.trim() !== "";
   const targetValid =
     draft.targetKind === "pages"
       ? !!draft.pageProjectId && !!draft.pageTagId && pageTagReady(selectedTag)
@@ -876,9 +878,12 @@ function AdditionalRouteWizard({
           <DialogDescription>Choose a path prefix and its upstream target.</DialogDescription>
         </DialogHeader>
 
-        <div className="border border-border">
+        <div className="space-y-4">
           <ContentLoading loading={containersLoading || projectsLoading || tagsLoading} />
-          <SettingsControlRow title="Path prefix" description="Literal path prefix for this route.">
+          <div className="space-y-1.5">
+            <label htmlFor="additional-route-path" className="block text-sm font-medium">
+              Path prefix
+            </label>
             <Input
               id="additional-route-path"
               value={draft.path}
@@ -887,10 +892,23 @@ function AdditionalRouteWizard({
               }
               placeholder="/api"
               disabled={saving || Boolean(route)}
-              aria-invalid={Boolean(pathError)}
+              aria-invalid={showPathError}
+              aria-describedby="additional-route-path-help"
             />
-          </SettingsControlRow>
-          <SettingsControlRow title="Target" description="Choose the destination for this path.">
+            <p
+              id="additional-route-path-help"
+              className={cn(
+                "text-xs",
+                showPathError ? "text-destructive" : "text-muted-foreground"
+              )}
+            >
+              {showPathError ? pathError : "Literal path prefix for this route, for example /api/."}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="additional-route-target" className="block text-sm font-medium">
+              Target
+            </label>
             <Select
               value={draft.targetKind}
               onValueChange={(value) => {
@@ -902,7 +920,7 @@ function AdditionalRouteWizard({
               }}
               disabled={saving}
             >
-              <SelectTrigger aria-label="Additional route target">
+              <SelectTrigger id="additional-route-target">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -912,9 +930,10 @@ function AdditionalRouteWizard({
                 <SelectItem value="pages">Pages</SelectItem>
               </SelectContent>
             </Select>
-          </SettingsControlRow>
+          </div>
           {draft.targetKind === "pages" ? (
             <PagesTargetPicker
+              layout="form"
               projectId={draft.pageProjectId}
               tagId={draft.pageTagId}
               onProjectChange={(projectId) =>
@@ -937,6 +956,7 @@ function AdditionalRouteWizard({
             />
           ) : (
             <ProxyUpstreamFields
+              layout="form"
               value={draft.upstream}
               onChange={(upstream) => setDraft((current) => ({ ...current, upstream }))}
               containers={containers}

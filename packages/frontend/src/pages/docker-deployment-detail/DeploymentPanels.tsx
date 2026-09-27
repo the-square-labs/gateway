@@ -3,19 +3,16 @@ import { useMemo } from "react";
 import { toast } from "sonner";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { AvailabilitySummary } from "@/components/docker/availability/AvailabilitySummary";
+import { ImageReference } from "@/components/docker/ImageReference";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { resolveDeploymentImageReference } from "@/lib/docker-image-ref";
 import { api } from "@/services/api";
 import type { DockerDeployment, DockerDeploymentRelease, DockerDeploymentSlot } from "@/types";
-import {
-  copyToClipboard,
-  formatDate,
-  type InspectData,
-  STATUS_BADGE,
-} from "../docker-detail/helpers";
+import { copyToClipboard, type InspectData, STATUS_BADGE } from "../docker-detail/helpers";
 
 export function statusVariant(
   status?: string
@@ -104,16 +101,10 @@ export function DeploymentOverview({
               </button>
             }
           />
-          <DetailRow
-            label="Desired Image"
-            value={<span className="font-mono">{desiredImage}</span>}
-          />
-          <DetailRow
-            label="Active Image"
-            value={<span className="font-mono">{activeImage}</span>}
-          />
-          <DetailRow label="Created" value={formatDate(deployment.createdAt)} />
-          <DetailRow label="Updated" value={formatDate(deployment.updatedAt)} />
+          <DetailRow label="Desired Image" value={<ImageReference value={desiredImage} />} />
+          <DetailRow label="Active Image" value={<ImageReference value={activeImage} />} />
+          <DetailRow label="Created" value={<RelativeTime value={deployment.createdAt} />} />
+          <DetailRow label="Updated" value={<RelativeTime value={deployment.updatedAt} />} />
         </PanelShell>
 
         <PanelShell
@@ -307,8 +298,8 @@ export function DeploymentSlots({
                   style={slot.slot === activeSlot ? { borderBottomColor: "#fff" } : undefined}
                 >
                   <span className="pt-0.5 text-sm text-muted-foreground">Image</span>
-                  <span className="min-w-0 justify-self-end text-right text-sm">
-                    <span className="font-mono break-all">{effectiveImage}</span>
+                  <span className="min-w-0 max-w-full justify-self-end text-right text-sm">
+                    <ImageReference value={effectiveImage} />
                   </span>
                 </div>
               </div>
@@ -352,9 +343,10 @@ function ReleaseRow({ release }: { release: DockerDeploymentRelease }) {
         <Badge variant={statusVariant(release.status)} size="inline">
           {release.status}
         </Badge>
-        <span className="text-sm text-muted-foreground tabular-nums">
-          {formatDate(release.createdAt)}
-        </span>
+        <RelativeTime
+          value={release.createdAt}
+          className="text-sm text-muted-foreground tabular-nums"
+        />
       </div>
     </div>
   );

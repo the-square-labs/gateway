@@ -4,8 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { ContentLoading } from "@/components/common/ContentLoading";
+import {
+  CreateFolderSelect,
+  getCreateFolderChoices,
+  isCreateFolderAllowed,
+} from "@/components/common/CreateFolderSelect";
 import { DetailRow } from "@/components/common/DetailRow";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { PanelShell } from "@/components/common/PanelShell";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,13 +30,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import {
-  allowedCreationFolderId,
-  creationFolderChoices,
-  flattenCreationFolders,
-} from "@/lib/creation-folders";
-import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
@@ -82,28 +81,14 @@ export function AddDomainDialog({
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
   const scopes = useAuthStore((state) => state.user?.scopes ?? NO_SCOPES);
   // Same destinations the backend accepts for domains:create: broad, node or folder grants.
+  // The folder picker keeps the selection valid when the node or the grants change.
   const folderChoices = useMemo(
-    () =>
-      creationFolderChoices(
-        scopes,
-        "domains:create",
-        flattenCreationFolders(domainFolders ?? []),
-        nginxNodeId
-      ),
+    () => getCreateFolderChoices(scopes, "domains:create", domainFolders ?? [], nginxNodeId),
     [domainFolders, nginxNodeId, scopes]
   );
-  const canCreateInSelectedFolder = canCreateInFolder(
-    scopes,
-    "domains:create",
-    folderId || null,
-    nginxNodeId || undefined
-  );
-  const selectedNginxNode = nodeOptions?.eligibleNodes.find((node) => node.id === nginxNodeId);
-
-  useEffect(() => {
-    if (!open) return;
-    setFolderId((current) => allowedCreationFolderId(folderChoices, current));
-  }, [folderChoices, open]);
+  const canCreateInSelectedFolder = isCreateFolderAllowed(folderChoices, folderId);
+  const eligibleNodes = nodeOptions?.eligibleNodes ?? [];
+  const selectedNginxNode = eligibleNodes.find((node) => node.id === nginxNodeId);
 
   const resetForm = () => {
     setDomain("");
@@ -290,7 +275,7 @@ export function AddDomainDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add Domain</DialogTitle>
           <DialogDescription>
@@ -300,123 +285,119 @@ export function AddDomainDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          {/* Nodes and folders are the options of this form: open with them in place. */}
-          <ContentLoading
-            loading={foldersLoading || (nodeOptions === null && nodesError === null)}
-          />
-          <div className="border border-border bg-card">
-            <SettingsControlRow
-              title="Domain"
-              description="Domain name to register"
-              className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
-              controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
-            >
-              <Input
-                value={domain}
-                onChange={(e) => setDomain(e.target.value)}
-                placeholder="example.com"
-                autoFocus
-              />
-            </SettingsControlRow>
-            <SettingsControlRow
-              title="Description"
-              description="Optional description"
-              className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
-              controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
-            >
-              <Input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional description"
-              />
-            </SettingsControlRow>
-            <SettingsControlRow
-              title="Folder"
-              description="Optional organization folder"
-              className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
-              controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
-            >
-              <Select
-                value={folderId || (folderChoices.allowRoot ? "__none__" : "")}
-                onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
-                disabled={foldersLoading}
-              >
-                <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-                  <SelectValue
-                    placeholder={folderChoices.allowRoot ? "No folder" : "Select a folder"}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {folderChoices.allowRoot && <SelectItem value="__none__">No folder</SelectItem>}
-                  {folderChoices.folders.map((folder) => (
-                    <SelectItem key={folder.id} value={folder.id}>
-                      {"  ".repeat(folder.depth) + folder.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </SettingsControlRow>
-            <SettingsControlRow
-              title="Ingress node"
-              description="Public ingress for this domain"
-              className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
-              controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
-            >
-              {nodeOptions && nodeOptions.eligibleNodes.length > 0 ? (
-                <Select value={nginxNodeId} onValueChange={setNginxNodeId}>
-                  <SelectTrigger aria-label="Ingress node">
-                    <SelectValue placeholder="Select node">
-                      {selectedNginxNode?.displayName || selectedNginxNode?.hostname}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {nodeOptions.eligibleNodes.map((node) => (
-                      <SelectItem key={node.id} value={node.id}>
-                        {node.displayName || node.hostname} · {node.effectiveAddress}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <span className="text-sm text-muted-foreground">Unavailable</span>
-              )}
-            </SettingsControlRow>
-            {dnsProvider === "cloudflare" && (
-              <>
-                <SettingsControlRow
-                  title="TTL"
-                  description="DNS record time to live"
-                  className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
-                  controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
-                >
-                  <Input
-                    type="number"
-                    min={1}
-                    value={ttl}
-                    onChange={(e) => setTtl(e.target.value)}
-                    placeholder="1"
-                  />
-                </SettingsControlRow>
-                <SettingsControlRow
-                  title="Proxied"
-                  description="Use Cloudflare proxy"
-                  className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
-                  controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
-                >
-                  <Switch checked={proxied} onChange={setProxied} />
-                </SettingsControlRow>
-              </>
-            )}
+          {/* Nodes are the options of this form: open with them in place. */}
+          <ContentLoading loading={nodeOptions === null && nodesError === null} />
+          <div className="space-y-1.5">
+            <label htmlFor="add-domain-name" className="text-sm font-medium">
+              Domain
+            </label>
+            <Input
+              id="add-domain-name"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              placeholder="example.com"
+              autoFocus
+            />
           </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-domain-folder" className="text-sm font-medium">
+              Folder
+            </label>
+            <CreateFolderSelect
+              id="add-domain-folder"
+              choices={folderChoices}
+              value={folderId}
+              onChange={setFolderId}
+              loading={foldersLoading}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-domain-node" className="text-sm font-medium">
+              Ingress node
+            </label>
+            <Select
+              value={nginxNodeId}
+              onValueChange={setNginxNodeId}
+              disabled={nodesLoading || eligibleNodes.length === 0}
+            >
+              <SelectTrigger
+                id="add-domain-node"
+                aria-label="Ingress node"
+                aria-busy={nodesLoading}
+              >
+                <SelectValue
+                  placeholder={
+                    nodesLoading
+                      ? "Loading nodes…"
+                      : eligibleNodes.length > 0
+                        ? "Select a node"
+                        : "Unavailable"
+                  }
+                >
+                  {/* Always defined: the trigger shows the name only, never the option's address. */}
+                  {selectedNginxNode
+                    ? selectedNginxNode.displayName || selectedNginxNode.hostname
+                    : null}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {eligibleNodes.map((node) => (
+                  <SelectItem key={node.id} value={node.id}>
+                    {node.displayName || node.hostname} · {node.effectiveAddress}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {dnsProvider === "cloudflare"
+                ? "DNS records point at this node's public address."
+                : "The domain must already resolve to this node's public address."}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="add-domain-description" className="text-sm font-medium">
+              Description
+            </label>
+            <Input
+              id="add-domain-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional context for this domain"
+            />
+          </div>
+          {dnsProvider === "cloudflare" && (
+            <>
+              <div className="space-y-1.5">
+                <label htmlFor="add-domain-ttl" className="text-sm font-medium">
+                  TTL
+                </label>
+                <Input
+                  id="add-domain-ttl"
+                  type="number"
+                  min={1}
+                  value={ttl}
+                  onChange={(e) => setTtl(e.target.value)}
+                  placeholder="1"
+                />
+                <p className="text-xs text-muted-foreground">
+                  DNS record time to live in seconds; 1 lets Cloudflare choose.
+                </p>
+              </div>
+              <SwitchCard
+                label="Proxied"
+                description="Serve the domain through the Cloudflare proxy."
+                checked={proxied}
+                onCheckedChange={setProxied}
+              />
+            </>
+          )}
           <AnimatePresence initial={false}>
             {(preview || previewError || isPreviewLoading) && (
               <motion.div {...PREVIEW_ANIMATION} className="overflow-hidden">
-                <div className="border border-border">
-                  <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-                    <span className="text-sm font-medium">
-                      {dnsProvider === "cloudflare" ? "Cloudflare DNS preview" : "DNS check"}
-                    </span>
-                    {isPreviewLoading ? (
+                <PanelShell
+                  title={dnsProvider === "cloudflare" ? "Cloudflare DNS preview" : "DNS check"}
+                  actions={
+                    isPreviewLoading ? (
                       <LoaderCircle
                         className="h-4 w-4 animate-spin text-muted-foreground"
                         aria-label="Loading"
@@ -434,10 +415,12 @@ export function AddDomainDialog({
                       >
                         {preview.status}
                       </Badge>
-                    ) : null}
-                  </div>
+                    ) : null
+                  }
+                  bodyClassName="divide-y divide-border"
+                >
                   {preview?.dnsProvider === "cloudflare" ? (
-                    <div className="divide-y divide-border">
+                    <>
                       <DetailRow
                         label="Zone"
                         value={<span className="font-medium">{preview.zoneName}</span>}
@@ -471,9 +454,9 @@ export function AddDomainDialog({
                           }
                         />
                       )}
-                    </div>
+                    </>
                   ) : preview?.dnsProvider === "external" ? (
-                    <div className="divide-y divide-border">
+                    <>
                       <DetailRow
                         label="Expected"
                         value={
@@ -499,15 +482,13 @@ export function AddDomainDialog({
                           }
                         />
                       )}
-                    </div>
+                    </>
                   ) : (
-                    <div className="px-3 py-2 text-sm">
-                      <p className="text-muted-foreground">
-                        {previewError ?? "Loading DNS preview..."}
-                      </p>
-                    </div>
+                    <p className="px-4 py-3 text-sm text-muted-foreground">
+                      {previewError ?? "Loading DNS preview..."}
+                    </p>
                   )}
-                </div>
+                </PanelShell>
               </motion.div>
             )}
           </AnimatePresence>

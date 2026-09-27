@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
-import { ToggleField } from "@/components/common/ToggleField";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -286,12 +286,11 @@ export function SiemDestinationDialog({
             </AnimatePresence>
           </AnimatedHeight>
           <div className="pt-4">
-            <ToggleField
-              title="Delivery enabled"
+            <SwitchCard
+              label="Delivery enabled"
               description="Disabled destinations keep their queued events paused until re-enabled."
               checked={enabled}
-              onChange={setEnabled}
-              ariaLabel="Delivery enabled"
+              onCheckedChange={setEnabled}
             />
           </div>
           <p className="text-xs text-muted-foreground">

@@ -1,6 +1,6 @@
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { ToggleField } from "@/components/common/ToggleField";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Input } from "@/components/ui/input";
 import type { DockerBuildSourceRepository } from "@/types";
 
@@ -143,20 +143,18 @@ export function RepositorySourceFields({
           )}
         </div>
       )}
-      <ToggleField
-        title="Automatic builds"
+      <SwitchCard
+        label="Automatic builds"
         description="Build new commits detected by webhook or polling."
         checked={autoBuild}
-        onChange={onAutoBuildChange}
-        ariaLabel="Automatic builds"
+        onCheckedChange={onAutoBuildChange}
       />
       {!pages && (
-        <ToggleField
-          title="Automatic deployment"
+        <SwitchCard
+          label="Automatic deployment"
           description="Deploy accepted artifacts after successful builds."
           checked={autoDeploy}
-          onChange={onAutoDeployChange}
-          ariaLabel="Automatic deployment"
+          onCheckedChange={onAutoDeployChange}
         />
       )}
     </div>

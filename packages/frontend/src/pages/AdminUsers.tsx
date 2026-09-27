@@ -22,6 +22,7 @@ import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { useContentLoading } from "@/components/common/reveal-gate";
@@ -832,10 +833,13 @@ function AdminUsersContent({
         canResetMfa={hasScope("admin:system")}
         onOpenChange={setConfigureOpen}
         onUserUpdated={(updatedUser) => {
+          // Action responses can omit list-only fields (sign-in and invitation state); keep them.
           setUsers((current) =>
-            current.map((user) => (user.id === updatedUser.id ? updatedUser : user))
+            current.map((user) => (user.id === updatedUser.id ? { ...user, ...updatedUser } : user))
           );
-          setConfigureUser(updatedUser);
+          setConfigureUser((current) =>
+            current?.id === updatedUser.id ? { ...current, ...updatedUser } : updatedUser
+          );
           void reloadUsers();
         }}
         onUserDeleted={() => {
@@ -884,7 +888,7 @@ function AdminUsersContent({
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{user.name || user.email}</p>
                         <p className="truncate text-xs text-muted-foreground">
-                          {user.email} · deleted {new Date(user.deletedAt).toLocaleString()}
+                          {user.email} · deleted <RelativeTime value={user.deletedAt} />
                         </p>
                         {!user.originalGroupExists && (
                           <p className="mt-1 text-xs text-warning-foreground">

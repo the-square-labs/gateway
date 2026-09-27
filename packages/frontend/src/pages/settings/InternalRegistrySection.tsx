@@ -2,6 +2,7 @@ import { HardDrive, Save, ShieldCheck } from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
@@ -18,7 +19,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { DockerInternalRegistryState, Node, SSLCertificate } from "@/types";
@@ -266,8 +267,14 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
         help="Garbage collection permanently removes image layers and build artifacts that are no longer referenced. Its schedule and retention policy are configured in Housekeeping."
       >
         <span className="text-right text-sm text-muted-foreground">
-          {state?.lastGcAt ? `Last ${new Date(state.lastGcAt).toLocaleString()}` : "Not run yet"}
-          {state?.nextGcAt ? ` · Next ${new Date(state.nextGcAt).toLocaleString()}` : ""}
+          {state?.lastGcAt ? (
+            <>
+              Last <RelativeTime value={state.lastGcAt} />
+            </>
+          ) : (
+            "Not run yet"
+          )}
+          {state?.nextGcAt ? ` · Next ${formatDateTime(state.nextGcAt)}` : ""}
         </span>
       </SettingsControlRow>
       <SettingsControlRow

@@ -24,10 +24,11 @@ import { ManagedResourceFields } from "@/components/common/ManagedResourceFields
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
-import { ToggleField } from "@/components/common/ToggleField";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -178,16 +179,6 @@ function parseStorageTags(value: string) {
         .filter(Boolean)
     )
   );
-}
-
-function formatLastCheck(dateStr: string | null): string {
-  if (!dateStr) return "Never";
-  const date = new Date(dateStr);
-  const diff = Date.now() - date.getTime();
-  if (diff < 60_000) return "Just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return date.toLocaleDateString();
 }
 
 function formatHealthLabel(
@@ -478,12 +469,11 @@ export function ManagedObjectStorageCreateForm({
               </SettingsControlRow>
             )}
           </PanelShell>
-          <ToggleField
-            title="TLS"
+          <SwitchCard
+            label="TLS"
             description="Encrypt the S3 endpoint with a certificate from the Gateway Storage CA."
             checked={draft.tlsEnabled ?? false}
-            onChange={(enabled) => set("tlsEnabled", enabled)}
-            ariaLabel="TLS"
+            onCheckedChange={(enabled) => set("tlsEnabled", enabled)}
           />
         </motion.div>
       )}
@@ -825,7 +815,9 @@ function StorageContent() {
         width: "14%",
         align: "center",
         renderCell: (row) => (
-          <Badge variant="outline">{formatLastCheck(row.lastHealthCheckAt)}</Badge>
+          <Badge variant="outline">
+            <RelativeTime value={row.lastHealthCheckAt} fallback="Never" />
+          </Badge>
         ),
       },
       {
@@ -1098,7 +1090,7 @@ function StorageContent() {
                 </Button>
               </>
             ) : (
-              <div className="flex w-full justify-between">
+              <>
                 <Button
                   variant="outline"
                   onClick={() => setManagedCreateStep((step) => (step - 1) as 1 | 2 | 3)}
@@ -1122,7 +1114,7 @@ function StorageContent() {
                     Deploy storage
                   </Button>
                 )}
-              </div>
+              </>
             )}
           </DialogFooter>
         </DialogContent>

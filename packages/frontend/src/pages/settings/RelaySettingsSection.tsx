@@ -17,22 +17,15 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
-import { CopyValueField } from "@/components/common/CopyValueField";
+import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { NumericInput } from "@/components/ui/numeric-input";
 import {
   Select,
@@ -44,7 +37,7 @@ import {
 import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUpdateStore } from "@/stores/update";
@@ -768,7 +761,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
               placement stays stable for 30 seconds. Existing connections drain without
               interruption.
               {status.automaticRebalanceRetryAt &&
-                ` Failed attempts wait until ${new Date(status.automaticRebalanceRetryAt).toLocaleString()} before automatic retry. You can retry manually now.`}
+                ` Failed attempts wait until ${formatDateTime(status.automaticRebalanceRetryAt)} before automatic retry. You can retry manually now.`}
             </p>
           )}
         {status?.automaticRebalancePaused && (
@@ -825,9 +818,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             {
               id: "time",
               header: "Started",
-              render: (row) => (
-                <time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time>
-              ),
+              render: (row) => <RelativeTime value={row.createdAt} />,
             },
             {
               id: "workload",
@@ -1144,45 +1135,45 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         </SettingsControlRow>
       </PanelShell>
 
-      <Dialog open={reenrollment !== null} onOpenChange={(open) => !open && setReenrollment(null)}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Re-enroll {shownReenrollment?.displayName}</DialogTitle>
-            <DialogDescription>
+      <OneTimeSecretDialog
+        open={reenrollment !== null}
+        onOpenChange={(open) => !open && setReenrollment(null)}
+        className="sm:max-w-2xl"
+        title={`Re-enroll ${shownReenrollment?.displayName ?? "Relay"}`}
+        description={
+          shownReenrollment ? (
+            <>
               Run this on the relay host. The installer updates the relay supervisor and enrolls it
-              again with the token below; the relay then trusts Gateway's current policy key.
-            </DialogDescription>
-          </DialogHeader>
-          {shownReenrollment && (
-            <div className="space-y-4">
-              <p className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm font-medium text-warning-foreground">
-                The token is single-use, expires at{" "}
-                {new Date(shownReenrollment.enrollmentTokenExpiresAt).toLocaleString()}, and will
-                not be shown again.
-              </p>
-              {(["public", "local"] as const).map((target) => {
-                const gateway =
-                  shownReenrollment.gatewayEnrollmentTargets?.[target]?.gateway ??
-                  (target === "public" ? `${window.location.hostname}:9443` : null);
-                if (!gateway) return null;
-                const command = relayReenrollmentCommand(shownReenrollment, gateway);
-                return (
-                  <CopyCodeBlock
-                    key={target}
-                    label={shownReenrollment.gatewayEnrollmentTargets?.[target]?.label ?? target}
-                    value={command}
-                    copyValue={command.replace(/\s*\\\n\s*/g, " ")}
-                  />
-                );
-              })}
-              <CopyValueField label="Enrollment token" value={shownReenrollment.enrollmentToken} />
-            </div>
-          )}
-          <DialogFooter>
-            <Button onClick={() => setReenrollment(null)}>Done</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              again with the token below; the relay then trusts Gateway's current policy key. The
+              token is single-use and expires at{" "}
+              {formatDateTime(shownReenrollment.enrollmentTokenExpiresAt)}.
+            </>
+          ) : null
+        }
+        fields={
+          shownReenrollment
+            ? [{ label: "Enrollment token", value: shownReenrollment.enrollmentToken }]
+            : null
+        }
+      >
+        {shownReenrollment
+          ? (["public", "local"] as const).map((target) => {
+              const gateway =
+                shownReenrollment.gatewayEnrollmentTargets?.[target]?.gateway ??
+                (target === "public" ? `${window.location.hostname}:9443` : null);
+              if (!gateway) return null;
+              const command = relayReenrollmentCommand(shownReenrollment, gateway);
+              return (
+                <CopyCodeBlock
+                  key={target}
+                  label={shownReenrollment.gatewayEnrollmentTargets?.[target]?.label ?? target}
+                  value={command}
+                  copyValue={command.replace(/\s*\\\n\s*/g, " ")}
+                />
+              );
+            })
+          : null}
+      </OneTimeSecretDialog>
 
       <NodeEnrollmentDialog
         open={enrollOpen}

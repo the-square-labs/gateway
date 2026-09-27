@@ -5,7 +5,7 @@ import {
   FolderedResourceListCore,
   type FolderedResourceListViewProps,
 } from "@/components/common/resource-list/FolderedResourceListCore";
-import { useResourceFolderStore } from "@/stores/resource-folders";
+import { hasSavedFolderExpansion, useResourceFolderStore } from "@/stores/resource-folders";
 import type { ResourceFolderTreeNode, ResourceFolderType } from "@/types";
 
 export interface FolderedResourceListItem {
@@ -99,6 +99,7 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
         folders: foldersByType[resourceType] ?? EMPTY_FOLDERS,
         loading: loadingByType[resourceType],
         expandedFolderIds: expandedFolderIdsByType[resourceType] ?? EMPTY_EXPANDED,
+        expansionTouched: hasSavedFolderExpansion(resourceType),
       }}
       keys={keys}
     />

@@ -18,7 +18,7 @@ describe("shared folder interaction contract", () => {
   it("uses the persisted folder store for system folders as well as ordinary folders", () => {
     expect(adapter).toContain("toggleFolder: (id) => toggleFolder(resourceType, id)");
     expect(core).toContain(
-      "isFolderExpanded: (folder) => lockExpanded || expandedFolderIds.has(folder.id)"
+      "lockExpanded || expandedFolderIds.has(folder.id) || folder.id === defaultOpenId"
     );
     expect(source).not.toContain("collapsedSystemFolderIds");
   });

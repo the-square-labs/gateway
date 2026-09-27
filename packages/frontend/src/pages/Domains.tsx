@@ -20,6 +20,7 @@ import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { AddDomainDialog } from "@/components/domains/AddDomainDialog";
@@ -53,7 +54,6 @@ import {
 import { useRealtime } from "@/hooks/use-realtime";
 import { hasCreationDestination } from "@/lib/creation-folders";
 import { canCreateInFolder } from "@/lib/scope-utils";
-import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
@@ -393,7 +393,6 @@ export function Domains() {
     {
       id: "domain",
       label: "Domain",
-      width: "minmax(16rem, 1fr)",
       renderCell: (d) => (
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
@@ -414,13 +413,15 @@ export function Domains() {
     {
       id: "health",
       label: "Health",
-      width: "8rem",
+      align: "right",
+      width: "7rem",
       renderCell: (d) => <DomainHealthBadge domain={d} />,
     },
     {
       id: "ssl",
       label: "SSL",
-      width: "6rem",
+      align: "right",
+      width: "4.5rem",
       renderCell: (d) =>
         d.sslCertCount ? (
           <Badge variant="secondary">{d.sslCertCount}</Badge>
@@ -431,7 +432,8 @@ export function Domains() {
     {
       id: "proxyHosts",
       label: "Routes",
-      width: "8rem",
+      align: "right",
+      width: "5.5rem",
       renderCell: (d) =>
         d.proxyHostCount ? (
           <Badge variant="secondary">{d.proxyHostCount}</Badge>
@@ -442,9 +444,10 @@ export function Domains() {
     {
       id: "added",
       label: "Added",
-      width: "8rem",
+      align: "right",
+      width: "7.5rem",
       renderCell: (d) => (
-        <span className="text-sm text-muted-foreground">{formatRelativeDate(d.createdAt)}</span>
+        <RelativeTime value={d.createdAt} className="text-sm text-muted-foreground" />
       ),
     },
     {

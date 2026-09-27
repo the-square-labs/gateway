@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,20 +39,6 @@ import { AIConversationStatusIndicator } from "./AIConversationStatusIndicator";
 export interface SidebarPointerPosition {
   x: number;
   y: number;
-}
-
-function formatConversationDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const now = new Date();
-  if (date.toDateString() === now.toDateString()) {
-    const diffMs = Math.max(0, now.getTime() - date.getTime());
-    const diffMinutes = Math.floor(diffMs / 60000);
-    if (diffMinutes < 1) return "now";
-    if (diffMinutes < 60) return `${diffMinutes} min ago`;
-    return `${Math.floor(diffMinutes / 60)} h ago`;
-  }
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 export type FolderDialogState =
@@ -429,7 +416,7 @@ export function ConversationMenuItem({
               transition={{ duration: 0.12, ease: "easeOut" }}
               className="text-xs text-muted-foreground"
             >
-              {formatConversationDate(conversation.lastUserMessageAt ?? conversation.createdAt)}
+              <RelativeTime value={conversation.lastUserMessageAt ?? conversation.createdAt} />
             </motion.span>
           )}
         </AnimatePresence>

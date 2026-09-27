@@ -1,19 +1,19 @@
-import { Plus } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { FolderPlus, Plus } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
-import { ContentLoading } from "@/components/common/ContentLoading";
+import { IssuingCABadge } from "@/components/certificates/IssuingCABadge";
 import { EmptyState } from "@/components/common/EmptyState";
+import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
-import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import {
   Select,
   SelectContent,
@@ -21,9 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
-import { daysUntil, formatDate } from "@/lib/utils";
+import { cn, daysUntil, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useCertificatesStore } from "@/stores/certificates";
@@ -48,13 +47,14 @@ const typeOptions: { value: CertificateType | "all"; label: string }[] = [
 
 export function Certificates() {
   const navigate = useNavigate();
-  const { hasScopedAccess } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const canViewSystemCertificates = useAuthStore((s) => s.hasScope("admin:details:certificates"));
   const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
   const showSystemCertificates = canViewSystemCertificates && showSystemCertificatePreference;
   const { cas, fetchCAs } = useCAStore();
   const {
     certificates,
+    error,
     isLoading,
     isLoadingMore,
     filters,
@@ -65,44 +65,39 @@ export function Certificates() {
     setFilters,
     resetFilters,
   } = useCertificatesStore();
-  const initialLoading = useInitialLoading(isLoading);
   const [searchInput, setSearchInput] = useState(filters.search);
   const [issueDialogOpen, setIssueDialogOpen] = useState(false);
+  const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
   const openIssueDialog = () => {
     if (!requireLicenseFeature("internal-pki", "Internal PKI certificates")) return;
     setIssueDialogOpen(true);
   };
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  // The CA list names the issuing CA and feeds the CA filter and the issue dialog.
+  const canListCAs = hasScopedAccess("pki:ca:view") || hasScopedAccess("pki:cert:issue");
 
   useEffect(() => {
     void showSystemCertificates;
     fetchCertificates();
-    if (hasScopedAccess("pki:cert:issue")) fetchCAs();
-  }, [fetchCAs, fetchCertificates, hasScopedAccess, showSystemCertificates]);
+    if (canListCAs) fetchCAs();
+  }, [canListCAs, fetchCAs, fetchCertificates, showSystemCertificates]);
 
   useRealtime("cert.changed", () => {
     fetchCertificates();
   });
 
-  useRealtime("ca.changed", () => {
-    if (hasScopedAccess("pki:ca:view") || hasScopedAccess("pki:cert:issue")) {
-      fetchCAs();
-    }
+  // Deleting a folder moves its certificates to ungrouped.
+  useRealtime("cert.folder.changed", () => {
+    fetchCertificates();
   });
 
+  useRealtime("ca.changed", () => {
+    if (canListCAs) fetchCAs();
+  });
+
+  // Folders group the whole list, so every page loads.
   useEffect(() => {
-    const sentinel = sentinelRef.current;
-    if (!sentinel || !hasMore || isLoadingMore) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) void fetchNextPage();
-      },
-      { root: scrollRef.current, threshold: 0.1 }
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [fetchNextPage, hasMore, isLoadingMore]);
+    if (hasMore && !isLoading && !isLoadingMore && !error) void fetchNextPage();
+  }, [error, fetchNextPage, hasMore, isLoading, isLoadingMore]);
 
   const handleSearch = () => {
     setFilters({ search: searchInput });
@@ -113,15 +108,16 @@ export function Certificates() {
     filters.type !== "all" ||
     filters.caId !== "all" ||
     filters.search !== "";
-  const certificateColumns: DataTableColumn<Certificate>[] = [
+  const canManageFolders = hasScope("pki:cert:folders:manage");
+  const casById = useMemo(() => new Map((cas || []).map((ca) => [ca.id, ca])), [cas]);
+  const certificateColumns: ResourceListColumn<Certificate>[] = [
     {
-      key: "common-name",
-      header: "Common Name",
-      width: "minmax(220px, 1.4fr)",
-      render: (cert) => (
-        <div>
-          <div className="flex items-center gap-2">
-            <p className="text-sm font-medium">{cert.commonName}</p>
+      id: "common-name",
+      label: "Common Name",
+      renderCell: (cert) => (
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-sm font-medium">{cert.commonName}</p>
             {cert.isSystem && (
               <Badge variant="outline" size="inline">
                 System
@@ -135,52 +131,52 @@ export function Certificates() {
       ),
     },
     {
-      key: "type",
-      header: "Type",
-      width: "150px",
-      render: (cert) => <Badge variant="secondary">{cert.type}</Badge>,
+      id: "type",
+      label: "Type",
+      width: "9rem",
+      renderCell: (cert) => <Badge variant="secondary">{cert.type}</Badge>,
     },
     {
-      key: "issuing-ca",
-      header: "Issuing CA",
-      width: "minmax(180px, 1fr)",
-      truncate: true,
-      render: (cert) => (
-        <span className="text-sm text-muted-foreground">{cert.issuerDn || cert.caId}</span>
-      ),
+      id: "issuing-ca",
+      label: "Issuing CA",
+      width: "15rem",
+      renderCell: (cert) => <IssuingCABadge certificate={cert} ca={casById.get(cert.caId)} />,
     },
     {
-      key: "expires",
-      header: "Expires",
-      width: "140px",
-      render: (cert) => {
+      id: "status",
+      label: "Status",
+      width: "8rem",
+      renderCell: (cert) => <StatusBadge status={cert.status} />,
+    },
+    {
+      id: "expires",
+      label: "Expires",
+      width: "9rem",
+      align: "right",
+      cellClassName: "whitespace-nowrap",
+      renderCell: (cert) => {
         const expDays = daysUntil(cert.notAfter);
         return (
           <span
-            className={`text-sm ${
+            className={cn(
+              "text-sm",
               expDays <= 30 && expDays > 0
                 ? "text-warning-foreground"
                 : expDays <= 0
                   ? "text-destructive"
                   : "text-muted-foreground"
-            }`}
+            )}
           >
             {formatDate(cert.notAfter)}
           </span>
         );
       },
     },
-    {
-      key: "status",
-      header: "Status",
-      width: "120px",
-      render: (cert) => <StatusBadge status={cert.status} />,
-    },
   ];
 
   return (
     <PageTransition>
-      <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-6">
+      <div className="h-full overflow-y-auto p-6 space-y-3">
         <PageHeader
           className="shrink-0"
           leading={<LiteModeBackButton />}
@@ -189,8 +185,17 @@ export function Certificates() {
           description={`${total} certificates total`}
           actions={
             <ResponsiveHeaderActions
-              actions={
-                hasScopedAccess("pki:cert:issue")
+              actions={[
+                ...(canManageFolders && createFolderAction
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: createFolderAction,
+                      },
+                    ]
+                  : []),
+                ...(hasScopedAccess("pki:cert:issue")
                   ? [
                       {
                         label: "Issue Certificate",
@@ -198,9 +203,15 @@ export function Certificates() {
                         onClick: openIssueDialog,
                       },
                     ]
-                  : []
-              }
+                  : []),
+              ]}
             >
+              {canManageFolders && (
+                <Button variant="outline" onClick={() => createFolderAction?.()}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
               {hasScopedAccess("pki:cert:issue") && (
                 <Button onClick={openIssueDialog}>
                   <Plus className="h-4 w-4" />
@@ -211,112 +222,100 @@ export function Certificates() {
           }
         />
 
-        {/* Search and filters */}
-        <SearchFilterBar
-          className="shrink-0"
-          placeholder="Search by common name, serial number..."
-          search={searchInput}
-          onSearchChange={setSearchInput}
-          onSearchSubmit={handleSearch}
-          hasActiveFilters={hasActiveFilters}
-          onReset={() => {
-            resetFilters();
-            setSearchInput("");
-          }}
-          filters={
-            <>
-              <div className="w-40">
-                <Select
-                  value={filters.status}
-                  onValueChange={(v) => setFilters({ status: v as CertificateStatus | "all" })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {statusOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="w-40">
-                <Select
-                  value={filters.type}
-                  onValueChange={(v) => setFilters({ type: v as CertificateType | "all" })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {typeOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="w-48">
-                <Select value={filters.caId} onValueChange={(v) => setFilters({ caId: v })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All CAs</SelectItem>
-                    {(cas || []).map((ca) => (
-                      <SelectItem key={ca.id} value={ca.id}>
-                        {ca.commonName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </>
-          }
-        />
-
-        {/* Table */}
-        <ContentLoading loading={initialLoading && (certificates || []).length === 0} />
-        {initialLoading && (certificates || []).length === 0 ? null : (certificates || []).length >
-          0 ? (
-          <div className="min-h-0 shrink">
-            <DataTable
-              columns={certificateColumns}
-              data={certificates}
-              keyFn={(cert) => cert.id}
-              loading={isLoading}
-              onRowClick={(cert) => navigate(`/certificates/${cert.id}`)}
-              scrollRef={scrollRef}
-              horizontalScroll
-              minWidth="860px"
-              footer={
-                hasMore ? (
-                  <div
-                    ref={sentinelRef}
-                    className="flex items-center justify-center py-3 text-xs text-muted-foreground"
-                  >
-                    {isLoadingMore ? "Loading more certificates..." : "Scroll to load more"}
-                  </div>
-                ) : undefined
-              }
-            />
-          </div>
-        ) : (
-          <EmptyState
-            message="No certificates."
-            {...(hasScopedAccess("pki:cert:issue")
-              ? { actionLabel: "Issue one", onAction: openIssueDialog }
-              : {})}
-            hasActiveFilters={hasActiveFilters}
-            onReset={() => {
+        <FolderedResourceList<Certificate>
+          resourceType="pki-certificate"
+          realtimeChannel="cert.folder.changed"
+          resources={certificates || []}
+          columns={certificateColumns}
+          search={{
+            placeholder: "Search by common name, serial number...",
+            search: searchInput,
+            onSearchChange: setSearchInput,
+            onSearchSubmit: handleSearch,
+            hasActiveFilters,
+            onReset: () => {
               resetFilters();
               setSearchInput("");
-            }}
-          />
-        )}
+            },
+            filters: (
+              <>
+                <div className="w-40">
+                  <Select
+                    value={filters.status}
+                    onValueChange={(v) => setFilters({ status: v as CertificateStatus | "all" })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statusOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-40">
+                  <Select
+                    value={filters.type}
+                    onValueChange={(v) => setFilters({ type: v as CertificateType | "all" })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {typeOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-48">
+                  <Select value={filters.caId} onValueChange={(v) => setFilters({ caId: v })}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All CAs</SelectItem>
+                      {(cas || []).map((ca) => (
+                        <SelectItem key={ca.id} value={ca.id}>
+                          {ca.commonName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            ),
+          }}
+          loading={isLoading || isLoadingMore}
+          loadingLabel="Loading certificates..."
+          emptyState={
+            <EmptyState
+              message="No certificates."
+              {...(hasScopedAccess("pki:cert:issue")
+                ? { actionLabel: "Issue one", onAction: openIssueDialog }
+                : {})}
+              hasActiveFilters={hasActiveFilters}
+              onReset={() => {
+                resetFilters();
+                setSearchInput("");
+              }}
+            />
+          }
+          minWidth={860}
+          canManageFolders={canManageFolders}
+          canReorganizeItem={(cert) =>
+            canManageFolders && !cert.isSystem && hasScope(`pki:cert:issue:${cert.caId}`)
+          }
+          getResourceLabel={(cert) => cert.commonName}
+          onItemClick={(cert) => navigate(`/certificates/${cert.id}`)}
+          onRefresh={fetchCertificates}
+          onCreateFolderRef={(fn) => setCreateFolderAction(() => fn)}
+        />
 
         <CertificateIssueDialog
           open={issueDialogOpen}

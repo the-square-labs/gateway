@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
@@ -405,7 +406,7 @@ export function NodeDetailsTab({
               {hosting.provider === "proxmox" && (
                 <DetailRow label="Ownership" value={hosting.origin} />
               )}
-              <DetailRow label="Updated" value={new Date(hosting.observedAt).toLocaleString()} />
+              <DetailRow label="Updated" value={<RelativeTime value={hosting.observedAt} />} />
               {hosting.price && (
                 <DetailRow
                   label={hosting.price.estimated ? "Estimated cost" : "Cost"}
@@ -636,10 +637,10 @@ export function NodeDetailsTab({
               }
             />
           )}
-          <DetailRow label="Created" value={new Date(node.createdAt).toLocaleString()} />
+          <DetailRow label="Created" value={<RelativeTime value={node.createdAt} />} />
           <DetailRow
             label="Last Seen"
-            value={node.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "Never"}
+            value={<RelativeTime value={node.lastSeenAt} fallback="Never" />}
           />
         </PanelShell>
       </div>

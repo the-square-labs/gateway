@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { AIToolAccessModal } from "@/components/ai/AIToolAccessModal";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
@@ -95,19 +96,6 @@ const WEB_SEARCH_PROVIDER_LABELS: Record<string, string> = {
   serper: "Serper",
   tavily: "Tavily",
 };
-
-function formatRelativeTime(value: string | null | undefined) {
-  if (!value) return "-";
-  const diffMs = Date.now() - new Date(value).getTime();
-  if (!Number.isFinite(diffMs)) return "-";
-  const diffSeconds = Math.max(0, Math.floor(diffMs / 1000));
-  if (diffSeconds < 60) return `${diffSeconds}s ago`;
-  const diffMinutes = Math.floor(diffSeconds / 60);
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return new Date(value).toLocaleString();
-}
 
 function formatExpires(value: string | null | undefined) {
   if (!value) return "-";
@@ -238,7 +226,7 @@ function SandboxJobsPanel() {
       header: "Age",
       className: "w-28",
       cellClassName: "w-28 whitespace-nowrap",
-      render: (job) => formatRelativeTime(job.createdAt),
+      render: (job) => <RelativeTime value={job.createdAt} />,
     },
     {
       id: "expires",
@@ -340,13 +328,6 @@ function SandboxOutputBody({
       </pre>
     </div>
   );
-}
-
-function formatDateTime(value: string | null | undefined) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "-";
-  return date.toLocaleString();
 }
 
 function openArtifactPreview(artifact: AISandboxArtifact) {
@@ -523,7 +504,7 @@ function SandboxArtifactsPanel() {
       header: "Created",
       className: "w-44",
       cellClassName: "w-44 whitespace-nowrap",
-      render: (artifact) => formatDateTime(artifact.createdAt),
+      render: (artifact) => <RelativeTime value={artifact.createdAt} />,
     },
     {
       id: "actions",
@@ -618,7 +599,7 @@ function SandboxArtifactsPanel() {
       key: "created",
       header: "Created",
       width: "11rem",
-      render: (artifact) => formatDateTime(artifact.createdAt),
+      render: (artifact) => <RelativeTime value={artifact.createdAt} />,
     },
     {
       key: "actions",

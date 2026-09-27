@@ -27,8 +27,10 @@ export function FinalizeSetupWizardDialog({
   stepKey,
   children,
   footer,
-  footerLeft,
+  footerStatus,
   onClose,
+  onCancel,
+  cancelDisabled = false,
   onBack,
   backDisabled = false,
   onSkip,
@@ -40,16 +42,20 @@ export function FinalizeSetupWizardDialog({
   stepKey: string;
   children: ReactNode;
   footer?: ReactNode;
-  footerLeft?: ReactNode;
+  /** A short status shown in the footer ahead of its buttons. */
+  footerStatus?: ReactNode;
   /** Optional explicit exit for standalone setup flows. */
   onClose?: () => void;
+  /** Adds a Cancel button to the footer. */
+  onCancel?: () => void;
+  cancelDisabled?: boolean;
   onBack?: () => void;
   backDisabled?: boolean;
   onSkip?: () => void | Promise<void>;
   skipDisabled?: boolean;
 }) {
   const [skipping, setSkipping] = useState(false);
-  const hasFooter = Boolean(footerLeft || footer || onBack || onSkip);
+  const hasFooter = Boolean(footerStatus || footer || onCancel || onBack || onSkip);
 
   useEffect(() => {
     if (!open) {
@@ -103,31 +109,31 @@ export function FinalizeSetupWizardDialog({
           </AnimatePresence>
         </AnimatedHeight>
         {hasFooter && (
-          <DialogFooter
-            data-setup-footer=""
-            className={footerLeft ? "sm:justify-between" : undefined}
-          >
-            {footerLeft && <div className="mr-auto flex items-center">{footerLeft}</div>}
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:space-x-2 sm:gap-0">
-              {onBack && (
-                <Button variant="outline" onClick={onBack} disabled={backDisabled}>
-                  <ArrowLeft />
-                  Back
-                </Button>
-              )}
-              {onSkip && (
-                <Button
-                  variant="outline"
-                  onClick={() => void skip()}
-                  pending={skipping}
-                  disabled={skipDisabled}
-                >
-                  <MoreHorizontal />
-                  Skip
-                </Button>
-              )}
-              {footer}
-            </div>
+          <DialogFooter data-setup-footer="">
+            {footerStatus && <div className="flex items-center">{footerStatus}</div>}
+            {onSkip && (
+              <Button
+                variant="outline"
+                onClick={() => void skip()}
+                pending={skipping}
+                disabled={skipDisabled}
+              >
+                <MoreHorizontal />
+                Skip
+              </Button>
+            )}
+            {onCancel && (
+              <Button variant="outline" onClick={onCancel} disabled={cancelDisabled}>
+                Cancel
+              </Button>
+            )}
+            {onBack && (
+              <Button variant="outline" onClick={onBack} disabled={backDisabled}>
+                <ArrowLeft />
+                Back
+              </Button>
+            )}
+            {footer}
           </DialogFooter>
         )}
       </DialogContent>

@@ -3,15 +3,16 @@ import { useCallback, useEffect, useState } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { AvailabilitySummary } from "@/components/docker/availability/AvailabilitySummary";
+import { ImageReference } from "@/components/docker/ImageReference";
 import { Badge } from "@/components/ui/badge";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
-import { formatTimeOrDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { DockerAvailabilityPolicy } from "@/types";
-import { copyToClipboard, formatDate, type InspectData, STATUS_BADGE } from "./helpers";
+import { copyToClipboard, type InspectData, STATUS_BADGE } from "./helpers";
 import { type ContainerDatabaseLink, LinkRuntimeTab } from "./LinkRuntimeTab";
 
 export function OverviewTab({
@@ -179,11 +180,13 @@ export function OverviewTab({
                   </button>
                 </span>
               ) : (
-                <span className="font-mono">{image}</span>
+                <ImageReference
+                  value={imageReferenceOverride || resolveContainerImageReference(data)}
+                />
               )
             }
           />
-          <DetailRow label="Created" value={created ? formatDate(created) : "-"} />
+          <DetailRow label="Created" value={<RelativeTime value={created} />} />
           <DetailRow label="Restart Policy" value={restartPolicy} />
           {platform && <DetailRow label="Platform" value={platform} />}
         </PanelShell>
@@ -319,9 +322,7 @@ export function OverviewTab({
                   {task.status}
                 </Badge>
                 {task.createdAt && (
-                  <span className="text-sm text-muted-foreground">
-                    {formatTimeOrDateTime(task.createdAt)}
-                  </span>
+                  <RelativeTime value={task.createdAt} className="text-sm text-muted-foreground" />
                 )}
               </div>
             </div>

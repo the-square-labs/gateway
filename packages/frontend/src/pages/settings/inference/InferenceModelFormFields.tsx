@@ -304,7 +304,7 @@ export function ModelAccessFields({
       <AnimatePresence initial={false} mode="popLayout">
         {mode === "selected" && (
           <motion.div {...REVEAL_ANIMATION} className="overflow-hidden">
-            <div className="grid grid-cols-2 border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="grid grid-cols-2 border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground">
               <div className="px-3 py-2">Subject type</div>
               <div className="border-l border-border px-3 py-2">User or group</div>
             </div>

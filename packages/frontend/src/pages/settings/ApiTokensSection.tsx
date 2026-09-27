@@ -3,14 +3,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
-import { OneTimeTokenDialog } from "@/components/common/OneTimeTokenDialog";
+import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { ScopeList } from "@/components/common/ScopeList";
-import {
-  ScopeSearchFilter,
-  type ScopeSelectionFilter,
-} from "@/components/common/ScopeSearchFilter";
+import { ScopePicker } from "@/components/common/ScopePicker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -29,7 +26,6 @@ import {
   parseScopesForForm,
   requiresResourceSelection,
 } from "@/lib/scope-utils";
-import { formatDate, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { apiTokenChangedChannel } from "@/services/user-resource-events";
 import { useCAStore } from "@/stores/ca";
@@ -73,8 +69,6 @@ export function ApiTokensSection({
   const [isCreating, setIsCreating] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
-  const [tokenScopeSearch, setTokenScopeSearch] = useState("");
-  const [tokenScopeFilter, setTokenScopeFilter] = useState<ScopeSelectionFilter>("all");
   const [editingToken, setEditingToken] = useState<ApiToken | null>(null);
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
   const userScopes = useMemo(() => user?.scopes ?? [], [user?.scopes]);
@@ -127,8 +121,6 @@ export function ApiTokensSection({
     setResourceScopes(parsed.resources);
     setInitialResourceLimitedScopes(Object.keys(parsed.resources));
     setCreatedSecret(null);
-    setTokenScopeSearch("");
-    setTokenScopeFilter("all");
     setCreateDialogOpen(true);
   };
 
@@ -175,8 +167,6 @@ export function ApiTokensSection({
     setResourceScopes({});
     setInitialResourceLimitedScopes([]);
     setCreatedSecret(null);
-    setTokenScopeSearch("");
-    setTokenScopeFilter("all");
     setCreateDialogOpen(true);
   };
 
@@ -271,10 +261,16 @@ export function ApiTokensSection({
                         <p className="text-sm font-medium">{token.name}</p>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {token.tokenPrefix}... &middot; Created {formatDate(token.createdAt)}
-                        {token.lastUsedAt
-                          ? ` · Last used ${formatRelativeDate(token.lastUsedAt)}`
-                          : " · Never used"}
+                        {token.tokenPrefix}... &middot; Created{" "}
+                        <RelativeTime value={token.createdAt} />
+                        {token.lastUsedAt ? (
+                          <>
+                            {" · Last used "}
+                            <RelativeTime value={token.lastUsedAt} />
+                          </>
+                        ) : (
+                          " · Never used"
+                        )}
                         {` · Scopes: ${(token.scopes || []).length}`}
                       </p>
                     </div>
@@ -334,50 +330,37 @@ export function ApiTokensSection({
               />
             </div>
 
-            <div className="border border-border">
-              <ScopeSearchFilter
-                search={tokenScopeSearch}
-                onSearchChange={setTokenScopeSearch}
-                filter={tokenScopeFilter}
-                onFilterChange={setTokenScopeFilter}
-                placeholder="Search scopes..."
-              />
-              <ScopeList
-                scopes={API_TOKEN_SCOPES.filter(
-                  (scope) =>
-                    selectedScopes.includes(scope.value) ||
-                    hasSelectableScopeBase(userScopes, scope.value)
-                )}
-                search={tokenScopeSearch}
-                selectionFilter={tokenScopeFilter}
-                selected={selectedScopes}
-                onToggle={toggleScope}
-                resources={resourceScopes}
-                onToggleResource={(scope, caId) => {
-                  setResourceScopes((prev) => {
-                    const current = prev[scope] || [];
-                    const has = current.includes(caId);
-                    return {
-                      ...prev,
-                      [scope]: has ? current.filter((id) => id !== caId) : [...current, caId],
-                    };
-                  });
-                }}
-                cas={cas}
-                nodes={nodesList}
-                proxyHosts={proxyHostsList}
-                databases={databasesList}
-                loggingSchemas={loggingSchemasList}
-                restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-                allowedResourceIds={allowedResourceIdsByScope}
-                viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
-              />
-              <div className="border-t border-border px-3 py-2">
-                <p className="text-xs text-muted-foreground">
-                  {finalTokenScopes.length} scope{finalTokenScopes.length !== 1 ? "s" : ""}
-                </p>
-              </div>
-            </div>
+            <ScopePicker
+              header={<span className="text-sm font-medium">Scopes</span>}
+              scopes={API_TOKEN_SCOPES.filter(
+                (scope) =>
+                  selectedScopes.includes(scope.value) ||
+                  hasSelectableScopeBase(userScopes, scope.value)
+              )}
+              selected={selectedScopes}
+              onToggle={toggleScope}
+              resources={resourceScopes}
+              onResourcesChange={setResourceScopes}
+              onToggleResource={(scope, caId) => {
+                setResourceScopes((prev) => {
+                  const current = prev[scope] || [];
+                  const has = current.includes(caId);
+                  return {
+                    ...prev,
+                    [scope]: has ? current.filter((id) => id !== caId) : [...current, caId],
+                  };
+                });
+              }}
+              cas={cas}
+              nodes={nodesList}
+              proxyHosts={proxyHostsList}
+              databases={databasesList}
+              loggingSchemas={loggingSchemasList}
+              restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
+              allowedResourceIds={allowedResourceIdsByScope}
+              viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
+              footer={`${finalTokenScopes.length} scope${finalTokenScopes.length !== 1 ? "s" : ""}`}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
@@ -404,12 +387,11 @@ export function ApiTokensSection({
         </DialogContent>
       </Dialog>
 
-      <OneTimeTokenDialog
+      <OneTimeSecretDialog
         open={createdSecretDialogOpen}
         onOpenChange={setCreatedSecretDialogOpen}
         title="API Token Created"
-        token={createdSecret}
-        tokenLabel="API token"
+        fields={createdSecret ? [{ label: "API token", value: createdSecret }] : null}
         onClosed={() => setCreatedSecret(null)}
       />
     </>

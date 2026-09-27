@@ -140,7 +140,7 @@ export function ModelReasoningFields({
       </SettingsControlRow>
       {rows.length ? (
         <>
-          <div className="grid grid-cols-[2.25rem_1fr_1fr] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          <div className="grid grid-cols-[2.25rem_1fr_1fr] border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground">
             <div>
               <span className="sr-only">Order</span>
             </div>

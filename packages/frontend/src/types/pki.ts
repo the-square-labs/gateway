@@ -31,6 +31,10 @@ export interface CA {
   revocationReason: string | null;
   certCount: number;
   isSystem?: boolean;
+  /** Folder of the CA's hierarchy: an intermediate reports the folder of its root CA. */
+  folderId?: string | null;
+  /** Order among sibling CAs (roots within a folder, intermediates under their parent). */
+  sortOrder?: number;
 }
 
 // Certificate types
@@ -68,6 +72,8 @@ export interface Certificate {
   revocationReason: string | null;
   issuedById: string;
   isSystem?: boolean;
+  folderId?: string | null;
+  sortOrder?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -111,6 +117,8 @@ export interface Template {
   certificatePolicies: CertificatePolicy[];
   customExtensions: CustomExtension[];
   createdById: string | null;
+  folderId?: string | null;
+  sortOrder?: number;
   createdAt: string;
   updatedAt: string;
 }

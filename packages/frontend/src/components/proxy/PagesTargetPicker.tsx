@@ -1,7 +1,8 @@
+import { useId } from "react";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import type { PageProject, PageTag } from "@/types";
+import { UpstreamField, type UpstreamFieldLayout } from "./upstream-field";
 
 export interface PagesTargetPickerProps {
   projectId: string;
@@ -20,6 +21,8 @@ export interface PagesTargetPickerProps {
     variant: BadgeProps["variant"];
   };
   availabilityDescription?: string;
+  /** Settings rows (default) or stacked form fields for form dialogs. */
+  layout?: UpstreamFieldLayout;
 }
 
 /**
@@ -42,7 +45,9 @@ export function PagesTargetPicker({
   selectedTagLabel,
   availability,
   availabilityDescription,
+  layout = "rows",
 }: PagesTargetPickerProps) {
+  const fieldId = useId();
   const showProjectFallback =
     Boolean(projectId) && !projects.some((project) => project.id === projectId);
   const showTagFallback = Boolean(tagId) && !tags.some((tag) => tag.id === tagId);
@@ -83,11 +88,14 @@ export function PagesTargetPicker({
 
   return (
     <>
-      <SettingsControlRow
+      <UpstreamField
+        layout={layout}
+        id={`${fieldId}-project`}
         title="Page Project"
         description="Project that owns the Tag served by this route."
       >
         <Combobox
+          id={`${fieldId}-project`}
           value={projectId}
           options={projectOptions}
           onValueChange={onProjectChange}
@@ -97,12 +105,15 @@ export function PagesTargetPicker({
           ariaLabel="Page Project"
           disabled={projectsLoading || disabled}
         />
-      </SettingsControlRow>
-      <SettingsControlRow
+      </UpstreamField>
+      <UpstreamField
+        layout={layout}
+        id={`${fieldId}-tag`}
         title="Tag"
         description="Mutable Tag whose ready Deployment is published on this route."
       >
         <Combobox
+          id={`${fieldId}-tag`}
           value={tagId}
           options={tagOptions}
           onValueChange={onTagChange}
@@ -112,11 +123,13 @@ export function PagesTargetPicker({
           ariaLabel="Tag"
           disabled={!projectId || tagsLoading || disabled}
         />
-      </SettingsControlRow>
+      </UpstreamField>
       {availability ? (
-        <SettingsControlRow title="Availability" description={availabilityDescription}>
-          <Badge variant={availability.variant}>{availability.label}</Badge>
-        </SettingsControlRow>
+        <UpstreamField layout={layout} title="Availability" description={availabilityDescription}>
+          <div>
+            <Badge variant={availability.variant}>{availability.label}</Badge>
+          </div>
+        </UpstreamField>
       ) : null}
     </>
   );

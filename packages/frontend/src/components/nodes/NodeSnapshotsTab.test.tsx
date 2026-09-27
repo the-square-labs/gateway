@@ -577,18 +577,9 @@ it("uses the Docker deployment toggle block and sends RAM only when selected for
   render(<NodeSnapshotsTab resourceId="vm" />);
   await screen.findByText("before");
   await userEvent.click(screen.getByRole("button", { name: "Create snapshot" }));
-  const toggle = screen.getByRole("button", { name: "Include RAM" });
-  expect(toggle).toHaveAttribute("aria-pressed", "false");
-  expect(toggle.parentElement).toHaveClass(
-    "flex",
-    "items-center",
-    "justify-between",
-    "gap-4",
-    "border",
-    "border-border",
-    "bg-muted/30",
-    "p-3"
-  );
+  const toggle = screen.getByRole("checkbox", { name: "Include RAM" });
+  expect(toggle).not.toBeChecked();
+  expect(toggle.closest("label")).toHaveClass("border", "border-border", "p-3");
   await userEvent.click(toggle);
   await userEvent.type(screen.getByPlaceholderText("Snapshot name"), "With memory{Enter}");
   await waitFor(() =>
@@ -610,7 +601,7 @@ it.each([
   render(<NodeSnapshotsTab resourceId="vm" />);
   await screen.findByText("before");
   await userEvent.click(screen.getByRole("button", { name: "Create snapshot" }));
-  expect(screen.queryByRole("button", { name: "Include RAM" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "Include RAM" })).not.toBeInTheDocument();
   await userEvent.type(screen.getByPlaceholderText("Snapshot name"), "Disk only{Enter}");
   await waitFor(() => expect(action).toHaveBeenCalled());
   expect(action.mock.lastCall?.[1]).not.toHaveProperty("includeRam");
@@ -622,7 +613,7 @@ it("resets RAM on reopening and disables selecting it for a stopped Proxmox VM",
   render(<NodeSnapshotsTab resourceId="vm" />);
   await screen.findByText("before");
   await userEvent.click(screen.getByRole("button", { name: "Create snapshot" }));
-  await userEvent.click(screen.getByRole("button", { name: "Include RAM" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "Include RAM" }));
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
   get.mockResolvedValue({ ...view, provider: "proxmox", powerState: "stopped" });
   await userEvent.click(screen.getByRole("button", { name: "Refresh snapshots" }));
@@ -630,11 +621,8 @@ it("resets RAM on reopening and disables selecting it for a stopped Proxmox VM",
     expect(screen.getByRole("button", { name: "Create snapshot" })).toBeEnabled()
   );
   await userEvent.click(screen.getByRole("button", { name: "Create snapshot" }));
-  expect(screen.getByRole("button", { name: "Include RAM" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Include RAM" })).toHaveAttribute(
-    "aria-pressed",
-    "false"
-  );
+  expect(screen.getByRole("checkbox", { name: "Include RAM" })).toBeDisabled();
+  expect(screen.getByRole("checkbox", { name: "Include RAM" })).not.toBeChecked();
 });
 it("does not mutate after destructive confirmation is declined", async () => {
   vi.spyOn(api, "getHostingSnapshots").mockResolvedValue(view);

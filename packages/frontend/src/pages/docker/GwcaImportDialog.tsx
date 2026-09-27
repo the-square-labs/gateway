@@ -547,7 +547,7 @@ export function GwcaImportDialog({
                       title="Network remapping"
                       description="Compatible networks are reused; portable missing networks are created automatically."
                     >
-                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         <div className="px-3 py-2">Archive network</div>
                         <div className="border-l border-border px-3 py-2">Target</div>
                       </div>
@@ -605,7 +605,7 @@ export function GwcaImportDialog({
                       title="Volume remapping"
                       description="Volumes that cannot be recreated directly must use a new or existing Gateway-managed local volume."
                     >
-                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         <div className="px-3 py-2">Archive volume</div>
                         <div className="border-l border-border px-3 py-2">Target volume</div>
                       </div>
@@ -657,7 +657,7 @@ export function GwcaImportDialog({
                       title="Port remapping"
                       description="These host ports are occupied. Use 0 to let Docker assign a free port."
                     >
-                      <div className="grid grid-cols-[minmax(0,1fr)_140px] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      <div className="grid grid-cols-[minmax(0,1fr)_140px] border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         <div className="px-3 py-2">Archive binding</div>
                         <div className="border-l border-border px-3 py-2">Target port</div>
                       </div>

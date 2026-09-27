@@ -1,3 +1,5 @@
+import type { CodeEditorLanguage } from "@/components/ui/code-editor";
+
 export function imageMimeFromExtension(name: string) {
   const extension = name.split(".").pop()?.toLowerCase();
   switch (extension) {
@@ -76,4 +78,43 @@ export function imageMimeForFile(name: string, bytes: Uint8Array) {
 
 export function isImageFileName(name: string) {
   return imageMimeFromExtension(name) !== null;
+}
+
+const EDITOR_LANGUAGE_BY_EXTENSION = new Map<string, CodeEditorLanguage>([
+  ["conf", "nginx"],
+  ["nginx", "nginx"],
+  ["env", "env"],
+  ["json", "json"],
+  ["sql", "sql"],
+  ["xml", "xml"],
+  ["yaml", "yaml"],
+  ["yml", "yaml"],
+]);
+
+/**
+ * The code editor language for a file, from its extension and then its media type. Files
+ * without an extension inside an `nginx` directory are nginx config; the rest, Markdown
+ * included, stay plain text.
+ */
+export function codeEditorLanguageForFile(
+  path: string,
+  mediaType?: string | null
+): CodeEditorLanguage {
+  const segments = path.toLowerCase().split("/");
+  const name = segments.pop() ?? "";
+  if (/^\.env(\..+)?$/.test(name)) return "env";
+  const dot = name.lastIndexOf(".");
+  if (dot > 0) {
+    const language = EDITOR_LANGUAGE_BY_EXTENSION.get(name.slice(dot + 1));
+    if (language) return language;
+  } else if (segments.includes("nginx")) {
+    return "nginx";
+  }
+
+  const type = mediaType?.split(";")[0].trim().toLowerCase() ?? "";
+  if (type === "application/json" || type.endsWith("+json")) return "json";
+  if (/^(application|text)\/(x-)?yaml$/.test(type)) return "yaml";
+  if (type === "application/xml" || type === "text/xml" || type.endsWith("+xml")) return "xml";
+  if (type === "application/sql") return "sql";
+  return "plain";
 }

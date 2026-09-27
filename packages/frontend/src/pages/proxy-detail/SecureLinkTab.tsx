@@ -14,10 +14,11 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Notice } from "@/components/common/Notice";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
-import { formatBytes, formatDateTime } from "@/lib/utils";
+import { formatBytes, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { ProxyAdditionalSecureLinkRuntime, ProxySecureLinkStatus } from "@/types";
 
@@ -256,9 +257,9 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
 
   if (!link && loadError) {
     return (
-      <div className="border border-destructive/50 bg-card p-4 text-sm text-destructive">
+      <Notice tone="destructive" role="alert" title="Secure link status could not be loaded">
         {loadError}
-      </div>
+      </Notice>
     );
   }
 
@@ -324,9 +325,15 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
 
       {link.telemetryStale === true && (
         <Notice tone="warning" role="status" title="Telemetry is stale">
-          <p className="text-sm text-muted-foreground">
+          <p>
             Showing the last complete sample
-            {link.telemetrySampledAt ? ` from ${formatDateTime(link.telemetrySampledAt)}` : ""}.
+            {link.telemetrySampledAt && (
+              <>
+                {" from "}
+                <RelativeTime value={link.telemetrySampledAt} />
+              </>
+            )}
+            .
           </p>
         </Notice>
       )}
@@ -515,7 +522,9 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
             />
             <StatCard
               label="Last request"
-              value={traffic.lastRequestAt ? formatDateTime(traffic.lastRequestAt) : "No traffic"}
+              value={
+                traffic.lastRequestAt ? formatRelativeDate(traffic.lastRequestAt) : "No traffic"
+              }
               icon={Clock3}
               color="#64748b"
               valueClassName="text-base"

@@ -1,12 +1,11 @@
 import { Link2, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox } from "@/components/common/Combobox";
 import { confirmAction } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import {
   DEFAULT_PROXY_UPSTREAM,
   isProxyUpstreamValid,
@@ -32,6 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { DockerContainer, ManagedObjectStorage, ProxyAdditionalSecureLink } from "@/types";
 
@@ -58,6 +58,7 @@ export function AdditionalSecureLinkBindings({
   const [storagesLoading, setStoragesLoading] = useState(false);
   const [storagesError, setStoragesError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const fieldId = useId();
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const hiddenBindingIds = useRef(new Set<string>());
   const requestGeneration = useRef(0);
@@ -126,6 +127,7 @@ export function AdditionalSecureLinkBindings({
   }, [adding, storageTarget]);
 
   const validName = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name);
+  const nameInvalid = name.length > 0 && !validName;
   const canProvision =
     validName &&
     (storageTarget
@@ -279,7 +281,7 @@ export function AdditionalSecureLinkBindings({
         <div className="overflow-x-auto">
           <div className="min-w-[900px]">
             <div
-              className="grid border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground"
+              className="grid border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground"
               style={{ gridTemplateColumns: bindingGridTemplate }}
             >
               <div className="px-3 py-2">Name</div>
@@ -411,21 +413,41 @@ export function AdditionalSecureLinkBindings({
               Advanced config.
             </DialogDescription>
           </DialogHeader>
-          <div className="border border-border">
-            <SettingsControlRow
-              title="Name"
-              description="Variable-safe binding name"
-              help="Becomes the identifier used in Advanced config, for example additionalSecureLinks.api. Names must start with a letter and contain only letters, numbers, and underscores."
-            >
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor={`${fieldId}-name`} className="block text-sm font-medium">
+                Name
+              </label>
               <Input
+                id={`${fieldId}-name`}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="api"
-                aria-invalid={name.length > 0 && !validName}
+                aria-invalid={nameInvalid}
+                aria-describedby={`${fieldId}-name-help`}
                 disabled={pending}
               />
-            </SettingsControlRow>
-            <SettingsControlRow title="Target" description="Choose how requests reach the upstream">
+              <p
+                id={`${fieldId}-name-help`}
+                className={cn(
+                  "text-xs",
+                  nameInvalid ? "text-destructive" : "text-muted-foreground"
+                )}
+              >
+                {nameInvalid ? (
+                  "Start with a letter; use up to 64 letters, numbers and underscores."
+                ) : (
+                  <>
+                    Referenced in Advanced config as{" "}
+                    <code className="font-mono">{`{{additionalSecureLinks.${name || "name"}}}`}</code>
+                  </>
+                )}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor={`${fieldId}-target`} className="block text-sm font-medium">
+                Target
+              </label>
               <Select
                 value={storageTarget ? "managed_storage" : selection.kind}
                 onValueChange={(kind) => {
@@ -438,7 +460,7 @@ export function AdditionalSecureLinkBindings({
                 }}
                 disabled={pending}
               >
-                <SelectTrigger aria-label="Target">
+                <SelectTrigger id={`${fieldId}-target`}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -447,16 +469,14 @@ export function AdditionalSecureLinkBindings({
                   <SelectItem value="managed_storage">Managed S3 storage</SelectItem>
                 </SelectContent>
               </Select>
-            </SettingsControlRow>
+            </div>
             {storageTarget ? (
-              <SettingsControlRow
-                title="Storage"
-                description={
-                  storagesError ??
-                  "Private S3 via Relay. No shared network or published port; S3 credentials are still required."
-                }
-              >
+              <div className="space-y-1.5">
+                <label htmlFor={`${fieldId}-storage`} className="block text-sm font-medium">
+                  Storage
+                </label>
                 <Combobox
+                  id={`${fieldId}-storage`}
                   value={managedStorageId}
                   ariaLabel="Managed S3 storage"
                   onValueChange={(value) => setManagedStorageId(value ?? "")}
@@ -464,9 +484,19 @@ export function AdditionalSecureLinkBindings({
                   placeholder={storagesLoading ? "Loading storages..." : "Select storage"}
                   disabled={pending || storagesLoading}
                 />
-              </SettingsControlRow>
+                <p
+                  className={cn(
+                    "text-xs",
+                    storagesError ? "text-destructive" : "text-muted-foreground"
+                  )}
+                >
+                  {storagesError ??
+                    "Private S3 via Relay. No shared network or published port; S3 credentials are still required."}
+                </p>
+              </div>
             ) : (
               <ProxyUpstreamFields
+                layout="form"
                 value={selection}
                 onChange={setSelection}
                 containers={containers}

@@ -1,15 +1,6 @@
-import {
-  Activity,
-  ArrowRight,
-  Database,
-  Info,
-  RefreshCw,
-  Rocket,
-  Server,
-  ShieldCheck,
-  Sparkles,
-} from "lucide-react";
+import { Activity, Database, RefreshCw, Rocket, Server, ShieldCheck, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Notice, NoticeAction } from "@/components/common/Notice";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import {
@@ -256,59 +247,29 @@ export function AIWorkspaceScenarioStart({
             </div>
 
             {relayNeedsAttention ? (
-              <div className="border border-destructive bg-card">
-                <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <Info className="h-4 w-4 shrink-0 text-destructive" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-destructive">
-                        Gateway needs attention
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        A Gateway relay issue may affect managed nodes or secure database
-                        connections.
-                      </p>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="link"
-                    size="inline"
-                    onClick={onInvestigateOperationalIssue}
-                    className="shrink-0 justify-start text-sm text-destructive [&_svg]:size-3.5"
-                  >
+              <Notice
+                tone="destructive"
+                title="Gateway needs attention"
+                actions={
+                  <NoticeAction tone="destructive" onClick={onInvestigateOperationalIssue}>
                     Investigate
-                    <ArrowRight />
-                  </Button>
-                </div>
-              </div>
+                  </NoticeAction>
+                }
+              >
+                A Gateway relay issue may affect managed nodes or secure database connections.
+              </Notice>
             ) : setupPending ? (
-              <div className="border bg-card">
-                <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <Info className="h-4 w-4 shrink-0 text-[color:var(--color-link)]" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-[color:var(--color-link)]">
-                        Finalize setup
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Connect infrastructure, secure your account, and enable optional Gateway
-                        features.
-                      </p>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="link"
-                    size="inline"
-                    onClick={() => setFinalizeSetupOpen(true)}
-                    className="shrink-0 justify-start text-sm [&_svg]:size-3.5"
-                  >
+              <Notice
+                tone="info"
+                title="Finalize setup"
+                actions={
+                  <NoticeAction tone="info" onClick={() => setFinalizeSetupOpen(true)}>
                     Open checklist
-                    <ArrowRight />
-                  </Button>
-                </div>
-              </div>
+                  </NoticeAction>
+                }
+              >
+                Connect infrastructure, secure your account, and enable optional Gateway features.
+              </Notice>
             ) : null}
 
             {featured.length > 0 && (

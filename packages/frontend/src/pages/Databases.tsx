@@ -25,11 +25,11 @@ import { ManagedResourceFields } from "@/components/common/ManagedResourceFields
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
-import { ToggleField } from "@/components/common/ToggleField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
@@ -206,16 +206,6 @@ function parseTags(value: string) {
         .filter(Boolean)
     )
   );
-}
-
-function formatLastCheck(dateStr: string | null): string {
-  if (!dateStr) return "Never";
-  const date = new Date(dateStr);
-  const diff = Date.now() - date.getTime();
-  if (diff < 60_000) return "Just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return date.toLocaleDateString();
 }
 
 function formatHealthLabel(status: DatabaseConnection["healthStatus"] | "paused"): string {
@@ -546,19 +536,22 @@ export function ManagedDatabaseCreateForm({
                   </SettingsControlRow>
                   {draft.type === "clickhouse" && (
                     <>
-                      <ToggleField
+                      <SettingsControlRow
                         title="Publish native TCP port"
                         description="Expose the ClickHouse native protocol for native clients."
-                        checked={draft.publishNativeTcp ?? true}
-                        onChange={(checked) =>
-                          onChange({
-                            ...draft,
-                            publishNativeTcp: checked,
-                            ...(checked ? {} : { publishedNativePort: undefined }),
-                          })
-                        }
-                        ariaLabel="Publish native TCP port"
-                      />
+                      >
+                        <Switch
+                          checked={draft.publishNativeTcp ?? true}
+                          onChange={(checked) =>
+                            onChange({
+                              ...draft,
+                              publishNativeTcp: checked,
+                              ...(checked ? {} : { publishedNativePort: undefined }),
+                            })
+                          }
+                          ariaLabel="Publish native TCP port"
+                        />
+                      </SettingsControlRow>
                       {(draft.publishNativeTcp ?? true) && (
                         <SettingsControlRow
                           title="Native TCP port"
@@ -580,13 +573,16 @@ export function ManagedDatabaseCreateForm({
                       )}
                     </>
                   )}
-                  <ToggleField
+                  <SettingsControlRow
                     title="TLS"
                     description="Encrypt direct database traffic. Secure managed links always remain encrypted."
-                    checked={draft.tlsEnabled ?? true}
-                    onChange={(checked) => set("tlsEnabled", checked)}
-                    ariaLabel="Enable TLS"
-                  />
+                  >
+                    <Switch
+                      checked={draft.tlsEnabled ?? true}
+                      onChange={(checked) => set("tlsEnabled", checked)}
+                      ariaLabel="Enable TLS"
+                    />
+                  </SettingsControlRow>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1063,7 +1059,9 @@ function DatabasesContent({
         width: "14%",
         align: "center",
         renderCell: (row) => (
-          <Badge variant="outline">{formatLastCheck(row.lastHealthCheckAt)}</Badge>
+          <Badge variant="outline">
+            <RelativeTime value={row.lastHealthCheckAt} fallback="Never" />
+          </Badge>
         ),
       },
       {
@@ -1326,7 +1324,7 @@ function DatabasesContent({
                   </Button>
                 </>
               ) : (
-                <div className="flex w-full justify-between">
+                <>
                   <Button
                     variant="outline"
                     onClick={() => setManagedCreateStep((step) => (step - 1) as 1 | 2 | 3)}
@@ -1350,7 +1348,7 @@ function DatabasesContent({
                       Deploy database
                     </Button>
                   )}
-                </div>
+                </>
               )}
             </DialogFooter>
           </DialogContent>

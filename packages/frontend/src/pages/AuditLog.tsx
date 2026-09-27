@@ -8,6 +8,7 @@ import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { ValueTile } from "@/components/common/ValueTile";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -21,7 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { formatRelativeDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import {
   type AuditExportFormat,
   type AuditFilterUserOption,
@@ -31,6 +32,7 @@ import {
   formatAuditToken,
   getAuditEntryUserKey,
   getAuditEntryUserLabel,
+  getAuditResourceDisplay,
   mergeAuditFilterUsers,
   mergeAuditFilterValues,
 } from "@/pages/audit-log/audit-format";
@@ -271,44 +273,6 @@ function getAuditUserInitials(entry: AuditLogEntry): string {
     .toUpperCase();
 }
 
-function getAuditResourceNameFromDetails(details: AuditLogEntry["details"]): string | null {
-  if (!details) return null;
-  for (const key of [
-    "newName",
-    "name",
-    "displayName",
-    "hostname",
-    "commonName",
-    "cn",
-    "domain",
-    "containerName",
-    "imageRef",
-    "key",
-  ]) {
-    const value = details[key];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  for (const key of ["domainNames", "domains"]) {
-    const value = details[key];
-    if (!Array.isArray(value)) continue;
-    const names = value.filter((item): item is string => typeof item === "string" && !!item.trim());
-    if (names.length) return names.join(", ");
-  }
-  return null;
-}
-
-function getAuditResourceDisplay(entry: AuditLogEntry): { label: string; title: string } {
-  const resourceName = entry.resourceName ?? getAuditResourceNameFromDetails(entry.details);
-  const resourceValue = resourceName ?? entry.resourceId;
-  const resourceType = formatAuditToken(entry.resourceType);
-  const label = resourceValue ? `${resourceType} / ${resourceValue}` : resourceType;
-  const title =
-    resourceName && entry.resourceId && resourceName !== entry.resourceId
-      ? `${label} (${entry.resourceId})`
-      : label;
-  return { label, title };
-}
-
 const columns: DataTableColumn<AuditLogEntry>[] = [
   {
     key: "user",
@@ -374,9 +338,7 @@ const columns: DataTableColumn<AuditLogEntry>[] = [
     header: "Time",
     width: "minmax(130px, 0.65fr)",
     align: "right",
-    render: (entry) => (
-      <span className="text-muted-foreground">{formatRelativeDate(entry.createdAt)}</span>
-    ),
+    render: (entry) => <RelativeTime value={entry.createdAt} className="text-muted-foreground" />,
   },
 ];
 
@@ -1000,7 +962,7 @@ export function AuditLog({
                   {selectedEntry.action}
                 </ValueTile>
                 <ValueTile className="sm:col-span-2" label="Time">
-                  {new Date(selectedEntry.createdAt).toLocaleString()}
+                  {formatDateTime(selectedEntry.createdAt)}
                 </ValueTile>
                 <ValueTile className="sm:col-span-2" label="Resource Type">
                   {selectedEntry.resourceType}

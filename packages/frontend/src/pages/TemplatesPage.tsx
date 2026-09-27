@@ -1,4 +1,4 @@
-import { Award, FileCode, Plus } from "lucide-react";
+import { Award, FileCode, FolderPlus, Plus } from "lucide-react";
 import { useRef } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -21,6 +21,7 @@ const TABS = [
     icon: Award,
     scope: "pki:templates:view",
     createScope: "pki:templates:create",
+    foldersScope: "pki:templates:folders:manage",
   },
   {
     value: "nginx",
@@ -28,6 +29,7 @@ const TABS = [
     icon: FileCode,
     scope: "proxy:templates:view",
     createScope: "proxy:templates:manage",
+    foldersScope: "proxy:templates:folders:manage",
   },
 ] as const;
 
@@ -39,6 +41,7 @@ export function TemplatesPage() {
 
   const pkiCreateRef = useRef<(() => void) | null>(null);
   const nginxCreateRef = useRef<(() => void) | null>(null);
+  const createFolderRefs = useRef<Record<string, () => void>>({});
 
   const visibleTabs = TABS.filter((t) => {
     if (t.value === "pki" && !pkiEnabled) return false;
@@ -57,9 +60,12 @@ export function TemplatesPage() {
     navigate(`/templates/${value}`, { replace: true });
   };
 
-  const renderActions = () => {
-    const tab = TABS.find((t) => t.value === activeTab);
-    if (!tab || !hasScope(tab.createScope)) return null;
+  const activeTabDef = TABS.find((t) => t.value === activeTab);
+  const canManageFolders = !!activeTabDef && hasScope(activeTabDef.foldersScope);
+  const openCreateFolder = () => createFolderRefs.current[activeTab]?.();
+
+  const renderCreateAction = () => {
+    if (!activeTabDef || !hasScope(activeTabDef.createScope)) return null;
 
     switch (activeTab) {
       case "pki":
@@ -85,7 +91,16 @@ export function TemplatesPage() {
         return null;
     }
   };
-  const headerActions =
+  const folderActions = canManageFolders
+    ? [
+        {
+          label: "Add Folder",
+          icon: <FolderPlus className="h-4 w-4" />,
+          onClick: openCreateFolder,
+        },
+      ]
+    : [];
+  const createActions =
     activeTab === "pki" && hasScope("pki:templates:create")
       ? [
           {
@@ -117,8 +132,14 @@ export function TemplatesPage() {
           badges={activeTab === "pki" ? <LicensePlanBadge feature="internal-pki" /> : null}
           description="Certificate and nginx configuration templates"
           actions={
-            <ResponsiveHeaderActions actions={headerActions}>
-              {renderActions()}
+            <ResponsiveHeaderActions actions={[...folderActions, ...createActions]}>
+              {canManageFolders && (
+                <Button variant="outline" onClick={openCreateFolder}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {renderCreateAction()}
             </ResponsiveHeaderActions>
           }
         />
@@ -142,6 +163,9 @@ export function TemplatesPage() {
                 onCreateRef={(fn) => {
                   pkiCreateRef.current = fn;
                 }}
+                onCreateFolderRef={(fn) => {
+                  createFolderRefs.current.pki = fn;
+                }}
               />
             </TabsContent>
           )}
@@ -151,6 +175,9 @@ export function TemplatesPage() {
                 embedded
                 onCreateRef={(fn) => {
                   nginxCreateRef.current = fn;
+                }}
+                onCreateFolderRef={(fn) => {
+                  createFolderRefs.current.nginx = fn;
                 }}
               />
             </TabsContent>

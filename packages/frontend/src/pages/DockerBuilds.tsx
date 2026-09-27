@@ -1,20 +1,11 @@
-import { GitBranch, Pin, RefreshCw, RotateCcw, Square } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -22,40 +13,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
-import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { api } from "@/services/api";
-import { useDockerStore } from "@/stores/docker";
-import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import type { DockerBuild, DockerBuildStatus } from "@/types";
 import { DockerBuildDetailsDialog } from "./docker-detail/DockerBuildDetailsDialog";
+import { DockerBuildsTable } from "./docker-detail/DockerBuildsTable";
 import {
-  formatDockerBuildDuration,
-  useDockerBuildClock,
-} from "./docker-detail/docker-build-duration";
-import { ACTIVE_DOCKER_BUILD_STATUSES as ACTIVE } from "./docker-detail/docker-build-status";
-
-const STATUS_VARIANT: Record<
-  DockerBuildStatus,
-  "default" | "secondary" | "destructive" | "success" | "warning"
-> = {
-  queued: "secondary",
-  claimed: "secondary",
-  checking_out: "default",
-  building: "default",
-  scanning: "default",
-  pushing: "default",
-  deploying: "warning",
-  succeeded: "success",
-  failed: "destructive",
-  cancelled: "secondary",
-  superseded: "secondary",
-};
-
-function shortSha(value: string) {
-  return value.slice(0, 8);
-}
+  ACTIVE_DOCKER_BUILD_STATUSES as ACTIVE,
+  DOCKER_BUILD_STATUS_VARIANT,
+} from "./docker-detail/docker-build-status";
 
 export interface DockerBuildsProps {
   embedded?: boolean;
@@ -64,7 +30,6 @@ export interface DockerBuildsProps {
 export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<DockerBuild[]>([]);
-  const now = useDockerBuildClock(rows);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -76,18 +41,11 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
   const [branch, setBranch] = useState("all");
   const [selected, setSelected] = useState<DockerBuild | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [pinBuild, setPinBuild] = useState<DockerBuild | null>(null);
-  const [pinOpen, setPinOpen] = useState(false);
-  const [actingBuildId, setActingBuildId] = useState<string | null>(null);
-  const displayedPinBuild = useRetainedDialogValue(pinBuild, pinOpen);
   const requestId = useRef(0);
   const pollRequestId = useRef(0);
   const loadingMore = useRef(false);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const dockerNodes = useDockerStore((state) => state.dockerNodes);
-  const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } =
-    usePinnedContainersStore();
 
   useEffect(() => {
     const buildId = searchParams.get("build");
@@ -254,173 +212,6 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
     [optionBuilds]
   );
 
-  const act = useCallback(
-    async (build: DockerBuild, action: "cancel" | "retry") => {
-      setActingBuildId(build.id);
-      try {
-        if (action === "cancel") await api.cancelDockerBuild(build.id);
-        else await api.retryDockerBuild(build.id);
-        await loadPage(undefined, true);
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : `Failed to ${action} build`);
-      } finally {
-        setActingBuildId((current) => (current === build.id ? null : current));
-      }
-    },
-    [loadPage]
-  );
-
-  const columns = useMemo<DataTableColumn<DockerBuild>[]>(
-    () => [
-      {
-        key: "source",
-        header: "Source / resource",
-        width: "minmax(14rem,1.6fr)",
-        render: (build) => (
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-              <GitBranch className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate font-medium">{build.repositoryFullPath}</span>
-              <span className="block truncate text-xs text-muted-foreground">
-                {build.target.kind === "container"
-                  ? build.target.name
-                  : build.target.kind === "deployment"
-                    ? `Deployment ${build.target.name}`
-                    : build.target.kind === "compose_project"
-                      ? `Compose ${build.target.name}${build.serviceName ? ` · ${build.serviceName}` : ""}`
-                      : `Pages ${build.target.name}`}
-              </span>
-            </span>
-          </span>
-        ),
-      },
-      {
-        key: "commit",
-        header: "Commit / ref",
-        // A short SHA and a branch name: a fixed width instead of a share of the free space.
-        width: "9rem",
-        render: (build) => (
-          <span className="block min-w-0">
-            <Badge variant="outline" className="font-mono">
-              {shortSha(build.commitSha)}
-            </Badge>
-            <span className="mt-1 block truncate text-xs text-muted-foreground">
-              {build.ref.replace("refs/heads/", "")}
-            </span>
-          </span>
-        ),
-      },
-      {
-        key: "status",
-        header: "Status",
-        align: "right",
-        width: "minmax(9rem,0.6fr)",
-        render: (build) => (
-          <Badge variant={STATUS_VARIANT[build.status]}>{build.status.replaceAll("_", " ")}</Badge>
-        ),
-      },
-      {
-        key: "result",
-        header: "Result",
-        align: "right",
-        width: "minmax(12rem,0.8fr)",
-        render: (build) => {
-          if (!build.artifact) {
-            return (
-              <span className="block min-w-0">
-                <Badge variant="secondary">Pending</Badge>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  {build.status === "scanning" ? "Security scan" : "Waiting for artifact"}
-                </span>
-              </span>
-            );
-          }
-          const blocked = build.artifact.policyDecision === "rejected";
-          return (
-            <span className="block min-w-0">
-              <Badge variant={blocked ? "destructive" : "success"}>
-                {blocked
-                  ? "Policy blocked"
-                  : build.status === "succeeded"
-                    ? "Deployed"
-                    : "Approved"}
-              </Badge>
-              <span className="mt-1 block truncate text-xs text-muted-foreground">
-                {blocked
-                  ? build.artifact.policyReason || "Artifact rejected"
-                  : build.status === "succeeded"
-                    ? "Deployment completed"
-                    : "Artifact approved"}
-              </span>
-            </span>
-          );
-        },
-      },
-      {
-        key: "time",
-        header: "Duration / created",
-        align: "right",
-        width: "minmax(11rem,0.6fr)",
-        render: (build) => (
-          <span className="block">
-            <span className="block">{formatDockerBuildDuration(build, now)}</span>
-            <span className="block text-xs text-muted-foreground">
-              {new Date(build.createdAt).toLocaleString()}
-            </span>
-          </span>
-        ),
-      },
-      {
-        key: "actions",
-        header: "",
-        align: "right",
-        width: "4rem",
-        render: (build) => (
-          <span className="flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
-            {build.target.kind !== "pages_project" && (
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label="Pin build"
-                onClick={() => {
-                  setPinBuild(build);
-                  setPinOpen(true);
-                }}
-              >
-                <Pin className="h-4 w-4" />
-              </Button>
-            )}
-            {ACTIVE.has(build.status) && (
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label="Cancel build"
-                pending={actingBuildId === build.id}
-                onClick={() => void act(build, "cancel")}
-              >
-                {actingBuildId !== build.id && <Square className="h-4 w-4" />}
-              </Button>
-            )}
-            {["failed", "cancelled", "superseded"].includes(build.status) && (
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label="Retry build"
-                pending={actingBuildId === build.id}
-                onClick={() => void act(build, "retry")}
-              >
-                {actingBuildId !== build.id && <RotateCcw className="h-4 w-4" />}
-              </Button>
-            )}
-          </span>
-        ),
-      },
-    ],
-    [act, actingBuildId, now]
-  );
-
   const content = (
     <div className={embedded ? "flex min-h-0 flex-1 flex-col gap-3" : "space-y-3"}>
       <div className="flex items-center justify-between gap-3">
@@ -466,7 +257,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
                 </SelectTrigger>
                 <SelectContent className="max-h-80">
                   <SelectItem value="all">All statuses</SelectItem>
-                  {Object.keys(STATUS_VARIANT).map((value) => (
+                  {Object.keys(DOCKER_BUILD_STATUS_VARIANT).map((value) => (
                     <SelectItem key={value} value={value}>
                       {value.replaceAll("_", " ")}
                     </SelectItem>
@@ -535,27 +326,20 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
           </>
         }
       />
-      <DataTable
-        columns={columns}
-        data={rows}
-        keyFn={(build) => build.id}
-        onRowClick={(build) => {
+      <DockerBuildsTable
+        builds={rows}
+        loading={loading}
+        onOpenBuild={(build) => {
           setSelected(build);
           setDetailsOpen(true);
         }}
-        loading={loading && rows.length === 0}
-        horizontalScroll
-        minWidth="80rem"
+        onBuildsChanged={() => loadPage(undefined, true)}
+        hasMore={Boolean(nextCursor)}
+        loadingMore={loading}
         className={embedded ? "shrink" : undefined}
         scrollRef={tableScrollRef}
+        sentinelRef={sentinelRef}
         emptyMessage="No builds match the current filters."
-        footer={
-          nextCursor ? (
-            <div ref={sentinelRef} className="py-3 text-center text-xs text-muted-foreground">
-              {loading ? "Loading more…" : "Scroll to load older builds"}
-            </div>
-          ) : null
-        }
       />
 
       <DockerBuildDetailsDialog
@@ -576,82 +360,6 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         }}
         onExited={() => setSelected(null)}
       />
-      <Dialog
-        open={pinOpen}
-        onOpenChange={(open) => {
-          setPinOpen(open);
-          if (!open) setPinBuild(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Pin Build</DialogTitle>
-            <DialogDescription>
-              Keep{" "}
-              {displayedPinBuild
-                ? `${displayedPinBuild.target.name} · ${shortSha(displayedPinBuild.commitSha)}`
-                : "build"}{" "}
-              visible.
-            </DialogDescription>
-          </DialogHeader>
-          {displayedPinBuild &&
-            (() => {
-              if (displayedPinBuild.target.kind === "pages_project") return null;
-              const scopeBase =
-                displayedPinBuild.target.kind === "compose_project"
-                  ? ("docker:compose:view" as const)
-                  : ("docker:containers:view" as const);
-              const scopeResourceId =
-                displayedPinBuild.target.kind === "container"
-                  ? displayedPinBuild.target.containerName
-                  : displayedPinBuild.target.kind === "deployment"
-                    ? displayedPinBuild.target.deploymentId
-                    : displayedPinBuild.target.composeProjectId;
-              const nodeSlug =
-                dockerNodes.find((node) => node.id === displayedPinBuild.target.nodeId)?.slug ??
-                displayedPinBuild.target.nodeId;
-              const meta = {
-                nodeId: displayedPinBuild.target.nodeId,
-                nodeSlug,
-                name: `${displayedPinBuild.target.name} · ${shortSha(displayedPinBuild.commitSha)}`,
-                state: displayedPinBuild.status,
-                kind: "build" as const,
-                scopeBase,
-                scopeResourceId,
-              };
-              return (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-medium">Add to dashboard</p>
-                      <p className="text-xs text-muted-foreground">Show current build status</p>
-                    </div>
-                    <Switch
-                      checked={isPinnedDashboard(displayedPinBuild.id)}
-                      onChange={() => {
-                        toggleDashboard(displayedPinBuild.id, meta);
-                        usePinnedContainersStore.getState().invalidate();
-                      }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-medium">Add to sidebar</p>
-                      <p className="text-xs text-muted-foreground">Quick access to build details</p>
-                    </div>
-                    <Switch
-                      checked={isPinnedSidebar(displayedPinBuild.id)}
-                      onChange={() => {
-                        toggleSidebar(displayedPinBuild.id, meta);
-                        usePinnedContainersStore.getState().invalidate();
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            })()}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 

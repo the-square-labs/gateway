@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle } from "lucide-react";
+import { Notice } from "@/components/common/Notice";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -9,7 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   ClickHouseDatabaseConfig,
@@ -556,24 +556,20 @@ export function DatabaseConnectionForm({
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-                        <div>
-                          <p className="text-sm font-medium">TLS / SSL</p>
-                          <p className="text-xs text-muted-foreground">
-                            {draft.type === "postgres"
-                              ? "Require TLS for the Postgres connection"
-                              : "Use HTTPS for the ClickHouse connection"}
-                          </p>
-                        </div>
-                        <Switch
-                          checked={draft.type === "postgres" ? draft.sslEnabled : draft.tlsEnabled}
-                          onChange={(checked) =>
-                            draft.type === "postgres"
-                              ? set("sslEnabled", checked)
-                              : set("tlsEnabled", checked)
-                          }
-                        />
-                      </div>
+                      <SwitchCard
+                        label="TLS / SSL"
+                        description={
+                          draft.type === "postgres"
+                            ? "Require TLS for the Postgres connection"
+                            : "Use HTTPS for the ClickHouse connection"
+                        }
+                        checked={draft.type === "postgres" ? draft.sslEnabled : draft.tlsEnabled}
+                        onCheckedChange={(checked) =>
+                          draft.type === "postgres"
+                            ? set("sslEnabled", checked)
+                            : set("tlsEnabled", checked)
+                        }
+                      />
                     </>
                   ) : (
                     <>
@@ -613,18 +609,12 @@ export function DatabaseConnectionForm({
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-                        <div>
-                          <p className="text-sm font-medium">TLS</p>
-                          <p className="text-xs text-muted-foreground">
-                            Use TLS when connecting to Redis
-                          </p>
-                        </div>
-                        <Switch
-                          checked={draft.tlsEnabled}
-                          onChange={(checked) => set("tlsEnabled", checked)}
-                        />
-                      </div>
+                      <SwitchCard
+                        label="TLS"
+                        description="Use TLS when connecting to Redis"
+                        checked={draft.tlsEnabled}
+                        onCheckedChange={(checked) => set("tlsEnabled", checked)}
+                      />
                     </>
                   )}
                 </motion.div>
@@ -660,20 +650,13 @@ function DatabaseTlsVerificationFields({
   ) => onChange({ ...draft, [key]: value });
 
   return (
-    <div className="space-y-3 border border-border bg-muted/30 p-3">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium">Verify server certificate</p>
-          <p className="text-xs text-muted-foreground">
-            Check the certificate chain and that it was issued for this host
-          </p>
-        </div>
-        <Switch
-          ariaLabel="Verify server certificate"
-          checked={draft.tlsVerifyCertificate}
-          onChange={(checked) => set("tlsVerifyCertificate", checked)}
-        />
-      </div>
+    <div className="space-y-3">
+      <SwitchCard
+        label="Verify server certificate"
+        description="Check the certificate chain and that it was issued for this host"
+        checked={draft.tlsVerifyCertificate}
+        onCheckedChange={(checked) => set("tlsVerifyCertificate", checked)}
+      />
 
       {draft.tlsVerifyCertificate ? (
         <div className="space-y-1.5">
@@ -693,13 +676,10 @@ function DatabaseTlsVerificationFields({
           </p>
         </div>
       ) : (
-        <div className="flex items-start gap-2 border border-warning/30 bg-warning/5 p-3">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
-          <p className="text-sm text-warning-foreground">
-            Traffic is encrypted, but the server identity is not checked. Anyone on the network path
-            can impersonate this database and capture its credentials.
-          </p>
-        </div>
+        <Notice tone="warning" title="The server identity is not checked">
+          Traffic is encrypted, but anyone on the network path can impersonate this database and
+          capture its credentials.
+        </Notice>
       )}
 
       {confirmPassword && tlsVerificationWeakened(draft) && (

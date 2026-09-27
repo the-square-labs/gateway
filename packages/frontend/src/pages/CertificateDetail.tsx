@@ -2,12 +2,14 @@ import { Copy, Download, ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { IssuingCABadge } from "@/components/certificates/IssuingCABadge";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { Badge } from "@/components/ui/badge";
@@ -33,14 +35,22 @@ import { daysUntil, formatDate, formatSerialNumber, hoursUntil } from "@/lib/uti
 import { api } from "@/services/api";
 import type { CertificateExportFormat } from "@/services/api-pki";
 import { useAuthStore } from "@/stores/auth";
+import { useCAStore } from "@/stores/ca";
 import type { Certificate } from "@/types";
 
 export function CertificateDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
+  const { cas, fetchCAs } = useCAStore();
   const [cert, setCert] = useState<Certificate | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // The CA list names the issuing CA, as on the certificate list.
+  const canListCAs = hasScopedAccess("pki:ca:view") || hasScopedAccess("pki:cert:issue");
+
+  useEffect(() => {
+    if (canListCAs) void fetchCAs();
+  }, [canListCAs, fetchCAs]);
 
   useEffect(() => {
     if (!id) return;
@@ -178,8 +188,13 @@ export function CertificateDetail() {
             </>
           }
           description={
-            <span className="block truncate">
-              {cert.type} certificate &middot; Issuer: {cert.issuerDn || cert.caId}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0">{cert.type} certificate &middot; Issuer:</span>
+              <IssuingCABadge
+                certificate={cert}
+                ca={cas.find((ca) => ca.id === cert.caId)}
+                size="inline"
+              />
             </span>
           }
           actions={
@@ -341,7 +356,7 @@ export function CertificateDetail() {
             />
             {cert.revokedAt && (
               <>
-                <DetailRow label="Revoked At" value={formatDate(cert.revokedAt)} />
+                <DetailRow label="Revoked At" value={<RelativeTime value={cert.revokedAt} />} />
                 <DetailRow
                   label="Revocation Reason"
                   value={cert.revocationReason || "unspecified"}

@@ -9,6 +9,7 @@ import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
@@ -57,16 +58,6 @@ const STATUS_BADGE: Record<
   pending: "secondary",
   error: "destructive",
 };
-
-function formatLastSeen(dateStr: string | null): string {
-  if (!dateStr) return "Never";
-  const d = new Date(dateStr);
-  const diff = Date.now() - d.getTime();
-  if (diff < 60_000) return "Just now";
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
-  return d.toLocaleDateString();
-}
 
 function formatDaemonVersion(version: string | null | undefined): string {
   if (!version) return "";
@@ -290,7 +281,11 @@ export function AdminNodes() {
         label: "Last Seen",
         width: "16%",
         align: "center",
-        renderCell: (node) => <Badge variant="outline">{formatLastSeen(node.lastSeenAt)}</Badge>,
+        renderCell: (node) => (
+          <Badge variant="outline">
+            <RelativeTime value={node.lastSeenAt} fallback="Never" />
+          </Badge>
+        ),
       },
       {
         id: "status",

@@ -20,6 +20,10 @@ export interface User {
   aiApprovalMode?: AIApprovalMode;
   folderId?: string | null;
   sortOrder?: number;
+  /** Admin user payloads: set once the user has signed in; null means never. */
+  lastLoginAt?: string | null;
+  /** Admin user payloads: when the one-time account invitation email was sent. */
+  invitationSentAt?: string | null;
   impersonation?: {
     active: true;
     actor: {
@@ -137,6 +141,7 @@ export interface AuthProvisioningSettings {
     updateChannel: "stable" | "preview";
     hideExternalBranding?: boolean;
     autoAssignCreatedResourcePermissions?: boolean;
+    sendInvitationOnUserCreate?: boolean;
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;
     gatewayGrpcPublicTarget: string | null;

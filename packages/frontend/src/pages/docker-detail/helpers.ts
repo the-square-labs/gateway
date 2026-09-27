@@ -69,11 +69,6 @@ export function containerArchiveCapabilities(scopes: {
   };
 }
 
-export function formatDate(ts: number | string): string {
-  const d = typeof ts === "number" ? new Date(ts * 1000) : new Date(ts);
-  return d.toLocaleString();
-}
-
 export { formatBytes } from "@/lib/utils";
 
 export function copyToClipboard(text: string) {

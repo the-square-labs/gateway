@@ -15,9 +15,11 @@ import {
 import { Combobox } from "@/components/common/Combobox";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { ProxyUpstreamPanel } from "@/components/proxy/ProxyUpstreamEditor";
+import { REDIRECT_STATUS_OPTIONS } from "@/components/proxy/redirect-status-options";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,7 +33,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { supportsPagesRouteTemplate } from "@/lib/proxy-template-capabilities";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type {
   AccessList,
   CustomHeader,
@@ -301,7 +303,9 @@ export function SettingsTab({
                 replicas ready
               </span>
               {tlsDistributionProblem.lastVerifiedAt && (
-                <span>Last verified {formatDateTime(tlsDistributionProblem.lastVerifiedAt)}</span>
+                <span>
+                  Last verified <RelativeTime value={tlsDistributionProblem.lastVerifiedAt} />
+                </span>
               )}
               {tlsDistributionProblem.error && (
                 <span className="break-words">{tlsDistributionProblem.error}</span>
@@ -465,10 +469,11 @@ export function SettingsTab({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="font-sans">
-                  <SelectItem value="301">301 — Permanent</SelectItem>
-                  <SelectItem value="302">302 — Temporary</SelectItem>
-                  <SelectItem value="307">307 — Temporary, preserve method</SelectItem>
-                  <SelectItem value="308">308 — Permanent, preserve method</SelectItem>
+                  {REDIRECT_STATUS_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={String(option.value)}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </SettingsControlRow>
@@ -478,7 +483,7 @@ export function SettingsTab({
         {templateVariableDefinitions.length > 0 ? (
           <div className="overflow-x-auto">
             <div className="min-w-[680px]">
-              <div className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,16rem)] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <div className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_minmax(0,16rem)] border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 <div className="px-3 py-2">Variable</div>
                 <div className="border-l border-border px-3 py-2">Description</div>
                 <div className="border-l border-border px-3 py-2">Value</div>
@@ -722,7 +727,7 @@ export function SettingsTab({
           {customHeaders.length > 0 ? (
             <div className="overflow-x-auto">
               <div className="min-w-[560px]">
-                <div className="grid grid-cols-[1fr_1fr_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <div className="grid grid-cols-[1fr_1fr_2.25rem] border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   <div className="px-3 py-2">Header</div>
                   <div className="border-l border-border px-3 py-2">Value</div>
                   <div className="border-l border-border" />
@@ -813,7 +818,7 @@ export function SettingsTab({
           {customRewrites.length > 0 ? (
             <div className="overflow-x-auto">
               <div className="min-w-[720px]">
-                <div className="grid grid-cols-[1fr_1fr_11rem_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <div className="grid grid-cols-[1fr_1fr_11rem_2.25rem] border-b border-border bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground">
                   <div className="px-3 py-2">Source</div>
                   <div className="border-l border-border px-3 py-2">Destination</div>
                   <div className="border-l border-border px-3 py-2">Type</div>

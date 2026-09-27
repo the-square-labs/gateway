@@ -5,6 +5,7 @@ import { ContentLoading } from "@/components/common/ContentLoading";
 import { CopyButton } from "@/components/common/CopyButton";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { DownloadButton } from "@/components/common/DownloadButton";
+import { Notice } from "@/components/common/Notice";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -246,9 +247,9 @@ export function StorageCredentialsDialog({
         <div className="space-y-4">
           <ContentLoading loading={open && (loading || !settled)} />
           {open && (loading || !settled) ? null : error ? (
-            <div className="border border-destructive/50 bg-destructive/5 p-6 text-sm text-destructive">
+            <Notice tone="destructive" role="alert" title="Credentials could not be loaded">
               {error}
-            </div>
+            </Notice>
           ) : credentials ? (
             <>
               <CredentialField label="S3 Endpoint" value={resolvedEndpoint} />

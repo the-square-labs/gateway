@@ -19,10 +19,10 @@ const storage = {
 afterEach(() => vi.restoreAllMocks());
 
 describe("managed storage settings", () => {
-  it("uses the shared toggle block and resets the publication state with saved data", () => {
+  it("uses the shared switch card and resets the publication state with saved data", () => {
     const view = render(<ManagedObjectStorageSettingsTab storage={storage} onSaved={() => {}} />);
     const toggle = screen.getByRole("button", { name: "Publish S3 endpoint" });
-    expect(toggle.parentElement).toHaveClass("border", "bg-muted/30", "p-3");
+    expect(toggle.closest("label")).toHaveClass("border", "border-border", "p-3");
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     view.rerender(
       <ManagedObjectStorageSettingsTab

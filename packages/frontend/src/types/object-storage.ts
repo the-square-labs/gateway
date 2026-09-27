@@ -262,6 +262,11 @@ export interface ObjectStorageRevealedCredentials {
 
 export type ManagedStorageBindingTargetType = "container" | "deployment";
 export type ManagedStorageBindingStatus = "creating" | "ready" | "error" | "deleting";
+/**
+ * `target_applied`: a ready link saved in the workload's configuration that its runtime does not run yet (the
+ * workload has not started, is stopped, or has not finished its rollout). `active`: the runtime carries it.
+ */
+export type ManagedStorageBindingObservedState = "target_applied" | "active";
 
 /** Environment variable names a binding writes into its target workload. */
 export interface ManagedStorageBindingEnvironment {
@@ -283,6 +288,7 @@ export interface ManagedStorageBinding {
   buckets: string[];
   accessKeyId: string | null;
   status: ManagedStorageBindingStatus;
+  observedState?: ManagedStorageBindingObservedState;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;

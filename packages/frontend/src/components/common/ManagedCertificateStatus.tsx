@@ -182,7 +182,7 @@ export function ManagedCertificateNotice({
         ) : undefined
       }
     >
-      <p className="text-sm text-muted-foreground">
+      <p>
         {note ? `${note.text} ` : ""}
         The current certificate expires {formatDate(certificate.notAfter)}.
       </p>

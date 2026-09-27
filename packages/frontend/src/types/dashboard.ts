@@ -186,7 +186,7 @@ export interface RelayReenrollment {
 export interface DashboardPinnedDockerResourceRequest {
   id: string;
   nodeId: string;
-  kind: "container" | "deployment" | "build" | "compose";
+  kind: "container" | "deployment" | "compose";
   scopeResourceId?: string;
 }
 
@@ -298,7 +298,7 @@ export interface DashboardBootstrapPinnedResources {
     nodeSlug: string;
     name: string;
     state?: string;
-    kind: "container" | "deployment" | "build" | "compose";
+    kind: "container" | "deployment" | "compose";
     scopeBase: "docker:containers:view" | "docker:compose:view";
     scopeResourceId?: string;
   }>;

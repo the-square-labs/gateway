@@ -439,6 +439,8 @@ export interface NginxTemplate {
   type: ProxyHostType;
   content: string;
   variables: TemplateVariableDef[];
+  folderId?: string | null;
+  sortOrder?: number;
   createdAt: string;
   updatedAt: string;
 }

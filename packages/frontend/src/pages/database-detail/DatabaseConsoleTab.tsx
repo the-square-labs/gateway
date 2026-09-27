@@ -1,5 +1,6 @@
 import { History, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -418,9 +419,10 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
                     setHistoryOpen(false);
                   }}
                 >
-                  <div className="mb-1 text-xs text-muted-foreground">
-                    {new Date(entry.executedAt).toLocaleString()}
-                  </div>
+                  <RelativeTime
+                    value={entry.executedAt}
+                    className="mb-1 block text-xs text-muted-foreground"
+                  />
                   <pre className="line-clamp-3 whitespace-pre-wrap font-mono text-sm">
                     {entry.query}
                   </pre>

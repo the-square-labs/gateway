@@ -2,13 +2,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { CheckboxCard } from "@/components/common/CheckboxCard";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { ScopeList } from "@/components/common/ScopeList";
 import {
   ScopeSearchFilter,
   type ScopeSelectionFilter,
 } from "@/components/common/ScopeSearchFilter";
-import { ToggleField } from "@/components/common/ToggleField";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -1008,16 +1008,15 @@ export function AlertDialog({
               <motion.div key="step-2" {...STEP_ANIMATION} className="space-y-5">
                 {/* Scope */}
                 <div className="space-y-3">
-                  <ToggleField
-                    title={`Limit to specific ${cat?.label?.toLowerCase() ?? category}s`}
+                  <CheckboxCard
+                    label={`Limit to specific ${cat?.label?.toLowerCase() ?? category}s`}
                     description={
                       scopeEnabled
                         ? "Only selected resources will trigger this alert."
                         : `Alert applies to all ${cat?.label?.toLowerCase() ?? category}s.`
                     }
                     checked={scopeEnabled}
-                    ariaLabel={`Limit to specific ${cat?.label?.toLowerCase() ?? category}s`}
-                    onChange={(v) => {
+                    onCheckedChange={(v) => {
                       setScopeEnabled(v);
                       if (!v) setResourceIds([]);
                     }}
@@ -1188,24 +1187,24 @@ export function AlertDialog({
             </>
           )}
           {step === 2 && (
-            <div className="flex w-full justify-between">
+            <>
               <Button variant="outline" onClick={() => setStep(1)}>
                 <ArrowLeft /> Back
               </Button>
               <Button onClick={() => setStep(3)} disabled={selectedWebhookIds.length === 0}>
                 Next <ArrowRight />
               </Button>
-            </div>
+            </>
           )}
           {step === 3 && (
-            <div className="flex w-full justify-between">
+            <>
               <Button variant="outline" onClick={() => setStep(2)}>
                 <ArrowLeft /> Back
               </Button>
               <Button onClick={handleSave} pending={saving}>
                 {isEdit ? "Update" : "Create"}
               </Button>
-            </div>
+            </>
           )}
         </DialogFooter>
       </DialogContent>

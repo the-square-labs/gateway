@@ -1,8 +1,9 @@
-import { Check, Cpu, Info, Plus } from "lucide-react";
+import { Check, Cpu, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
+import { Notice } from "@/components/common/Notice";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -450,16 +451,10 @@ export function InferenceSetupWizard({
             onRefresh={core.refresh}
           />
         ) : !inferenceEnabled ? (
-          <div className="flex items-center gap-3 border border-link/55 p-4">
-            <Info className="h-5 w-5 shrink-0 text-link" />
-            <div>
-              <p className="text-sm font-medium text-link">Inference is disabled</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Enable it to connect providers centrally and make selected models available to
-                Gateway users.
-              </p>
-            </div>
-          </div>
+          <Notice tone="info" title="Inference is disabled">
+            Enable it to connect providers centrally and make selected models available to Gateway
+            users.
+          </Notice>
         ) : ready ? (
           <div className="border border-border p-4 text-sm text-muted-foreground">
             Gateway has{" "}

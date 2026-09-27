@@ -1,8 +1,10 @@
 import { Check, Lock, Mail, RotateCcw, Save, ShieldAlert, Trash2, Unlock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { AdminUserInvitationRow } from "@/components/admin/AdminUserInvitationRow";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -185,6 +187,12 @@ export function AdminUserConfigDialog({
         setPasswordLinkCoolingDown(false);
         passwordLinkCooldownTimer.current = null;
       }, 5000);
+    });
+
+  const sendInvitation = () =>
+    run("invitation", async () => {
+      onUserUpdated(await api.sendUserInvitation(user.id));
+      toast.success("Invitation email sent");
     });
 
   const revokeSession = (sessionId: string) =>
@@ -384,6 +392,13 @@ export function AdminUserConfigDialog({
                 </section>
               )}
 
+              <AdminUserInvitationRow
+                user={user}
+                pending={isBusy("invitation")}
+                disabled={saving}
+                onSend={sendInvitation}
+              />
+
               <section className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                 <div>
                   <p className="text-sm font-medium">Active sessions</p>
@@ -485,7 +500,7 @@ export function AdminUserConfigDialog({
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
                       {session.authMethod.replace("_", " ")} · {session.ipAddress || "Unknown IP"} ·
-                      Last active {new Date(session.lastSeenAt).toLocaleString()}
+                      Last active <RelativeTime value={session.lastSeenAt} />
                     </p>
                   </div>
                   <Button

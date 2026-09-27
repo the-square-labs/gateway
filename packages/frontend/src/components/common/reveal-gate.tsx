@@ -289,8 +289,36 @@ export function growToNaturalHeight(element: HTMLElement, fromHeight: number) {
 
 /** The loader a gate shows once content takes longer than its delay. */
 export function ContentLoader({ className }: { className?: string }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  // Offset of the visible middle of the box: a tall page centres the loader in view, not in content.
+  const [visibleMiddle, setVisibleMiddle] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box || className) return;
+    const update = () => {
+      const rect = box.getBoundingClientRect();
+      const top = Math.max(rect.top, 0);
+      const bottom = Math.min(rect.bottom, window.innerHeight);
+      setVisibleMiddle(bottom > top && rect.height > 0 ? (top + bottom) / 2 - rect.top : null);
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [className]);
+
+  const label = (
+    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      Loading…
+    </div>
+  );
   return (
     <div
+      ref={boxRef}
       data-reveal-skip=""
       role="status"
       aria-label="Loading"
@@ -300,10 +328,16 @@ export function ContentLoader({ className }: { className?: string }) {
       }
       style={{ visibility: "visible" }}
     >
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading…
-      </div>
+      {visibleMiddle === null ? (
+        label
+      ) : (
+        <div
+          className="absolute inset-x-0 flex -translate-y-1/2 justify-center"
+          style={{ top: visibleMiddle }}
+        >
+          {label}
+        </div>
+      )}
     </div>
   );
 }

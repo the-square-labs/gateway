@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { DetailRow } from "@/components/common/DetailRow";
+import { Notice } from "@/components/common/Notice";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -171,34 +172,31 @@ function MigrationProgress({ migration }: { migration: DockerMigration }) {
       ) : null}
 
       {migration.sourceState !== "running" ? (
-        <p className="border border-border px-4 py-3 text-sm text-muted-foreground">
-          The source was stopped. The target will remain stopped and no application health check
-          will run.
-        </p>
+        <Notice tone="info" title="The source was stopped">
+          The target will remain stopped and no application health check will run.
+        </Notice>
       ) : null}
 
       {migration.errorMessage ? (
-        <p
-          className="border bg-destructive/15 px-4 py-3 text-sm text-destructive"
-          style={{ borderColor: "var(--color-destructive)" }}
+        <Notice
+          tone="destructive"
+          role="alert"
+          title={
+            migration.status === "needs_attention"
+              ? "Migration needs attention"
+              : "Migration failed"
+          }
         >
           {migration.errorMessage}
-        </p>
+        </Notice>
       ) : null}
 
       {completed ? (
-        <div
-          className="flex items-start gap-2 border bg-success/15 px-4 py-3 text-sm"
-          style={{ borderColor: "var(--color-success)" }}
-        >
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success-text" />
-          <span>
-            Migration completed.{" "}
-            {migration.keepSource
-              ? "The source is stopped and protected from restart."
-              : "The verified source resource was removed."}
-          </span>
-        </div>
+        <Notice tone="success" role="status" title="Migration completed">
+          {migration.keepSource
+            ? "The source is stopped and protected from restart."
+            : "The verified source resource was removed."}
+        </Notice>
       ) : null}
     </div>
   );

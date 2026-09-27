@@ -19,6 +19,7 @@ import {
 import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import {
   AIChangedResources,
   resourceAwareMarkdown,
@@ -339,7 +340,11 @@ export function AIMessage({
           {message.steer && (
             <span>{message.steerPending ? "Steer · waiting for next step" : "Steer"}</span>
           )}
-          <span className="whitespace-nowrap">{formatMessageRelativeTime(message)}</span>
+          <RelativeTime
+            value={messageTimestamp(message)}
+            fallback={null}
+            className="whitespace-nowrap"
+          />
           {onEditUserMessage && (
             <button
               type="button"
@@ -524,21 +529,8 @@ function openArtifactPreview(attachment: AIMessageAttachment | ArtifactAttachmen
   window.open(url, `artifact-${artifactId}`, "width=900,height=600,menubar=no,toolbar=no");
 }
 
-function formatMessageRelativeTime(message: AIMessageType): string {
-  const value = message.createdAt ?? timestampFromGeneratedId(message.id);
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const diffMs = Math.max(0, Date.now() - date.getTime());
-  const diffSeconds = Math.floor(diffMs / 1000);
-  if (diffSeconds < 60) return "now";
-  const diffMinutes = Math.floor(diffSeconds / 60);
-  if (diffMinutes < 60) return `${diffMinutes} min ago`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours} h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays} d ago`;
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function messageTimestamp(message: AIMessageType): string | null {
+  return message.createdAt ?? timestampFromGeneratedId(message.id);
 }
 
 function timestampFromGeneratedId(id: string | undefined): string | null {

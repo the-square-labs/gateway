@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
-import type { DockerBuild, DockerSourceBinding, DockerSourceTarget } from "@/types";
+import type { DockerSourceBinding, DockerSourceTarget } from "@/types";
 import { DockerBuildHistoryPanel } from "./DockerBuildHistoryPanel";
 import { DockerGitSourcePanel } from "./DockerGitSourcePanel";
 
 interface DockerResourceGitTabsProps {
   target: DockerSourceTarget;
   view: "source" | "builds";
-  includeBuilds?: boolean;
   composeVariables?: Record<string, string>;
   composeSecretKeys?: string[];
   canEdit?: boolean;
@@ -17,20 +15,9 @@ interface DockerResourceGitTabsProps {
   pendingContainer?: boolean;
 }
 
-const ACTIVE_BUILD_STATUSES = new Set<DockerBuild["status"]>([
-  "queued",
-  "claimed",
-  "checking_out",
-  "building",
-  "scanning",
-  "pushing",
-  "deploying",
-]);
-
 export function DockerResourceGitTabs({
   target,
   view,
-  includeBuilds = false,
   composeVariables,
   composeSecretKeys,
   canEdit = true,
@@ -38,11 +25,9 @@ export function DockerResourceGitTabs({
   pendingContainer = false,
 }: DockerResourceGitTabsProps) {
   const [source, setSource] = useState<DockerSourceBinding | null>(null);
-  const [builds, setBuilds] = useState<DockerBuild[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const sourceRequestId = useRef(0);
-  const buildRequestId = useRef(0);
   const targetKind = target.kind;
   const targetNodeId = target.nodeId;
   const targetResourceId =
@@ -53,7 +38,6 @@ export function DockerResourceGitTabs({
         : target.kind === "compose_project"
           ? target.composeProjectId
           : target.pageProjectId;
-  const inlineBuildHistory = view === "builds";
   const stableTarget = useMemo<DockerSourceTarget>(
     () =>
       targetKind === "container"
@@ -72,13 +56,8 @@ export function DockerResourceGitTabs({
     setError(null);
     try {
       const nextSource = await api.getDockerSource(stableTarget);
-      const nextBuilds =
-        (view === "builds" || includeBuilds) && nextSource && !inlineBuildHistory
-          ? await api.listDockerBuilds({ sourceBindingId: nextSource.id, limit: 5 })
-          : [];
       if (currentRequest !== sourceRequestId.current) return;
       setSource(nextSource);
-      if (view === "builds" || includeBuilds) setBuilds(nextBuilds);
     } catch (error) {
       if (currentRequest !== sourceRequestId.current) return;
       const message = error instanceof Error ? error.message : "Failed to load repository state";
@@ -87,84 +66,34 @@ export function DockerResourceGitTabs({
     } finally {
       if (currentRequest === sourceRequestId.current) setLoading(false);
     }
-  }, [includeBuilds, inlineBuildHistory, stableTarget, view]);
-
-  const refreshBuilds = useCallback(async () => {
-    if (!source || inlineBuildHistory || !includeBuilds) return;
-    const currentRequest = ++buildRequestId.current;
-    try {
-      const nextBuilds = await api.listDockerBuilds({ sourceBindingId: source.id, limit: 5 });
-      if (currentRequest === buildRequestId.current) setBuilds(nextBuilds);
-    } catch {
-      // Background polling remains silent; the existing rows stay visible.
-    }
-  }, [includeBuilds, inlineBuildHistory, source]);
+  }, [stableTarget]);
 
   useEffect(() => {
     void load();
     return () => {
       sourceRequestId.current += 1;
-      buildRequestId.current += 1;
     };
   }, [load]);
 
-  const hasActiveBuilds = builds.some((build) => ACTIVE_BUILD_STATUSES.has(build.status));
-  useRealtime(
-    source && !inlineBuildHistory ? "docker.build.changed" : null,
-    (payload) => {
-      const event = payload as { sourceBindingId?: string } | undefined;
-      if (event?.sourceBindingId === source?.id) void refreshBuilds();
-    },
-    { onReconnect: () => void refreshBuilds() }
-  );
-  useRealtime(source && !inlineBuildHistory ? "docker.build.artifact.changed" : null, (payload) => {
-    const event = payload as { sourceBindingId?: string } | undefined;
-    if (!event?.sourceBindingId || event.sourceBindingId === source?.id) void refreshBuilds();
-  });
-
-  useEffect(() => {
-    if (!source || inlineBuildHistory || !includeBuilds) return;
-    const interval = window.setInterval(
-      () => {
-        if (!document.hidden) void refreshBuilds();
-      },
-      hasActiveBuilds ? 5_000 : 15_000
-    );
-    return () => window.clearInterval(interval);
-  }, [hasActiveBuilds, includeBuilds, inlineBuildHistory, refreshBuilds, source]);
-
   return view === "source" ? (
-    <div className="space-y-4">
-      <DockerGitSourcePanel
-        target={stableTarget}
-        source={source}
-        loading={loading}
-        error={error}
-        onRetry={() => void load()}
-        onBuildQueued={includeBuilds ? () => void refreshBuilds() : undefined}
-        onSourceChange={setSource}
-        composeVariables={composeVariables}
-        composeSecretKeys={composeSecretKeys}
-        canEdit={canEdit}
-        canBuild={canBuild}
-        pendingContainer={pendingContainer}
-      />
-      {includeBuilds && source ? (
-        <DockerBuildHistoryPanel
-          key={source.id}
-          builds={builds}
-          sourceBindingId={source.id}
-          loading={loading}
-        />
-      ) : null}
-    </div>
+    <DockerGitSourcePanel
+      target={stableTarget}
+      source={source}
+      loading={loading}
+      error={error}
+      onRetry={() => void load()}
+      onSourceChange={setSource}
+      composeVariables={composeVariables}
+      composeSecretKeys={composeSecretKeys}
+      canEdit={canEdit}
+      canBuild={canBuild}
+      pendingContainer={pendingContainer}
+    />
   ) : (
     <DockerBuildHistoryPanel
       key={source?.id ?? "loading"}
-      builds={builds}
       sourceBindingId={source?.id}
       loading={loading}
-      inlineHistory={inlineBuildHistory}
     />
   );
 }

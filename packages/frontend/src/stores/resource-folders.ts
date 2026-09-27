@@ -39,6 +39,10 @@ const RESOURCE_TYPES: ResourceFolderType[] = [
   "node",
   "domain",
   "ssl-certificate",
+  "pki-ca",
+  "pki-certificate",
+  "pki-template",
+  "nginx-template",
   "database",
   "storage",
   "logging-environment",
@@ -57,6 +61,16 @@ function resourceMap<T>(value: (type: ResourceFolderType) => T): FolderResourceM
 
 function storageKey(type: ResourceFolderType) {
   return `${EXPANDED_STORAGE_KEY}:${type}`;
+}
+
+/** Whether the user ever folded a folder in this list (the first toggle saves the set). */
+export function hasSavedFolderExpansion(type: ResourceFolderType): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(storageKey(type)) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function loadExpandedFolderIds(type: ResourceFolderType): string[] {
@@ -240,6 +254,14 @@ function listFolders(type: ResourceFolderType): Promise<ResourceFolderTreeNode[]
       return api.listDomainFolders();
     case "ssl-certificate":
       return api.listSSLCertificateFolders();
+    case "pki-ca":
+      return api.listCAFolders();
+    case "pki-certificate":
+      return api.listCertificateFolders();
+    case "pki-template":
+      return api.listPkiTemplateFolders();
+    case "nginx-template":
+      return api.listNginxTemplateFolders();
     case "database":
       return api.listDatabaseFolders();
     case "storage":
@@ -270,6 +292,14 @@ function createFolderByType(
       return api.createDomainFolder(data);
     case "ssl-certificate":
       return api.createSSLCertificateFolder(data);
+    case "pki-ca":
+      return api.createCAFolder(data);
+    case "pki-certificate":
+      return api.createCertificateFolder(data);
+    case "pki-template":
+      return api.createPkiTemplateFolder(data);
+    case "nginx-template":
+      return api.createNginxTemplateFolder(data);
     case "database":
       return api.createDatabaseFolder(data);
     case "storage":
@@ -301,6 +331,14 @@ function updateFolderByType(
       return api.updateDomainFolder(id, data);
     case "ssl-certificate":
       return api.updateSSLCertificateFolder(id, data);
+    case "pki-ca":
+      return api.updateCAFolder(id, data);
+    case "pki-certificate":
+      return api.updateCertificateFolder(id, data);
+    case "pki-template":
+      return api.updatePkiTemplateFolder(id, data);
+    case "nginx-template":
+      return api.updateNginxTemplateFolder(id, data);
     case "database":
       return api.updateDatabaseFolder(id, data);
     case "storage":
@@ -328,6 +366,14 @@ function deleteFolderByType(type: ResourceFolderType, id: string): Promise<void>
       return api.deleteDomainFolder(id);
     case "ssl-certificate":
       return api.deleteSSLCertificateFolder(id);
+    case "pki-ca":
+      return api.deleteCAFolder(id);
+    case "pki-certificate":
+      return api.deleteCertificateFolder(id);
+    case "pki-template":
+      return api.deletePkiTemplateFolder(id);
+    case "nginx-template":
+      return api.deleteNginxTemplateFolder(id);
     case "database":
       return api.deleteDatabaseFolder(id);
     case "storage":
@@ -358,6 +404,14 @@ function reorderFoldersByType(
       return api.reorderDomainFolders(items);
     case "ssl-certificate":
       return api.reorderSSLCertificateFolders(items);
+    case "pki-ca":
+      return api.reorderCAFolders(items);
+    case "pki-certificate":
+      return api.reorderCertificateFolders(items);
+    case "pki-template":
+      return api.reorderPkiTemplateFolders(items);
+    case "nginx-template":
+      return api.reorderNginxTemplateFolders(items);
     case "database":
       return api.reorderDatabaseFolders(items);
     case "storage":
@@ -389,6 +443,14 @@ function moveResourcesToFolderByType(
       return api.moveDomainsToFolder(ids, folderId);
     case "ssl-certificate":
       return api.moveSSLCertificatesToFolder(ids, folderId);
+    case "pki-ca":
+      return api.moveCAsToFolder(ids, folderId);
+    case "pki-certificate":
+      return api.moveCertificatesToFolder(ids, folderId);
+    case "pki-template":
+      return api.movePkiTemplatesToFolder(ids, folderId);
+    case "nginx-template":
+      return api.moveNginxTemplatesToFolder(ids, folderId);
     case "database":
       return api.moveDatabasesToFolder(ids, folderId);
     case "storage":
@@ -419,6 +481,14 @@ function reorderResourcesByType(
       return api.reorderDomains(items);
     case "ssl-certificate":
       return api.reorderSSLCertificates(items);
+    case "pki-ca":
+      return api.reorderCAs(items);
+    case "pki-certificate":
+      return api.reorderCertificates(items);
+    case "pki-template":
+      return api.reorderPkiTemplates(items);
+    case "nginx-template":
+      return api.reorderNginxTemplates(items);
     case "database":
       return api.reorderDatabases(items);
     case "storage":

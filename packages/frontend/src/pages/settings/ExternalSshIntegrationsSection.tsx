@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +20,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
-import { cn, formatRelativeDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { ExternalSshConnector } from "@/types/integrations";
@@ -306,9 +307,13 @@ function SshConnectorRow({
             Host fingerprint {connector.hostFingerprint}
           </p>
           <p className="mt-1 truncate text-xs text-muted-foreground">
-            {connector.testedAt
-              ? `Tested ${formatRelativeDate(connector.testedAt)}`
-              : "Never tested"}
+            {connector.testedAt ? (
+              <>
+                Tested <RelativeTime value={connector.testedAt} />
+              </>
+            ) : (
+              "Never tested"
+            )}
             {connector.testLastError ? ` · ${connector.testLastError}` : ""}
           </p>
         </div>

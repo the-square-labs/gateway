@@ -1,11 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("react-router-dom", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("react-router-dom")>()),
-  useNavigate: () => vi.fn(),
-}));
-
-import { validateBasicAuthUsers } from "./AccessLists";
+import { describe, expect, it } from "vitest";
+import { validateBasicAuthUsers } from "./access-list-form";
 
 describe("validateBasicAuthUsers", () => {
   it("rejects a new user with a blank password instead of dropping the row", () => {

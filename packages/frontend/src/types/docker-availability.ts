@@ -15,6 +15,11 @@ export interface DockerAvailabilityPolicyInput {
   selectedNodeIds: string[];
   rolloutPolicy: { maxUnavailable: number; maxSurge: number; drainSeconds: number };
   offlineReplacementGraceSeconds: number;
+  /** Serve from the first available nodes of nodePriority and move back to them when they return. */
+  priorityMode: boolean;
+  /** Ordered node IDs: the first is the primary, the rest are backups in order. */
+  nodePriority: string[];
+  failbackDelaySeconds: number;
 }
 
 export interface DockerAvailabilityIssue {
@@ -78,6 +83,7 @@ export interface DockerAvailabilityOperation {
     | "heal"
     | "disable"
     | "stale_cleanup"
+    | "failback"
     | "start"
     | "stop"
     | "restart";
@@ -135,6 +141,9 @@ export interface DockerAvailabilityPolicy {
   desiredGeneration: number;
   rolloutPolicy: { maxUnavailable: number; maxSurge: number; drainSeconds: number };
   offlineReplacementGraceSeconds: number;
+  priorityMode: boolean;
+  nodePriority: string[];
+  failbackDelaySeconds: number;
   status:
     | "single"
     | "enabling"

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ScopeItem, ScopeList } from "@/components/common/ScopeList";
 import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
+import { expandScopeRestrictions } from "@/test/scope-restrictions";
 import { type Node, type ProxyHost, TOKEN_SCOPES } from "@/types";
 
 const apiMocks = vi.hoisted(() => ({
@@ -221,6 +222,7 @@ describe("ScopeList characterization", () => {
         restrictableScopes={[scopeItem.value]}
       />
     );
+    await expandScopeRestrictions();
 
     expect(await screen.findByText("public.example.com")).toBeInTheDocument();
     expect(checkboxFor("public.example.com")).toBeChecked();
@@ -255,6 +257,7 @@ describe("ScopeList characterization", () => {
         restrictableScopes={[scopeItem.value]}
       />
     );
+    await expandScopeRestrictions();
 
     await screen.findByText("Production");
     const folderCheckbox = checkboxFor("Production");
@@ -291,6 +294,7 @@ describe("ScopeList characterization", () => {
         restrictableScopes={[scopeItem.value]}
       />
     );
+    await expandScopeRestrictions();
 
     expect(await screen.findByText("Production")).toBeInTheDocument();
     expect(checkboxFor("Production")).toBeChecked();
@@ -327,6 +331,7 @@ describe("ScopeList characterization", () => {
         restrictableScopes={[scopeItem.value]}
       />
     );
+    await expandScopeRestrictions();
 
     expect(await screen.findByText("Docker Node")).toBeInTheDocument();
     expect(screen.queryByText("Ingress Node")).not.toBeInTheDocument();

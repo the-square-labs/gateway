@@ -1,6 +1,7 @@
 import { EllipsisVertical, FileJson, ScrollText, Settings, Trash2 } from "lucide-react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -173,9 +174,7 @@ function schemaColumns({
       label: "Updated",
       width: "8rem",
       renderCell: (schema) => (
-        <span className="text-sm text-muted-foreground">
-          {new Date(schema.updatedAt).toLocaleDateString()}
-        </span>
+        <RelativeTime value={schema.updatedAt} className="text-sm text-muted-foreground" />
       ),
     },
     {

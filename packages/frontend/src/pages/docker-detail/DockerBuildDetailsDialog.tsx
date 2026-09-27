@@ -12,25 +12,9 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
-import type { DockerBuild, DockerBuildLogChunk, DockerBuildStatus } from "@/types";
+import type { DockerBuild, DockerBuildLogChunk } from "@/types";
 import { DockerLogViewport } from "./DockerLogViewport";
-
-const STATUS_VARIANT: Record<
-  DockerBuildStatus,
-  "default" | "secondary" | "destructive" | "success" | "warning"
-> = {
-  queued: "secondary",
-  claimed: "secondary",
-  checking_out: "default",
-  building: "default",
-  scanning: "default",
-  pushing: "default",
-  deploying: "warning",
-  succeeded: "success",
-  failed: "destructive",
-  cancelled: "secondary",
-  superseded: "secondary",
-};
+import { ACTIVE_DOCKER_BUILD_STATUSES, DOCKER_BUILD_STATUS_VARIANT } from "./docker-build-status";
 
 const VULNERABILITY_VARIANT: Record<string, "secondary" | "destructive" | "warning"> = {
   critical: "destructive",
@@ -41,15 +25,6 @@ const VULNERABILITY_VARIANT: Record<string, "secondary" | "destructive" | "warni
   unknown: "secondary",
 };
 
-const ACTIVE_LOG_STATUSES = new Set<DockerBuildStatus>([
-  "queued",
-  "claimed",
-  "checking_out",
-  "building",
-  "scanning",
-  "pushing",
-  "deploying",
-]);
 const OS_PACKAGE_TYPES = new Set(["deb", "rpm", "apk", "alpm"]);
 const VULNERABILITY_SEVERITIES = ["critical", "high", "medium", "low", "unknown"] as const;
 
@@ -121,7 +96,7 @@ export function DockerBuildDetailsDialog({
   }, [buildId, open, refreshLogs]);
 
   useEffect(() => {
-    if (!open || !buildId || !build || !ACTIVE_LOG_STATUSES.has(build.status)) return;
+    if (!open || !buildId || !build || !ACTIVE_DOCKER_BUILD_STATUSES.has(build.status)) return;
     const interval = window.setInterval(() => {
       if (!document.hidden) void refreshLogs();
     }, 2_000);
@@ -195,7 +170,7 @@ export function DockerBuildDetailsDialog({
         {build && (
           <div className="divide-y divide-border overflow-hidden border border-border bg-card">
             <MetaRow label="Status" header>
-              <Badge variant={STATUS_VARIANT[build.status]}>
+              <Badge variant={DOCKER_BUILD_STATUS_VARIANT[build.status]}>
                 {build.status.replaceAll("_", " ")}
               </Badge>
             </MetaRow>
@@ -208,6 +183,9 @@ export function DockerBuildDetailsDialog({
               <Badge variant="secondary">
                 {build.builderName ?? build.builderNodeId ?? "Waiting"}
               </Badge>
+            </MetaRow>
+            <MetaRow label="Attempt">
+              {build.attempt} of {build.maxAttempts}
             </MetaRow>
             {build.errorMessage && (
               <MetaRow label="Error">

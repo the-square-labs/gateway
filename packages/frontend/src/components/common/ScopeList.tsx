@@ -1,3 +1,4 @@
+import { ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import type { ScopeSelectionFilter } from "@/components/common/ScopeSearchFilter";
@@ -75,7 +76,7 @@ interface ScopeListProps {
   selectionFilter?: ScopeSelectionFilter;
   /**
    * Keep each restriction tree behind a one-line summary ("All resources · Restrict…") until the
-   * user opens it. Used where many scopes start selected, such as OAuth consent.
+   * user opens it (the default everywhere; read-only lists offer "Show").
    */
   collapsedRestrictions?: boolean;
   /** Receives the folders loaded for the selected scopes' folder families. */
@@ -106,7 +107,7 @@ export function ScopeList({
   readOnly,
   viewportClassName,
   selectionFilter = "all",
-  collapsedRestrictions = false,
+  collapsedRestrictions = true,
   onFolderOptionsChange,
   onInitialLoadComplete,
 }: ScopeListProps) {
@@ -664,6 +665,69 @@ function ScopeRow({
   }
   // Git scopes render their own connector and target rows.
   const listedRestrictionRows = gitProvider ? [] : restrictionRows;
+  // Nodes and folders that hold rows below them fold, so a long container list stays short; a
+  // lone top-level group starts open. `toggledGroups` holds the groups flipped from that default.
+  const [toggledGroups, setToggledGroups] = useState<ReadonlySet<string>>(() => new Set());
+  const groupKeys = new Set(
+    listedRestrictionRows
+      .filter((row, index) => (listedRestrictionRows[index + 1]?.depth ?? -1) > row.depth)
+      .map((row) => row.key)
+  );
+  const topGroups = listedRestrictionRows.filter(
+    (row) => row.depth === 0 && groupKeys.has(row.key)
+  );
+  const isGroupOpen = (key: string) =>
+    toggledGroups.has(key) !== (topGroups.length === 1 && topGroups[0]?.key === key);
+  const toggleGroup = (key: string) =>
+    setToggledGroups((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const isRowChecked = (row: RestrictionRow) =>
+    combinedSelectedIds.includes(
+      row.type === "folder" ? folderTarget(row.folder.id) : row.resource.id
+    );
+  const visibleRestrictionRows: { row: RestrictionRow; hiddenSelected: number }[] = [];
+  {
+    const ancestors: { depth: number; open: boolean }[] = [];
+    listedRestrictionRows.forEach((row, index) => {
+      while (ancestors.length > 0 && (ancestors.at(-1)?.depth ?? -1) >= row.depth) ancestors.pop();
+      const isGroup = groupKeys.has(row.key);
+      const open = isGroup && isGroupOpen(row.key);
+      if (ancestors.every((ancestor) => ancestor.open)) {
+        let hiddenSelected = 0;
+        if (isGroup && !open) {
+          for (const below of listedRestrictionRows.slice(index + 1)) {
+            if (below.depth <= row.depth) break;
+            if (isRowChecked(below)) hiddenSelected += 1;
+          }
+        }
+        visibleRestrictionRows.push({ row, hiddenSelected });
+      }
+      if (isGroup) ancestors.push({ depth: row.depth, open });
+    });
+  }
+  const treeHasGroups = groupKeys.size > 0;
+  const groupToggle = (row: RestrictionRow, label: string, hiddenSelected: number) => {
+    if (!treeHasGroups) return null;
+    if (!groupKeys.has(row.key)) return <span className="w-4 shrink-0" aria-hidden="true" />;
+    const open = isGroupOpen(row.key);
+    return (
+      <button
+        type="button"
+        onClick={() => toggleGroup(row.key)}
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} ${label}${
+          hiddenSelected > 0 ? `, ${hiddenSelected} selected` : ""
+        }`}
+        className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+      >
+        <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
+      </button>
+    );
+  };
   const hasRestrictionOptions = gitProvider
     ? (gitConnectors[gitProvider]?.length ?? 0) > 0 ||
       combinedSelectedIds.length > 0 ||
@@ -742,10 +806,9 @@ function ScopeRow({
             variant="quiet"
             size="inline"
             onClick={onToggleExpanded}
-            disabled={disabled}
-            aria-label={`Restrict ${scope.label}`}
+            aria-label={disabled ? `Show ${scope.label} restrictions` : `Restrict ${scope.label}`}
           >
-            {combinedSelectedIds.length === 0 ? "Restrict…" : "Change…"}
+            {disabled ? "Show" : combinedSelectedIds.length === 0 ? "Restrict…" : "Change…"}
           </Button>
         </div>
       )}
@@ -759,10 +822,12 @@ function ScopeRow({
                 variant="quiet"
                 size="inline"
                 onClick={onToggleExpanded}
-                aria-label={`Done restricting ${scope.label}`}
+                aria-label={
+                  disabled ? `Hide ${scope.label} restrictions` : `Done restricting ${scope.label}`
+                }
                 className="shrink-0"
               >
-                Done
+                {disabled ? "Hide" : "Done"}
               </Button>
             )}
           </div>
@@ -786,7 +851,10 @@ function ScopeRow({
               onRememberLabels={onRememberGitLabels}
             />
           )}
-          {listedRestrictionRows.map((row) => {
+          {visibleRestrictionRows.map(({ row, hiddenSelected }) => {
+            const selectedBelow = hiddenSelected > 0 && (
+              <span className="text-xs text-muted-foreground">{hiddenSelected} selected</span>
+            );
             if (row.type === "resource") {
               const opt = row.resource;
               const parentSelected = !!opt.parentId && combinedSelectedIds.includes(opt.parentId);
@@ -804,35 +872,43 @@ function ScopeRow({
               const contextOnly = !!allowedIds && !allowedIds.includes(opt.id);
               const optionDisabled = !!disabled || parentSelected || folderSelected || contextOnly;
               return (
-                <label
+                <div
                   key={row.key}
                   className={cn(
-                    "flex items-center gap-2 py-0.5 text-xs",
+                    "flex items-center gap-1",
                     row.depth === 1 && "pl-5",
-                    row.depth === 2 && "pl-10",
-                    optionDisabled ? "cursor-default opacity-60" : "cursor-pointer"
+                    row.depth === 2 && "pl-10"
                   )}
                 >
-                  <input
-                    type="checkbox"
-                    checked={
-                      parentSelected || folderSelected || combinedSelectedIds.includes(opt.id)
-                    }
-                    onChange={() =>
-                      !optionDisabled &&
-                      !inheritedSet.has(opt.id) &&
-                      onToggleResource?.(scope.value, opt.id)
-                    }
-                    disabled={optionDisabled || inheritedSet.has(opt.id) || !onToggleResource}
-                    className="form-checkbox"
-                  />
-                  <span>{opt.label}</span>
-                  {opt.kind && <span className="text-xs text-muted-foreground">{opt.kind}</span>}
-                  {(inheritedSet.has(opt.id) || parentInherited || folderInherited) &&
-                    inheritedFromName && (
-                      <span className="text-xs text-muted-foreground">inherited</span>
+                  {groupToggle(row, opt.label, hiddenSelected)}
+                  <label
+                    className={cn(
+                      "flex min-w-0 items-center gap-2 py-0.5 text-xs",
+                      optionDisabled ? "cursor-default opacity-60" : "cursor-pointer"
                     )}
-                </label>
+                  >
+                    <input
+                      type="checkbox"
+                      checked={
+                        parentSelected || folderSelected || combinedSelectedIds.includes(opt.id)
+                      }
+                      onChange={() =>
+                        !optionDisabled &&
+                        !inheritedSet.has(opt.id) &&
+                        onToggleResource?.(scope.value, opt.id)
+                      }
+                      disabled={optionDisabled || inheritedSet.has(opt.id) || !onToggleResource}
+                      className="form-checkbox"
+                    />
+                    <span>{opt.label}</span>
+                    {opt.kind && <span className="text-xs text-muted-foreground">{opt.kind}</span>}
+                    {(inheritedSet.has(opt.id) || parentInherited || folderInherited) &&
+                      inheritedFromName && (
+                        <span className="text-xs text-muted-foreground">inherited</span>
+                      )}
+                  </label>
+                  {selectedBelow}
+                </div>
               );
             }
 
@@ -843,32 +919,37 @@ function ScopeRow({
               combinedSelectedIds.includes(folderTarget(id))
             );
             return (
-              <label
+              <div
                 key={row.key}
-                className={cn(
-                  "flex items-center gap-2 py-0.5 text-xs",
-                  row.depth === 1 && "pl-5",
-                  disabled || parentSelected ? "cursor-default opacity-60" : "cursor-pointer"
-                )}
+                className={cn("flex items-center gap-1", row.depth === 1 && "pl-5")}
               >
-                <input
-                  type="checkbox"
-                  checked={parentSelected || combinedSelectedIds.includes(target)}
-                  onChange={() =>
-                    !disabled &&
-                    !parentSelected &&
-                    !inherited &&
-                    onToggleResource?.(scope.value, target)
-                  }
-                  disabled={disabled || parentSelected || inherited || !onToggleResource}
-                  className="form-checkbox"
-                />
-                <span>{folder.label}</span>
-                <span className="text-xs text-muted-foreground">folder</span>
-                {inherited && inheritedFromName && (
-                  <span className="text-xs text-muted-foreground">inherited</span>
-                )}
-              </label>
+                {groupToggle(row, folder.label, hiddenSelected)}
+                <label
+                  className={cn(
+                    "flex min-w-0 items-center gap-2 py-0.5 text-xs",
+                    disabled || parentSelected ? "cursor-default opacity-60" : "cursor-pointer"
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={parentSelected || combinedSelectedIds.includes(target)}
+                    onChange={() =>
+                      !disabled &&
+                      !parentSelected &&
+                      !inherited &&
+                      onToggleResource?.(scope.value, target)
+                    }
+                    disabled={disabled || parentSelected || inherited || !onToggleResource}
+                    className="form-checkbox"
+                  />
+                  <span>{folder.label}</span>
+                  <span className="text-xs text-muted-foreground">folder</span>
+                  {inherited && inheritedFromName && (
+                    <span className="text-xs text-muted-foreground">inherited</span>
+                  )}
+                </label>
+                {selectedBelow}
+              </div>
             );
           })}
         </div>

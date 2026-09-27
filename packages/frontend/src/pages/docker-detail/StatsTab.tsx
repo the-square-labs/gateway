@@ -519,7 +519,7 @@ export function StatsTab({
                 <div className="overflow-x-auto">
                   <div className="max-h-[calc(2rem*9+2.25rem+4px)] overflow-auto">
                     <table className="w-full">
-                      <thead className="sticky top-0 z-10 bg-muted">
+                      <thead className="sticky top-0 z-10 bg-header">
                         <tr className="text-left border-b border-border">
                           {filteredTitles.map((title) => (
                             <th

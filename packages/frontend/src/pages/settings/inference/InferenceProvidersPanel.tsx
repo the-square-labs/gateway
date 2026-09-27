@@ -40,6 +40,7 @@ import {
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import {
   SimpleTable,
@@ -48,7 +49,7 @@ import {
 } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { cn, formatRelativeDate } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { InferenceProviderCatalogItem, InferenceProviderConnection } from "@/types/inference";
@@ -404,11 +405,9 @@ export function InferenceProvidersPanel({
       className: "w-[12%]",
       cellClassName: "w-[12%]",
       render: (row) =>
-        row.kind === "connection"
-          ? row.connection.lastSyncedAt
-            ? formatRelativeDate(row.connection.lastSyncedAt)
-            : "Never"
-          : null,
+        row.kind === "connection" ? (
+          <RelativeTime value={row.connection.lastSyncedAt} fallback="Never" />
+        ) : null,
     },
     {
       id: "actions",
@@ -711,7 +710,7 @@ function ProviderDragOverlayRow({
             </td>
             <td className="px-4 py-3 align-middle">{formatWorstQuota([connection])}</td>
             <td className="px-4 py-3 align-middle">
-              {connection.lastSyncedAt ? formatRelativeDate(connection.lastSyncedAt) : "Never"}
+              <RelativeTime value={connection.lastSyncedAt} fallback="Never" />
             </td>
             <td className="px-4 py-3 text-right align-middle">
               <div className="flex justify-end">

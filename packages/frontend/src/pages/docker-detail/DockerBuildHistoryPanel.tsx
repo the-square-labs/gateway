@@ -2,58 +2,34 @@ import { Hammer } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
-import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { DockerBuild } from "@/types";
 import { DockerBuildDetailsDialog } from "./DockerBuildDetailsDialog";
-import { formatDockerBuildDuration, useDockerBuildClock } from "./docker-build-duration";
+import { DockerBuildsTable } from "./DockerBuildsTable";
+import { ACTIVE_DOCKER_BUILD_STATUSES } from "./docker-build-status";
 
 interface DockerBuildHistoryPanelProps {
-  builds: DockerBuild[];
   sourceBindingId?: string;
+  /** The resource's source is still loading. */
   loading?: boolean;
-  inlineHistory?: boolean;
 }
-
-const ACTIVE_BUILD_STATUSES = new Set<DockerBuild["status"]>([
-  "queued",
-  "claimed",
-  "checking_out",
-  "building",
-  "scanning",
-  "pushing",
-  "deploying",
-]);
 
 function compareBuildsNewestFirst(left: DockerBuild, right: DockerBuild): number {
   const createdAtOrder = right.createdAt.localeCompare(left.createdAt);
   return createdAtOrder || right.id.localeCompare(left.id);
 }
 
+/** The Builds tab of a resource: its build history in the shared build table. */
 export function DockerBuildHistoryPanel({
-  builds,
   sourceBindingId,
   loading = false,
-  inlineHistory = false,
 }: DockerBuildHistoryPanelProps) {
   const [selected, setSelected] = useState<DockerBuild | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [allOpen, setAllOpen] = useState(false);
-  const [allBuilds, setAllBuilds] = useState<DockerBuild[]>([]);
-  // Inline history loads on mount; start as loading so the tab waits for the first page.
-  const [allLoading, setAllLoading] = useState(() => inlineHistory && Boolean(sourceBindingId));
+  const [builds, setBuilds] = useState<DockerBuild[]>([]);
+  // History loads on mount; start as loading so the tab waits for the first page.
+  const [historyLoading, setHistoryLoading] = useState(() => Boolean(sourceBindingId));
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const headRequestId = useRef(0);
   const pageRequestId = useRef(0);
@@ -82,12 +58,12 @@ export function DockerBuildHistoryPanel({
       if (reset) {
         paginationInitialized.current = false;
         setNextCursor(null);
-        setAllLoading(true);
+        setHistoryLoading(true);
       }
       try {
         const page = await api.listDockerBuildPage({ sourceBindingId, limit: 50 });
         if (currentRequest !== headRequestId.current) return;
-        setAllBuilds((current) => {
+        setBuilds((current) => {
           if (reset) return page.data;
           const refreshedIds = new Set(page.data.map((build) => build.id));
           return [...page.data, ...current.filter((build) => !refreshedIds.has(build.id))];
@@ -101,7 +77,7 @@ export function DockerBuildHistoryPanel({
           toast.error(error instanceof Error ? error.message : "Failed to load build history");
         }
       } finally {
-        if (currentRequest === headRequestId.current) setAllLoading(false);
+        if (currentRequest === headRequestId.current) setHistoryLoading(false);
       }
     },
     [sourceBindingId]
@@ -112,11 +88,11 @@ export function DockerBuildHistoryPanel({
       if (!sourceBindingId || loadingMore.current) return;
       const currentRequest = ++pageRequestId.current;
       loadingMore.current = true;
-      setAllLoading(true);
+      setHistoryLoading(true);
       try {
         const page = await api.listDockerBuildPage({ sourceBindingId, cursor, limit: 50 });
         if (currentRequest !== pageRequestId.current) return;
-        setAllBuilds((current) => {
+        setBuilds((current) => {
           const existingIds = new Set(current.map((build) => build.id));
           return [...current, ...page.data.filter((build) => !existingIds.has(build.id))];
         });
@@ -127,7 +103,7 @@ export function DockerBuildHistoryPanel({
         }
       } finally {
         if (currentRequest === pageRequestId.current) {
-          setAllLoading(false);
+          setHistoryLoading(false);
           loadingMore.current = false;
         }
       }
@@ -154,7 +130,7 @@ export function DockerBuildHistoryPanel({
         ) {
           return;
         }
-        setAllBuilds((current) => {
+        setBuilds((current) => {
           const existingIndex = current.findIndex((candidate) => candidate.id === build.id);
           const next =
             existingIndex === -1
@@ -170,10 +146,10 @@ export function DockerBuildHistoryPanel({
   );
 
   const refreshTrackedActiveBuilds = useCallback(() => {
-    for (const build of allBuilds) {
-      if (ACTIVE_BUILD_STATUSES.has(build.status)) void refreshBuild(build.id);
+    for (const build of builds) {
+      if (ACTIVE_DOCKER_BUILD_STATUSES.has(build.status)) void refreshBuild(build.id);
     }
-  }, [allBuilds, refreshBuild]);
+  }, [builds, refreshBuild]);
 
   useEffect(
     () => () => {
@@ -183,17 +159,14 @@ export function DockerBuildHistoryPanel({
     []
   );
 
-  const historyActive = inlineHistory || allOpen;
-  const buildClock = useDockerBuildClock(historyActive ? allBuilds : builds);
-
   useEffect(() => {
-    if (historyActive) void loadHead(true);
-  }, [historyActive, loadHead]);
+    void loadHead(true);
+  }, [loadHead]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
     const root = tableScrollRef.current;
-    if (!historyActive || !sentinel || !root || !nextCursor) return;
+    if (!sentinel || !root || !nextCursor) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting && !loadingMore.current) {
@@ -204,18 +177,16 @@ export function DockerBuildHistoryPanel({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [historyActive, loadPage, nextCursor]);
+  }, [loadPage, nextCursor]);
 
   useEffect(() => {
     if (!selected) return;
-    const refreshed = (inlineHistory ? allBuilds : builds).find(
-      (build) => build.id === selected.id
-    );
+    const refreshed = builds.find((build) => build.id === selected.id);
     if (refreshed && refreshed !== selected) setSelected(refreshed);
-  }, [allBuilds, builds, inlineHistory, selected]);
+  }, [builds, selected]);
 
   useRealtime(
-    historyActive && sourceBindingId ? "docker.build.changed" : null,
+    sourceBindingId ? "docker.build.changed" : null,
     (payload) => {
       const event = payload as { buildId?: string; sourceBindingId?: string } | undefined;
       if (event?.sourceBindingId === sourceBindingId) {
@@ -231,21 +202,18 @@ export function DockerBuildHistoryPanel({
       },
     }
   );
-  useRealtime(
-    historyActive && sourceBindingId ? "docker.build.artifact.changed" : null,
-    (payload) => {
-      const event = payload as { buildId?: string; sourceBindingId?: string } | undefined;
-      if (event?.sourceBindingId === sourceBindingId) {
-        const buildId = event?.buildId;
-        if (buildId) void refreshBuild(buildId);
-        void refreshHead();
-      }
+  useRealtime(sourceBindingId ? "docker.build.artifact.changed" : null, (payload) => {
+    const event = payload as { buildId?: string; sourceBindingId?: string } | undefined;
+    if (event?.sourceBindingId === sourceBindingId) {
+      const buildId = event?.buildId;
+      if (buildId) void refreshBuild(buildId);
+      void refreshHead();
     }
-  );
+  });
 
-  const hasActiveHistoryBuilds = allBuilds.some((build) => ACTIVE_BUILD_STATUSES.has(build.status));
+  const hasActiveBuilds = builds.some((build) => ACTIVE_DOCKER_BUILD_STATUSES.has(build.status));
   useEffect(() => {
-    if (!historyActive || !sourceBindingId) return;
+    if (!sourceBindingId) return;
     const interval = window.setInterval(
       () => {
         if (!document.hidden) {
@@ -253,276 +221,38 @@ export function DockerBuildHistoryPanel({
           void refreshHead();
         }
       },
-      hasActiveHistoryBuilds ? 5_000 : 15_000
+      hasActiveBuilds ? 5_000 : 15_000
     );
     return () => window.clearInterval(interval);
-  }, [
-    hasActiveHistoryBuilds,
-    historyActive,
-    refreshHead,
-    refreshTrackedActiveBuilds,
-    sourceBindingId,
-  ]);
+  }, [hasActiveBuilds, refreshHead, refreshTrackedActiveBuilds, sourceBindingId]);
 
-  const renderStatus = (build: DockerBuild) => (
-    <Badge
-      variant={
-        build.status === "succeeded"
-          ? "success"
-          : build.status === "failed"
-            ? "destructive"
-            : "secondary"
-      }
-    >
-      {build.status.replaceAll("_", " ")}
-    </Badge>
-  );
-  const renderWorker = (build: DockerBuild) => (
-    <Badge variant="secondary" className="max-w-full truncate">
-      {build.builderName ?? build.builderNodeId?.slice(0, 8) ?? "Waiting"}
-    </Badge>
-  );
-  const renderResult = (build: DockerBuild) => {
-    const detail = !build.artifact
-      ? build.status === "scanning"
-        ? "Security scan"
-        : "Waiting for artifact"
-      : build.artifact.policyDecision === "rejected"
-        ? build.artifact.policyReason || "Artifact rejected"
-        : build.status === "succeeded"
-          ? "Deployment completed"
-          : "Artifact approved";
-    if (!build.artifact) {
-      return (
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Badge variant="secondary" tabIndex={0}>
-                Pending
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent side="top">{detail}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      );
-    }
-    const blocked = build.artifact.policyDecision === "rejected";
-    return (
-      <TooltipProvider delayDuration={200}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge variant={blocked ? "destructive" : "success"} tabIndex={0}>
-              {blocked ? "Policy blocked" : build.status === "succeeded" ? "Deployed" : "Approved"}
-            </Badge>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-sm">
-            {detail}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    );
-  };
-  const renderArtifactSha = (build: DockerBuild) =>
-    build.artifact ? (
-      <span className="block truncate font-mono text-xs">
-        {`${build.artifact.digest.slice(0, 19)}…`}
-      </span>
-    ) : (
-      <span className="text-muted-foreground">—</span>
-    );
-  const hasServiceBuilds = builds.some((build) => Boolean(build.serviceName));
-  const renderService = (build: DockerBuild) => (
-    <span className="block truncate font-medium">{build.serviceName ?? "—"}</span>
-  );
-
-  const recentColumns: SimpleTableColumn<DockerBuild>[] = [
-    {
-      id: "commit",
-      header: "Commit",
-      className: hasServiceBuilds ? "w-[16%]" : "w-[20%]",
-      render: (build) => <span className="font-mono">{build.commitSha.slice(0, 10)}</span>,
-    },
-    ...(hasServiceBuilds
-      ? [
-          {
-            id: "service",
-            header: "Service",
-            className: "w-[16%]",
-            render: renderService,
-          } satisfies SimpleTableColumn<DockerBuild>,
-        ]
-      : []),
-    {
-      id: "status",
-      header: "Status",
-      align: "right",
-      className: hasServiceBuilds ? "w-[13%]" : "w-[15%]",
-      render: renderStatus,
-    },
-    {
-      id: "worker",
-      header: "Build Worker",
-      align: "right",
-      className: hasServiceBuilds ? "w-[17%]" : "w-[20%]",
-      render: renderWorker,
-    },
-    {
-      id: "artifact",
-      header: "Result",
-      align: "right",
-      className: hasServiceBuilds ? "w-[22%]" : "w-[25%]",
-      render: renderResult,
-    },
-    {
-      id: "artifactSha",
-      header: "SHA",
-      align: "right",
-      className: hasServiceBuilds ? "w-[16%]" : "w-[20%]",
-      render: renderArtifactSha,
-    },
-  ];
-  const allColumns: DataTableColumn<DockerBuild>[] = [
-    {
-      key: "commit",
-      header: "Commit",
-      width: "0.75fr",
-      render: (build) => (
-        <span className="block truncate font-mono">{build.commitSha.slice(0, 10)}</span>
-      ),
-    },
-    ...(hasServiceBuilds
-      ? [
-          {
-            key: "service",
-            header: "Service",
-            width: "0.9fr",
-            render: renderService,
-          } satisfies DataTableColumn<DockerBuild>,
-        ]
-      : []),
-    { key: "status", header: "Status", align: "center", width: "0.8fr", render: renderStatus },
-    {
-      key: "worker",
-      header: "Build Worker",
-      align: "center",
-      width: "1.2fr",
-      render: renderWorker,
-    },
-    {
-      key: "artifact",
-      header: "Result",
-      align: "center",
-      width: "1.35fr",
-      render: renderResult,
-    },
-    {
-      key: "time",
-      header: "Time",
-      align: "center",
-      width: "0.7fr",
-      render: (build) => formatDockerBuildDuration(build, buildClock),
-    },
-    {
-      key: "artifactSha",
-      header: "SHA",
-      align: "right",
-      width: "1.1fr",
-      render: renderArtifactSha,
-    },
-  ];
-
-  const openDetails = (build: DockerBuild) => {
-    setSelected(build);
-    setDetailsOpen(true);
-  };
-  const openAll = () => {
-    headRequestId.current += 1;
-    pageRequestId.current += 1;
-    paginationInitialized.current = false;
-    loadingMore.current = false;
-    setAllBuilds([]);
-    setNextCursor(null);
-    setAllLoading(true);
-    setAllOpen(true);
-  };
-  const closeAll = (nextOpen: boolean) => {
-    setAllOpen(nextOpen);
-    if (!nextOpen) {
-      headRequestId.current += 1;
-      pageRequestId.current += 1;
-      loadingMore.current = false;
-    }
-  };
-  const historyTable = (embedded: boolean) => (
-    <DataTable
-      columns={allColumns}
-      data={allBuilds}
-      keyFn={(build) => build.id}
-      onRowClick={openDetails}
-      loading={(inlineHistory ? loading || allLoading : allLoading) && allBuilds.length === 0}
-      className={
-        embedded
-          ? "h-fit w-full max-h-full [&_[data-route-scroll-container]]:flex-1"
-          : "max-h-[min(56dvh,36rem)]"
-      }
-      scrollRef={tableScrollRef}
-      emptyMessage="No builds yet."
-      embedded={embedded}
-      horizontalScroll={embedded}
-      minWidth={embedded ? "900px" : undefined}
-      footer={
-        nextCursor ? (
-          <div ref={sentinelRef} className="py-3 text-center text-xs text-muted-foreground">
-            {allLoading ? "Loading more…" : "Scroll to load older builds"}
-          </div>
-        ) : null
-      }
-    />
-  );
   return (
     <>
-      {inlineHistory ? (
-        <PanelShell
-          icon={<Hammer className="h-4 w-4" />}
-          title="Builds"
-          description="Build history, security decisions, and deployment results."
-          className="flex h-fit max-h-full min-h-0 flex-col"
-          bodyClassName="flex min-h-0 flex-1 p-0"
-        >
-          {historyTable(true)}
-        </PanelShell>
-      ) : (
-        <PanelShell
-          icon={<Hammer className="h-4 w-4" />}
-          title="Builds"
-          description="The 5 most recent builds, security decisions, and deployment results."
-          actions={
-            <Button variant="quiet" size="inline" className="text-sm font-normal" onClick={openAll}>
-              View all
-            </Button>
-          }
-        >
-          <SimpleTable
-            columns={recentColumns}
-            rows={builds.slice(0, 5)}
-            getRowKey={(build) => build.id}
-            loading={loading}
-            emptyMessage="No builds yet. Queue the first build from the Source tab."
-            tableClassName="table-fixed"
-            onRowClick={openDetails}
-          />
-        </PanelShell>
-      )}
-
-      <Dialog open={!inlineHistory && allOpen} onOpenChange={closeAll}>
-        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-h-[85dvh] sm:max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>Build History</DialogTitle>
-            <DialogDescription>Scroll the table to load older builds.</DialogDescription>
-          </DialogHeader>
-          {historyTable(false)}
-        </DialogContent>
-      </Dialog>
+      <PanelShell
+        icon={<Hammer className="h-4 w-4" />}
+        title="Builds"
+        description="Build history, security decisions, and deployment results."
+        className="flex h-fit max-h-full min-h-0 flex-col"
+        bodyClassName="flex min-h-0 flex-1 p-0"
+      >
+        <DockerBuildsTable
+          builds={builds}
+          scope="resource"
+          loading={loading || historyLoading}
+          onOpenBuild={(build) => {
+            setSelected(build);
+            setDetailsOpen(true);
+          }}
+          onBuildsChanged={refreshHead}
+          hasMore={Boolean(nextCursor)}
+          loadingMore={historyLoading}
+          embedded
+          className="h-fit w-full max-h-full [&_[data-route-scroll-container]]:flex-1"
+          scrollRef={tableScrollRef}
+          sentinelRef={sentinelRef}
+          emptyMessage="No builds yet."
+        />
+      </PanelShell>
 
       <DockerBuildDetailsDialog
         open={detailsOpen}

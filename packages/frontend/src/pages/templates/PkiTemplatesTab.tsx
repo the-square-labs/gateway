@@ -1,18 +1,19 @@
-import { FileText, MoreVertical, Pencil, Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { FileText, FolderPlus, MoreVertical, Pencil, Plus, Trash2 } from "lucide-react";
+import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
+import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
-import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -23,7 +24,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -47,26 +47,37 @@ import {
   WIZARD_STEPS,
 } from "./PkiTemplateWizardSteps";
 
+/** Read-only folder that holds the built-in templates above the operator's folders. */
+const BUILTIN_FOLDER_ID = "pki-templates-builtin";
+
+const stopRowEvent = (event: SyntheticEvent) => event.stopPropagation();
+
 export function PkiTemplatesTab({
   embedded,
   onCreateRef,
+  onCreateFolderRef,
 }: {
   embedded?: boolean;
   onCreateRef?: (fn: () => void) => void;
+  onCreateFolderRef?: (fn: () => void) => void;
 }) {
   const { hasScope } = useAuthStore();
   const canListTemplates = hasScope("pki:templates:view");
   const canCreateTemplates = hasScope("pki:templates:create");
   const canEditTemplates = hasScope("pki:templates:edit");
   const canDeleteTemplates = hasScope("pki:templates:delete");
+  const canManageFolders = hasScope("pki:templates:folders:manage");
   const cachedTemplates = canListTemplates
     ? api.getCached<Template[]>("templates:list")
     : undefined;
   const [templates, setTemplates] = useState<Template[]>(cachedTemplates ?? []);
   const [isLoading, setIsLoading] = useState(canListTemplates && !cachedTemplates);
-  const initialLoading = useInitialLoading(isLoading);
+  const [search, setSearch] = useState("");
+  const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Template | null>(null);
+  // Built-in templates open the same wizard with every field disabled.
+  const [viewOnly, setViewOnly] = useState(false);
   const [step, setStep] = useState(0);
 
   // Form state
@@ -115,6 +126,11 @@ export function PkiTemplatesTab({
     loadTemplates();
   });
 
+  // Deleting a folder moves its templates to ungrouped.
+  useRealtime("pki.template.folder.changed", () => {
+    loadTemplates();
+  });
+
   const resetForm = () => {
     setName("");
     setDescription("");
@@ -140,6 +156,7 @@ export function PkiTemplatesTab({
 
   const openCreate = () => {
     setEditing(null);
+    setViewOnly(false);
     resetForm();
     setDialogOpen(true);
   };
@@ -151,8 +168,9 @@ export function PkiTemplatesTab({
     createRefSet.current = true;
   }
 
-  const openEdit = (t: Template) => {
+  const openEdit = (t: Template, { readOnly = false }: { readOnly?: boolean } = {}) => {
     setEditing(t);
+    setViewOnly(readOnly);
     setName(t.name);
     setDescription(t.description || "");
     setCertType(t.certType);
@@ -247,71 +265,58 @@ export function PkiTemplatesTab({
   const isLastStep = step === WIZARD_STEPS.length - 1;
   const canProceed =
     step === 0 ? name.trim() !== "" && validityDays >= 1 && validityDays <= 3650 : true;
-  const templateColumns: SimpleTableColumn<Template>[] = [
+  const canOpenTemplate = (template: Template) => template.isBuiltin || canEditTemplates;
+  const query = search.trim().toLowerCase();
+  const visibleTemplates = query
+    ? templates.filter((template) =>
+        [template.name, template.description].some((value) => value?.toLowerCase().includes(query))
+      )
+    : templates;
+  const templateColumns: ResourceListColumn<Template>[] = [
     {
       id: "name",
-      header: "Name",
-      render: (template) => (
-        <div className="flex min-w-0 items-center gap-2">
-          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="truncate text-sm font-medium">{template.name}</span>
-          {template.isBuiltin && <Badge size="inline">Built-in</Badge>}
+      label: "Name",
+      renderCell: (template) => (
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate text-sm font-medium">{template.name}</span>
+            {template.isBuiltin && <Badge size="inline">Built-in</Badge>}
+          </div>
+          {template.description && (
+            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+              {template.description}
+            </p>
+          )}
         </div>
-      ),
-    },
-    {
-      id: "description",
-      header: "Description",
-      render: (template) => (
-        <span className="line-clamp-1 text-sm text-muted-foreground">
-          {template.description || "No description"}
-        </span>
       ),
     },
     {
       id: "type",
-      header: "Type",
-      render: (template) => <Badge variant="secondary">{template.certType}</Badge>,
+      label: "Type",
+      width: "9rem",
+      renderCell: (template) => <Badge variant="secondary">{template.certType}</Badge>,
     },
     {
       id: "algorithm",
-      header: "Algorithm",
-      render: (template) => <Badge variant="secondary">{template.keyAlgorithm}</Badge>,
+      label: "Algorithm",
+      width: "9rem",
+      renderCell: (template) => <Badge variant="secondary">{template.keyAlgorithm}</Badge>,
     },
     {
       id: "validity",
-      header: "Validity",
-      render: (template) => <Badge variant="secondary">{template.validityDays}d</Badge>,
-    },
-    {
-      id: "usage",
-      header: "Usage",
-      render: (template) => (
-        <div className="flex flex-wrap gap-1">
-          {(template.keyUsage?.length ?? 0) > 0 && (
-            <Badge variant="secondary">{template.keyUsage.length} KU</Badge>
-          )}
-          {(template.extKeyUsage?.length ?? 0) > 0 && (
-            <Badge variant="secondary">{template.extKeyUsage.length} EKU</Badge>
-          )}
-          {(template.crlDistributionPoints?.length ?? 0) > 0 && (
-            <Badge variant="secondary">CRL</Badge>
-          )}
-          {(template.customExtensions?.length ?? 0) > 0 && (
-            <Badge variant="secondary">{template.customExtensions.length} ext</Badge>
-          )}
-        </div>
-      ),
+      label: "Validity",
+      width: "7rem",
+      renderCell: (template) => <Badge variant="secondary">{template.validityDays}d</Badge>,
     },
     {
       id: "actions",
-      header: "",
+      label: "Actions",
       align: "right",
-      className: "w-12",
-      cellClassName: "w-12",
-      render: (template) =>
+      width: "5rem",
+      renderCell: (template) =>
         (canEditTemplates || canDeleteTemplates) && !template.isBuiltin ? (
-          <div onClick={(event) => event.stopPropagation()}>
+          <div className="flex justify-end" onClick={stopRowEvent} onPointerDown={stopRowEvent}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${template.name}`}>
@@ -354,8 +359,17 @@ export function PkiTemplatesTab({
             description="Certificate issuance templates"
             actions={
               <ResponsiveHeaderActions
-                actions={
-                  canCreateTemplates
+                actions={[
+                  ...(canManageFolders && createFolderAction
+                    ? [
+                        {
+                          label: "Add Folder",
+                          icon: <FolderPlus className="h-4 w-4" />,
+                          onClick: createFolderAction,
+                        },
+                      ]
+                    : []),
+                  ...(canCreateTemplates
                     ? [
                         {
                           label: "Create Template",
@@ -363,9 +377,15 @@ export function PkiTemplatesTab({
                           onClick: openCreate,
                         },
                       ]
-                    : []
-                }
+                    : []),
+                ]}
               >
+                {canManageFolders && (
+                  <Button variant="outline" onClick={() => createFolderAction?.()}>
+                    <FolderPlus className="h-4 w-4" />
+                    Add Folder
+                  </Button>
+                )}
                 {canCreateTemplates && (
                   <Button onClick={openCreate}>
                     <Plus className="h-4 w-4" />
@@ -377,40 +397,72 @@ export function PkiTemplatesTab({
           />
         )}
 
-        {/* Template grid */}
-        <ContentLoading loading={initialLoading && templates.length === 0} />
-        {initialLoading && templates.length === 0 ? null : templates.length > 0 ? (
-          <div className="border border-border bg-card">
-            <SimpleTable
-              columns={templateColumns}
-              rows={templates}
-              getRowKey={(template) => template.id}
-              loading={isLoading}
-              loadingMessage="Loading certificate templates"
-              onRowClick={(template) => {
-                if (canEditTemplates && !template.isBuiltin) openEdit(template);
-              }}
-              isRowClickable={(template) => canEditTemplates && !template.isBuiltin}
+        <FolderedResourceList<Template>
+          resourceType="pki-template"
+          realtimeChannel="pki.template.folder.changed"
+          resources={visibleTemplates.filter((template) => !template.isBuiltin)}
+          systemFolders={[
+            {
+              id: BUILTIN_FOLDER_ID,
+              name: "Built-in",
+              // Built-in templates keep the server's order.
+              items: visibleTemplates
+                .filter((template) => template.isBuiltin)
+                .map((template, index) => ({ ...template, sortOrder: index })),
+            },
+          ]}
+          columns={templateColumns}
+          search={{
+            placeholder: "Search templates...",
+            search,
+            onSearchChange: setSearch,
+            hasActiveFilters: search !== "",
+            onReset: () => setSearch(""),
+          }}
+          loading={isLoading}
+          loadingLabel="Loading certificate templates..."
+          emptyState={
+            <EmptyState
+              message="No templates."
+              {...(canCreateTemplates ? { actionLabel: "Create one", onAction: openCreate } : {})}
+              hasActiveFilters={search !== ""}
+              onReset={() => setSearch("")}
             />
-          </div>
-        ) : (
-          <EmptyState
-            message="No templates."
-            {...(canCreateTemplates
-              ? { actionLabel: "Create one", onAction: () => setDialogOpen(true) }
-              : {})}
-          />
-        )}
+          }
+          minWidth={760}
+          canManageFolders={canManageFolders}
+          canViewItem={canOpenTemplate}
+          canReorganizeItem={(template) =>
+            canManageFolders && canEditTemplates && !template.isBuiltin
+          }
+          getResourceLabel={(template) => template.name}
+          onItemClick={(template) => {
+            if (template.isBuiltin) openEdit(template, { readOnly: true });
+            else if (canEditTemplates) openEdit(template);
+          }}
+          onRefresh={loadTemplates}
+          onCreateFolderRef={(fn) => {
+            setCreateFolderAction(() => fn);
+            onCreateFolderRef?.(fn);
+          }}
+        />
 
         {/* Wizard Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
-              <DialogTitle>{editing ? "Edit Template" : "Create Template"}</DialogTitle>
+              <DialogTitle>
+                {viewOnly ? editing?.name : editing ? "Edit Template" : "Create Template"}
+              </DialogTitle>
+              {viewOnly && (
+                <DialogDescription>
+                  Built-in template. Its settings are read-only.
+                </DialogDescription>
+              )}
             </DialogHeader>
 
             {/* Step indicator */}
-            <div className="flex gap-1 px-1">
+            <div className="flex gap-1">
               {/* Step progress segments; each one jumps to its step. */}
               {WIZARD_STEPS.map((s, i) => (
                 <button
@@ -428,7 +480,7 @@ export function PkiTemplatesTab({
             </div>
 
             {/* Step content */}
-            <div className="-mx-1 space-y-4 px-1 pb-1">
+            <fieldset className="-mx-1 min-w-0 space-y-4 border-0 px-1 pb-1" disabled={viewOnly}>
               {step === 0 && (
                 <StepGeneral
                   name={name}
@@ -494,30 +546,28 @@ export function PkiTemplatesTab({
                   setCustomExtensions={setCustomExtensions}
                 />
               )}
-            </div>
+            </fieldset>
 
-            <DialogFooter className="flex items-center justify-between sm:justify-between">
-              <div>
-                {step > 0 && (
-                  <Button variant="outline" onClick={() => setStep(step - 1)}>
-                    Back
-                  </Button>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setDialogOpen(false)}>
-                  Cancel
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDialogOpen(false)}>
+                {viewOnly ? "Close" : "Cancel"}
+              </Button>
+              {step > 0 && (
+                <Button variant="outline" onClick={() => setStep(step - 1)}>
+                  Back
                 </Button>
-                {isLastStep ? (
-                  <Button onClick={handleSave} disabled={!canProceed} pending={isSaving}>
-                    {editing ? "Update" : "Create"}
-                  </Button>
-                ) : (
-                  <Button onClick={() => setStep(step + 1)} disabled={!canProceed}>
-                    Next
-                  </Button>
-                )}
-              </div>
+              )}
+              {viewOnly ? (
+                !isLastStep && <Button onClick={() => setStep(step + 1)}>Next</Button>
+              ) : isLastStep ? (
+                <Button onClick={handleSave} disabled={!canProceed} pending={isSaving}>
+                  {editing ? "Update" : "Create"}
+                </Button>
+              ) : (
+                <Button onClick={() => setStep(step + 1)} disabled={!canProceed}>
+                  Next
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>

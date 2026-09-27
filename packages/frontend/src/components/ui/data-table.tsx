@@ -159,7 +159,7 @@ export function DataTable<T>({
         >
           {/* Sticky header — sibling of the virtualized body, sharing the same grid template */}
           <div
-            className="sticky top-0 z-10 grid bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground shadow-[inset_0_-1px_0_var(--color-border)]"
+            className="sticky top-0 z-10 grid bg-header text-xs font-medium uppercase tracking-wider text-muted-foreground shadow-[inset_0_-1px_0_var(--color-border)]"
             style={{ gridTemplateColumns }}
           >
             {columns.map((col) => (
@@ -213,7 +213,8 @@ export function DataTable<T>({
               return (
                 <Fragment key={item.key}>
                   <div
-                    ref={virtualizer.measureElement}
+                    // A fixed row height is the row's size: not measured, like group rows.
+                    ref={fixedRowHeight ? undefined : virtualizer.measureElement}
                     data-index={vi.index}
                     className={cn(
                       "absolute inset-x-0 grid items-center transition-colors",

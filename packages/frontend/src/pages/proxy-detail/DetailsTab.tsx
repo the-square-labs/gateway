@@ -3,10 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { nodeRoute } from "@/lib/resource-routes";
+import { formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { NodeDetail, ProxyHost } from "@/types";
@@ -155,8 +157,8 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
               value={`${host.redirectUrl} (${host.redirectStatusCode})`}
             />
           )}
-          <DetailRow label="Created" value={new Date(host.createdAt).toLocaleString()} />
-          <DetailRow label="Updated" value={new Date(host.updatedAt).toLocaleString()} />
+          <DetailRow label="Created" value={<RelativeTime value={host.createdAt} />} />
+          <DetailRow label="Updated" value={<RelativeTime value={host.updatedAt} />} />
         </PanelShell>
 
         {/* Health Check Status Card */}
@@ -182,7 +184,7 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
             {host.lastHealthCheckAt && (
               <DetailRow
                 label="Last Check"
-                value={new Date(host.lastHealthCheckAt).toLocaleString()}
+                value={<RelativeTime value={host.lastHealthCheckAt} />}
               />
             )}
           </PanelShell>
@@ -216,10 +218,7 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
             }
           />
           {host.sslCertificate.notAfter && (
-            <DetailRow
-              label="Expires"
-              value={new Date(host.sslCertificate.notAfter).toLocaleString()}
-            />
+            <DetailRow label="Expires" value={formatDate(host.sslCertificate.notAfter)} />
           )}
         </PanelShell>
       )}

@@ -44,7 +44,8 @@ export function shouldForceHeaderActionOverflow(action: ResponsiveHeaderAction):
 
 const MIN_HEADER_CONTENT_WIDTH_PX = 320;
 const HEADER_ACTION_GAP_PX = 8;
-const MAX_HEADER_BUTTONS = 4;
+/** Direct header actions shown at most; the rest go to the overflow menu. */
+const MAX_DIRECT_HEADER_ACTIONS = 6;
 
 interface MeasuredHeaderAction {
   width: number;
@@ -62,6 +63,16 @@ export function getHeaderActionOverflowIndices(
   const overflowIndices = new Set(
     actions.flatMap((action, index) => (action.alwaysOverflow ? [index] : []))
   );
+  const collapseOrder = actions
+    .map((action, index) => ({ index, priority: action.priority ?? 0 }))
+    .filter(({ index }) => !overflowIndices.has(index))
+    .sort((a, b) => a.priority - b.priority || a.index - b.index);
+
+  // The cap holds before layout can be measured, so a header never starts wider than it.
+  for (const action of collapseOrder) {
+    if (actions.length - overflowIndices.size <= MAX_DIRECT_HEADER_ACTIONS) break;
+    overflowIndices.add(action.index);
+  }
 
   if (
     headerWidth <= 0 ||
@@ -88,20 +99,6 @@ export function getHeaderActionOverflowIndices(
       Math.max(0, renderedItemCount - 1) * gapWidth
     );
   };
-
-  const collapseOrder = actions
-    .map((action, index) => ({ index, priority: action.priority ?? 0 }))
-    .filter(({ index }) => !overflowIndices.has(index))
-    .sort((a, b) => a.priority - b.priority || a.index - b.index);
-
-  // The overflow trigger counts as one of the four visible header buttons.
-  // Once overflow exists, leave room for at most three direct actions.
-  for (const action of collapseOrder) {
-    const visibleCount = actions.length - overflowIndices.size;
-    const renderedItemCount = visibleCount + (overflowIndices.size > 0 ? 1 : 0);
-    if (renderedItemCount <= MAX_HEADER_BUTTONS) break;
-    overflowIndices.add(action.index);
-  }
 
   for (const action of collapseOrder) {
     if (overflowIndices.has(action.index)) continue;

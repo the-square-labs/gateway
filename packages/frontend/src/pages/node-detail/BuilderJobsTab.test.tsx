@@ -48,8 +48,11 @@ it("loads and lazily paginates virtualized jobs for one Build Worker", async () 
     })
   );
   expect(await screen.findByText("Build jobs")).toBeInTheDocument();
-  expect(screen.queryByText("Scroll to load older jobs")).not.toBeInTheDocument();
-  expect(container.querySelector(".-mt-px.h-px[aria-hidden='true']")).not.toBeNull();
+  // The shared build table: Docker Builds columns and its infinite-scroll footer.
+  expect(await screen.findByText("Source / resource")).toBeInTheDocument();
+  expect(screen.getByText("Result")).toBeInTheDocument();
+  expect(screen.queryByText("Attempt")).not.toBeInTheDocument();
+  expect(screen.getByText("Scroll to load older builds")).toBeInTheDocument();
   expect(container.querySelector(".h-fit.w-full.max-h-full")).not.toBeNull();
 
   await waitFor(() => expect(intersectionCallback).toBeDefined());
@@ -68,22 +71,15 @@ it("loads and lazily paginates virtualized jobs for one Build Worker", async () 
   );
 });
 
-it("uses measured shared-table rows and a zero-height pagination sentinel", () => {
+it("renders jobs with the canonical build table instead of its own columns", () => {
   const source = readFileSync(
     resolve(process.cwd(), "src/pages/node-detail/BuilderJobsTab.tsx"),
     "utf8"
   );
-  const dataTableSource = readFileSync(
-    resolve(process.cwd(), "src/components/ui/data-table.tsx"),
-    "utf8"
-  );
 
-  expect(source).not.toContain("fixedRowHeight=");
-  expect(source).toContain('className="-mt-px h-px"');
-  expect(source).toContain("footerRowSeparator={false}");
-  expect(source).toContain("embeddedLastRowSeparator={false}");
-  expect(dataTableSource).toContain("Boolean(footer) && footerRowSeparator");
-  expect(dataTableSource).toContain("embedded && embeddedLastRowSeparator");
+  expect(source).toContain('from "../docker-detail/DockerBuildsTable"');
+  expect(source).not.toContain('from "@/components/ui/data-table"');
+  expect(source).not.toContain("STATUS_VARIANT");
 });
 
 function build(id: string): DockerBuild {

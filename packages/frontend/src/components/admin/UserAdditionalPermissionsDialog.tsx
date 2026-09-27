@@ -3,10 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { ScopeList } from "@/components/common/ScopeList";
-import {
-  ScopeSearchFilter,
-  type ScopeSelectionFilter,
-} from "@/components/common/ScopeSearchFilter";
+import { ScopePicker } from "@/components/common/ScopePicker";
 import {
   allResourcePages,
   canLoadScopeResource,
@@ -81,8 +78,6 @@ export function UserAdditionalPermissionsDialog({
   const [baseScopes, setBaseScopes] = useState<string[]>([]);
   const [resources, setResources] = useState<Record<string, string[]>>({});
   const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
-  const [selectionFilter, setSelectionFilter] = useState<ScopeSelectionFilter>("all");
   const [saving, setSaving] = useState(false);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [proxyHosts, setProxyHosts] = useState<ProxyHost[]>([]);
@@ -114,8 +109,6 @@ export function UserAdditionalPermissionsDialog({
     setBaseScopes(parsed.baseScopes);
     setResources(parsed.resources);
     setInitialResourceLimitedScopes(Object.keys(parsed.resources));
-    setSearch("");
-    setSelectionFilter("all");
   }, [open, user]);
 
   useEffect(() => {
@@ -261,21 +254,14 @@ export function UserAdditionalPermissionsDialog({
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="additional" className="border border-border">
-            <ScopeSearchFilter
-              search={search}
-              onSearchChange={setSearch}
-              filter={selectionFilter}
-              onFilterChange={setSelectionFilter}
-              placeholder="Search permissions..."
-            />
-            <ScopeList
+          <TabsContent value="additional">
+            <ScopePicker
+              searchPlaceholder="Search permissions..."
               scopes={assignableScopes}
-              search={search}
-              selectionFilter={selectionFilter}
               selected={baseScopes}
               onToggle={toggleScope}
               resources={resources}
+              onResourcesChange={setResources}
               onToggleResource={toggleResource}
               cas={cas}
               nodes={nodes}
@@ -287,6 +273,7 @@ export function UserAdditionalPermissionsDialog({
               inheritedScopes={groupScopes}
               inheritedFromName={displayedUser?.groupNames?.join(", ") ?? displayedUser?.groupName}
               viewportClassName="max-h-[min(25rem,48dvh)] overflow-y-auto overscroll-contain"
+              footer={`${additionalScopes.length} additional scope${additionalScopes.length === 1 ? "" : "s"}`}
             />
           </TabsContent>
 
@@ -331,7 +318,6 @@ export function UserAdditionalPermissionsDialog({
           <Button
             type="button"
             variant="ghost"
-            className="sm:mr-auto"
             onClick={resetAdditionalPermissions}
             disabled={additionalScopes.length === 0 || saving}
           >

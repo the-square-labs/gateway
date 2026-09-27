@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useState } from "react";
-import { InlineFolderEditor } from "@/components/common/InlineFolderEditor";
+import { FolderRenameDialog } from "@/components/common/FolderCreateDialog";
 import { type ResourceListColumn, ResourceListTable } from "@/components/common/ResourceListLayout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,7 +43,7 @@ export function ResourceFolderGroup<TFolder, TItem>({
   folderConfig,
   itemConfig,
 }: ResourceFolderGroupProps<TFolder, TItem>) {
-  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
   const folderId = folderConfig.getFolderId(folder);
   const children = folderConfig.getFolderChildren(folder);
   const items = folderConfig.getFolderItems(folder);
@@ -93,29 +93,16 @@ export function ResourceFolderGroup<TFolder, TItem>({
         <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
         {isSystem && <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
 
-        {isRenaming ? (
-          <div onClick={(e) => e.stopPropagation()}>
-            <InlineFolderEditor
-              initialName={folderConfig.getFolderName(folder)}
-              onSave={(name) => {
-                folderConfig.onRenameFolder?.(folderId, name);
-                setIsRenaming(false);
-              }}
-              onCancel={() => setIsRenaming(false)}
-            />
-          </div>
-        ) : (
-          <span className="min-w-0 truncate text-sm font-medium">
-            {folderConfig.getFolderName(folder)}
-          </span>
-        )}
+        <span className="min-w-0 truncate text-sm font-medium">
+          {folderConfig.getFolderName(folder)}
+        </span>
 
         <Badge variant="secondary" size="inline" className="ml-1">
           {countFolderItems(folder, folderConfig)}
         </Badge>
         {folderConfig.renderFolderBadges?.(folder)}
 
-        {canManage && !isRenaming && (
+        {canManage && (
           <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -124,7 +111,7 @@ export function ResourceFolderGroup<TFolder, TItem>({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => setIsRenaming(true)}>
+                <DropdownMenuItem onClick={() => setRenameOpen(true)}>
                   <Pencil className="h-4 w-4" />
                   Rename
                 </DropdownMenuItem>
@@ -149,6 +136,16 @@ export function ResourceFolderGroup<TFolder, TItem>({
           </div>
         )}
       </div>
+
+      {canManage && (
+        // Outside the row: events from the dialog must not toggle or drag the folder.
+        <FolderRenameDialog
+          open={renameOpen}
+          onOpenChange={setRenameOpen}
+          folderName={folderConfig.getFolderName(folder)}
+          onRename={(name) => folderConfig.onRenameFolder?.(folderId, name)}
+        />
+      )}
 
       <motion.div
         initial={false}

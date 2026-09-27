@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { toast } from "sonner";
+import { CheckboxCard } from "@/components/common/CheckboxCard";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { SwitchCard } from "@/components/common/SwitchCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +13,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/services/api";
 import type { ObjectStorageConnection, ObjectStorageProvider } from "@/types";
@@ -498,18 +499,12 @@ export function StorageConnectionForm({
 
           {draft.provider === "ftps" && (
             <>
-              <div className="flex items-center justify-between gap-4 border border-border bg-card px-3 py-2.5">
-                <div>
-                  <p className="text-sm font-medium">Implicit TLS</p>
-                  <p className="text-xs text-muted-foreground">
-                    Off: explicit AUTH TLS on port 21. On: implicit TLS, usually port 990.
-                  </p>
-                </div>
-                <Switch
-                  checked={draft.implicitTls}
-                  onChange={(checked) => set("implicitTls", checked)}
-                />
-              </div>
+              <SwitchCard
+                label="Implicit TLS"
+                description="Off: explicit AUTH TLS on port 21. On: implicit TLS, usually port 990."
+                checked={draft.implicitTls}
+                onCheckedChange={(checked) => set("implicitTls", checked)}
+              />
 
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">CA Certificate</label>
@@ -626,18 +621,12 @@ export function StorageConnectionForm({
             />
           </div>
 
-          <div className="flex items-center justify-between gap-4 border border-border bg-card px-3 py-2.5">
-            <div>
-              <p className="text-sm font-medium">Force path-style addressing</p>
-              <p className="text-xs text-muted-foreground">
-                Required for MinIO, SeaweedFS and most self-hosted S3-compatible servers
-              </p>
-            </div>
-            <Switch
-              checked={draft.forcePathStyle}
-              onChange={(checked) => set("forcePathStyle", checked)}
-            />
-          </div>
+          <CheckboxCard
+            label="Force path-style addressing"
+            description="Required for MinIO, SeaweedFS and most self-hosted S3-compatible servers"
+            checked={draft.forcePathStyle}
+            onCheckedChange={(checked) => set("forcePathStyle", checked)}
+          />
 
           {storageId && (
             <div className="flex justify-end">

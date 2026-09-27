@@ -13,7 +13,7 @@ import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Toaster } from "@/components/ui/sonner";
-import { imageMimeForFile } from "@/lib/file-types";
+import { codeEditorLanguageForFile, imageMimeForFile } from "@/lib/file-types";
 
 type ImageInfo = {
   blob: Blob;
@@ -419,7 +419,12 @@ export function AIArtifactPopout() {
               />
             </div>
           ) : (
-            <CodeEditor value={content ?? ""} onChange={() => {}} readOnly />
+            <CodeEditor
+              value={content ?? ""}
+              onChange={() => {}}
+              readOnly
+              language={codeEditorLanguageForFile(filename, mediaType)}
+            />
           )}
         </div>
       )}

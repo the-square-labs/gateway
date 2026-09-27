@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Minus, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ContentLoading } from "@/components/common/ContentLoading";
+import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -57,9 +58,7 @@ export function WebhookDialog({
   const [bodyTemplate, setBodyTemplate] = useState("");
   const [signingSecret, setSigningSecret] = useState("");
   const [signingHeader, setSigningHeader] = useState("X-Signature-256");
-  const [headers, setHeaders] = useState<Array<{ key: string; value: string }>>([
-    { key: "", value: "" },
-  ]);
+  const [headers, setHeaders] = useState<Array<{ key: string; value: string }>>([]);
 
   const bodyEditorRef = useRef<TemplateEditorHandle>(null);
 
@@ -74,14 +73,7 @@ export function WebhookDialog({
     setSigningSecret("");
     setSigningHeader(webhook?.signingHeader ?? "X-Signature-256");
     const wHeaders = webhook?.headers as Record<string, string> | null;
-    if (wHeaders && Object.keys(wHeaders).length > 0) {
-      setHeaders([
-        ...Object.entries(wHeaders).map(([key, value]) => ({ key, value })),
-        { key: "", value: "" },
-      ]);
-    } else {
-      setHeaders([{ key: "", value: "" }]);
-    }
+    setHeaders(Object.entries(wHeaders ?? {}).map(([key, value]) => ({ key, value })));
     api
       .getWebhookPresets()
       .then(setPresets)
@@ -95,10 +87,7 @@ export function WebhookDialog({
     if (p) {
       setBodyTemplate(p.bodyTemplate);
       if (p.defaultHeaders && Object.keys(p.defaultHeaders).length > 0) {
-        setHeaders([
-          ...Object.entries(p.defaultHeaders).map(([key, value]) => ({ key, value })),
-          { key: "", value: "" },
-        ]);
+        setHeaders(Object.entries(p.defaultHeaders).map(([key, value]) => ({ key, value })));
       }
     }
   };
@@ -107,10 +96,7 @@ export function WebhookDialog({
     setHeaders((prev) => prev.map((h, i) => (i === idx ? { ...h, [field]: val } : h)));
   };
   const removeHeader = (idx: number) => {
-    setHeaders((prev) => {
-      const next = prev.filter((_, i) => i !== idx);
-      return next.length > 0 ? next : [{ key: "", value: "" }];
-    });
+    setHeaders((prev) => prev.filter((_, i) => i !== idx));
   };
   const addHeader = () => {
     setHeaders((prev) => [...prev, { key: "", value: "" }]);
@@ -236,65 +222,47 @@ export function WebhookDialog({
                     />
                   </div>
                 </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Custom Headers</label>
-                  <div className="overflow-hidden border border-border">
-                    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.25rem] border-b border-border bg-muted text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                      <div className="px-3 py-2">Header</div>
-                      <div className="border-l border-border px-3 py-2">Value</div>
-                      <div />
-                    </div>
-                    {headers.map((h, idx) => (
-                      <div
-                        key={idx}
-                        className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.25rem] border-b border-border last:border-b-0"
-                      >
-                        <Input
-                          value={h.key}
-                          onChange={(e) => updateHeader(idx, "key", e.target.value)}
-                          className="h-9 rounded-none border-0 font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          placeholder="Content-Type"
-                        />
-                        <Input
-                          value={h.value}
-                          onChange={(e) => updateHeader(idx, "value", e.target.value)}
-                          className="h-9 rounded-none border-0 border-l border-border font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                          placeholder="application/json"
-                        />
-                        <div className="flex border-l border-border">
+                <PanelShell
+                  title="Custom Headers"
+                  description="Extra HTTP headers sent with every delivery."
+                  headerActionsClassName="pl-4"
+                  actions={
+                    <Button variant="outline" size="sm" onClick={addHeader}>
+                      <Plus className="h-3.5 w-3.5" />
+                      Add header
+                    </Button>
+                  }
+                >
+                  {headers.length > 0
+                    ? headers.map((h, idx) => (
+                        <div key={idx} className="flex border-b border-border last:border-b-0">
+                          <Input
+                            aria-label={`Header ${idx + 1} name`}
+                            value={h.key}
+                            onChange={(e) => updateHeader(idx, "key", e.target.value)}
+                            className="h-9 min-w-0 flex-1 rounded-none border-0 bg-transparent font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                            placeholder="Content-Type"
+                          />
+                          <Input
+                            aria-label={`Header ${idx + 1} value`}
+                            value={h.value}
+                            onChange={(e) => updateHeader(idx, "value", e.target.value)}
+                            className="h-9 min-w-0 flex-1 rounded-none border-0 border-l border-border bg-transparent font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                            placeholder="application/json"
+                          />
                           <Button
                             variant="ghost"
                             size="icon"
+                            className="rounded-none border-l border-border"
                             aria-label={`Remove header ${idx + 1}`}
                             onClick={() => removeHeader(idx)}
                           >
                             <Minus className="h-3.5 w-3.5" />
                           </Button>
                         </div>
-                      </div>
-                    ))}
-                    <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] bg-muted/60 dark:bg-muted">
-                      {/* The empty row area adds a header too, like the button beside it. */}
-                      <button
-                        type="button"
-                        className="h-9 min-w-0 cursor-pointer"
-                        aria-hidden="true"
-                        tabIndex={-1}
-                        onClick={addHeader}
-                      />
-                      <div className="flex border-l border-border">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Add header"
-                          onClick={addHeader}
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                      ))
+                    : null}
+                </PanelShell>
               </motion.div>
             )}
             {step === 2 && (

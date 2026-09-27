@@ -40,6 +40,7 @@ import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1027,9 +1028,10 @@ function IncidentsTab({
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(incident.startedAt).toLocaleString()}
-                    </span>
+                    <RelativeTime
+                      value={incident.startedAt}
+                      className="text-xs text-muted-foreground"
+                    />
                     {hasActions && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -1127,7 +1129,7 @@ function IncidentsTab({
                           </span>
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                              <span>{new Date(update.createdAt).toLocaleString()}</span>
+                              <RelativeTime value={update.createdAt} />
                               <span className="font-medium text-foreground">
                                 {incidentStatusLabel(displayStatus)}
                               </span>

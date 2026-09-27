@@ -9,6 +9,7 @@ import {
   isCreateFolderAllowed,
 } from "@/components/common/CreateFolderSelect";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -216,7 +217,7 @@ export function DatabaseBackupsTab({
       {
         key: "created",
         header: "Started",
-        render: (run) => formatDateTime(run.startedAt ?? run.createdAt),
+        render: (run) => <RelativeTime value={run.startedAt ?? run.createdAt} />,
       },
       {
         key: "type",

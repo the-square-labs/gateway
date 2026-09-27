@@ -40,6 +40,7 @@ const DEFAULT_GENERAL_SETTINGS = {
   updateChannel: "stable" as const,
   hideExternalBranding: false,
   autoAssignCreatedResourcePermissions: true,
+  sendInvitationOnUserCreate: false,
   fileUploadMaxBytes: DEFAULT_FILE_UPLOAD_MAX_BYTES,
   fileOpenMaxBytes: DEFAULT_FILE_OPEN_MAX_BYTES,
   gatewayGrpcPublicTarget: null as string | null,
@@ -732,6 +733,9 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     await updateGeneralSettings({ autoAssignCreatedResourcePermissions });
   };
 
+  const handleToggleInvitationOnCreate = (checked: boolean) =>
+    updateGeneralSettings({ sendInvitationOnUserCreate: checked });
+
   const saveShutdownSettings = async (
     shutdown: AuthProvisioningSettings["generalSettings"]["shutdown"]
   ) => {
@@ -1114,6 +1118,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     skipNextWebhookCidrsBlur,
     selectedGroup,
     handleToggleAutoCreate,
+    handleToggleInvitationOnCreate,
     handleChangeGroup,
     handleToggleRequireVerifiedEmail,
     handleToggleWebTls,

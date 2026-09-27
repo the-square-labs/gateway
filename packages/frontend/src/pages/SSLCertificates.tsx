@@ -10,6 +10,7 @@ import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
+import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { DNSChallengeVerification } from "@/components/ssl/DNSChallengeVerification";
@@ -43,7 +44,7 @@ import {
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { hasCreationDestination } from "@/lib/creation-folders";
-import { cn, daysUntil, formatDate, formatDateTime, hoursUntil } from "@/lib/utils";
+import { cn, daysUntil, formatDate, hoursUntil } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useSSLStore } from "@/stores/ssl";
@@ -952,8 +953,8 @@ export function SSLCertificates() {
                   value={previewCert.notAfter ? formatDate(previewCert.notAfter) : "-"}
                 />
                 {previewCert.isSystem && <DetailRow label="System" value="Yes" />}
-                <DetailRow label="Created" value={formatDate(previewCert.createdAt)} />
-                <DetailRow label="Updated" value={formatDate(previewCert.updatedAt)} />
+                <DetailRow label="Created" value={<RelativeTime value={previewCert.createdAt} />} />
+                <DetailRow label="Updated" value={<RelativeTime value={previewCert.updatedAt} />} />
               </PanelShell>
 
               <PanelShell title="Deployments" bodyClassName="divide-y divide-border">
@@ -987,7 +988,7 @@ export function SSLCertificates() {
                           )}
                           {replica.lastVerifiedAt && (
                             <span className="text-xs text-muted-foreground">
-                              Checked {formatDateTime(replica.lastVerifiedAt)}
+                              Checked <RelativeTime value={replica.lastVerifiedAt} />
                             </span>
                           )}
                         </span>
@@ -1012,7 +1013,7 @@ export function SSLCertificates() {
                 />
                 <DetailRow
                   label="Last Renewed"
-                  value={previewCert.lastRenewedAt ? formatDate(previewCert.lastRenewedAt) : "-"}
+                  value={<RelativeTime value={previewCert.lastRenewedAt} />}
                 />
                 {previewCert.autoRenewDisabledReason && (
                   <DetailRow

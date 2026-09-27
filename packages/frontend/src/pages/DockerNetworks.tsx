@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { Notice } from "@/components/common/Notice";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -619,11 +620,13 @@ export function DockerNetworks({
         }}
         afterSearch={
           truncatedListMeta ? (
-            <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-              Showing first {truncatedListMeta._listLimit ?? networks.length} of{" "}
-              {truncatedListMeta._listTotal ?? "many"} networks. Narrow the node or search filters
-              for more specific data.
-            </div>
+            <Notice
+              tone="warning"
+              role="status"
+              title={`Showing the first ${truncatedListMeta._listLimit ?? networks.length} of ${truncatedListMeta._listTotal ?? "many"} networks`}
+            >
+              Narrow the node or search filters for more specific data.
+            </Notice>
           ) : null
         }
         loading={networks.length === 0 && (!initialFetchDone || isLoading)}
@@ -795,9 +798,12 @@ export function DockerNetworks({
 
               <PanelShell title="Connected Containers">
                 {selectedNetwork.containersTruncated && (
-                  <div className="border-b border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
-                    Showing a preview of connected containers.
-                  </div>
+                  <Notice
+                    tone="warning"
+                    role="status"
+                    className="border-x-0 border-t-0"
+                    title="Showing a preview of connected containers"
+                  />
                 )}
                 <SimpleTable
                   columns={detailContainerColumns}
