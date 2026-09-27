@@ -32,6 +32,7 @@ import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-p
 import type {
   DockerAvailabilityIssue,
   DockerAvailabilityMode,
+  DockerAvailabilityPartitionMode,
   DockerAvailabilityPlacement,
   DockerAvailabilityPolicy,
   DockerAvailabilityPolicyInput,
@@ -201,6 +202,7 @@ export function AvailabilitySection({
   const [priorityMode, setPriorityMode] = useState(false);
   const [nodePriority, setNodePriority] = useState<string[]>([]);
   const [failbackDelay, setFailbackDelay] = useState("300");
+  const [partitionMode, setPartitionMode] = useState<DockerAvailabilityPartitionMode>("strict");
   const [disableOpen, setDisableOpen] = useState(false);
   const [survivorId, setSurvivorId] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -244,6 +246,7 @@ export function AvailabilitySection({
             setPriorityMode(nextPolicy.mode !== "single" && nextPolicy.priorityMode);
             setNodePriority(nextPolicy.nodePriority);
             setFailbackDelay(String(nextPolicy.failbackDelaySeconds));
+            setPartitionMode(nextPolicy.partitionMode);
           }
         }
       } catch (error) {
@@ -296,6 +299,7 @@ export function AvailabilitySection({
       // Off keeps the stored order untouched; on saves the order shown.
       nodePriority: priorityMode ? priorityOrder : nodePriority,
       failbackDelaySeconds: Math.min(3600, Math.max(0, Number(failbackDelay) || 0)),
+      partitionMode,
     }),
     [
       drainSeconds,
@@ -305,6 +309,7 @@ export function AvailabilitySection({
       maxUnavailable,
       mode,
       nodePriority,
+      partitionMode,
       priorityMode,
       priorityOrder,
       replicas,
@@ -351,6 +356,7 @@ export function AvailabilitySection({
       Number(maxUnavailable) !== policy.rolloutPolicy.maxUnavailable ||
       Number(maxSurge) !== policy.rolloutPolicy.maxSurge ||
       Number(drainSeconds) !== policy.rolloutPolicy.drainSeconds ||
+      partitionMode !== policy.partitionMode ||
       priorityMode !== policy.priorityMode ||
       (priorityMode &&
         (Number(failbackDelay) !== policy.failbackDelaySeconds ||
@@ -620,6 +626,24 @@ export function AvailabilitySection({
           onFailbackDelayChange={setFailbackDelay}
           disabled={!canManage || !enabledDraft}
         />
+        <SettingsControlRow
+          title="Allow available mode"
+          description="Allow two copies during a network partition."
+          help="Strict never runs two copies of a slot, even under a partition. Available keeps serving on a reachable candidate and accepts that two copies can run at once."
+        >
+          <Switch
+            checked={partitionMode === "available"}
+            onChange={(value) => setPartitionMode(value ? "available" : "strict")}
+            disabled={!canManage || !enabledDraft}
+            ariaLabel="Allow available mode"
+          />
+        </SettingsControlRow>
+        {partitionMode === "available" && (
+          <p className="border-b border-border px-4 py-3 text-sm text-warning-text">
+            May briefly run two copies during a network split; do not enable for singletons
+            (indexers, queue consumers, cron).
+          </p>
+        )}
         <SettingsControlRow
           title="Replacement grace"
           description="Wait briefly for a disconnected node before creating a replacement."

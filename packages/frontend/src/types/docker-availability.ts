@@ -6,6 +6,9 @@ export type DockerAvailabilityResource =
 export type DockerAvailabilityMode = "single" | "replicated" | "failover";
 export type DockerAvailabilityPolicyMode = Exclude<DockerAvailabilityMode, "single">;
 export type DockerAvailabilityNodeSelectionMode = "all_compatible" | "selected";
+/** strict never runs two copies of a slot, even under a partition; available keeps serving on a reachable
+ * candidate and accepts that two copies can run at once. */
+export type DockerAvailabilityPartitionMode = "strict" | "available";
 
 export interface DockerAvailabilityPolicyInput {
   resource: DockerAvailabilityResource;
@@ -20,6 +23,54 @@ export interface DockerAvailabilityPolicyInput {
   /** Ordered node IDs: the first is the primary, the rest are backups in order. */
   nodePriority: string[];
   failbackDelaySeconds: number;
+  partitionMode: DockerAvailabilityPartitionMode;
+}
+
+export type DockerAvailabilityLeaseMode = "legacy" | "bootstrapping" | "lease" | "closing";
+
+export interface DockerAvailabilityLeaseReason {
+  code: string;
+  message: string;
+  nodeIds?: string[];
+}
+
+export interface DockerAvailabilityLeaseBallot {
+  round: string;
+  incarnation: string;
+  proposerId: string;
+}
+
+export interface DockerAvailabilityLeaseHolder {
+  slot: number;
+  holderNodeId: string | null;
+  placementId: string | null;
+  ballot: DockerAvailabilityLeaseBallot | null;
+  observedAt: string;
+  holderSince: string | null;
+  source: "daemon" | "acceptor" | "relay";
+}
+
+export interface DockerAvailabilityLeaseVoterMargin {
+  epoch: number;
+  joint: boolean;
+  voters: number;
+  reachable: number;
+  required: number;
+  margin: number;
+}
+
+/** Read-only data-plane lease state of a policy. Null when the policy is not lease-capable. */
+export interface DockerAvailabilityLease {
+  mode: DockerAvailabilityLeaseMode;
+  reason: DockerAvailabilityLeaseReason | null;
+  manifestVersion: number;
+  epoch: number;
+  publishedPartitionMode: DockerAvailabilityPartitionMode | null;
+  holders: DockerAvailabilityLeaseHolder[];
+  bootstrap: Array<{ slot: number; holderNodeId: string }>;
+  strictPending: boolean;
+  copiesStoppedAt: string | null;
+  voterMargin: DockerAvailabilityLeaseVoterMargin | null;
 }
 
 export interface DockerAvailabilityIssue {
@@ -144,6 +195,7 @@ export interface DockerAvailabilityPolicy {
   priorityMode: boolean;
   nodePriority: string[];
   failbackDelaySeconds: number;
+  partitionMode: DockerAvailabilityPartitionMode;
   status:
     | "single"
     | "enabling"
@@ -158,6 +210,7 @@ export interface DockerAvailabilityPolicy {
   lastErrorMessage: string | null;
   placements: DockerAvailabilityPlacement[];
   latestOperation: DockerAvailabilityOperation | null;
+  lease: DockerAvailabilityLease | null;
 }
 
 export interface DockerAvailabilityPreflight {

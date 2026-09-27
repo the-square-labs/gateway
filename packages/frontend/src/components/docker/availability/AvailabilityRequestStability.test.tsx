@@ -89,11 +89,13 @@ describe("Availability request stability", () => {
       priorityMode: false,
       nodePriority: [],
       failbackDelaySeconds: 300,
+      partitionMode: "strict",
       status: "disabling",
       lastErrorCode: null,
       lastErrorMessage: null,
       placements: [],
       latestOperation: null,
+      lease: null,
     };
     vi.spyOn(api, "getDockerAvailability").mockResolvedValue(disablingPolicy);
 
