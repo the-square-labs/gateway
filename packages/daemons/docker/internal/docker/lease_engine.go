@@ -1,0 +1,159 @@
+package docker
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/moby/moby/api/types/container"
+	mobyclient "github.com/moby/moby/client"
+	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
+	"github.com/wiolett-industries/gateway/docker-daemon/internal/lease"
+)
+
+// leaseEngine is the Docker side of the availability lease runtime. The
+// runtime calls it only from background operations, never from its loop.
+type leaseEngine struct {
+	client     *Client
+	cgroupRoot string
+
+	infoMu        sync.Mutex
+	cgroupDriver  string
+	cgroupVersion string
+}
+
+var _ lease.Engine = (*leaseEngine)(nil)
+
+func (e *leaseEngine) ListLeaseContainers(ctx context.Context) ([]lease.Container, error) {
+	filters := make(mobyclient.Filters).Add("label", availabilityPolicyLabel)
+	listed, err := e.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{All: true, Filters: filters})
+	if err != nil {
+		return nil, fmt.Errorf("list lease-mode containers: %w", err)
+	}
+	out := make([]lease.Container, 0, len(listed.Items))
+	for _, item := range listed.Items {
+		c, found, inspectErr := e.Inspect(ctx, item.ID)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if found {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+func (e *leaseEngine) Inspect(ctx context.Context, id string) (lease.Container, bool, error) {
+	result, err := e.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		if isNotFoundErr(err) {
+			return lease.Container{}, false, nil
+		}
+		return lease.Container{}, false, fmt.Errorf("inspect lease-mode container: %w", err)
+	}
+	return e.convert(ctx, result.Container), true, nil
+}
+
+func (e *leaseEngine) convert(ctx context.Context, inspect container.InspectResponse) lease.Container {
+	c := lease.Container{ID: inspect.ID, Name: trimContainerName(inspect.Name), RestartCount: inspect.RestartCount}
+	if inspect.Config != nil {
+		c.Labels = inspect.Config.Labels
+		c.PolicyID = inspect.Config.Labels[availabilityPolicyLabel]
+		c.PlacementID = inspect.Config.Labels[availabilityPlacementLabel]
+		if inspect.Config.StopTimeout != nil && *inspect.Config.StopTimeout > 0 {
+			c.StopTimeout = time.Duration(*inspect.Config.StopTimeout) * time.Second
+		}
+	}
+	if inspect.HostConfig != nil {
+		c.RestartPolicy = string(inspect.HostConfig.RestartPolicy.Name)
+		if c.RestartPolicy == "" {
+			c.RestartPolicy = "no"
+		}
+	}
+	pid := 0
+	if state := inspect.State; state != nil {
+		c.Running, c.Paused, c.Restarting = state.Running, state.Paused, state.Restarting
+		c.Status, c.ExitCode, pid = string(state.Status), state.ExitCode, state.Pid
+		if state.Health != nil {
+			c.Health = string(state.Health.Status)
+		}
+	}
+	c.CgroupPath = e.cgroupPath(ctx, inspect, pid)
+	return c
+}
+
+// cgroupPath is the running container's cgroup from /proc, else Docker's
+// predicted location. The watchdog also probes the standard layouts.
+func (e *leaseEngine) cgroupPath(ctx context.Context, inspect container.InspectResponse, pid int) string {
+	if pid > 0 {
+		if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid)); err == nil {
+			if path := leasefence.CgroupFromProc(e.cgroupRoot, string(data)); path != "" {
+				return path
+			}
+		}
+	}
+	driver, version := e.cgroupInfo(ctx)
+	parent := ""
+	if inspect.HostConfig != nil {
+		parent = inspect.HostConfig.CgroupParent
+	}
+	root := e.cgroupRoot
+	if version == "1" {
+		root = filepath.Join(root, "pids")
+	}
+	if driver == "systemd" {
+		if parent == "" {
+			parent = "system.slice"
+		}
+		return filepath.Join(root, parent, "docker-"+inspect.ID+".scope")
+	}
+	if parent == "" {
+		parent = "docker"
+	}
+	return filepath.Join(root, parent, inspect.ID)
+}
+
+func (e *leaseEngine) cgroupInfo(ctx context.Context) (string, string) {
+	e.infoMu.Lock()
+	defer e.infoMu.Unlock()
+	if e.cgroupDriver == "" {
+		if info, err := e.client.cli.Info(ctx, mobyclient.InfoOptions{}); err == nil {
+			e.cgroupDriver, e.cgroupVersion = info.Info.CgroupDriver, info.Info.CgroupVersion
+		}
+	}
+	return e.cgroupDriver, e.cgroupVersion
+}
+
+func (e *leaseEngine) Start(ctx context.Context, id string) error {
+	return e.client.StartContainer(ctx, id)
+}
+
+func (e *leaseEngine) Stop(ctx context.Context, id string, grace time.Duration) error {
+	return e.client.StopContainer(ctx, id, int(math.Ceil(grace.Seconds())))
+}
+
+func (e *leaseEngine) Kill(ctx context.Context, id string) error {
+	return e.client.KillContainer(ctx, id, "KILL")
+}
+
+func (e *leaseEngine) DisableRestart(ctx context.Context, id string) error {
+	_, err := e.client.cli.ContainerUpdate(ctx, id, mobyclient.ContainerUpdateOptions{
+		RestartPolicy: &container.RestartPolicy{Name: container.RestartPolicyDisabled},
+	})
+	return err
+}
+
+func (e *leaseEngine) CgroupEmpty(_ context.Context, c lease.Container) (bool, error) {
+	return leasefence.ContainerCgroupEmpty(e.cgroupRoot, c.ID, c.CgroupPath)
+}
+
+func trimContainerName(name string) string {
+	for len(name) > 0 && name[0] == '/' {
+		name = name[1:]
+	}
+	return name
+}

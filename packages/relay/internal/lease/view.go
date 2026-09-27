@@ -1,0 +1,252 @@
+package lease
+
+import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"sort"
+	"sync"
+
+	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"google.golang.org/protobuf/proto"
+)
+
+// Signature domains of availabilitylease/doc.go: the wire contract the
+// Gateway signs lease blocks and rotation links with.
+const (
+	domainManifest    = "gateway-availability-lease/manifest/v1"
+	domainVoterConfig = "gateway-availability-lease/voter-config/v1"
+	domainKeyRotation = "gateway-availability-lease/key-rotation/v1"
+
+	// memberConfigHistory keeps the members of the previous voter config
+	// authorized so voters leaving through a joint epoch keep their streams.
+	memberConfigHistory = 2
+	maxPendingLinks     = 16
+)
+
+// memberView is the relay's own verified view of who may use Coordinate: the
+// members of the latest signed voter configs and the candidates of every
+// signed manifest. It verifies blocks independently of the lease node, which
+// stays the only authority for protocol state; the view only authorizes
+// routing, so a disagreement costs liveness, never safety.
+type memberView struct {
+	mu        sync.RWMutex
+	keys      map[string]ed25519.PublicKey
+	links     map[string]*relayv1.LeasePolicyKeyRotation
+	configs   []viewConfig
+	manifests map[string]viewManifest
+}
+
+type viewConfig struct {
+	epoch   uint64
+	members map[string]bool
+	voters  map[string]bool
+}
+
+type viewManifest struct {
+	version    uint64
+	slots      uint32
+	closed     bool
+	candidates map[string]bool
+}
+
+func newMemberView() *memberView {
+	return &memberView{keys: map[string]ed25519.PublicKey{}, links: map[string]*relayv1.LeasePolicyKeyRotation{}, manifests: map[string]viewManifest{}}
+}
+
+// trust adds a policy key delivered by the verified policy envelope.
+func (v *memberView) trust(id string, publicKey ed25519.PublicKey) {
+	if id == "" || len(publicKey) != ed25519.PublicKeySize {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.keys[id] = append(ed25519.PublicKey(nil), publicKey...)
+	v.adoptLinksLocked()
+}
+
+// adoptLinks verifies rotation links against trusted keys, in any order.
+// Links that cannot be verified yet wait, bounded, keyed by signature so a
+// bogus link cannot shadow a genuine one with the same key id.
+func (v *memberView) adoptLinks(links []*relayv1.LeasePolicyKeyRotation) {
+	if len(links) == 0 {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, link := range links {
+		if _, trusted := v.keys[link.GetKeyId()]; trusted || link.GetKeyId() == "" {
+			continue
+		}
+		if len(v.links) >= maxPendingLinks {
+			for signature := range v.links {
+				delete(v.links, signature)
+				break
+			}
+		}
+		v.links[string(link.GetSignature())] = link
+	}
+	v.adoptLinksLocked()
+}
+
+func (v *memberView) adoptLinksLocked() {
+	for progress := true; progress; {
+		progress = false
+		for signature, link := range v.links {
+			id := link.GetKeyId()
+			if _, trusted := v.keys[id]; trusted {
+				delete(v.links, signature)
+				continue
+			}
+			previous, ok := v.keys[link.GetPreviousKeyId()]
+			if !ok {
+				continue
+			}
+			delete(v.links, signature)
+			if len(link.GetPublicKey()) != ed25519.PublicKeySize || keyFingerprint(link.GetPublicKey()) != link.GetPublicKeyFingerprint() ||
+				!ed25519.Verify(previous, rotationMessage(id, link.GetPublicKey()), link.GetSignature()) {
+				continue
+			}
+			v.keys[id] = append(ed25519.PublicKey(nil), link.GetPublicKey()...)
+			progress = true
+		}
+	}
+}
+
+// adoptBlock records a verified voter config or manifest newer than the one
+// in the view. It reports whether the view changed.
+func (v *memberView) adoptBlock(block *relayv1.LeaseSignedBlock) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	domain := domainManifest
+	if block.GetKind() == relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG {
+		domain = domainVoterConfig
+	} else if block.GetKind() != relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST {
+		return false
+	}
+	publicKey, ok := v.keys[block.GetSigningKeyId()]
+	if !ok || len(block.GetSignature()) != ed25519.SignatureSize || !ed25519.Verify(publicKey, blockMessage(domain, block.GetPayload()), block.GetSignature()) {
+		return false
+	}
+	if domain == domainVoterConfig {
+		return v.adoptConfigLocked(block.GetPayload())
+	}
+	return v.adoptManifestLocked(block.GetPayload())
+}
+
+func (v *memberView) adoptConfigLocked(payload []byte) bool {
+	value := &relayv1.LeaseVoterConfig{}
+	if proto.Unmarshal(payload, value) != nil || value.GetEpoch() == 0 {
+		return false
+	}
+	if len(v.configs) > 0 && value.GetEpoch() <= v.configs[len(v.configs)-1].epoch {
+		return false
+	}
+	config := viewConfig{epoch: value.GetEpoch(), members: map[string]bool{}, voters: map[string]bool{}}
+	for _, member := range value.GetMembers() {
+		if member.GetId() != "" {
+			config.members[member.GetId()] = true
+		}
+	}
+	for _, set := range value.GetQuorumSets() {
+		for _, id := range set.GetVoterIds() {
+			config.voters[id] = true
+		}
+	}
+	v.configs = append(v.configs, config)
+	if len(v.configs) > memberConfigHistory {
+		v.configs = v.configs[len(v.configs)-memberConfigHistory:]
+	}
+	return true
+}
+
+func (v *memberView) adoptManifestLocked(payload []byte) bool {
+	value := &relayv1.LeaseManifest{}
+	if proto.Unmarshal(payload, value) != nil || value.GetPolicyId() == "" || value.GetManifestVersion() == 0 {
+		return false
+	}
+	if current, ok := v.manifests[value.GetPolicyId()]; ok && value.GetManifestVersion() <= current.version {
+		return false
+	}
+	manifest := viewManifest{version: value.GetManifestVersion(), slots: value.GetSlots(), closed: value.GetClosed(), candidates: map[string]bool{}}
+	for _, candidate := range value.GetCandidates() {
+		manifest.candidates[candidate.GetId()] = true
+	}
+	v.manifests[value.GetPolicyId()] = manifest
+	return true
+}
+
+// authorized reports whether id is a member of a recent voter config or a
+// candidate of a known manifest.
+func (v *memberView) authorized(id string) bool {
+	if id == "" {
+		return false
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, config := range v.configs {
+		if config.members[id] {
+			return true
+		}
+	}
+	for _, manifest := range v.manifests {
+		if manifest.candidates[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// voter reports whether id is in a quorum set of the latest voter config.
+func (v *memberView) voter(id string) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	return len(v.configs) > 0 && v.configs[len(v.configs)-1].voters[id]
+}
+
+func (v *memberView) manifest(policyID string) (viewManifest, bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	manifest, ok := v.manifests[policyID]
+	return manifest, ok
+}
+
+func (v *memberView) policyIDs() []string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	ids := make([]string, 0, len(v.manifests))
+	for id := range v.manifests {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (v *memberView) keyIDs() []string {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	ids := make([]string, 0, len(v.keys))
+	for id := range v.keys {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func blockMessage(domain string, payload []byte) []byte {
+	message := append([]byte(domain), 0)
+	return append(message, payload...)
+}
+
+func rotationMessage(keyID string, publicKey []byte) []byte {
+	message := append([]byte(domainKeyRotation), 0)
+	message = binary.BigEndian.AppendUint32(message, uint32(len(keyID)))
+	message = append(message, keyID...)
+	return append(message, publicKey...)
+}
+
+func keyFingerprint(publicKey []byte) string {
+	digest := sha256.Sum256(publicKey)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}

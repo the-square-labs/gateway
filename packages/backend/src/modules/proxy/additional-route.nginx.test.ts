@@ -254,9 +254,12 @@ describe('managed Additional Route rendering', () => {
     );
 
     expect(rendered).toContain('least_conn;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock;');
-    expect(rendered).not.toContain('server unix:/run/gateway-secure-links/original.sock;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).not.toContain('original.sock');
+    expect(rendered).toMatch(
+      /proxy_pass http:\/\/gateway_additional_secure_link_66666666_6666_4666_8666_666666666666;\n\s+proxy_next_upstream error timeout;/
+    );
   });
 
   it('balances an Advanced Secure Link across its placement-owned sockets', async () => {
@@ -278,8 +281,43 @@ describe('managed Additional Route rendering', () => {
 
     expect(rendered).toContain('upstream gateway_additional_secure_link_77777777_7777_4777_8777_777777777777');
     expect(rendered).toContain('least_conn;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock;');
-    expect(rendered).not.toContain('server unix:/run/gateway-secure-links/original.sock;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).not.toContain('original.sock');
+  });
+
+  it('marks Availability members of the primary upstream as failing fast and retries the next member', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...baseHost,
+        forwardHost: '127.0.0.1',
+        secureLinkUpstream: true,
+        secureLinkSocketPath: '/run/gateway-secure-links/member-a.sock',
+        secureLinkSocketPaths: ['/run/gateway-secure-links/member-a.sock', '/run/gateway-secure-links/member-b.sock'],
+      },
+      null
+    );
+
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/member-a.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/member-b.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).toMatch(
+      /proxy_pass http:\/\/gateway_secure_link_[0-9a-f_]+;\n\s+proxy_next_upstream error timeout;/
+    );
+  });
+
+  it('leaves a single Secure Link upstream without Availability parameters', async () => {
+    const rendered = await service().renderForHost(
+      {
+        ...baseHost,
+        forwardHost: '127.0.0.1',
+        secureLinkUpstream: true,
+        secureLinkSocketPath: '/run/gateway-secure-links/only.sock',
+      },
+      null
+    );
+
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/only.sock;');
+    expect(rendered).not.toContain('max_fails');
+    expect(rendered).not.toContain('proxy_next_upstream');
   });
 });

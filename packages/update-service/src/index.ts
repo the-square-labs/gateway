@@ -58,6 +58,8 @@ const TAG_PATTERNS: Readonly<Record<string, RegExp>> = {
 	"nginx-daemon": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-nginx$/,
 	"docker-daemon": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-docker$/,
 	"monitoring-daemon": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-monitoring$/,
+	// The lease watchdog ships on its own line, independent of docker-daemon.
+	"lease-watchdog": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-watchdog$/,
 	"relay-supervisor": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-relay$/,
 	"inference-core": /^v\d+\.\d+\.\d+-(?:wiolett|thesqlabs)\.\d+$/,
 };
@@ -71,6 +73,8 @@ const ARTIFACT_PATTERNS: Readonly<Record<string, RegExp>> = {
 		/^(docker-daemon-linux-(amd64|arm64)(\.update\.json)?|checksums\.txt)$/,
 	"monitoring-daemon":
 		/^(monitoring-daemon-linux-(amd64|arm64)(\.update\.json)?|checksums\.txt)$/,
+	"lease-watchdog":
+		/^(lease-watchdog-linux-(amd64|arm64)(\.update\.json)?|checksums\.txt)$/,
 	"relay-supervisor":
 		/^(relay-(supervisor|worker)-linux-(amd64|arm64)(\.update\.json)?|checksums\.txt)$/,
 	"inference-core": /^opencodex-image\.update\.json$/,
@@ -193,7 +197,9 @@ function parseReleaseVersion(
 					? "-nginx"
 					: component === "docker-daemon"
 						? "-docker"
-						: "-monitoring";
+						: component === "lease-watchdog"
+							? "-watchdog"
+							: "-monitoring";
 	const optionalSuffix = suffix ? `(?:${suffix})?` : "";
 	const match = new RegExp(
 		`^(\\d+)\\.(\\d+)\\.(\\d+)(?:-rc\\.(\\d+))?${optionalSuffix}$`,

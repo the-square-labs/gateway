@@ -7,6 +7,7 @@ import type { AppEnv } from '@/types.js';
 import { registerDockerAvailabilityRoutes } from './docker-availability.routes.js';
 import { DockerAvailabilityPolicyInputSchema } from './docker-availability.schemas.js';
 import { DockerAvailabilityService } from './docker-availability.service.js';
+import { AvailabilityLeaseService } from './lease/availability-lease.service.js';
 
 const NODE_ID = '11111111-1111-4111-8111-111111111111';
 const POLICY_ID = '22222222-2222-4222-8222-222222222222';
@@ -99,7 +100,7 @@ describe('Docker Availability routes', () => {
       body: JSON.stringify(input()),
     });
     expect(preflightResponse.status).toBe(200);
-    expect(service.preflight).toHaveBeenCalledWith(input(), scopes);
+    expect(service.preflight).toHaveBeenCalledWith({ ...input(), partitionMode: 'strict' }, scopes);
 
     const lookupResponse = await app.request(
       `/availability/by-resource?type=container&nodeId=${NODE_ID}&containerName=api`
@@ -128,7 +129,7 @@ describe('Docker Availability routes', () => {
       body: JSON.stringify(input()),
     });
     expect(enableResponse.status).toBe(202);
-    expect(service.enable).toHaveBeenCalledWith(input(), USER_ID, scopes);
+    expect(service.enable).toHaveBeenCalledWith({ ...input(), partitionMode: 'strict' }, USER_ID, scopes);
 
     const update = { mode: 'failover', desiredReplicaCount: 1 };
     const updateResponse = await app.request(`/availability/${POLICY_ID}`, {
@@ -153,6 +154,50 @@ describe('Docker Availability routes', () => {
     });
     expect(retryResponse.status).toBe(202);
     expect(service.retryOperation).toHaveBeenCalledWith(POLICY_ID, OPERATION_ID, USER_ID, scopes);
+  });
+
+  it('adds the lease state to policy responses and persists a requested partition mode', async () => {
+    const service = {
+      get: vi.fn().mockResolvedValue({ id: POLICY_ID, partitionMode: 'strict' }),
+      update: vi.fn().mockResolvedValue({ id: POLICY_ID, partitionMode: 'strict' }),
+    };
+    const lease = {
+      mode: 'lease',
+      reason: null,
+      manifestVersion: 3,
+      epoch: 2,
+      publishedPartitionMode: 'strict',
+      holders: [],
+      bootstrap: [],
+      strictPending: false,
+      copiesStoppedAt: null,
+      voterMargin: { epoch: 2, joint: false, voters: 5, reachable: 4, required: 3, margin: 1 },
+    };
+    const leaseService = {
+      getPolicyLease: vi.fn().mockResolvedValue(lease),
+      setPartitionMode: vi.fn().mockResolvedValue(undefined),
+    };
+    container.registerInstance(DockerAvailabilityService, service as never);
+    container.registerInstance(AvailabilityLeaseService, leaseService as never);
+    const app = appWithScopes(['docker:availability:manage']);
+
+    const read = await app.request(`/availability/${POLICY_ID}`);
+    expect(await read.json()).toEqual({ data: { id: POLICY_ID, partitionMode: 'strict', lease } });
+
+    const updated = await app.request(`/availability/${POLICY_ID}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ partitionMode: 'available' }),
+    });
+    expect(updated.status).toBe(202);
+    expect(service.update).toHaveBeenCalledWith(POLICY_ID, { partitionMode: 'available' }, USER_ID, [
+      'docker:availability:manage',
+    ]);
+    expect(leaseService.setPartitionMode).toHaveBeenCalledWith(POLICY_ID, 'available');
+    expect(((await updated.json()) as { data: unknown }).data).toMatchObject({
+      partitionMode: 'available',
+      lease: { mode: 'lease' },
+    });
   });
 
   it('keeps policy and operation reads delegated to the service', async () => {

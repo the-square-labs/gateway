@@ -2,6 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  relayEndpointAssignments,
   relayEndpoints,
   relayGrantSigningKeys,
   relayInstances,
@@ -860,7 +861,10 @@ describe('RelayPolicyService policy signing trust', () => {
   const signedRotationRefusal = () =>
     Object.assign(new Error('9 FAILED_PRECONDITION: new policy signing keys require signed rotation'), { code: 9 });
 
-  function localPoolFixture(relayOverrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+  function localPoolFixture(
+    relayOverrides: Record<string, ReturnType<typeof vi.fn>> = {},
+    tables: Map<unknown, unknown[]> = new Map()
+  ) {
     let transportRevision = 100;
     const local = {
       id: 'local',
@@ -883,11 +887,13 @@ describe('RelayPolicyService policy signing trust', () => {
           // biome-ignore lint/suspicious/noThenProperty: emulate Drizzle's lazy thenable query
           then: (resolve: (rows: unknown[]) => unknown) =>
             Promise.resolve(
-              table === relayPolicyState
-                ? [{ revision: 10, gatewayInstanceId: 'gateway' }]
-                : table === relayInstances
-                  ? [local]
-                  : []
+              tables.has(table)
+                ? tables.get(table)!
+                : table === relayPolicyState
+                  ? [{ revision: 10, gatewayInstanceId: 'gateway' }]
+                  : table === relayInstances
+                    ? [local]
+                    : []
             ).then(resolve),
         };
         for (const method of ['where', 'limit', 'innerJoin', 'for']) query[method] = () => query;
@@ -972,6 +978,102 @@ describe('RelayPolicyService policy signing trust', () => {
         verifyUntilUnix: String(verifyUntil.getTime() / 1000),
       }),
     ]);
+  });
+
+  it('carries the availability lease blocks and key chain in every signed relay snapshot', async () => {
+    const { service, keys } = localPoolFixture();
+    const block = {
+      signingKeyId: 'active',
+      kind: 'LEASE_BLOCK_KIND_MANIFEST',
+      payload: Buffer.from('manifest'),
+      signature: Buffer.alloc(64, 7),
+    };
+    const rotation = {
+      previousKeyId: 'old',
+      keyId: 'active',
+      publicKey: Buffer.alloc(32, 1),
+      publicKeyFingerprint: 'sha256:a',
+      signature: Buffer.alloc(64, 3),
+    };
+    service.setAvailabilityLeaseSource({
+      relayPolicyFields: async () => ({ leaseBlocks: [block], leaseKeyRotations: [rotation] }),
+      retainedSigningKeyIds: async () => ['old'],
+    });
+
+    await (service as any).buildInstanceSnapshot('local', ['active']);
+
+    const [payload] = keys.signPayload.mock.calls[0] as unknown as [Buffer, string];
+    const decoded = decodeRelayV1Message('PolicyEnvelopePayload', payload) as {
+      leaseBlocks: unknown[];
+      leaseKeyRotations: unknown[];
+    };
+    expect(decoded.leaseBlocks).toEqual([block]);
+    expect(decoded.leaseKeyRotations).toEqual([rotation]);
+    await expect((keys as any).retainedKeyIds()).resolves.toEqual(['old']);
+  });
+
+  it('marks lease-gated endpoints and routes with their policy, and fails closed without the gate', async () => {
+    const endpoint = {
+      id: 'endpoint-1',
+      ownerKind: 'proxy_host_secure_link',
+      ownerId: 'member-link',
+      generation: 1,
+      subjectKind: 'daemon',
+      subjectId: 'node-1',
+      certificateSha256: 'sha256:node',
+      maxConcurrentSessions: 0,
+    };
+    const route = {
+      id: 'route-1',
+      ownerKind: 'managed_database_binding',
+      ownerId: 'projection-1',
+      generation: 1,
+      sourceKind: 'daemon',
+      sourceId: 'node-1',
+      sourceCertificateSha256: 'sha256:node',
+      targetEndpointId: 'endpoint-1',
+      maxConcurrentSessions: 0,
+      maxFrameBytes: 0,
+    };
+    const plain = { ...endpoint, id: 'endpoint-2', ownerId: 'other-link' };
+    const tables = new Map<unknown, unknown[]>([
+      [
+        relayEndpointAssignments,
+        [
+          { endpointId: 'endpoint-1', assignmentGeneration: 1, generationState: 'active' },
+          { endpointId: 'endpoint-2', assignmentGeneration: 1, generationState: 'active' },
+        ],
+      ],
+      [relayEndpoints, [endpoint, plain]],
+      [relayRoutes, [route]],
+    ]);
+    const { service, keys } = localPoolFixture({}, tables);
+    const relayLeasePolicyIds = vi.fn(async () => ({
+      endpoints: new Map([['endpoint-1', 'policy-1']]),
+      routes: new Map([['route-1', 'policy-1']]),
+    }));
+    service.setAvailabilityLeaseSource({
+      relayPolicyFields: async () => ({ leaseBlocks: [], leaseKeyRotations: [] }),
+      retainedSigningKeyIds: async () => [],
+      relayLeasePolicyIds,
+    });
+
+    await (service as any).buildInstanceSnapshot('local', ['active']);
+
+    expect(relayLeasePolicyIds).toHaveBeenCalledWith([endpoint, plain], [route]);
+    const [payload] = keys.signPayload.mock.calls[0] as unknown as [Buffer, string];
+    const decoded = decodeRelayV1Message('PolicyEnvelopePayload', payload) as {
+      endpoints: Array<{ endpointId: string; leasePolicyId: string }>;
+      routes: Array<{ routeId: string; leasePolicyId: string }>;
+    };
+    expect(decoded.endpoints.map(({ endpointId, leasePolicyId }) => [endpointId, leasePolicyId])).toEqual([
+      ['endpoint-1', 'policy-1'],
+      ['endpoint-2', ''],
+    ]);
+    expect(decoded.routes).toEqual([expect.objectContaining({ routeId: 'route-1', leasePolicyId: 'policy-1' })]);
+
+    relayLeasePolicyIds.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect((service as any).buildInstanceSnapshot('local', ['active'])).rejects.toThrow('database unavailable');
   });
 
   it('pins the active key on the local relay and signs with it', async () => {

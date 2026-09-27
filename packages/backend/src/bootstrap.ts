@@ -66,6 +66,7 @@ import { ManagedDatabaseService } from '@/modules/databases/managed-databases.se
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { dockerAvailabilityCommercialRuntime } from '@/modules/docker/availability/docker-availability-commercial-runtime.js';
 import { DockerWorkloadResolverService } from '@/modules/docker/availability/docker-workload-resolver.service.js';
+import { AvailabilityLeaseService } from '@/modules/docker/availability/lease/availability-lease.service.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerComposeNodeDispatcher } from '@/modules/docker/compose/compose-node-dispatcher.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
@@ -257,6 +258,7 @@ import { RelayDockerRecoveryService } from '@/services/relay-docker-recovery.ser
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
 import { applyNewerInstalledRelayArtifact, loadInstalledRelayArtifact } from '@/services/relay-installed-artifact.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
+import { RelayPolicySigningKeyService } from '@/services/relay-policy-signing-key.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { RelayRegistryService } from '@/services/relay-registry.service.js';
 import { RelayRegistryIngressService } from '@/services/relay-registry-ingress.service.js';
@@ -1349,6 +1351,19 @@ export async function initializeContainer(): Promise<void> {
   const dockerWorkloadResolver = new DockerWorkloadResolverService(db);
   container.registerInstance(DockerWorkloadResolverService, dockerWorkloadResolver);
   dockerHealthCheckService.setWorkloadResolver(dockerWorkloadResolver);
+  // Data-plane lease host: signs lease blocks with the relay policy key and hands relays and daemons their copy.
+  const availabilityLeaseService = new AvailabilityLeaseService(
+    db,
+    nodeRegistry,
+    auditService,
+    eventBus,
+    new RelayPolicySigningKeyService(db, cryptoService)
+  );
+  container.registerInstance(AvailabilityLeaseService, availabilityLeaseService);
+  if (relayPolicyService) {
+    relayPolicyService.setAvailabilityLeaseSource(availabilityLeaseService);
+    availabilityLeaseService.setRelayPublisher(relayPolicyService);
+  }
   const dockerAvailabilityService = commercialEdition.createDockerAvailabilityService(
     {
       db,
@@ -1366,10 +1381,12 @@ export async function initializeContainer(): Promise<void> {
       proxy: proxyService,
       secureLinks: proxySecureLinkService,
       workloads: dockerWorkloadResolver,
+      lease: availabilityLeaseService,
     },
     dockerAvailabilityCommercialRuntime
   );
   container.registerInstance(DockerAvailabilityService, dockerAvailabilityService);
+  availabilityLeaseService.attachController(dockerAvailabilityService);
   dockerManagementService.setWorkloadResolver(dockerWorkloadResolver);
   dockerManagementService.setAvailabilityMutationGuard((nodeId, containerName) =>
     dockerAvailabilityService.assertContainerMutationAllowed(nodeId, containerName)
@@ -1852,6 +1869,7 @@ export async function initializeContainer(): Promise<void> {
       expectedProtocolMajor: env.GATEWAY_RELAY_PROTOCOL_MAJOR,
     }
   );
+  relaySupervisor.setAvailabilityLeaseSink(availabilityLeaseService);
   container.registerInstance(RelaySupervisorService, relaySupervisor);
 
   // Update service

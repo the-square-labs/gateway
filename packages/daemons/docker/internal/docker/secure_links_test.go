@@ -303,3 +303,28 @@ func TestNormalizeResolvedTargetBindingsPersistsTheValidatedDestination(t *testi
 		t.Fatal("normalization mutated the incoming command")
 	}
 }
+
+func TestDormantMemberWithStoppedStandbyDoesNotFailTheSync(t *testing.T) {
+	bindings := []*pb.ProxySecureLinkBinding{
+		{LinkId: "11111111-1111-4111-8111-111111111111", TargetContainer: "serving", TargetNetwork: "net-a"},
+		{LinkId: "22222222-2222-4222-8222-222222222222", TargetContainer: "standby", TargetNetwork: "net-b", Dormant: true, AvailabilityPolicyId: "policy-1"},
+	}
+	resolve := func(binding *pb.ProxySecureLinkBinding) (string, string, error) {
+		if binding.TargetContainer == "standby" {
+			return "", "", errSecureLinkTargetUnavailable
+		}
+		return "10.0.0.2", binding.TargetNetwork, nil
+	}
+	resolved, networks, err := resolveSecureLinkTargets(bindings, resolve)
+	if err != nil || len(resolved) != 1 || len(networks) != 1 {
+		t.Fatalf("dormant standby must be skipped, resolved=%d networks=%v err=%v", len(resolved), networks, err)
+	}
+	normalized := normalizeResolvedTargetBindings(&pb.SyncProxySecureLinksCommand{Bindings: bindings}, resolved)
+	if len(normalized.Bindings) != 2 || normalized.Bindings[1].TargetNetwork != "net-b" {
+		t.Fatalf("the dormant member must stay in the committed state with its network: %+v", normalized.Bindings)
+	}
+	bindings[1].Dormant = false
+	if _, _, err := resolveSecureLinkTargets(bindings, resolve); err == nil {
+		t.Fatal("a serving member with a stopped target must still fail the sync")
+	}
+}

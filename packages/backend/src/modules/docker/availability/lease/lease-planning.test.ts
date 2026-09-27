@@ -1,0 +1,142 @@
+import { describe, expect, it } from 'vitest';
+import {
+  bootstrapAcknowledged,
+  bootstrapFromHolders,
+  bootstrapFromServing,
+  classifyLeaseHolderChange,
+  type LeaseObservationCandidate,
+  type LeasePlanningPlacement,
+  mergeLeaseObservation,
+  orderLeaseCandidates,
+} from './lease-planning.js';
+
+const NOW = new Date('2026-09-28T00:00:00Z');
+const at = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
+
+function placement(nodeId: string, extra: Partial<LeasePlanningPlacement> = {}): LeasePlanningPlacement {
+  return { id: `p-${nodeId}`, nodeId, desiredState: 'standby', serving: false, createdAt: NOW, ...extra };
+}
+
+function ballot(round: number, proposerId: string) {
+  return { round: String(round), incarnation: '1', proposerId };
+}
+
+function holding(holderId: string, round: number, source: 'daemon' | 'relay' = 'daemon'): LeaseObservationCandidate {
+  return {
+    holderId,
+    ballot: ballot(round, holderId),
+    epoch: 3,
+    manifestVersion: 5,
+    source,
+    sourceId: source === 'daemon' ? holderId : 'relay-1',
+  };
+}
+
+describe('availability lease manifest planning', () => {
+  it('orders candidates by priority, then serving before standby, oldest first (D4, D5)', () => {
+    const placements = [
+      placement('n-standby-old', { createdAt: at(-60) }),
+      placement('n-serving', { desiredState: 'serving', serving: true, createdAt: at(10) }),
+      placement('n-standby-new', { createdAt: at(30) }),
+      placement('n-removed', { desiredState: 'removed' }),
+    ];
+    expect(orderLeaseCandidates({ priorityMode: false, nodePriority: [] }, placements)).toEqual([
+      'n-serving',
+      'n-standby-old',
+      'n-standby-new',
+    ]);
+    expect(
+      orderLeaseCandidates({ priorityMode: true, nodePriority: ['n-standby-new', 'n-serving'] }, placements)
+    ).toEqual(['n-standby-new', 'n-serving', 'n-standby-old']);
+  });
+
+  it('reserves slots for the serving placements, and for observed holders when strict takes over (A5, A7)', () => {
+    const placements = [
+      placement('n-2', { desiredState: 'serving', serving: true, createdAt: at(5) }),
+      placement('n-1', { desiredState: 'serving', serving: true, createdAt: at(1) }),
+      placement('n-3'),
+    ];
+    expect(bootstrapFromServing(placements, 2)).toEqual([
+      { slot: 0, holderId: 'n-1' },
+      { slot: 1, holderId: 'n-2' },
+    ]);
+    expect(bootstrapFromServing(placements, 1)).toEqual([{ slot: 0, holderId: 'n-1' }]);
+    expect(
+      bootstrapFromHolders(
+        [
+          { slot: 1, holderId: 'n-3' },
+          { slot: 0, holderId: null },
+          { slot: 4, holderId: 'n-9' },
+        ],
+        2
+      )
+    ).toEqual([{ slot: 1, holderId: 'n-3' }]);
+  });
+});
+
+describe('availability lease observations', () => {
+  it('names the holder of the highest ballot and detects a change of holder', () => {
+    const first = mergeLeaseObservation(null, { candidates: [holding('n-1', 2)], now: NOW });
+    expect(first.next.holderId).toBe('n-1');
+    expect(first.change).toEqual({ from: null, to: 'n-1', ballot: ballot(2, 'n-1') });
+
+    const stale = mergeLeaseObservation(first.next, { candidates: [holding('n-2', 1)], now: at(1) });
+    expect(stale.next.holderId).toBe('n-1');
+    expect(stale.change).toBeNull();
+
+    const refreshed = mergeLeaseObservation(first.next, { candidates: [holding('n-1', 2)], now: at(2) });
+    expect(refreshed.next.observedAt).toEqual(at(2));
+    expect(refreshed.change).toBeNull();
+
+    const failover = mergeLeaseObservation(first.next, { candidates: [holding('n-2', 9, 'relay')], now: at(3) });
+    expect(failover.next).toMatchObject({ holderId: 'n-2', source: 'relay', lastHolderId: 'n-2', holderSince: at(3) });
+    expect(failover.change).toEqual({ from: 'n-1', to: 'n-2', ballot: ballot(9, 'n-2') });
+  });
+
+  it('clears a holder that reports another role and never revives it from the released ballot', () => {
+    const held = mergeLeaseObservation(null, {
+      candidates: [holding('n-1', 4)],
+      reporter: { id: 'n-1', role: 'holding' },
+      now: NOW,
+    }).next;
+    expect(held.claimants).toEqual({ 'n-1': { role: 'holding', observedAt: NOW.toISOString() } });
+
+    const released = mergeLeaseObservation(held, { candidates: [], reporter: { id: 'n-1', role: null }, now: at(5) });
+    expect(released.next).toMatchObject({ holderId: null, lastHolderId: 'n-1', claimants: {} });
+    expect(released.change).toBeNull();
+
+    const replay = mergeLeaseObservation(released.next, { candidates: [holding('n-1', 4, 'relay')], now: at(6) });
+    expect(replay.next.holderId).toBeNull();
+
+    const successor = mergeLeaseObservation(released.next, { candidates: [holding('n-2', 5)], now: at(7) });
+    expect(successor.change).toEqual({ from: 'n-1', to: 'n-2', ballot: ballot(5, 'n-2') });
+
+    const reacquired = mergeLeaseObservation(released.next, { candidates: [holding('n-1', 6)], now: at(8) });
+    expect(reacquired.next.holderId).toBe('n-1');
+    expect(reacquired.change).toBeNull();
+  });
+
+  it('audits a planned or designated-successor change as a handoff and any other as a failover (D9)', () => {
+    const change = { from: 'n-1', to: 'n-2', ballot: ballot(5, 'n-2') };
+    const planned = [
+      { slot: 0, fromHolderId: 'n-1', toHolderId: 'n-2', operationId: 'op', expiresAt: at(60).toISOString() },
+    ];
+    expect(classifyLeaseHolderChange(change, 0, planned, new Set(), NOW)).toBe('handoff');
+    expect(classifyLeaseHolderChange(change, 1, planned, new Set(), NOW)).toBe('failover');
+    expect(classifyLeaseHolderChange(change, 0, planned, new Set(), at(120))).toBe('failover');
+    expect(classifyLeaseHolderChange(change, 0, [], new Set(['n-2']), NOW)).toBe('handoff');
+    expect(classifyLeaseHolderChange({ ...change, from: null }, 0, [], new Set(), NOW)).toBeNull();
+  });
+
+  it('acks a bootstrap only when the reserved holder holds and no other copy may run (A5, A7)', () => {
+    const bootstrap = [{ slot: 0, holderId: 'n-1' }];
+    const observation = (holderId: string | null, claimants: string[]) => ({
+      holderId,
+      claimants: Object.fromEntries(claimants.map((id) => [id, { role: 'holding', observedAt: NOW.toISOString() }])),
+    });
+    expect(bootstrapAcknowledged(bootstrap, new Map([[0, observation('n-1', ['n-1'])]]))).toBe(true);
+    expect(bootstrapAcknowledged(bootstrap, new Map([[0, observation('n-1', ['n-1', 'n-2'])]]))).toBe(false);
+    expect(bootstrapAcknowledged(bootstrap, new Map([[0, observation('n-2', ['n-2'])]]))).toBe(false);
+    expect(bootstrapAcknowledged(bootstrap, new Map())).toBe(false);
+  });
+});

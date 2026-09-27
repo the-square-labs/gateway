@@ -1217,7 +1217,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_availability',
     description:
-      'Run a Docker container, blue/green deployment, or Compose Project across several Docker nodes (replicated) or with automatic failover. preflight checks eligibility and candidate nodes for a proposed policy; enable applies it; get and get_by_resource read the policy with placements; list_operations pages rollout history; update changes mode, replicas, node selection, rollout policy, offline grace, or priority mode; priorityMode with an ordered nodePriority (first node is the primary, the rest are backups in order; only eligible nodes, no duplicates) serves from the first available nodes and moves the workload back (a failback operation) once a higher-priority node has stayed healthy for failbackDelaySeconds; retry_operation retries a failed operation; disable returns the workload to one node and requires survivingPlacementId plus the typed confirmation shown by the UI. Mutations need docker:availability:manage; the workload, candidate nodes, and dependencies are authorized like the Availability routes.',
+      'Run a Docker container, blue/green deployment, or Compose Project across several Docker nodes (replicated) or with automatic failover. preflight checks eligibility and candidate nodes for a proposed policy; enable applies it; get and get_by_resource read the policy with placements; list_operations pages rollout history; update changes mode, replicas, node selection, rollout policy, offline grace, or priority mode; priorityMode with an ordered nodePriority (first node is the primary, the rest are backups in order; only eligible nodes, no duplicates) serves from the first available nodes and moves the workload back (a failback operation) once a higher-priority node has stayed healthy for failbackDelaySeconds; retry_operation retries a failed operation; disable returns the workload to one node and requires survivingPlacementId plus the typed confirmation shown by the UI. Failover runs in the data plane (lease mode) once every candidate node, every ingress Nginx node and a majority of lease voters support it, otherwise the backend drives it (legacy); get returns lease.mode with lease.reason, the lease holder per slot and the voter reachability margin. partitionMode strict (default) never runs two copies of a slot; available keeps serving through a partition and may run two copies at once. Mutations need docker:availability:manage; the workload, candidate nodes, and dependencies are authorized like the Availability routes.',
     parameters: {
       type: 'object',
       properties: {
@@ -1283,6 +1283,12 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
           minimum: 0,
           maximum: 3600,
           description: 'Seconds a returning higher-priority node must stay healthy before failback. Default: 300.',
+        },
+        partitionMode: {
+          type: 'string',
+          enum: ['strict', 'available'],
+          description:
+            'Lease-mode behaviour under a network partition. strict (default) never runs two copies of a slot; available keeps serving on a reachable node and can run two copies concurrently.',
         },
         survivingPlacementId: { type: 'string', description: 'disable: placement UUID that keeps running.' },
         confirmation: { type: 'string', description: 'disable: typed confirmation text.' },

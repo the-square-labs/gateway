@@ -213,6 +213,29 @@ describe("gateway update facade", () => {
 		});
 	});
 
+	it("serves the lease watchdog on its own release line", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(
+				Response.json([
+					release("v1.1.12-docker"),
+					release("v1.1.11-watchdog"),
+					release("v1.1.10-watchdog"),
+				]),
+			);
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=lease-watchdog&current=v1.1.10",
+			),
+			env,
+			fetcher,
+		);
+		await expect(response.json()).resolves.toMatchObject({
+			reason: "patch",
+			target: { tag_name: "v1.1.11-watchdog" },
+		});
+	});
+
 	it("rejects unknown update channels without contacting GitHub", async () => {
 		const fetcher = vi.fn<typeof fetch>();
 		const response = await handleRequest(

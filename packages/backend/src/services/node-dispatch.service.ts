@@ -751,6 +751,9 @@ export class NodeDispatchService {
       sourceConfigManaged?: boolean;
       rotateListener?: boolean;
       socketOnly?: boolean;
+      dormant?: boolean;
+      availabilityPolicyId?: string;
+      availabilityCandidateId?: string;
     }>,
     timeoutMs = 60_000
   ): Promise<CommandResult> {

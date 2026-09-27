@@ -19,6 +19,7 @@ security_best_practices_report.md
 
 # Go
 packages/daemons/docker/bin/
+packages/daemons/lease-watchdog/bin/
 packages/daemons/nginx/bin/
 packages/daemons/nginx/nginx-daemon
 packages/daemons/monitoring/bin/monitoring-daemon

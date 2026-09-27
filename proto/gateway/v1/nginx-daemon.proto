@@ -180,6 +180,9 @@ message HealthReport {
   // Physical GPU inventory and capability-aware telemetry. Metrics are only
   // meaningful when their name is present in GpuDevice.available_metrics.
   repeated GpuDevice gpu_devices = 35;
+  // Availability lease state of a daemon advertising availability_lease_v1:
+  // persisted acks, held leases and, for a voter, its acceptor view.
+  AvailabilityLeaseReport availability_lease = 36;
   // Smoothed round-trip time from this node to each relay it measured
   // recently. Gateway places relay assignments by network distance with it.
   repeated RelayLatencySample relay_latencies = 40;
@@ -339,6 +342,12 @@ message GatewayCommand {
     // Relay supervisor only: installs a renewed relay data-plane server
     // certificate on its worker without dropping tunnels.
     RenewRelayIdentityCommand renew_relay_identity = 74;
+    // Availability data-plane lease. Accepted by general docker-daemons and
+    // nginx-daemons advertising availability_lease_v1. The sync carries the
+    // signed voter config, manifests and policy key chain; the handoff asks
+    // the current holder of one lease to release it to a designated successor.
+    SyncAvailabilityLeaseCommand sync_availability_lease = 75;
+    AvailabilityLeaseHandoffCommand availability_lease_handoff = 76;
   }
 }
 
@@ -391,6 +400,9 @@ message RelayRuntimeStatus {
   uint32 service_port = 14;
   repeated RelayAssignmentTunnelCount assignment_tunnels = 15;
   repeated string policy_signing_key_ids = 16;
+  // The relay's acceptor and data-path gate view (relays advertising
+  // availability_lease_v1). member_id is the relay instance id.
+  AvailabilityLeaseReport availability_lease = 17;
 }
 
 message RelayAssignmentTunnelCount {
@@ -679,6 +691,16 @@ message ProxySecureLinkBinding {
   // authenticated Unix socket. False preserves the legacy loopback listener
   // for mixed-version recovery and user-owned legacy configs.
   bool socket_only = 13;
+  // Availability members only. A dormant member belongs to a standby
+  // placement (D7): the source keeps its socket closed and the target keeps
+  // its connector prepared until the member's candidate holds the lease.
+  // Older daemons ignore these fields; Gateway never sends a dormant member to
+  // a daemon without availability_lease_v1.
+  bool dormant = 14;
+  // Availability members only: the lease policy and the candidate id (the
+  // docker node id) whose lease opens this member (D8).
+  string availability_policy_id = 15;
+  string availability_candidate_id = 16;
 }
 
 message ProbeProxySecureLinkCommand {
@@ -928,6 +950,141 @@ message DockerAvailabilityCommand {
   string resource_kind = 7; // container, deployment, compose
   string resource_id = 8;
   string config_json = 9;
+}
+
+// ---------------------------------------------------------------------------
+// Availability data-plane lease (Docker Availability failover without Gateway).
+// Blocks are opaque serialized relay.v1 messages, like SyncRelayPolicyCommand:
+// they are signed by the relay policy signing key and verified by the daemon's
+// availabilitylease package, never trusted because of this transport alone.
+// ---------------------------------------------------------------------------
+
+message SyncAvailabilityLeaseCommand {
+  // Monotonic distribution revision. The daemon reports the last revision it
+  // applied in AvailabilityLeaseReport.lease_revision.
+  uint64 revision = 1;
+  // This daemon's voter/candidate id in the blocks (its node id).
+  string member_id = 2;
+  // Policy signing keys delivered over this authenticated stream (A4). The
+  // daemon trusts them directly; rotation links extend trust to later keys.
+  repeated AvailabilityLeasePolicyKey policy_keys = 3;
+  // Serialized relay.v1.LeasePolicyKeyRotation links, oldest first (A14).
+  repeated bytes key_rotations = 4;
+  // Serialized relay.v1.LeaseSignedBlock of kind VOTER_CONFIG (current epoch).
+  // Empty while no voter config exists yet.
+  bytes voter_config = 5;
+  // Serialized relay.v1.LeaseSignedBlock of kind MANIFEST, one per policy in
+  // bootstrapping, lease or closing mode. The set is complete: a policy that is
+  // absent went back to legacy after its lease-closed manifest was acked.
+  repeated bytes manifests = 6;
+}
+
+message AvailabilityLeasePolicyKey {
+  string key_id = 1;
+  // Raw 32-byte Ed25519 public key.
+  bytes public_key = 2;
+  // "sha256:<hex>" of public_key.
+  string public_key_fingerprint = 3;
+}
+
+// Planned handoff (D9, A6): the current holder of (policy_id, slot) checks
+// that the successor is ready, stops its workload, deregisters its endpoint
+// and releases the lease to successor_id. Acceptors accept only that successor
+// for the successor window, then open the key to anyone.
+message AvailabilityLeaseHandoffCommand {
+  string policy_id = 1;
+  uint32 slot = 2;
+  // Candidate id (docker node id) of the successor.
+  string successor_id = 3;
+  string operation_id = 4;
+  // Placement generation the successor serves under (D12).
+  uint64 successor_generation = 5;
+  // Manifest version the Gateway planned against; a holder with an older
+  // manifest refuses the handoff until it adopted this version.
+  uint64 manifest_version = 6;
+}
+
+message AvailabilityLeaseBallot {
+  uint64 round = 1;
+  uint64 incarnation = 2;
+  string proposer_id = 3;
+}
+
+message AvailabilityLeaseReport {
+  // Voter/candidate id: node id for daemons, relay instance id for relays.
+  string member_id = 1;
+  // PKIX DER ECDSA P-256 public key of the identity that signs frames.
+  bytes identity_public_key = 2;
+  // Persisted incarnation, bumped on every start (A3).
+  uint64 incarnation = 3;
+  // Highest voter config epoch persisted (A4 persisted ack).
+  uint64 epoch = 4;
+  // Policy signing keys this member trusts, directly or through rotation
+  // links (A14 ack).
+  repeated string trusted_policy_key_ids = 5;
+  // Manifest versions persisted per policy (A4, A5 lease-closed ack).
+  repeated AvailabilityLeaseManifestAck manifests = 6;
+  // Daemons only: leases this node proposes for, with its local role.
+  repeated AvailabilityLeaseHeld held = 7;
+  // Voters (and relays, which also keep shadow accepts): acceptor view.
+  repeated AvailabilityLeaseKeyView acceptor = 8;
+  // True while the acceptor abstains after a start or a fresh state (A3).
+  bool acceptor_abstaining = 9;
+  // Docker daemons: the watchdog heartbeat is fresh (A12.4). A daemon without
+  // it must not acquire, so Gateway treats it as not capable.
+  bool watchdog_ready = 10;
+  // Transitions since the previous report, oldest first (D9 audit).
+  repeated AvailabilityLeaseEvent events = 11;
+  // Last SyncAvailabilityLeaseCommand revision applied.
+  uint64 lease_revision = 12;
+}
+
+message AvailabilityLeaseManifestAck {
+  string policy_id = 1;
+  uint64 manifest_version = 2;
+  bool closed = 3;
+}
+
+message AvailabilityLeaseHeld {
+  string policy_id = 1;
+  uint32 slot = 2;
+  // availabilitylease.Role: candidate, acquiring, bootstrapping, recovering,
+  // holding, fencing, abandoned or releasing.
+  string role = 3;
+  // Ballot of the last committed round, when any.
+  AvailabilityLeaseBallot ballot = 4;
+  // Epoch and manifest version of the last committed round (A4 settlement).
+  uint64 epoch = 5;
+  uint64 manifest_version = 6;
+  string placement_id = 7;
+  uint64 placement_generation = 8;
+}
+
+message AvailabilityLeaseKeyView {
+  string policy_id = 1;
+  uint32 slot = 2;
+  // relay.v1.LeaseKeyState name without prefix: free, held, reserved,
+  // abstaining or closed.
+  string state = 3;
+  string holder_id = 4;
+  string reserved_for = 5;
+  AvailabilityLeaseBallot promised = 6;
+  AvailabilityLeaseBallot committed = 7;
+  uint64 epoch = 8;
+  uint64 manifest_version = 9;
+  // Relays only: the data-path gate for the holder is open (A11).
+  bool gate_open = 10;
+}
+
+message AvailabilityLeaseEvent {
+  // acquired, fence, released or handoff (availabilitylease.EventKind).
+  string kind = 1;
+  string policy_id = 2;
+  uint32 slot = 3;
+  AvailabilityLeaseBallot ballot = 4;
+  string successor_id = 5;
+  string reason = 6;
+  int64 at_unix_ms = 7;
 }
 
 message DockerRuntimeCommand {

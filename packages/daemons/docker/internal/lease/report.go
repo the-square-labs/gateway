@@ -1,0 +1,104 @@
+package lease
+
+import (
+	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
+)
+
+// Report is the lease part of the daemon health report. Field for field it
+// maps onto T3's gateway.v1 AvailabilityLeaseReport (see the T4 report for
+// the wiring).
+type Report struct {
+	MemberID            string
+	Incarnation         uint64
+	Epoch               uint64
+	TrustedPolicyKeyIDs []string
+	Manifests           []ManifestAck
+	Held                []Held
+	Acceptor            []availabilitylease.KeyView
+	AcceptorAbstaining  bool
+	WatchdogReady       bool
+	Events              []ReportEvent
+	LeaseRevision       uint64
+}
+
+type ManifestAck struct {
+	PolicyID string
+	Version  uint64
+	Closed   bool
+}
+
+// Held is one key this node proposes for, with the D12 mapping of the lease
+// ballot to this node's placement and generation.
+type Held struct {
+	Key                 availabilitylease.Key
+	Role                string
+	Ballot              availabilitylease.Ballot
+	Epoch               uint64
+	ManifestVersion     uint64
+	PlacementID         string
+	PlacementGeneration uint64
+}
+
+type ReportEvent struct {
+	Kind      string
+	Key       availabilitylease.Key
+	Ballot    availabilitylease.Ballot
+	Successor string
+	Reason    string
+	AtUnixMs  int64
+}
+
+// Report returns the current lease state and drains the events collected
+// since the previous report.
+func (r *Runtime) Report() Report {
+	report := Report{
+		MemberID: r.opts.NodeID, Incarnation: r.node.Incarnation(), Epoch: r.node.Epoch(),
+		WatchdogReady: r.opts.Fence.HeartbeatFresh(r.opts.Clock.Now()),
+	}
+	for _, manifest := range r.node.Manifests() {
+		report.Manifests = append(report.Manifests, ManifestAck{PolicyID: manifest.PolicyID, Version: manifest.Version, Closed: manifest.Closed})
+	}
+	for _, status := range r.node.Holders() {
+		held := Held{Key: status.Key, Role: status.Role.String(), Ballot: status.Ballot}
+		held.Epoch, held.ManifestVersion, _ = r.node.HeldCommit(status.Key)
+		if placement, ok := r.opts.Placements.Local(status.Key.PolicyID); ok {
+			held.PlacementID, held.PlacementGeneration = placement.PlacementID, placement.Generation
+		}
+		report.Held = append(report.Held, held)
+	}
+	report.Acceptor = r.node.AcceptorView()
+	for _, view := range report.Acceptor {
+		report.AcceptorAbstaining = report.AcceptorAbstaining || view.Abstaining
+	}
+	report.TrustedPolicyKeyIDs = r.node.TrustedPolicyKeyIDs()
+	r.mu.Lock()
+	report.Events = r.events
+	r.events = nil
+	report.LeaseRevision = r.revision
+	r.mu.Unlock()
+	return report
+}
+
+// collectEventsLocked moves protocol transitions into the report buffer and
+// logs them: the audit trail of autonomous transitions (D9).
+func (r *Runtime) collectEventsLocked() {
+	events := r.node.DrainEvents()
+	if len(events) == 0 {
+		return
+	}
+	now, wall := r.opts.Clock.Now(), r.opts.Wall()
+	for _, event := range events {
+		at := wall.Add(-(now - event.At))
+		r.logger.Info("availability lease transition", "kind", event.Kind, "policy_id", event.Key.PolicyID, "slot", event.Key.Slot,
+			"ballot", event.Ballot.String(), "successor_id", event.Successor, "reason", event.Reason, "at", at.Format(time.RFC3339Nano))
+		r.events = append(r.events, ReportEvent{
+			Kind: string(event.Kind), Key: event.Key, Ballot: event.Ballot, Successor: event.Successor,
+			Reason: string(event.Reason), AtUnixMs: at.UnixMilli(),
+		})
+	}
+	if len(r.events) > maxPendingEvents {
+		r.events = r.events[len(r.events)-maxPendingEvents:]
+	}
+}

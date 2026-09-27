@@ -21,7 +21,16 @@ type Service struct {
 	identity     *identity.Store
 	reloadApp    func() error
 	buildVersion string
+	lease        LeaseReporter
 }
+
+// LeaseReporter is the relay's availability lease coordinator.
+type LeaseReporter interface {
+	Report() *relayv1.AvailabilityLeaseReport
+}
+
+// SetLeaseReporter adds the availability lease view and capability to health.
+func (s *Service) SetLeaseReporter(reporter LeaseReporter) { s.lease = reporter }
 
 func New(store *policy.Store, broker *broker.Broker, identityStore *identity.Store, reloadApp func() error, buildVersion string) *Service {
 	return &Service{store: store, broker: broker, identity: identityStore, reloadApp: reloadApp, buildVersion: buildVersion}
@@ -81,9 +90,10 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 		FileDescriptorLimit:    runtime.Admission.FileDescriptorLimit,
 		Liveness:               true, Readiness: ready, Reason: reason,
 		PoolId: current.PoolID, RelayInstanceId: current.RelayInstanceID, Mode: current.Mode,
-		PolicyExpiresAtUnix: policyExpiresAtUnix, Capabilities: healthCapabilities(current.Mode),
-		Draining:     runtime.Draining,
-		PolicyKeyIds: s.store.PolicyKeyIDs(),
+		PolicyExpiresAtUnix: policyExpiresAtUnix, Capabilities: healthCapabilities(current.Mode, s.lease != nil),
+		AvailabilityLease: s.leaseReport(),
+		Draining:          runtime.Draining,
+		PolicyKeyIds:      s.store.PolicyKeyIDs(),
 		AssignmentTunnels: func() []*relayv1.AssignmentTunnelCount {
 			result := make([]*relayv1.AssignmentTunnelCount, 0, len(runtime.AssignmentTunnels))
 			for _, count := range runtime.AssignmentTunnels {
@@ -98,7 +108,7 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 
 // healthCapabilities lists what Gateway may rely on. Only the local relay
 // advertises the trust reset: a remote relay refuses it.
-func healthCapabilities(mode relayv1.RelayMode) []string {
+func healthCapabilities(mode relayv1.RelayMode, availabilityLease bool) []string {
 	capabilities := []string{
 		policy.PoolCapability, "signed_policy_envelope_v1", identity.ServerCertificateRolloverCapability,
 		policy.LongLeaseCapability,
@@ -106,7 +116,21 @@ func healthCapabilities(mode relayv1.RelayMode) []string {
 	if mode == relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
 		capabilities = append(capabilities, policy.TrustResetCapability)
 	}
+	if availabilityLease {
+		capabilities = append(capabilities, AvailabilityLeaseCapability)
+	}
 	return capabilities
+}
+
+// AvailabilityLeaseCapability tells Gateway the relay coordinates Docker
+// Availability data-plane leases (Coordinate, gate fencing, lease view).
+const AvailabilityLeaseCapability = "availability_lease_v1"
+
+func (s *Service) leaseReport() *relayv1.AvailabilityLeaseReport {
+	if s.lease == nil {
+		return nil
+	}
+	return s.lease.Report()
 }
 
 func (s *Service) GetRouteRuntime(ctx context.Context, request *relayv1.RouteRuntimeRequest) (*relayv1.RouteRuntimeResponse, error) {

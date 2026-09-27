@@ -149,6 +149,12 @@ export class RelaySupervisorService {
   private readonly readinessWaitMs: number;
   private readonly readinessPollMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private availabilityLease?: {
+    ingestRelayReport(
+      relayInstanceId: string,
+      report: NonNullable<RelayHealthResponse['availabilityLease']>
+    ): Promise<void>;
+  };
 
   constructor(
     private readonly db: DrizzleClient,
@@ -165,6 +171,11 @@ export class RelaySupervisorService {
     this.readinessWaitMs = options.readinessWaitMs ?? 20_000;
     this.readinessPollMs = options.readinessPollMs ?? 1_000;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  }
+
+  /** The local relay's acceptor and gate view goes to the availability lease service with every health probe. */
+  setAvailabilityLeaseSink(sink: NonNullable<RelaySupervisorService['availabilityLease']>): void {
+    this.availabilityLease = sink;
   }
 
   async start(): Promise<void> {
@@ -657,6 +668,11 @@ export class RelaySupervisorService {
         resourceId: response.relayInstanceId,
         details: { from: previous.lastSeenAt.toISOString(), to: reportedAt.toISOString() },
       });
+    }
+    if (response.availabilityLease && this.availabilityLease) {
+      await this.availabilityLease
+        .ingestRelayReport(response.relayInstanceId, response.availabilityLease)
+        .catch((error) => logger.warn('Local relay availability lease report was not recorded', { error }));
     }
   }
 

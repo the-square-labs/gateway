@@ -22,6 +22,8 @@ const (
 	TunnelBroker_RegisterEndpoint_FullMethodName = "/relay.v1.TunnelBroker/RegisterEndpoint"
 	TunnelBroker_OpenTunnel_FullMethodName       = "/relay.v1.TunnelBroker/OpenTunnel"
 	TunnelBroker_AcceptTunnel_FullMethodName     = "/relay.v1.TunnelBroker/AcceptTunnel"
+	TunnelBroker_Coordinate_FullMethodName       = "/relay.v1.TunnelBroker/Coordinate"
+	TunnelBroker_WatchLeaseGates_FullMethodName  = "/relay.v1.TunnelBroker/WatchLeaseGates"
 )
 
 // TunnelBrokerClient is the client API for TunnelBroker service.
@@ -34,6 +36,15 @@ type TunnelBrokerClient interface {
 	RegisterEndpoint(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[EndpointControl, EndpointControl], error)
 	OpenTunnel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TunnelFrame, TunnelFrame], error)
 	AcceptTunnel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TunnelFrame, TunnelFrame], error)
+	// Availability lease coordination (Docker Availability data-plane failover).
+	// The relay routes frames by destination_id among connected members and is
+	// itself an acceptor. Only identities named by the current signed voter
+	// config or a manifest candidate list may use it.
+	Coordinate(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CoordinationFrame, CoordinationFrame], error)
+	// Streams this relay's data-path gate view for lease keys: sent on every
+	// change and at least once a second. nginx daemons derive Secure Link
+	// socket state from it with a TTL of at most the lease term (A8).
+	WatchLeaseGates(ctx context.Context, in *LeaseGateWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LeaseGateSnapshot], error)
 }
 
 type tunnelBrokerClient struct {
@@ -83,6 +94,38 @@ func (c *tunnelBrokerClient) AcceptTunnel(ctx context.Context, opts ...grpc.Call
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type TunnelBroker_AcceptTunnelClient = grpc.BidiStreamingClient[TunnelFrame, TunnelFrame]
 
+func (c *tunnelBrokerClient) Coordinate(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CoordinationFrame, CoordinationFrame], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &TunnelBroker_ServiceDesc.Streams[3], TunnelBroker_Coordinate_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CoordinationFrame, CoordinationFrame]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type TunnelBroker_CoordinateClient = grpc.BidiStreamingClient[CoordinationFrame, CoordinationFrame]
+
+func (c *tunnelBrokerClient) WatchLeaseGates(ctx context.Context, in *LeaseGateWatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LeaseGateSnapshot], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &TunnelBroker_ServiceDesc.Streams[4], TunnelBroker_WatchLeaseGates_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[LeaseGateWatchRequest, LeaseGateSnapshot]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type TunnelBroker_WatchLeaseGatesClient = grpc.ServerStreamingClient[LeaseGateSnapshot]
+
 // TunnelBrokerServer is the server API for TunnelBroker service.
 // All implementations must embed UnimplementedTunnelBrokerServer
 // for forward compatibility.
@@ -93,6 +136,15 @@ type TunnelBrokerServer interface {
 	RegisterEndpoint(grpc.BidiStreamingServer[EndpointControl, EndpointControl]) error
 	OpenTunnel(grpc.BidiStreamingServer[TunnelFrame, TunnelFrame]) error
 	AcceptTunnel(grpc.BidiStreamingServer[TunnelFrame, TunnelFrame]) error
+	// Availability lease coordination (Docker Availability data-plane failover).
+	// The relay routes frames by destination_id among connected members and is
+	// itself an acceptor. Only identities named by the current signed voter
+	// config or a manifest candidate list may use it.
+	Coordinate(grpc.BidiStreamingServer[CoordinationFrame, CoordinationFrame]) error
+	// Streams this relay's data-path gate view for lease keys: sent on every
+	// change and at least once a second. nginx daemons derive Secure Link
+	// socket state from it with a TTL of at most the lease term (A8).
+	WatchLeaseGates(*LeaseGateWatchRequest, grpc.ServerStreamingServer[LeaseGateSnapshot]) error
 	mustEmbedUnimplementedTunnelBrokerServer()
 }
 
@@ -111,6 +163,12 @@ func (UnimplementedTunnelBrokerServer) OpenTunnel(grpc.BidiStreamingServer[Tunne
 }
 func (UnimplementedTunnelBrokerServer) AcceptTunnel(grpc.BidiStreamingServer[TunnelFrame, TunnelFrame]) error {
 	return status.Error(codes.Unimplemented, "method AcceptTunnel not implemented")
+}
+func (UnimplementedTunnelBrokerServer) Coordinate(grpc.BidiStreamingServer[CoordinationFrame, CoordinationFrame]) error {
+	return status.Error(codes.Unimplemented, "method Coordinate not implemented")
+}
+func (UnimplementedTunnelBrokerServer) WatchLeaseGates(*LeaseGateWatchRequest, grpc.ServerStreamingServer[LeaseGateSnapshot]) error {
+	return status.Error(codes.Unimplemented, "method WatchLeaseGates not implemented")
 }
 func (UnimplementedTunnelBrokerServer) mustEmbedUnimplementedTunnelBrokerServer() {}
 func (UnimplementedTunnelBrokerServer) testEmbeddedByValue()                      {}
@@ -154,6 +212,24 @@ func _TunnelBroker_AcceptTunnel_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type TunnelBroker_AcceptTunnelServer = grpc.BidiStreamingServer[TunnelFrame, TunnelFrame]
 
+func _TunnelBroker_Coordinate_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(TunnelBrokerServer).Coordinate(&grpc.GenericServerStream[CoordinationFrame, CoordinationFrame]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type TunnelBroker_CoordinateServer = grpc.BidiStreamingServer[CoordinationFrame, CoordinationFrame]
+
+func _TunnelBroker_WatchLeaseGates_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(LeaseGateWatchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(TunnelBrokerServer).WatchLeaseGates(m, &grpc.GenericServerStream[LeaseGateWatchRequest, LeaseGateSnapshot]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type TunnelBroker_WatchLeaseGatesServer = grpc.ServerStreamingServer[LeaseGateSnapshot]
+
 // TunnelBroker_ServiceDesc is the grpc.ServiceDesc for TunnelBroker service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -179,6 +255,17 @@ var TunnelBroker_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _TunnelBroker_AcceptTunnel_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "Coordinate",
+			Handler:       _TunnelBroker_Coordinate_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "WatchLeaseGates",
+			Handler:       _TunnelBroker_WatchLeaseGates_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "relay/v1/relay.proto",

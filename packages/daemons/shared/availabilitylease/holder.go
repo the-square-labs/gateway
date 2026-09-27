@@ -1,0 +1,240 @@
+package availabilitylease
+
+import (
+	"errors"
+	"time"
+
+	pb "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+)
+
+const noDeadline = time.Duration(1<<62 - 1)
+
+type releaseState struct {
+	successor  string
+	ballot     Ballot
+	acks       map[string]bool
+	final      bool
+	finalSent  int
+	nextAt     time.Duration
+	finalAcked map[string]bool
+}
+
+// HolderStatus returns the proposer view of a key for the docker daemon.
+func (n *Node) HolderStatus(key Key) HolderStatus {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.holderStatusLocked(key, n.clock.Now())
+}
+
+func (n *Node) holderStatusLocked(key Key, now time.Duration) HolderStatus {
+	status := HolderStatus{Key: key}
+	manifest := n.manifests[key.PolicyID]
+	status.Available = manifest != nil && manifest.Available
+	pk := n.proposers[key]
+	if pk == nil {
+		return status
+	}
+	status.Role, status.Ballot = pk.role, pk.ballot
+	switch pk.role {
+	case RoleHolding:
+		status.Holding = true
+		status.Deadline, status.SoftFenceAt = pk.deadline, pk.softAt
+		status.MayStart = now < pk.softAt
+		status.FenceNow = !status.MayStart
+		if status.FenceNow {
+			status.FenceReason = FenceTimer
+		}
+	case RoleRecovering, RoleAbandoned:
+		status.Deadline, status.SoftFenceAt = pk.deadline, pk.softAt
+		status.FenceNow = now >= pk.softAt
+	case RoleFencing:
+		status.Deadline, status.SoftFenceAt = pk.deadline, pk.softAt
+		status.FenceNow, status.FenceReason = true, pk.fenceReason
+	case RoleReleasing:
+		status.Deadline = pk.deadline
+	}
+	return status
+}
+
+// Holders lists every key this node holds, recovers, fences or releases.
+func (n *Node) Holders() []HolderStatus {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	now := n.clock.Now()
+	set := map[Key]bool{}
+	for key, pk := range n.proposers {
+		if pk.role != RoleNone && pk.role != RoleCandidate {
+			set[key] = true
+		}
+	}
+	var out []HolderStatus
+	for _, key := range sortKeys(set) {
+		out = append(out, n.holderStatusLocked(key, now))
+	}
+	return out
+}
+
+// Recover registers a lease-mode container that was running when the daemon
+// started (A2.3). deadline is the watchdog record. The container is treated
+// as unfenced: unless a round succeeds before the soft fence point the
+// daemon must stop it, and the watchdog kills it at deadline.
+func (n *Node) Recover(key Key, deadline time.Duration) {
+	n.run(func(now time.Duration) {
+		pk := n.proposerFor(key)
+		if pk.holdsLease() {
+			return
+		}
+		pk.role, pk.round = RoleRecovering, nil
+		pk.deadline, pk.softAt = deadline, deadline-(FenceCompleteAfter-SoftFenceAfter)
+		if manifest := n.manifests[key.PolicyID]; manifest != nil && manifest.Available {
+			// Available mode never fences on time (A7): renew or yield to a
+			// commit that beats ours.
+			pk.deadline, pk.softAt = now+FenceCompleteAfter, noDeadline
+		}
+		pk.lastProposeAt = now
+		pk.recoverUntil = now + recoveryQueryWait
+		pk.ballot = Ballot{}
+		n.sendQuery(key)
+		if now >= pk.softAt {
+			n.fence(pk, FenceRecovery, now)
+		}
+	})
+}
+
+// FenceComplete tells the node the container is confirmed dead (cgroup
+// empty). After a timer or recovery fence it releases the key so successors
+// need not wait for the acceptors' hold to lapse.
+func (n *Node) FenceComplete(key Key) {
+	n.run(func(now time.Duration) {
+		pk := n.proposers[key]
+		if pk == nil {
+			return
+		}
+		switch pk.role {
+		case RoleFencing, RoleAbandoned:
+		default:
+			return
+		}
+		switch pk.fenceReason {
+		case FenceTimer, FenceRecovery, FenceNone:
+			if !pk.lastIssued.IsZero() {
+				n.beginRelease(pk, "", now)
+				return
+			}
+		}
+		pk.role, pk.deadline, pk.softAt = RoleNone, 0, 0
+	})
+}
+
+// Release gives the key up, optionally to a designated successor (D9). The
+// caller guarantees the container's cgroup is empty and its endpoint is
+// deregistered (A6). Relays are relinquished first; acceptors are released
+// only once every relay acked or RelinquishWait passed since the last propose.
+func (n *Node) Release(key Key, successor string) error {
+	var err error
+	n.run(func(now time.Duration) {
+		pk := n.proposers[key]
+		if pk == nil || (!pk.holdsLease() && pk.role != RoleFencing && pk.role != RoleAbandoned) {
+			err = errors.New("availability lease is not held")
+			return
+		}
+		n.beginRelease(pk, successor, now)
+	})
+	return err
+}
+
+// Abandon stops renewing without releasing, for a stop that did not
+// complete: the watchdog fences at the deadline (A6).
+func (n *Node) Abandon(key Key) {
+	n.run(func(now time.Duration) {
+		pk := n.proposers[key]
+		if pk == nil || (!pk.holdsLease() && pk.role != RoleFencing) {
+			return
+		}
+		pk.round = nil
+		pk.role = RoleAbandoned
+		n.emit(Event{Kind: EventFence, Key: key, Ballot: pk.ballot, Reason: pk.fenceReason, At: now})
+	})
+}
+
+func (n *Node) beginRelease(pk *proposerKey, successor string, now time.Duration) {
+	pk.round = nil
+	pk.role = RoleReleasing
+	pk.release = releaseState{successor: successor, ballot: pk.lastIssued, acks: map[string]bool{}, finalAcked: map[string]bool{}, nextAt: now}
+	kind := EventReleased
+	if successor != "" {
+		kind = EventHandoff
+	}
+	n.emit(Event{Kind: kind, Key: pk.key, Ballot: pk.ballot, Successor: successor, At: now})
+	n.tickRelease(pk, now)
+}
+
+func (n *Node) tickRelease(pk *proposerKey, now time.Duration) {
+	config := n.currentConfig()
+	if config == nil {
+		pk.role = RoleNone
+		return
+	}
+	rel := &pk.release
+	if !rel.final {
+		acked := true
+		for _, id := range config.relayIDs {
+			if !rel.acks[id] {
+				acked = false
+			}
+		}
+		if acked || now >= pk.lastProposeAt+RelinquishWait {
+			rel.final, rel.nextAt = true, now
+		} else if now >= rel.nextAt {
+			item := &pb.LeaseRelease{Key: pk.key.proto(), Ballot: rel.ballot.proto(), Phase: pb.LeaseReleasePhase_LEASE_RELEASE_PHASE_RELINQUISH}
+			for _, id := range config.relayIDs {
+				if !rel.acks[id] {
+					n.queue(id, &pb.LeaseItem{Body: &pb.LeaseItem_Release{Release: item}})
+				}
+			}
+			rel.nextAt = now + releaseRetry
+		}
+	}
+	if !rel.final || now < rel.nextAt {
+		return
+	}
+	if rel.finalSent >= releaseAttempts {
+		pk.role, pk.deadline, pk.softAt = RoleNone, 0, 0
+		pk.release.nextAt = 0
+		pk.nextRoundAt = now + SuccessorWindow
+		return
+	}
+	item := &pb.LeaseRelease{
+		Key: pk.key.proto(), Ballot: rel.ballot.proto(), Phase: pb.LeaseReleasePhase_LEASE_RELEASE_PHASE_FINAL,
+		SuccessorId: rel.successor,
+	}
+	targets := map[string]bool{}
+	for _, id := range config.memberIDs {
+		targets[id] = !rel.finalAcked[id]
+	}
+	if rel.successor != "" {
+		targets[rel.successor] = !rel.finalAcked[rel.successor]
+	}
+	for _, id := range sortedKeys(targets) {
+		if targets[id] {
+			n.queue(id, &pb.LeaseItem{Body: &pb.LeaseItem_Release{Release: item}})
+		}
+	}
+	rel.finalSent++
+	rel.nextAt = now + releaseRetry
+}
+
+func (n *Node) onReleaseAck(from string, msg *pb.LeaseReleaseAck, now time.Duration) {
+	key, ok := keyFromProto(msg.GetKey())
+	pk := n.proposers[key]
+	if !ok || pk == nil || pk.role != RoleReleasing || ballotFromProto(msg.GetBallot()) != pk.release.ballot {
+		return
+	}
+	switch msg.GetPhase() {
+	case pb.LeaseReleasePhase_LEASE_RELEASE_PHASE_RELINQUISH:
+		pk.release.acks[from] = true
+		n.tickRelease(pk, now)
+	case pb.LeaseReleasePhase_LEASE_RELEASE_PHASE_FINAL:
+		pk.release.finalAcked[from] = true
+	}
+}

@@ -7,6 +7,7 @@ import * as protoLoader from '@grpc/proto-loader';
 import type { DrizzleClient } from '@/db/client.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { AvailabilityLeaseService } from '@/modules/docker/availability/lease/availability-lease.service.js';
 import type { CAService } from '@/modules/pki/ca.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import { validateGrpcServerCertificate } from '@/services/grpc-server-certificate.js';
@@ -108,6 +109,7 @@ export interface GrpcServerDeps {
   systemCA: SystemCAService;
   relayPeerFingerprint?: string;
   relayPolicy?: RelayPolicyService;
+  availabilityLease?: Pick<AvailabilityLeaseService, 'ingestDaemonReport' | 'ingestRelayReport'>;
 }
 
 let server: grpc.Server | null = null;

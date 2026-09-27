@@ -1,0 +1,213 @@
+import type {
+  DockerAvailabilityLeaseBallot,
+  DockerAvailabilityLeaseBootstrapSlot,
+  DockerAvailabilityLeaseObservationSource,
+  DockerAvailabilityLeasePlannedHandoff,
+  DockerAvailabilityPlacementDesiredState,
+} from '@/db/schema/index.js';
+import { compareLeaseBallots } from './lease-codec.js';
+import { ACTIVE_LEASE_ROLES, HOLDING_LEASE_ROLES } from './lease-constants.js';
+
+export interface LeasePlanningPlacement {
+  id: string;
+  nodeId: string;
+  desiredState: DockerAvailabilityPlacementDesiredState;
+  serving: boolean;
+  createdAt: Date;
+}
+
+/** Placements that take part in the lease: every placement the controller keeps, serving or standby. */
+export function leaseCandidatePlacements<T extends LeasePlanningPlacement>(placements: T[]): T[] {
+  return placements.filter((placement) => ['serving', 'standby', 'draining'].includes(placement.desiredState));
+}
+
+/**
+ * Deterministic takeover order (D4, D5): priority mode follows nodePriority; otherwise serving placements come first,
+ * then standbys, oldest first. The data plane never chooses freely.
+ */
+export function orderLeaseCandidates(
+  policy: { priorityMode: boolean; nodePriority: string[] },
+  placements: LeasePlanningPlacement[]
+): string[] {
+  const stateRank = (placement: LeasePlanningPlacement) =>
+    placement.serving || placement.desiredState === 'serving' ? 0 : placement.desiredState === 'standby' ? 1 : 2;
+  const priorityRank = (placement: LeasePlanningPlacement) => {
+    if (!policy.priorityMode) return 0;
+    const index = policy.nodePriority.indexOf(placement.nodeId);
+    return index < 0 ? policy.nodePriority.length : index;
+  };
+  const ordered = [...leaseCandidatePlacements(placements)].sort(
+    (left, right) =>
+      priorityRank(left) - priorityRank(right) ||
+      stateRank(left) - stateRank(right) ||
+      left.createdAt.getTime() - right.createdAt.getTime() ||
+      left.nodeId.localeCompare(right.nodeId)
+  );
+  return [...new Set(ordered.map((placement) => placement.nodeId))];
+}
+
+/** A5: the first manifest reserves each slot for a placement that serves right now, oldest first. */
+export function bootstrapFromServing(
+  placements: LeasePlanningPlacement[],
+  slots: number
+): DockerAvailabilityLeaseBootstrapSlot[] {
+  return placements
+    .filter((placement) => placement.serving)
+    .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+    .slice(0, slots)
+    .map((placement, slot) => ({ slot, holderId: placement.nodeId }));
+}
+
+/** A7: switching available -> strict reserves every slot for the holder observed now. */
+export function bootstrapFromHolders(
+  holders: Array<{ slot: number; holderId: string | null }>,
+  slots: number
+): DockerAvailabilityLeaseBootstrapSlot[] {
+  return holders
+    .filter((holder): holder is { slot: number; holderId: string } => holder.holderId !== null && holder.slot < slots)
+    .sort((left, right) => left.slot - right.slot)
+    .map(({ slot, holderId }) => ({ slot, holderId }));
+}
+
+export interface LeaseObservationState {
+  holderId: string | null;
+  ballot: DockerAvailabilityLeaseBallot | null;
+  epoch: number;
+  manifestVersion: number;
+  source: DockerAvailabilityLeaseObservationSource;
+  sourceId: string;
+  observedAt: Date;
+  holderSince: Date | null;
+  lastHolderId: string | null;
+  claimants: Record<string, { role: string; observedAt: string }>;
+}
+
+export interface LeaseObservationCandidate {
+  holderId: string;
+  ballot: DockerAvailabilityLeaseBallot;
+  epoch: number;
+  manifestVersion: number;
+  source: DockerAvailabilityLeaseObservationSource;
+  sourceId: string;
+}
+
+export interface LeaseHolderChange {
+  from: string | null;
+  to: string;
+  ballot: DockerAvailabilityLeaseBallot | null;
+}
+
+/**
+ * Folds one report into the stored holder of a key. A strictly higher ballot names the holder; the same ballot only
+ * refreshes it; a daemon that held the key and now reports another role (or omits the key) released or fenced. A
+ * released key is never brought back by a report of the ballot it released.
+ */
+export function mergeLeaseObservation(
+  stored: LeaseObservationState | null,
+  input: {
+    candidates: LeaseObservationCandidate[];
+    /** Set for daemon reports: the reporter and its role for this key, null when the key is absent. */
+    reporter?: { id: string; role: string | null };
+    now: Date;
+  }
+): { next: LeaseObservationState; change: LeaseHolderChange | null } {
+  const now = input.now;
+  const next: LeaseObservationState = stored
+    ? { ...stored, claimants: { ...stored.claimants } }
+    : {
+        holderId: null,
+        ballot: null,
+        epoch: 0,
+        manifestVersion: 0,
+        source: input.candidates[0]?.source ?? 'daemon',
+        sourceId: input.candidates[0]?.sourceId ?? input.reporter?.id ?? '',
+        observedAt: now,
+        holderSince: null,
+        lastHolderId: null,
+        claimants: {},
+      };
+  const reporter = input.reporter;
+  if (reporter) {
+    if (reporter.role && ACTIVE_LEASE_ROLES.has(reporter.role)) {
+      next.claimants[reporter.id] = { role: reporter.role, observedAt: now.toISOString() };
+    } else {
+      delete next.claimants[reporter.id];
+    }
+    if (next.holderId === reporter.id && !(reporter.role && HOLDING_LEASE_ROLES.has(reporter.role))) {
+      next.holderId = null;
+      next.holderSince = null;
+      next.observedAt = now;
+      next.source = 'daemon';
+      next.sourceId = reporter.id;
+    }
+  }
+  const best = input.candidates.reduce<LeaseObservationCandidate | null>(
+    (winner, candidate) => (!winner || compareLeaseBallots(candidate.ballot, winner.ballot) > 0 ? candidate : winner),
+    null
+  );
+  if (best) {
+    const order = compareLeaseBallots(best.ballot, next.ballot);
+    if (order > 0) {
+      if (next.holderId !== best.holderId) next.holderSince = now;
+      next.holderId = best.holderId;
+      next.ballot = best.ballot;
+      next.epoch = best.epoch;
+      next.manifestVersion = best.manifestVersion;
+      next.source = best.source;
+      next.sourceId = best.sourceId;
+      next.observedAt = now;
+    } else if (order === 0 && next.holderId === best.holderId && next.holderId !== null) {
+      next.epoch = Math.max(next.epoch, best.epoch);
+      next.manifestVersion = Math.max(next.manifestVersion, best.manifestVersion);
+      next.observedAt = now;
+    }
+  }
+  const previousHolder = stored?.holderId ?? null;
+  const lastKnown = previousHolder ?? stored?.lastHolderId ?? null;
+  if (next.holderId) next.lastHolderId = next.holderId;
+  const change =
+    next.holderId && next.holderId !== previousHolder && next.holderId !== lastKnown
+      ? { from: lastKnown, to: next.holderId, ballot: next.ballot }
+      : null;
+  return { next, change };
+}
+
+export type LeaseHolderChangeKind = 'failover' | 'handoff';
+
+/**
+ * D9 audit: a holder change the backend planned (a handoff command, or a release that named the new holder as its
+ * designated successor) is a handoff; any other change of holder is an autonomous failover. The first holder of a key
+ * is neither.
+ */
+export function classifyLeaseHolderChange(
+  change: LeaseHolderChange,
+  slot: number,
+  planned: DockerAvailabilityLeasePlannedHandoff[],
+  handoffSuccessors: ReadonlySet<string>,
+  now: Date
+): LeaseHolderChangeKind | null {
+  if (!change.from) return null;
+  const plannedMatch = planned.some(
+    (handoff) =>
+      handoff.slot === slot &&
+      handoff.toHolderId === change.to &&
+      (handoff.fromHolderId === null || handoff.fromHolderId === change.from) &&
+      Date.parse(handoff.expiresAt) > now.getTime()
+  );
+  return plannedMatch || handoffSuccessors.has(change.to) ? 'handoff' : 'failover';
+}
+
+/**
+ * A5 / A7: a bootstrap is acked once every reserved holder holds its key under a committed ballot and no other daemon
+ * reports a role in which its copy may still run.
+ */
+export function bootstrapAcknowledged(
+  bootstrap: DockerAvailabilityLeaseBootstrapSlot[],
+  observations: Map<number, Pick<LeaseObservationState, 'holderId' | 'claimants'>>
+): boolean {
+  return bootstrap.every((entry) => {
+    const observation = observations.get(entry.slot);
+    if (!observation || observation.holderId !== entry.holderId) return false;
+    return Object.keys(observation.claimants).every((claimant) => claimant === entry.holderId);
+  });
+}
