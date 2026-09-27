@@ -1,0 +1,174 @@
+package daemon
+
+import (
+	"net"
+	"testing"
+	"time"
+
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+)
+
+func availabilityMemberCommand(policyID, candidateID string) *pb.SyncProxySecureLinksCommand {
+	return &pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{{
+		LinkId: testSecureLinkID, Role: "source", Generation: 1, SocketOnly: true,
+		AvailabilityPolicyId: policyID, AvailabilityCandidateId: candidateID,
+	}}}
+}
+
+// TestSourceLinkManagerAvailabilityMemberStartsClosed covers D8/A8: a newly
+// synced availability member's socket does not listen until a relay gate
+// view says its candidate holds the lease.
+func TestSourceLinkManagerAvailabilityMemberStartsClosed(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	statuses, err := manager.sync(availabilityMemberCommand("policy-1", "node-a"))
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("sync: statuses=%#v err=%v", statuses, err)
+	}
+	if _, err := net.DialTimeout("unix", statuses[0].SocketPath, 200*time.Millisecond); err == nil {
+		t.Fatal("an availability member's socket must not accept connections before any lease view opens it")
+	}
+}
+
+// TestSourceLinkManagerNonAvailabilityMemberSocketUnaffected covers the "non-
+// availability sockets are unchanged" requirement: a plain binding keeps
+// listening exactly as it did before this feature existed.
+func TestSourceLinkManagerNonAvailabilityMemberSocketUnaffected(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	statuses, err := manager.sync(sourceCommand(0, 1))
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("sync: statuses=%#v err=%v", statuses, err)
+	}
+	connection, err := net.DialTimeout("unix", statuses[0].SocketPath, time.Second)
+	if err != nil {
+		t.Fatalf("a non-availability socket must keep listening unconditionally: %v", err)
+	}
+	_ = connection.Close()
+}
+
+// TestAvailabilityLeaseCoordinatorOpensAndClosesSocketOnGateViewChanges
+// covers D8/A8 end to end through the coordinator: the socket opens once a
+// relay gate view admits its candidate, and closes the moment the view moves
+// to a different holder.
+func TestAvailabilityLeaseCoordinatorOpensAndClosesSocketOnGateViewChanges(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	statuses, err := manager.sync(availabilityMemberCommand("policy-1", "node-a"))
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("sync: statuses=%#v err=%v", statuses, err)
+	}
+	socketPath := statuses[0].SocketPath
+
+	coordinator := newAvailabilityLeaseCoordinator(t.TempDir(), manager, nil)
+	defer coordinator.close()
+
+	coordinator.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-a", RemainingMs: 30000,
+	}}}, time.Now())
+	coordinator.reconcileSockets()
+
+	connection, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		t.Fatalf("socket did not open once the gate view admitted its candidate: %v", err)
+	}
+	_ = connection.Close()
+
+	// The lease moves to a different holder: node-a's socket must close.
+	coordinator.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-b", RemainingMs: 30000,
+	}}}, time.Now())
+	coordinator.reconcileSockets()
+
+	if _, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond); err == nil {
+		t.Fatal("socket stayed open after the gate view moved to a different holder")
+	}
+
+	// The lease returns to node-a: the socket reopens.
+	coordinator.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-a", RemainingMs: 30000,
+	}}}, time.Now())
+	coordinator.reconcileSockets()
+	connection, err = net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		t.Fatalf("socket did not reopen once the view admitted node-a again: %v", err)
+	}
+	_ = connection.Close()
+}
+
+// TestAvailabilityLeaseCoordinatorClosesSocketOnStaleView covers D8/A8's
+// "close instead of waiting for a broadcast" rule: once a view's own TTL
+// elapses, the next reconciliation closes the socket even though no new
+// snapshot ever arrived.
+func TestAvailabilityLeaseCoordinatorClosesSocketOnStaleView(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	statuses, err := manager.sync(availabilityMemberCommand("policy-1", "node-a"))
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("sync: statuses=%#v err=%v", statuses, err)
+	}
+	socketPath := statuses[0].SocketPath
+
+	coordinator := newAvailabilityLeaseCoordinator(t.TempDir(), manager, nil)
+	defer coordinator.close()
+
+	coordinator.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-a", RemainingMs: 50,
+	}}}, time.Now())
+	coordinator.reconcileSockets()
+
+	connection, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		t.Fatalf("socket did not open: %v", err)
+	}
+	_ = connection.Close()
+
+	time.Sleep(150 * time.Millisecond) // the view's 50ms TTL has elapsed; no new broadcast follows
+	coordinator.reconcileSockets()
+
+	if _, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond); err == nil {
+		t.Fatal("socket stayed open after its gate view went stale")
+	}
+}
+
+// TestAvailabilityLeaseCoordinatorSocketSweepClosesStaleViewOnItsOwn checks
+// the background sweep started by (*availabilityLeaseCoordinator).start:
+// nothing needs to call reconcileSockets by hand for a stale view to close.
+func TestAvailabilityLeaseCoordinatorSocketSweepClosesStaleViewOnItsOwn(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	statuses, err := manager.sync(availabilityMemberCommand("policy-1", "node-a"))
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("sync: statuses=%#v err=%v", statuses, err)
+	}
+	socketPath := statuses[0].SocketPath
+
+	coordinator := newAvailabilityLeaseCoordinator(t.TempDir(), manager, nil)
+	coordinator.start()
+	defer coordinator.close()
+
+	coordinator.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-a", RemainingMs: 700,
+	}}}, time.Now())
+
+	deadline := time.Now().Add(2 * time.Second)
+	opened := false
+	for time.Now().Before(deadline) {
+		if _, err := net.DialTimeout("unix", socketPath, 50*time.Millisecond); err == nil {
+			opened = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !opened {
+		t.Fatal("background sweep never opened the socket once the gate view admitted its candidate")
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		_, dialErr := net.DialTimeout("unix", socketPath, 50*time.Millisecond)
+		if dialErr != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background sweep never closed the socket once its view went stale")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
