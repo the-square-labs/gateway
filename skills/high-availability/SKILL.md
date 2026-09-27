@@ -31,15 +31,40 @@ Either mode can prefer Nodes in a fixed order: `priorityMode: true` with `nodePr
 ## Workflow
 
 1. `preflight` with `resource: { type: "container" | "deployment" | "compose", nodeId, containerName? | deploymentId? | composeProjectId? }`, `mode`, and optional `desiredReplicaCount`, `nodeSelectionMode`, `selectedNodeIds`. It reports eligibility and candidate Nodes. Resolve every incompatibility (mounts, capacity, Node compatibility) before continuing.
-2. `enable` with the same shape, plus optional `rolloutPolicy: { maxUnavailable, maxSurge, drainSeconds }` and `offlineReplacementGraceSeconds` (how long to wait after losing a Node's control connection before creating a replacement; about 15 seconds by default).
+2. `enable` with the same shape, plus optional `rolloutPolicy: { maxUnavailable, maxSurge, drainSeconds }`, `offlineReplacementGraceSeconds` (how long to wait after losing a Node's control connection before creating a replacement; about 15 seconds by default), and `partitionMode` (`strict`, the default, or `available`; see Data-plane failover).
 3. Poll `get` or `get_by_resource`, and `list_operations` with `policyId`, until the requested serving count is reached.
 4. Verify real traffic through the Route, database access from the placements, and application logs, not only the placement count.
-5. `update` with `policyId` changes mode, replica count, Node selection, rollout policy, grace period, or priority mode (`priorityMode`, `nodePriority`, `failbackDelaySeconds`). `retry_operation` with `operationId` retries a stuck rollout.
+5. `update` with `policyId` changes mode, replica count, Node selection, rollout policy, grace period, `partitionMode`, or priority mode (`priorityMode`, `nodePriority`, `failbackDelaySeconds`). `retry_operation` with `operationId` retries a stuck rollout.
 6. `disable` needs `policyId`, the `survivingPlacementId` to keep, and `confirmation` set to the exact typed text the tool or Console shows. It is destructive; never guess the confirmation text or the surviving placement.
+
+## Data-plane failover (lease mode)
+
+When every candidate Node, every ingress nginx Node of the workload's routes, and a majority of voters advertise `availability_lease_v1`, a policy runs in lease mode. In lease mode failover no longer depends on Gateway being reachable.
+- **Who decides.** The Nodes and relays hold a lease per serving slot. A serving Node renews it every few seconds and stops its own copy if it cannot, so a dead or cut-off Node is replaced by the next candidate within about 45 seconds even while Gateway is down.
+- **Standbys.** They are created ahead of time: the image is pulled and the container is created but not started.
+- **Traffic.** It reaches only the current lease holder.
+- **Voters.** All relays plus up to 12 Docker and nginx Nodes. One live relay is enough as long as a majority of voters is reachable through it.
+
+What Gateway still does in lease mode:
+- plans moves: failback, drain, manual moves, rollouts;
+- keeps two standbys provisioned;
+- reconciles its records with the actual holders after it returns. An autonomous takeover appears in the audit log as `docker.availability.lease_failover`, a planned move as `docker.availability.lease_handoff`.
+
+`get` returns a `lease` object:
+- `mode`: `legacy`, `bootstrapping`, `lease` or `closing`;
+- `reason`: why a policy is still legacy, for example Nodes without the capability;
+- `holders` per slot, with Node, placement and holder time;
+- `voterMargin` with `voters`, `reachable`, `required` and `margin`.
+
+When `margin` is 0 or less, losing one more voter disables autonomous failover.
+
+`partitionMode` controls a network split:
+- `strict`, the default: never runs two copies.
+- `available`: keeps serving on both sides of a split and may briefly run two copies. Never set `available` for singletons such as indexers, queue consumers or cron jobs.
 
 ## Node loss and recovery
 
-After a Node's control connection is lost, Gateway waits `offlineReplacementGraceSeconds` and then creates a replacement on an eligible Node. When the lost Node reconnects, Gateway heals the policy and excludes stale generations from routing; it does not fence the host or guarantee single-writer semantics outside its own routing. Never delete child Containers to force an operation forward; that desynchronizes the durable record. If the replica count is not restored, check operation phase, Node compatibility and capacity, image pull, application health, and private dependencies, in that order.
+In lease mode, see Data-plane failover. Otherwise, after a Node's control connection is lost, Gateway waits `offlineReplacementGraceSeconds` and then creates a replacement on an eligible Node. When the lost Node reconnects, Gateway heals the policy and excludes stale generations from routing; it does not fence the host or guarantee single-writer semantics outside its own routing. Never delete child Containers to force an operation forward; that desynchronizes the durable record. If the replica count is not restored, check operation phase, Node compatibility and capacity, image pull, application health, and private dependencies, in that order.
 
 A rolling update that fails repeatedly (3 attempts or 15 minutes) rolls back automatically; updated replicas return to the previous image and settings.
 
