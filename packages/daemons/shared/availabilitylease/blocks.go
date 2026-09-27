@@ -42,13 +42,9 @@ func (n *Node) AdoptKeyRotation(link *pb.LeasePolicyKeyRotation) error {
 	return err
 }
 
-// AdoptVoterConfig adopts a newer signed voter config. It returns true when
-// the config was new; callers ack only after this returns (A4 persisted ack).
-func (n *Node) AdoptVoterConfig(block *pb.LeaseSignedBlock) (bool, error) {
-	return n.adoptPublic(block, pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG)
-}
-
-// AdoptManifest adopts a newer signed policy manifest.
+// AdoptManifest adopts a newer signed policy manifest, which carries the
+// policy's voter set (A18). It returns true once the manifest is durably
+// adopted; callers ack only after this returns (A4 persisted ack).
 func (n *Node) AdoptManifest(block *pb.LeaseSignedBlock) (bool, error) {
 	return n.adoptPublic(block, pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST)
 }
@@ -89,12 +85,12 @@ func (n *Node) ManifestVersion(policyID string) uint64 {
 	return 0
 }
 
-// Epoch returns the adopted voter config epoch.
-func (n *Node) Epoch() uint64 {
+// Epoch returns the adopted voter epoch of a policy (A18).
+func (n *Node) Epoch(policyID string) uint64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if config := n.currentConfig(); config != nil {
-		return config.Epoch
+	if manifest := n.manifests[policyID]; manifest != nil {
+		return manifest.Epoch
 	}
 	return 0
 }
@@ -130,29 +126,6 @@ func (n *Node) adoptForwarded(batch *pb.LeaseBatch, now time.Duration) {
 func (n *Node) adoptBlock(block *pb.LeaseSignedBlock, now time.Duration) (bool, error) {
 	data, _ := proto.Marshal(block)
 	switch block.GetKind() {
-	case pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG:
-		config, err := parseVoterConfig(block)
-		if err != nil {
-			return false, err
-		}
-		if current := n.currentConfig(); current != nil && config.Epoch <= current.Epoch {
-			if config.Epoch == current.Epoch && n.resigned(current.block, block, domainVoterConfig) {
-				current.block = block
-				n.dirtyOther[fmt.Sprintf("%s%020d", prefixConfig, config.Epoch)] = data
-				return true, nil
-			}
-			return false, nil
-		}
-		if err := n.chain.verifyBlock(block, domainVoterConfig); err != nil {
-			return false, err
-		}
-		n.configs = append(n.configs, config)
-		n.dirtyOther[fmt.Sprintf("%s%020d", prefixConfig, config.Epoch)] = data
-		for len(n.configs) > configHistory {
-			n.deletes = append(n.deletes, fmt.Sprintf("%s%020d", prefixConfig, n.configs[0].Epoch))
-			n.configs = n.configs[1:]
-		}
-		return true, nil
 	case pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST:
 		manifest, err := parseManifest(block)
 		if err != nil {
@@ -166,12 +139,18 @@ func (n *Node) adoptBlock(block *pb.LeaseSignedBlock, now time.Duration) (bool, 
 			}
 			return false, nil
 		}
+		previous := n.manifests[manifest.PolicyID]
+		if previous != nil && manifest.Epoch < previous.Epoch && !manifest.Closed {
+			return false, fmt.Errorf("lease manifest voter epoch %d goes back from %d", manifest.Epoch, previous.Epoch)
+		}
 		if err := n.chain.verifyBlock(block, domainManifest); err != nil {
 			return false, err
 		}
-		previous := n.manifests[manifest.PolicyID]
 		n.manifests[manifest.PolicyID] = manifest
 		n.dirtyOther[prefixManifest+manifest.PolicyID] = data
+		if n.rememberVoters(manifest.Voters) {
+			n.dirtyOther[votersRecordName(manifest.PolicyID, manifest.Epoch)] = data
+		}
 		n.onManifestChanged(previous, manifest, now)
 		return true, nil
 	}
