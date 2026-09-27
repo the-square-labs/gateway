@@ -490,7 +490,9 @@ export function AdminNodeDetail({
     !!(id && hasScope(`nodes:config:view:${id}`)) || hasScope("nodes:config:view") || canManageNode;
   const canViewNodeDetails = !!(id && hasScope(`nodes:details:${id}`)) || hasScope("nodes:details");
   const firewallProvider =
-    hosting?.provider === "digitalocean" || hosting?.provider === "proxmox"
+    hosting?.provider === "digitalocean" ||
+    hosting?.provider === "cloudblast" ||
+    hosting?.provider === "proxmox"
       ? hosting.provider
       : null;
   const canViewNodeFirewall = Boolean(
