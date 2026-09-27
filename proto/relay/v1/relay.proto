@@ -282,7 +282,6 @@ message SetDrainResponse {
   uint64 disconnected_tunnels = 2;
 }
 
-// ===== BEGIN copied verbatim from T1 (availabilitylease); T1's version wins at integration =====
 // ---------------------------------------------------------------------------
 // Availability lease coordination (Docker Availability data-plane failover).
 // Protocol logic lives in daemon-shared/availabilitylease; see its doc.go for
@@ -556,4 +555,3 @@ message LeasePolicyKeyRotation {
   string public_key_fingerprint = 4;
   bytes signature = 5;
 }
-// ===== END copied verbatim from T1 =====
