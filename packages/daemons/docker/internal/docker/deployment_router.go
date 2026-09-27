@@ -567,6 +567,9 @@ func renderDeploymentNginx(routes []deploymentRouteConfig, activeSlot string) st
 		// than once at startup, so nginx starts and reloads even while the
 		// active slot container is stopped or not created yet.
 		fmt.Fprintf(&b, "  resolver %s valid=10s ipv6=off;\n", deploymentRouterResolver)
+		// Body size is the ingress route's decision; the router in front of
+		// the slots must not add nginx's 1 MB default on top of it.
+		b.WriteString("  client_max_body_size 0;\n")
 		b.WriteString("  location / {\n")
 		fmt.Fprintf(&b, "    set $deployment_upstream %s:%d;\n", activeSlot, route.ContainerPort)
 		// Without a URI part, proxy_pass forwards the original request URI
@@ -579,6 +582,8 @@ func renderDeploymentNginx(routes []deploymentRouteConfig, activeSlot string) st
 		// expires; fail fast instead of holding requests for the 60 s default.
 		b.WriteString("    proxy_connect_timeout 5s;\n")
 		b.WriteString("    proxy_http_version 1.1;\n")
+		// Stream request bodies to the slot instead of spooling them to disk.
+		b.WriteString("    proxy_request_buffering off;\n")
 		b.WriteString("    proxy_set_header Host $host;\n")
 		b.WriteString("    proxy_set_header X-Real-IP $remote_addr;\n")
 		b.WriteString("    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")

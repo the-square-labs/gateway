@@ -483,3 +483,13 @@ func TestSwitchDeploymentStartsAStoppedRouter(t *testing.T) {
 		t.Fatalf("router serves %q after switch", configs[current.ID])
 	}
 }
+
+func TestRenderDeploymentNginxLeavesBodySizeToIngress(t *testing.T) {
+	config := renderDeploymentNginx(testDeploymentRoutes, "blue")
+	if !strings.Contains(config, "client_max_body_size 0;") {
+		t.Fatalf("router must not cap request bodies:\n%s", config)
+	}
+	if !strings.Contains(config, "proxy_request_buffering off;") {
+		t.Fatalf("router must stream request bodies:\n%s", config)
+	}
+}
