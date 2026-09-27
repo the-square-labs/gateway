@@ -388,6 +388,10 @@ message CoordinationFrame {
   bytes payload = 3;
   // ECDSA P-256 ASN.1 signature over SHA-256("gateway-availability-lease/frame/v1" 0x00 || payload).
   bytes signature = 4;
+  // During an identity-key rotation the sender also signs the same bytes
+  // with its previous key. A frame is valid when any signature verifies
+  // under any key listed for the sender in any adopted manifest.
+  repeated bytes additional_signatures = 5;
 }
 
 message LeaseBatch {
@@ -464,6 +468,9 @@ message LeaseAccepted {
   string acceptor_id = 5;
   uint64 acceptor_incarnation = 6;
   bytes signature = 7;
+  // Signature of the same statement with the acceptor's previous identity
+  // key while it rotates keys; any one verifying signature suffices.
+  repeated bytes additional_signatures = 8;
 }
 
 message LeaseNack {

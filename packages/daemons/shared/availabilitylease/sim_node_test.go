@@ -67,7 +67,8 @@ func (t simTransport) Send(frame *pb.CoordinationFrame) {
 		t.n.w.fail("transport decode: %v", err)
 		return
 	}
-	t.n.w.send(t.n.id, frame.GetDestinationId(), batch)
+	payload, _ := proto.Marshal(frame)
+	t.n.w.sendPayload(t.n.id, frame.GetDestinationId(), batch, payload)
 }
 
 func (n *simNode) local() time.Duration {

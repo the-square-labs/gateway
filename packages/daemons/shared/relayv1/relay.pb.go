@@ -3366,9 +3366,13 @@ type CoordinationFrame struct {
 	// Encoded LeaseBatch.
 	Payload []byte `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
 	// ECDSA P-256 ASN.1 signature over SHA-256("gateway-availability-lease/frame/v1" 0x00 || payload).
-	Signature     []byte `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Signature []byte `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	// During an identity-key rotation the sender also signs the same bytes
+	// with its previous key. A frame is valid when any signature verifies
+	// under any key listed for the sender in any adopted manifest.
+	AdditionalSignatures [][]byte `protobuf:"bytes,5,rep,name=additional_signatures,json=additionalSignatures,proto3" json:"additional_signatures,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *CoordinationFrame) Reset() {
@@ -3425,6 +3429,13 @@ func (x *CoordinationFrame) GetPayload() []byte {
 func (x *CoordinationFrame) GetSignature() []byte {
 	if x != nil {
 		return x.Signature
+	}
+	return nil
+}
+
+func (x *CoordinationFrame) GetAdditionalSignatures() [][]byte {
+	if x != nil {
+		return x.AdditionalSignatures
 	}
 	return nil
 }
@@ -4079,8 +4090,11 @@ type LeaseAccepted struct {
 	AcceptorId          string                 `protobuf:"bytes,5,opt,name=acceptor_id,json=acceptorId,proto3" json:"acceptor_id,omitempty"`
 	AcceptorIncarnation uint64                 `protobuf:"varint,6,opt,name=acceptor_incarnation,json=acceptorIncarnation,proto3" json:"acceptor_incarnation,omitempty"`
 	Signature           []byte                 `protobuf:"bytes,7,opt,name=signature,proto3" json:"signature,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Signature of the same statement with the acceptor's previous identity
+	// key while it rotates keys; any one verifying signature suffices.
+	AdditionalSignatures [][]byte `protobuf:"bytes,8,rep,name=additional_signatures,json=additionalSignatures,proto3" json:"additional_signatures,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *LeaseAccepted) Reset() {
@@ -4158,6 +4172,13 @@ func (x *LeaseAccepted) GetAcceptorIncarnation() uint64 {
 func (x *LeaseAccepted) GetSignature() []byte {
 	if x != nil {
 		return x.Signature
+	}
+	return nil
+}
+
+func (x *LeaseAccepted) GetAdditionalSignatures() [][]byte {
+	if x != nil {
+		return x.AdditionalSignatures
 	}
 	return nil
 }
@@ -6268,12 +6289,13 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x10force_disconnect\x18\x03 \x01(\bR\x0fforceDisconnect\"a\n" +
 	"\x10SetDrainResponse\x12\x1a\n" +
 	"\bdraining\x18\x01 \x01(\bR\bdraining\x121\n" +
-	"\x14disconnected_tunnels\x18\x02 \x01(\x04R\x13disconnectedTunnels\"\x8f\x01\n" +
+	"\x14disconnected_tunnels\x18\x02 \x01(\x04R\x13disconnectedTunnels\"\xc4\x01\n" +
 	"\x11CoordinationFrame\x12%\n" +
 	"\x0edestination_id\x18\x01 \x01(\tR\rdestinationId\x12\x1b\n" +
 	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\x12\x1c\n" +
-	"\tsignature\x18\x04 \x01(\fR\tsignature\"\xc4\x02\n" +
+	"\tsignature\x18\x04 \x01(\fR\tsignature\x123\n" +
+	"\x15additional_signatures\x18\x05 \x03(\fR\x14additionalSignatures\"\xc4\x02\n" +
 	"\n" +
 	"LeaseBatch\x12\x1d\n" +
 	"\n" +
@@ -6322,7 +6344,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x06ballot\x18\x02 \x01(\v2\x15.relay.v1.LeaseBallotR\x06ballot\x12\x14\n" +
 	"\x05epoch\x18\x03 \x01(\x04R\x05epoch\x12)\n" +
 	"\x10manifest_version\x18\x04 \x01(\x04R\x0fmanifestVersion\x12\x12\n" +
-	"\x04echo\x18\x05 \x01(\x04R\x04echo\"\x97\x02\n" +
+	"\x04echo\x18\x05 \x01(\x04R\x04echo\"\xcc\x02\n" +
 	"\rLeaseAccepted\x12$\n" +
 	"\x03key\x18\x01 \x01(\v2\x12.relay.v1.LeaseKeyR\x03key\x12-\n" +
 	"\x06ballot\x18\x02 \x01(\v2\x15.relay.v1.LeaseBallotR\x06ballot\x12\x14\n" +
@@ -6331,7 +6353,8 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\vacceptor_id\x18\x05 \x01(\tR\n" +
 	"acceptorId\x121\n" +
 	"\x14acceptor_incarnation\x18\x06 \x01(\x04R\x13acceptorIncarnation\x12\x1c\n" +
-	"\tsignature\x18\a \x01(\fR\tsignature\"\x93\x03\n" +
+	"\tsignature\x18\a \x01(\fR\tsignature\x123\n" +
+	"\x15additional_signatures\x18\b \x03(\fR\x14additionalSignatures\"\x93\x03\n" +
 	"\tLeaseNack\x12$\n" +
 	"\x03key\x18\x01 \x01(\v2\x12.relay.v1.LeaseKeyR\x03key\x12-\n" +
 	"\x06ballot\x18\x02 \x01(\v2\x15.relay.v1.LeaseBallotR\x06ballot\x121\n" +

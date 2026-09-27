@@ -87,11 +87,22 @@
 // contact, on NACKs and on lag reports, so failover never waits for the
 // Gateway (A4, A14).
 //
-// Driving. Hand every frame addressed to this node to ReceiveFrame; it
-// verifies the ECDSA signature against the sender's key from the members or
-// candidates of any adopted manifest. ErrUnknownSender means the node lacks
+// Driving. Hand every frame addressed to this node to ReceiveFrame. A frame
+// (and an accept statement) is authentic when any of its signatures verifies
+// under any key listed for the sender in any adopted manifest or remembered
+// voter config; votes still count only in the key's own policy (A18) and
+// replay binding (A9) is unchanged. ErrUnknownSender means the node lacks
 // the blocks that name the sender; it answers with a lag report. Call Tick
 // at NextWakeup (a local clock value) or at least every 250 ms.
+//
+// Identity-key renewal (relay and daemon certificates). Call
+// RotateIdentityKey(nextSigner, nextPublicKeyDER) as soon as the renewed key
+// is in use. The node then signs every frame and accept with the new key and
+// also with the previous one (additional_signatures), until every adopted
+// manifest that names the node lists the new key, or IdentityKeyOverlap
+// (24 h) passed; IdentityOverlap reports it. The overlap is in memory: after
+// a restart during it, call RotateIdentityKey again with the previous key as
+// Config.Signer. The Gateway republishes manifests with the new key (T3).
 //
 // # Docker daemon (T4)
 //
@@ -194,7 +205,8 @@
 //
 // # Frames and proto mapping (proto/relay/v1)
 //
-// CoordinationFrame{destination_id, sender_id, payload, signature} carries
+// CoordinationFrame{destination_id, sender_id, payload, signature,
+// additional_signatures} carries
 // one LeaseBatch per destination. signature is ECDSA P-256 (ASN.1) by the
 // sender's identity key over SHA-256("gateway-availability-lease/frame/v1"
 // 0x00 || payload). LeaseBatch repeats sender, incarnation and destination
