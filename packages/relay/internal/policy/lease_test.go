@@ -23,7 +23,7 @@ func TestSignedPolicyCarriesLeaseBlocksAcrossRestart(t *testing.T) {
 	if err := proto.Unmarshal(request.SignedEnvelope.Payload, payload); err != nil {
 		t.Fatal(err)
 	}
-	payload.LeaseBlocks = []*relayv1.LeaseSignedBlock{{SigningKeyId: "policy-1", Kind: relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, Payload: []byte("config"), Signature: []byte("signature")}}
+	payload.LeaseBlocks = []*relayv1.LeaseSignedBlock{{SigningKeyId: "policy-1", Kind: relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, Payload: []byte("manifest"), Signature: []byte("signature")}}
 	payload.LeaseKeyRotations = []*relayv1.LeasePolicyKeyRotation{{PreviousKeyId: "policy-0", KeyId: "policy-1"}}
 	encoded, _ := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	request.SignedEnvelope.Payload, request.SignedEnvelope.Signature = encoded, ed25519.Sign(policyPrivate, encoded)
@@ -42,7 +42,7 @@ func TestSignedPolicyCarriesLeaseBlocksAcrossRestart(t *testing.T) {
 	}
 	reopened := remoteStore(t, dir, &now)
 	defer reopened.Close()
-	if blocks := reopened.Current().LeaseBlocks; len(blocks) != 1 || string(blocks[0].Payload) != "config" {
+	if blocks := reopened.Current().LeaseBlocks; len(blocks) != 1 || string(blocks[0].Payload) != "manifest" {
 		t.Fatalf("lease blocks after restart = %v", blocks)
 	}
 }

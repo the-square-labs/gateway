@@ -91,7 +91,7 @@ func TestFreshRelayStateAbstainsWithIncreasingIncarnation(t *testing.T) {
 	if report.GetIncarnation() <= before {
 		t.Fatalf("fresh incarnation %d is not above %d", report.GetIncarnation(), before)
 	}
-	if report.GetEpoch() != 1 || len(report.GetManifests()) != 1 {
+	if acks := report.GetManifests(); len(acks) != 1 || acks[0].GetVoterEpoch() != 1 {
 		t.Fatalf("fresh relay did not adopt the snapshot blocks: %v", report)
 	}
 	relayAbstains(t, h)

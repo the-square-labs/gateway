@@ -63,9 +63,10 @@ type harness struct {
 	voters    []string
 	relayVote bool
 	fresh     bool
-	manifest  *relayv1.LeaseSignedBlock
-	config    *relayv1.LeaseSignedBlock
-	version   uint64
+	// manifests holds the latest signed manifest per policy; each carries
+	// the policy's own voters (A18).
+	manifests map[string]*relayv1.LeaseSignedBlock
+	versions  map[string]uint64
 
 	mu  sync.Mutex
 	out []*relayv1.CoordinationFrame
@@ -84,10 +85,10 @@ func (t harnessTransport) Send(frame *relayv1.CoordinationFrame) {
 	t.h.out = append(t.h.out, frame)
 }
 
-// newHarness starts a relay and daemons v1, v2 (acceptors) and d1, d2
-// (candidates of policy-1). relayVotes puts the relay in the quorum set with
-// v1 and v2; otherwise the quorum set is v1, v2, v3 and the relay only
-// shadow-accepts (the local relay when the voter count is even).
+// newHarness starts a relay and daemons v1, v2, v3 (acceptors) and d1, d2
+// (candidates of policy-1). relayVotes makes the relay policy-1's witness
+// with v1 and v2; otherwise policy-1's voters are v1, v2, v3 and the relay is
+// a non-voting member that only shadow-accepts.
 func newHarness(t *testing.T, relayVotes bool) *harness {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -99,13 +100,13 @@ func newHarness(t *testing.T, relayVotes bool) *harness {
 		keys: map[string]*ecdsa.PrivateKey{}, dir: t.TempDir(), daemons: map[string]*availabilitylease.Node{},
 		streams: map[string]*memberStream{}, down: map[string]bool{}, relayVote: relayVotes,
 		relayFrames: map[string][]*relayv1.CoordinationFrame{},
+		manifests:   map[string]*relayv1.LeaseSignedBlock{}, versions: map[string]uint64{},
 	}
 	h.voters = []string{relayID, "v1", "v2"}
-	daemons := []string{"v1", "v2", "d1", "d2"}
 	if !relayVotes {
 		h.voters = []string{"v1", "v2", "v3"}
-		daemons = append(daemons, "v3")
 	}
+	daemons := []string{"v1", "v2", "v3", "d1", "d2"}
 	for _, id := range append([]string{relayID}, daemons...) {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -113,8 +114,7 @@ func newHarness(t *testing.T, relayVotes bool) *harness {
 		}
 		h.keys[id] = key
 	}
-	h.config = h.signConfig(1, h.voters)
-	h.manifest = h.signManifest([]string{"d1", "d2"}, false)
+	h.signManifest([]string{"d1", "d2"}, false)
 	h.openRelay()
 	for _, id := range daemons {
 		node, err := availabilitylease.NewNode(availabilitylease.Config{
@@ -127,11 +127,10 @@ func newHarness(t *testing.T, relayVotes bool) *harness {
 		if err := node.TrustPolicyKey(policyKey, pub); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := node.AdoptVoterConfig(h.config); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := node.AdoptManifest(h.manifest); err != nil {
-			t.Fatal(err)
+		for _, id := range sortedIDs(h.manifests) {
+			if _, err := node.AdoptManifest(h.manifests[id]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		h.daemons[id] = node
 		h.connect(id)
@@ -163,7 +162,7 @@ func (h *harness) openRelay() {
 		h.t.Fatal(err)
 	}
 	h.store, h.relay, h.fresh = store, coordinator, fresh
-	h.relay.ApplyPolicy(&policy.Snapshot{LeaseBlocks: []*relayv1.LeaseSignedBlock{h.config, h.manifest}})
+	h.relay.ApplyPolicy(h.snapshot())
 	h.streams = map[string]*memberStream{}
 	for id := range h.daemons {
 		h.connect(id)
@@ -204,44 +203,69 @@ func (h *harness) publicKey(id string) []byte {
 	return encoded
 }
 
-func (h *harness) signConfig(epoch uint64, voters []string) *relayv1.LeaseSignedBlock {
-	members := map[string]bool{relayID: true}
-	for _, id := range voters {
-		members[id] = true
+// snapshot is the relay policy snapshot carrying every current manifest.
+func (h *harness) snapshot() *policy.Snapshot {
+	snapshot := &policy.Snapshot{}
+	for _, id := range sortedIDs(h.manifests) {
+		snapshot.LeaseBlocks = append(snapshot.LeaseBlocks, h.manifests[id])
 	}
-	ids := make([]string, 0, len(members))
-	for id := range members {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	value := &relayv1.LeaseVoterConfig{SchemaVersion: 1, Epoch: epoch, QuorumSets: []*relayv1.LeaseQuorumSet{{VoterIds: voters}}}
-	for _, id := range ids {
-		role := relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON
-		if id == relayID {
-			role = relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY
-		}
-		value.Members = append(value.Members, &relayv1.LeaseMember{Id: id, PublicKey: h.publicKey(id), Role: role})
-	}
-	payload, _ := proto.Marshal(value)
-	return availabilitylease.SignPolicyBlock(policyKey, h.policyKey, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, payload)
+	return snapshot
 }
 
+// signManifest signs the next policy-1 manifest with the harness voters.
 func (h *harness) signManifest(candidates []string, closed bool) *relayv1.LeaseSignedBlock {
-	h.version++
+	return h.signPolicy(policyID, candidates, h.voters, closed)
+}
+
+// signPolicy signs the next manifest of a policy. Its members are the relay
+// (a RELAY member, voting only when it is in voters), the voters and the
+// candidates (A18).
+func (h *harness) signPolicy(id string, candidates, voters []string, closed bool) *relayv1.LeaseSignedBlock {
+	h.versions[id]++
 	value := &relayv1.LeaseManifest{
-		SchemaVersion: 1, PolicyId: policyID, ManifestVersion: h.version, Slots: 1, Epoch: 1, Closed: closed,
+		SchemaVersion: 1, PolicyId: id, ManifestVersion: h.versions[id], Slots: 1, VoterEpoch: 1, Closed: closed,
 		Mode: relayv1.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: relayv1.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
-		LeaseTermMs: 30000,
+		LeaseTermMs: 30000, QuorumSets: []*relayv1.LeaseQuorumSet{{VoterIds: voters}},
 	}
-	for _, id := range candidates {
-		if h.keys[id] == nil {
+	members := map[string]bool{relayID: true}
+	for _, member := range append(append([]string(nil), voters...), candidates...) {
+		members[member] = true
+	}
+	for _, member := range append(append([]string(nil), candidates...), sortedIDs(members)...) {
+		if h.keys[member] == nil {
 			key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			h.keys[id] = key
+			h.keys[member] = key
 		}
-		value.Candidates = append(value.Candidates, &relayv1.LeaseCandidate{Id: id, PublicKey: h.publicKey(id)})
+	}
+	for _, candidate := range candidates {
+		value.Candidates = append(value.Candidates, &relayv1.LeaseCandidate{Id: candidate, PublicKey: h.publicKey(candidate)})
+	}
+	for _, member := range sortedIDs(members) {
+		role := relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON
+		if member == relayID {
+			role = relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY
+		}
+		value.Members = append(value.Members, &relayv1.LeaseMember{Id: member, PublicKey: h.publicKey(member), Role: role})
 	}
 	payload, _ := proto.Marshal(value)
-	return availabilitylease.SignPolicyBlock(policyKey, h.policyKey, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, payload)
+	block := availabilitylease.SignPolicyBlock(policyKey, h.policyKey, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, payload)
+	h.manifests[id] = block
+	return block
+}
+
+// addPolicy publishes a new policy to every daemon and the relay.
+func (h *harness) addPolicy(id string, candidates, voters []string) {
+	h.t.Helper()
+	block := h.signPolicy(id, candidates, voters, false)
+	for _, node := range h.daemons {
+		if _, err := node.AdoptManifest(block); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	h.relay.ApplyPolicy(h.snapshot())
+	for _, candidate := range candidates {
+		h.daemons[candidate].SetCandidateReady(id, true)
+	}
 }
 
 func (h *harness) ready(ids ...string) {

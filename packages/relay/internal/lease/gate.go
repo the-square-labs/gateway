@@ -122,9 +122,8 @@ func (c *Coordinator) gateView(key availabilitylease.Key) *relayv1.LeaseGateView
 func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 	c.observeSuspend()
 	report := &relayv1.AvailabilityLeaseReport{
-		MemberId: c.id, IdentityPublicKey: c.publicKey(), Incarnation: c.node.Incarnation(), Epoch: c.node.Epoch(),
+		MemberId: c.id, IdentityPublicKey: c.publicKey(), Incarnation: c.node.Incarnation(),
 		AcceptorAbstaining: c.clock.Now() < c.startedAt+availabilitylease.AbstainAfterStart,
-		Voter:              c.view.voter(c.id),
 	}
 	for _, id := range c.view.keyIDs() {
 		if c.node.TrustsPolicyKey(id) {
@@ -132,13 +131,16 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 		}
 	}
 	for _, policyID := range c.view.policyIDs() {
+		// Voters are per policy (A18): the relay votes only where the manifest
+		// makes it the witness and shadow-accepts wherever it is a member.
 		if version := c.node.ManifestVersion(policyID); version > 0 {
+			manifest, _ := c.view.manifest(policyID)
 			report.Manifests = append(report.Manifests, &relayv1.AvailabilityLeaseManifestAck{
 				PolicyId: policyID, ManifestVersion: version, Closed: !c.node.LeaseMode(policyID),
+				VoterEpoch: c.node.Epoch(policyID), Voter: manifest.voters[c.id], Member: manifest.members[c.id],
 			})
 		}
 	}
-	epoch := report.Epoch
 	for _, view := range c.node.AcceptorView() {
 		gate := c.gateView(view.Key)
 		var gateBallot *relayv1.AvailabilityLeaseBallot
@@ -148,7 +150,7 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 		entry := &relayv1.AvailabilityLeaseKeyView{
 			PolicyId: view.Key.PolicyID, Slot: view.Key.Slot,
 			State:    strings.ToLower(strings.TrimPrefix(view.State.String(), "LEASE_KEY_STATE_")),
-			HolderId: view.Holder, ReservedFor: view.ReservedFor, Epoch: epoch,
+			HolderId: view.Holder, ReservedFor: view.ReservedFor, Epoch: c.node.Epoch(view.Key.PolicyID),
 			ManifestVersion: c.node.ManifestVersion(view.Key.PolicyID),
 			GateOpen:        gate.GetOpen(), GateHolderId: gate.GetHolderId(), GateBallot: gateBallot,
 			GateReason: gate.GetReason(), GateRemainingMs: gate.GetRemainingMs(), Abstaining: view.Abstaining,
