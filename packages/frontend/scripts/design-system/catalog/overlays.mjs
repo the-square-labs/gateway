@@ -205,42 +205,46 @@ mount(h(Demo));
 `,
   },
   {
-    name: "OneTimeTokenDialog",
+    name: "OneTimeSecretDialog",
     group: "Overlays",
-    source: "src/components/common/OneTimeTokenDialog.tsx",
-    exports: ["OneTimeTokenDialog"],
+    source: "src/components/common/OneTimeSecretDialog.tsx",
+    exports: ["OneTimeSecretDialog"],
     height: 360,
     width: 820,
-    summary: "Shows a secret once after it is created: a warning tint, the token in a copy field, and Done.",
+    summary: "Shows a freshly created secret once: \"<Thing> Created\", a description that says it won't be shown again, the value in a copy field, and Done.",
     guide: `
 ## Use it for
-API tokens, enrollment tokens and access keys right after creation. The token leaves memory when the dialog finishes closing (\`onClosed\`).
+Every token, key or password Gateway shows once: API, deploy, inference and ingest tokens, storage access keys, node and relay enrollment tokens. The secret leaves state when the dialog finishes closing (\`onClosed\`).
+
+## Rules
+- No warning tint: the description carries the notice ("Copy it now — it won't be shown again.").
+- One copy field per value (an access key ID and its secret are two fields); extra content such as a setup command goes in \`children\` above them.
+- The footer holds a single Done.
 
 ## The consumer provides
-\`open\`, \`onOpenChange\`, \`title\` ("Access Key Created"), \`token\`, \`tokenLabel\`, \`onClosed\`.
+\`open\`, \`onOpenChange\`, \`title\`, optional \`description\`, \`fields\` (\`{ label, value, hint? }[]\` or null), optional \`children\`, \`onClosed\`, \`className\` for a wider dialog.
 `,
     preview: () => `
-mount(h(G.OneTimeTokenDialog, { open: true, onOpenChange: function () {}, title: "Access Key Created", token: "gw_pat_4be1a0f2c9d84d6e9a7f1b3c5d7e9f01", tokenLabel: "Access key", onClosed: function () {} }));
+mount(h(G.OneTimeSecretDialog, { open: true, onOpenChange: function () {}, title: "API Token Created", fields: [{ label: "API token", value: "gw_pat_4be1a0f2c9d84d6e9a7f1b3c5d7e9f01" }], onClosed: function () {} }));
 `,
   },
   {
     name: "FolderCreateDialog",
     group: "Overlays",
     source: "src/components/common/FolderCreateDialog.tsx",
-    exports: ["FolderCreateDialog"],
+    exports: ["FolderCreateDialog", "FolderRenameDialog"],
     height: 300,
     width: 820,
-    summary: "The small dialog that names a new folder or subfolder: one field, Cancel and Create.",
+    summary: "The small dialog that names a folder: Create Folder (Cancel, Create) and Rename Folder (the current name prefilled, Cancel, Save).",
     guide: `
 ## Use it for
-Creating folders and subfolders in foldered lists (routes, containers, databases).
+Creating, and through \`FolderRenameDialog\`, renaming folders and subfolders in foldered lists (routes, containers, databases). Folders are never renamed in place in the row.
 
 ## Rules
-- Enter submits; Create stays disabled while the name is blank.
-- Create disables itself while \`onCreate\` runs but does not show \`pending\`: an exception to the mutation rule.
+- Enter submits; Create and Save stay disabled while the name is blank and show \`pending\` while the request runs.
 
 ## The consumer provides
-\`open\`, \`onOpenChange\`, \`title\`, \`description\`, \`initialName\`, \`onCreate(name)\`.
+\`FolderCreateDialog\`: \`open\`, \`onOpenChange\`, \`title\`, \`description\`, \`initialName\`, \`onCreate(name)\`. \`FolderRenameDialog\`: \`open\`, \`onOpenChange\`, \`folderName\`, \`onRename(name)\`. Shared foldered lists open the rename dialog from the folder row menu themselves.
 `,
     preview: () => `
 mount(h(G.FolderCreateDialog, { open: true, onOpenChange: function () {}, initialName: "Production", onCreate: function () { return new Promise(function () {}); } }));

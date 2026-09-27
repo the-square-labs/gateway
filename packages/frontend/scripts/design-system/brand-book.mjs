@@ -50,7 +50,7 @@ export function renderBrandBook({ tokens, contrast, timings, cva, components, re
 
   return `Good Gateway is an infrastructure control plane: nodes, routes, containers, certificates, databases, logs. Its interface is a working tool that stays open all day, so it is **flat, square, neutral and calm**: ink on light grey, or light grey on near-black; 1px borders instead of shadows; no rounded corners; colour only where it means a status. Nothing moves after it appears.
 
-Build with the real components in \`GatewayUI\` (the kit in \`src/components/ui\`, the shared pieces in \`src/components/common\`) and the tokens below. Every rule here comes from the product code.
+Build with the real components (the kit in \`src/components/ui\`, the shared pieces in \`src/components/common\`) and the tokens in these pages. Every rule here comes from the product code.
 
 ## Visual foundations
 
@@ -204,7 +204,7 @@ useContentLoading(loading);
 
 ## Components
 
-The kit renders from the real sources as \`window.GatewayUI\` (React ${reactVersion}). By group:
+Every component page renders the real sources (React ${reactVersion}) through \`scripts/design-system/prelude.ts\`. By group:
 
 ${componentIndex}
 

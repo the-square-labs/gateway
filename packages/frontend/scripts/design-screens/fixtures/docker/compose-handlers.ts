@@ -29,8 +29,7 @@ export function dockerComposeDetailHandlers() {
           ])
         : notFound()
     ),
-    // Deployed from YAML, not from a Git source.
-    http.get("*/api/docker/nodes/:nodeId/compose-projects/:projectId/source", () => wrapped(null)),
+    // The Git source of northwind-stack is answered by dockerBuildHandlers().
     http.get("*/api/docker/nodes/:nodeId/compose-projects/:projectId", ({ params }) =>
       isStack(params) ? wrapped(stackProject) : notFound()
     ),

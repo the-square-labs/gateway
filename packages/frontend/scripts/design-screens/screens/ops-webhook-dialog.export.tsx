@@ -20,6 +20,9 @@ it("ops-webhook-dialog", async () => {
       const [name, url] = within(dialog).getAllByRole("textbox");
       await user.type(name, "Incident channel (Teams)");
       await user.type(url, "https://chat.example.com/hooks/incidents");
+      await user.click(within(dialog).getByRole("button", { name: "Add header" }));
+      await user.type(within(dialog).getByRole("textbox", { name: "Header 1 name" }), "X-Team");
+      await user.type(within(dialog).getByRole("textbox", { name: "Header 1 value" }), "platform");
     },
   });
 });

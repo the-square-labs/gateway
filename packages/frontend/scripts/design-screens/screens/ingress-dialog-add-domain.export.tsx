@@ -19,15 +19,16 @@ it("ingress-dialog-add-domain", async () => {
     interact: async (user) => {
       await user.click(screen.getByRole("button", { name: "Add Domain" }));
       const dialog = await screen.findByRole("dialog", { name: "Add Domain" });
-      await user.type(within(dialog).getAllByRole("textbox")[0], "billing.example.com");
-      await user.type(within(dialog).getAllByRole("textbox")[1], "Invoices and payment portal");
-      const nodePicker = within(dialog)
-        .getAllByRole("combobox")
-        .find((element) => element.textContent?.includes("Select node"));
-      if (nodePicker) {
-        await user.click(nodePicker);
-        await user.click(await screen.findByRole("option", { name: /Edge Frankfurt/ }));
-      }
+      await user.type(
+        within(dialog).getByRole("textbox", { name: "Domain" }),
+        "billing.example.com"
+      );
+      await user.click(within(dialog).getByRole("combobox", { name: "Ingress node" }));
+      await user.click(await screen.findByRole("option", { name: /Edge Frankfurt/ }));
+      await user.type(
+        within(dialog).getByRole("textbox", { name: "Description" }),
+        "Invoices and payment portal"
+      );
       await waitForReveal();
       await releaseAnimatedHeights(dialog);
     },

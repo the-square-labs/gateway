@@ -1,7 +1,7 @@
 /**
  * Git sources, builds and migrations of the Docker area: the `web` container and the
- * `checkout` deployment on apps-1 are built from Git; the Compose project is YAML-based.
- * Uuid seeds: 7020–7069.
+ * `checkout` deployment on apps-1 and the `northwind-stack` Compose project on apps-2 are
+ * built from Git. Uuid seeds: 7020–7089.
  */
 import { HttpResponse, http } from "msw";
 import type {
@@ -18,7 +18,7 @@ import { ok, wrapped } from "../../handlers";
 import { pageProjects } from "../catalog";
 import { buildWorker } from "../nodes/builder";
 import { ago, uuid } from "../time";
-import { apps1, apps2, checkoutDeploymentId, fullId } from "./data";
+import { apps1, apps2, checkoutDeploymentId, composeIds, fullId, stackRevisions } from "./data";
 
 export const sourceConnectors: DockerSourceConnector[] = [
   { id: uuid(7020), name: "Northwind GitLab", provider: "gitlab" },
@@ -38,6 +38,11 @@ export const checkoutCommits = {
   building: sha("7ad1e0c9"),
   deployed: sha("3b94f2e6"),
   previous: sha("c8e15a02"),
+};
+
+export const stackCommits = {
+  deployed: sha("a41c07d2"),
+  blocked: sha("6f2b9e58"),
 };
 
 function binding(
@@ -108,6 +113,22 @@ export const checkoutSource = binding(
   }
 );
 
+/** Builds every service that declares `build` in compose.yaml: web, api and worker. */
+export const stackSource = binding(
+  7070,
+  { kind: "compose_project", nodeId: apps2.id, composeProjectId: composeIds.stack },
+  {
+    repositoryFullPath: "northwind/stack",
+    composeFilePath: "compose.yaml",
+    composeVariables: stackRevisions[0].variables,
+    composeSecretKeys: stackRevisions[0].secretKeys,
+    buildSecretNames: ["NPM_TOKEN"],
+    desiredCommitSha: stackCommits.deployed,
+    deployedCommitSha: stackCommits.deployed,
+    lastWebhookAt: ago(40, "m"),
+  }
+);
+
 const marketingSourceId = uuid(7028);
 
 function artifact(
@@ -149,6 +170,9 @@ interface BuildSeed {
   queuedAgo: [number, "m" | "h" | "d"];
   seconds: number;
   ref?: string;
+  /** Compose builds: one batch per commit, one build per service. */
+  batchId?: string;
+  serviceName?: string;
   artifact?: DockerBuildArtifact | null;
   errorCode?: string | null;
   errorMessage?: string | null;
@@ -170,8 +194,8 @@ function build(seed: BuildSeed): DockerBuild {
   return {
     id: uuid(seed.seed),
     sourceBindingId: seed.source.id,
-    batchId: null,
-    serviceName: null,
+    batchId: seed.batchId ?? null,
+    serviceName: seed.serviceName ?? null,
     provider: seed.source.provider,
     trigger: seed.trigger,
     repositoryFullPath: seed.source.repositoryFullPath,
@@ -325,6 +349,125 @@ export const checkoutBuilds: DockerBuild[] = [
   }),
 ];
 
+const stackScan = { critical: 0, high: 0, medium: 1, low: 4 };
+
+interface StackBatch {
+  id: string;
+  commitSha: string;
+  queuedAgo: BuildSeed["queuedAgo"];
+}
+
+/** One service build of northwind-stack; every build of a commit shares its batch. */
+function stackBuild(
+  seed: number,
+  service: "web" | "api" | "worker",
+  batch: StackBatch,
+  status: DockerBuild["status"],
+  seconds: number,
+  artifactOf: DockerBuildArtifact,
+  extra: Pick<BuildSeed, "errorCode" | "errorMessage"> = {}
+): DockerBuild {
+  return build({
+    seed,
+    source: stackSource,
+    target: {
+      kind: "compose_project",
+      nodeId: apps2.id,
+      composeProjectId: composeIds.stack,
+      name: "northwind-stack",
+      serviceName: service,
+    },
+    batchId: batch.id,
+    serviceName: service,
+    commitSha: batch.commitSha,
+    status,
+    trigger: "gitlab_push",
+    queuedAgo: batch.queuedAgo,
+    seconds,
+    artifact: artifactOf,
+    ...extra,
+  });
+}
+
+const stackDeployedBatch: StackBatch = {
+  id: uuid(7078),
+  commitSha: stackCommits.deployed,
+  queuedAgo: [40, "m"],
+};
+const stackBlockedBatch: StackBatch = {
+  id: uuid(7079),
+  commitSha: stackCommits.blocked,
+  queuedAgo: [26, "h"],
+};
+
+/**
+ * Two batches of northwind-stack: the latest commit built and applied all three services;
+ * the one before was not applied because the api image failed the vulnerability policy.
+ */
+export const stackBuilds: DockerBuild[] = [
+  stackBuild(
+    7072,
+    "web",
+    stackDeployedBatch,
+    "succeeded",
+    138,
+    artifact(7073, uuid(7072), "internal/northwind/stack-web", 48.2, stackScan)
+  ),
+  stackBuild(
+    7074,
+    "api",
+    stackDeployedBatch,
+    "succeeded",
+    171,
+    artifact(7075, uuid(7074), "internal/northwind/stack-api", 212.6, stackScan)
+  ),
+  stackBuild(
+    7076,
+    "worker",
+    stackDeployedBatch,
+    "succeeded",
+    94,
+    artifact(7077, uuid(7076), "internal/northwind/stack-worker", 198.1, stackScan)
+  ),
+  stackBuild(
+    7080,
+    "api",
+    stackBlockedBatch,
+    "failed",
+    166,
+    artifact(
+      7081,
+      uuid(7080),
+      "internal/northwind/stack-api",
+      212.4,
+      { critical: 1, high: 0, medium: 2, low: 4 },
+      "rejected",
+      "1 critical vulnerability (threshold: high)"
+    ),
+    {
+      errorCode: "artifact_policy_rejected",
+      errorMessage: "1 critical vulnerability in application packages exceeds the policy threshold",
+    }
+  ),
+  // Approved, but the batch was not applied once the api artifact was rejected.
+  stackBuild(
+    7082,
+    "web",
+    stackBlockedBatch,
+    "cancelled",
+    131,
+    artifact(7083, uuid(7082), "internal/northwind/stack-web", 48.1, stackScan)
+  ),
+  stackBuild(
+    7084,
+    "worker",
+    stackBlockedBatch,
+    "cancelled",
+    97,
+    artifact(7085, uuid(7084), "internal/northwind/stack-worker", 198.0, stackScan)
+  ),
+];
+
 const marketingBuild = build({
   seed: 7046,
   source: {
@@ -347,9 +490,12 @@ const marketingBuild = build({
 });
 
 /** Every build, newest first, as the Builds tab lists them. */
-export const allBuilds: DockerBuild[] = [...webBuilds, ...checkoutBuilds, marketingBuild].sort(
-  (a, b) => new Date(b.queuedAt).getTime() - new Date(a.queuedAt).getTime()
-);
+export const allBuilds: DockerBuild[] = [
+  ...webBuilds,
+  ...checkoutBuilds,
+  ...stackBuilds,
+  marketingBuild,
+].sort((a, b) => new Date(b.queuedAt).getTime() - new Date(a.queuedAt).getTime());
 
 export const buildSecrets: Record<string, DockerBuildSecret[]> = {
   [webSource.id]: [
@@ -358,6 +504,9 @@ export const buildSecrets: Record<string, DockerBuildSecret[]> = {
   [checkoutSource.id]: [
     { id: uuid(7051), name: "PIP_INDEX_TOKEN", createdAt: ago(41, "d"), updatedAt: ago(41, "d") },
     { id: uuid(7052), name: "SENTRY_AUTH_TOKEN", createdAt: ago(41, "d"), updatedAt: ago(12, "d") },
+  ],
+  [stackSource.id]: [
+    { id: uuid(7086), name: "NPM_TOKEN", createdAt: ago(30, "d"), updatedAt: ago(30, "d") },
   ],
 };
 
@@ -403,7 +552,13 @@ export const migrations: DockerMigration[] = [
   },
 ];
 
-const sourceFor = (params: Record<string, unknown>, kind: "container" | "deployment") => {
+const sourceFor = (
+  params: Record<string, unknown>,
+  kind: "container" | "deployment" | "compose_project"
+) => {
+  if (kind === "compose_project") {
+    return params.nodeId === apps2.id && params.projectId === composeIds.stack ? stackSource : null;
+  }
   if (params.nodeId !== apps1.id) return null;
   if (kind === "container") return params.name === "web" ? webSource : null;
   return params.deploymentId === checkoutDeploymentId ? checkoutSource : null;
@@ -449,5 +604,28 @@ export function dockerBuildHandlers() {
     http.get("*/api/docker/nodes/:nodeId/deployments/:deploymentId/source", ({ params }) =>
       wrapped(sourceFor(params, "deployment"))
     ),
+    http.get(
+      "*/api/docker/nodes/:nodeId/compose-projects/:projectId/source/build-secrets",
+      ({ params }) => wrapped(buildSecrets[sourceFor(params, "compose_project")?.id ?? ""] ?? [])
+    ),
+    http.get("*/api/docker/nodes/:nodeId/compose-projects/:projectId/source", ({ params }) =>
+      wrapped(sourceFor(params, "compose_project"))
+    ),
+    // Sync now: the branch head is unchanged, so no build is queued.
+    http.post(
+      "*/api/docker/nodes/:nodeId/compose-projects/:projectId/source/sync",
+      ({ params }) => {
+        const source = sourceFor(params, "compose_project");
+        return source ? wrapped({ source, changed: false, build: null }) : notFound();
+      }
+    ),
+    http.post("*/api/docker/nodes/:nodeId/containers/:name/source/sync", ({ params }) => {
+      const source = sourceFor(params, "container");
+      return source ? wrapped({ source, changed: false, build: null }) : notFound();
+    }),
+    http.post("*/api/docker/nodes/:nodeId/deployments/:deploymentId/source/sync", ({ params }) => {
+      const source = sourceFor(params, "deployment");
+      return source ? wrapped({ source, changed: false, build: null }) : notFound();
+    }),
   ];
 }

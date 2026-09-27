@@ -41,3 +41,6 @@ update-signing-private.pem.b64
 .shannon
 .playwright-mcp
 .workflow/
+
+# Design canvases (foss-design)
+.design/

@@ -2,7 +2,7 @@
 // exports, the guidance for its README and the live preview script. Preview
 // scripts get `f` (facts read from the source: cva variants and the classes
 // its hover:/focus-visible: states apply) and run in the preview frame with
-// the shared prelude (G = window.GatewayUI, h, I, mount, stage, row, note).
+// the shared prelude (prelude.ts: G = the kit in entry.tsx, h, I, mount, stage, row).
 
 const json = (value) => JSON.stringify(value);
 
@@ -420,7 +420,7 @@ mount(stage(
     summary: "A square on/off toggle, 36 by 20px: ink when on, a faint fill when off.",
     guide: `
 ## Use it for
-Settings that apply at once or on Save: enable a feature, a check, a rule. In a titled row use \`ToggleField\` or \`SettingsControlRow\`.
+Settings that apply at once or on Save: enable a feature, a check, a rule. As a standalone option with a title use \`SwitchCard\`; in a settings panel row use \`SettingsControlRow\`.
 
 ## Rules
 - Always pass \`ariaLabel\`; the switch has no visible text of its own.
@@ -441,25 +441,56 @@ mount(stage(row(null,
 `,
   },
   {
-    name: "ToggleField",
+    name: "SwitchCard",
     group: "Forms",
-    source: "src/components/common/ToggleField.tsx",
-    exports: ["ToggleField"],
+    source: "src/components/common/SwitchCard.tsx",
+    exports: ["SwitchCard"],
     height: 250,
-    summary: "A bordered row with a title, a short description and a Switch at the right, for one on/off option inside a form.",
+    summary: "A bordered on/off option: the Switch and its title on the first line, the description below, on a transparent ground.",
     guide: `
 ## Use it for
-Boolean options in dialogs and forms ("Force HTTPS", "Enable health check"). Settings pages with several controls per row use \`SettingsControlRow\`.
+A live on/off state inside a dialog or form ("Proxied", "Force HTTPS"). An option that is included or not reads better as \`CheckboxCard\`. Rows of a multi-row settings panel use \`SettingsControlRow\`.
+
+## Rules
+- The control sits on the left, next to its title; the description runs below across the full width.
+- A disabled \`fieldset\` around it disables it too.
 
 ## The consumer provides
-\`title\`, optional \`description\`, \`checked\`, \`onChange\`, \`ariaLabel\`, \`disabled\`.
+\`label\`, optional \`description\`, \`checked\`, \`onCheckedChange(next)\`, \`disabled\`.
 `,
     preview: () => `
-function T(props) { var s = React.useState(props.checked); return h(G.ToggleField, { title: props.title, description: props.description, checked: s[0], onChange: s[1], ariaLabel: props.title, disabled: props.disabled }); }
+function T(props) { var s = React.useState(props.checked); return h(G.SwitchCard, { label: props.label, description: props.description, checked: s[0], onCheckedChange: s[1], disabled: props.disabled }); }
 mount(stage(h("div", { className: "w-[28rem] space-y-3" },
-  h(T, { title: "Force HTTPS", description: "Redirect plain HTTP requests to HTTPS.", checked: true }),
-  h(T, { title: "Health check", description: "Probe the upstream every 30 seconds.", checked: false }),
-  h(T, { title: "Managed by template", description: "Locked while the template controls it.", checked: true, disabled: true })
+  h(T, { label: "Force HTTPS", description: "Redirect plain HTTP requests to HTTPS.", checked: true }),
+  h(T, { label: "Health check", description: "Probe the upstream every 30 seconds.", checked: false }),
+  h(T, { label: "Managed by template", description: "Locked while the template controls it.", checked: true, disabled: true })
+)));
+`,
+  },
+  {
+    name: "CheckboxCard",
+    group: "Forms",
+    source: "src/components/common/CheckboxCard.tsx",
+    exports: ["CheckboxCard"],
+    height: 250,
+    summary: "A bordered checkbox option: the box and its title on the first line, the description below, on a transparent ground.",
+    guide: `
+## Use it for
+Choosing which options apply, often several at once (certificate key usages, allowed SAN types).
+
+## Rules
+- The box sits on the left, next to its title; the description runs below across the full width.
+- A disabled \`fieldset\` around it disables it too.
+
+## The consumer provides
+\`label\`, optional \`description\`, \`checked\`, \`onCheckedChange(next)\`, \`disabled\`.
+`,
+    preview: () => `
+function C(props) { var s = React.useState(props.checked); return h(G.CheckboxCard, { label: props.label, description: props.description, checked: s[0], onCheckedChange: s[1], disabled: props.disabled }); }
+mount(stage(h("div", { className: "w-[28rem] space-y-2" },
+  h(C, { label: "Digital Signature", description: "Verify digital signatures. Required for TLS and most uses.", checked: true }),
+  h(C, { label: "Key Encipherment", description: "Encrypt symmetric keys during an RSA TLS handshake.", checked: true }),
+  h(C, { label: "Data Encipherment", description: "Encrypt data directly. Rarely needed.", checked: false })
 )));
 `,
   },
@@ -601,27 +632,6 @@ var NGINX = [
 ].join("\\n");
 function E() { var s = React.useState(NGINX); return h(G.CodeEditor, { value: s[0], onChange: s[1], language: "nginx", minHeight: "220px", errorLines: [5] }); }
 mount(stage(h(E)));
-`,
-  },
-  {
-    name: "InlineFolderEditor",
-    group: "Forms",
-    source: "src/components/common/InlineFolderEditor.tsx",
-    exports: ["InlineFolderEditor"],
-    height: 130,
-    summary: "A compact 28px name field with save and cancel icon buttons, for creating or renaming a folder inside a list row.",
-    guide: `
-## Use it for
-Renaming a folder in place in a foldered list. Enter saves, Escape cancels; Save is disabled while the name is blank.
-
-## The consumer provides
-\`initialName\`, \`onSave(name)\`, \`onCancel\`, \`autoFocus\`.
-`,
-    preview: () => `
-mount(stage(
-  row("rename", h(G.InlineFolderEditor, { initialName: "Production", onSave: function () {}, onCancel: function () {}, autoFocus: false })),
-  row("new, blank", h(G.InlineFolderEditor, { onSave: function () {}, onCancel: function () {}, autoFocus: false }))
-));
 `,
   },
   {

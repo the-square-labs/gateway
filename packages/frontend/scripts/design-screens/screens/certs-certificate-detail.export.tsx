@@ -13,7 +13,11 @@ it("certs-certificate-detail", async () => {
     height: 1100,
     ready: async () => {
       await screen.findByText("Serial Number");
+      // The issuing CA badge in the header needs the CA list.
+      await screen.findByText("Northwind Services CA");
     },
-    notes: ["A server certificate for auth.example.com with DNS and IP SANs."],
+    notes: [
+      "A server certificate for auth.example.com with DNS and IP SANs; the header links its issuing CA.",
+    ],
   });
 });

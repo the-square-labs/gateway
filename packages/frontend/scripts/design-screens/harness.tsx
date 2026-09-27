@@ -39,17 +39,17 @@ export type ScreenGroup =
   | "States";
 
 export interface ScreenSpec {
-  /** Artboard file stem, e.g. `routes-list`. */
+  /** Screen file stem, e.g. `ingress-routes`. */
   id: string;
-  /** Name shown on the artboard's strip. */
+  /** Name shown above the screen on the canvas. */
   title: string;
-  /** Canvas page the artboard belongs to (PAGES in assemble.mjs). */
+  /** Canvas page the screen belongs to (PAGES in canvas.mjs). */
   group: ScreenGroup;
   /** Location the app opens at. */
   route: string;
   /** Screen-specific API handlers, checked before the shared ones. */
   handlers?: HttpHandler[];
-  /** Artboard height; width is always the desktop viewport. */
+  /** Screen height; width is always the desktop viewport. */
   height?: number;
   /** Seed stores before the app mounts. */
   before?: () => void | Promise<void>;
@@ -61,7 +61,10 @@ export interface ScreenSpec {
   captureBeforeReveal?: () => Promise<void>;
   /** Width HealthBars measure (jsdom has no layout); defaults to the page content width. */
   healthBarsWidth?: number;
-  /** Placeholder labels for boxes jsdom cannot paint (charts, editors, terminals). */
+  /**
+   * Placeholder labels for boxes jsdom cannot paint (charts, editors, terminals). An editor
+   * placeholder takes the editor's container and fills the editor's frame.
+   */
   placeholders?: Array<{ selector: string; label: string }>;
   /** Notes recorded in the manifest (what is placeholder, what is special). */
   notes?: string[];

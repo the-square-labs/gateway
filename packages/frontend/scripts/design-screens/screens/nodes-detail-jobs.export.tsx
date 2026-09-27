@@ -12,7 +12,7 @@ it("nodes-detail-jobs", async () => {
     before: nodeScreenSetup,
     height: 1100,
     ready: async () => {
-      await screen.findByText("7ad1e0c9d7");
+      await screen.findByText("7ad1e0c9");
     },
     notes: [
       "build-1 is a dedicated Build worker node; it runs every Git build of the Docker area.",

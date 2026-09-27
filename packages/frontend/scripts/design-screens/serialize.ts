@@ -1,11 +1,9 @@
 /**
- * Serializes the rendered jsdom document to static markup that the canvas
- * runtime can mount as-is:
+ * Serializes the rendered jsdom document to static markup for an HTML screen:
  * - every element is closed explicitly and every attribute is quoted;
  * - boolean attributes carry their name as value (an empty value reads as false);
  * - live form state (input values, checked boxes, textarea text) becomes markup;
- * - reveal gates show their settled content (their `visibility:hidden` is dropped);
- * - `{{` never survives, since the canvas treats it as a template hole.
+ * - reveal gates show their settled content (their `visibility:hidden` is dropped).
  */
 
 const VOID_ELEMENTS = new Set([
@@ -75,19 +73,12 @@ export interface SerializedDocument {
   reparse: { original: number; reparsed: number };
 }
 
-function breakHoles(value: string) {
-  // A zero-width space between braces keeps `{{` visible but inert.
-  return value.replace(/\{\{/g, "{​{").replace(/\}\}/g, "}​}");
-}
-
 function escapeText(value: string) {
-  return breakHoles(value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function escapeAttribute(value: string) {
-  return breakHoles(
-    value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  );
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function cleanStyle(element: Element, style: string, options: SerializeOptions) {
@@ -106,9 +97,31 @@ function cleanStyle(element: Element, style: string, options: SerializeOptions) 
   return next.trim();
 }
 
+/**
+ * CodeMirror's `.cm-editor` has no size outside a browser, so a placeholder aimed at it
+ * takes the editor's container instead: the element that carries the editor's size.
+ */
+function placeholderTarget(element: Element) {
+  return element.matches(".cm-editor") ? (element.parentElement ?? element) : element;
+}
+
+/**
+ * A browser draws an editor across its whole frame. An editor container without a height
+ * of its own (inline or an `h-*` class) takes its parent's, so the placeholder covers that
+ * frame instead of a strip at its top.
+ */
+function placeholderStyle(element: Element) {
+  const style = element.getAttribute("style") ?? "";
+  const isEditor = element.querySelector(":scope > .cm-editor") !== null;
+  const hasHeight =
+    /(^|;)\s*height:/.test(style) || /(^|\s)h-/.test(element.getAttribute("class") ?? "");
+  if (!isEditor || hasHeight) return style;
+  return style ? `${style.replace(/;?\s*$/, ";")} height: 100%;` : "height: 100%;";
+}
+
 function placeholderMarkup(label: string, element: Element) {
   const className = element.getAttribute("class") ?? "";
-  const style = element.getAttribute("style") ?? "";
+  const style = placeholderStyle(element);
   return (
     `<div class="${escapeAttribute(className)}" style="${escapeAttribute(style)}"` +
     ` data-design-placeholder="${escapeAttribute(label)}">` +
@@ -211,7 +224,7 @@ export function serializeDocument(document: Document, options: SerializeOptions)
   const replaced = new Map<Element, string>();
   for (const { selector, label } of options.placeholders) {
     for (const element of Array.from(document.querySelectorAll(selector))) {
-      replaced.set(element, label);
+      replaced.set(placeholderTarget(element), label);
     }
   }
   const styles: string[] = [];

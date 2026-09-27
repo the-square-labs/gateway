@@ -28,8 +28,8 @@ import type { AIAgentSkill, AISandboxArtifact, AISandboxStatus } from "@/types/a
 import type { HostingConnector } from "@/types/hosting";
 import type { InferenceCoreStatus } from "@/types/inference-core";
 import { people } from "../catalog";
-import { domains } from "../edge/domains";
 import { sslCertificates } from "../edge/ssl";
+import { pagesProfileConfigured, pagesProfileOptions } from "../ingress/pages-profile";
 import { edgeNode, nodeBySlug } from "../nodes";
 import { ago, agoMs, ahead, uuid } from "../time";
 
@@ -233,95 +233,12 @@ export const internalRegistryState: DockerInternalRegistryState = {
   lastError: null,
 };
 
-const wildcard = sslCertificates.find((cert) => cert.name === "Wildcard example.com");
 const statusCert = sslCertificates.find((cert) => cert.name === "status.example.com");
-const pagesDomain = domains.find((domain) => domain.domain === "app.example.com") ?? domains[0];
 
-export const pageProfile: PageProfile = {
-  id: uuid(65120),
-  enabled: true,
-  status: "ready",
-  domainId: pagesDomain.id,
-  nodeId: edgeNode.id,
-  certificateId: wildcard?.id ?? null,
-  labelTemplate: "{project}-{hash}",
-  overrideSameRegistrableDomain: false,
-  overrideAcknowledgedById: null,
-  overrideAcknowledgedAt: null,
-  createdAt: ago(90, "d"),
-  updatedAt: ago(14, "d"),
-  lastErrorCode: null,
-  lastErrorMessage: null,
-  domain: {
-    id: pagesDomain.id,
-    domain: pagesDomain.domain,
-    dnsStatus: pagesDomain.dnsStatus,
-    nginxNodeId: edgeNode.id,
-  },
-  node: {
-    id: edgeNode.id,
-    displayName: edgeNode.displayName,
-    hostname: edgeNode.hostname,
-    status: "online",
-    pagesCapable: true,
-  },
-  certificate: wildcard
-    ? {
-        id: wildcard.id,
-        name: wildcard.name,
-        domainNames: wildcard.domainNames,
-        status: wildcard.status,
-        notAfter: wildcard.notAfter,
-      }
-    : null,
-  isolation: {
-    gatewayHost: "gateway.example.com",
-    pagesHost: "pages.example.net",
-    gatewayRegistrableDomain: "example.com",
-    pagesRegistrableDomain: "example.net",
-    same: false,
-    overrideRequired: false,
-    overrideCurrent: false,
-  },
-};
+/** The Pages profile the Pages screens use: previews under pages.example.com, the shared parent acknowledged. */
+export const pageProfile: PageProfile = pagesProfileConfigured;
 
-export const pageProfileOptions: PageProfileOptions = {
-  domains: [
-    {
-      id: pagesDomain.id,
-      domain: pagesDomain.domain,
-      dnsStatus: pagesDomain.dnsStatus,
-      nginxNodeId: edgeNode.id,
-      isolation: {
-        gatewayHost: "gateway.example.com",
-        pagesHost: "pages.example.net",
-        gatewayRegistrableDomain: "example.com",
-        pagesRegistrableDomain: "example.net",
-        same: false,
-      },
-    },
-  ],
-  nodes: [
-    {
-      id: edgeNode.id,
-      displayName: edgeNode.displayName,
-      hostname: edgeNode.hostname,
-      status: "online",
-      pagesCapable: true,
-    },
-  ],
-  certificates: wildcard
-    ? [
-        {
-          id: wildcard.id,
-          name: wildcard.name,
-          domainNames: wildcard.domainNames,
-          status: wildcard.status,
-          notAfter: wildcard.notAfter,
-        },
-      ]
-    : [],
-};
+export const pageProfileOptions: PageProfileOptions = pagesProfileOptions;
 
 export const statusPageCertificateId = statusCert?.id ?? null;
 

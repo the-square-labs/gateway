@@ -12,7 +12,7 @@ it("docker-deployment-builds", async () => {
     height: 1100,
     before: detailSetup,
     ready: async () => {
-      await screen.findByText("7ad1e0c9d7");
+      await screen.findByText("7ad1e0c9");
     },
     notes: ["The newest checkout build is still running (building step 6 of 11)."],
   });

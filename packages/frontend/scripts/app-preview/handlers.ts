@@ -3,7 +3,12 @@
 import { delay, HttpResponse, http, ws } from "msw";
 import { webContainerHandlers } from "../design-screens/fixtures/docker/detail-sets";
 import { nodesListHandlers } from "../design-screens/fixtures/nodes/sets";
-import { loggingHandlers } from "../design-screens/fixtures/ops/handlers";
+import {
+  adminHandlers,
+  loggingHandlers,
+  profileHandlers,
+  scopePickerHandlers,
+} from "../design-screens/fixtures/ops/handlers";
 import { backgroundPrewarmHandlers } from "../design-screens/fixtures/prewarm";
 import { shellHandlers } from "../design-screens/handlers";
 
@@ -29,6 +34,9 @@ export function previewHandlers() {
     ...nodesListHandlers(),
     ...loggingHandlers(),
     ...webContainerHandlers(),
+    ...adminHandlers(),
+    ...profileHandlers(),
+    ...scopePickerHandlers(),
     ...shellHandlers(),
     ...backgroundPrewarmHandlers(),
     http.all("*", ({ request }) => {

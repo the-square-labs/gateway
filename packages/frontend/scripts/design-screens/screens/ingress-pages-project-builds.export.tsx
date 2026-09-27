@@ -14,6 +14,8 @@ it("ingress-pages-project-builds", async () => {
     ready: async () => {
       await screen.findAllByText(/9f3c2a1/);
     },
-    notes: ["The six latest builds of marketing-site; one failed on a missing i18n file."],
+    notes: [
+      "The six latest builds of marketing-site in the Docker Builds table; one failed on a missing i18n file.",
+    ],
   });
 });

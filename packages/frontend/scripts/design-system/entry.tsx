@@ -1,7 +1,6 @@
-// Entry of the design system bundle: the product's own kit and shared
-// components, unchanged, exposed as window.GatewayUI for the previews.
-// scripts/design-system/export.mjs bundles it with esbuild (IIFE, React from
-// window.React / window.ReactDOM) and reads its exports for the types.
+// The design system kit: the product's own kit and shared components,
+// unchanged, as the specimens use them (prelude.ts exposes it as `G`).
+// scripts/design-system/export.mjs reads its exports for the props tables.
 
 import {
   Activity,
@@ -54,8 +53,7 @@ export { DownloadButton } from "@/components/common/DownloadButton";
 export { EditableStringList } from "@/components/common/EditableStringList";
 export { EmptyState } from "@/components/common/EmptyState";
 export { ErrorBoundary } from "@/components/common/ErrorBoundary";
-export { FolderCreateDialog } from "@/components/common/FolderCreateDialog";
-export { InlineFolderEditor } from "@/components/common/InlineFolderEditor";
+export { FolderCreateDialog, FolderRenameDialog } from "@/components/common/FolderCreateDialog";
 export { LoadingSpinner } from "@/components/common/LoadingSpinner";
 export {
   ManagedCertificateDetailRow,
@@ -63,7 +61,7 @@ export {
 } from "@/components/common/ManagedCertificateStatus";
 export { Notice, NoticeAction } from "@/components/common/Notice";
 export { ManagedResourceFields } from "@/components/common/ManagedResourceFields";
-export { OneTimeTokenDialog } from "@/components/common/OneTimeTokenDialog";
+export { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 export { PageBackButton } from "@/components/common/PageBackButton";
 export { PageHeader } from "@/components/common/PageHeader";
 export { PageTransition } from "@/components/common/PageTransition";
@@ -102,7 +100,8 @@ export {
 } from "@/components/common/SettingsControlRow";
 export { SimpleTable } from "@/components/common/SimpleTable";
 export { StatusBadge } from "@/components/common/StatusBadge";
-export { ToggleField } from "@/components/common/ToggleField";
+export { CheckboxCard } from "@/components/common/CheckboxCard";
+export { SwitchCard } from "@/components/common/SwitchCard";
 export { ValueTile } from "@/components/common/ValueTile";
 export { AnsiText } from "@/components/ui/ansi-text";
 export { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";

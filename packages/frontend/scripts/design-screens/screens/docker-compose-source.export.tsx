@@ -10,13 +10,14 @@ it("docker-compose-source", async () => {
     group: "Docker",
     route: `/docker/compose/${composeIds.stack}/source`,
     handlers: composeProjectHandlers(),
-    height: 1100,
+    height: 1450,
     before: detailSetup,
     ready: async () => {
-      await screen.findByText("Connect repository");
+      await screen.findByText("NPM_TOKEN");
     },
     notes: [
-      "northwind-stack is deployed from Gateway-stored YAML; the Source tab offers to connect a Git repository.",
+      "northwind-stack builds web, api and worker from northwind/stack on GitLab (compose.yaml).",
+      "Repository and Build sit side by side; Sync now checks the branch for new commits right away.",
     ],
   });
 });

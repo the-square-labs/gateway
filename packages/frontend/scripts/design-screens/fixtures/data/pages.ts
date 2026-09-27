@@ -1,7 +1,8 @@
 /**
  * Pages projects of the fictional installation. marketing-site is served on
  * its own domain from the Frankfurt edge and deploys from GitLab: release tags
- * publish production, merge requests publish expiring previews.
+ * publish production, merge requests publish expiring previews. Pages Tag names
+ * are single DNS labels, so CI publishes Git tag v2.8.1 as Tag v2-8-1.
  */
 import type {
   PageDeployment,
@@ -132,7 +133,7 @@ export const marketingDeployments: PageDeployment[] = [
     expiresAt: ahead(7, "d"),
   }),
   deployment(42, "h2x9cv7pl4dq8wme", {
-    requestedTag: "v2.8.1",
+    requestedTag: "v2-8-1",
     pinned: true,
     sourceMetadata: gitSource("refs/tags/v2.8.1", "9f2c1ab83e", "Maya Chen"),
     createdAt: ago(2, "h"),
@@ -164,7 +165,7 @@ export const marketingDeployments: PageDeployment[] = [
     expiresAt: ahead(5, "d"),
   }),
   deployment(39, "c5vb9kx3pw2nq7ht", {
-    requestedTag: "v2.8.0",
+    requestedTag: "v2-8-0",
     sourceMetadata: gitSource("refs/tags/v2.8.0", "71ad6e4f02", "Maya Chen"),
     createdAt: ago(4, "d"),
     compressedSizeBytes: 18.2 * MiB,
@@ -180,7 +181,7 @@ export const marketingDeployments: PageDeployment[] = [
     expiresAt: ahead(2, "d"),
   }),
   deployment(37, "q9pk4hw7vn2cz6md", {
-    requestedTag: "v2.7.4",
+    requestedTag: "v2-7-4",
     pinned: true,
     sourceMetadata: gitSource("refs/tags/v2.7.4", "c8e03d1b6f", "Omar Haddad"),
     createdAt: ago(12, "d"),
@@ -190,7 +191,7 @@ export const marketingDeployments: PageDeployment[] = [
 ];
 
 function tagPreview(name: string) {
-  const hostname = `${marketingProject.previewHash}-${name.replaceAll(".", "-")}.${PAGES_DOMAIN}`;
+  const hostname = `${marketingProject.previewHash}-${name}.${PAGES_DOMAIN}`;
   return { hostname, url: `https://${hostname}`, status: "ready" as const, reason: null };
 }
 
@@ -219,8 +220,8 @@ const bySequence = (sequence: number) =>
 export const marketingTags: PageTag[] = [
   tag("latest", bySequence(42), 58, true),
   tag("production", bySequence(42), 21),
-  tag("v2.8.1", bySequence(42), 1),
-  tag("v2.8.0", bySequence(39), 1),
+  tag("v2-8-1", bySequence(42), 1),
+  tag("v2-8-0", bySequence(39), 1),
   tag(mrTag(121), bySequence(41), 3),
 ];
 

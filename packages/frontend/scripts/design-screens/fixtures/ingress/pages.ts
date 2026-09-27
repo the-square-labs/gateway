@@ -323,6 +323,10 @@ export function pagesExtraHandlers() {
       const rows = binding === marketingSource.id ? marketingBuilds.slice(0, limit) : [];
       return ok({ data: rows, nextCursor: null });
     }),
+    // Sync now: the branch head is unchanged, so no build is queued.
+    http.post("*/api/pages/projects/:id/source/sync", () =>
+      wrapped({ source: marketingSource, changed: false, build: null })
+    ),
     http.get("*/api/pages/projects/:id/source/build-secrets", () =>
       wrapped([
         {

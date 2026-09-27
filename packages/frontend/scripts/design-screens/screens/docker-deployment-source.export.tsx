@@ -9,10 +9,13 @@ it("docker-deployment-source", async () => {
     group: "Docker",
     route: "/docker/deployments/apps-1/checkout/source",
     handlers: checkoutDeploymentHandlers(),
-    height: 1100,
+    height: 1450,
     before: detailSetup,
     ready: async () => {
       await screen.findByText("PIP_INDEX_TOKEN");
     },
+    notes: [
+      "Repository and Build settings side by side; Sync now checks the branch for new commits right away.",
+    ],
   });
 });

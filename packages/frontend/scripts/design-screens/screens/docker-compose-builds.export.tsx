@@ -13,8 +13,11 @@ it("docker-compose-builds", async () => {
     height: 1100,
     before: detailSetup,
     ready: async () => {
-      await screen.findByText("No builds yet.");
+      await screen.findAllByText("a41c07d2");
     },
-    notes: ["northwind-stack is YAML-based, so it has no Git builds (empty state)."],
+    notes: [
+      "northwind-stack builds web, api and worker from Git: one build per service, one batch per commit.",
+      "The latest batch was applied; the one before stopped because the api image failed the vulnerability policy.",
+    ],
   });
 });

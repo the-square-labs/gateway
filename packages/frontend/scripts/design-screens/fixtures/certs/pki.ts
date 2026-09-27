@@ -1,14 +1,17 @@
 /**
  * Internal PKI of the installation: the certificate authorities, the
- * certificates they issued and the PKI certificate templates.
+ * certificates they issued, the folders both lists are organized in and the
+ * PKI certificate templates.
  * The first two CAs are the ones the dashboard and pickers already show.
- * Seeds 23000-23999 belong to this file.
+ * Seeds 23000-23899 belong to this file (23900-23999 to creation.ts).
  */
 import { HttpResponse, http } from "msw";
-import type { CA, Certificate, Template } from "@/types";
-import { ok } from "../../handlers";
+import { useAuthStore } from "@/stores/auth";
+import type { CA, Certificate, ResourceFolderTreeNode, Template } from "@/types";
+import { ok, wrapped } from "../../handlers";
 import { people } from "../catalog";
 import { certificateAuthorities } from "../dashboard";
+import { expandFolders } from "../data/folders";
 import { ago, ahead, uuid } from "../time";
 
 const PEM_PLACEHOLDER = [
@@ -19,6 +22,40 @@ const PEM_PLACEHOLDER = [
 ].join("\n");
 
 const [rootCa, servicesCa] = certificateAuthorities;
+
+// ── Folders ──────────────────────────────────────────────────────────────
+
+function folder(seed: number, name: string, sortOrder: number): ResourceFolderTreeNode {
+  return {
+    id: uuid(23300 + seed),
+    name,
+    parentId: null,
+    sortOrder,
+    depth: 0,
+    createdAt: ago(180, "d"),
+    updatedAt: ago(180, "d"),
+    children: [],
+  };
+}
+
+/** CA folders hold whole hierarchies; an intermediate reports its root's folder. */
+export const caFolders: ResourceFolderTreeNode[] = [
+  folder(1, "Production", 0),
+  folder(2, "Partners", 1),
+];
+const [productionFolder, partnersFolder] = caFolders;
+
+export const certificateFolders: ResourceFolderTreeNode[] = [
+  folder(11, "Service mesh", 0),
+  folder(12, "Staff devices", 1),
+];
+const [meshFolder, staffFolder] = certificateFolders;
+
+export const templateFolders: ResourceFolderTreeNode[] = [
+  folder(21, "Services", 0),
+  folder(22, "People", 1),
+];
+const [servicesTemplateFolder, peopleTemplateFolder] = templateFolders;
 
 function ca(seed: number, overrides: Partial<CA> & Pick<CA, "commonName" | "type">): CA {
   return {
@@ -46,13 +83,27 @@ function ca(seed: number, overrides: Partial<CA> & Pick<CA, "commonName" | "type
     revokedAt: null,
     revocationReason: null,
     certCount: 0,
+    folderId: null,
+    sortOrder: 0,
     ...overrides,
   };
 }
 
 export const cas: CA[] = [
-  { ...rootCa, certificatePem: PEM_PLACEHOLDER, certCount: 0 },
-  { ...servicesCa, certificatePem: PEM_PLACEHOLDER, certCount: 6 },
+  {
+    ...rootCa,
+    certificatePem: PEM_PLACEHOLDER,
+    certCount: 0,
+    folderId: productionFolder.id,
+    sortOrder: 0,
+  },
+  {
+    ...servicesCa,
+    certificatePem: PEM_PLACEHOLDER,
+    certCount: 6,
+    folderId: productionFolder.id,
+    sortOrder: 0,
+  },
   ca(1, {
     commonName: "Northwind Clients CA",
     type: "intermediate",
@@ -63,6 +114,8 @@ export const cas: CA[] = [
     crlDistributionUrl: "https://gateway.example.com/pki/crl/clients.crl",
     ocspResponderUrl: "https://gateway.example.com/pki/ocsp",
     certCount: 3,
+    folderId: productionFolder.id,
+    sortOrder: 1,
   }),
   ca(2, {
     commonName: "Northwind Lab Root (2021)",
@@ -77,9 +130,66 @@ export const cas: CA[] = [
     lastCrlAt: ago(90, "d"),
     certCount: 1,
   }),
+  // Issued under the lab root, so it ends with it.
+  ca(3, {
+    commonName: "Northwind Lab Issuing CA",
+    type: "intermediate",
+    parentId: uuid(23002),
+    issuerDn: "CN=Northwind Lab Root (2021),O=Northwind",
+    keyAlgorithm: "rsa-4096",
+    maxValidityDays: 365,
+    notBefore: ago(700, "d"),
+    notAfter: ahead(25, "d"),
+    createdAt: ago(700, "d"),
+    updatedAt: ago(90, "d"),
+    lastCrlAt: ago(90, "d"),
+    certCount: 2,
+  }),
+  ca(4, {
+    commonName: "Northwind Partner Root CA",
+    type: "root",
+    keyAlgorithm: "ecdsa-p384",
+    pathLengthConstraint: 1,
+    maxValidityDays: 3650,
+    notBefore: ago(120, "d"),
+    notAfter: ahead(3530, "d"),
+    crlDistributionUrl: "https://gateway.example.com/pki/crl/partner-root.crl",
+    createdAt: ago(120, "d"),
+    folderId: partnersFolder.id,
+    sortOrder: 0,
+  }),
+  ca(5, {
+    commonName: "Partner Exchange CA",
+    type: "intermediate",
+    parentId: uuid(23004),
+    issuerDn: "CN=Northwind Partner Root CA,O=Northwind",
+    pathLengthConstraint: 0,
+    maxValidityDays: 825,
+    notBefore: ago(118, "d"),
+    notAfter: ahead(1700, "d"),
+    crlDistributionUrl: "https://gateway.example.com/pki/crl/partner-exchange.crl",
+    createdAt: ago(118, "d"),
+    folderId: partnersFolder.id,
+    sortOrder: 0,
+  }),
+  ca(6, {
+    commonName: "Partner Devices CA",
+    type: "intermediate",
+    parentId: uuid(23005),
+    issuerDn: "CN=Partner Exchange CA,O=Northwind",
+    maxValidityDays: 397,
+    notBefore: ago(110, "d"),
+    notAfter: ahead(1600, "d"),
+    ocspResponderUrl: "https://gateway.example.com/pki/ocsp",
+    createdAt: ago(110, "d"),
+    certCount: 14,
+    folderId: partnersFolder.id,
+    sortOrder: 0,
+  }),
 ];
 
 export const [pkiRootCa, pkiServicesCa, pkiClientsCa, pkiLabCa] = cas;
+const pkiPartnerDevicesCa = cas.find((item) => item.id === uuid(23006))!;
 
 // ── Templates ────────────────────────────────────────────────────────────
 
@@ -103,6 +213,8 @@ function template(
     certificatePolicies: [],
     customExtensions: [],
     createdById: people[0].id,
+    folderId: null,
+    sortOrder: 0,
     createdAt: ago(240, "d"),
     updatedAt: ago(240, "d"),
     ...overrides,
@@ -153,6 +265,7 @@ export const pkiTemplates: Template[] = [
     subjectDnFields: { o: "Northwind", ou: "Platform" },
     crlDistributionPoints: ["https://gateway.example.com/pki/crl/services.crl"],
     authorityInfoAccess: { ocspUrl: "https://gateway.example.com/pki/ocsp" },
+    folderId: servicesTemplateFolder.id,
     updatedAt: ago(12, "d"),
   }),
   template(5, {
@@ -166,7 +279,44 @@ export const pkiTemplates: Template[] = [
     sanTypes: ["email"],
     subjectDnFields: { o: "Northwind", ou: "Staff", c: "DE" },
     customExtensions: [{ oid: "1.3.6.1.4.1.32473.1.1", critical: false, value: "staff" }],
+    folderId: peopleTemplateFolder.id,
     updatedAt: ago(30, "d"),
+  }),
+  template(6, {
+    name: "Mesh sidecar (30 days)",
+    description: "Server and client auth for service mesh sidecars",
+    certType: "tls-server",
+    validityDays: 30,
+    extKeyUsage: ["serverAuth", "clientAuth"],
+    sanTypes: ["dns", "uri"],
+    subjectDnFields: { o: "Northwind", ou: "Mesh" },
+    folderId: servicesTemplateFolder.id,
+    sortOrder: 1,
+    updatedAt: ago(6, "d"),
+  }),
+  template(7, {
+    name: "Contractor mTLS",
+    description: "Short-lived client certificates for contractor laptops",
+    certType: "tls-client",
+    validityDays: 60,
+    keyUsage: ["digitalSignature"],
+    extKeyUsage: ["clientAuth"],
+    sanTypes: ["email"],
+    subjectDnFields: { o: "Northwind", ou: "Contractors" },
+    folderId: peopleTemplateFolder.id,
+    sortOrder: 1,
+    updatedAt: ago(21, "d"),
+  }),
+  template(8, {
+    name: "S/MIME email",
+    description: "Signing and encryption certificates for the ops mailbox",
+    certType: "email",
+    keyAlgorithm: "rsa-2048",
+    validityDays: 365,
+    keyUsage: ["digitalSignature", "keyEncipherment"],
+    extKeyUsage: ["emailProtection"],
+    sanTypes: ["email"],
+    updatedAt: ago(45, "d"),
   }),
 ];
 
@@ -197,6 +347,8 @@ function certificate(
     revokedAt: null,
     revocationReason: null,
     issuedById: people[1].email,
+    folderId: null,
+    sortOrder: seed,
     createdAt: ago(40, "d"),
     updatedAt: ago(40, "d"),
     ...overrides,
@@ -207,6 +359,7 @@ export const pkiCertificates: Certificate[] = [
   certificate(1, {
     commonName: "auth.example.com",
     caId: pkiServicesCa.id,
+    folderId: meshFolder.id,
     sans: ["auth.example.com", "status.example.com", "10.0.12.31"],
     notBefore: ago(40, "d"),
     notAfter: ahead(325, "d"),
@@ -215,6 +368,7 @@ export const pkiCertificates: Certificate[] = [
   certificate(2, {
     commonName: "api.internal.example.com",
     caId: pkiServicesCa.id,
+    folderId: meshFolder.id,
     sans: ["api.internal.example.com", "10.0.12.40"],
     notBefore: ago(75, "d"),
     notAfter: ahead(15, "d"),
@@ -222,6 +376,7 @@ export const pkiCertificates: Certificate[] = [
   certificate(3, {
     commonName: "orders-db.internal.example.com",
     caId: pkiServicesCa.id,
+    folderId: meshFolder.id,
     sans: ["orders-db.internal.example.com"],
     notBefore: ago(12, "d"),
     notAfter: ahead(78, "d"),
@@ -229,12 +384,14 @@ export const pkiCertificates: Certificate[] = [
   certificate(4, {
     commonName: "grafana.internal.example.com",
     caId: pkiServicesCa.id,
+    folderId: meshFolder.id,
     notBefore: ago(30, "d"),
     notAfter: ahead(60, "d"),
   }),
   certificate(5, {
     commonName: "lena.novak@example.com",
     caId: pkiClientsCa.id,
+    folderId: staffFolder.id,
     type: "tls-client",
     sans: ["lena.novak@example.com"],
     subjectDn: "CN=lena.novak@example.com,OU=Staff,O=Northwind,C=DE",
@@ -251,6 +408,7 @@ export const pkiCertificates: Certificate[] = [
   certificate(6, {
     commonName: "sam.patel@example.com",
     caId: pkiClientsCa.id,
+    folderId: staffFolder.id,
     type: "tls-client",
     sans: ["sam.patel@example.com"],
     subjectDn: "CN=sam.patel@example.com,OU=Staff,O=Northwind,C=DE",
@@ -276,11 +434,23 @@ export const pkiCertificates: Certificate[] = [
   certificate(8, {
     commonName: "legacy-vpn.example.com",
     caId: pkiServicesCa.id,
+    folderId: meshFolder.id,
     status: "revoked",
     revokedAt: ago(18, "d"),
     revocationReason: "superseded",
     notBefore: ago(120, "d"),
     notAfter: ahead(245, "d"),
+  }),
+  certificate(9, {
+    commonName: "edge-gw-01.partner.example.net",
+    caId: pkiPartnerDevicesCa.id,
+    type: "tls-client",
+    sans: ["edge-gw-01.partner.example.net", "192.0.2.41"],
+    subjectDn: "CN=edge-gw-01.partner.example.net,OU=Partners,O=Northwind",
+    keyUsage: ["digitalSignature"],
+    extKeyUsage: ["clientAuth"],
+    notBefore: ago(60, "d"),
+    notAfter: ahead(305, "d"),
   }),
 ];
 
@@ -288,10 +458,44 @@ export const authCertificate = pkiCertificates[0];
 
 const notFound = () => HttpResponse.json({ message: "Not found" }, { status: 404 });
 
+/**
+ * The PKI lists as the operator left them: every folder open. The PKI folder
+ * scopes are not in the token scope catalog yet (backend work), so the fixture
+ * operator gets them here to see folder management and drag and drop.
+ */
+export function preparePkiLists() {
+  useAuthStore.setState((state) => ({
+    user: state.user && {
+      ...state.user,
+      scopes: [
+        ...state.user.scopes,
+        "pki:ca:folders:manage",
+        "pki:cert:folders:manage",
+        "pki:templates:folders:manage",
+      ],
+    },
+  }));
+  expandFolders(
+    "pki-ca",
+    caFolders.map((item) => item.id)
+  );
+  expandFolders(
+    "pki-certificate",
+    certificateFolders.map((item) => item.id)
+  );
+  expandFolders("pki-template", [
+    "pki-templates-builtin",
+    ...templateFolders.map((item) => item.id),
+  ]);
+}
+
 /** CAs, issued certificates and PKI templates. */
 export function pkiHandlers() {
   return [
     http.get("*/api/cas", () => ok(cas)),
+    // Before `/cas/:id` and `/certificates/:id`, which would take "folders" for an id.
+    http.get("*/api/cas/folders", () => wrapped(caFolders)),
+    http.get("*/api/certificates/folders", () => wrapped(certificateFolders)),
     http.get("*/api/cas/:id", ({ params }) => {
       const found = cas.find((item) => item.id === params.id);
       return found ? ok(found) : notFound();
@@ -318,5 +522,6 @@ export function pkiHandlers() {
       return found ? ok(found) : notFound();
     }),
     http.get("*/api/templates", () => ok(pkiTemplates)),
+    http.get("*/api/templates/folders", () => wrapped(templateFolders)),
   ];
 }

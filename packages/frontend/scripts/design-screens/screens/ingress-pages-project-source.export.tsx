@@ -15,6 +15,10 @@ it("ingress-pages-project-source", async () => {
     ready: async () => {
       await screen.findAllByText(/northwind\/marketing-site/);
     },
-    notes: ["GitLab source with pnpm build settings, one build variable and one build secret."],
+    notes: [
+      "GitLab source with pnpm build settings, one build variable and one build secret.",
+      "Repository (repository, branch, application root, automatic builds) and Build (toolchain, output, Publish Tag) sit side by side; each saves its own settings.",
+      "Sync now checks the branch for new commits right away; Disconnect lives in Destructive actions at the bottom.",
+    ],
   });
 });
