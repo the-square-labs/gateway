@@ -547,7 +547,7 @@ func (b *sourceLinkBinding) closeBinding(removeSocketPath bool) {
 	case <-b.done:
 		return
 	default:
-close(b.done)
+		close(b.done)
 		if b.listener != nil {
 			_ = b.listener.Close()
 		}

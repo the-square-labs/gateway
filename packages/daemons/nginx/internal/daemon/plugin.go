@@ -303,12 +303,6 @@ func (p *NginxPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 
 	configVersionHash := p.state.GetExtraString("config_version_hash")
 
-	if p.availabilityLease != nil {
-		if err := p.availabilityLease.ensureNode(nodeID, p.baseCfg.TLS.ClientCert, p.baseCfg.TLS.ClientKey); err != nil {
-			p.logger.Warn("availability lease coordination is unavailable", "error", err)
-		}
-	}
-
 	return &pb.RegisterMessage{
 		NodeId:             nodeID,
 		Hostname:           hostname,
@@ -396,7 +390,7 @@ func (p *NginxPlugin) capabilities() []string {
 			capabilities = append(capabilities, "nginx_pages_reconcile_v1")
 		}
 	}
-	if p.availabilityLease != nil && p.availabilityLease.ready() {
+	if p.availabilityLease != nil {
 		capabilities = append(capabilities, availabilityLeaseCapability)
 	}
 	return capabilities
