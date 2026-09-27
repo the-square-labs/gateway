@@ -926,8 +926,7 @@ message SyncAvailabilityLeaseCommand {
   repeated AvailabilityLeasePolicyKey policy_keys = 3;
   // Serialized relay.v1.LeasePolicyKeyRotation links, oldest first (A14).
   repeated bytes key_rotations = 4;
-  // Serialized relay.v1.LeaseSignedBlock of kind VOTER_CONFIG (current epoch).
-  // Empty while no voter config exists yet.
+  // Unused since voters travel in each policy manifest (A18); always empty.
   bytes voter_config = 5;
   // Serialized relay.v1.LeaseSignedBlock of kind MANIFEST, one per policy in
   // bootstrapping, lease or closing mode. The set is complete: a policy that is
@@ -999,6 +998,15 @@ message AvailabilityLeaseManifestAck {
   string policy_id = 1;
   uint64 manifest_version = 2;
   bool closed = 3;
+  // Per-policy voter epoch persisted with the manifest (A18; Node.Epoch(policy)).
+  // The A4 ack the Gateway waits for before it settles a joint voter change.
+  // Relays fill it; daemons should too. Zero means unknown: the Gateway then
+  // falls back to manifest_version.
+  uint64 voter_epoch = 20;
+  // This member is in a quorum set of the policy (relays: it is the witness).
+  bool voter = 21;
+  // This member is listed in the policy's manifest members.
+  bool member = 22;
 }
 
 message AvailabilityLeaseHeld {

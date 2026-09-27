@@ -1,16 +1,11 @@
 -- Availability data-plane lease. Policies get a partition mode (strict by default, so no existing policy changes
--- behaviour) and a lease state that starts in legacy: the backend keeps reacting to node loss until every candidate,
--- ingress node and a voter majority advertise availability_lease_v1. The cluster row holds the signed voter config
--- and its epoch, members hold what each daemon and relay last reported, and observations record the lease holder of
--- every (policy, slot). Standby Secure Link members are marked dormant; existing members stay active.
+-- behaviour), an optional lease witness, and a lease state that starts in legacy: the backend keeps reacting to node
+-- loss until every candidate and ingress node advertises availability_lease_v1. Each policy carries its own voters
+-- (candidate hosts plus witnesses) and voter epoch; the cluster row only tracks the manifest signing key. Members hold
+-- what each daemon and relay last reported, and observations record the lease holder of every (policy, slot).
+-- Standby Secure Link members are marked dormant; existing members stay active.
 CREATE TABLE "availability_lease_cluster" (
 	"id" varchar(32) PRIMARY KEY NOT NULL,
-	"epoch" bigint DEFAULT 0 NOT NULL,
-	"members" jsonb DEFAULT '[]'::jsonb NOT NULL,
-	"quorum_sets" jsonb DEFAULT '[]'::jsonb NOT NULL,
-	"voter_config_block" text,
-	"joint_started_at" timestamp with time zone,
-	"joint_acked_at" timestamp with time zone,
 	"signing_key_id" varchar(64),
 	"revision" bigint DEFAULT 0 NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
@@ -68,7 +63,13 @@ CREATE TABLE "docker_availability_lease_state" (
 	"mode" varchar(16) DEFAULT 'legacy' NOT NULL,
 	"reason" jsonb,
 	"manifest_version" bigint DEFAULT 0 NOT NULL,
-	"manifest_epoch" bigint DEFAULT 0 NOT NULL,
+	"voter_epoch" bigint DEFAULT 0 NOT NULL,
+	"quorum_sets" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"voter_members" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"joint_version" bigint DEFAULT 0 NOT NULL,
+	"joint_acked_at" timestamp with time zone,
+	"witnesses" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"witness_warning" varchar(64),
 	"manifest_digest" text,
 	"manifest_block" text,
 	"bootstrap_id" bigint DEFAULT 0 NOT NULL,
@@ -85,10 +86,11 @@ CREATE TABLE "docker_availability_lease_state" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "docker_availability_lease_state_mode_check" CHECK ("docker_availability_lease_state"."mode" IN ('legacy', 'bootstrapping', 'lease', 'closing')),
 	CONSTRAINT "docker_availability_lease_state_surge_check" CHECK ("docker_availability_lease_state"."surge_slots" BETWEEN 0 AND 32),
-	CONSTRAINT "docker_availability_lease_state_version_check" CHECK ("docker_availability_lease_state"."manifest_version" >= 0 AND "docker_availability_lease_state"."manifest_epoch" >= 0 AND "docker_availability_lease_state"."bootstrap_id" >= 0)
+	CONSTRAINT "docker_availability_lease_state_version_check" CHECK ("docker_availability_lease_state"."manifest_version" >= 0 AND "docker_availability_lease_state"."voter_epoch" >= 0 AND "docker_availability_lease_state"."bootstrap_id" >= 0)
 );
 --> statement-breakpoint
 ALTER TABLE "docker_availability_policies" ADD COLUMN "partition_mode" varchar(16) DEFAULT 'strict' NOT NULL;--> statement-breakpoint
+ALTER TABLE "docker_availability_policies" ADD COLUMN "witness" varchar(64);--> statement-breakpoint
 ALTER TABLE "proxy_additional_secure_links" ADD COLUMN "dormant" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE "availability_lease_members" ADD CONSTRAINT "availability_lease_members_node_id_nodes_id_fk" FOREIGN KEY ("node_id") REFERENCES "public"."nodes"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "availability_lease_members" ADD CONSTRAINT "availability_lease_members_relay_instance_id_relay_instances_id_fk" FOREIGN KEY ("relay_instance_id") REFERENCES "public"."relay_instances"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

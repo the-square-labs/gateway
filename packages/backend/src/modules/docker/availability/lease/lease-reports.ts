@@ -156,9 +156,15 @@ export class AvailabilityLeaseReports {
   }
 
   private async recordMember(sender: LeaseReportSender, report: AvailabilityLeaseReport, now: Date): Promise<void> {
-    const manifestAcks: Record<string, { version: number; closed: boolean }> = {};
+    const manifestAcks: Record<string, { version: number; closed: boolean; voterEpoch?: number }> = {};
     for (const ack of report.manifests ?? []) {
-      if (ack.policyId) manifestAcks[ack.policyId] = { version: toNumber(ack.manifestVersion), closed: ack.closed };
+      if (!ack.policyId) continue;
+      const voterEpoch = toNumber(ack.voterEpoch);
+      manifestAcks[ack.policyId] = {
+        version: toNumber(ack.manifestVersion),
+        closed: ack.closed,
+        ...(voterEpoch > 0 ? { voterEpoch } : {}),
+      };
     }
     const values = {
       kind: sender.kind,

@@ -1,4 +1,5 @@
 import type {
+  AvailabilityLeaseWitness,
   DockerAvailabilityLeaseBallot,
   DockerAvailabilityLeaseMode,
   DockerAvailabilityLeaseObservationSource,
@@ -7,7 +8,7 @@ import type {
 } from '@/db/schema/index.js';
 import type { LeaseModeChange } from './lease-policies.js';
 import type { LeaseHolderChangeNotice } from './lease-reports.js';
-import type { LeaseVoterMargin } from './lease-voters.js';
+import type { LeaseVoterMargin, LeaseWitnessWarning } from './lease-voters.js';
 
 /** A lease mode transition of one policy, delivered to the Availability controller. */
 export type DockerAvailabilityLeaseModeChange = LeaseModeChange;
@@ -57,7 +58,23 @@ export interface DockerAvailabilityLeaseView {
    * relay gate window (24 s) passed since then (A16); null while other copies may still run.
    */
   copiesStoppedAt: Date | null;
+  /** Per-policy voter reachability margin over its quorum sets (A18). */
   voterMargin: LeaseVoterMargin | null;
+  /** Voters of the newest quorum set: candidate hosts in rank order, then witnesses (A18). */
+  voters: string[];
+  /** The (first) witness and the witness warning (A19); memberId null when none is needed or none is eligible. */
+  witness: DockerAvailabilityLeaseWitnessView | null;
+  witnesses: AvailabilityLeaseWitness[];
+}
+
+export interface DockerAvailabilityLeaseWitnessView {
+  memberId: string | null;
+  kind: 'relay' | 'docker' | null;
+  /** Chosen automatically, or configured on the policy. */
+  auto: boolean;
+  /** Smallest round trip from any candidate, when every candidate measured it. */
+  minRttMs: number | null;
+  warning: LeaseWitnessWarning | null;
 }
 
 export interface DockerAvailabilityLeaseHandoffInput {

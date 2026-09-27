@@ -1,5 +1,5 @@
 {
-  "id": "175edf1b-e300-4cfd-9a61-9a1773c804de",
+  "id": "13428a70-5bc8-4c34-98d9-bb1ed4c979f3",
   "prevId": "d9fe077b-3b70-4a18-a188-067488d8dad5",
   "version": "7",
   "dialect": "postgresql",
@@ -7349,6 +7349,12 @@
           "notNull": true,
           "default": "'strict'"
         },
+        "witness": {
+          "name": "witness",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "status": {
           "name": "status",
           "type": "varchar(32)",
@@ -7605,45 +7611,6 @@
           "type": "varchar(32)",
           "primaryKey": true,
           "notNull": true
-        },
-        "epoch": {
-          "name": "epoch",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "members": {
-          "name": "members",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "quorum_sets": {
-          "name": "quorum_sets",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "voter_config_block": {
-          "name": "voter_config_block",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "joint_started_at": {
-          "name": "joint_started_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "joint_acked_at": {
-          "name": "joint_acked_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "signing_key_id": {
           "name": "signing_key_id",
@@ -8052,12 +8019,52 @@
           "notNull": true,
           "default": 0
         },
-        "manifest_epoch": {
-          "name": "manifest_epoch",
+        "voter_epoch": {
+          "name": "voter_epoch",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "quorum_sets": {
+          "name": "quorum_sets",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "voter_members": {
+          "name": "voter_members",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "joint_version": {
+          "name": "joint_version",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "joint_acked_at": {
+          "name": "joint_acked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "witnesses": {
+          "name": "witnesses",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "witness_warning": {
+          "name": "witness_warning",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
         },
         "manifest_digest": {
           "name": "manifest_digest",
@@ -8181,7 +8188,7 @@
         },
         "docker_availability_lease_state_version_check": {
           "name": "docker_availability_lease_state_version_check",
-          "value": "\"docker_availability_lease_state\".\"manifest_version\" >= 0 AND \"docker_availability_lease_state\".\"manifest_epoch\" >= 0 AND \"docker_availability_lease_state\".\"bootstrap_id\" >= 0"
+          "value": "\"docker_availability_lease_state\".\"manifest_version\" >= 0 AND \"docker_availability_lease_state\".\"voter_epoch\" >= 0 AND \"docker_availability_lease_state\".\"bootstrap_id\" >= 0"
         }
       },
       "isRLSEnabled": false

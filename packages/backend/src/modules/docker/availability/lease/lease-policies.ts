@@ -20,9 +20,9 @@ import {
   leaseManifestDigest,
   signLeaseBlock,
 } from './lease-codec.js';
-import { CLOSE_SETTLE_MS, GATE_WINDOW_MS } from './lease-constants.js';
+import { CLOSE_SETTLE_MS, GATE_WINDOW_MS, LEASE_TERM_MS } from './lease-constants.js';
 import { evaluateLeaseGating } from './lease-gating.js';
-import type { LeaseParticipants } from './lease-participants.js';
+import { type LeaseParticipants, leaseVoterCandidates, leaseWitnessPool } from './lease-participants.js';
 import {
   bootstrapAcknowledged,
   bootstrapFromHolders,
@@ -31,9 +31,10 @@ import {
   leaseCandidatePlacements,
   orderLeaseCandidates,
 } from './lease-planning.js';
+import { planPolicyVoters } from './lease-policy-voters.js';
 import type { LeaseClusterRow, LeaseMemberRow, LeaseStateRow } from './lease-store.js';
 import { ensureLeaseState } from './lease-store.js';
-import { holdsEveryMajority } from './lease-voters.js';
+import { holdsEveryMajority, selectPolicyVoters } from './lease-voters.js';
 
 const logger = createChildLogger('AvailabilityLeasePolicies');
 
@@ -49,7 +50,14 @@ const STRICT_SWITCH_PENDING: DockerAvailabilityLeaseReason = {
 
 type PolicyRow = Pick<
   typeof dockerAvailabilityPolicies.$inferSelect,
-  'id' | 'mode' | 'desiredReplicaCount' | 'partitionMode' | 'priorityMode' | 'nodePriority' | 'specFingerprint'
+  | 'id'
+  | 'mode'
+  | 'desiredReplicaCount'
+  | 'partitionMode'
+  | 'priorityMode'
+  | 'nodePriority'
+  | 'specFingerprint'
+  | 'witness'
 >;
 type ObservationRow = typeof dockerAvailabilityLeaseObservations.$inferSelect;
 
@@ -65,7 +73,7 @@ export interface LeaseModeChange {
 export interface LeasePoliciesOutcome {
   changed: boolean;
   modeChanges: LeaseModeChange[];
-  /** Some policy needs the cluster voter config. */
+  /** Some policy uses or may use the lease. */
   wanted: boolean;
 }
 
@@ -73,9 +81,6 @@ export interface LeasePoliciesContext {
   participants: LeaseParticipants;
   members: Map<string, LeaseMemberRow>;
   cluster: LeaseClusterRow;
-  clusterReady: boolean;
-  capableVoters: number;
-  totalVoters: number;
   controllerSupportsLease: boolean;
   now: Date;
 }
@@ -103,16 +108,6 @@ export class AvailabilityLeasePolicies {
     private readonly sign: LeaseSigner
   ) {}
 
-  /** Whether any policy would use or already uses the lease, before the cluster config exists. */
-  async wanted(): Promise<boolean> {
-    const [policy] = await this.db
-      .select({ id: dockerAvailabilityPolicies.id })
-      .from(dockerAvailabilityPolicies)
-      .where(inArray(dockerAvailabilityPolicies.mode, ['replicated', 'failover']))
-      .limit(1);
-    return Boolean(policy);
-  }
-
   async reconcile(context: LeasePoliciesContext, onlyPolicyId?: string): Promise<LeasePoliciesOutcome> {
     const [policies, states] = await Promise.all([
       this.db
@@ -124,6 +119,7 @@ export class AvailabilityLeasePolicies {
           priorityMode: dockerAvailabilityPolicies.priorityMode,
           nodePriority: dockerAvailabilityPolicies.nodePriority,
           specFingerprint: dockerAvailabilityPolicies.specFingerprint,
+          witness: dockerAvailabilityPolicies.witness,
         })
         .from(dockerAvailabilityPolicies)
         .where(onlyPolicyId ? eq(dockerAvailabilityPolicies.id, onlyPolicyId) : undefined),
@@ -217,7 +213,7 @@ export class AvailabilityLeasePolicies {
       controllerSupportsLease: context.controllerSupportsLease,
       legacyRequested: state.legacyRequested,
       policyMode: policy.mode,
-      clusterReady: context.clusterReady && Boolean(context.cluster.signingKeyId),
+      signingReady: Boolean(context.cluster.signingKeyId),
       candidates: candidateNodes.map((nodeId) => ({
         nodeId,
         capable: context.participants.byId.get(nodeId)?.capable ?? false,
@@ -226,8 +222,6 @@ export class AvailabilityLeasePolicies {
         nodeId,
         capable: context.participants.byId.get(nodeId)?.capable ?? false,
       })),
-      capableVoters: context.capableVoters,
-      totalVoters: context.totalVoters,
     });
     // D9: a rollout's surge is a temporary extra slot; failover stays at one slot.
     const slots = policy.mode === 'replicated' ? Math.min(32, policy.desiredReplicaCount + state.surgeSlots) : 1;
@@ -295,7 +289,7 @@ export class AvailabilityLeasePolicies {
       // Without a known holder only the majority path is safe: someone may hold without the Gateway having seen it.
       const holdersAcked = holders.length > 0 && holders.every(({ holderId }) => closedAckers.has(holderId));
       let ackedAt = state.closingAckedAt;
-      if (!ackedAt && holdsEveryMajority(context.cluster.quorumSets, closedAckers)) {
+      if (!ackedAt && holdsEveryMajority(state.quorumSets, closedAckers)) {
         ackedAt = now;
         updates.closingAckedAt = now;
       }
@@ -323,11 +317,9 @@ export class AvailabilityLeasePolicies {
     const merged: LeaseStateRow = { ...state, ...(updates as Partial<LeaseStateRow>) };
     let blockChanged = false;
     if (next !== 'legacy') {
-      const published = await this.publishManifest(policy, merged, placements, slots, context);
-      if (published) {
-        Object.assign(updates, published);
-        blockChanged = true;
-      }
+      const published = await this.publishManifest(policy, merged, placements, slots, observations, context);
+      Object.assign(updates, published.updates);
+      blockChanged = published.published;
     }
     if (Object.keys(updates).length > 0) {
       await this.db
@@ -354,16 +346,62 @@ export class AvailabilityLeasePolicies {
     state: LeaseStateRow,
     placements: LeasePlanningPlacement[],
     slots: number,
+    observations: ObservationRow[],
     context: LeasePoliciesContext
-  ): Promise<Partial<typeof dockerAvailabilityLeaseState.$inferInsert> | null> {
+  ): Promise<{ updates: Partial<typeof dockerAvailabilityLeaseState.$inferInsert>; published: boolean }> {
+    const none = { updates: {}, published: false };
     const signingKeyId = context.cluster.signingKeyId;
-    if (!signingKeyId || context.cluster.epoch === 0) return null;
+    if (!signingKeyId) return none;
     const closed = state.mode === 'closing';
-    const candidates = orderLeaseCandidates(policy, placements).flatMap((nodeId) => {
-      const publicKey = context.participants.byId.get(nodeId)?.publicKey;
+    const participants = context.participants;
+    const ranked = orderLeaseCandidates(policy, placements);
+    const candidates = ranked.flatMap((nodeId) => {
+      const publicKey = participants.byId.get(nodeId)?.publicKey;
       return publicKey ? [{ id: nodeId, publicKey: Buffer.from(publicKey, 'base64') }] : [];
     });
-    if (candidates.length === 0 && !closed) return null;
+    if (candidates.length === 0 && !closed) return none;
+    const selection = selectPolicyVoters({
+      candidates: leaseVoterCandidates(participants, ranked),
+      pool: leaseWitnessPool(participants),
+      configuredWitness: policy.witness,
+      currentAutoWitnesses: state.witnesses.filter((witness) => witness.auto).map((witness) => witness.memberId),
+    });
+    const plan = planPolicyVoters({
+      state,
+      desired: selection.voterIds,
+      memberOf: (id) => {
+        const participant = participants.byId.get(id);
+        return participant?.publicKey ? { id, role: participant.role, publicKey: participant.publicKey } : null;
+      },
+      ackedEpoch: (memberId) => {
+        const ack = context.members.get(memberId)?.manifestAcks[policy.id];
+        if (!ack) return 0;
+        if (ack.voterEpoch) return ack.voterEpoch;
+        return state.jointVersion > 0 && ack.version >= state.jointVersion ? state.voterEpoch : 0;
+      },
+      activeLeaseEpochs: observations
+        .filter(
+          (observation) =>
+            observation.holderId && context.now.getTime() - observation.observedAt.getTime() <= 2 * LEASE_TERM_MS
+        )
+        .map((observation) => observation.epoch),
+      now: context.now,
+    });
+    const voters = plan.next;
+    const updates: Partial<typeof dockerAvailabilityLeaseState.$inferInsert> = {};
+    if (JSON.stringify(selection.witnesses) !== JSON.stringify(state.witnesses))
+      updates.witnesses = selection.witnesses;
+    if (selection.warning !== state.witnessWarning) updates.witnessWarning = selection.warning;
+    if (voters.jointAckedAt !== state.jointAckedAt) updates.jointAckedAt = voters.jointAckedAt;
+    // Members (A18): the voters of every quorum set, plus every capable relay as a non-voting member so its data-path
+    // gate keeps shadow accepts for this policy (A11, A15). nginx daemons are observers and never members.
+    const voterIds = new Set(voters.quorumSets.flat());
+    const members = [
+      ...voters.voterMembers.filter((member) => voterIds.has(member.id)),
+      ...participants.relays
+        .filter((relay) => relay.capable && relay.publicKey && !voterIds.has(relay.id))
+        .map((relay) => ({ id: relay.id, role: 'relay' as const, publicKey: relay.publicKey! })),
+    ].sort((left, right) => left.id.localeCompare(right.id));
     const known = new Set(candidates.map((candidate) => candidate.id));
     const content: LeaseManifestContent = {
       policyId: policy.id,
@@ -372,19 +410,24 @@ export class AvailabilityLeasePolicies {
       slots,
       candidates,
       specFingerprint: policy.specFingerprint,
-      epoch: context.cluster.epoch,
+      voterEpoch: voters.voterEpoch,
       closed,
       bootstrapId: state.bootstrap.length > 0 ? state.bootstrapId : 0,
       // A bootstrap holder must be a candidate; one that is not stays unreserved (rank-based acquisition).
       bootstrap: state.bootstrap.filter((entry) => entry.slot < slots && known.has(entry.holderId)),
+      members: members.map((member) => ({ ...member, publicKey: Buffer.from(member.publicKey, 'base64') })),
+      quorumSets: voters.quorumSets,
     };
     const digest = leaseManifestDigest(content);
     if (digest === state.manifestDigest && state.manifestBlock) {
       // A16: once voters trust a new policy key the current manifest is signed again with it, same payload.
       const current = decodeLeaseSignedBlock(Buffer.from(state.manifestBlock, 'base64'));
-      if (current.signingKeyId === signingKeyId) return null;
+      if (current.signingKeyId === signingKeyId) return { updates, published: false };
       const resigned = await signLeaseBlock(current.kind, current.payload, signingKeyId, this.sign);
-      return { manifestBlock: encodeLeaseSignedBlock(resigned).toString('base64') };
+      return {
+        updates: { ...updates, manifestBlock: encodeLeaseSignedBlock(resigned).toString('base64') },
+        published: true,
+      };
     }
     const manifestVersion = state.manifestVersion + 1;
     const block = await signLeaseBlock(
@@ -394,11 +437,19 @@ export class AvailabilityLeasePolicies {
       this.sign
     );
     return {
-      manifestVersion,
-      manifestEpoch: context.cluster.epoch,
-      manifestDigest: digest,
-      manifestBlock: encodeLeaseSignedBlock(block).toString('base64'),
-      publishedPartitionMode: policy.partitionMode,
+      updates: {
+        ...updates,
+        manifestVersion,
+        voterEpoch: voters.voterEpoch,
+        quorumSets: voters.quorumSets,
+        voterMembers: voters.voterMembers,
+        jointVersion: plan.jointStarted ? manifestVersion : voters.jointVersion,
+        jointAckedAt: voters.jointAckedAt,
+        manifestDigest: digest,
+        manifestBlock: encodeLeaseSignedBlock(block).toString('base64'),
+        publishedPartitionMode: policy.partitionMode,
+      },
+      published: true,
     };
   }
 }

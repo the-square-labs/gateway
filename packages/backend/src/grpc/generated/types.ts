@@ -804,6 +804,7 @@ export interface SyncAvailabilityLeaseCommand {
   memberId: string;
   policyKeys: AvailabilityLeasePolicyKey[];
   keyRotations: Buffer[];
+  /** Unused since voters travel in each policy manifest (A18); always empty. */
   voterConfig: Buffer;
   manifests: Buffer[];
 }
@@ -849,6 +850,10 @@ export interface AvailabilityLeaseManifestAck {
   policyId: string;
   manifestVersion: string;
   closed: boolean;
+  /** Per-policy voter epoch persisted with the manifest (A18); '0' when the sender does not report it. */
+  voterEpoch?: string;
+  voter?: boolean;
+  member?: boolean;
 }
 
 export interface AvailabilityLeaseHeld {

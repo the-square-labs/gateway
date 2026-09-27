@@ -8,6 +8,9 @@ const UUID = z.string().uuid();
  */
 export const DockerAvailabilityPartitionModeSchema = z.enum(['strict', 'available']);
 
+/** A19: the lease witness, a relay instance id or a Docker node id; null picks one automatically. */
+export const DockerAvailabilityWitnessSchema = UUID.nullable();
+
 export const DockerAvailabilityLeaseModeSchema = z.enum(['legacy', 'bootstrapping', 'lease', 'closing']);
 
 const DockerAvailabilityLeaseBallotSchema = z.object({
@@ -44,6 +47,24 @@ export const DockerAvailabilityLeaseSchema = z.object({
   surgeSlots: z.number().int().min(0).max(32),
   strictPending: z.boolean(),
   copiesStoppedAt: z.coerce.date().nullable(),
+  voters: z.array(UUID),
+  witness: z
+    .object({
+      memberId: UUID.nullable(),
+      kind: z.enum(['relay', 'docker']).nullable(),
+      auto: z.boolean(),
+      minRttMs: z.number().nonnegative().nullable(),
+      warning: z.enum(['witness_near_candidate', 'no_eligible_witness', 'configured_witness_unavailable']).nullable(),
+    })
+    .nullable(),
+  witnesses: z.array(
+    z.object({
+      memberId: UUID,
+      kind: z.enum(['relay', 'docker']),
+      auto: z.boolean(),
+      minRttMs: z.number().nonnegative().nullable(),
+    })
+  ),
   voterMargin: z
     .object({
       epoch: z.number().int().nonnegative(),

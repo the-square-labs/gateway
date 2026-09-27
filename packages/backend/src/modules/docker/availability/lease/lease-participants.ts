@@ -1,32 +1,43 @@
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { eq, inArray, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import {
-  dockerAvailabilityPlacements,
-  dockerAvailabilityPolicies,
-  nodes,
-  proxyAdditionalSecureLinks,
-  relayInstances,
-} from '@/db/schema/index.js';
+import { nodes, relayInstances } from '@/db/schema/index.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import { AVAILABILITY_LEASE_CAPABILITY } from './lease-constants.js';
 import type { LeaseMemberRow } from './lease-store.js';
-import type { LeaseVoterCandidate } from './lease-voters.js';
+import type { LeaseVoterCandidateNode, LeaseWitnessCandidate } from './lease-voters.js';
 
-export interface LeaseParticipant extends LeaseVoterCandidate {
+export interface LeaseParticipant {
+  id: string;
+  role: 'relay' | 'daemon';
   kind: 'docker' | 'nginx' | 'relay';
   /** Node id of the daemon; for relays the relay daemon's node, null for the local relay. */
   nodeId: string | null;
+  /**
+   * Physical host (A20). Daemons: their host identity, else their node id. Relays: the host identity of the node that
+   * runs them, else that node's id; a relay without a node (the local combined relay) uses its fault domain, so relays
+   * sharing a fault domain count as one host. Voters are deduplicated by this key across docker, nginx and relay.
+   */
+  hostKey: string;
+  /** Relay fault domain; null for daemons. */
+  faultDomain: string | null;
+  /** Advertises availability_lease_v1, reported an identity key and (docker) a fresh watchdog. */
+  capable: boolean;
+  publicKey: string | null;
 }
 
 export interface LeaseParticipants {
   relays: LeaseParticipant[];
   daemons: LeaseParticipant[];
   byId: Map<string, LeaseParticipant>;
+  /** Fault domains of relays running on each host key, for the witness fallback (A19). */
+  hostFaultDomains: Map<string, string[]>;
+  /** Smoothed round trip (ms) a node last reported to a relay, from the relay topology data. */
+  relayRtt(nodeId: string, relayId: string): number | undefined;
 }
 
 /**
- * A9: only relays in the operator's own enrolled pools vote. Every relay pool Gateway knows today is enrolled by the
- * operator; a managed or third-party pool type must return false here so it never joins the voter set.
+ * A9: only relays in the operator's own enrolled pools take part. Every relay pool Gateway knows today is enrolled by
+ * the operator; a managed or third-party pool type must return false here.
  */
 export function isOperatorOwnedRelayPool(_poolId: string): boolean {
   return true;
@@ -35,6 +46,18 @@ export function isOperatorOwnedRelayPool(_poolId: string): boolean {
 function persistedCapabilities(value: unknown): string[] {
   const list = (value as { capabilities?: unknown } | null)?.capabilities;
   return Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function relayLatencies(report: unknown): Map<string, number> {
+  const list = (report as { relayLatencies?: unknown } | null)?.relayLatencies;
+  const result = new Map<string, number>();
+  if (!Array.isArray(list)) return result;
+  for (const entry of list as Array<{ relayInstanceId?: unknown; rttMs?: unknown }>) {
+    if (typeof entry?.relayInstanceId === 'string' && typeof entry.rttMs === 'number' && Number.isFinite(entry.rttMs)) {
+      result.set(entry.relayInstanceId, entry.rttMs);
+    }
+  }
+  return result;
 }
 
 /**
@@ -56,14 +79,13 @@ export async function loadLeaseParticipants(
   registry: Pick<NodeRegistryService, 'getNode'>,
   members: Map<string, LeaseMemberRow>
 ): Promise<LeaseParticipants> {
-  const [relayRows, daemonRows, candidateRows, ingressRows] = await Promise.all([
+  const [relayRows, daemonRows] = await Promise.all([
     db
       .select({
         id: relayInstances.id,
-        kind: relayInstances.kind,
         poolId: relayInstances.poolId,
         nodeId: relayInstances.nodeId,
-        state: relayInstances.state,
+        faultDomainId: relayInstances.faultDomainId,
         capabilities: relayInstances.capabilities,
         hostIdentityId: nodes.hostIdentityId,
       })
@@ -74,30 +96,13 @@ export async function loadLeaseParticipants(
       .select({
         id: nodes.id,
         type: nodes.type,
-        status: nodes.status,
-        lastSeenAt: nodes.lastSeenAt,
         hostIdentityId: nodes.hostIdentityId,
         capabilities: nodes.capabilities,
+        lastHealthReport: nodes.lastHealthReport,
       })
       .from(nodes)
       .where(inArray(nodes.type, ['docker', 'nginx'])),
-    db
-      .selectDistinct({ nodeId: dockerAvailabilityPlacements.nodeId })
-      .from(dockerAvailabilityPlacements)
-      .innerJoin(dockerAvailabilityPolicies, eq(dockerAvailabilityPolicies.id, dockerAvailabilityPlacements.policyId))
-      .where(
-        and(
-          ne(dockerAvailabilityPolicies.mode, 'single'),
-          inArray(dockerAvailabilityPlacements.desiredState, ['serving', 'standby', 'draining'])
-        )
-      ),
-    db
-      .selectDistinct({ nodeId: proxyAdditionalSecureLinks.sourceNodeId })
-      .from(proxyAdditionalSecureLinks)
-      .where(eq(proxyAdditionalSecureLinks.purpose, 'availability_member')),
   ]);
-  const candidateNodes = new Set(candidateRows.map(({ nodeId }) => nodeId));
-  const ingressNodes = new Set(ingressRows.map(({ nodeId }) => nodeId));
   const relays: LeaseParticipant[] = relayRows
     .filter((relay) => isOperatorOwnedRelayPool(relay.poolId))
     .map((relay) => {
@@ -108,13 +113,13 @@ export async function loadLeaseParticipants(
         role: 'relay' as const,
         kind: 'relay' as const,
         nodeId: relay.nodeId,
-        hostKey: relay.hostIdentityId ?? relay.nodeId ?? `relay:${relay.id}`,
-        local: relay.kind === 'local',
+        hostKey: relay.hostIdentityId ?? relay.nodeId ?? `relay-fault-domain:${relay.faultDomainId}`,
+        faultDomain: relay.faultDomainId,
         capable: leaseMemberCapable('relay', advertised, member),
         publicKey: member?.identityPublicKey ?? null,
-        online: ['synchronizing', 'ready', 'draining'].includes(relay.state),
       };
     });
+  const latencies = new Map<string, Map<string, number>>();
   const daemons: LeaseParticipant[] = daemonRows.map((node) => {
     const member = members.get(node.id);
     const connected = registry.getNode(node.id);
@@ -122,21 +127,68 @@ export async function loadLeaseParticipants(
       ? connected.capabilities.has(AVAILABILITY_LEASE_CAPABILITY)
       : persistedCapabilities(node.capabilities).includes(AVAILABILITY_LEASE_CAPABILITY);
     const kind = node.type === 'nginx' ? ('nginx' as const) : ('docker' as const);
+    latencies.set(node.id, relayLatencies(connected?.lastHealthReport ?? node.lastHealthReport));
     return {
       id: node.id,
       role: 'daemon' as const,
       kind,
       nodeId: node.id,
       hostKey: node.hostIdentityId ?? node.id,
+      faultDomain: null,
       capable: leaseMemberCapable(kind, advertised, member),
       publicKey: member?.identityPublicKey ?? null,
-      online: Boolean(connected) || node.status === 'online',
-      offlineSince: connected || node.status === 'online' ? null : (node.lastSeenAt?.getTime() ?? null),
-      hostsCandidate: candidateNodes.has(node.id),
-      hostsIngress: ingressNodes.has(node.id),
     };
   });
   const byId = new Map<string, LeaseParticipant>();
   for (const participant of [...relays, ...daemons]) byId.set(participant.id, participant);
-  return { relays, daemons, byId };
+  const hostFaultDomains = new Map<string, string[]>();
+  for (const relay of relays) {
+    if (relay.faultDomain)
+      hostFaultDomains.set(relay.hostKey, [...(hostFaultDomains.get(relay.hostKey) ?? []), relay.faultDomain]);
+  }
+  return {
+    relays,
+    daemons,
+    byId,
+    hostFaultDomains,
+    relayRtt: (nodeId, relayId) => latencies.get(nodeId)?.get(relayId),
+  };
+}
+
+/** Candidate nodes of a policy, in rank order, as voter candidates (A18). */
+export function leaseVoterCandidates(
+  participants: LeaseParticipants,
+  rankedNodeIds: string[]
+): LeaseVoterCandidateNode[] {
+  return rankedNodeIds.flatMap((id) => {
+    const participant = participants.byId.get(id);
+    if (!participant) return [];
+    return [
+      {
+        id,
+        hostKey: participant.hostKey,
+        faultDomains: participants.hostFaultDomains.get(participant.hostKey) ?? [],
+        publicKey: participant.publicKey,
+      },
+    ];
+  });
+}
+
+/**
+ * Members that may be a witness (A19): relays and docker daemons. nginx daemons are observers only. Round trips are
+ * known only from a candidate node to a relay (relay topology data); docker witnesses rank without one.
+ */
+export function leaseWitnessPool(participants: LeaseParticipants): LeaseWitnessCandidate[] {
+  return [...participants.relays, ...participants.daemons.filter((daemon) => daemon.kind === 'docker')].map(
+    (participant) => ({
+      id: participant.id,
+      kind: participant.kind === 'relay' ? ('relay' as const) : ('docker' as const),
+      hostKey: participant.hostKey,
+      faultDomain: participant.faultDomain,
+      capable: participant.capable,
+      publicKey: participant.publicKey,
+      rttFrom: (candidateId: string) =>
+        participant.kind === 'relay' ? participants.relayRtt(candidateId, participant.id) : undefined,
+    })
+  );
 }

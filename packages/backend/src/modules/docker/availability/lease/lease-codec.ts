@@ -8,11 +8,11 @@ import { decodeRelayV1Message, encodeRelayV1Message } from '@/grpc/relay-proto.j
  */
 export const LEASE_SIGNATURE_DOMAINS = {
   manifest: 'gateway-availability-lease/manifest/v1',
-  voterConfig: 'gateway-availability-lease/voter-config/v1',
   keyRotation: 'gateway-availability-lease/key-rotation/v1',
 } as const;
 
-export type LeaseBlockKind = 'LEASE_BLOCK_KIND_MANIFEST' | 'LEASE_BLOCK_KIND_VOTER_CONFIG';
+/** Voter configs travel inside manifests since A18; only manifests are signed as blocks. */
+export type LeaseBlockKind = 'LEASE_BLOCK_KIND_MANIFEST';
 
 export interface LeaseSignedBlockValue {
   signingKeyId: string;
@@ -41,11 +41,9 @@ function lengthPrefixed(value: Buffer): Buffer {
   return Buffer.concat([length, value]);
 }
 
-/** domain || 0x00 || payload: what the policy key signs for a manifest or voter config block. */
-export function leaseBlockMessage(kind: LeaseBlockKind, payload: Buffer): Buffer {
-  const domain =
-    kind === 'LEASE_BLOCK_KIND_VOTER_CONFIG' ? LEASE_SIGNATURE_DOMAINS.voterConfig : LEASE_SIGNATURE_DOMAINS.manifest;
-  return Buffer.concat([statementPrefix(domain), payload]);
+/** domain || 0x00 || payload: what the policy key signs for a manifest block. */
+export function leaseBlockMessage(_kind: LeaseBlockKind, payload: Buffer): Buffer {
+  return Buffer.concat([statementPrefix(LEASE_SIGNATURE_DOMAINS.manifest), payload]);
 }
 
 /** domain || 0x00 || be32(len(keyId)) || keyId || publicKey: what the previous key signs for a rotation link (A14). */
@@ -109,10 +107,15 @@ export interface LeaseManifestContent {
   /** Ordered: the index is the takeover rank (D5). */
   candidates: LeaseManifestCandidate[];
   specFingerprint: string;
-  epoch: number;
+  /** Per-policy voter epoch (A18); bumped on every voter change, never goes back. */
+  voterEpoch: number;
   closed: boolean;
   bootstrapId: number;
   bootstrap: Array<{ slot: number; holderId: string }>;
+  /** Voters (candidate hosts and witnesses) and every relay serving the policy as non-voting members. */
+  members: Array<{ id: string; role: 'relay' | 'daemon'; publicKey: Buffer }>;
+  /** One quorum set when settled, two (old, new) during a joint voter change. */
+  quorumSets: string[][];
 }
 
 /** Serialized relay.v1.LeaseManifest; schema version 1 and the fixed 30 s term. */
@@ -127,11 +130,17 @@ export function encodeLeaseManifest(content: LeaseManifestContent, manifestVersi
     slots: content.slots,
     candidates: content.candidates.map((candidate) => ({ id: candidate.id, publicKey: candidate.publicKey })),
     specFingerprint: content.specFingerprint,
-    epoch: String(content.epoch),
+    voterEpoch: String(content.voterEpoch),
     closed: content.closed,
     bootstrapId: String(content.bootstrapId),
     bootstrap: content.bootstrap.map((entry) => ({ slot: entry.slot, holderId: entry.holderId })),
     leaseTermMs: 30_000,
+    members: content.members.map((member) => ({
+      id: member.id,
+      publicKey: member.publicKey,
+      role: member.role === 'relay' ? 'LEASE_MEMBER_ROLE_RELAY' : 'LEASE_MEMBER_ROLE_DAEMON',
+    })),
+    quorumSets: content.quorumSets.map((voterIds) => ({ voterIds })),
   });
 }
 
@@ -142,29 +151,10 @@ export function leaseManifestDigest(content: LeaseManifestContent): string {
       JSON.stringify({
         ...content,
         candidates: content.candidates.map((candidate) => [candidate.id, candidate.publicKey.toString('base64')]),
+        members: content.members.map((member) => [member.id, member.role, member.publicKey.toString('base64')]),
       })
     )
     .digest('hex');
-}
-
-export interface LeaseVoterConfigContent {
-  epoch: number;
-  members: Array<{ id: string; role: 'relay' | 'daemon'; publicKey: Buffer }>;
-  /** One set when settled, two (old, new) during a joint-consensus change. */
-  quorumSets: string[][];
-}
-
-export function encodeLeaseVoterConfig(content: LeaseVoterConfigContent): Buffer {
-  return encodeRelayV1Message('LeaseVoterConfig', {
-    schemaVersion: 1,
-    epoch: String(content.epoch),
-    members: content.members.map((member) => ({
-      id: member.id,
-      publicKey: member.publicKey,
-      role: member.role === 'relay' ? 'LEASE_MEMBER_ROLE_RELAY' : 'LEASE_MEMBER_ROLE_DAEMON',
-    })),
-    quorumSets: content.quorumSets.map((voterIds) => ({ voterIds })),
-  });
 }
 
 function uint(value: string | undefined): bigint {

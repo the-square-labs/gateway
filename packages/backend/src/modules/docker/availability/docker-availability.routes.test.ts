@@ -183,7 +183,7 @@ describe('Docker Availability routes', () => {
     const app = appWithScopes(['docker:availability:manage']);
 
     const read = await app.request(`/availability/${POLICY_ID}`);
-    expect(await read.json()).toEqual({ data: { id: POLICY_ID, partitionMode: 'strict', lease } });
+    expect(await read.json()).toEqual({ data: { id: POLICY_ID, partitionMode: 'strict', witness: null, lease } });
 
     const updated = await app.request(`/availability/${POLICY_ID}`, {
       method: 'PATCH',
