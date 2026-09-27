@@ -170,7 +170,7 @@ func (n *Node) beginRelease(pk *proposerKey, successor string, now time.Duration
 }
 
 func (n *Node) tickRelease(pk *proposerKey, now time.Duration) {
-	config := n.currentConfig()
+	config := n.policyConfig(pk.key.PolicyID)
 	if config == nil {
 		pk.role = RoleNone
 		return

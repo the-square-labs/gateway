@@ -67,7 +67,6 @@ func (n *Node) reportUnknownSender(batch *pb.LeaseBatch) {
 	if from == "" || from == n.id {
 		return
 	}
-	config := n.currentConfig()
 	reported := map[Key]bool{}
 	for _, item := range batch.GetItems() {
 		key, ok := keyFromProto(itemKey(item))
@@ -76,7 +75,7 @@ func (n *Node) reportUnknownSender(batch *pb.LeaseBatch) {
 		}
 		reported[key] = true
 		status := &pb.LeaseStatus{Key: key.proto()}
-		if config != nil {
+		if config := n.policyConfig(key.PolicyID); config != nil {
 			status.Epoch = config.Epoch
 		}
 		if manifest := n.manifests[key.PolicyID]; manifest != nil {
@@ -127,7 +126,7 @@ func (n *Node) reportLag(from string, commit *pb.LeaseCommit) {
 	if !ok || from == n.id {
 		return
 	}
-	manifest, config := n.manifests[key.PolicyID], n.currentConfig()
+	manifest, config := n.manifests[key.PolicyID], n.policyConfig(key.PolicyID)
 	if manifest != nil && manifest.Version >= commit.GetManifestVersion() && config != nil && config.Epoch >= commit.GetEpoch() {
 		return
 	}
@@ -141,15 +140,15 @@ func (n *Node) reportLag(from string, commit *pb.LeaseCommit) {
 	n.queue(from, &pb.LeaseItem{Body: &pb.LeaseItem_Status{Status: status}})
 }
 
-// forwardOnce attaches our config, the policy manifest and the key chain the
+// forwardOnce attaches the policy manifest (with its voters) and the key chain the
 // first time we address dest after adopting a newer version, so lagging
 // peers adopt it from the frame instead of NACKing (A4, A14).
 func (n *Node) forwardOnce(dest, policyID string) {
-	manifest, config := n.manifests[policyID], n.currentConfig()
-	if manifest == nil || config == nil || dest == n.id {
+	manifest := n.manifests[policyID]
+	if manifest == nil || dest == n.id {
 		return
 	}
-	mark := forwardMark{epoch: config.Epoch, version: manifest.Version}
+	mark := forwardMark{epoch: manifest.Epoch, version: manifest.Version}
 	name := dest + "\x00" + policyID
 	if n.forwarded[name] == mark {
 		return

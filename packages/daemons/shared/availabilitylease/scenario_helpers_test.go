@@ -64,7 +64,7 @@ func newScenario(t *testing.T, spec scenarioSpec) *simWorld {
 	for slot := uint32(0); slot < slots; slot++ {
 		w.keys = append(w.keys, Key{PolicyID: "p1", Slot: slot})
 	}
-	w.gw.buildConfig([][]string{voters})
+	policy.epoch, policy.sets = 1, [][]string{voters}
 	w.gw.buildManifest(policy)
 	if testing.Verbose() {
 		w.traceOn = true
