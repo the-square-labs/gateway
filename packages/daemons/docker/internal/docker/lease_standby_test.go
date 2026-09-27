@@ -40,6 +40,9 @@ func (f *standbyFakeDocker) handler(t *testing.T) http.HandlerFunc {
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
 			id := strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/json")
 			labels, ok := f.labels[id]
+			if created, exists := f.created[id]; !ok && exists && created.Config != nil {
+				labels, ok = created.Config.Labels, true
+			}
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"message":"No such container"}`))

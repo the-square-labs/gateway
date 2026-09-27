@@ -95,6 +95,9 @@ func (c *Client) createDeploymentSlot(ctx context.Context, deploymentID, network
 		}
 	}
 	if start {
+		if err := c.gateStart(ctx, resp.ID); err != nil {
+			return "", err
+		}
 		if _, err := c.cli.ContainerStart(ctx, resp.ID, mobyclient.ContainerStartOptions{}); err != nil {
 			return "", fmt.Errorf("start deployment slot: %w", err)
 		}

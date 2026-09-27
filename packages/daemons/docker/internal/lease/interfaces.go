@@ -13,6 +13,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
 	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 )
@@ -73,6 +74,20 @@ type Endpoints interface {
 	// Deregistration returns only once every registration stream of the
 	// policy has ended, so a release that follows is ordered after it.
 	SetServing(policyID string, serving bool)
+}
+
+// IdentityRotation hands certificate renewals to the protocol node (H3).
+// After a renewal the node dual-signs every frame and accept with the new and
+// the previous key (Node.RotateIdentityKey) until every adopted manifest that
+// names it lists the new key, or availabilitylease.IdentityKeyOverlap passed.
+type IdentityRotation interface {
+	// PendingRotation returns a renewed key the node does not sign with yet.
+	PendingRotation() (next availabilitylease.Signer, publicKeyDER []byte, ok bool)
+	// RotationApplied records that the node now signs with publicKeyDER and
+	// keeps the replaced key for the overlap (persisted across restarts).
+	RotationApplied(publicKeyDER []byte)
+	// OverlapEnded tells the source the node retired the previous key.
+	OverlapEnded()
 }
 
 // Placement is this node's placement of a policy (D12 mapping).

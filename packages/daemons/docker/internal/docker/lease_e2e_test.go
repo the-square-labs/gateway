@@ -11,6 +11,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -169,6 +171,8 @@ func (f *e2eFence) DeleteRecord(id string) error {
 type e2eDaemon struct {
 	id     string
 	key    *ecdsa.PrivateKey
+	dir    string
+	keys   *identityKeys
 	plugin *DockerPlugin
 	engine *e2eEngine
 }
@@ -234,10 +238,18 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 		d.engine = &e2eEngine{container: lease.Container{
 			ID: e2eContainerID(d.id), Name: "app-" + d.id, PolicyID: e2ePolicy, RestartPolicy: "unless-stopped", Labels: map[string]string{},
 		}}
-		key := d.key
-		integration := &leaseIntegration{plugin: d.plugin, serving: map[string]bool{}, identity: func() []byte { return e2eDER(key) }}
+		// The production signer over mTLS files, so a certificate renewal
+		// can happen mid-lease (H3).
+		d.dir = t.TempDir()
+		certPath, keyPath := writeIdentityFiles(t, d.dir, d.key)
+		keys, err := newIdentityKeys(certPath, keyPath, filepath.Join(d.dir, "previous-identity.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.keys = keys
+		integration := &leaseIntegration{plugin: d.plugin, serving: map[string]bool{}, identity: keys.publicKeyDER}
 		runtime, err := lease.New(lease.Options{
-			NodeID: d.id, StateDir: t.TempDir(), Clock: clock, Wall: clock.wall, Signer: availabilitylease.ECDSASigner{Key: d.key},
+			NodeID: d.id, StateDir: t.TempDir(), Clock: clock, Wall: clock.wall, Signer: keys.InitialSigner(), Identity: keys,
 			Engine: d.engine, Fence: &e2eFence{records: map[string]leasefence.Record{}}, Endpoints: integration, Placements: integration,
 			Logger: e2eDiscard(),
 		})
@@ -308,6 +320,74 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 		len(report.GetHeld()) != 1 || report.GetHeld()[0].GetRole() != "holding" || report.GetHeld()[0].GetBallot().GetProposerId() != "node-1" ||
 		len(report.GetManifests()) != 1 || report.GetManifests()[0].GetManifestVersion() != 1 || len(report.GetTrustedPolicyKeyIds()) != 1 {
 		t.Fatalf("holder report incomplete: %v", report)
+	}
+
+	// H3: the holder's certificate renews mid-lease. The node dual-signs with
+	// the old and the renewed key, so peers that still list the old key keep
+	// accepting its frames and nothing fences.
+	renewed := e2eKey()
+	writeIdentityFiles(t, daemons[0].dir, renewed)
+	holder := daemons[0].plugin.lease.runtime.Node()
+	fencedDuringRenewal := false
+	watch := func() bool {
+		fencedDuringRenewal = fencedDuringRenewal || !daemons[0].engine.running()
+		return false
+	}
+	runUntil(20*time.Second, watch)
+	if fencedDuringRenewal || !serving(daemons[0]) || !holder.IdentityOverlap() {
+		t.Fatal("a certificate renewal mid-lease must dual-sign and not fence the holder")
+	}
+	if string(daemons[0].plugin.availabilityLeaseReport().GetIdentityPublicKey()) != string(e2eDER(renewed)) {
+		t.Fatal("the report must carry the renewed key so the Gateway republishes")
+	}
+	// The Gateway republishes the manifest with the renewed key (v2). The
+	// relays and the other daemon adopt it BEFORE the holder: they now list
+	// only the renewed key, and must still accept the holder's frames.
+	manifest.ManifestVersion = 2
+	for _, candidate := range manifest.Candidates {
+		if candidate.GetId() == "node-1" {
+			candidate.PublicKey = e2eDER(renewed)
+		}
+	}
+	for _, member := range manifest.Members {
+		if member.GetId() == "node-1" {
+			member.PublicKey = e2eDER(renewed)
+		}
+	}
+	renewedPayload, _ := proto.Marshal(manifest)
+	renewedBlock := availabilitylease.SignPolicyBlock("k1", policyPrivate, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, renewedPayload)
+	sync := func(d *e2eDaemon) {
+		result := d.plugin.HandleCommand(&pb.GatewayCommand{CommandId: "sync-2", Payload: &pb.GatewayCommand_SyncAvailabilityLease{
+			SyncAvailabilityLease: &pb.SyncAvailabilityLeaseCommand{
+				Revision: 2, MemberId: d.id, Manifests: [][]byte{mustMarshal(t, renewedBlock)},
+				PolicyKeys: []*pb.AvailabilityLeasePolicyKey{{KeyId: "k1", PublicKey: policyPublic}},
+			},
+		}})
+		if !result.Success {
+			t.Fatalf("%s sync v2 failed: %s", d.id, result.Error)
+		}
+	}
+	for _, relay := range relays {
+		if _, err := relay.node.AdoptManifest(renewedBlock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync(daemons[1])
+	if holder.ManifestVersion(e2ePolicy) != 1 {
+		t.Fatal("the holder must still lag behind its peers here")
+	}
+	runUntil(40*time.Second, watch)
+	if fencedDuringRenewal || !serving(daemons[0]) {
+		t.Fatal("peers that adopted the renewed key first must keep accepting the holder's frames")
+	}
+	// Once the holder too lists only the renewed key, the overlap retires.
+	sync(daemons[0])
+	runUntil(10*time.Second, watch)
+	if fencedDuringRenewal || !serving(daemons[0]) || holder.IdentityOverlap() {
+		t.Fatal("after every manifest lists the renewed key the holder retires the old key and keeps its lease")
+	}
+	if _, err := os.Stat(filepath.Join(daemons[0].dir, "previous-identity.json")); !os.IsNotExist(err) {
+		t.Fatal("the persisted previous key is removed when the overlap ends")
 	}
 
 	voterView := daemons[1].plugin.availabilityLeaseReport().GetAcceptor()

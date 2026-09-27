@@ -17,7 +17,11 @@ func (p *DockerPlugin) leaseGate(cmd *pb.GatewayCommand) error {
 	if p.lease == nil || p.lease.runtime == nil {
 		return nil
 	}
-	for _, policyID := range p.leaseGatedPolicies(cmd) {
+	policies, err := p.leaseGatedPolicies(cmd)
+	if err != nil {
+		return err
+	}
+	for _, policyID := range policies {
 		if err := p.lease.runtime.CheckServe(policyID); err != nil {
 			return fmt.Errorf("refused for availability policy %s: %w", policyID, err)
 		}
@@ -54,54 +58,48 @@ func (p *DockerPlugin) leaseStandbyPrepareGate(cmd *pb.DockerAvailabilityCommand
 
 // leaseGatedPolicies lists the availability policies a command would start
 // or serve, for the actions that can start a workload.
-func (p *DockerPlugin) leaseGatedPolicies(cmd *pb.GatewayCommand) []string {
+func (p *DockerPlugin) leaseGatedPolicies(cmd *pb.GatewayCommand) ([]string, error) {
 	switch payload := cmd.Payload.(type) {
 	case *pb.GatewayCommand_DockerAvailability:
 		switch payload.DockerAvailability.GetAction() {
 		case availabilityActionActivate, availabilityActionAdoptSingle:
-			return []string{payload.DockerAvailability.GetPolicyId()}
+			return []string{payload.DockerAvailability.GetPolicyId()}, nil
 		}
 	case *pb.GatewayCommand_DockerContainer:
 		switch payload.DockerContainer.GetAction() {
 		case "start", "restart", "recreate", "update", "duplicate":
-			if policyID := p.containerPolicy(payload.DockerContainer.GetContainerId()); policyID != "" {
-				return []string{policyID}
+			// Fail closed: a container that cannot be inspected is refused.
+			policyID, err := p.containerPolicy(payload.DockerContainer.GetContainerId())
+			if err != nil || policyID == "" {
+				return nil, err
 			}
+			return []string{policyID}, nil
 		}
 	case *pb.GatewayCommand_DockerDeployment:
 		switch payload.DockerDeployment.GetAction() {
 		case "create", "deploy_slot", "switch", "start", "restart":
 			policies := p.availability.policiesForResource("deployment", payload.DockerDeployment.GetDeploymentId())
-			return appendLabelPolicy(policies, payload.DockerDeployment.GetConfigJson())
+			return appendLabelPolicy(policies, payload.DockerDeployment.GetConfigJson()), nil
 		}
 	case *pb.GatewayCommand_DockerCompose:
 		switch payload.DockerCompose.GetAction() {
 		case "apply", "pull_apply", "start", "restart":
-			return p.availability.policiesForResource("compose", payload.DockerCompose.GetProjectId())
+			return p.availability.policiesForResource("compose", payload.DockerCompose.GetProjectId()), nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
-func (p *DockerPlugin) containerPolicy(containerID string) string {
-	if containerID == "" || p.client == nil {
-		return ""
+// containerPolicy resolves a container's lease policy, Compose placement
+// containers included. An inspect error is returned so callers fail closed.
+func (p *DockerPlugin) containerPolicy(containerID string) (string, error) {
+	if containerID == "" {
+		return "", nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	data, err := p.client.InspectContainer(ctx, containerID)
-	if err != nil {
-		return ""
-	}
-	var inspect struct {
-		Config struct {
-			Labels map[string]string `json:"Labels"`
-		} `json:"Config"`
-	}
-	if json.Unmarshal(data, &inspect) != nil {
-		return ""
-	}
-	return inspect.Config.Labels[availabilityPolicyLabel]
+	ref, err := p.leaseContainerRef(ctx, containerID)
+	return ref.PolicyID, err
 }
 
 // appendLabelPolicy adds the policy named by a deployment payload's desired
@@ -133,7 +131,11 @@ func (p *DockerPlugin) leaseLiveUpdateGate(cmd *pb.DockerContainerCommand) error
 	if json.Unmarshal([]byte(cmd.GetConfigJson()), &params) != nil || params.RestartPolicy == nil || *params.RestartPolicy == "no" {
 		return nil
 	}
-	if policyID := p.containerPolicy(cmd.GetContainerId()); policyID != "" && p.lease.runtime.LeaseMode(policyID) {
+	policyID, err := p.containerPolicy(cmd.GetContainerId())
+	if err != nil {
+		return err
+	}
+	if policyID != "" && p.lease.runtime.LeaseMode(policyID) {
 		return fmt.Errorf("availability policy %s runs in lease mode: its containers keep restart policy no", policyID)
 	}
 	return nil

@@ -38,6 +38,8 @@ var (
 )
 
 type composeRequest struct {
+	// noStart runs a lease-mode project with --no-start (A12.1).
+	noStart             bool
 	action              string
 	operationID         string
 	projectID           string
@@ -138,7 +140,18 @@ func (p *DockerPlugin) handleComposeCommand(cmd *pb.DockerComposeCommand, result
 			return
 		}
 	}
-	detail, err := p.composeExecutor.handle(cmd)
+	// A lease-mode project never starts inside the Compose sidecar: compose
+	// creates with --no-start and the containers start through the Engine
+	// API behind the lease start hook (A5, A12.1).
+	leaseStart := false
+	switch cmd.GetAction() {
+	case "apply", "pull_apply", "start", "restart":
+		leaseStart = p.composeLeaseMode(cmd.GetProjectId())
+	}
+	detail, err := p.composeExecutor.handleWith(cmd, leaseStart)
+	if err == nil && leaseStart {
+		err = p.startComposeProject(cmd.GetProjectName())
+	}
 	if err != nil {
 		result.Success = false
 		result.Error = err.Error()
@@ -148,10 +161,15 @@ func (p *DockerPlugin) handleComposeCommand(cmd *pb.DockerComposeCommand, result
 }
 
 func (e *composeExecutor) handle(cmd *pb.DockerComposeCommand) (string, error) {
+	return e.handleWith(cmd, false)
+}
+
+func (e *composeExecutor) handleWith(cmd *pb.DockerComposeCommand, noStart bool) (string, error) {
 	request, err := validateComposeCommand(cmd)
 	if err != nil {
 		return "", err
 	}
+	request.noStart = noStart
 	if request.action == "cancel" {
 		return "", e.cancel(request)
 	}
@@ -485,6 +503,18 @@ func (s *dockerComposeSidecar) run(ctx context.Context, request composeRequest) 
 }
 
 func composeSidecarCommands(request composeRequest) ([][]string, error) {
+	if request.noStart {
+		switch request.action {
+		case "apply":
+			return [][]string{{"up", "--no-start", "--no-build", "--pull", "never"}}, nil
+		case "pull_apply":
+			return [][]string{{"pull"}, {"up", "--no-start", "--no-build", "--pull", "never"}}, nil
+		case "start":
+			return nil, nil
+		case "restart":
+			return [][]string{{"stop"}}, nil
+		}
+	}
 	switch request.action {
 	case "apply":
 		return [][]string{{"up", "--detach", "--no-build", "--pull", "never"}}, nil
