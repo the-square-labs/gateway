@@ -1,0 +1,1 @@
+ALTER TABLE "relay_grant_signing_keys" ADD COLUMN "published_at_revision" bigint;

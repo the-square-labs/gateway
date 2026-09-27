@@ -229,7 +229,7 @@ export class RelayPolicyService {
     private readonly relay: RelayControlClient
   ) {
     this.grantIssuer = new RelayGrantIssuerService(db, cryptoService, settings);
-    this.grantKeys = new RelayGrantKeyService(db, cryptoService);
+    this.grantKeys = new RelayGrantKeyService(db, cryptoService, settings);
     this.policyKeys = new RelayPolicySigningKeyService(db, cryptoService);
   }
 

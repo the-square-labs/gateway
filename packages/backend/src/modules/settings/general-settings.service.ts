@@ -32,6 +32,13 @@ export const RELAY_POLICY_LEASE_MAX_HOURS = 168;
 /** The policy lease a relay that predates long-lease support still enforces. */
 export const LEGACY_RELAY_POLICY_LEASE_SECONDS = 15 * 60;
 /**
+ * Mirrors policy.LeaseExpiryClockSkew in packages/relay/internal/policy/store.go: how long past
+ * its issued lease a relay whose clock runs ahead still admits. A relay that is genuinely
+ * isolated cannot still be admitting past lease + this skew, so that bound is safe to treat as
+ * "the relay has stopped admitting on the pre-rotation policy" when nothing else confirms it.
+ */
+export const RELAY_LEASE_EXPIRY_CLOCK_SKEW_MS = 2 * 60 * 1000;
+/**
  * Advertised by relay builds that accept a policy lease and grant lifetime longer than the legacy
  * 15-minute lease / 48-hour grant caps (see policy.LongLeaseCapability in the relay). Gateway must
  * not issue the longer lease or grant to an instance that has not reported this, or it refuses the
