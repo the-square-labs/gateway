@@ -39,7 +39,7 @@ func writeIdentityFiles(t *testing.T, dir string, key *ecdsa.PrivateKey) (string
 	return certPath, keyPath
 }
 
-func signedBy(t *testing.T, signer *identityKeySigner, key *ecdsa.PrivateKey) bool {
+func signedBy(t *testing.T, signer availabilitylease.Signer, key *ecdsa.PrivateKey) bool {
 	t.Helper()
 	message := []byte("frame")
 	signature, err := signer.Sign(message)
@@ -49,59 +49,59 @@ func signedBy(t *testing.T, signer *identityKeySigner, key *ecdsa.PrivateKey) bo
 	return (&availabilitylease.ECDSAVerifier{}).Verify(e2eDER(key), message, signature)
 }
 
-func TestIdentityRotationKeepsTheListedKeyUntilManifestsCatchUp(t *testing.T) {
+func TestIdentityKeysHandRenewalsToTheNodeAndSurviveRestarts(t *testing.T) {
 	dir := t.TempDir()
 	oldKey, newKey := e2eKey(), e2eKey()
 	certPath, keyPath := writeIdentityFiles(t, dir, oldKey)
 	previousPath := filepath.Join(dir, "state", "previous-identity.json")
-	signer, err := newIdentityKeySigner(certPath, keyPath, previousPath)
+	keys, err := newIdentityKeys(certPath, keyPath, previousPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !signedBy(t, signer, oldKey) {
-		t.Fatal("signer must use the enrolled key")
+	if !signedBy(t, keys.InitialSigner(), oldKey) {
+		t.Fatal("the node starts with the enrolled key")
+	}
+	if _, _, pending := keys.PendingRotation(); pending {
+		t.Fatal("no rotation before a renewal")
 	}
 	writeIdentityFiles(t, dir, newKey) // certificate renewal
-	signer.ObserveListedKeys([][]byte{e2eDER(oldKey), e2eDER(newKey)})
-	if !signedBy(t, signer, oldKey) {
-		t.Fatal("while any adopted manifest lists the old key, frames stay signed with it (H3)")
+	next, der, pending := keys.PendingRotation()
+	if !pending || !signedBy(t, next, newKey) || string(der) != string(e2eDER(newKey)) {
+		t.Fatal("a renewal must be handed to the node as a rotation")
 	}
-	if string(signer.publicKeyDER()) != string(e2eDER(newKey)) {
-		t.Fatal("the Gateway must learn the new key from the report")
+	keys.RotationApplied(der)
+	if _, _, again := keys.PendingRotation(); again {
+		t.Fatal("an applied rotation is not handed twice")
+	}
+	if string(keys.publicKeyDER()) != string(e2eDER(newKey)) {
+		t.Fatal("the report carries the renewed key")
 	}
 
-	// A daemon restart inside the overlap keeps the previous key.
-	restarted, err := newIdentityKeySigner(certPath, keyPath, previousPath)
+	// A daemon restart inside the overlap starts with the previous key and
+	// rotates to the renewed one again (T1's overlap is in memory).
+	restarted, err := newIdentityKeys(certPath, keyPath, previousPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !signedBy(t, restarted, oldKey) {
-		t.Fatal("the previous key must survive a daemon restart inside the overlap")
+	if !signedBy(t, restarted.InitialSigner(), oldKey) {
+		t.Fatal("a restart inside the overlap starts with the previous key")
 	}
-
-	signer.ObserveListedKeys([][]byte{e2eDER(newKey), e2eDER(newKey)})
-	if !signedBy(t, signer, newKey) {
-		t.Fatal("once every manifest lists the new key, frames switch to it")
+	if next, _, pending := restarted.PendingRotation(); !pending || !signedBy(t, next, newKey) {
+		t.Fatal("the restarted daemon rotates to the renewed key again")
 	}
+	restarted.OverlapEnded()
 	if _, err := os.Stat(previousPath); !os.IsNotExist(err) {
-		t.Fatal("the previous key is dropped after the switch")
+		t.Fatal("the previous key is dropped once the overlap ends")
 	}
 
-	// Manifests that never catch up (a closed policy) cap the overlap at 24 h.
-	late, err := newIdentityKeySigner(certPath, keyPath, filepath.Join(dir, "late.json"))
+	// A persisted previous key older than the overlap is ignored.
+	keys.RotationApplied(e2eDER(newKey)) // no-op: already applied
+	stale, err := newIdentityKeys(certPath, keyPath, previousPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	nextKey := e2eKey()
-	clock := time.Now()
-	late.now = func() time.Time { return clock }
-	writeIdentityFiles(t, dir, nextKey)
-	late.ObserveListedKeys([][]byte{e2eDER(newKey)})
-	if !signedBy(t, late, newKey) {
-		t.Fatal("inside the overlap the listed key signs")
-	}
-	clock = clock.Add(identityRotationOverlap)
-	if !signedBy(t, late, nextKey) {
-		t.Fatal("after 24 h the new key signs regardless")
+	stale.now = func() time.Time { return time.Now().Add(availabilitylease.IdentityKeyOverlap) }
+	if _, _, ok := stale.loadPrevious(); ok {
+		t.Fatal("a previous key past the 24 h overlap must not be used")
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,68 +17,74 @@ import (
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/lease"
 )
 
-// identityRotationOverlap bounds how long the previous identity key keeps
-// signing after a certificate renewal when manifests never catch up.
-const identityRotationOverlap = 24 * time.Hour
-
-// identityKeySigner signs lease frames with the node's mTLS identity key
-// (ECDSA P-256, D3). Peers verify frames against the key the adopted
-// manifests list for this node, so a certificate renewal must not switch
-// keys at once (H3): the previous key keeps signing until every adopted
-// manifest naming this node lists the new key, or 24 h passed. The previous
-// key is kept on disk so a daemon restart inside the overlap keeps it.
-//
-// Dual signatures (old and new key on every frame) need T1's multi-signature
-// frame API; until it lands the signer picks the key the manifests list.
-type identityKeySigner struct {
+// identityKeys is the node's mTLS identity for the lease (ECDSA P-256, D3)
+// and the source of its renewals (H3). A certificate renewal replaces the key
+// file; the runtime then calls Node.RotateIdentityKey, and the node signs
+// every frame and accept with both keys until every adopted manifest naming
+// it lists the new key, or availabilitylease.IdentityKeyOverlap passed. The
+// replaced key is persisted so a daemon restart inside the overlap starts
+// with it and rotates again, as T1 requires (the overlap is in memory).
+type identityKeys struct {
 	certPath, keyPath, previousPath string
 	now                             func() time.Time
 
-	mu        sync.Mutex
-	modTime   time.Time
-	key       crypto.Signer
+	mu      sync.Mutex
+	modTime time.Time
+	current crypto.Signer // newest key on disk
+	signing crypto.Signer // key the node signs with as its current key
+	// previous is the key replaced by the last handed rotation, kept for the
+	// overlap; rotatedAt is when that rotation first happened.
 	previous  crypto.Signer
 	rotatedAt time.Time
-	// newListed is true once every adopted manifest naming this node lists
-	// the current key (lease.KeyListener).
-	newListed bool
 }
 
-var _ lease.KeyListener = (*identityKeySigner)(nil)
+var _ lease.IdentityRotation = (*identityKeys)(nil)
 
 type previousIdentity struct {
 	RotatedAtUnixMs int64  `json:"rotatedAtUnixMs"`
 	KeyPEM          []byte `json:"keyPem"`
 }
 
-func newIdentityKeySigner(certPath, keyPath, previousPath string) (*identityKeySigner, error) {
-	signer := &identityKeySigner{certPath: certPath, keyPath: keyPath, previousPath: previousPath, now: time.Now}
-	if _, err := signer.current(); err != nil {
+func newIdentityKeys(certPath, keyPath, previousPath string) (*identityKeys, error) {
+	keys := &identityKeys{certPath: certPath, keyPath: keyPath, previousPath: previousPath, now: time.Now}
+	current, err := keys.reload()
+	if err != nil {
 		return nil, err
 	}
-	signer.loadPrevious()
-	return signer, nil
+	keys.signing = current
+	if previous, rotatedAt, ok := keys.loadPrevious(); ok && !bytes.Equal(publicDER(previous), publicDER(current)) {
+		// Restart inside an overlap: start with the previous key; the first
+		// step rotates to the current one again.
+		keys.signing, keys.rotatedAt = previous, rotatedAt
+	}
+	return keys, nil
 }
 
-// current returns the newest key, reloading it after a renewal and keeping
-// the key it replaced as the previous one.
-func (s *identityKeySigner) current() (crypto.Signer, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	info, err := os.Stat(s.keyPath)
+// InitialSigner is the key the node is created with.
+func (k *identityKeys) InitialSigner() availabilitylease.Signer {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return availabilitylease.ECDSASigner{Key: k.signing}
+}
+
+// reload reads the key file when it changed.
+func (k *identityKeys) reload() (crypto.Signer, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	info, err := os.Stat(k.keyPath)
 	if err != nil {
-		if s.key != nil {
-			return s.key, nil
+		if k.current != nil {
+			return k.current, nil
 		}
 		return nil, err
 	}
-	if s.key != nil && info.ModTime().Equal(s.modTime) {
-		return s.key, nil
+	if k.current != nil && info.ModTime().Equal(k.modTime) {
+		return k.current, nil
 	}
-	pair, err := tls.LoadX509KeyPair(s.certPath, s.keyPath)
+	pair, err := tls.LoadX509KeyPair(k.certPath, k.keyPath)
 	if err != nil {
-		if s.key != nil {
-			return s.key, nil
+		if k.current != nil {
+			return k.current, nil
 		}
 		return nil, err
 	}
@@ -87,70 +92,66 @@ func (s *identityKeySigner) current() (crypto.Signer, error) {
 	if !ok {
 		return nil, errors.New("node identity key cannot sign")
 	}
-	if s.key != nil && !bytes.Equal(publicDER(s.key), publicDER(key)) {
-		s.previous, s.rotatedAt, s.newListed = s.key, s.now(), false
-		s.savePreviousLocked()
-	}
-	s.key, s.modTime = key, info.ModTime()
+	k.current, k.modTime = key, info.ModTime()
 	return key, nil
 }
 
-// signingKey is the key peers can verify: the previous one while manifests
-// still list it, inside the overlap.
-func (s *identityKeySigner) signingKey() (crypto.Signer, error) {
-	key, err := s.current()
+// PendingRotation implements lease.IdentityRotation.
+func (k *identityKeys) PendingRotation() (availabilitylease.Signer, []byte, bool) {
+	current, err := k.reload()
 	if err != nil {
-		return nil, err
+		return nil, nil, false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.previous != nil && !s.newListed && s.now().Sub(s.rotatedAt) < identityRotationOverlap {
-		return s.previous, nil
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	der := publicDER(current)
+	if bytes.Equal(der, publicDER(k.signing)) {
+		return nil, nil, false
 	}
-	return key, nil
+	return availabilitylease.ECDSASigner{Key: current}, der, true
 }
 
-func (s *identityKeySigner) Sign(message []byte) ([]byte, error) {
-	key, err := s.signingKey()
-	if err != nil {
-		return nil, fmt.Errorf("load node identity key: %w", err)
-	}
-	return availabilitylease.ECDSASigner{Key: key}.Sign(message)
-}
-
-// ObserveListedKeys implements lease.KeyListener: listed holds, per adopted
-// manifest naming this node, the key it lists for it.
-func (s *identityKeySigner) ObserveListedKeys(listed [][]byte) {
-	key, err := s.current()
-	if err != nil {
+// RotationApplied implements lease.IdentityRotation.
+func (k *identityKeys) RotationApplied(publicKeyDER []byte) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.current == nil || !bytes.Equal(publicDER(k.current), publicKeyDER) {
 		return
 	}
-	current := publicDER(key)
-	all := true
-	for _, der := range listed {
-		all = all && bytes.Equal(der, current)
+	if k.rotatedAt.IsZero() || k.previous != nil {
+		// A fresh rotation (not the replay after a restart) starts its own
+		// overlap clock.
+		k.rotatedAt = k.now()
 	}
-	s.mu.Lock()
-	switched := all && !s.newListed && s.previous != nil
-	s.newListed = all
-	if switched {
-		s.previous = nil
-		_ = os.Remove(s.previousPath)
-	}
-	s.mu.Unlock()
+	k.previous, k.signing = k.signing, k.current
+	k.savePreviousLocked()
 }
 
-// publicKeyDER is the newest key: the one reported to the Gateway so it
-// republishes manifests with it.
-func (s *identityKeySigner) publicKeyDER() []byte {
-	key, err := s.current()
+// OverlapEnded implements lease.IdentityRotation.
+func (k *identityKeys) OverlapEnded() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.previous == nil && k.rotatedAt.IsZero() {
+		return
+	}
+	k.previous, k.rotatedAt = nil, time.Time{}
+	_ = os.Remove(k.previousPath)
+}
+
+// publicKeyDER is the newest key, reported so the Gateway republishes the
+// manifests naming this node with it.
+func (k *identityKeys) publicKeyDER() []byte {
+	current, err := k.reload()
 	if err != nil {
 		return nil
 	}
-	return publicDER(key)
+	return publicDER(current)
 }
 
 func publicDER(key crypto.Signer) []byte {
+	if key == nil {
+		return nil
+	}
 	der, err := x509.MarshalPKIXPublicKey(key.Public())
 	if err != nil {
 		return nil
@@ -158,47 +159,45 @@ func publicDER(key crypto.Signer) []byte {
 	return der
 }
 
-func (s *identityKeySigner) savePreviousLocked() {
-	if s.previousPath == "" {
+func (k *identityKeys) savePreviousLocked() {
+	if k.previousPath == "" || k.previous == nil {
 		return
 	}
-	der, err := x509.MarshalPKCS8PrivateKey(s.previous)
+	der, err := x509.MarshalPKCS8PrivateKey(k.previous)
 	if err != nil {
 		return
 	}
 	data, _ := json.Marshal(previousIdentity{
-		RotatedAtUnixMs: s.rotatedAt.UnixMilli(),
+		RotatedAtUnixMs: k.rotatedAt.UnixMilli(),
 		KeyPEM:          pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}),
 	})
-	if err := os.MkdirAll(filepath.Dir(s.previousPath), 0o700); err == nil {
-		_ = writeDurableFile(s.previousPath, data)
+	if err := os.MkdirAll(filepath.Dir(k.previousPath), 0o700); err == nil {
+		_ = writeDurableFile(k.previousPath, data)
 	}
 }
 
-func (s *identityKeySigner) loadPrevious() {
-	data, err := os.ReadFile(s.previousPath)
+// loadPrevious returns the persisted previous key while its overlap is open.
+func (k *identityKeys) loadPrevious() (crypto.Signer, time.Time, bool) {
+	data, err := os.ReadFile(k.previousPath)
 	if err != nil {
-		return
+		return nil, time.Time{}, false
 	}
 	var stored previousIdentity
 	if json.Unmarshal(data, &stored) != nil {
-		return
+		return nil, time.Time{}, false
 	}
-	block, _ := pem.Decode(stored.KeyPEM)
 	rotatedAt := time.UnixMilli(stored.RotatedAtUnixMs)
-	if block == nil || s.now().Sub(rotatedAt) >= identityRotationOverlap {
-		_ = os.Remove(s.previousPath)
-		return
+	block, _ := pem.Decode(stored.KeyPEM)
+	if block == nil || k.now().Sub(rotatedAt) >= availabilitylease.IdentityKeyOverlap {
+		_ = os.Remove(k.previousPath)
+		return nil, time.Time{}, false
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return
+		return nil, time.Time{}, false
 	}
-	if key, ok := parsed.(crypto.Signer); ok {
-		s.mu.Lock()
-		s.previous, s.rotatedAt = key, rotatedAt
-		s.mu.Unlock()
-	}
+	key, ok := parsed.(crypto.Signer)
+	return key, rotatedAt, ok
 }
 
 func writeDurableFile(path string, data []byte) error {

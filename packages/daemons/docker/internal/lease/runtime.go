@@ -44,8 +44,12 @@ type Options struct {
 	Clock availabilitylease.Clock
 	// Wall is the wall clock without a monotonic reading, for suspend
 	// detection (A17) and event timestamps.
-	Wall       func() time.Time
-	Signer     availabilitylease.Signer
+	Wall func() time.Time
+	// Signer is the key the node starts with: after a restart inside a
+	// rotation overlap, the previous key (Identity then rotates to the new).
+	Signer availabilitylease.Signer
+	// Identity hands later certificate renewals to the node (H3); optional.
+	Identity   IdentityRotation
 	Engine     Engine
 	Fence      Fence
 	Endpoints  Endpoints
@@ -198,9 +202,7 @@ func (r *Runtime) Step() {
 		}
 	}
 	hbFresh := r.opts.Fence.HeartbeatFresh(now)
-	if listener, ok := r.opts.Signer.(KeyListener); ok {
-		listener.ObserveListedKeys(r.node.ListedKeys(r.opts.NodeID))
-	}
+	r.rotateIdentity()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -245,6 +247,25 @@ func rolePriority(role availabilitylease.Role) int {
 		return 2
 	}
 	return 1
+}
+
+// rotateIdentity hands a renewed identity key to the node, which then
+// dual-signs until the manifests list the new key or the overlap ends (H3).
+func (r *Runtime) rotateIdentity() {
+	if r.opts.Identity == nil {
+		return
+	}
+	if next, publicKey, ok := r.opts.Identity.PendingRotation(); ok {
+		if err := r.node.RotateIdentityKey(next, publicKey); err != nil {
+			r.logger.Warn("availability lease identity rotation failed", "error", err)
+		} else {
+			r.opts.Identity.RotationApplied(publicKey)
+			r.logger.Info("availability lease identity key renewed; dual-signing until every manifest lists the new key")
+		}
+	}
+	if !r.node.IdentityOverlap() {
+		r.opts.Identity.OverlapEnded()
+	}
 }
 
 // detectSuspend compares the wall-clock advance with the BOOTTIME advance.

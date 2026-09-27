@@ -47,7 +47,7 @@ func (p *DockerPlugin) initAvailabilityLease() {
 		p.logger.Info("availability lease disabled until the node is enrolled")
 		return
 	}
-	signer, err := newIdentityKeySigner(p.cfg.TLS.ClientCert, p.cfg.TLS.ClientKey, filepath.Join(p.cfg.StateDir, "availability-lease", "previous-identity.json"))
+	keys, err := newIdentityKeys(p.cfg.TLS.ClientCert, p.cfg.TLS.ClientKey, filepath.Join(p.cfg.StateDir, "availability-lease", "previous-identity.json"))
 	if err != nil {
 		p.logger.Warn("availability lease disabled: node identity key unavailable", "error", err)
 		return
@@ -58,10 +58,10 @@ func (p *DockerPlugin) initAvailabilityLease() {
 	}
 	integration := &leaseIntegration{
 		plugin: p, fence: lease.DirFence{Dir: leasefence.Dir{Root: root}},
-		identity: signer.publicKeyDER, serving: map[string]bool{},
+		identity: keys.publicKeyDER, serving: map[string]bool{},
 	}
 	runtime, err := lease.New(lease.Options{
-		NodeID: stored.NodeID, StateDir: p.cfg.StateDir, Signer: signer,
+		NodeID: stored.NodeID, StateDir: p.cfg.StateDir, Signer: keys.InitialSigner(), Identity: keys,
 		Engine: &leaseEngine{client: p.client, cgroupRoot: leasefence.DefaultCgroupRoot, composeProjects: p.availability.leaseComposeProjects},
 		Fence:  integration.fence, Endpoints: integration, Placements: integration, Logger: p.logger,
 	})
