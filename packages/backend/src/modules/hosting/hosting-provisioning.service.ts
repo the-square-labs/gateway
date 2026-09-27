@@ -43,11 +43,18 @@ import type {
   HostingResourceSnapshot,
 } from './hosting-provider.types.js';
 import { isHostedNodeReady } from './hosting-readiness.js';
-import { CLOUDBLAST_CREATE_UNSUPPORTED } from './providers/cloudblast.js';
+import {
+  createSshInstallKey,
+  HostingSshInstaller,
+  initialSshInstallState,
+  rotateSshInstallToken,
+  SSH_INSTALL_TOKEN_TTL_MS,
+  type SshInstallKey,
+} from './hosting-ssh-install.js';
 import { allocateProxmoxPool } from './proxmox-allocation.js';
 import { reserveProxmoxQuota } from './proxmox-quota.js';
 
-type BootstrapPayload = { script: string; create: HostingCreateRequest };
+type BootstrapPayload = { script: string; create: HostingCreateRequest; ssh?: SshInstallKey };
 const BOOTSTRAP_TTL_MS = 60 * 60 * 1000;
 const CREDIT_REJECTED_MESSAGE =
   'HOSTKEY rejected account credit payment. Pay this order invoice in HOSTKEY; Gateway will continue automatically once it is paid. No replacement VM will be ordered.';
@@ -100,9 +107,15 @@ export class HostingProvisioningService {
     private readonly auth: Pick<AuthService, 'getUserById'>,
     private readonly dispatch: Pick<NodeDispatchService, 'isNodeConnected'>,
     private readonly audit: Pick<AuditService, 'log'>,
-    private readonly ssh: Pick<ExternalSshService, 'executeForHosting'>,
+    private readonly ssh: Pick<
+      ExternalSshService,
+      'executeForHosting' | 'readHostKeyForHosting' | 'executeWithKeyForHosting'
+    >,
     private readonly snapshots?: ResourceSnapshotStore
-  ) {}
+  ) {
+    this.sshInstall = new HostingSshInstaller({ operations, ssh, audit });
+  }
+  private readonly sshInstall: HostingSshInstaller;
 
   async catalog(connectorId: string, user: User) {
     const connector = await this.connectors.get(connectorId, user, true);
@@ -131,9 +144,6 @@ export class HostingProvisioningService {
     const connector = await this.connectors.get(input.connectorId, user, true);
     const settings = this.connectors.settings(connector);
     const adapter = this.connectors.adapter(connector);
-    // CloudBlast cannot deliver the installer to a new server; refuse before reserving a node.
-    if (connector.provider === 'cloudblast' && !input.existingResourceId)
-      throw new AppError(409, 'HOSTING_ACTION_UNSUPPORTED', CLOUDBLAST_CREATE_UNSUPPORTED);
     // Reject insufficient DO permissions before reserving a node or durable order.
     // The adapter checks again at dispatch in case scopes changed in the meantime.
     if (connector.provider === 'digitalocean' && !input.existingResourceId) {
@@ -300,7 +310,12 @@ export class HostingProvisioningService {
             ipConfig = `ip=${allocation.ipAddress}/${prefix},gw=${profile.gateway}`;
           }
         }
-        const created = await this.nodeService.create(nodeInput, user.id, tx);
+        // Providers without user data install over SSH with a one-time key and a short-lived token.
+        const sshKey =
+          connector.provider === 'cloudblast' && !existing ? createSshInstallKey(`gw-${operationId}`) : undefined;
+        const created = sshKey
+          ? await this.nodeService.create(nodeInput, user.id, tx, { enrollmentTokenTtlMs: SSH_INSTALL_TOKEN_TTL_MS })
+          : await this.nodeService.create(nodeInput, user.id, tx);
         const script = buildHostingBootstrap({
           waitForCloudInit: connector.provider === 'proxmox' && !proxmoxProfile?.imageStorage,
           role: acceptedRequest.role,
@@ -327,7 +342,9 @@ export class HostingProvisioningService {
             ipConfig,
             vmid: acceptedRequest.vmid,
             proxmox: proxmoxProfile,
+            ...(sshKey ? { sshPublicKey: sshKey.publicKey } : {}),
           },
+          ...(sshKey ? { ssh: sshKey } : {}),
         };
         return {
           request: {
@@ -337,6 +354,7 @@ export class HostingProvisioningService {
           nodeId: created.node.id,
           encryptedBootstrap: JSON.stringify(this.crypto.encryptString(JSON.stringify(payload))),
           bootstrapExpiresAt: new Date(Date.now() + BOOTSTRAP_TTL_MS),
+          ...(sshKey ? { result: { sshInstall: initialSshInstallState() } } : {}),
         };
       }
     );
@@ -684,13 +702,14 @@ export class HostingProvisioningService {
         await adapter.cleanupBootstrap(current, payload.create);
       }
     }
-    await this.operations.finish(row, 'ready', { nodeId: node.id, resourceId: row.resourceId });
+    await this.sshInstall.finish(adapter, row, 'ready', { nodeId: node.id, resourceId: row.resourceId });
     return true;
   }
 
   private cloudInitOwnsInstallation(row: HostingOperationRow, connector: HostingConnectorRow) {
     return (
       row.action === 'create' &&
+      connector.provider !== 'cloudblast' &&
       (connector.provider !== 'proxmox' || Boolean(this.payload(row).create.proxmox?.imageStorage))
     );
   }
@@ -708,6 +727,12 @@ export class HostingProvisioningService {
     adapter: HostingProviderAdapter,
     actor: User
   ) {
+    // One-time SSH install keys: finish deferred outcomes and retry pending key cleanups first.
+    const resumed = await this.sshInstall.resume(row, adapter, () =>
+      row.encryptedBootstrap ? this.payload(row).ssh : undefined
+    );
+    row = resumed.row;
+    if (resumed.done) return;
     const [node] = row.nodeId
       ? await this.db.select({ id: nodes.id }).from(nodes).where(eq(nodes.id, row.nodeId)).limit(1)
       : [];
@@ -721,11 +746,17 @@ export class HostingProvisioningService {
         });
         return;
       }
-      await this.operations.finish(row, 'failed', row.resourceId ? { resourceId: row.resourceId } : undefined, {
-        code: 'HOSTING_NODE_MISSING',
-        message:
-          'The Gateway node was removed before provisioning finished. No further provisioning will be attempted; check the provider VM before recovering or removing it.',
-      });
+      await this.sshInstall.finish(
+        adapter,
+        row,
+        'failed',
+        row.resourceId ? { resourceId: row.resourceId } : undefined,
+        {
+          code: 'HOSTING_NODE_MISSING',
+          message:
+            'The Gateway node was removed before provisioning finished. No further provisioning will be attempted; check the provider VM before recovering or removing it.',
+        }
+      );
       return;
     }
     if (await this.enrolled(row, connector, actor, adapter)) return;
@@ -737,7 +768,7 @@ export class HostingProvisioningService {
           .where(and(eq(nodes.id, row.nodeId), eq(nodes.status, 'pending')));
       // Keep the paid resource visible and retain the write boundary even when installation expires.
       if (row.resourceId || (row.phase === 'pending' && !row.dispatchStartedAt)) {
-        await this.operations.finish(row, 'failed', undefined, {
+        await this.sshInstall.finish(adapter, row, 'failed', undefined, {
           code: 'HOSTING_BOOTSTRAP_EXPIRED',
           message: 'Installation expired; retry installation on this VM without ordering a replacement',
         });
@@ -861,7 +892,7 @@ export class HostingProvisioningService {
         adapter.orderInvoice ? adapter.orderInvoice(invoiceId, `gw-${row.id}`, quote) : adapter.invoice!(invoiceId);
       let invoice = await readInvoice();
       if (['cancelled', 'canceled', 'refunded', 'collections'].includes(invoice.status)) {
-        await this.operations.finish(row, 'failed', undefined, {
+        await this.sshInstall.finish(adapter, row, 'failed', undefined, {
           code: 'HOSTING_ORDER_INVOICE_CANCELLED',
           message:
             'HOSTKEY order invoice was cancelled or closed; no credit will be applied and no replacement VM will be ordered',
@@ -926,10 +957,16 @@ export class HostingProvisioningService {
     let hostkeyCallbackPolled = false;
     if (connector.provider === 'hostkey' && row.action === 'create' && row.providerOperation?.id) {
       if (row.providerOperation.status === 'failed') {
-        await this.operations.finish(row, 'failed', row.resourceId ? { resourceId: row.resourceId } : undefined, {
-          code: 'HOSTING_PROVIDER_TASK_FAILED',
-          message: row.providerOperation.error ?? 'Provider task failed; VM was not deleted',
-        });
+        await this.sshInstall.finish(
+          adapter,
+          row,
+          'failed',
+          row.resourceId ? { resourceId: row.resourceId } : undefined,
+          {
+            code: 'HOSTING_PROVIDER_TASK_FAILED',
+            message: row.providerOperation.error ?? 'Provider task failed; VM was not deleted',
+          }
+        );
         return;
       }
       if (row.providerOperation.status !== 'succeeded') {
@@ -942,10 +979,16 @@ export class HostingProvisioningService {
         };
         if (callback.status === 'failed') {
           row = await this.operations.update(row, { providerOperation });
-          await this.operations.finish(row, 'failed', row.resourceId ? { resourceId: row.resourceId } : undefined, {
-            code: 'HOSTING_PROVIDER_TASK_FAILED',
-            message: callback.error ?? 'Provider task failed; VM was not deleted',
-          });
+          await this.sshInstall.finish(
+            adapter,
+            row,
+            'failed',
+            row.resourceId ? { resourceId: row.resourceId } : undefined,
+            {
+              code: 'HOSTING_PROVIDER_TASK_FAILED',
+              message: callback.error ?? 'Provider task failed; VM was not deleted',
+            }
+          );
           return;
         }
         row = await this.operations.update(row, {
@@ -1033,7 +1076,7 @@ export class HostingProvisioningService {
       });
     }
     if (!row.encryptedBootstrap) {
-      await this.operations.finish(row, 'failed', undefined, {
+      await this.sshInstall.finish(adapter, row, 'failed', undefined, {
         code: 'HOSTING_BOOTSTRAP_EXPIRED',
         message:
           'The existing provider VM was recovered after installation expired. Retry installation without ordering another VM.',
@@ -1099,7 +1142,8 @@ export class HostingProvisioningService {
       const completedStage = row.providerOperation.preparationStage;
       const task = await adapter.operation(row.providerOperation.id, resource.remoteId);
       if (task.status === 'failed') {
-        await this.operations.finish(
+        await this.sshInstall.finish(
+          adapter,
           row,
           'failed',
           { resourceId: row.resourceId },
@@ -1178,6 +1222,14 @@ export class HostingProvisioningService {
       return;
     }
     if (resource.powerState !== 'running') return;
+    if (connector.provider === 'cloudblast' && row.action === 'create') {
+      const payload = this.payload(row);
+      if (!payload.ssh)
+        throw new AppError(409, 'HOSTING_INSTALL_TRANSPORT_REQUIRED', 'The one-time SSH install key is unavailable');
+      await this.authorizeBootstrap(row, connector, actor);
+      await this.sshInstall.install(row, resource, payload.ssh, () => this.sshInstallScript(row, connector), adapter);
+      return;
+    }
     const input = acceptedProvisionInput(row.request);
     const guestBootstrap = Boolean(adapter.bootstrap && resource.capabilities.bootstrap.available);
     if (!guestBootstrap && !input.sshConnectorId) {
@@ -1228,7 +1280,7 @@ export class HostingProvisioningService {
         resource.addresses.filter((address) => address.direct).map((address) => address.ip)
       );
       if (result.exitCode !== 0) {
-        await this.operations.finish(row, 'failed', undefined, {
+        await this.sshInstall.finish(adapter, row, 'failed', undefined, {
           code: 'HOSTING_INSTALL_FAILED',
           message: 'Installation exited unsuccessfully. Inspect guest diagnostics, then retry installation on this VM.',
         });
@@ -1239,6 +1291,24 @@ export class HostingProvisioningService {
         dispatchStartedAt: null,
       });
     }
+  }
+
+  /** Built at SSH dispatch time so the embedded token is fresh (30 min) instead of the reservation token. */
+  private async sshInstallScript(row: HostingOperationRow, connector: HostingConnectorRow): Promise<string> {
+    const input = acceptedProvisionInput(row.request);
+    const gateway = (await this.nodeService.getGatewayEnrollmentTargets()).public.gateway;
+    if (!gateway)
+      throw new AppError(409, 'HOSTING_GATEWAY_NOT_READY', 'Configure a reachable Gateway enrollment endpoint');
+    validateHostingGateway(gateway, connector.provider === 'proxmox');
+    return buildHostingBootstrap({
+      role: input.role,
+      gateway,
+      certificateFingerprint: await this.nodeService.getGatewayEnrollmentCertificateFingerprint(),
+      token: await rotateSshInstallToken(this.db, row.nodeId!),
+      relayAddress: input.role === 'relay' ? input.relayAddress : undefined,
+      requireCleanHost: true,
+      operationMarker: `gw-${row.id}`,
+    });
   }
 
   async reconcileDue() {
@@ -1297,7 +1367,7 @@ export class HostingProvisioningService {
                 .update(nodes)
                 .set({ enrollmentTokenHash: null, enrollmentTokenSelector: null })
                 .where(and(eq(nodes.id, current.nodeId), eq(nodes.status, 'pending')));
-            await this.operations.finish(current ?? row, 'failed', undefined, { code, message });
+            await this.sshInstall.finish(undefined, current ?? row, 'failed', undefined, { code, message });
           } else await this.operations.update(row, { phase, errorCode: code, errorMessage: message });
         } catch {
           /* Lost lease: the current owner reconciles. */

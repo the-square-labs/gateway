@@ -335,11 +335,16 @@ export class NodesService {
     return node.healthHistory ?? [];
   }
 
-  async create(input: CreateNodeInput, userId: string, transaction?: DrizzleTransaction) {
+  async create(
+    input: CreateNodeInput,
+    userId: string,
+    transaction?: DrizzleTransaction,
+    options: { enrollmentTokenTtlMs?: number } = {}
+  ) {
     // Generate enrollment token
     const enrollmentToken = createNodeEnrollmentToken();
     const tokenHash = await bcrypt.hash(enrollmentToken.token, 10);
-    const enrollmentTokenExpiresAt = nodeEnrollmentTokenExpiresAt();
+    const enrollmentTokenExpiresAt = nodeEnrollmentTokenExpiresAt(new Date(), options.enrollmentTokenTtlMs);
 
     const createNode = (executor: DrizzleExecutor) =>
       writeWithAllocatedSlug({

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { AppError } from '@/middleware/error-handler.js';
 import { type HostingHttp, HostingProviderError, type HostingRequestOptions } from '../hosting-http.js';
 import { applyHostingImagePolicy } from '../hosting-image-policy.js';
 import type { HostingConnection, HostingResourceSnapshot } from '../hosting-provider.types.js';
@@ -75,7 +74,7 @@ async function resource(http = inventoryHttp()): Promise<HostingResourceSnapshot
 }
 
 describe('CloudBlastHostingAdapter', () => {
-  it('identifies the account by its numeric ID and declares creation and resizing unsupported', async () => {
+  it('identifies the account by its numeric ID, allows creation and declares resizing unsupported', async () => {
     const http = new FakeHostingHttp((path) =>
       path === '/api/v2/account'
         ? { data: { id: 1001, name: 'Ada', surname: 'Ops', email: 'ops@example.com', credit: 42.5 } }
@@ -84,8 +83,7 @@ describe('CloudBlastHostingAdapter', () => {
     const account = await new CloudBlastHostingAdapter(connection, http).test();
     expect(account.authority).toBe('cloudblast:1001');
     expect(account.name).toBe('ops@example.com');
-    expect(account.capabilities.create).toMatchObject({ available: false, reasonCode: 'unsupported' });
-    expect(account.capabilities.create.reason).toContain('no user data');
+    expect(account.capabilities.create.available).toBe(true);
     expect(account.capabilities.resize.available).toBe(false);
     expect(account.capabilities.finance.available).toBe(true);
     expect(account.capabilities.topup.available).toBe(false);
@@ -216,8 +214,6 @@ describe('CloudBlastHostingAdapter', () => {
       await expect(adapter.action(vm, { action, size: '8' })).rejects.toMatchObject({
         code: 'HOSTING_ACTION_UNSUPPORTED',
       });
-    await expect(adapter.create()).rejects.toBeInstanceOf(AppError);
-    await expect(adapter.validateCreate()).rejects.toMatchObject({ code: 'HOSTING_ACTION_UNSUPPORTED' });
     expect(http.calls).toHaveLength(before);
     await expect(adapter.action(vm, { action: 'delete' })).resolves.toEqual({
       id: null,
@@ -253,6 +249,9 @@ describe('CloudBlastHostingAdapter', () => {
           data: [
             { slug: 'ubuntu-24-04', name: 'Ubuntu 24.04 LTS', group_name: 'Ubuntu' },
             { slug: 'windows-2022', name: 'Windows Server 2022', group_name: 'Windows' },
+            { slug: 'ubuntu-24-04-docker', name: 'Ubuntu 24.04 Docker', group_name: 'Apps' },
+            { slug: 'fedora-43', name: 'Fedora 43', group_name: 'Fedora' },
+            { slug: 'debian-12', name: 'debian-12', group_name: 'Debian' },
           ],
         };
       if (path === '/api/v2/locations/2/templates')
@@ -275,8 +274,76 @@ describe('CloudBlastHostingAdapter', () => {
       operatingSystem: { distribution: 'ubuntu', version: '24.04' },
     });
     expect(catalog.images.find((image) => image.id === 'windows-2022')?.operatingSystem).toBeUndefined();
-    // Templates declare no architecture, so none are admitted for automatic installation.
-    expect(applyHostingImagePolicy(catalog, 'cloudblast').images).toEqual([]);
+    expect(medium?.architecture).toBe('x64');
+    // Plain Ubuntu and Debian templates are admitted; application, Fedora and Windows templates stay closed.
+    expect(applyHostingImagePolicy(catalog, 'cloudblast').images.map((image) => image.id)).toEqual([
+      'ubuntu-24-04',
+      'debian-12',
+    ]);
+  });
+
+  it('registers the one-time key by operation marker, creates the server with it and never registers twice', async () => {
+    const marker = 'gw-33333333-3333-4333-8333-333333333333';
+    const keys: Array<{ id: number; name: string }> = [];
+    let serverResponse: unknown = { data: { ...server(), hostname: `web-1-${marker}` } };
+    const http = new FakeHostingHttp((path, options) => {
+      if (path === '/api/v2/ssh-keys' && options.method === 'POST') {
+        keys.push({ id: 55, name: String((options.body as { name: string }).name) });
+        return { data: { id: 55 } };
+      }
+      if (path === '/api/v2/ssh-keys') return { data: keys };
+      if (path === '/api/v2/ssh-keys/55' && options.method === 'DELETE') {
+        keys.splice(0);
+        return null;
+      }
+      if (path === '/api/v2/servers' && options.method === 'POST') {
+        if (serverResponse instanceof Error) throw serverResponse;
+        return serverResponse;
+      }
+      throw new Error(`Unexpected ${options.method} ${path}`);
+    });
+    const adapter = new CloudBlastHostingAdapter(connection, http);
+    const request = {
+      name: 'Web 1',
+      location: '1',
+      size: '7',
+      image: 'ubuntu-24-04',
+      marker,
+      userData: 'never sent',
+      sshPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGatewayTestKeyOnly gw',
+    };
+    await expect(adapter.create(request)).resolves.toEqual({ id: null, resourceId: SERVER, status: 'succeeded' });
+    const create = http.calls.find((call) => call.path === '/api/v2/servers')!;
+    expect(create.options.body).toEqual({
+      plan_id: 7,
+      location_id: 1,
+      template_slug: 'ubuntu-24-04',
+      hostname: `web-1-${marker}`,
+      ssh_key_ids: [55],
+    });
+    expect(JSON.stringify(http.calls)).not.toContain('never sent');
+    // A repeated dispatch reuses the key registered under the marker.
+    await adapter.create(request);
+    expect(
+      http.calls.filter((call) => call.path === '/api/v2/ssh-keys' && call.options.method === 'POST')
+    ).toHaveLength(1);
+    // A definite rejection removes the key; an uncertain one keeps it for reconciliation.
+    serverResponse = new HostingProviderError(422, false, 'rejected');
+    await expect(adapter.create(request)).rejects.toThrow('rejected');
+    expect(keys).toEqual([]);
+    await expect(adapter.releaseInstallKey(marker)).resolves.toEqual({ deleted: 0 });
+    await expect(adapter.releaseInstallKey('not-a-marker')).rejects.toBeInstanceOf(HostingProviderError);
+  });
+
+  it('exposes the marker from the hostname and reports an installing server as starting', async () => {
+    const marker = 'gw-33333333-3333-4333-8333-333333333333';
+    const http = new FakeHostingHttp((path) =>
+      path.endsWith('/status')
+        ? running
+        : { data: { ...detail().data, hostname: `web-1-${marker}`, status: 'installing' } }
+    );
+    const vm = await resource(http);
+    expect(vm).toMatchObject({ marker, powerState: 'starting' });
   });
 
   it('reads the EUR credit balance, paginated invoices and estimated monthly VM expenses', async () => {

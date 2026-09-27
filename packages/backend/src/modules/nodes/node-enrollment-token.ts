@@ -16,8 +16,8 @@ export interface NodeEnrollmentToken {
   selector: string;
 }
 
-export function nodeEnrollmentTokenExpiresAt(now: Date = new Date()): Date {
-  return new Date(now.getTime() + NODE_ENROLLMENT_TOKEN_TTL_MS);
+export function nodeEnrollmentTokenExpiresAt(now: Date = new Date(), ttlMs = NODE_ENROLLMENT_TOKEN_TTL_MS): Date {
+  return new Date(now.getTime() + ttlMs);
 }
 
 /** A NULL expiry is a token issued before expiries existed; it never expires. */
