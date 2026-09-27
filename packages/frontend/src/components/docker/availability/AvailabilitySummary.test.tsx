@@ -137,6 +137,13 @@ describe("AvailabilitySummary", () => {
         strictPending: false,
         copiesStoppedAt: null,
         voterMargin: { epoch: 2, joint: false, voters: 5, reachable: 3, required: 3, margin: 0 },
+        witness: {
+          memberId: "node-b",
+          kind: "node",
+          auto: true,
+          minRttMs: 1,
+          warning: "same_site",
+        },
       },
     } as DockerAvailabilityPolicy;
 
@@ -152,5 +159,9 @@ describe("AvailabilitySummary", () => {
     expect(screen.getByText("Bootstrapping")).toBeInTheDocument();
     expect(await screen.findByText("Node A")).toBeInTheDocument();
     expect(screen.getByText(/Voter reachability margin is insufficient/)).toBeInTheDocument();
+    expect(screen.getByText("Witness")).toBeInTheDocument();
+    expect(
+      screen.getByText(/witness is likely on the same site as a candidate/)
+    ).toBeInTheDocument();
   });
 });
