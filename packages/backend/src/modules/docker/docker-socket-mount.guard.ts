@@ -155,6 +155,18 @@ function hasConfigMountFields(config: { mounts?: unknown; volumes?: unknown } | 
   return !!config && (Object.hasOwn(config, 'mounts') || Object.hasOwn(config, 'volumes'));
 }
 
+/** Recreate request fields that never change what runs against the container's mounts (compared separately). */
+const NON_WORKLOAD_RECREATE_FIELDS = new Set(['env', 'labels', 'networks', 'mounts', 'volumes']);
+
+/**
+ * Whether a container recreate request can run other code against the container's host binds. Only a request
+ * limited to environment, labels, networks and unchanged mounts keeps the image; any other field (the image
+ * included, even under the same reference, since a pull can bring other code) counts as a change.
+ */
+export function containerRecreateChangesWorkload(request: Record<string, unknown>): boolean {
+  return Object.keys(request).some((key) => request[key] !== undefined && !NON_WORKLOAD_RECREATE_FIELDS.has(key));
+}
+
 export function assertDockerMountChangeAllowed(args: {
   nodeId: string;
   resourceId?: string;
@@ -164,6 +176,13 @@ export function assertDockerMountChangeAllowed(args: {
   currentInspect?: DockerInspectData | null;
   currentDefinitions?: NormalizedMountDefinition[];
   useCurrentWhenNextMissing?: boolean;
+  /**
+   * Whether the change can run other code against the workload's host binds: another image, command,
+   * entrypoint, user or runtime. Left out, it counts as a change. A recreate that keeps all of that and the
+   * mounts (only environment, secrets, labels or Gateway link networks differ) grants no new host access,
+   * so it needs no mounts scope from anyone.
+   */
+  workloadChanged?: boolean;
 }): { mountsChanged: boolean } {
   const currentDefinitions = args.currentDefinitions ?? normalizeMountDefinitionsFromInspect(args.currentInspect);
   const nextDefinitions = args.nextDefinitions
@@ -175,13 +194,14 @@ export function assertDockerMountChangeAllowed(args: {
 
   const resourceSuffix = args.resourceId ? `${args.nodeId}/${args.resourceId}` : args.nodeId;
   const hasMountScope = hasScope([...args.actorScopes], `docker:containers:mounts:${resourceSuffix}`);
-  const preservesHostBindCapability = currentDefinitions.some((definition) => definition.type === 'bind');
+  const preservesHostBindCapability =
+    args.workloadChanged !== false && currentDefinitions.some((definition) => definition.type === 'bind');
   if ((mountsChanged || preservesHostBindCapability) && !hasMountScope) {
     throw new AppError(
       403,
       'MISSING_DOCKER_MOUNTS_SCOPE',
       preservesHostBindCapability && !mountsChanged
-        ? 'Mutating a Docker container or deployment with host bind mounts requires docker:containers:mounts'
+        ? 'Changing the image, command or runtime of a Docker container or deployment with host bind mounts requires docker:containers:mounts'
         : 'Changing Docker container or deployment mounts requires docker:containers:mounts for this node'
     );
   }

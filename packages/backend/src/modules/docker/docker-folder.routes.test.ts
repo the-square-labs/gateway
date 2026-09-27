@@ -58,12 +58,39 @@ describe('Docker folder routes', () => {
     expect(getFolderTree).not.toHaveBeenCalled();
   });
 
-  it.each(['docker:compose:view', 'docker:compose:create'])('allows compose folder lookup with %s', async (scope) => {
+  it('lists every compose folder for a caller who views every project', async () => {
     const getFolderTree = vi.fn().mockResolvedValue([]);
     container.registerInstance(DockerFolderService, { getFolderTree } as never);
-    const response = await appWithScopes([scope]).request('/folders?resourceType=compose');
+    const response = await appWithScopes(['docker:compose:view']).request('/folders?resourceType=compose');
     expect(response.status).toBe(200);
     expect(getFolderTree).toHaveBeenCalledWith({ resourceType: 'compose', includeAllFolders: true });
+  });
+
+  it('does not list every folder for a creator who cannot view the projects in them', async () => {
+    const getFolderTree = vi.fn().mockResolvedValue([]);
+    container.registerInstance(DockerFolderService, { getFolderTree } as never);
+    const response = await appWithScopes(['docker:compose:create']).request('/folders?resourceType=compose');
+    expect(response.status).toBe(200);
+    expect(getFolderTree).toHaveBeenCalledWith({
+      resourceType: 'compose',
+      allowedFolderIds: [],
+      allowedNodeIds: [],
+      allowedResourceRefs: [],
+    });
+  });
+
+  it('keeps a folder-limited viewer to their folder even when they may create on the node', async () => {
+    const getFolderTree = vi.fn().mockResolvedValue([]);
+    container.registerInstance(DockerFolderService, { getFolderTree } as never);
+    const response = await appWithScopes([
+      `docker:compose:view:folder/${FOLDER_ID}`,
+      'docker:compose:create:9f0c2e1a-0000-4000-8000-000000000001',
+    ]).request('/folders?resourceType=compose');
+    expect(response.status).toBe(200);
+    expect(getFolderTree).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceType: 'compose', allowedFolderIds: [FOLDER_ID] })
+    );
+    expect(getFolderTree).not.toHaveBeenCalledWith(expect.objectContaining({ includeAllFolders: true }));
   });
 
   it('preserves folder restrictions when loading compose folders', async () => {

@@ -671,7 +671,9 @@ export class DockerManagementService {
     try {
       const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
       const data = this.parseResult(result);
-      return data?.State?.Status === 'running' ? 'running' : 'created';
+      // A crash-looping (restarting) container is meant to run: recreate it
+      // running so its restart policy keeps trying with the new configuration.
+      return data?.State?.Status === 'running' || data?.State?.Status === 'restarting' ? 'running' : 'created';
     } catch {
       return 'running';
     }

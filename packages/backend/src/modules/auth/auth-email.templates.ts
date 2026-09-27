@@ -5,14 +5,19 @@ export type AuthEmailKind =
   | 'password_setup'
   | 'password_reset'
   | 'email_otp_enabled'
-  | 'email_otp';
+  | 'email_otp'
+  | 'account_invitation';
+
+/** How an invited user signs in; decides the one sign-in hint in the invitation. */
+export type AccountInvitationSignIn = 'oidc' | 'password' | 'email_otp';
 
 export type AuthEmailInput =
   | { kind: 'smtp_configuration' }
   | { kind: 'password_setup'; actionUrl: string }
   | { kind: 'password_reset'; actionUrl: string }
   | { kind: 'email_otp_enabled'; actionUrl: string }
-  | { kind: 'email_otp'; code: string };
+  | { kind: 'email_otp'; code: string }
+  | { kind: 'account_invitation'; actionUrl: string; email: string; signIn: AccountInvitationSignIn };
 
 export interface AuthEmailMessage {
   subject: string;
@@ -82,6 +87,18 @@ function getEmailContent(input: AuthEmailInput): EmailContent {
           'This code expires in 10 minutes. We will never ask for it by phone, chat, or email. If you did not start this sign-in, no action is required.',
         code: input.code,
       };
+    case 'account_invitation': {
+      const signInHint = ACCOUNT_INVITATION_SIGN_IN_HINTS[input.signIn];
+      return {
+        subject: 'Gateway: an account was created for you',
+        title: 'Your Gateway account is ready',
+        body: `An administrator created a Gateway account for ${input.email}. ${signInHint}`,
+        text: `An administrator created a Gateway account for ${input.email}. ${signInHint}\n\nSign in to Gateway: ${input.actionUrl}`,
+        securityNote:
+          'Gateway will never ask for your password or a sign-in code by phone, chat, or email. If you were not expecting this account, contact your administrator.',
+        action: { label: 'Sign in to Gateway', url: input.actionUrl },
+      };
+    }
     case 'smtp_configuration':
       return {
         subject: 'Gateway SMTP test',
@@ -93,6 +110,13 @@ function getEmailContent(input: AuthEmailInput): EmailContent {
       };
   }
 }
+
+const ACCOUNT_INVITATION_SIGN_IN_HINTS: Record<AccountInvitationSignIn, string> = {
+  oidc: "Sign in with your organization's single sign-on (SSO) provider using this email address.",
+  password:
+    'A separate email contains a link to set your password (if it has expired, ask your administrator for a new one); then sign in with this email address and your password.',
+  email_otp: 'Enter this email address at sign-in and Gateway will email you a one-time code.',
+};
 
 function renderAuthEmail(content: EmailContent): string {
   const action = content.action

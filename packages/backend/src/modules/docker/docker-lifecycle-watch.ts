@@ -148,7 +148,11 @@ export function watchDockerRecreateByName(
         const newId = match.id ?? match.Id;
         const state = match.state ?? match.State ?? '';
 
-        if (newId !== oldContainerId && state === expectedState) {
+        // A replacement that started and now restarts under its restart policy
+        // was recreated as asked; waiting for it to stay up would hold the
+        // container until the timeout.
+        const reached = state === expectedState || (expectedState === 'running' && state === 'restarting');
+        if (newId !== oldContainerId && reached) {
           clearInterval(poll);
           try {
             await context.preserveContainerIdentity?.(nodeId, containerName, newId);

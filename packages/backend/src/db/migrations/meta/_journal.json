@@ -1471,6 +1471,34 @@
       "when": 1790400009000,
       "tag": "0209_reservation_holds",
       "breakpoints": true
+    },
+    {
+      "idx": 210,
+      "version": "7",
+      "when": 1790400010000,
+      "tag": "0210_user_invitation_sent_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 211,
+      "version": "7",
+      "when": 1790400011000,
+      "tag": "0211_availability_priority_mode",
+      "breakpoints": true
+    },
+    {
+      "idx": 212,
+      "version": "7",
+      "when": 1790400012000,
+      "tag": "0212_storage_link_observed_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 213,
+      "version": "7",
+      "when": 1790400013000,
+      "tag": "0213_docker_webhook_owner",
+      "breakpoints": true
     }
   ]
 }

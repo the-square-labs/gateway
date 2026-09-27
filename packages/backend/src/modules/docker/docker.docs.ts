@@ -575,6 +575,8 @@ export const deployDeploymentRoute = appRoute({
   path: '/nodes/{nodeId}/deployments/{deploymentId}/deploy',
   tags: ['Docker Deployments'],
   summary: 'Deploy a new inactive slot',
+  description:
+    'Rolls the deployment out to its standby slot, with the requested image or tag or the saved configuration. On a deployment with legacy host bind mounts, a requested image or tag needs docker:containers:mounts (new code gets that host access); redeploying the saved configuration needs none.',
   request: { params: deploymentParams, ...optionalJsonBody(DockerDeploymentDeploySchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -583,6 +585,8 @@ export const switchDeploymentRoute = appRoute({
   path: '/nodes/{nodeId}/deployments/{deploymentId}/switch',
   tags: ['Docker Deployments'],
   summary: 'Switch deployment slot',
+  description:
+    'Serves the standby slot as it was deployed. A standby deployed before the current managed database and storage links is recreated from its own release with the current link networks; the deployment keeps its saved configuration. That recreate keeps the standby image and mounts, so it needs no docker:containers:mounts.',
   request: { params: deploymentParams, ...jsonBody(DockerDeploymentSwitchSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -591,6 +595,8 @@ export const rollbackDeploymentRoute = appRoute({
   path: '/nodes/{nodeId}/deployments/{deploymentId}/rollback',
   tags: ['Docker Deployments'],
   summary: 'Rollback a deployment',
+  description:
+    'Serves the previous release from the standby slot. The release keeps the current managed database and storage links: their networks come from the current configuration (a link added since stays, a link removed since is not reattached) and their secrets are merged at deploy time. Rolling back to another image on a deployment with host bind mounts needs docker:containers:mounts.',
   request: { params: deploymentParams, ...optionalJsonBody(z.object({ force: z.boolean().optional() })) },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -615,6 +621,8 @@ export const upsertDeploymentWebhookRoute = appRoute({
   path: '/nodes/{nodeId}/deployments/{deploymentId}/webhook',
   tags: ['Docker Deployments'],
   summary: 'Configure deployment webhook',
+  description:
+    "Saving the webhook records the caller as the account its calls act for: on a workload with host bind mounts, a call that brings a new image needs that account's current docker:containers:mounts.",
   request: { params: deploymentParams, ...jsonBody(WebhookUpsertSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -631,6 +639,8 @@ export const regenerateDeploymentWebhookRoute = appRoute({
   path: '/nodes/{nodeId}/deployments/{deploymentId}/webhook/regenerate',
   tags: ['Docker Deployments'],
   summary: 'Regenerate deployment webhook token',
+  description:
+    "Rotating the token records the caller as the account the webhook calls act for: on a workload with host bind mounts, a call that brings a new image needs that account's current docker:containers:mounts.",
   request: { params: deploymentParams },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -1212,6 +1222,8 @@ export const triggerDockerWebhookRoute = appRoute({
   path: '/{token}',
   tags: ['Docker Webhooks'],
   summary: 'Trigger a Docker webhook',
+  description:
+    "Updates the image of the webhook's container or deployment. On a workload with legacy host bind mounts the call acts for the account that last saved the webhook and needs its current docker:containers:mounts; a webhook with no recorded account (saved before Gateway recorded one) is refused there until it is saved again.",
   security: [],
   request: { params: pathParamSchema('token'), ...jsonBody(WebhookTriggerSchema) },
   responses: okJson(UnknownDataResponseSchema),
@@ -1229,6 +1241,8 @@ export const upsertContainerWebhookRoute = appRoute({
   path: '/nodes/{nodeId}/containers/{containerName}/webhook',
   tags: ['Docker Webhooks'],
   summary: 'Configure container webhook',
+  description:
+    "Saving the webhook records the caller as the account its calls act for: on a workload with host bind mounts, a call that brings a new image needs that account's current docker:containers:mounts.",
   request: { params: containerNameParams, ...jsonBody(WebhookUpsertSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -1245,6 +1259,8 @@ export const regenerateContainerWebhookRoute = appRoute({
   path: '/nodes/{nodeId}/containers/{containerName}/webhook/regenerate',
   tags: ['Docker Webhooks'],
   summary: 'Regenerate container webhook token',
+  description:
+    "Rotating the token records the caller as the account the webhook calls act for: on a workload with host bind mounts, a call that brings a new image needs that account's current docker:containers:mounts.",
   request: { params: containerNameParams },
   responses: okJson(UnknownDataResponseSchema),
 });

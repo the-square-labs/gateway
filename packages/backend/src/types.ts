@@ -27,6 +27,9 @@ export interface User {
   aiApprovalMode?: 'always-ask' | 'normal' | 'bypass-non-destructive' | 'bypass-everything';
   folderId?: string | null;
   sortOrder?: number;
+  /** Admin user payloads: the first sign-in marker and when the account invitation email was sent. */
+  lastLoginAt?: string | null;
+  invitationSentAt?: string | null;
 }
 
 export interface SessionData {

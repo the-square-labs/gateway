@@ -5,8 +5,14 @@ import { dockerWebhooks } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { AuthService } from '@/modules/auth/auth.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import {
+  type AutomaticDeployAuthority,
+  resolveAutomaticDeployAuthority,
+  webhookDeployMountsRefusal,
+} from './automatic-deploy-authority.js';
 import type { DockerManagementService } from './docker.service.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { envListToMap, normalizeEnvRecord } from './docker-env-operations.js';
@@ -28,7 +34,9 @@ export class DockerWebhookService {
     private dispatch: NodeDispatchService,
     private registry: DockerRegistryService,
     private cleanup: DockerImageCleanupService,
-    private deployments?: DockerDeploymentService
+    private deployments?: DockerDeploymentService,
+    /** Reads the current permissions of the account a webhook call acts for (the one that last saved the webhook). */
+    private auth?: Pick<AuthService, 'getUserById'>
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -77,6 +85,8 @@ export class DockerWebhookService {
         .update(dockerWebhooks)
         .set({
           enabled: input.enabled ?? existing.enabled,
+          // Saving the webhook makes this account the one its calls act for.
+          updatedById: userId,
           updatedAt: new Date(),
         })
         .where(eq(dockerWebhooks.id, existing.id))
@@ -92,6 +102,8 @@ export class DockerWebhookService {
         containerName,
         targetType: 'container',
         enabled: input.enabled ?? true,
+        createdById: userId,
+        updatedById: userId,
       })
       .returning();
 
@@ -128,7 +140,7 @@ export class DockerWebhookService {
 
     const [updated] = await this.db
       .update(dockerWebhooks)
-      .set({ token: randomUUID(), updatedAt: new Date() })
+      .set({ token: randomUUID(), updatedById: userId, updatedAt: new Date() })
       .where(eq(dockerWebhooks.id, existing.id))
       .returning();
 
@@ -152,6 +164,12 @@ export class DockerWebhookService {
     tag?: string;
     userId?: string;
     webhookId?: string;
+    /**
+     * With `webhookId`: the account that last saved the webhook (`docker_webhooks.updated_by_id`). A webhook call acts
+     * for it, so a new image on a container with host bind mounts needs its current docker:containers:mounts. Left
+     * out or null, no account can authorize that and such a call is refused.
+     */
+    webhookOwnerId?: string | null;
   }): Promise<{ taskId: string; message: string }> {
     const managed = await this.docker.getManagedContainerConfiguration(params.nodeId, params.containerId);
     const { tag, userId, webhookId } = params;
@@ -227,6 +245,7 @@ export class DockerWebhookService {
     // Clear our transition — recreateWithConfig will set 'recreating'
     this.docker.clearTransition(nodeId, containerName);
 
+    let authority: AutomaticDeployAuthority | null = null;
     try {
       if (managed) {
         // The coordinator merges this image-only patch, preserves shouldRun and
@@ -237,12 +256,23 @@ export class DockerWebhookService {
         });
       } else {
         const config = buildRecreateConfig(inspectData as Record<string, unknown>, targetRef);
+        // A webhook call acts for the account that last saved the webhook. The mount guard asks for its scopes only
+        // when the container has host bind mounts; Availability containers have no mounts at all.
+        authority = webhookId
+          ? await resolveAutomaticDeployAuthority(this.auth, { updatedById: params.webhookOwnerId })
+          : null;
         await this.docker.recreateWithConfig(nodeId, containerId, config, userId ?? null, {
           skipImagePull: true,
           skipWebhookCleanup: true,
+          ...(authority ? { actorScopes: authority.scopes } : {}),
         });
       }
-    } catch (err) {
+    } catch (caught) {
+      const workload = `container "${containerName}"`;
+      const err =
+        (authority
+          ? webhookDeployMountsRefusal(caught, authority, workload, 'update')
+          : webhookHostBindRefusal(caught, workload)) ?? caught;
       await this.tasks
         .update(task.id, {
           status: 'failed',
@@ -293,7 +323,9 @@ export class DockerWebhookService {
     }
     if (webhook.targetType === 'deployment') {
       if (!this.deployments) throw new AppError(500, 'DEPLOYMENTS_UNAVAILABLE', 'Deployment service unavailable');
-      return this.deployments.triggerWebhook(webhook.id, tag);
+      // The deployment acts for the account that last saved the webhook, read from its current permissions.
+      const authority = await resolveAutomaticDeployAuthority(this.auth, { updatedById: webhook.updatedById });
+      return this.deployments.triggerWebhook(webhook.id, tag, authority);
     }
     return this.triggerUpdate({
       nodeId: webhook.nodeId,
@@ -302,6 +334,7 @@ export class DockerWebhookService {
       tag,
       userId,
       webhookId: webhook.id,
+      webhookOwnerId: webhook.updatedById,
     });
   }
 
@@ -314,6 +347,20 @@ export class DockerWebhookService {
 }
 
 // ─── Module-level helpers ────────────────────────────────────────────
+
+/**
+ * An image update that acts for no account cannot give a workload with host bind mounts a new image: that runs new
+ * code with the host access and needs docker:containers:mounts. The refusal names the scope and the way out. Webhook
+ * calls act for the account that last saved the webhook instead (`webhookDeployMountsRefusal`).
+ */
+export function webhookHostBindRefusal(error: unknown, workload: string): AppError | null {
+  if ((error as { code?: unknown } | null)?.code !== 'MISSING_DOCKER_MOUNTS_SCOPE') return null;
+  return new AppError(
+    403,
+    'MISSING_DOCKER_MOUNTS_SCOPE',
+    `Image update refused: ${workload} has host bind mounts, so running a new image on it needs docker:containers:mounts, and this update acts for no account that holds it. Update the image as a user who holds docker:containers:mounts on it.`
+  );
+}
 
 /** Parse "image:tag" into components. Handles images with registry prefixes. */
 function parseImageRef(ref: string): { imageName: string; currentTag: string } {

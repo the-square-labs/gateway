@@ -179,6 +179,8 @@ export const createManagedStorageBindingRoute = appRoute({
   path: '/{id}/bindings',
   tags: [TAG],
   summary: 'Bind a workload to a managed object storage cluster over a private connector',
+  description:
+    'The link is saved into the workload whatever it is doing and the call does not wait for the workload to become healthy. A ready link reports observedState target_applied while the workload has not run it yet (never started, stopped, or its rollout pending or failed) and active once its runtime carries it. A Git-source container whose first build has not created it yet is linked by its name, authorized on its reserved identity, and its first build starts it with the link.',
   request: { params: IdParamSchema, ...jsonBody(CreateManagedStorageBindingSchema) },
   responses: createdJson(UnknownDataResponseSchema),
 });

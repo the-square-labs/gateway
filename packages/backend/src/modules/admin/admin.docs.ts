@@ -201,6 +201,15 @@ export const sendAdminUserPasswordSetupRoute = appRoute({
   responses: okJson(z.object({ message: z.string(), purpose: z.enum(['password_setup', 'password_reset']) })),
 });
 
+export const sendAdminUserInvitationRoute = appRoute({
+  method: 'post',
+  path: '/users/{id}/invitation',
+  tags: ['Admin'],
+  summary: 'Email the one-time account invitation to a user who has never signed in',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const updateUserAdditionalPermissionsRoute = appRoute({
   method: 'put',
   path: '/users/{id}/additional-permissions',

@@ -25,6 +25,7 @@ function setup(managed: Record<string, unknown> | null) {
       id: 'webhook-1',
       enabled: true,
       targetType: 'container',
+      updatedById: 'owner-1',
       nodeId: 'origin-node',
       containerName: 'app',
     }),
@@ -68,6 +69,7 @@ describe('Docker webhook trigger resource resolution', () => {
       containerId: 'canonical-app',
       tag: 'next',
       webhookId: 'webhook-1',
+      webhookOwnerId: 'owner-1',
     });
   });
 
@@ -81,6 +83,7 @@ describe('Docker webhook trigger resource resolution', () => {
       containerId: 'physical-id',
       tag: 'next',
       webhookId: 'webhook-1',
+      webhookOwnerId: 'owner-1',
     });
     expect(docker.getManagedContainerConfiguration.mock.invocationCallOrder[0]).toBeLessThan(
       docker.listContainers.mock.invocationCallOrder[0]!

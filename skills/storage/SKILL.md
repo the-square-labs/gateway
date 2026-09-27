@@ -23,7 +23,7 @@ Start with `using-gateway` for connection, discovery, and safety rules. Read `re
 `manage_managed_storage({ operation, ... })`:
 
 1. `catalog`, then `create` with `type: "seaweedfs"`, optional size and `memoryMb` (at least 512), and `folderId`. Poll `get` with `managedStorageId` until ready.
-2. `list_bindings`, `create_binding`, `delete_binding`: private, bucket-scoped workload links (need `storage:iam` plus permission on the target workload).
+2. `list_bindings`, `create_binding`, `delete_binding`: private, bucket-scoped workload links for a Container or Deployment (need `storage:iam` plus permission on the target workload). The workload need not run: a link on a stopped, crash-looping, failed, or not yet deployed workload, or on a Git-source Container before its first build (by its name), is saved without waiting. `list_bindings` shows `observedState: "target_applied"` until the workload runs with the link, then `active`. A Deployment rollback keeps the current links. The target Docker Node must be online.
 3. `list_access_keys`, `create_access_key`, `remove_access_key`: scoped IAM keys. `create_access_key` returns its secret exactly once; `list` never returns key or root secrets.
 4. `reveal_credentials`: the cluster root keys, only on an explicit request (`storage:credentials:reveal`, refused during impersonation).
 5. `ca_certificate`: the public Storage CA (PEM and SHA-256) for S3 clients of a TLS cluster; needs only `storage:view`.
@@ -42,7 +42,7 @@ Only on the user's explicit request. It is a guided procedure run one tool step 
 ## Verify
 
 - Copy or migration cutover: the only acceptable proof is a `copy_data_status` result with `report.clean: true` on the final sync pass.
-- Workload link: the workload runs with clean logs after the link is created or moved.
+- Workload link: the link is `active` and the workload runs with clean logs after the link is created or moved.
 - Credential-affecting changes (freeze, unfreeze, key import): a real client request through the new credential or endpoint, not only the API acknowledgment.
 
 ## Pitfalls

@@ -20,6 +20,12 @@ export interface DockerAvailabilityPolicyInput {
   selectedNodeIds: string[];
   rolloutPolicy: DockerAvailabilityRolloutPolicy;
   offlineReplacementGraceSeconds: number;
+  /** Serve from the first available nodes of nodePriority and move back to them when they return. */
+  priorityMode: boolean;
+  /** Ordered node IDs: the first is the primary, the rest are backups in order. */
+  nodePriority: string[];
+  /** How long a returning higher-priority node must stay healthy before the workload moves back. */
+  failbackDelaySeconds: number;
 }
 
 export interface DockerAvailabilityPolicyUpdateInput {
@@ -29,6 +35,9 @@ export interface DockerAvailabilityPolicyUpdateInput {
   selectedNodeIds?: string[];
   rolloutPolicy?: DockerAvailabilityRolloutPolicy;
   offlineReplacementGraceSeconds?: number;
+  priorityMode?: boolean;
+  nodePriority?: string[];
+  failbackDelaySeconds?: number;
 }
 
 export interface DockerAvailabilityIssue {

@@ -14,11 +14,7 @@ import { DatabaseConnectionService } from '@/modules/databases/databases.service
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
-import {
-  DockerAccessResourceService,
-  hasDockerResourceScope,
-} from '@/modules/docker/docker-access-resource.service.js';
-import { DockerBuildQuery } from '@/modules/docker/docker-build-query.js';
+import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
@@ -190,6 +186,7 @@ const DashboardBootstrapRequestSchema = z.object({
               z.object({
                 id: z.string().min(1).max(256),
                 nodeId: z.string().uuid(),
+                // 'build' comes only from clients older than the removal of build pins; it is skipped.
                 kind: z.enum(['container', 'deployment', 'build', 'compose']),
                 scopeResourceId: z.string().optional(),
               })
@@ -211,6 +208,7 @@ const DashboardBootstrapRequestSchema = z.object({
               z.object({
                 id: z.string().min(1).max(256),
                 nodeId: z.string().uuid(),
+                // 'build' comes only from clients older than the removal of build pins; it is skipped.
                 kind: z.enum(['container', 'deployment', 'build', 'compose']),
                 scopeResourceId: z.string().optional(),
               })
@@ -231,7 +229,7 @@ type DashboardDockerResource = {
   nodeId: string;
   name: string;
   state?: string;
-  kind: 'container' | 'deployment' | 'build' | 'compose';
+  kind: 'container' | 'deployment' | 'compose';
   scopeBase: 'docker:containers:view' | 'docker:compose:view';
   scopeResourceId?: string;
 };
@@ -562,35 +560,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
           : [];
         const resolved: DashboardDockerResource[] = [];
         for (const resource of forNode) {
-          if (resource.kind === 'build') {
-            const build = await container
-              .resolve(DockerBuildQuery)
-              .get(resource.id)
-              .catch(() => null);
-            if (build?.target.kind === 'pages_project') continue;
-            if (!build || build.target.nodeId !== nodeId) continue;
-            const scopeResourceId =
-              build.target.kind === 'container'
-                ? await container.resolve(DockerAccessResourceService).resolveContainer(nodeId, {
-                    name: build.target.containerName,
-                  })
-                : build.target.kind === 'deployment'
-                  ? build.target.deploymentId
-                  : build.target.composeProjectId;
-            const baseScope =
-              build.target.kind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view';
-            if (!scopeResourceId || !hasDockerResourceScope(scopes, baseScope, nodeId, scopeResourceId)) continue;
-            resolved.push({
-              id: resource.id,
-              nodeId,
-              name: `${build.target.name} · ${build.commitSha.slice(0, 8)}`,
-              state: build.status,
-              kind: 'build',
-              scopeBase: baseScope,
-              scopeResourceId,
-            });
-            continue;
-          }
+          if (resource.kind === 'build') continue;
           if (resource.kind === 'compose') {
             if (!hasDockerResourceScope(scopes, 'docker:compose:view', nodeId, resource.id)) continue;
             const project = await container

@@ -194,11 +194,11 @@ export async function dockerFolderTreeOptions(scopes: string[], resourceType: Do
   ) {
     throw new AppError(403, 'FORBIDDEN', 'Docker folders require resource view access or docker:folders:manage');
   }
+  // Only a caller who sees every resource (or manages every folder) sees every folder. A creator
+  // limited in what they view sees the folders they were granted and the ones holding resources
+  // they can view, so a folder-limited user never lists other people's (empty) folders.
   const canManageFolders = hasScope(scopes, 'docker:folders:manage');
-  return canManageFolders ||
-    hasScope(scopes, viewScope) ||
-    hasScope(scopes, createScope) ||
-    getResourceScopedIds(scopes, createScope).some((id) => !id.includes('/'))
+  return canManageFolders || hasScope(scopes, viewScope)
     ? { resourceType, includeAllFolders: true }
     : {
         resourceType,

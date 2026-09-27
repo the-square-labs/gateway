@@ -301,6 +301,13 @@ export type ManagedStorageAccessKeyRow = typeof managedStorageAccessKeys.$inferS
 export const storageBindingTargetTypeEnum = pgEnum('storage_binding_target_type', ['container', 'deployment']);
 export const storageBindingStatusEnum = pgEnum('storage_binding_status', ['creating', 'ready', 'error', 'deleting']);
 
+/**
+ * Whether a ready link already reached the workload's runtime. `target_applied`: the link is saved in the
+ * workload's desired configuration (a deployment's config, a container's secrets) and takes effect when the
+ * workload is next created, started or rolled out. `active`: the running (or stopped) runtime carries it.
+ */
+export type ManagedStorageBindingObservedState = 'target_applied' | 'active';
+
 /** Environment variable names a binding injects into its target workload. */
 export interface StorageBindingEnvironment {
   endpoint?: string;
@@ -344,6 +351,10 @@ export const managedStorageBindings = pgTable(
     principal: varchar('principal', { length: 128 }),
     buckets: jsonb('buckets').$type<string[]>().notNull().default([]),
     status: storageBindingStatusEnum('status').notNull().default('creating'),
+    observedState: varchar('observed_state', { length: 32 })
+      .$type<ManagedStorageBindingObservedState>()
+      .notNull()
+      .default('active'),
     lastError: text('last_error'),
     createdById: uuid('created_by_id')
       .notNull()

@@ -1006,7 +1006,8 @@ export async function initializeContainer(): Promise<void> {
     nodeDispatch,
     dockerRegistryService,
     dockerImageCleanupService,
-    dockerDeploymentService
+    dockerDeploymentService,
+    authService
   );
   container.registerInstance(DockerWebhookService, dockerWebhookService);
   const dockerBuildService = commercialEdition.createDockerBuild(

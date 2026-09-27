@@ -21,6 +21,9 @@ const POLICY_FIELDS = [
   'selectedNodeIds',
   'rolloutPolicy',
   'offlineReplacementGraceSeconds',
+  'priorityMode',
+  'nodePriority',
+  'failbackDelaySeconds',
 ] as const;
 const MANAGE_OPERATIONS = new Set(['enable', 'update', 'disable', 'retry_operation']);
 

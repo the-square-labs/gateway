@@ -55,6 +55,7 @@ export type DockerAvailabilityOperationType =
   | 'heal'
   | 'disable'
   | 'stale_cleanup'
+  | 'failback'
   | 'start'
   | 'stop'
   | 'restart';
@@ -128,6 +129,12 @@ export const dockerAvailabilityPolicies = pgTable(
       .notNull()
       .default({ maxUnavailable: 0, maxSurge: 1, drainSeconds: 30 }),
     offlineReplacementGraceSeconds: integer('offline_replacement_grace_seconds').notNull().default(15),
+    // Priority mode: serving placements go to the first available nodes of nodePriority (the first is the
+    // primary), and the workload moves back to a higher-priority node once it has been healthy for
+    // failbackDelaySeconds. selectedNodeIds still decides which nodes are eligible at all.
+    priorityMode: boolean('priority_mode').notNull().default(false),
+    nodePriority: text('node_priority').array().notNull().default([]),
+    failbackDelaySeconds: integer('failback_delay_seconds').notNull().default(300),
     status: varchar('status', { length: 32 }).$type<DockerAvailabilityPolicyStatus>().notNull().default('single'),
     lastErrorCode: text('last_error_code'),
     lastErrorMessage: text('last_error_message'),
@@ -152,6 +159,10 @@ export const dockerAvailabilityPolicies = pgTable(
     check(
       'docker_availability_policies_generation_check',
       sql`${table.desiredGeneration} >= 1 AND ${table.offlineReplacementGraceSeconds} BETWEEN 0 AND 3600`
+    ),
+    check(
+      'docker_availability_policies_priority_check',
+      sql`${table.failbackDelaySeconds} BETWEEN 0 AND 3600 AND (NOT ${table.priorityMode} OR cardinality(${table.nodePriority}) > 0)`
     ),
     uniqueIndex('docker_availability_policies_container_unique')
       .on(table.sourceNodeId, table.containerName)

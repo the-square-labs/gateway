@@ -923,6 +923,8 @@ export class AuthService {
         aiApprovalMode: u.aiApprovalMode,
         folderId: u.folderId,
         sortOrder: u.sortOrder,
+        lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
+        invitationSentAt: u.invitationSentAt?.toISOString() ?? null,
       };
     });
   }

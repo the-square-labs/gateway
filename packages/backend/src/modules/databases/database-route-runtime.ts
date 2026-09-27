@@ -21,6 +21,7 @@ import {
 import { decodeComposeServiceTarget } from '@/modules/docker/compose/compose-managed-bindings.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { assertDockerResourceScope } from '@/modules/docker/docker-access.middleware.js';
+import { resolveBindingTargetContainerIdentity } from '@/modules/docker/docker-binding-target-identity.js';
 import { isGatewayInternalContainer } from '@/modules/docker/docker-internal-containers.js';
 import { RenewManagedCertificateSchema } from '@/modules/managed-workloads/certificate-renewal.docs.js';
 import {
@@ -152,6 +153,7 @@ export const databaseRouteRuntime = {
   DockerManagementService,
   assertDockerResourceScope,
   isGatewayInternalContainer,
+  resolveBindingTargetContainerIdentity,
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
   MoveResourcesToFolderSchema,

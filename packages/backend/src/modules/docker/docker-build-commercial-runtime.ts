@@ -26,6 +26,7 @@ import {
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 
+import { resolveAutomaticDeployAuthority } from './automatic-deploy-authority.js';
 import { DockerManagementService } from './docker.service.js';
 import { DockerAccessResourceService } from './docker-access-resource.service.js';
 import {
@@ -105,4 +106,5 @@ export const dockerBuildCommercialRuntime = {
   runAsDockerBuildRollout,
   loggerDockerBuildService,
   loggerDockerBuildRunner,
+  resolveAutomaticDeployAuthority,
 };

@@ -219,6 +219,8 @@ export const createManagedDatabaseBindingRoute = appRoute({
   path: '/managed/{id}/bindings',
   tags: ['Databases'],
   summary: 'Create a managed database binding',
+  description:
+    "The link is saved into the workload whatever it is doing and the call does not wait for the workload to become healthy; observedState is target_applied until the workload runs it, then active. A Git-source container whose first build has not created it yet is linked by its name, authorized on its reserved identity, and its first build starts it with the link. A Compose service may be linked before the project's first revision or while a build rollout or another operation holds the project, by a service name the next revision defines; the link fails with the reason when that revision lacks the service.",
   request: { params: IdParamSchema, ...jsonBody(CreateManagedDatabaseBindingSchema) },
   responses: createdJson(UnknownDataResponseSchema),
 });

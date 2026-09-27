@@ -49,6 +49,8 @@ export const users = pgTable(
     folderId: uuid('folder_id').references((): AnyPgColumn => adminUserFolders.id, { onDelete: 'set null' }),
     sortOrder: integer('sort_order').notNull().default(0),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+    // Set once when the account invitation email is sent; stays null if sending failed.
+    invitationSentAt: timestamp('invitation_sent_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

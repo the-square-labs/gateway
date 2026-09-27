@@ -244,7 +244,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'deploy_docker_deployment',
     description:
-      'Deploy a new inactive slot for a blue/green Docker deployment, optionally with a full image reference or a new tag. This is the deployment-safe replacement for updating a managed slot container image.',
+      'Deploy a new inactive slot for a blue/green Docker deployment, optionally with a full image reference or a new tag. This is the deployment-safe replacement for updating a managed slot container image. On a deployment with legacy host bind mounts, an image or tag needs docker:containers:mounts (a new image runs new code with that host access); redeploying the saved configuration, as a link change does, needs none.',
     parameters: {
       type: 'object',
       properties: {
@@ -265,7 +265,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'switch_docker_deployment_slot',
     description:
-      'Switch a blue/green Docker deployment to the specified slot. Use only with the Gateway deployment ID and slot name, not a container ID.',
+      'Switch a blue/green Docker deployment to the specified slot. Use only with the Gateway deployment ID and slot name, not a container ID. The standby starts as it was deployed; a standby deployed before the current managed database and storage links is recreated from its own release with those links. That recreate keeps the standby image and mounts, so it needs no docker:containers:mounts even with host bind mounts.',
     parameters: {
       type: 'object',
       properties: {
@@ -283,7 +283,8 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'rollback_docker_deployment',
-    description: 'Rollback a blue/green Docker deployment to the inactive previous slot.',
+    description:
+      'Rollback a blue/green Docker deployment to the inactive previous slot. The previous release keeps the current managed database and storage links: a link added since stays attached and a link removed since is not reattached. Rolling back to another image on a deployment with host bind mounts needs docker:containers:mounts.',
     parameters: {
       type: 'object',
       properties: {
@@ -756,7 +757,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_compose',
     description:
-      'Inspect and manage first-class single-node Docker Compose Projects. Supports discovery, validation, create/adopt/delete, immutable revisions, lifecycle operations, operation history, project secrets, and recent service logs (logs, optionally one serviceName). Managed mutations require the Compose entitlement and exact docker:compose resource scopes. While a Git-source build rollout owns a project, revision, secret, and lifecycle changes are refused with 409 BUILD_ROLLOUT_IN_PROGRESS until it finishes.',
+      'Inspect and manage first-class single-node Docker Compose Projects. Supports discovery, validation, create/adopt/delete, immutable revisions, lifecycle operations, operation history, project secrets, and recent service logs (logs, optionally one serviceName). Managed mutations require the Compose entitlement and exact docker:compose resource scopes. While a Git-source build rollout owns a project, revision, secret, and lifecycle changes are refused with 409 BUILD_ROLLOUT_IN_PROGRESS until it finishes. operation_start pull_apply applies a revision with the managed database links that exist when it runs: links deleted since the revision was built are left out (their variables, secrets and network), links the project runs are kept and links saved pending are added when the revision defines their service. When that changes the revision, a copy of it is applied (the operation names that revision); it is refused when it lacks the service of a link the project runs.',
     parameters: {
       type: 'object',
       properties: {
@@ -881,7 +882,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_source',
     description:
-      'Inspect, attach, update, remove, resolve, or manually build the Git source bound directly to an existing Docker container, blue/green deployment, or Compose Project, or create a new container, deployment, or Compose Project from a Git source (create). pending reads a container that exists only as a queued first source build. Also lists the Git connectors a source can come from (connectors: id, name, provider) and their repositories (repositories, connectorId); both need a create or edit scope of the workload the source is for and list only what the Git scopes of the caller cover. Attaching or changing a source (create, upsert) and a manual build also need integrations:<provider>:use on that repository: unqualified, or limited to its connector, GitLab group or GitHub owner, or the exact project or repository. Manages source-scoped Build Secrets without exposing secret values. Builds always resolve an exact commit and deploy only approved immutable artifacts; while a build rollout deploys, other changes to its target are refused with 409 BUILD_ROLLOUT_IN_PROGRESS.',
+      'Inspect, attach, update, remove, resolve, or manually build the Git source bound directly to an existing Docker container, blue/green deployment, or Compose Project, or create a new container, deployment, or Compose Project from a Git source (create). pending reads a container that exists only as a queued first source build. Also lists the Git connectors a source can come from (connectors: id, name, provider) and their repositories (repositories, connectorId); both need a create or edit scope of the workload the source is for and list only what the Git scopes of the caller cover. Attaching or changing a source (create, upsert) and a manual build also need integrations:<provider>:use on that repository: unqualified, or limited to its connector, GitLab group or GitHub owner, or the exact project or repository. Manages source-scoped Build Secrets without exposing secret values. Builds always resolve an exact commit and deploy only approved immutable artifacts; while a build rollout deploys, other changes to its target are refused with 409 BUILD_ROLLOUT_IN_PROGRESS. Automatic deployments act for the account that last saved the source (its settings or Build Secrets): a new image on a workload with host bind mounts deploys only while that account holds docker:containers:mounts on it, checked when the rollout runs; otherwise the build fails with MISSING_DOCKER_MOUNTS_SCOPE naming the account and the fix (grant the scope, or save the source as a user who holds it). get returns composeServiceNames for a Compose source: the services of the Compose file it resolved, which the project can be linked to before its first revision.',
     parameters: {
       type: 'object',
       properties: {
@@ -1216,7 +1217,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_availability',
     description:
-      'Run a Docker container, blue/green deployment, or Compose Project across several Docker nodes (replicated) or with automatic failover. preflight checks eligibility and candidate nodes for a proposed policy; enable applies it; get and get_by_resource read the policy with placements; list_operations pages rollout history; update changes mode, replicas, node selection, rollout policy, or offline grace; retry_operation retries a failed operation; disable returns the workload to one node and requires survivingPlacementId plus the typed confirmation shown by the UI. Mutations need docker:availability:manage; the workload, candidate nodes, and dependencies are authorized like the Availability routes.',
+      'Run a Docker container, blue/green deployment, or Compose Project across several Docker nodes (replicated) or with automatic failover. preflight checks eligibility and candidate nodes for a proposed policy; enable applies it; get and get_by_resource read the policy with placements; list_operations pages rollout history; update changes mode, replicas, node selection, rollout policy, offline grace, or priority mode; priorityMode with an ordered nodePriority (first node is the primary, the rest are backups in order; only eligible nodes, no duplicates) serves from the first available nodes and moves the workload back (a failback operation) once a higher-priority node has stayed healthy for failbackDelaySeconds; retry_operation retries a failed operation; disable returns the workload to one node and requires survivingPlacementId plus the typed confirmation shown by the UI. Mutations need docker:availability:manage; the workload, candidate nodes, and dependencies are authorized like the Availability routes.',
     parameters: {
       type: 'object',
       properties: {
@@ -1267,6 +1268,22 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
           additionalProperties: false,
         },
         offlineReplacementGraceSeconds: { type: 'integer', minimum: 0, maximum: 3600 },
+        priorityMode: {
+          type: 'boolean',
+          description: 'Serve from the first available nodes of nodePriority and fail back to them. Default: false.',
+        },
+        nodePriority: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Ordered node UUIDs: primary first, then backups. Required with priorityMode; only eligible (selected) nodes, no duplicates.',
+        },
+        failbackDelaySeconds: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 3600,
+          description: 'Seconds a returning higher-priority node must stay healthy before failback. Default: 300.',
+        },
         survivingPlacementId: { type: 'string', description: 'disable: placement UUID that keeps running.' },
         confirmation: { type: 'string', description: 'disable: typed confirmation text.' },
         page: { type: 'integer', minimum: 1, description: 'list_operations page. Default: 1' },

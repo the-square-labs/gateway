@@ -24,6 +24,7 @@ import {
   restoreAdminUser,
   revokeAdminUserSession,
   revokeAllAdminUserSessions,
+  sendAdminUserInvitation,
   sendAdminUserPasswordLink,
   setAdminUserBlocked,
   updateAdminUserAdditionalPermissions,
@@ -388,6 +389,8 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
         return resetAdminUserAvatar(actor, userId, services);
       case 'send_password_link':
         return sendAdminUserPasswordLink(actor, userId, services);
+      case 'send_invitation':
+        return sendAdminUserInvitation(actor, userId, services);
       case 'list_sessions':
         // Assistant and MCP calls are not a browser session, so no session is marked current.
         return listAdminUserSessions(actor, userId, '', services);

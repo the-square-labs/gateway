@@ -12,6 +12,7 @@ Start with `using-gateway` for connection, discovery, and safety rules; its conn
 Every user belongs to exactly one permission group. Built-in groups (`system-admin`, `admin`, `operator`, `viewer`, `guest`) cannot be modified. Custom groups hold any scope combination and nest one level: a top-level group can be a parent, a nested group cannot have children, and inherited scopes add to the member's effective scopes.
 
 - `list_users`, `manage_user` for general administration.
+- `manage_user` `send_invitation` emails a new user the one-time account invitation; it works only before their first sign-in and needs verified SMTP and the Gateway public URL. `list_users` shows `lastLoginAt` and `invitationSentAt`. The Gateway setting `generalSettings.sendInvitationOnUserCreate` (off by default) sends it on every `create_user`; if that send fails, the user is still created with `invitationSentAt: null`.
 - `update_user_role(userId, groupId)` changes effective permissions immediately.
 - `set_user_additional_permissions(userId, additionalScopes)` **replaces** the user's extra scopes; `[]` resets them without touching the group. Read the current `additionalScopes` first when adding one, and grant only scopes the acting administrator holds.
 - `set_user_blocked` blocks or unblocks.

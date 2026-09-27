@@ -30,6 +30,7 @@ import {
   restoreAdminUser,
   revokeAdminUserSession,
   revokeAllAdminUserSessions,
+  sendAdminUserInvitation,
   sendAdminUserPasswordLink,
   setAdminUserBlocked,
   updateAdminUserAdditionalPermissions,
@@ -79,6 +80,7 @@ import {
   restoreAdminUserRoute,
   revokeAdminUserSessionRoute,
   revokeAllAdminUserSessionsRoute,
+  sendAdminUserInvitationRoute,
   sendAdminUserPasswordSetupRoute,
   updateAdminUserFolderRoute,
   updateAuthSettingsRoute,
@@ -282,6 +284,11 @@ adminRoutes.openapi({ ...resetUserAvatarRoute, middleware: requireScopeForResour
 adminRoutes.openapi(
   { ...sendAdminUserPasswordSetupRoute, middleware: requireScopeForResource('admin:users', 'id') },
   async (c) => c.json(await sendAdminUserPasswordLink(adminUserActor(c), c.req.param('id')!))
+);
+
+adminRoutes.openapi(
+  { ...sendAdminUserInvitationRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => c.json(await sendAdminUserInvitation(adminUserActor(c), c.req.param('id')!))
 );
 
 adminRoutes.openapi({ ...resetAdminUserMfaRoute, middleware: requireScope('admin:system') }, async (c) =>

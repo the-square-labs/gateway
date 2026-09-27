@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertDockerMountChangeAllowed,
+  containerRecreateChangesWorkload,
   normalizeMountDefinitionsFromConfig,
   normalizeMountDefinitionsFromInspect,
 } from './docker-socket-mount.guard.js';
@@ -143,5 +144,72 @@ describe('Docker mount scope guard', () => {
         nextConfig: { mounts: [{ hostPath: '/srv/app/config', containerPath: '/config', readOnly: true }] },
       })
     ).toThrowError(/docker:containers:mounts/);
+  });
+
+  describe('a recreate that keeps the image and the mounts', () => {
+    const hostBind = normalizeMountDefinitionsFromConfig({
+      mounts: [{ hostPath: '/srv/app/config', containerPath: '/config', readOnly: false }],
+    });
+
+    it('needs no mounts scope from anyone when only environment, labels or link networks change', () => {
+      expect(
+        assertDockerMountChangeAllowed({
+          nodeId: 'node-1',
+          resourceId: 'deployment-1',
+          actorScopes: [],
+          currentDefinitions: hostBind,
+          nextConfig: { mounts: [{ hostPath: '/srv/app/config', containerPath: '/config', readOnly: false }] },
+          workloadChanged: false,
+        })
+      ).toEqual({ mountsChanged: false });
+    });
+
+    it('still needs the mounts scope for another image, and when the workload change is not stated', () => {
+      for (const workloadChanged of [true, undefined]) {
+        expect(() =>
+          assertDockerMountChangeAllowed({
+            nodeId: 'node-1',
+            resourceId: 'deployment-1',
+            actorScopes: ['docker:containers:manage:node-1'],
+            currentDefinitions: hostBind,
+            nextDefinitions: hostBind,
+            workloadChanged,
+          })
+        ).toThrowError(/Changing the image, command or runtime .* requires docker:containers:mounts/);
+      }
+      expect(
+        assertDockerMountChangeAllowed({
+          nodeId: 'node-1',
+          resourceId: 'deployment-1',
+          actorScopes: ['docker:containers:mounts:node-1/deployment-1'],
+          currentDefinitions: hostBind,
+          nextDefinitions: hostBind,
+          workloadChanged: true,
+        })
+      ).toEqual({ mountsChanged: false });
+    });
+
+    it('still needs the mounts scope when the mounts themselves change', () => {
+      expect(() =>
+        assertDockerMountChangeAllowed({
+          nodeId: 'node-1',
+          actorScopes: [],
+          currentDefinitions: hostBind,
+          nextConfig: { mounts: [] },
+          workloadChanged: false,
+        })
+      ).toThrowError(/Changing Docker container or deployment mounts/);
+    });
+
+    it('treats only environment, labels, networks and mounts as leaving a container recreate on its image', () => {
+      expect(containerRecreateChangesWorkload({ env: { A: '1' }, labels: { team: 'a' }, networks: ['app'] })).toBe(
+        false
+      );
+      expect(containerRecreateChangesWorkload({ env: { A: '1' }, image: undefined })).toBe(false);
+      // The same image reference can pull other code, and a command or restart change is not a link change.
+      expect(containerRecreateChangesWorkload({ image: 'nginx:latest' })).toBe(true);
+      expect(containerRecreateChangesWorkload({ env: { A: '1' }, command: ['sh'] })).toBe(true);
+      expect(containerRecreateChangesWorkload({ restartPolicy: 'always' })).toBe(true);
+    });
   });
 });

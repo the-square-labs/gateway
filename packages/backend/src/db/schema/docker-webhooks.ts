@@ -1,6 +1,7 @@
 import { boolean, pgTable, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { dockerDeployments } from './docker-deployments.js';
 import { nodes } from './nodes.js';
+import { users } from './users.js';
 
 export const dockerWebhooks = pgTable(
   'docker_webhooks',
@@ -14,6 +15,13 @@ export const dockerWebhooks = pgTable(
     deploymentId: uuid('deployment_id').references(() => dockerDeployments.id, { onDelete: 'cascade' }),
     token: uuid('token').notNull().defaultRandom(),
     enabled: boolean('enabled').notNull().default(true),
+    /**
+     * The account that created the webhook, and the one that last changed it (enable, disable, token rotation). A
+     * webhook call that gives a workload with host bind mounts a new image acts for `updatedById`, checked against
+     * its current docker:containers:mounts permission. Webhooks saved before these columns have null here.
+     */
+    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    updatedById: uuid('updated_by_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

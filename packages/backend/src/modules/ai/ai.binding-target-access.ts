@@ -1,10 +1,8 @@
-import { container } from '@/container.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { decodeComposeServiceTarget } from '@/modules/docker/compose/compose-managed-bindings.js';
-import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
-import { isGatewayInternalContainer } from '@/modules/docker/docker-internal-containers.js';
+import { resolveBindingTargetContainerIdentity } from '@/modules/docker/docker-binding-target-identity.js';
 
 export interface WorkloadBindingTarget {
   targetNodeId: string;
@@ -66,14 +64,8 @@ export async function assertWorkloadBindingTargetAccess(
     (scope) => hasScope(scopes, scope) || hasScope(scopes, `${scope}:${target.targetNodeId}`)
   );
   if (canAccessNode) return;
-  const inspected = await container
-    .resolve(DockerManagementService)
-    .inspectContainer(target.targetNodeId, target.targetResourceId);
-  if (isGatewayInternalContainer(inspected)) {
-    throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
-  }
-  const resourceId = String(inspected?.scopeResourceId ?? '');
-  if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+  // A Git-source container its first build has not created yet is judged by Gateway's record of it.
+  const resourceId = await resolveBindingTargetContainerIdentity(target.targetNodeId, target.targetResourceId);
   for (const scope of BINDING_TARGET_SCOPES) requireDockerScope(scopes, scope, target.targetNodeId, resourceId);
 }
 
@@ -96,13 +88,6 @@ export async function assertWorkloadBindingTargetViewAccess(
     requireDockerScope(scopes, scope, target.targetNodeId, target.targetResourceId);
     return;
   }
-  const inspected = await container
-    .resolve(DockerManagementService)
-    .inspectContainer(target.targetNodeId, target.targetResourceId);
-  if (isGatewayInternalContainer(inspected)) {
-    throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
-  }
-  const resourceId = String(inspected?.scopeResourceId ?? '');
-  if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+  const resourceId = await resolveBindingTargetContainerIdentity(target.targetNodeId, target.targetResourceId);
   requireDockerScope(scopes, scope, target.targetNodeId, resourceId);
 }

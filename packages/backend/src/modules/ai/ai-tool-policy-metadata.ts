@@ -111,7 +111,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   manage_user: operationPolicies({
     read: ['list_sessions', 'list_deleted'],
     update: ['set_auth_method', 'rename', 'reset_avatar', 'restore'],
-    external: ['send_password_link'],
+    external: ['send_password_link', 'send_invitation'],
     delete: ['revoke_session', 'revoke_all_sessions'],
     destructive: ['reset_mfa'],
   }),

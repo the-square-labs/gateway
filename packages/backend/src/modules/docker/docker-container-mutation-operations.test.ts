@@ -951,6 +951,67 @@ describe('recreateWithConfig reserved labels', () => {
   });
 });
 
+describe('recreateWithConfig on a container with host bind mounts', () => {
+  function hostBindCtx() {
+    const runtimeSettingsService = { get: vi.fn().mockResolvedValue(null), replace: vi.fn() };
+    const runtimeContext = {
+      db: {},
+      nodeDispatch: { sendDockerContainerCommand: vi.fn() },
+      nodeRegistry: { getNode: vi.fn().mockReturnValue(undefined) },
+      runtimeSettingsService,
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail || '{}'),
+    };
+    return {
+      db: {},
+      runtimeSettingsService,
+      nodeDispatch: runtimeContext.nodeDispatch,
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      assertDockerRuntimeProfileAvailable: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('app'),
+      resolveExpectedRecreateState: vi.fn().mockResolvedValue('running'),
+      requireNoTransition: vi.fn(),
+      inspectContainer: vi.fn().mockResolvedValue({
+        scopeResourceId: 'app-resource',
+        HostConfig: {},
+        Config: { Image: 'registry/app:1', Env: [], Labels: {} },
+        Mounts: [{ Type: 'bind', Source: '/srv/app', Destination: '/data', RW: true }],
+      }),
+      resolveStopTimeoutFromInspect: vi.fn().mockReturnValue(10),
+      runtimeOperationContext: () => runtimeContext,
+      // The claim is the first step after admission; stop there.
+      setTransition: vi.fn(() => {
+        throw new Error('admitted');
+      }),
+      parseResult: runtimeContext.parseResult,
+    };
+  }
+
+  it('admits an environment and network recreate without anyone holding the mounts scope', async () => {
+    const ctx = hostBindCtx();
+
+    await expect(
+      recreateWithConfig(ctx as never, 'node-1', 'container-1', { env: { DATABASE_URL: 'x' }, networks: ['app'] }, null)
+    ).rejects.toThrow('admitted');
+    expect(ctx.setTransition).toHaveBeenCalledWith('node-1', 'app', 'recreating');
+  });
+
+  it('refuses a new image without the mounts scope and admits it with the scope', async () => {
+    const refused = hostBindCtx();
+    await expect(
+      recreateWithConfig(refused as never, 'node-1', 'container-1', { image: 'registry/app:2' }, null)
+    ).rejects.toMatchObject({ code: 'MISSING_DOCKER_MOUNTS_SCOPE' });
+    expect(refused.setTransition).not.toHaveBeenCalled();
+
+    const admitted = hostBindCtx();
+    await expect(
+      recreateWithConfig(admitted as never, 'node-1', 'container-1', { image: 'registry/app:2' }, null, {
+        actorScopes: ['docker:containers:mounts:node-1/app-resource'],
+      })
+    ).rejects.toThrow('admitted');
+  });
+});
+
 describe('updateContainer image changes', () => {
   it('syncs registry credentials and realigns stored env that mirrored the old image default', async () => {
     const environmentService = {

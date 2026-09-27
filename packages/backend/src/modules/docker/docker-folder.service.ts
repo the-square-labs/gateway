@@ -277,9 +277,14 @@ export class DockerFolderService {
             .select({ folderId: dockerContainerFolderAssignments.folderId })
             .from(dockerContainerFolderAssignments)
             .where(and(eq(dockerContainerFolderAssignments.resourceType, resourceType), or(...visibilityFilters)));
+      // A folder grant covers its subfolders, empty ones included (folders come parents first).
+      const grantedSubtree = new Set(options.allowedFolderIds ?? []);
+      for (const folder of allFolders) {
+        if (folder.parentId && grantedSubtree.has(folder.parentId)) grantedSubtree.add(folder.id);
+      }
       const visibleIds = new Set([
         ...assignments.map((row) => row.folderId).filter((id): id is string => !!id),
-        ...(options.allowedFolderIds ?? []),
+        ...grantedSubtree,
       ]);
       for (const folder of [...allFolders].sort((a, b) => b.depth - a.depth)) {
         if (visibleIds.has(folder.id) && folder.parentId) visibleIds.add(folder.parentId);

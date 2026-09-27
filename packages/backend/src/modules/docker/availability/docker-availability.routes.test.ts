@@ -23,6 +23,9 @@ function input() {
     selectedNodeIds: [NODE_ID],
     rolloutPolicy: { maxUnavailable: 0, maxSurge: 1, drainSeconds: 30 },
     offlineReplacementGraceSeconds: 15,
+    priorityMode: false,
+    nodePriority: [] as string[],
+    failbackDelaySeconds: 300,
   };
 }
 

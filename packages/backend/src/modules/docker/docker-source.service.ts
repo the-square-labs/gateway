@@ -107,6 +107,8 @@ export class DockerSourceService {
     composeFilePath: string | null;
     composeVariables: Record<string, string>;
     composeSecretKeys: string[];
+    /** Services of the Compose file the source last resolved; null for other targets or before it resolved. */
+    composeServiceNames: string[] | null;
     autoBuild: boolean;
     autoDeploy: boolean;
     buildArgs: Record<string, string>;
@@ -194,6 +196,8 @@ export class DockerSourceService {
     composeFilePath: string | null;
     composeVariables: Record<string, string>;
     composeSecretKeys: string[];
+    /** Services of the Compose file the source last resolved; null for other targets or before it resolved. */
+    composeServiceNames: string[] | null;
     autoBuild: boolean;
     autoDeploy: boolean;
     buildArgs: Record<string, string>;
@@ -273,6 +277,8 @@ export class DockerSourceService {
     composeFilePath: string | null;
     composeVariables: Record<string, string>;
     composeSecretKeys: string[];
+    /** Services of the Compose file the source last resolved; null for other targets or before it resolved. */
+    composeServiceNames: string[] | null;
     autoBuild: boolean;
     autoDeploy: boolean;
     buildArgs: Record<string, string>;

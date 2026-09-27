@@ -178,6 +178,7 @@ dockerWebhookTriggerRoutes.openapi(triggerDockerWebhookRoute, async (c) => {
       containerId: managed.containerName,
       tag,
       webhookId: webhook.id,
+      webhookOwnerId: webhook.updatedById,
     });
     return c.json({ data });
   }
@@ -203,6 +204,7 @@ dockerWebhookTriggerRoutes.openapi(triggerDockerWebhookRoute, async (c) => {
     containerId,
     tag,
     webhookId: webhook.id,
+    webhookOwnerId: webhook.updatedById,
   });
 
   return c.json({ data: result });

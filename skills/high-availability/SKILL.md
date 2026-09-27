@@ -18,6 +18,10 @@ Start with `using-gateway` for connection, discovery, and safety rules, and `dep
 
 Replica count is manual. There is no metric autoscaling and never more than one placement of a workload per Node.
 
+### Priority mode
+
+Either mode can prefer Nodes in a fixed order: `priorityMode: true` with `nodePriority`, an ordered list of Node IDs whose first entry is the primary and the rest backups in order. It may only contain eligible Nodes (the `selectedNodeIds` with selected mode) and no duplicates; `selectedNodeIds` still decides eligibility. Serving placements go to the first available Nodes of the order; Nodes outside it come after. When a higher-priority Node returns and stays healthy for `failbackDelaySeconds` (default 300, 0 to 3600), a `failback` operation starts the workload there, switches traffic to it, and then drains and removes the backup placement, so a placement serves throughout (this needs `rolloutPolicy.maxSurge` of at least 1, or more than one replica and `maxUnavailable` of at least 1). A Node that goes offline or reports an error again restarts the delay, so a flapping Node does not take traffic back; after a Gateway restart every Node's delay starts again. Failback runs only while the policy is healthy and no other operation is active. `preflight` warns `AVAILABILITY_FAILBACK_NEEDS_SURGE` when the rollout policy cannot move without a gap, and then no failback runs. A failed failback leaves the backup serving and is not retried automatically for 15 minutes; `retry_operation` retries it sooner. `get` returns `priorityMode`, `nodePriority`, and `failbackDelaySeconds`; failbacks appear in `list_operations`. With `priorityMode: false` (the default) placement follows free capacity as before.
+
 ## Prerequisites
 
 - At least two online, compatible Docker Nodes with capacity for the replicas plus temporary placements during rollout.
@@ -30,7 +34,7 @@ Replica count is manual. There is no metric autoscaling and never more than one 
 2. `enable` with the same shape, plus optional `rolloutPolicy: { maxUnavailable, maxSurge, drainSeconds }` and `offlineReplacementGraceSeconds` (how long to wait after losing a Node's control connection before creating a replacement; about 15 seconds by default).
 3. Poll `get` or `get_by_resource`, and `list_operations` with `policyId`, until the requested serving count is reached.
 4. Verify real traffic through the Route, database access from the placements, and application logs, not only the placement count.
-5. `update` with `policyId` changes mode, replica count, Node selection, rollout policy, or grace period. `retry_operation` with `operationId` retries a stuck rollout.
+5. `update` with `policyId` changes mode, replica count, Node selection, rollout policy, grace period, or priority mode (`priorityMode`, `nodePriority`, `failbackDelaySeconds`). `retry_operation` with `operationId` retries a stuck rollout.
 6. `disable` needs `policyId`, the `survivingPlacementId` to keep, and `confirmation` set to the exact typed text the tool or Console shows. It is destructive; never guess the confirmation text or the surviving placement.
 
 ## Node loss and recovery

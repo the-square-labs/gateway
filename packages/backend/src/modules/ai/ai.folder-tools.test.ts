@@ -454,9 +454,12 @@ describe('AI folder tools', () => {
         dockerResourceType: 'compose',
       })
     ).resolves.toEqual([]);
+    // A creator who cannot view projects sees no folders beyond the ones granted to them.
     expect(dockerFolderService.getFolderTree).toHaveBeenCalledWith({
       resourceType: 'compose',
-      includeAllFolders: true,
+      allowedFolderIds: [],
+      allowedNodeIds: [],
+      allowedResourceRefs: [],
     });
 
     await expect(

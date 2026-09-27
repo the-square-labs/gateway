@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { assertDockerMountChangeAllowed, normalizeMountDefinitionsFromConfig } from './docker-socket-mount.guard.js';
 import { DockerWebhookService } from './docker-webhook.service.js';
 
 describe('DockerWebhookService', () => {
@@ -18,7 +19,10 @@ describe('DockerWebhookService', () => {
     expect(select).not.toHaveBeenCalled();
   });
 
-  function createService(inspectConfig: Record<string, unknown> = {}) {
+  function createService(
+    inspectConfig: Record<string, unknown> = {},
+    auth?: { getUserById: (id: string) => Promise<unknown> }
+  ) {
     const docker = {
       getManagedContainerConfiguration: vi.fn().mockResolvedValue(null),
       inspectContainer: vi.fn().mockResolvedValue({
@@ -70,7 +74,9 @@ describe('DockerWebhookService', () => {
       { log: vi.fn().mockResolvedValue({}) } as never,
       dispatch as never,
       registry as never,
-      cleanup as never
+      cleanup as never,
+      undefined,
+      auth as never
     );
     const getByContainer = vi.spyOn(service, 'getByContainer').mockResolvedValue(null as never);
 
@@ -210,6 +216,214 @@ describe('DockerWebhookService', () => {
     expect(tasks.create).not.toHaveBeenCalled();
   });
 
+  describe('a webhook call on a container with host bind mounts', () => {
+    const MOUNTS = 'docker:containers:mounts:node-1';
+    const hostBind = normalizeMountDefinitionsFromConfig({
+      mounts: [{ hostPath: '/srv/app', containerPath: '/data', readOnly: false }],
+    });
+    const users: Record<string, Record<string, unknown>> = {
+      ops: { id: 'ops', email: 'ops@example.com', name: 'Ops', scopes: [MOUNTS], isBlocked: false, isDeleted: false },
+      viewer: { id: 'viewer', email: 'viewer@example.com', name: null, scopes: [], isBlocked: false, isDeleted: false },
+      blocked: {
+        id: 'blocked',
+        email: 'b@example.com',
+        name: null,
+        scopes: [MOUNTS],
+        isBlocked: true,
+        isDeleted: false,
+      },
+      deleted: {
+        id: 'deleted',
+        email: 'd@example.com',
+        name: null,
+        scopes: [MOUNTS],
+        isBlocked: false,
+        isDeleted: true,
+      },
+    };
+
+    /** The recreate runs the real mount guard against a container that has a host bind mount (or none). */
+    function hostBindService(mounts = hostBind) {
+      const auth = { getUserById: vi.fn(async (id: string) => users[id] ?? null) };
+      const context = createService({}, auth);
+      context.docker.recreateWithConfig.mockImplementation(
+        async (_node: string, _id: string, _config: unknown, _user: unknown, options?: { actorScopes?: string[] }) => {
+          assertDockerMountChangeAllowed({
+            nodeId: 'node-1',
+            actorScopes: options?.actorScopes ?? [],
+            currentDefinitions: mounts,
+            nextDefinitions: mounts,
+          });
+          return {};
+        }
+      );
+      const trigger = (webhookOwnerId: string | null | undefined) =>
+        context.service.triggerUpdate({
+          nodeId: 'node-1',
+          containerId: 'container-1',
+          containerName: 'app',
+          tag: 'new',
+          webhookId: 'webhook-1',
+          webhookOwnerId,
+        });
+      return { ...context, auth, trigger };
+    }
+
+    it('updates the image with the current scopes of the account that last saved the webhook', async () => {
+      const { auth, docker, tasks, trigger } = hostBindService();
+
+      await expect(trigger('ops')).resolves.toMatchObject({ taskId: 'task-1' });
+
+      expect(auth.getUserById).toHaveBeenCalledWith('ops');
+      expect(docker.recreateWithConfig).toHaveBeenCalledWith(
+        'node-1',
+        'container-1',
+        expect.objectContaining({ image: 'registry.example.com/team/app:new' }),
+        null,
+        { skipImagePull: true, skipWebhookCleanup: true, actorScopes: [MOUNTS] }
+      );
+      expect(tasks.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'succeeded' }));
+    });
+
+    it('refuses when that account lacks the scope, naming it, the scope and the fix', async () => {
+      const { tasks, trigger } = hostBindService();
+
+      const error = await trigger('viewer').catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({ statusCode: 403, code: 'MISSING_DOCKER_MOUNTS_SCOPE' });
+      expect((error as Error).message).toBe(
+        'Webhook update refused: container "app" has host bind mounts, so running a new image on it needs docker:containers:mounts, and viewer@example.com, who last saved the webhook and whose permissions webhook calls use, does not hold docker:containers:mounts on it. Grant docker:containers:mounts on this workload to viewer@example.com, or save the webhook again as a user who holds it.'
+      );
+      expect(tasks.update).toHaveBeenCalledWith(
+        'task-1',
+        expect.objectContaining({ status: 'failed', error: (error as Error).message })
+      );
+    });
+
+    it.each([
+      [
+        'no recorded account (saved before owners were recorded)',
+        null,
+        'Gateway cannot tell whose permissions the webhook uses',
+      ],
+      ['a deleted account', 'deleted', 'Gateway cannot tell whose permissions the webhook uses'],
+      ['a blocked account', 'blocked', 'the account that last saved the webhook, b@example.com, is blocked'],
+    ])('refuses with %s', async (_case, ownerId, reason) => {
+      const { trigger } = hostBindService();
+
+      const error = await trigger(ownerId).catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({ statusCode: 403, code: 'MISSING_DOCKER_MOUNTS_SCOPE' });
+      expect((error as Error).message).toContain(reason);
+      expect((error as Error).message).toContain(
+        'Save the webhook again (configure it, or regenerate its URL) as a user who holds docker:containers:mounts on this workload.'
+      );
+    });
+
+    it('leaves a container without host bind mounts unaffected, even with no recorded account', async () => {
+      const { tasks, trigger } = hostBindService([]);
+
+      await expect(trigger(null)).resolves.toMatchObject({ taskId: 'task-1' });
+      expect(tasks.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'succeeded' }));
+    });
+
+    it('passes the owner recorded on the webhook row from a token call', async () => {
+      const { auth, service } = hostBindService();
+      vi.spyOn(service, 'getByToken').mockResolvedValue({
+        id: 'webhook-1',
+        enabled: true,
+        targetType: 'container',
+        nodeId: 'node-1',
+        containerName: 'app',
+        updatedById: 'ops',
+      } as never);
+
+      await service.triggerWebhookToken('11111111-1111-4111-8111-111111111111', 'new');
+      expect(auth.getUserById).toHaveBeenCalledWith('ops');
+    });
+  });
+
+  it('runs a deployment webhook with the resolved account of the webhook', async () => {
+    const deployments = { triggerWebhook: vi.fn().mockResolvedValue({ deploymentId: 'deployment-1' }) };
+    const auth = {
+      getUserById: vi.fn(async () => ({
+        id: 'ops',
+        email: 'ops@example.com',
+        name: null,
+        scopes: ['x'],
+        isBlocked: false,
+      })),
+    };
+    const service = new DockerWebhookService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      deployments as never,
+      auth as never
+    );
+    vi.spyOn(service, 'getByToken').mockResolvedValue({
+      id: 'webhook-1',
+      enabled: true,
+      targetType: 'deployment',
+      updatedById: 'ops',
+    } as never);
+
+    await service.triggerWebhookToken('11111111-1111-4111-8111-111111111111', 'v3');
+
+    expect(deployments.triggerWebhook).toHaveBeenCalledWith('webhook-1', 'v3', {
+      user: { id: 'ops', label: 'ops@example.com' },
+      unavailable: null,
+      scopes: ['x'],
+    });
+  });
+
+  it('records the account that created, changed or rotated a container webhook', async () => {
+    const row: Record<string, unknown> = {};
+    const writes: Array<Record<string, unknown>> = [];
+    const returning = async () => [{ ...row }];
+    const db = {
+      insert: () => ({
+        values: (values: Record<string, unknown>) => {
+          Object.assign(row, { id: 'webhook-1', ...values });
+          writes.push(values);
+          return { returning };
+        },
+      }),
+      update: () => ({
+        set: (patch: Record<string, unknown>) => {
+          Object.assign(row, patch);
+          writes.push(patch);
+          return { where: () => ({ returning }) };
+        },
+      }),
+    };
+    const service = new DockerWebhookService(
+      db as never,
+      {} as never,
+      {} as never,
+      { log: vi.fn().mockResolvedValue({}) } as never,
+      {} as never,
+      {} as never,
+      {} as never
+    );
+    const getByContainer = vi.spyOn(service, 'getByContainer').mockResolvedValue(null as never);
+
+    await service.upsert('node-1', 'app', { enabled: true }, 'creator');
+    expect(row).toMatchObject({ createdById: 'creator', updatedById: 'creator' });
+
+    getByContainer.mockResolvedValue({ ...row } as never);
+    await service.upsert('node-1', 'app', { enabled: false }, 'editor');
+    expect(row).toMatchObject({ createdById: 'creator', updatedById: 'editor', enabled: false });
+
+    await service.regenerateToken('node-1', 'app', 'rotator');
+    expect(row).toMatchObject({ createdById: 'creator', updatedById: 'rotator' });
+    expect(writes).toHaveLength(3);
+  });
+
   it('keeps the exact legacy physical pull and recreate path when HA configuration is null', async () => {
     const { cleanup, dispatch, docker, registry, service } = createService();
 
@@ -257,7 +471,8 @@ describe('DockerWebhookService', () => {
         networkingConfig: {},
       },
       null,
-      { skipImagePull: true, skipWebhookCleanup: true }
+      // A webhook call with no recorded owner carries no scopes; a container without host binds needs none.
+      { skipImagePull: true, skipWebhookCleanup: true, actorScopes: [] }
     );
     expect(cleanup.scheduleCleanupForContainer).toHaveBeenCalledExactlyOnceWith(
       'node-1',

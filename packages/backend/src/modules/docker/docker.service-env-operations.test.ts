@@ -226,7 +226,12 @@ describe('DockerManagementService env operations', () => {
     });
   });
 
-  it('passes the pre-recreate running state to daemon env updates', async () => {
+  it.each([
+    ['running', 'running'],
+    // A crash-looping container is recreated running so its next start carries the change.
+    ['restarting', 'running'],
+    ['exited', 'created'],
+  ])('passes the pre-recreate %s state to daemon env updates as %s', async (status, expectedState) => {
     const inspect = {
       Id: 'container-1',
       Name: '/api',
@@ -235,7 +240,7 @@ describe('DockerManagementService env operations', () => {
         Env: ['PATH=/bin'],
         Labels: {},
       },
-      State: { Status: 'running' },
+      State: { Status: status },
     };
     const dispatch = {
       sendDockerContainerCommand: vi.fn(async (_nodeId: string, action: string, payload?: Record<string, unknown>) => {
@@ -272,6 +277,6 @@ describe('DockerManagementService env operations', () => {
 
     const updateCall = dispatch.sendDockerContainerCommand.mock.calls.find((call) => call[1] === 'update');
     const config = JSON.parse((updateCall?.[2] as { configJson: string }).configJson);
-    expect(config.expectedState).toBe('running');
+    expect(config.expectedState).toBe(expectedState);
   });
 });

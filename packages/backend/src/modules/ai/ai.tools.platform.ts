@@ -237,7 +237,7 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_user',
     description:
-      'Create (invite) a user before first login and assign permission groups. authMethod password or email_otp emails the onboarding link or code and requires verified SMTP. You can only assign groups within your own effective scopes.',
+      'Create (invite) a user before first login and assign permission groups. authMethod password or email_otp emails the onboarding link or code and requires verified SMTP. With the Gateway setting generalSettings.sendInvitationOnUserCreate on, the account invitation email is also sent (a send failure does not fail the creation; the returned invitationSentAt stays null and manage_user send_invitation can retry). You can only assign groups within your own effective scopes.',
     parameters: {
       type: 'object',
       properties: {

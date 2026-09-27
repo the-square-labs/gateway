@@ -521,6 +521,49 @@ export class DockerComposeService {
   }> {
     return commercialModuleUnavailable();
   }
+  async resolveLinkServiceTarget(
+    _nodeId: string,
+    _targetResourceId: string
+  ): Promise<{
+    project: {
+      id: string;
+      nodeId: string;
+      name: string;
+      managementState: import('@/db/schema/index.js').DockerComposeManagementState;
+      desiredState: import('@/db/schema/index.js').DockerComposeDesiredState;
+      status: import('@/db/schema/index.js').DockerComposeProjectStatus;
+      availability: import('@/db/schema/index.js').DockerComposeAvailability;
+      activeRevisionId: string | null;
+      observedFingerprint: string | null;
+      lastSeenAt: Date | null;
+      createdById: string | null;
+      updatedById: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    };
+    revision: {
+      id: string;
+      createdAt: Date;
+      createdById: string | null;
+      projectId: string;
+      revisionNumber: number;
+      sourceYaml: string;
+      originalYaml: string;
+      normalizedModel: import('@/db/schema/index.js').DockerComposeNormalizedModel;
+      configDigest: string;
+      variables: Record<string, string>;
+      secretKeys: string[];
+      sourceBindingId: string | null;
+      buildBatchId: string | null;
+      sourceCommitSha: string | null;
+    } | null;
+    serviceName: string;
+    service: import('@/db/schema/index.js').DockerComposeNormalizedService | null;
+    targetResourceId: string;
+    deferred: boolean;
+  }> {
+    return commercialModuleUnavailable();
+  }
   async getServiceEnvironmentNames(_nodeId: string, _targetResourceId: string): Promise<Set<string>> {
     return commercialModuleUnavailable();
   }
@@ -548,7 +591,7 @@ export class DockerComposeService {
     sourceBindingId: string | null;
     buildBatchId: string | null;
     sourceCommitSha: string | null;
-  }> {
+  } | null> {
     return commercialModuleUnavailable();
   }
   async removeManagedDatabaseBinding(
@@ -575,7 +618,7 @@ export class DockerComposeService {
     sourceBindingId: string | null;
     buildBatchId: string | null;
     sourceCommitSha: string | null;
-  }> {
+  } | null> {
     return commercialModuleUnavailable();
   }
   async waitForOperation(

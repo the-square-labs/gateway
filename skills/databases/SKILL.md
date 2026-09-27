@@ -24,6 +24,10 @@ Before provisioning, check engine availability, placement, capacity, entitlement
 
 Each binding gets its own engine identity, never the owner account: a login role for PostgreSQL, a role-scoped user for ClickHouse, an ACL user with dangerous and admin commands denied for Redis. One database with one binding per workload is the intended pattern. Never copy owner credentials into environment variables as a shortcut. If the workload is recreated, confirm the binding is still attached through the owning resource.
 
+The workload need not run. `create_binding` and `delete_binding` on a stopped, crash-looping, failed, or not yet deployed workload save the link and return without waiting; `list_bindings` shows `observedState: "target_applied"` until the workload next starts or finishes its rollout, then `active`. For a Deployment whose first Git build failed, retry the source build; never set its image by hand to force the link. A Git-source Container before its first build is linked by its name, and a Compose service before the first revision (or during a build rollout) by a service name the next revision defines; the link fails with the reason if that revision lacks the service. Rollbacks, slot switches, and older Compose revisions keep the current links. The target Docker Node must be online (`NODE_OFFLINE` otherwise).
+
+For TLS-enabled PostgreSQL, the plain `connectionUri` works: the database Node's daemon (2.11.0-rc.14 or later) opens TLS to PostgreSQL for a client that connects without it, and a client that requests TLS itself keeps end-to-end TLS.
+
 ## Lifecycle is not one operation
 
 Provisioning, `restart`, `pause`, `unpause`, `retry`, `update`, credential rotation, certificate rotation, and `delete` are distinct operations; follow each returned Task and the reported state. `delete_binding` revokes one application's access; `delete` removes the managed database and its storage. A request to disconnect, redeploy, or remove an application never authorizes deleting its database. Delete bindings before deleting a database or workload when possible.
@@ -44,7 +48,7 @@ SQL and Redis tools, query scopes, backup policies, runs, and restores: [Queries
 Report the last verified boundary; a healthy database does not prove the application can use it.
 
 1. The database is provisioned and healthy.
-2. The binding identity is created and ready.
+2. The binding identity is created and ready, with `observedState: "active"`; `target_applied` means the workload has not run with it yet.
 3. The workload received the binding's variable names (report names, never values).
 4. The application connected and performed its expected operation. For isolation, an ordinary query succeeds while an admin operation such as creating a role fails.
 

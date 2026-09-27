@@ -45,6 +45,7 @@ export class ManagedStorageBindingsService {
       buckets: string[];
       accessKeyId: string | null;
       status: 'error' | 'ready' | 'creating' | 'deleting';
+      observedState: 'target_applied' | 'active';
       lastError: string | null;
       createdAt: string;
       updatedAt: string;
@@ -67,6 +68,7 @@ export class ManagedStorageBindingsService {
     buckets: string[];
     accessKeyId: string | null;
     status: 'error' | 'ready' | 'creating' | 'deleting';
+    observedState: 'target_applied' | 'active';
     lastError: string | null;
     createdAt: string;
     updatedAt: string;
@@ -113,6 +115,7 @@ export class ManagedStorageBindingsService {
       buckets: string[];
       accessKeyId: string | null;
       status: 'error' | 'ready' | 'creating' | 'deleting';
+      observedState: 'target_applied' | 'active';
       lastError: string | null;
       createdAt: string;
       updatedAt: string;

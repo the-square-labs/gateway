@@ -14,6 +14,7 @@ import type { LicensePolicyService } from '@/modules/license/license-policy.serv
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import type { AutomaticDeployAuthority } from './automatic-deploy-authority.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import type { DockerBuildRolloutGuard } from './docker-build-rollout-guard.js';
 import type {
@@ -159,7 +160,8 @@ export class DockerDeploymentService {
     _deploymentId: string,
     _image: string,
     _userId: string | null,
-    _source?: string
+    _source?: string,
+    _actorScopes?: string[]
   ): Promise<DockerDeploymentDetail> {
     return commercialModuleUnavailable();
   }
@@ -191,7 +193,11 @@ export class DockerDeploymentService {
     _userId: string | null,
     _forceRollout?: boolean,
     _targetEnvironment?: Record<string, string>
-  ): Promise<DockerDeploymentDetail> {
+  ): Promise<
+    DockerDeploymentDetail & {
+      bindingRolloutPending: boolean;
+    }
+  > {
     return commercialModuleUnavailable();
   }
   async setManagedStorageBindingNetwork(
@@ -200,8 +206,16 @@ export class DockerDeploymentService {
     _networkName: string,
     _enabled: boolean,
     _userId: string | null,
-    _targetEnvironment?: Record<string, string>
-  ): Promise<DockerDeploymentDetail> {
+    _targetEnvironment?: Record<string, string>,
+    _forceRollout?: boolean
+  ): Promise<
+    DockerDeploymentDetail & {
+      bindingRolloutPending: boolean;
+    }
+  > {
+    return commercialModuleUnavailable();
+  }
+  async managedBindingNetworkApplied(_nodeId: string, _deploymentId: string, _networkName: string): Promise<boolean> {
     return commercialModuleUnavailable();
   }
   async deploy(
@@ -302,6 +316,8 @@ export class DockerDeploymentService {
     targetType: 'container' | 'deployment';
     token: string;
     enabled: boolean;
+    createdById: string | null;
+    updatedById: string | null;
   } | null> {
     return commercialModuleUnavailable();
   }
@@ -322,6 +338,8 @@ export class DockerDeploymentService {
     targetType: 'container' | 'deployment';
     token: string;
     enabled: boolean;
+    createdById: string | null;
+    updatedById: string | null;
   }> {
     return commercialModuleUnavailable();
   }
@@ -340,14 +358,18 @@ export class DockerDeploymentService {
     deploymentId: string | null;
     token: string;
     enabled: boolean;
+    createdById: string | null;
+    updatedById: string | null;
     createdAt: Date;
     updatedAt: Date;
   }> {
     return commercialModuleUnavailable();
   }
+  /** `authority`: the account that last saved the webhook, whose current scopes the deployment runs with. */
   async triggerWebhook(
     _webhookId: string,
-    _tag?: string
+    _tag?: string,
+    _authority?: AutomaticDeployAuthority
   ): Promise<{
     deploymentId: string;
     message: string;

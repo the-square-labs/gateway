@@ -6,6 +6,53 @@ const uniqueUuidArray = z.array(UUID).refine((values) => new Set(values).size ==
   message: 'Selected Docker nodes must be unique',
 });
 
+/** Ordered: the first node is the primary, the rest are backups in order. */
+const nodePriorityArray = z
+  .array(UUID)
+  .max(64)
+  .refine((values) => new Set(values).size === values.length, {
+    message: 'Priority nodes must be unique',
+  });
+
+const failbackDelaySecondsSchema = z.number().int().min(0).max(3600);
+
+type PriorityFields = {
+  nodeSelectionMode?: 'all_compatible' | 'selected';
+  selectedNodeIds?: string[];
+  priorityMode?: boolean;
+  nodePriority?: string[];
+};
+
+/**
+ * In priority mode the order may only name eligible nodes and needs a primary. A stored order is not checked while
+ * priority mode is off, so it never blocks unrelated changes. The service checks the merged policy of an update
+ * and eligibility against all compatible nodes, since it knows the node inventory.
+ */
+function refinePriorityFields(value: PriorityFields, context: z.RefinementCtx): void {
+  if (value.priorityMode === true && value.nodePriority !== undefined && value.nodePriority.length === 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['nodePriority'],
+      message: 'Priority mode requires at least one node in the priority order',
+    });
+  }
+  if (
+    value.priorityMode === true &&
+    value.nodeSelectionMode === 'selected' &&
+    value.selectedNodeIds &&
+    value.nodePriority
+  ) {
+    const selected = new Set(value.selectedNodeIds);
+    if (value.nodePriority.some((nodeId) => !selected.has(nodeId))) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['nodePriority'],
+        message: 'The priority order may only contain selected Docker nodes',
+      });
+    }
+  }
+}
+
 export const DockerAvailabilityResourceSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('container'),
@@ -45,6 +92,9 @@ const DockerAvailabilityPolicyValuesSchema = z.object({
   selectedNodeIds: uniqueUuidArray.default([]),
   rolloutPolicy: DockerAvailabilityRolloutPolicyInputSchema,
   offlineReplacementGraceSeconds: z.number().int().min(0).max(3600).default(15),
+  priorityMode: z.boolean().default(false),
+  nodePriority: nodePriorityArray.default([]),
+  failbackDelaySeconds: failbackDelaySecondsSchema.default(300),
 });
 
 export const DockerAvailabilityPolicyInputSchema = z
@@ -81,6 +131,7 @@ export const DockerAvailabilityPolicyInputSchema = z
         message: 'Selected node IDs must be empty when using all-compatible node selection',
       });
     }
+    refinePriorityFields(value, context);
   });
 
 export const DockerAvailabilityPolicyUpdateSchema = z
@@ -91,6 +142,9 @@ export const DockerAvailabilityPolicyUpdateSchema = z
     selectedNodeIds: uniqueUuidArray.optional(),
     rolloutPolicy: DockerAvailabilityRolloutPolicySchema.optional(),
     offlineReplacementGraceSeconds: z.number().int().min(0).max(3600).optional(),
+    priorityMode: z.boolean().optional(),
+    nodePriority: nodePriorityArray.optional(),
+    failbackDelaySeconds: failbackDelaySecondsSchema.optional(),
   })
   .superRefine((value, context) => {
     if (value.mode === 'replicated' && value.desiredReplicaCount === 1) {
@@ -121,6 +175,7 @@ export const DockerAvailabilityPolicyUpdateSchema = z
         message: 'Selected node IDs must be empty when using all-compatible node selection',
       });
     }
+    refinePriorityFields(value, context);
   });
 
 export const DockerAvailabilityDisableInputSchema = z.object({
@@ -236,6 +291,7 @@ export const DockerAvailabilityOperationTypeSchema = z.enum([
   'heal',
   'disable',
   'stale_cleanup',
+  'failback',
 ]);
 
 export const DockerAvailabilityOperationStatusSchema = z.enum([
@@ -349,6 +405,9 @@ export const DockerAvailabilityPolicySchema = z.object({
   desiredGeneration: z.number().int().min(1),
   rolloutPolicy: DockerAvailabilityRolloutPolicySchema,
   offlineReplacementGraceSeconds: z.number().int().min(0).max(3600),
+  priorityMode: z.boolean(),
+  nodePriority: z.array(UUID),
+  failbackDelaySeconds: failbackDelaySecondsSchema,
   status: DockerAvailabilityPolicyStatusSchema,
   lastErrorCode: z.string().nullable(),
   lastErrorMessage: z.string().nullable(),
@@ -367,6 +426,9 @@ export const DockerAvailabilityProposedPolicySchema = z.object({
   selectedNodeIds: z.array(UUID),
   rolloutPolicy: DockerAvailabilityRolloutPolicySchema,
   offlineReplacementGraceSeconds: z.number().int().min(0).max(3600),
+  priorityMode: z.boolean(),
+  nodePriority: z.array(UUID),
+  failbackDelaySeconds: failbackDelaySecondsSchema,
 });
 
 export const DockerAvailabilityIssueSchema = z.object({

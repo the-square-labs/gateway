@@ -212,6 +212,31 @@ describe('watchDockerRecreateByName finalization', () => {
     });
   });
 
+  it('completes a running recreate whose replacement restarts under its restart policy', async () => {
+    vi.useFakeTimers();
+    const { context, taskService } = recreateWatchContext();
+    context.nodeDispatch.sendDockerContainerCommand.mockResolvedValue({
+      success: true,
+      detail: JSON.stringify([{ id: 'container-2', name: 'api', state: 'restarting' }]),
+    });
+
+    watchDockerRecreateByName(
+      context as never,
+      'node-1',
+      'api',
+      'container-1',
+      'task-1',
+      'Container env updated',
+      'running',
+      60000
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(taskService.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'succeeded' }));
+    expect(context.clearTransition).toHaveBeenCalledWith('node-1', 'api');
+    expect(context.failTask).not.toHaveBeenCalled();
+  });
+
   it('falls back to replacement inspection when an older daemon does not support task status', async () => {
     vi.useFakeTimers();
     const { context, taskService } = recreateWatchContext();

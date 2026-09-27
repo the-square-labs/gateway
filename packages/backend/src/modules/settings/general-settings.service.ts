@@ -49,6 +49,8 @@ export interface GeneralSettings {
   updateChannel: UpdateChannel;
   hideExternalBranding: boolean;
   autoAssignCreatedResourcePermissions: boolean;
+  /** Email the account invitation to every user created through the admin, API or MCP create-user path. */
+  sendInvitationOnUserCreate: boolean;
   fileUploadMaxBytes: number;
   fileOpenMaxBytes: number;
   gatewayGrpcPublicTarget: string | null;
@@ -92,6 +94,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   updateChannel: 'stable',
   hideExternalBranding: false,
   autoAssignCreatedResourcePermissions: true,
+  sendInvitationOnUserCreate: false,
   fileUploadMaxBytes: FILE_UPLOAD_DEFAULT_BYTES,
   fileOpenMaxBytes: FILE_OPEN_DEFAULT_BYTES,
   gatewayGrpcPublicTarget: null,
@@ -517,6 +520,7 @@ export class GeneralSettingsService {
           ? record.hideExternalBranding
           : DEFAULT_GENERAL_SETTINGS.hideExternalBranding,
       autoAssignCreatedResourcePermissions: record.autoAssignCreatedResourcePermissions !== false,
+      sendInvitationOnUserCreate: record.sendInvitationOnUserCreate === true,
       fileUploadMaxBytes,
       fileOpenMaxBytes,
       gatewayGrpcPublicTarget: normalizeHostPortTarget(record.gatewayGrpcPublicTarget as string | null | undefined),

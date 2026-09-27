@@ -112,6 +112,9 @@ export class DockerAvailabilityService {
       selectedNodeIds: string[];
       rolloutPolicy: import('@/db/schema/index.js').DockerAvailabilityRolloutPolicy;
       offlineReplacementGraceSeconds: number;
+      priorityMode: boolean;
+      nodePriority: string[];
+      failbackDelaySeconds: number;
     };
     blockers: DockerAvailabilityIssue[];
     warnings: DockerAvailabilityIssue[];
@@ -195,6 +198,9 @@ export class DockerAvailabilityService {
       desiredGeneration: number;
       rolloutPolicy: import('@/db/schema/index.js').DockerAvailabilityRolloutPolicy;
       offlineReplacementGraceSeconds: number;
+      priorityMode: boolean;
+      nodePriority: string[];
+      failbackDelaySeconds: number;
       lastErrorCode: string | null;
       lastErrorMessage: string | null;
     } | null;
@@ -278,6 +284,9 @@ export class DockerAvailabilityService {
     desiredGeneration: number;
     rolloutPolicy: import('@/db/schema/index.js').DockerAvailabilityRolloutPolicy;
     offlineReplacementGraceSeconds: number;
+    priorityMode: boolean;
+    nodePriority: string[];
+    failbackDelaySeconds: number;
     lastErrorCode: string | null;
     lastErrorMessage: string | null;
   }> {
@@ -359,6 +368,9 @@ export class DockerAvailabilityService {
     desiredGeneration: number;
     rolloutPolicy: import('@/db/schema/index.js').DockerAvailabilityRolloutPolicy;
     offlineReplacementGraceSeconds: number;
+    priorityMode: boolean;
+    nodePriority: string[];
+    failbackDelaySeconds: number;
     lastErrorCode: string | null;
     lastErrorMessage: string | null;
   } | null> {
@@ -568,6 +580,9 @@ export class DockerAvailabilityService {
     desiredGeneration: number;
     rolloutPolicy: import('@/db/schema/index.js').DockerAvailabilityRolloutPolicy;
     offlineReplacementGraceSeconds: number;
+    priorityMode: boolean;
+    nodePriority: string[];
+    failbackDelaySeconds: number;
     lastErrorCode: string | null;
     lastErrorMessage: string | null;
   }> {
@@ -728,6 +743,9 @@ export class DockerAvailabilityService {
     desiredGeneration: number;
     rolloutPolicy: import('@/db/schema/index.js').DockerAvailabilityRolloutPolicy;
     offlineReplacementGraceSeconds: number;
+    priorityMode: boolean;
+    nodePriority: string[];
+    failbackDelaySeconds: number;
     lastErrorCode: string | null;
     lastErrorMessage: string | null;
   }> {
@@ -811,6 +829,9 @@ export class DockerAvailabilityService {
     desiredGeneration: number;
     rolloutPolicy: import('@/db/schema/index.js').DockerAvailabilityRolloutPolicy;
     offlineReplacementGraceSeconds: number;
+    priorityMode: boolean;
+    nodePriority: string[];
+    failbackDelaySeconds: number;
     lastErrorCode: string | null;
     lastErrorMessage: string | null;
   }> {

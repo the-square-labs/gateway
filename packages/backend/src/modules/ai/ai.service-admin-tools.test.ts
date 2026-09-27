@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
+import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
+import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { SessionService } from '@/services/session.service.js';
 import { AIService } from './ai.service.js';
 
@@ -86,7 +88,13 @@ describe('AIService admin user lifecycle tools', () => {
         groupId: GROUP_ID,
       })
     ).resolves.toEqual({
-      result: { id: 'user-2', email: 'ops@example.com', groupId: GROUP_ID },
+      result: {
+        id: 'user-2',
+        email: 'ops@example.com',
+        groupId: GROUP_ID,
+        lastLoginAt: null,
+        invitationSentAt: null,
+      },
       invalidateStores: ['users'],
     });
 
@@ -335,6 +343,53 @@ describe('AIService manage_user tool', () => {
         details: { targetUserId: 'user-2', previousName: 'Ops', name: 'Operations' },
       })
     );
+  });
+
+  it('sends the account invitation with the same checks as the route', async () => {
+    const state: { lastLoginAt: Date | null; invitationSentAt: Date | null } = {
+      lastLoginAt: null,
+      invitationSentAt: null,
+    };
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: { users: { findFirst: vi.fn(async () => ({ ...state })) } },
+      update: () => ({
+        set: (values: { invitationSentAt: Date }) => ({
+          where: () => ({
+            returning: async () => {
+              if (state.invitationSentAt || state.lastLoginAt) return [];
+              state.invitationSentAt = values.invitationSentAt;
+              return [{ id: 'user-2' }];
+            },
+          }),
+        }),
+      }),
+    } as never);
+    const sendSecurityEmail = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AuthMailService, {
+      getPublicConfig: vi.fn().mockResolvedValue({ verifiedAt: '2026-09-01T00:00:00.000Z' }),
+      sendSecurityEmail,
+    } as unknown as AuthMailService);
+    container.registerInstance(GeneralSettingsService, {
+      getPublicUrl: vi.fn().mockResolvedValue('https://gateway.example.com'),
+    } as unknown as GeneralSettingsService);
+    const auditService = { log: vi.fn() };
+    const service = createService({ authService: authService(BASE_USER), auditService });
+    const args = { operation: 'send_invitation', userId: 'user-2' };
+
+    await expect(service.executeTool(BASE_USER, 'manage_user', args)).resolves.toMatchObject({
+      result: { id: 'user-2', lastLoginAt: null, invitationSentAt: expect.any(String) },
+    });
+    expect(sendSecurityEmail).toHaveBeenCalledWith(
+      'ops@example.com',
+      expect.objectContaining({ kind: 'account_invitation', signIn: 'password' })
+    );
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.invitation_sent', resourceId: 'user-2' })
+    );
+    await expect(service.executeTool(BASE_USER, 'manage_user', args)).resolves.toMatchObject({
+      error: expect.stringContaining('already sent'),
+    });
+    expect(sendSecurityEmail).toHaveBeenCalledTimes(1);
   });
 
   it('enforces the per-user admin:users grant and the privilege boundary', async () => {

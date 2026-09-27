@@ -1,17 +1,21 @@
 import { container } from '@/container.js';
-import {
-  canManageUser,
-  hasScope,
-  hasScopeForCreation,
-  isScopeSubset,
-  privilegeBoundaryScopes,
-} from '@/lib/permissions.js';
+import { canManageUser, hasScope, hasScopeForCreation, isScopeSubset } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { CreateUserInput, UpdateUserAuthMethodInput } from '@/modules/admin/admin.schemas.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
-import { AuditService } from '@/modules/audit/audit.service.js';
-import { AuthService } from '@/modules/auth/auth.service.js';
-import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
+import {
+  type AdminUserActionServices,
+  type AdminUserActor,
+  assertAdminUserScope,
+  assertNotOwnSignInFromProgrammaticCaller,
+  assertSystemAdministrator,
+  auditServiceOf,
+  authServiceOf,
+  boundaryScopes,
+  grantBoundaryScopes,
+  requireManageableUser,
+} from '@/modules/admin/admin-user-guards.js';
+import { assertSmtpVerified, inviteCreatedUser, sendSignInOnboarding } from '@/modules/admin/admin-user-invitation.js';
 import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { isDemoVisitor } from '@/modules/demo/demo-mode.js';
@@ -23,97 +27,14 @@ import type { User } from '@/types.js';
  * User administration shared by the /api/admin routes and the AI/MCP tools, so
  * both enforce the same privilege boundaries, validation and audit records.
  */
-export interface AdminUserActor {
-  user: User;
-  /** Effective scopes of the request (bounded for programmatic callers). */
-  scopes: string[];
-  /** Live account scopes behind a programmatic caller; only account-only scopes are taken from them. */
-  accountScopes?: string[];
-  /**
-   * True for API tokens, MCP clients and the AI assistant. They may manage other
-   * accounts, but never the sign-in, MFA or sessions of the account they act for.
-   */
-  programmatic: boolean;
-  userAgent?: string;
-}
-
-function boundaryScopes(actor: AdminUserActor): string[] {
-  return privilegeBoundaryScopes(actor.scopes, actor.accountScopes);
-}
-
-/** Boundary for scopes being granted to someone else (groups, additional permissions). */
-function grantBoundaryScopes(actor: AdminUserActor): string[] {
-  return privilegeBoundaryScopes(actor.scopes, actor.accountScopes, 'grant');
-}
-
-/** Only a browser session may change its own sign-in method, MFA or sessions. */
-function assertNotOwnSignInFromProgrammaticCaller(actor: AdminUserActor, userId: string): void {
-  if (actor.programmatic && userId === actor.user.id) {
-    throw new AppError(
-      403,
-      'SELF_SIGN_IN_PROGRAMMATIC',
-      'API tokens, MCP clients and the AI assistant cannot change the sign-in, MFA or sessions of their own account'
-    );
-  }
-}
-
-/** Services the AI runtime injects directly; anything omitted resolves from the container. */
-export interface AdminUserActionServices {
-  authService?: AuthService;
-  auditService?: AuditService;
-  groupService?: GroupService;
-}
+export type { AdminUserActionServices, AdminUserActor } from '@/modules/admin/admin-user-guards.js';
+export { assertAdminUserScope, assertSystemAdministrator } from '@/modules/admin/admin-user-guards.js';
+export { sendAdminUserInvitation } from '@/modules/admin/admin-user-invitation.js';
 
 type AuthMethod = UpdateUserAuthMethodInput['authMethod'];
 
-function authServiceOf(services: AdminUserActionServices): AuthService {
-  return services.authService ?? container.resolve(AuthService);
-}
-
-function auditServiceOf(services: AdminUserActionServices): AuditService {
-  return services.auditService ?? container.resolve(AuditService);
-}
-
 function effectiveGroupScopes(group: { scopes: string[]; inheritedScopes?: string[] }) {
   return [...new Set([...(group.scopes ?? []), ...(group.inheritedScopes ?? [])])];
-}
-
-/** Mirrors requireScopeForResource('admin:users', 'id'). */
-export function assertAdminUserScope(scopes: string[], userId: string): void {
-  const requiredScope = `admin:users:${userId}`;
-  if (!hasScope(scopes, requiredScope)) {
-    throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${requiredScope}`);
-  }
-}
-
-/** Mirrors requireScope('admin:system') on the deleted-user and MFA routes. */
-export function assertSystemAdministrator(scopes: string[]): void {
-  if (!hasScope(scopes, 'admin:system')) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required scope: admin:system');
-  }
-}
-
-async function requireManageableUser(actor: AdminUserActor, userId: string, services: AdminUserActionServices) {
-  assertAdminUserScope(actor.scopes, userId);
-  const targetUser = await authServiceOf(services).getUserById(userId);
-  if (!targetUser) throw new AppError(404, 'NOT_FOUND', 'User not found');
-  const denyReason = canManageUser(boundaryScopes(actor), targetUser.scopes);
-  if (denyReason) throw new AppError(403, 'PRIVILEGE_BOUNDARY', denyReason);
-  return targetUser;
-}
-
-async function assertSmtpVerified(message: string): Promise<void> {
-  if (!(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
-    throw new AppError(409, 'SMTP_NOT_VERIFIED', message);
-  }
-}
-
-async function sendSignInOnboarding(email: string, authMethod: AuthMethod | undefined): Promise<void> {
-  if (authMethod === 'password') {
-    await container.resolve(LocalAuthService).requestPasswordLink(email, 'password_setup');
-  } else if (authMethod === 'email_otp') {
-    await container.resolve(LocalAuthService).sendEmailOtpOnboarding(email);
-  }
 }
 
 export async function listAdminUsers(
@@ -153,7 +74,6 @@ export async function createAdminUser(
     }
     const createdUser = await authService.createUser(input);
     await authService.grantCreatedResourcePermissions(actor.user.id, 'admin:users', createdUser.id);
-    await sendSignInOnboarding(createdUser.email, input.authMethod);
 
     await auditServiceOf(services).log({
       userId: actor.user.id,
@@ -171,7 +91,13 @@ export async function createAdminUser(
       userAgent: actor.userAgent,
     });
 
-    return createdUser;
+    const invitationSentAt = await inviteCreatedUser(actor, createdUser, services);
+    // The invitation already explains email-code sign-in, so it replaces that onboarding email.
+    if (!(invitationSentAt && input.authMethod === 'email_otp')) {
+      await sendSignInOnboarding(createdUser.email, input.authMethod);
+    }
+
+    return { ...createdUser, lastLoginAt: null, invitationSentAt: invitationSentAt?.toISOString() ?? null };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to create user';
     if (message === 'User with this email already exists') throw new AppError(409, 'CONFLICT', message);

@@ -30,6 +30,7 @@ import type { DockerRuntimeSettingsService } from './docker-runtime-settings.ser
 import type { DockerSecretService } from './docker-secret.service.js';
 import {
   assertDockerMountChangeAllowed,
+  containerRecreateChangesWorkload,
   normalizeMountDefinitionsFromConfig,
   normalizeMountDefinitionsFromInspect,
 } from './docker-socket-mount.guard.js';
@@ -1255,6 +1256,8 @@ export async function recreateWithConfig(
   const name = await ctx.resolveContainerName(nodeId, containerId);
   const expectedState = options?.expectedState ?? (await ctx.resolveExpectedRecreateState(nodeId, containerId));
   ctx.requireNoTransition(nodeId, name);
+  // Judged on the request itself: the persisted runtime settings merged below are what the container runs.
+  const workloadChanged = containerRecreateChangesWorkload(config);
   // Merge persisted runtime settings without saving the request yet: it is
   // persisted only after validation below succeeds.
   config = await mergePersistedDockerRuntimeSettingsIntoConfig(ctx.runtimeOperationContext(), nodeId, name, config);
@@ -1291,6 +1294,7 @@ export async function recreateWithConfig(
     nextConfig: config,
     currentInspect: inspect,
     useCurrentWhenNextMissing: true,
+    workloadChanged,
   });
   const currentMounts = normalizeMountDefinitionsFromInspect(inspect);
   const nextMounts =
