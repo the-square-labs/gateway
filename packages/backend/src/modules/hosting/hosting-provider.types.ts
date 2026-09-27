@@ -272,6 +272,8 @@ export interface HostingProviderAdapter {
   ): Promise<HostingProviderOperation | null>;
   /** Remove only the operation-owned bootstrap medium after verified enrollment. */
   cleanupBootstrap?(resource: HostingResourceSnapshot, request: HostingCreateRequest): Promise<void>;
+  /** Providers without user data: delete the one-time SSH install key registered for `marker`. Idempotent. */
+  releaseInstallKey?(marker: string): Promise<{ deleted: number }>;
   action(
     resource: HostingResourceSnapshot,
     request: HostingActionRequest,

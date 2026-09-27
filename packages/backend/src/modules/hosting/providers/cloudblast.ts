@@ -13,6 +13,7 @@ import {
   type HostingCatalog,
   type HostingCatalogOption,
   type HostingConnection,
+  type HostingCreateRequest,
   type HostingFinance,
   type HostingInventory,
   type HostingInvoice,
@@ -48,9 +49,9 @@ import { CloudBlastFirewallAdapter } from './cloudblast-firewall.js';
 const MIB = 1024 ** 2;
 const GIB = 1024 ** 3;
 const POWER_PREFIX = 'power:';
-/** Gateway installs roles through user data; CloudBlast's create API accepts no user data or cloud-init input. */
-export const CLOUDBLAST_CREATE_UNSUPPORTED =
-  'CloudBlast cannot pass the Gateway installer to a new server: its API has no user data or cloud-init input. Create the server in CloudBlast, then install Gateway on it over a trusted SSH connection.';
+const MARKER = /^gw-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+/** CloudBlast sells only x86-64 KVM plans (no ARM plans are documented); installer-supported families only. */
+const ADMITTED_DISTRIBUTIONS = new Set(['ubuntu', 'debian']);
 const RESIZE_UNSUPPORTED = 'CloudBlast does not expose plan changes through its API';
 const POWER_ACTIONS = { start: 'start', shutdown: 'shutdown', reboot: 'restart' } as const;
 
@@ -64,6 +65,7 @@ type CbServer = {
   location: string;
   addresses: HostingAddress[];
   plan: { id: string; price: HostingMoney | null } | null;
+  marker?: string;
 };
 type CbStatus = { state: string | null; task: Json | null; serverStatus: string | null };
 type CbLocation = { id: string; label: string };
@@ -80,11 +82,28 @@ function price(value: unknown, period: 'hour' | 'month'): HostingMoney | null {
 function planPrice(object: Json): HostingMoney | null {
   return price(object.monthly_price, 'month') ?? price(object.hourly_price, 'hour');
 }
-function capabilities(finance: boolean): HostingCapabilities {
-  const result = hostingCapabilities({ start: true, shutdown: true, reboot: true, delete: true, finance });
-  result.create = { available: false, reasonCode: 'unsupported', reason: CLOUDBLAST_CREATE_UNSUPPORTED };
+function capabilities(account: boolean, finance: boolean): HostingCapabilities {
+  const result = hostingCapabilities({
+    create: account,
+    start: true,
+    shutdown: true,
+    reboot: true,
+    delete: true,
+    finance,
+  });
+  if (!account) result.create = { available: false, reason: 'Provisioning is an account action' };
   result.resize = { available: false, reasonCode: 'unsupported', reason: RESIZE_UNSUPPORTED };
   return result;
+}
+/** Hostname carries the operation marker: CloudBlast has no labels or tags. */
+function hostname(name: string, marker: string): string {
+  if (!MARKER.test(marker)) return invalid();
+  const prefix =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'gateway';
+  return `${prefix.slice(0, 63 - marker.length - 1).replace(/-+$/g, '')}-${marker}`;
 }
 function parseAddress(value: unknown): HostingAddress {
   const object = record(value);
@@ -110,6 +129,7 @@ function parseServer(value: unknown): CbServer {
     location: locationOf(object),
     addresses: values(object.ip_addresses).map(parseAddress),
     plan: plan ? { id: id(plan.id), price: planPrice(plan) } : null,
+    marker: /-(gw-[0-9a-f-]{36})$/.exec(optionalString(object.hostname) ?? '')?.[1],
   };
 }
 function parseStatus(value: unknown): CbStatus {
@@ -146,6 +166,7 @@ function parsePlan(value: unknown): CbPlan {
     cpu: number(object.cpu) ?? undefined,
     memoryMb: bytesTo(object.memory, MIB) ?? undefined,
     diskGb: bytesTo(object.disk, GIB) ?? undefined,
+    architecture: 'x64',
     ...(price ? { price } : {}),
     // Only listed with location_id; stock can run out between catalog refreshes.
     available: object.available !== false,
@@ -153,11 +174,21 @@ function parsePlan(value: unknown): CbPlan {
 }
 function parseTemplate(value: unknown): HostingCatalogOption {
   const object = record(value);
-  const name = optionalString(object.name) ?? string(object.slug);
-  const identity = /^(ubuntu|debian|fedora)\s+(\d+(?:\.\d+)?)(?:\s+lts)?$/i.exec(name.trim());
-  const operatingSystem = identity ? hostingOsIdentity(identity[1]!, identity[2]!) : undefined;
-  // Templates carry no architecture metadata, so the admission policy keeps them closed.
-  return { id: string(object.slug), name, ...(operatingSystem ? { operatingSystem } : {}) };
+  const slug = string(object.slug);
+  const name = optionalString(object.name) ?? slug;
+  // Plain names ("Ubuntu 24.04 LTS", "Debian 12") or plain slugs ("ubuntu-24-04", "debian-12") only;
+  // application templates and other distributions stay closed for automatic installation.
+  const byName = /^(ubuntu|debian)\s+(\d+(?:\.\d+)?)(?:\s+lts)?$/i.exec(name.trim());
+  const bySlug = name === slug ? /^(ubuntu|debian)-(\d+)(?:[.-](\d{2}))?$/i.exec(slug) : null;
+  const version = byName ? byName[2]! : bySlug ? (bySlug[3] ? `${bySlug[2]}.${bySlug[3]}` : bySlug[2]!) : null;
+  const family = (byName?.[1] ?? bySlug?.[1])?.toLowerCase();
+  const operatingSystem =
+    family && version && ADMITTED_DISTRIBUTIONS.has(family) ? hostingOsIdentity(family, version) : undefined;
+  return {
+    id: slug,
+    name,
+    ...(operatingSystem ? { operatingSystem, architecture: 'x64' as const } : {}),
+  };
 }
 function parseInvoice(value: unknown): HostingInvoice {
   const object = record(value);
@@ -196,7 +227,7 @@ export class CloudBlastHostingAdapter implements HostingProviderAdapter {
       // The numeric account ID survives token rotation; never derive ownership from the token.
       authority: `cloudblast:${id(account.id)}`,
       name: optionalString(account.email) ?? (holder || 'CloudBlast'),
-      capabilities: capabilities(number(account.credit) !== null),
+      capabilities: capabilities(true, number(account.credit) !== null),
     };
   }
 
@@ -237,19 +268,21 @@ export class CloudBlastHostingAdapter implements HostingProviderAdapter {
       kind: 'vm',
       name: server.name,
       location: server.location,
-      powerState: powerState(status),
+      powerState:
+        server.status === 'installing' || server.status?.startsWith('restoring_') ? 'starting' : powerState(status),
       cpu: server.cpu,
       memoryMb: server.memoryMb,
       diskGb: server.diskGb,
       sizeId: server.plan?.id,
       addresses: server.addresses,
       incarnation: `uuid:${server.uuid}`,
+      ...(server.marker ? { marker: server.marker } : {}),
       providerUrl: new URL(
         `${CLOUDBLAST_API_PREFIX}/servers/${encodeURIComponent(server.uuid)}`,
         this.connection.baseUrl
       ).toString(),
       ...(server.plan?.price ? { price: server.plan.price } : {}),
-      capabilities: capabilities(false),
+      capabilities: capabilities(false, false),
       observedAt: new Date().toISOString(),
     };
   }
@@ -277,13 +310,68 @@ export class CloudBlastHostingAdapter implements HostingProviderAdapter {
     }
   }
 
-  /** Rejected before any node reservation or dispatch; see CLOUDBLAST_CREATE_UNSUPPORTED. */
-  async validateCreate(): Promise<void> {
-    throw new AppError(409, 'HOSTING_ACTION_UNSUPPORTED', CLOUDBLAST_CREATE_UNSUPPORTED);
+  /** Install keys are named by the operation marker, so a lost response never registers a second key. */
+  private async installKeys(marker: string): Promise<string[]> {
+    const keys = await this.api.array('/ssh-keys', record);
+    return keys.filter((key) => key.name === marker).map((key) => id(key.id));
   }
 
-  async create(): Promise<HostingProviderOperation> {
-    throw new AppError(409, 'HOSTING_ACTION_UNSUPPORTED', CLOUDBLAST_CREATE_UNSUPPORTED);
+  /**
+   * CloudBlast has no user data: register the operation's one-time public key and create the server
+   * with it; Gateway then installs over SSH with the matching private key.
+   */
+  async create(request: HostingCreateRequest): Promise<HostingProviderOperation> {
+    const name = hostname(input(request.name), input(request.marker));
+    const publicKey = input(request.sshPublicKey);
+    let keyId = (await this.installKeys(request.marker))[0];
+    if (!keyId) {
+      const created = await this.api.request('/ssh-keys', {
+        method: 'POST',
+        body: { name: request.marker, public_key: publicKey },
+      });
+      keyId = mutationResponse(() => id(record(record(created).data).id));
+    }
+    const planId = Number(input(request.size));
+    const locationId = Number(input(request.location));
+    if (!Number.isSafeInteger(planId) || !Number.isSafeInteger(locationId)) return invalid();
+    let payload: unknown;
+    try {
+      payload = await this.api.request('/servers', {
+        method: 'POST',
+        body: {
+          plan_id: planId,
+          location_id: locationId,
+          template_slug: input(request.image),
+          hostname: name,
+          ssh_key_ids: [Number(keyId)],
+        },
+      });
+    } catch (error) {
+      // A definite rejection created nothing: do not leave the one-time key registered.
+      if (error instanceof HostingProviderError && !error.outcomeUnknown)
+        await this.releaseInstallKey(request.marker).catch(() => undefined);
+      throw error;
+    }
+    return mutationResponse(() => ({
+      id: null,
+      resourceId: parseServer(record(payload).data).uuid,
+      status: 'succeeded' as const,
+    }));
+  }
+
+  /** Idempotent: deletes every account key registered for this operation marker. */
+  async releaseInstallKey(marker: string): Promise<{ deleted: number }> {
+    if (!MARKER.test(marker)) return invalid();
+    const keys = await this.installKeys(marker);
+    for (const keyId of keys) {
+      try {
+        await this.api.request(`/ssh-keys/${encodeURIComponent(keyId)}`, { method: 'DELETE' });
+      } catch (error) {
+        if (!(error instanceof HostingProviderError) || error.outcomeUnknown || error.providerStatus !== 404)
+          throw error;
+      }
+    }
+    return { deleted: keys.length };
   }
 
   async action(resource: HostingResourceSnapshot, request: HostingActionRequest): Promise<HostingProviderOperation> {
