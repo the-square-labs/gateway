@@ -3,9 +3,9 @@
   "edges": [
     {
       "from_id": "7rchqhpz",
-      "to_id": "nr9hvzr3",
+      "to_id": "asy6c7bj",
       "relation": "uses_service",
-      "weight": 0.5673,
+      "weight": 0.4255,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862737377,
@@ -17,16 +17,6 @@
       "relation": "related_to",
       "weight": 0.4802,
       "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862737377,
-      "updated_at": 1787862737377
-    },
-    {
-      "from_id": "7rchqhpz",
-      "to_id": "asy6c7bj",
-      "relation": "uses_service",
-      "weight": 0.4255,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862737377,
       "updated_at": 1787862737377
@@ -46,6 +36,16 @@
       "to_id": "lvklfxgs",
       "relation": "uses_service",
       "weight": 0.4037,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862737377,
+      "updated_at": 1787862737377
+    },
+    {
+      "from_id": "7rchqhpz",
+      "to_id": "nr9hvzr3",
+      "relation": "uses_service",
+      "weight": 0.5673,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862737377,

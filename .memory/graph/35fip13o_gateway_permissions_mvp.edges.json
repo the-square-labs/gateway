@@ -3,9 +3,9 @@
   "edges": [
     {
       "from_id": "35fip13o",
-      "to_id": "mu4tydcq",
+      "to_id": "123u7vfm",
       "relation": "uses_service",
-      "weight": 0.541,
+      "weight": 0.3429,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862737221,
@@ -23,20 +23,20 @@
     },
     {
       "from_id": "35fip13o",
-      "to_id": "123u7vfm",
-      "relation": "uses_service",
-      "weight": 0.3429,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "to_id": "j6oni2tm",
+      "relation": "same_workflow",
+      "weight": 0.324,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
       "created_at": 1787862737221,
       "updated_at": 1787862737221
     },
     {
       "from_id": "35fip13o",
-      "to_id": "j6oni2tm",
-      "relation": "same_workflow",
-      "weight": 0.324,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "to_id": "mu4tydcq",
+      "relation": "uses_service",
+      "weight": 0.541,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862737221,
       "updated_at": 1787862737221

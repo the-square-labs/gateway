@@ -13,9 +13,9 @@
     },
     {
       "from_id": "z638qk12",
-      "to_id": "gpx2fdwu",
+      "to_id": "gahvf5k5",
       "relation": "uses_service",
-      "weight": 0.476,
+      "weight": 0.4737,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862736396,
@@ -23,9 +23,9 @@
     },
     {
       "from_id": "z638qk12",
-      "to_id": "gahvf5k5",
+      "to_id": "gpx2fdwu",
       "relation": "uses_service",
-      "weight": 0.4737,
+      "weight": 0.476,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862736396,

@@ -3,19 +3,29 @@
   "edges": [
     {
       "from_id": "kufbu8qt",
-      "to_id": "vrch49nc",
+      "to_id": "hqwh565e",
       "relation": "same_workflow",
-      "weight": 0.85,
-      "reason": "Release tag/signing rules and the self-update migrator are parts of the Gateway update workflow.",
-      "source": "manual",
-      "created_at": 1784761805148,
-      "updated_at": 1784761805148
+      "weight": 0.4285,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1787862737179,
+      "updated_at": 1787862737179
     },
     {
       "from_id": "kufbu8qt",
       "to_id": "lvklfxgs",
       "relation": "uses_service",
       "weight": 0.5197,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862737179,
+      "updated_at": 1787862737179
+    },
+    {
+      "from_id": "kufbu8qt",
+      "to_id": "nr9hvzr3",
+      "relation": "uses_service",
+      "weight": 0.4103,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862737179,
@@ -33,23 +43,13 @@
     },
     {
       "from_id": "kufbu8qt",
-      "to_id": "hqwh565e",
+      "to_id": "vrch49nc",
       "relation": "same_workflow",
-      "weight": 0.4285,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862737179,
-      "updated_at": 1787862737179
-    },
-    {
-      "from_id": "kufbu8qt",
-      "to_id": "nr9hvzr3",
-      "relation": "uses_service",
-      "weight": 0.4103,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862737179,
-      "updated_at": 1787862737179
+      "weight": 0.85,
+      "reason": "Release tag/signing rules and the self-update migrator are parts of the Gateway update workflow.",
+      "source": "manual",
+      "created_at": 1784761805148,
+      "updated_at": 1784761805148
     }
   ]
 }

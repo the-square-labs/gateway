@@ -3,6 +3,26 @@
   "edges": [
     {
       "from_id": "3ta908aa",
+      "to_id": "43cdn720",
+      "relation": "uses_service",
+      "weight": 0.4166,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736309,
+      "updated_at": 1787862736309
+    },
+    {
+      "from_id": "3ta908aa",
+      "to_id": "a7elxcv1",
+      "relation": "uses_service",
+      "weight": 0.4576,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1787862736309,
+      "updated_at": 1787862736309
+    },
+    {
+      "from_id": "3ta908aa",
       "to_id": "iois3ul4",
       "relation": "uses_service",
       "weight": 0.6021,
@@ -23,29 +43,9 @@
     },
     {
       "from_id": "3ta908aa",
-      "to_id": "a7elxcv1",
-      "relation": "uses_service",
-      "weight": 0.4576,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736309,
-      "updated_at": 1787862736309
-    },
-    {
-      "from_id": "3ta908aa",
       "to_id": "vks9ym4c",
       "relation": "uses_service",
       "weight": 0.422,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736309,
-      "updated_at": 1787862736309
-    },
-    {
-      "from_id": "3ta908aa",
-      "to_id": "43cdn720",
-      "relation": "uses_service",
-      "weight": 0.4166,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
       "created_at": 1787862736309,

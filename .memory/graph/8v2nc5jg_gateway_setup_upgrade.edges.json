@@ -1,0 +1,25 @@
+{
+  "file_name": "8v2nc5jg_gateway_setup_upgrade",
+  "edges": [
+    {
+      "from_id": "8v2nc5jg",
+      "to_id": "e5deql0f",
+      "relation": "same_workflow",
+      "weight": 0.76,
+      "reason": "Covers the installer’s host and Docker provisioning prerequisites for fresh Gateway installations.",
+      "source": "auto",
+      "created_at": 1790420891009,
+      "updated_at": 1790420891009
+    },
+    {
+      "from_id": "8v2nc5jg",
+      "to_id": "yjerrsgn",
+      "relation": "same_workflow",
+      "weight": 0.82,
+      "reason": "Defines first-run setup endpoint availability and completion behavior relevant to the setup wizard flow.",
+      "source": "auto",
+      "created_at": 1790420891009,
+      "updated_at": 1790420891009
+    }
+  ]
+}

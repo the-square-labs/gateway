@@ -3,10 +3,10 @@
   "edges": [
     {
       "from_id": "02e60mqr",
-      "to_id": "lvklfxgs",
+      "to_id": "3ta908aa",
       "relation": "same_workflow",
-      "weight": 0.75,
-      "reason": "Gateway release preparation and upgrade validation are stages of the same release workflow.",
+      "weight": 0.58,
+      "reason": "Secure Link release candidates depend on immutable daemon and relay artifacts governed by these release conventions.",
       "source": "auto",
       "created_at": 1788309575156,
       "updated_at": 1788309575156
@@ -23,10 +23,10 @@
     },
     {
       "from_id": "02e60mqr",
-      "to_id": "3ta908aa",
+      "to_id": "lvklfxgs",
       "relation": "same_workflow",
-      "weight": 0.58,
-      "reason": "Secure Link release candidates depend on immutable daemon and relay artifacts governed by these release conventions.",
+      "weight": 0.75,
+      "reason": "Gateway release preparation and upgrade validation are stages of the same release workflow.",
       "source": "auto",
       "created_at": 1788309575156,
       "updated_at": 1788309575156

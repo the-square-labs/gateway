@@ -3,9 +3,9 @@
   "edges": [
     {
       "from_id": "h130czul",
-      "to_id": "w75b8az4",
+      "to_id": "92pnq26b",
       "relation": "same_area",
-      "weight": 0.4842,
+      "weight": 0.3352,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1787862737165,
@@ -43,9 +43,9 @@
     },
     {
       "from_id": "h130czul",
-      "to_id": "92pnq26b",
+      "to_id": "w75b8az4",
       "relation": "same_area",
-      "weight": 0.3352,
+      "weight": 0.4842,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
       "created_at": 1787862737165,
