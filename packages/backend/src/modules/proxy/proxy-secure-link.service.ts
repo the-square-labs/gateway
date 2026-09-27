@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  dockerAvailabilityPlacements,
   dockerDeploymentRoutes,
   dockerDeployments,
   managedStorageClusters,
@@ -315,6 +316,33 @@ export class ProxySecureLinkService {
       );
     }
     return ready;
+  }
+
+  /**
+   * Resends the Secure Link bindings of every Availability member of a policy, after its lease mode changed: members
+   * carry the lease policy only while the policy is in lease mode (B2), so nginx gates them by the lease only then.
+   */
+  async syncAvailabilityPolicyMembers(policyId: string): Promise<void> {
+    const members = await this.db
+      .select({
+        sourceNodeId: proxyAdditionalSecureLinks.sourceNodeId,
+        dockerNodeId: proxyAdditionalSecureLinks.dockerNodeId,
+      })
+      .from(proxyAdditionalSecureLinks)
+      .innerJoin(
+        dockerAvailabilityPlacements,
+        eq(dockerAvailabilityPlacements.id, proxyAdditionalSecureLinks.referenceId)
+      )
+      .where(
+        and(
+          eq(proxyAdditionalSecureLinks.purpose, 'availability_member'),
+          eq(dockerAvailabilityPlacements.policyId, policyId)
+        )
+      );
+    await Promise.all([
+      ...[...new Set(members.map(({ sourceNodeId }) => sourceNodeId))].map((nodeId) => this.syncSourceNode(nodeId)),
+      ...[...new Set(members.map(({ dockerNodeId }) => dockerNodeId))].map((nodeId) => this.syncTargetNode(nodeId)),
+    ]);
   }
 
   /**

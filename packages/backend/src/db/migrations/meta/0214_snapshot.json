@@ -1,5 +1,5 @@
 {
-  "id": "13428a70-5bc8-4c34-98d9-bb1ed4c979f3",
+  "id": "26a514f8-27cb-44f6-9b74-bc63c7f7654b",
   "prevId": "d9fe077b-3b70-4a18-a188-067488d8dad5",
   "version": "7",
   "dialect": "postgresql",
@@ -7722,6 +7722,18 @@
         "identity_public_key": {
           "name": "identity_public_key",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "previous_identity_public_key": {
+          "name": "previous_identity_public_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "identity_rotated_at": {
+          "name": "identity_rotated_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },

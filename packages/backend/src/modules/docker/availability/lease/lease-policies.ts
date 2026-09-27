@@ -31,6 +31,7 @@ import {
   leaseCandidatePlacements,
   orderLeaseCandidates,
 } from './lease-planning.js';
+import { loadPolicyRelays } from './lease-policy-relays.js';
 import { planPolicyVoters } from './lease-policy-voters.js';
 import type { LeaseClusterRow, LeaseMemberRow, LeaseStateRow } from './lease-store.js';
 import { ensureLeaseState } from './lease-store.js';
@@ -172,6 +173,7 @@ export class AvailabilityLeasePolicies {
           )
       : [];
     const policyOfPlacement = new Map(placements.map((placement) => [placement.id, placement.policyId]));
+    const policyRelays = await loadPolicyRelays(this.db, policyIds);
     for (const policy of relevant) {
       try {
         const state = stateByPolicy.get(policy.id) ?? (await ensureLeaseState(this.db, policy.id));
@@ -185,6 +187,7 @@ export class AvailabilityLeasePolicies {
           policyPlacements,
           ingressNodes,
           observations.filter((observation) => observation.policyId === policy.id),
+          [...(policyRelays.get(policy.id) ?? [])],
           context
         );
         outcome.changed ||= result.changed;
@@ -205,6 +208,7 @@ export class AvailabilityLeasePolicies {
     placements: LeasePlanningPlacement[],
     ingressNodes: string[],
     observations: ObservationRow[],
+    relayIds: string[],
     context: LeasePoliciesContext
   ): Promise<{ changed: boolean; modeChange: LeaseModeChange | null }> {
     const now = context.now;
@@ -221,6 +225,10 @@ export class AvailabilityLeasePolicies {
       ingress: [...new Set(ingressNodes)].map((nodeId) => ({
         nodeId,
         capable: context.participants.byId.get(nodeId)?.capable ?? false,
+      })),
+      relays: relayIds.map((relayId) => ({
+        relayId,
+        capable: context.participants.byId.get(relayId)?.capable ?? false,
       })),
     });
     // D9: a rollout's surge is a temporary extra slot; failover stays at one slot.

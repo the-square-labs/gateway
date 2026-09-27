@@ -233,6 +233,22 @@ describe('availability lease capability gating (D10)', () => {
     expect(
       evaluateLeaseGating({ ...eligible, ingress: [{ nodeId: eligible.ingress[0]!.nodeId, capable: false }] })
     ).toMatchObject({ eligible: false, reason: { code: 'ingress_not_capable' } });
+    // H4: every relay carrying the policy's endpoints and DB routes must run the lease gate.
+    expect(
+      evaluateLeaseGating({
+        ...eligible,
+        relays: [
+          { relayId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', capable: false },
+          { relayId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', capable: true },
+        ],
+      })
+    ).toMatchObject({
+      eligible: false,
+      reason: { code: 'relays_not_capable', relayIds: ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'] },
+    });
+    expect(
+      evaluateLeaseGating({ ...eligible, relays: [{ relayId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', capable: true }] })
+    ).toEqual({ eligible: true });
     expect(evaluateLeaseGating({ ...eligible, signingReady: false })).toMatchObject({
       eligible: false,
       reason: { code: 'signing_key_pending' },

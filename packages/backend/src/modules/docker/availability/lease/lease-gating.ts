@@ -12,6 +12,11 @@ export interface LeaseGatingInput {
   candidates: Array<{ nodeId: string; capable: boolean }>;
   /** Ingress nginx node ids of the policy's routes and whether each is capable. */
   ingress: Array<{ nodeId: string; capable: boolean }>;
+  /**
+   * Relay instances carrying the policy's member endpoints and managed-database routes, and whether each is capable.
+   * An old relay ignores lease_policy_id and would admit a stale holder (A2.4, A11).
+   */
+  relays?: Array<{ relayId: string; capable: boolean }>;
 }
 
 export type LeaseGatingResult = { eligible: true } | { eligible: false; reason: DockerAvailabilityLeaseReason };
@@ -66,6 +71,18 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
         code: 'ingress_not_capable',
         message: 'Some Nginx nodes that route to this workload run a daemon without data-plane failover; update them',
         nodeIds: [...new Set(incapableIngress)].sort(),
+      },
+    };
+  }
+  const incapableRelays = (input.relays ?? []).filter((relay) => !relay.capable).map(({ relayId }) => relayId);
+  if (incapableRelays.length > 0) {
+    return {
+      eligible: false,
+      reason: {
+        code: 'relays_not_capable',
+        message:
+          'Some relays that carry this workload run a version without the lease data-path gate; update them before data-plane failover can run',
+        relayIds: [...new Set(incapableRelays)].sort(),
       },
     };
   }

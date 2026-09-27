@@ -30,6 +30,8 @@ export interface DockerAvailabilityLeaseReason {
   code: string;
   message: string;
   nodeIds?: string[];
+  /** Relay instances named by the reason (relays_not_capable). */
+  relayIds?: string[];
 }
 
 /** A lease ballot as reported by the data plane; uint64 parts stay decimal strings. */
@@ -168,6 +170,12 @@ export const availabilityLeaseMembers = pgTable(
     relayInstanceId: uuid('relay_instance_id').references(() => relayInstances.id, { onDelete: 'cascade' }),
     /** Base64 PKIX DER ECDSA P-256 identity key the member signs frames with. */
     identityPublicKey: text('identity_public_key'),
+    /**
+     * H3: the key the member signed with before its last identity renewal, and when it changed. Manifests republish
+     * with the new key at once; the previous one is kept for a multi-key member entry during the overlap.
+     */
+    previousIdentityPublicKey: text('previous_identity_public_key'),
+    identityRotatedAt: timestamp('identity_rotated_at', { withTimezone: true }),
     watchdogReady: boolean('watchdog_ready').notNull().default(false),
     incarnation: bigint('incarnation', { mode: 'number' }).notNull().default(0),
     epochAck: bigint('epoch_ack', { mode: 'number' }).notNull().default(0),

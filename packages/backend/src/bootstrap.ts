@@ -1385,6 +1385,18 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(DockerAvailabilityService, dockerAvailabilityService);
   availabilityLeaseService.attachController(dockerAvailabilityService);
+  // B2: Availability members carry their lease policy (and nginx gates them) only while the policy is in lease mode.
+  eventBus.subscribe('docker.availability.changed', (payload) => {
+    const event = payload as { policyId?: unknown; action?: unknown } | null;
+    if (typeof event?.policyId !== 'string' || typeof event.action !== 'string' || !proxySecureLinkService) return;
+    if (!['lease_lease', 'lease_closing', 'lease_legacy', 'lease_bootstrapping'].includes(event.action)) return;
+    void proxySecureLinkService.syncAvailabilityPolicyMembers(event.policyId).catch((error) => {
+      logger.warn('Availability member Secure Links will follow the lease mode on the next sync', {
+        policyId: event.policyId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  });
   dockerManagementService.setWorkloadResolver(dockerWorkloadResolver);
   dockerManagementService.setAvailabilityMutationGuard((nodeId, containerName) =>
     dockerAvailabilityService.assertContainerMutationAllowed(nodeId, containerName)

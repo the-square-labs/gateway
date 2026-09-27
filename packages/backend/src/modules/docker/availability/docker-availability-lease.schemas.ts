@@ -27,6 +27,7 @@ export const DockerAvailabilityLeaseSchema = z.object({
       code: z.string(),
       message: z.string(),
       nodeIds: z.array(UUID).optional(),
+      relayIds: z.array(UUID).optional(),
     })
     .nullable(),
   manifestVersion: z.number().int().nonnegative(),

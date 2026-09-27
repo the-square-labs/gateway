@@ -1,9 +1,9 @@
 -- Availability data-plane lease. Policies get a partition mode (strict by default, so no existing policy changes
 -- behaviour), an optional lease witness, and a lease state that starts in legacy: the backend keeps reacting to node
--- loss until every candidate and ingress node advertises availability_lease_v1. Each policy carries its own voters
--- (candidate hosts plus witnesses) and voter epoch; the cluster row only tracks the manifest signing key. Members hold
--- what each daemon and relay last reported, and observations record the lease holder of every (policy, slot).
--- Standby Secure Link members are marked dormant; existing members stay active.
+-- loss until every candidate, ingress node and carrying relay advertises availability_lease_v1. Each policy carries its
+-- own voters (candidate hosts plus witnesses) and voter epoch; the cluster row only tracks the manifest signing key.
+-- Members hold what each daemon and relay last reported, and observations record the lease holder of every
+-- (policy, slot). Standby Secure Link members are marked dormant; existing members stay active.
 CREATE TABLE "availability_lease_cluster" (
 	"id" varchar(32) PRIMARY KEY NOT NULL,
 	"signing_key_id" varchar(64),
@@ -26,6 +26,8 @@ CREATE TABLE "availability_lease_members" (
 	"node_id" uuid,
 	"relay_instance_id" uuid,
 	"identity_public_key" text,
+	"previous_identity_public_key" text,
+	"identity_rotated_at" timestamp with time zone,
 	"watchdog_ready" boolean DEFAULT false NOT NULL,
 	"incarnation" bigint DEFAULT 0 NOT NULL,
 	"epoch_ack" bigint DEFAULT 0 NOT NULL,

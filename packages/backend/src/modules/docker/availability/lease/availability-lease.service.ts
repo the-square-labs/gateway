@@ -188,8 +188,18 @@ export class AvailabilityLeaseService {
   }
 
   private async ingest(sender: LeaseReportSender, report: AvailabilityLeaseReport): Promise<void> {
-    const notices = await this.reports.ingest(sender, report);
+    const { notices, identityChanged } = await this.reports.ingest(sender, report);
     for (const notice of notices) await this.recordHolderChange(notice);
+    // H3: a renewed identity key must reach every manifest that lists the member before its frames are dropped for
+    // long; republish now instead of on the next interval.
+    if (identityChanged) {
+      void this.reconcile().catch((error) => {
+        logger.warn('Availability lease manifests will pick up the renewed identity key on the next reconcile', {
+          memberId: sender.memberId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   }
 
   private async recordHolderChange(notice: LeaseHolderChangeNotice): Promise<void> {
