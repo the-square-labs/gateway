@@ -9,7 +9,7 @@ Hosting accounts let Gateway create a provider VM, run the existing role install
 | HOSTKEY | VM orders and lifecycle management | Account balance and estimated monthly expenses |
 | DigitalOcean | Droplets and lifecycle management | Account balance when available and estimated monthly expenses |
 | Hetzner Cloud | Cloud servers; not Robot or bare metal | Estimated VM expenses; no account balance API |
-| CloudBlast | Inventory and lifecycle of existing VPS servers; no creation (see below) | EUR credit balance and estimated monthly expenses |
+| CloudBlast | VPS creation (installed over SSH) and lifecycle management | EUR credit balance and estimated monthly expenses |
 | Proxmox VE | Create QEMU VMs; inventory and manage eligible QEMU VMs and LXC containers | None; placement shows host/storage capacity |
 
 Connect accounts under **Settings → Integrations → Hosting**, also listed under **Nodes → Providers**. Account pages contain Overview and Virtual machines, with account settings in the action menu. Balance and monthly expenses appear as overview cards where available and permitted. There is no Finance tab, invoice browser or top-up action. Testing a connection does not order a VM or create an invoice.
@@ -39,11 +39,13 @@ Installing Gateway on a visible existing server is an explicit action, distinct 
 
 CloudBlast connects with an API token from CloudBlast Account Settings → API; Gateway calls the official API v2 at `https://console.cloudblast.io`. The account's numeric ID is its identity, so a replacement token for the same account can be saved on the existing connector.
 
-- **No VM creation from Gateway.** CloudBlast's create API accepts no user data or cloud-init input, so Gateway cannot deliver its installer to a new server. Create the server in CloudBlast, then use **Install Gateway** on the discovered server with a trusted SSH connection. Plan changes (resize) and daemon recovery are also unavailable through its API.
+- **VM creation installs over SSH.** CloudBlast's create API accepts no user data, so Gateway generates a one-time ed25519 key pair per creation. The private key is held only in the operation's encrypted bootstrap data and is discarded when the operation ends. Gateway registers the public key with CloudBlast under the operation marker, then creates the server with it; the server hostname ends with the same marker. Once the server is running and out of `installing`, Gateway trusts the SSH host key on the first connection to the server's public address and pins it for the rest of the operation. A different key or address later stops the installation without sending anything. The installer then runs as root with a freshly rotated, single-use enrollment token that expires after 30 minutes.
+- After the installer finishes, successfully or not, Gateway deletes the key from the CloudBlast account. It also removes the key from `/root/.ssh/authorized_keys` when installation succeeded; after a failure the key stays so the failure can be diagnosed. Both cleanups are recorded on the operation. A failed provider-key deletion keeps the operation reconcilable, retries it (up to 20 attempts) and reports its outcome before the operation completes.
+- Admitted images are plain Ubuntu and Debian templates, such as "Ubuntu 24.04 LTS" and "Debian 12", within the installer-supported versions. Application templates, Fedora, other Linux distributions and Windows are listed but never offered for automatic installation. Plan changes (resize) and daemon recovery are unavailable through CloudBlast's API.
 - Inventory reads each server's plan, addresses and real-time hypervisor state. Start, graceful shutdown, reboot and destroy are polled through that state and never re-sent. Destroying a server keeps only addresses that were already reserved IPs.
 - **Snapshots** are CloudBlast backups taken in snapshot mode (the server stays online). Names are limited to 40 characters. Restore requires a stopped server. Storage cost uses the plan's backup price per GB-month.
 - **Firewall** uses one Gateway-owned security group per server, with explicit catch-all rules for the inbound and outbound policy. Gateway refuses to apply while the server is attached to other security groups, or when its group is shared or contains rules Gateway cannot represent. After confirmed server deletion, the unused owned group is removed.
-- Balance is the account credit in EUR. Top-ups, SSH keys, reverse DNS, extra or reserved IPs, reinstall and rename remain CloudBlast console actions.
+- Balance is the account credit in EUR. Top-ups, user SSH keys, reverse DNS, extra or reserved IPs, reinstall and rename remain CloudBlast console actions.
 
 ## Proxmox prerequisites
 

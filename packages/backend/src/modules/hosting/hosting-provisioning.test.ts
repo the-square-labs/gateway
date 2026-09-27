@@ -18,6 +18,7 @@ import {
   hostingCapabilities,
 } from './hosting-provider.types.js';
 import { assertHostingQuote, HostingProvisioningService } from './hosting-provisioning.service.js';
+import { createSshInstallKey, initialSshInstallState } from './hosting-ssh-install.js';
 
 const input: HostingProvisionInput = {
   connectorId: '11111111-1111-4111-8111-111111111111',
@@ -90,7 +91,8 @@ function runner(
   patch: Partial<HostingOperationRow> = {},
   allocation = { held: false, rows: [] as HostingOperationRow[] },
   createPatch: Partial<HostingCreateRequest> = {},
-  lifecycle: { connected?: boolean; node?: Record<string, unknown> | null } = {}
+  lifecycle: { connected?: boolean; node?: Record<string, unknown> | null } = {},
+  payloadPatch: Record<string, unknown> = {}
 ) {
   let row = {
     id: '33333333-3333-4333-8333-333333333333',
@@ -158,6 +160,7 @@ function runner(
     managedHostIdentity: null,
   };
   const resourceUpdates: Record<string, unknown>[] = [];
+  const nodeUpdates: Record<string, unknown>[] = [];
   const db = {
     transaction: async (callback: (tx: unknown) => Promise<unknown>) => {
       let owns = false;
@@ -196,9 +199,12 @@ function runner(
     })),
     update: vi.fn((table: unknown) => ({
       set: (change: Record<string, unknown>) => ({
-        where: async () => {
+        where: () => {
           if (table === hostingResources) resourceUpdates.push(change);
-          return [];
+          if (table === nodes) nodeUpdates.push(change);
+          return Object.assign(Promise.resolve([]), {
+            returning: async () => (table === nodes ? [{ id: row.nodeId }] : []),
+          });
         },
       }),
     })),
@@ -221,6 +227,7 @@ function runner(
     guestIdentity: vi.fn(async () => null),
     prepare: vi.fn(async () => ({ id: 'prepare', status: 'running' })),
     reconcilePreparation: vi.fn(async () => null as HostingProviderOperation | null),
+    releaseInstallKey: vi.fn(async (_marker: string) => ({ deleted: 1 })),
   };
   const connectors = {
     get: vi.fn(async () => ({ id: input.connectorId, provider: 'proxmox' })),
@@ -231,6 +238,15 @@ function runner(
   const nodeService = {
     create: vi.fn(),
     getGatewayEnrollmentTargets: vi.fn(async () => ({ public: { gateway: 'gateway.example.test:9443' } })),
+    getGatewayEnrollmentCertificateFingerprint: vi.fn(async () => `sha256:${'a'.repeat(64)}`),
+  };
+  const ssh = {
+    executeForHosting: vi.fn(),
+    readHostKeyForHosting: vi.fn(async () => 'SHA256:pinned'),
+    executeWithKeyForHosting: vi.fn(async (call: { prepare: () => Promise<string> }) => {
+      await call.prepare();
+      return { exitCode: 0, stdout: 'GATEWAY_INSTALL_KEY_REMOVED', sent: true as const };
+    }),
   };
   const service = new HostingProvisioningService(
     db as never,
@@ -239,14 +255,18 @@ function runner(
     nodeService as never,
     {
       decryptString: () =>
-        JSON.stringify({ script: 'installer', create: { ...input, marker: `gw-${row.id}`, ...createPatch } }),
+        JSON.stringify({
+          script: 'installer',
+          create: { ...input, marker: `gw-${row.id}`, ...createPatch },
+          ...payloadPatch,
+        }),
     } as never,
     { getUserById: async () => actor } as never,
     { isNodeConnected: () => lifecycle.connected ?? false } as never,
     { log: vi.fn() } as never,
-    { executeForHosting: vi.fn() } as never
+    ssh as never
   );
-  return { service, operations, adapter, connectors, nodeService, resourceUpdates, row: () => row };
+  return { service, operations, adapter, connectors, nodeService, resourceUpdates, nodeUpdates, ssh, row: () => row };
 }
 
 describe('hosting paid provisioning state machine', () => {
@@ -355,14 +375,32 @@ describe('hosting paid provisioning state machine', () => {
     expect(test.operations.dispatch).not.toHaveBeenCalled();
     expect(test.adapter.create).not.toHaveBeenCalled();
   });
-  it('refuses CloudBlast creation before reserving a node because the installer cannot be delivered', async () => {
-    const test = runner();
+  it('installs a created CloudBlast server over SSH with a fresh 30-minute token instead of cloud-init', async () => {
+    const test = runner(
+      { phase: 'provisioning', resourceId: 'resource', result: { sshInstall: initialSshInstallState() } },
+      undefined,
+      {},
+      {},
+      { ssh: createSshInstallKey('gw-33333333-3333-4333-8333-333333333333') }
+    );
     test.connectors.get.mockResolvedValue({ id: input.connectorId, provider: 'cloudblast' });
-    await expect(test.service.create(input, actor)).rejects.toMatchObject({ code: 'HOSTING_ACTION_UNSUPPORTED' });
-    expect(test.nodeService.create).not.toHaveBeenCalled();
-    expect(test.nodeService.getGatewayEnrollmentTargets).not.toHaveBeenCalled();
-    expect(test.operations.dispatch).not.toHaveBeenCalled();
-    expect(test.adapter.create).not.toHaveBeenCalled();
+    test.adapter.getResource.mockResolvedValue({
+      ...snapshot,
+      addresses: [{ ip: '203.0.113.20', network: 'public', direct: true }],
+    });
+    await test.service.reconcileDue();
+    expect(test.adapter.bootstrap).not.toHaveBeenCalled();
+    expect(test.ssh.readHostKeyForHosting).toHaveBeenCalledWith('203.0.113.20');
+    expect(test.ssh.executeWithKeyForHosting).toHaveBeenCalledWith(
+      expect.objectContaining({ address: '203.0.113.20', username: 'root', hostFingerprint: 'SHA256:pinned' })
+    );
+    const rotated = test.nodeUpdates.find((change) => change.enrollmentTokenExpiresAt);
+    const ttl = (rotated?.enrollmentTokenExpiresAt as Date).getTime() - Date.now();
+    expect(ttl).toBeGreaterThan(29 * 60 * 1000);
+    expect(ttl).toBeLessThanOrEqual(30 * 60 * 1000);
+    expect(test.adapter.releaseInstallKey).toHaveBeenCalledWith('gw-33333333-3333-4333-8333-333333333333');
+    expect(test.row()).toMatchObject({ phase: 'installing', dispatchStartedAt: null });
+    expect(test.row().result?.sshInstall).toMatchObject({ guestKey: 'removed', providerKey: 'deleted' });
   });
   it('fails a queued create before dispatch when scope validation is denied', async () => {
     const test = runner();
