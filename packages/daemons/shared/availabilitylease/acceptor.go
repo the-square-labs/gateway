@@ -268,12 +268,12 @@ func (n *Node) onPropose(from string, msg *pb.LeasePropose, now time.Duration) {
 		Key: key.proto(), Ballot: ballot.proto(), Epoch: msg.GetEpoch(), ManifestVersion: msg.GetManifestVersion(),
 		AcceptorId: n.id, AcceptorIncarnation: n.incarnation,
 	}
-	signature, err := n.signer.Sign(acceptStatement(key, ballot, msg.GetEpoch(), msg.GetManifestVersion(), n.id, n.incarnation))
+	signature, extra, err := signAll(n.signers(), acceptStatement(key, ballot, msg.GetEpoch(), msg.GetManifestVersion(), n.id, n.incarnation))
 	if err != nil {
 		n.logf("sign lease accept: %v", err)
 		return
 	}
-	accepted.Signature = signature
+	accepted.Signature, accepted.AdditionalSignatures = signature, extra
 	n.queue(from, &pb.LeaseItem{Body: &pb.LeaseItem_Accepted{Accepted: accepted}})
 }
 

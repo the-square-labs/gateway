@@ -120,9 +120,8 @@ func (n *Node) onAccepted(from string, msg *pb.LeaseAccepted, now time.Duration)
 	if r == nil || !r.config.isVoter(from) || msg.GetEpoch() != r.config.Epoch || msg.GetManifestVersion() != r.manifest.Version {
 		return
 	}
-	publicKey, _ := r.config.publicKey(from)
 	statement := acceptStatement(key, r.ballot, msg.GetEpoch(), msg.GetManifestVersion(), from, msg.GetAcceptorIncarnation())
-	if !n.verifier.Verify(publicKey, statement, msg.GetSignature()) {
+	if !n.verifyAny(n.identityKeys(from), statement, msg.GetSignature(), msg.GetAdditionalSignatures()) {
 		return
 	}
 	r.accepts[from] = msg
