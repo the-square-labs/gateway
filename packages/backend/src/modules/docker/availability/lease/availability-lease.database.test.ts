@@ -55,6 +55,19 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     ({ id, type }) => ({ nodeId: id, connectionId: `c-${id}`, type, capabilities: new Set(['availability_lease_v1']) })
   );
   const q = (text: string, values: unknown[] = []) => pool.query(text, values);
+  const memberLinkId = randomUUID();
+  const projectionId = randomUUID();
+  const gateOwners = {
+    endpoints: [
+      { id: 'endpoint-member', ownerKind: 'proxy_host_secure_link', ownerId: memberLinkId },
+      { id: 'endpoint-other', ownerKind: 'proxy_host_secure_link', ownerId: randomUUID() },
+    ],
+    routes: [{ id: 'route-projection', ownerKind: 'managed_database_binding', ownerId: projectionId }],
+  };
+  const gateIds = async () => {
+    const ids = await service.relayLeasePolicyIds(gateOwners.endpoints, gateOwners.routes);
+    return { endpoints: Object.fromEntries(ids.endpoints), routes: Object.fromEntries(ids.routes) };
+  };
 
   const report = (memberId: string, extra: Partial<AvailabilityLeaseReport> = {}): AvailabilityLeaseReport => ({
     memberId,
@@ -146,6 +159,49 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
         ]
       );
     }
+    const [placement] = (
+      await q('select id from docker_availability_placements where policy_id = $1 and node_id = $2', [
+        policyId,
+        nodeIds[0],
+      ])
+    ).rows;
+    const group = randomUUID();
+    const user = randomUUID();
+    await q('insert into permission_groups (id, name) values ($1, $2)', [group, `lease-${group}`]);
+    await q('insert into users (id, group_id, email, name) values ($1, $2, $3, $4)', [
+      user,
+      group,
+      `${user}@lease.test`,
+      'Lease test',
+    ]);
+    const hostId = randomUUID();
+    await q(`insert into proxy_hosts (id, slug, created_by_id) values ($1, 'lease-host', $2)`, [hostId, user]);
+    await q(
+      `insert into proxy_additional_secure_links (id, proxy_host_id, name, purpose, reference_id,
+         availability_owner_key, upstream_kind, source_node_id, docker_node_id, docker_container_port,
+         docker_host_port, target_container, status)
+       values ($1, $2, 'member', 'availability_member', $3, $4, 'docker_container', $5, $6, 80, 8080, 'app', 'active')`,
+      [memberLinkId, hostId, placement.id, `proxy-host:${hostId}`, nginxId, nodeIds[0]]
+    );
+    const databaseId = randomUUID();
+    await q(
+      `insert into managed_database_instances (id, node_id, name, slug, type, version, image_ref, engine_config,
+         encrypted_owner_credentials, storage_size_bytes, published_port, created_by_id)
+       values ($1, $2, 'db', 'db', 'postgres', '17', 'img', '{}', 'x', 1, null, $3)`,
+      [databaseId, nodeIds[2], user]
+    );
+    const bindingId = randomUUID();
+    await q(
+      `insert into managed_database_bindings (id, managed_database_id, target_node_id, target_type, target_resource_id,
+         network_name, connector_name, connector_alias, environment, encrypted_credentials, created_by_id)
+       values ($1, $2, $3, 'container', 'app', 'n', 'c', 'a', '{}', 'x', $4)`,
+      [bindingId, databaseId, nodeIds[0], user]
+    );
+    await q(
+      `insert into managed_database_binding_placements (id, binding_id, availability_placement_id, node_id,
+         network_name, connector_name, connector_alias) values ($1, $2, $3, $4, 'n', 'c', 'a')`,
+      [projectionId, bindingId, placement.id, nodeIds[0]]
+    );
     const registry = {
       getNode: (id: string) => connected.find((node) => node.nodeId === id),
       getAllNodes: () => connected,
@@ -191,6 +247,8 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
       true
     );
     expect((await service.getPolicyLease(policyId)).reason).toMatchObject({ code: 'voter_config_pending' });
+    // Legacy: the relay keeps legacy admission for every endpoint and route.
+    expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
   });
 
   it('bootstraps the policy with its serving placement as reserved holder (A5)', async () => {
@@ -215,6 +273,8 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
       'LEASE_BLOCK_KIND_VOTER_CONFIG',
       'LEASE_BLOCK_KIND_MANIFEST',
     ]);
+    // Bootstrapping keeps legacy admission until the reserved holder committed (A5).
+    expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
   });
 
   it('enters lease mode once the reserved holder acquired and the gate window passed, then audits a failover', async () => {
@@ -231,6 +291,10 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     }
     expect((await service.getPolicyLease(policyId)).mode).toBe('lease');
     expect(audit.log).not.toHaveBeenCalled();
+    expect(await gateIds()).toEqual({
+      endpoints: { 'endpoint-member': policyId },
+      routes: { 'route-projection': policyId },
+    });
 
     await service.ingestDaemonReport(nodeIds[0]!, 'docker', report(nodeIds[0]!, { epoch: '1' }));
     await service.ingestDaemonReport(nodeIds[1]!, 'docker', holding(nodeIds[1]!, 7));
@@ -300,6 +364,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     await service.reconcile();
     const closing = await service.getPolicyLease(policyId);
     expect(closing.mode).toBe('closing');
+    expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
     expect(closing.reason).toMatchObject({ code: 'candidates_not_capable', nodeIds: [nodeIds[1]] });
     expect(await service.isReactive(policyId)).toBe(false);
     await service.ingestDaemonReport(

@@ -26,6 +26,7 @@ import { AvailabilityLeaseDistribution, type RelayLeasePolicyFields } from './le
 import { availabilityStandbyCount } from './lease-gating.js';
 import { loadLeaseParticipants } from './lease-participants.js';
 import { AvailabilityLeasePolicies, type LeaseModeChange } from './lease-policies.js';
+import { type RelayLeaseOwner, type RelayLeasePolicyIds, relayLeasePolicyIds } from './lease-relay-gate.js';
 import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseReportSender } from './lease-reports.js';
 import {
   bumpLeaseRevision,
@@ -172,6 +173,11 @@ export class AvailabilityLeaseService {
   /** Lease fields of every relay policy envelope (relay.v1 PolicyEnvelopePayload 40, 41). */
   relayPolicyFields(): Promise<RelayLeasePolicyFields> {
     return this.distribution.relayFields();
+  }
+
+  /** relay.v1 lease_policy_id of endpoints and routes gated by the relay's lease view (lease mode only). */
+  relayLeasePolicyIds(endpoints: RelayLeaseOwner[], routes: RelayLeaseOwner[]): Promise<RelayLeasePolicyIds> {
+    return relayLeasePolicyIds(this.db, endpoints, routes);
   }
 
   /** Policy keys whose private half must survive: the key that signs lease blocks (A14). */

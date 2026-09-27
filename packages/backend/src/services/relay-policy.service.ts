@@ -219,6 +219,11 @@ export class RelayPolicyService {
   private lastLocalPolicyTrustResetAt = 0;
   /** Availability lease blocks and key chain for PolicyEnvelopePayload fields 40 and 41. */
   private availabilityLeaseSource?: () => Promise<{ leaseBlocks: unknown[]; leaseKeyRotations: unknown[] }>;
+  /** Endpoints and routes the relay admits only through its lease gate (EndpointPolicy 10, RoutePolicy 12). */
+  private availabilityLeaseGate?: (
+    endpoints: Array<{ id: string; ownerKind: string; ownerId: string }>,
+    routes: Array<{ id: string; ownerKind: string; ownerId: string }>
+  ) => Promise<{ endpoints: Map<string, string>; routes: Map<string, string> }>;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -251,8 +256,15 @@ export class RelayPolicyService {
   setAvailabilityLeaseSource(source: {
     relayPolicyFields(): Promise<{ leaseBlocks: unknown[]; leaseKeyRotations: unknown[] }>;
     retainedSigningKeyIds(): Promise<string[]>;
+    relayLeasePolicyIds?(
+      endpoints: Array<{ id: string; ownerKind: string; ownerId: string }>,
+      routes: Array<{ id: string; ownerKind: string; ownerId: string }>
+    ): Promise<{ endpoints: Map<string, string>; routes: Map<string, string> }>;
   }): void {
     this.availabilityLeaseSource = () => source.relayPolicyFields();
+    this.availabilityLeaseGate = source.relayLeasePolicyIds
+      ? (endpoints, routes) => source.relayLeasePolicyIds!(endpoints, routes)
+      : undefined;
     this.policyKeys.setRetainedKeyIds(() => source.retainedSigningKeyIds());
   }
 
@@ -1970,6 +1982,10 @@ export class RelayPolicyService {
           return null;
         })
       : null;
+    // Never fail open: without the lease gate ids the relay would admit a lease-mode placement like a legacy one.
+    const leaseGate = this.availabilityLeaseGate
+      ? await this.availabilityLeaseGate(projection.endpoints, projection.routes)
+      : null;
     const payload = encodeRelayV1Message('PolicyEnvelopePayload', {
       schemaVersion: 2,
       gatewayInstanceId: projection.state.gatewayInstanceId,
@@ -1996,6 +2012,7 @@ export class RelayPolicyService {
             poolId: projection.instance.poolId,
             relayInstanceId: projection.instance.id,
             assignmentGeneration: String(assignment.assignmentGeneration),
+            ...(leaseGate?.endpoints.get(endpoint.id) ? { leasePolicyId: leaseGate.endpoints.get(endpoint.id) } : {}),
           },
         ];
       }),
@@ -2013,6 +2030,7 @@ export class RelayPolicyService {
             maxFrameBytes: route.maxFrameBytes,
             ...relayRoutePolicy(route.ownerKind),
             assignmentGeneration: String(assignment.assignmentGeneration),
+            ...(leaseGate?.routes.get(route.id) ? { leasePolicyId: leaseGate.routes.get(route.id) } : {}),
           }))
       ),
       admissionPolicy: {
