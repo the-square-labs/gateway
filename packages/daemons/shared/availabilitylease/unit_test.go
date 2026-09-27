@@ -58,7 +58,7 @@ func newIdentity(t *testing.T) (*ecdsa.PrivateKey, []byte) {
 }
 
 // wireNode builds a relay node with real ECDSA identities, trusting a policy
-// key and holding a config whose members are the given identities.
+// key and holding a manifest whose voters are the given identities.
 func wireNode(t *testing.T, id string, key *ecdsa.PrivateKey, members map[string][]byte) (*Node, *captureTransport, ed25519.PrivateKey) {
 	t.Helper()
 	_, policy, _ := ed25519.GenerateKey(rand.Reader)
@@ -70,15 +70,17 @@ func wireNode(t *testing.T, id string, key *ecdsa.PrivateKey, members map[string
 	if err := node.TrustPolicyKey("k1", policy.Public().(ed25519.PublicKey)); err != nil {
 		t.Fatal(err)
 	}
-	config := &pb.LeaseVoterConfig{SchemaVersion: 1, Epoch: 1}
-	var voters []string
-	for _, member := range sortedKeys(members) {
-		config.Members = append(config.Members, &pb.LeaseMember{Id: member, PublicKey: members[member], Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY})
-		voters = append(voters, member)
-	}
-	config.QuorumSets = []*pb.LeaseQuorumSet{{VoterIds: voters}}
-	payload, _ := proto.Marshal(config)
-	if _, err := node.AdoptVoterConfig(SignPolicyBlock("k1", policy, pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, payload)); err != nil {
+	block := manifestBlock(t, policy, func(m *pb.LeaseManifest) {
+		m.Candidates, m.Members = nil, nil
+		var voters []string
+		for _, member := range sortedKeys(members) {
+			m.Candidates = append(m.Candidates, &pb.LeaseCandidate{Id: member, PublicKey: members[member]})
+			m.Members = append(m.Members, &pb.LeaseMember{Id: member, PublicKey: members[member], Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY})
+			voters = append(voters, member)
+		}
+		m.QuorumSets = []*pb.LeaseQuorumSet{{VoterIds: voters}}
+	})
+	if _, err := node.AdoptManifest(block); err != nil {
 		t.Fatal(err)
 	}
 	return node, transport, policy
@@ -136,7 +138,7 @@ func TestKeyChainFollowsSignedRotations(t *testing.T) {
 	if err := chain.verifyBlock(block, domainManifest); err != nil {
 		t.Fatalf("block signed by a reachable key rejected: %v", err)
 	}
-	if err := chain.verifyBlock(block, domainVoterConfig); err == nil {
+	if err := chain.verifyBlock(block, domainKeyRotation); err == nil {
 		t.Fatal("signature verified under another domain")
 	}
 	// The relay policy envelope signs raw payload bytes; such a signature
@@ -163,8 +165,12 @@ func manifestBlock(t *testing.T, key ed25519.PrivateKey, mutate func(*pb.LeaseMa
 	t.Helper()
 	value := &pb.LeaseManifest{
 		SchemaVersion: 1, PolicyId: "p1", ManifestVersion: 1, Mode: pb.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER,
-		PartitionMode: pb.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT, Slots: 1, Epoch: 1, LeaseTermMs: 30000,
+		PartitionMode: pb.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT, Slots: 1, VoterEpoch: 1, LeaseTermMs: 30000,
 		Candidates: []*pb.LeaseCandidate{{Id: "d1", PublicKey: []byte("pk:d1")}, {Id: "d2", PublicKey: []byte("pk:d2")}},
+		QuorumSets: []*pb.LeaseQuorumSet{{VoterIds: []string{"d1", "d2", "w"}}},
+	}
+	for _, id := range []string{"d1", "d2", "w"} {
+		value.Members = append(value.Members, &pb.LeaseMember{Id: id, PublicKey: []byte("pk:" + id), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON})
 	}
 	if mutate != nil {
 		mutate(value)
@@ -185,6 +191,17 @@ func TestManifestValidation(t *testing.T) {
 		"bootstrap needs an id":            func(m *pb.LeaseManifest) { m.Bootstrap = []*pb.LeaseBootstrapSlot{{HolderId: "d1"}} },
 		"duplicate candidates":             func(m *pb.LeaseManifest) { m.Candidates = append(m.Candidates, m.Candidates[0]) },
 		"partition mode must be specified": func(m *pb.LeaseManifest) { m.PartitionMode = 0 },
+		"duplicate member ids":             func(m *pb.LeaseManifest) { m.Members = append(m.Members, m.Members[0]) },
+		"voter must be a member":           func(m *pb.LeaseManifest) { m.QuorumSets[0].VoterIds[2] = "x" },
+		"voter epoch is required":          func(m *pb.LeaseManifest) { m.VoterEpoch = 0 },
+		"at most seven voters": func(m *pb.LeaseManifest) {
+			for i := 0; i < 5; i++ {
+				id := string(rune('a' + i))
+				m.Members = append(m.Members, &pb.LeaseMember{Id: id, PublicKey: []byte("pk:" + id)})
+				m.QuorumSets[0].VoterIds = append(m.QuorumSets[0].VoterIds, id)
+			}
+		},
+		"member key matches candidate key": func(m *pb.LeaseManifest) { m.Members[0].PublicKey = []byte("pk:other") },
 	}
 	for name, mutate := range cases {
 		if _, err := parseManifest(manifestBlock(t, key, mutate)); err == nil {
@@ -193,49 +210,115 @@ func TestManifestValidation(t *testing.T) {
 	}
 }
 
-// Joint consensus (D2, A4): a commit needs a majority of every quorum set.
-func TestCommitNeedsMajorityOfEveryQuorumSetDuringJointEpoch(t *testing.T) {
+func testCommit(policyID string, epoch uint64, ids ...string) *pb.LeaseCommit {
+	key := Key{PolicyID: policyID}
+	ballot := Ballot{Round: 1, Incarnation: 1, Proposer: "d1"}
+	c := &pb.LeaseCommit{Key: key.proto(), Ballot: ballot.proto(), Epoch: epoch, ManifestVersion: 1}
+	for _, id := range ids {
+		c.Quorum = append(c.Quorum, &pb.LeaseAccepted{Key: key.proto(), Ballot: ballot.proto(), Epoch: epoch, ManifestVersion: 1,
+			AcceptorId: id, AcceptorIncarnation: 1, Signature: []byte(id)})
+	}
+	return c
+}
+
+func observerNode(t *testing.T, id string) (*Node, ed25519.PrivateKey, *manualClock) {
+	t.Helper()
 	_, policy, _ := ed25519.GenerateKey(rand.Reader)
-	node, err := NewNode(Config{ID: "obs", Clock: &manualClock{}, Store: NewMemoryStore(), Signer: fakeSigner{id: "obs"}, Verifier: fakeVerifier{}})
+	clock := &manualClock{}
+	node, err := NewNode(Config{ID: id, Clock: clock, Store: NewMemoryStore(), Signer: fakeSigner{id: id}, Verifier: fakeVerifier{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = node.TrustPolicyKey("k1", policy.Public().(ed25519.PublicKey))
-	config := &pb.LeaseVoterConfig{SchemaVersion: 1, Epoch: 7,
-		QuorumSets: []*pb.LeaseQuorumSet{{VoterIds: []string{"a", "b", "c"}}, {VoterIds: []string{"c", "d", "e"}}}}
-	for _, id := range []string{"a", "b", "c", "d", "e"} {
-		config.Members = append(config.Members, &pb.LeaseMember{Id: id, PublicKey: []byte("pk:" + id), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON})
-	}
-	payload, _ := proto.Marshal(config)
-	if _, err := node.AdoptVoterConfig(SignPolicyBlock("k1", policy, pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, payload)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := node.AdoptManifest(manifestBlock(t, policy, func(m *pb.LeaseManifest) { m.Epoch = 7 })); err != nil {
-		t.Fatal(err)
-	}
-	ballot := Ballot{Round: 1, Incarnation: 1, Proposer: "d1"}
-	commit := func(ids ...string) *pb.LeaseCommit {
-		c := &pb.LeaseCommit{Key: keyP1.proto(), Ballot: ballot.proto(), Epoch: 7, ManifestVersion: 1}
-		for _, id := range ids {
-			c.Quorum = append(c.Quorum, &pb.LeaseAccepted{Key: keyP1.proto(), Ballot: ballot.proto(), Epoch: 7, ManifestVersion: 1,
-				AcceptorId: id, AcceptorIncarnation: 1, Signature: []byte(id)})
+	return node, policy, clock
+}
+
+func withVoters(epoch uint64, sets ...[]string) func(*pb.LeaseManifest) {
+	return func(m *pb.LeaseManifest) {
+		m.VoterEpoch, m.Members, m.QuorumSets = epoch, nil, nil
+		members := map[string]bool{}
+		for _, set := range sets {
+			m.QuorumSets = append(m.QuorumSets, &pb.LeaseQuorumSet{VoterIds: set})
+			for _, id := range set {
+				members[id] = true
+			}
 		}
-		return c
+		for _, id := range sortedKeys(members) {
+			m.Members = append(m.Members, &pb.LeaseMember{Id: id, PublicKey: []byte("pk:" + id), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON})
+		}
+	}
+}
+
+// Joint consensus (D2, A4, A18): a commit needs a majority of every quorum
+// set of the policy's voter epoch.
+func TestCommitNeedsMajorityOfEveryQuorumSetDuringJointEpoch(t *testing.T) {
+	node, policy, _ := observerNode(t, "obs")
+	if _, err := node.AdoptManifest(manifestBlock(t, policy, withVoters(7, []string{"a", "b", "c"}, []string{"c", "d", "e"}))); err != nil {
+		t.Fatal(err)
 	}
 	manifest := node.manifests["p1"]
-	if err := node.verifyCommit(commit("a", "b", "d"), manifest); err == nil {
+	if err := node.verifyCommit(testCommit("p1", 7, "a", "b", "d"), manifest); err == nil {
 		t.Fatal("old-set majority alone accepted")
 	}
-	if err := node.verifyCommit(commit("c", "d", "e"), manifest); err == nil {
+	if err := node.verifyCommit(testCommit("p1", 7, "c", "d", "e"), manifest); err == nil {
 		t.Fatal("new-set majority alone accepted")
 	}
-	if err := node.verifyCommit(commit("a", "c", "d"), manifest); err != nil {
+	if err := node.verifyCommit(testCommit("p1", 7, "a", "c", "d"), manifest); err != nil {
 		t.Fatalf("majority of both sets rejected: %v", err)
 	}
-	forged := commit("a", "c", "d")
+	forged := testCommit("p1", 7, "a", "c", "d")
 	forged.Quorum[1].Signature = []byte("x")
 	if err := node.verifyCommit(forged, manifest); err == nil {
 		t.Fatal("commit with a forged accept accepted")
+	}
+	// The joint epoch stays verifiable after the policy settles (A4).
+	settled := manifestBlock(t, policy, func(m *pb.LeaseManifest) {
+		withVoters(8, []string{"c", "d", "e"})(m)
+		m.ManifestVersion = 2
+	})
+	if _, err := node.AdoptManifest(settled); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.verifyCommit(testCommit("p1", 7, "a", "c", "d"), node.manifests["p1"]); err != nil {
+		t.Fatalf("commit of the previous voter epoch no longer verifies: %v", err)
+	}
+	backwards := manifestBlock(t, policy, func(m *pb.LeaseManifest) {
+		withVoters(6, []string{"a", "b", "c"})(m)
+		m.ManifestVersion = 3
+	})
+	if _, err := node.AdoptManifest(backwards); err == nil {
+		t.Fatal("manifest with an older voter epoch adopted")
+	}
+}
+
+// A18: voters are per policy. A vote of a node that votes for policy A never
+// counts for policy B, and a node votes only in the policies whose quorum
+// sets name it.
+func TestVotersArePerPolicy(t *testing.T) {
+	node, policy, clock := observerNode(t, "d1")
+	p2 := func(m *pb.LeaseManifest) {
+		withVoters(1, []string{"d3", "d4", "w2"})(m)
+		m.PolicyId = "p2"
+		m.Candidates = []*pb.LeaseCandidate{{Id: "d3", PublicKey: []byte("pk:d3")}, {Id: "d4", PublicKey: []byte("pk:d4")}}
+	}
+	if _, err := node.AdoptManifest(manifestBlock(t, policy, withVoters(1, []string{"d1", "d2", "w1"}))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.AdoptManifest(manifestBlock(t, policy, p2)); err != nil {
+		t.Fatal(err)
+	}
+	clock.now = AbstainAfterStart + time.Second
+	if !node.voting("p1", clock.now) || node.voting("p2", clock.now) {
+		t.Fatal("d1 must vote for p1 only")
+	}
+	if err := node.verifyCommit(testCommit("p2", 1, "d1", "d2", "w1"), node.manifests["p2"]); err == nil {
+		t.Fatal("p1 voters formed a commit for p2")
+	}
+	if err := node.verifyCommit(testCommit("p2", 1, "d3", "w2"), node.manifests["p2"]); err != nil {
+		t.Fatalf("p2 voters rejected: %v", err)
+	}
+	if node.Epoch("p1") != 1 || node.Epoch("p2") != 1 || node.Epoch("p3") != 0 {
+		t.Fatal("epochs are per policy")
 	}
 }
 

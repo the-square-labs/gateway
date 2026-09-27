@@ -74,7 +74,6 @@ func buildRandomWorld(seed int64, wire bool) (*simWorld, simTopology) {
 		}
 		w.newNode(id, false, rate(i > candidates)).detectSuspend = rng.Intn(2) == 0
 	}
-	topo.voters = pickVoters(w, topo.relays)
 	w.gw = newSimGateway(w)
 	policy := &simPolicy{id: "p1", slots: 1, available: topo.available, candidates: topo.candidates, bootstrap: map[uint32]string{}}
 	if topo.replicated {
@@ -90,15 +89,17 @@ func buildRandomWorld(seed int64, wire bool) (*simWorld, simTopology) {
 	for slot := uint32(0); slot < policy.slots; slot++ {
 		w.keys = append(w.keys, Key{PolicyID: "p1", Slot: slot})
 	}
-	w.gw.buildConfig([][]string{topo.voters})
+	policy.epoch, policy.sets = 1, [][]string{policyVoters(w, policy.candidates)}
 	w.gw.buildManifest(policy)
 	if rng.Float64() < 0.35 {
-		// A second strict failover policy with the reverse candidate order,
-		// so holders batch renewals of several keys into shared frames.
+		// A second strict failover policy with its own candidates (sharing
+		// some hosts) and its own voters, so holders batch renewals of several
+		// keys and one policy's outage must not disturb the other (A18).
 		second := &simPolicy{id: "p2", slots: 1, bootstrap: map[uint32]string{}}
-		for i := len(topo.candidates) - 1; i >= 0; i-- {
-			second.candidates = append(second.candidates, topo.candidates[i])
+		for _, i := range rng.Perm(len(w.daemons))[:2+rng.Intn(2)] {
+			second.candidates = append(second.candidates, w.daemons[i])
 		}
+		second.epoch, second.sets = 1, [][]string{policyVoters(w, second.candidates)}
 		w.gw.policies["p2"] = second
 		w.strict["p2"] = true
 		w.keys = append(w.keys, Key{PolicyID: "p2"})
@@ -107,25 +108,40 @@ func buildRandomWorld(seed int64, wire bool) (*simWorld, simTopology) {
 	return w, topo
 }
 
-// pickVoters takes every relay and enough daemons for an odd count of at
-// least three; with an even count the first (local) relay does not vote (D2).
-func pickVoters(w *simWorld, relays int) []string {
-	daemons := 2 + w.rng.Intn(3)
-	if daemons > len(w.daemons) {
-		daemons = len(w.daemons)
-	}
+// policyVoters picks a policy's voters per A18: its candidates in rank
+// order (at most 7), then witnesses from the other relays and daemons until
+// the count is odd and at least three; sometimes two more witnesses.
+func policyVoters(w *simWorld, candidates []string) []string {
 	var voters []string
-	start := 0
-	if (relays+daemons)%2 == 0 {
-		if relays > 1 {
-			start = 1
-		} else {
-			daemons--
+	for _, id := range candidates {
+		if len(voters) < maxVoters {
+			voters = append(voters, id)
 		}
 	}
-	voters = append(voters, w.relays[start:]...)
-	for _, i := range w.rng.Perm(len(w.daemons))[:daemons] {
-		voters = append(voters, w.daemons[i])
+	target := max(3, len(voters))
+	if target%2 == 0 {
+		target++
+	}
+	if target+2 <= maxVoters && w.rng.Float64() < 0.3 {
+		target += 2
+	}
+	isCandidate := map[string]bool{}
+	for _, id := range candidates {
+		isCandidate[id] = true
+	}
+	var pool []string
+	for _, id := range w.ids {
+		if !isCandidate[id] {
+			pool = append(pool, id)
+		}
+	}
+	w.rng.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
+	for len(voters) < target && len(pool) > 0 {
+		voters = append(voters, pool[0])
+		pool = pool[1:]
+	}
+	if len(voters)%2 == 0 {
+		voters = voters[:len(voters)-1]
 	}
 	sort.Strings(voters)
 	return voters
@@ -170,7 +186,7 @@ func runRandomSeed(seed int64, trace, wire bool) (*simWorld, seedResult) {
 func checkFailover(w *simWorld, topo simTopology, result *seedResult) {
 	key := Key{PolicyID: "p1"}
 	if !w.waitFor(healTimeout, func() bool { return w.holder(key) != "" }) {
-		if w.violation == "" && !bootstrapStuck(w, topo) && w.canLearnManifest(topo) {
+		if w.violation == "" && !bootstrapStuck(w, topo) && w.canLearnManifest("p1") {
 			w.fail("liveness: no holder %s after heal (live copies %v; %s)", healTimeout, w.liveCopies(key), w.describeCandidates(topo, key))
 		}
 		result.kind = "no-holder"
@@ -222,7 +238,7 @@ func (w *simWorld) successorsInformed(topo simTopology, holder string) bool {
 		if id == holder || !n.processUp() {
 			continue
 		}
-		if n.node.ManifestVersion("p1") < h.ManifestVersion("p1") || n.node.Epoch() < h.Epoch() {
+		if n.node.ManifestVersion("p1") < h.ManifestVersion("p1") || n.node.Epoch("p1") < h.Epoch("p1") {
 			return false
 		}
 	}
@@ -232,13 +248,13 @@ func (w *simWorld) successorsInformed(topo simTopology, holder string) bool {
 // canLearnManifest is false when no ready candidate holds the manifest and
 // config and no Gateway is left to deliver them: a daemon that lost its
 // state while the Gateway is down waits for the Gateway (documented limit).
-func (w *simWorld) canLearnManifest(topo simTopology) bool {
+func (w *simWorld) canLearnManifest(policyID string) bool {
 	if w.gw.alive {
 		return true
 	}
-	for _, id := range topo.candidates {
+	for _, id := range w.gw.policies[policyID].candidates {
 		n := w.nodes[id]
-		if n.processUp() && n.node.ManifestVersion("p1") > 0 && n.node.Epoch() > 0 {
+		if n.processUp() && n.node.ManifestVersion(policyID) > 0 && n.node.Epoch(policyID) > 0 {
 			return true
 		}
 	}
@@ -254,7 +270,7 @@ func (w *simWorld) describeCandidates(topo simTopology, key Key) string {
 			continue
 		}
 		st := n.node.HolderStatus(key)
-		parts = append(parts, fmt.Sprintf("%s:%s v%d e%d", id, st.Role, n.node.ManifestVersion("p1"), n.node.Epoch()))
+		parts = append(parts, fmt.Sprintf("%s:%s v%d e%d", id, st.Role, n.node.ManifestVersion("p1"), n.node.Epoch("p1")))
 	}
 	return strings.Join(parts, " ")
 }
@@ -274,7 +290,7 @@ func checkConvergence(w *simWorld, topo simTopology, result *seedResult) {
 	for w.violation == "" && w.now < end {
 		for _, key := range w.keys {
 			if copies := w.liveCopies(key); len(copies) != 1 {
-				if len(copies) == 0 && (!w.canLearnManifest(topo) || bootstrapStuck(w, topo)) {
+				if len(copies) == 0 && (!w.canLearnManifest(key.PolicyID) || (key.PolicyID == "p1" && bootstrapStuck(w, topo))) {
 					result.kind = "no-manifest"
 					return
 				}

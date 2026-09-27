@@ -179,9 +179,4 @@ func SignPolicyKeyRotation(previousKeyID string, previous ed25519.PrivateKey, ke
 	}
 }
 
-func blockDomain(kind pb.LeaseBlockKind) string {
-	if kind == pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG {
-		return domainVoterConfig
-	}
-	return domainManifest
-}
+func blockDomain(pb.LeaseBlockKind) string { return domainManifest }

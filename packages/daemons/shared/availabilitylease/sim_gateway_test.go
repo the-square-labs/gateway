@@ -10,24 +10,18 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// simGateway builds and signs voter configs and manifests with the policy
-// key, delivers them over "CommandStream" (direct calls, possibly partial),
+// simGateway builds and signs per-policy manifests, each carrying the
+// policy's own voter set (A18), with the policy key, delivers them over "CommandStream" (direct calls, possibly partial),
 // rotates keys and drives planned handoffs. It may die at any time.
 type simGateway struct {
 	w     *simWorld
 	alive bool
 
-	keys       []simPolicyKey
-	signIdx    int
-	links      []*pb.LeasePolicyKeyRotation
-	epoch      uint64
-	sets       [][]string
-	config     *pb.LeaseSignedBlock
-	policies   map[string]*simPolicy
-	deliverP   float64
-	jointSince time.Duration
-	joint      bool
-	jointAcked time.Duration
+	keys     []simPolicyKey
+	signIdx  int
+	links    []*pb.LeasePolicyKeyRotation
+	policies map[string]*simPolicy
+	deliverP float64
 }
 
 type simPolicyKey struct {
@@ -46,6 +40,12 @@ type simPolicy struct {
 	bootstrapID uint64
 	bootstrap   map[uint32]string
 	block       *pb.LeaseSignedBlock
+	// Per-policy voters (A18): epoch, quorum sets (two while joint) and
+	// non-voting relay members for the gate's shadow accepts.
+	epoch      uint64
+	sets       [][]string
+	joint      bool
+	jointAcked time.Duration
 }
 
 func newSimGateway(w *simWorld) *simGateway {
@@ -72,39 +72,10 @@ func (g *simGateway) publicKey(id string) []byte {
 	return []byte("pk:" + id)
 }
 
-func (g *simGateway) buildConfig(sets [][]string) *pb.LeaseSignedBlock {
-	g.epoch++
-	g.sets = sets
-	members := map[string]bool{}
-	for _, id := range g.w.relays {
-		members[id] = true
-	}
-	for _, set := range sets {
-		for _, id := range set {
-			members[id] = true
-		}
-	}
-	value := &pb.LeaseVoterConfig{SchemaVersion: 1, Epoch: g.epoch}
-	for _, id := range sortedKeys(members) {
-		role := pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON
-		if g.w.nodes[id].relay {
-			role = pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY
-		}
-		value.Members = append(value.Members, &pb.LeaseMember{Id: id, PublicKey: g.publicKey(id), Role: role})
-	}
-	for _, set := range sets {
-		value.QuorumSets = append(value.QuorumSets, &pb.LeaseQuorumSet{VoterIds: set})
-	}
-	payload, _ := proto.Marshal(value)
-	key := g.key()
-	g.config = SignPolicyBlock(key.id, key.priv, pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, payload)
-	return g.config
-}
-
 func (g *simGateway) buildManifest(p *simPolicy) *pb.LeaseSignedBlock {
 	p.version++
 	value := &pb.LeaseManifest{
-		SchemaVersion: 1, PolicyId: p.id, ManifestVersion: p.version, Slots: p.slots, Epoch: g.epoch,
+		SchemaVersion: 1, PolicyId: p.id, ManifestVersion: p.version, Slots: p.slots, VoterEpoch: p.epoch,
 		Mode: pb.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: pb.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
 		Closed: p.closed, BootstrapId: p.bootstrapID, LeaseTermMs: 30000,
 	}
@@ -121,6 +92,23 @@ func (g *simGateway) buildManifest(p *simPolicy) *pb.LeaseSignedBlock {
 		if holder := p.bootstrap[slot]; holder != "" {
 			value.Bootstrap = append(value.Bootstrap, &pb.LeaseBootstrapSlot{Slot: slot, HolderId: holder})
 		}
+	}
+	members := map[string]bool{}
+	for _, id := range g.w.relays {
+		members[id] = true
+	}
+	for _, set := range p.sets {
+		for _, id := range set {
+			members[id] = true
+		}
+		value.QuorumSets = append(value.QuorumSets, &pb.LeaseQuorumSet{VoterIds: set})
+	}
+	for _, id := range sortedKeys(members) {
+		role := pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON
+		if g.w.nodes[id].relay {
+			role = pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY
+		}
+		value.Members = append(value.Members, &pb.LeaseMember{Id: id, PublicKey: g.publicKey(id), Role: role})
 	}
 	payload, _ := proto.Marshal(value)
 	key := g.key()
@@ -145,13 +133,7 @@ func (g *simGateway) deliver(block *pb.LeaseSignedBlock, p float64) {
 
 func (g *simGateway) adopt(n *simNode, block *pb.LeaseSignedBlock) {
 	g.sendChain(n)
-	var err error
-	if block.GetKind() == pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST {
-		_, err = n.node.AdoptManifest(block)
-	} else {
-		_, err = n.node.AdoptVoterConfig(block)
-	}
-	if err != nil {
+	if _, err := n.node.AdoptManifest(block); err != nil {
 		g.w.fail("gateway delivery to %s: %v", n.id, err)
 	}
 }
@@ -170,9 +152,6 @@ func (g *simGateway) onNodeStart(n *simNode) {
 		return
 	}
 	g.sendChain(n)
-	if g.config != nil {
-		g.adopt(n, g.config)
-	}
 	for _, id := range sortedKeys(g.policies) {
 		if block := g.policies[id].block; block != nil {
 			g.adopt(n, block)
@@ -193,15 +172,11 @@ func (g *simGateway) sendChain(n *simNode) {
 	}
 }
 
-// resign re-signs the current config and manifests with the signing key
-// after a rotation was acked, so peers that only trust the new key can
-// verify blocks forwarded to them.
+// resign re-signs the current manifests with the signing key after a
+// rotation was acked, so peers that only trust the new key can verify blocks
+// forwarded to them.
 func (g *simGateway) resign() {
 	key := g.key()
-	if g.config != nil {
-		g.config = SignPolicyBlock(key.id, key.priv, g.config.GetKind(), g.config.GetPayload())
-		g.deliver(g.config, 1)
-	}
 	for _, id := range sortedKeys(g.policies) {
 		if p := g.policies[id]; p.block != nil {
 			p.block = SignPolicyBlock(key.id, key.priv, p.block.GetKind(), p.block.GetPayload())
@@ -252,58 +227,64 @@ func (g *simGateway) keyAckedByMajority(keyID string) bool {
 			acked[id] = true
 		}
 	}
-	for _, set := range g.sets {
-		count := 0
-		for _, id := range set {
-			if acked[id] {
-				count++
+	for _, policyID := range sortedKeys(g.policies) {
+		for _, set := range g.policies[policyID].sets {
+			count := 0
+			for _, id := range set {
+				if acked[id] {
+					count++
+				}
 			}
-		}
-		if count*2 <= len(set) {
-			return false
+			if count*2 <= len(set) {
+				return false
+			}
 		}
 	}
 	return true
 }
 
-// adoptedBy reports whether a majority of set persisted epoch or later.
-func (g *simGateway) adoptedBy(set []string, epoch uint64) bool {
+// adoptedBy reports whether a majority of set persisted the policy's epoch.
+func (g *simGateway) adoptedBy(policyID string, set []string, epoch uint64) bool {
 	count := 0
 	for _, id := range set {
-		if n := g.w.nodes[id]; n.processUp() && n.node.Epoch() >= epoch {
+		if n := g.w.nodes[id]; n.processUp() && n.node.Epoch(policyID) >= epoch {
 			count++
 		}
 	}
 	return count*2 > len(set)
 }
 
-// changeVoters starts a joint-consensus epoch (old, new) and settles it once
-// a majority of both persisted it and T x 1.1 at the slowest clock passed.
-func (g *simGateway) changeVoters(next []string, deliverP float64) {
-	if !g.alive || g.joint {
+// changeVoters changes one policy's voters (a candidate or witness change)
+// through a joint epoch (old, new) and settles it once a majority of both
+// persisted it and T x 1.1 at the slowest clock passed (A4, A16, A18).
+func (g *simGateway) changeVoters(policyID string, next []string, deliverP float64) {
+	p := g.policies[policyID]
+	if !g.alive || p.joint {
 		return
 	}
-	old := g.sets[0]
-	jointEpoch := g.epoch + 1
-	g.deliver(g.buildConfig([][]string{old, next}), deliverP)
-	g.joint, g.jointAcked = true, 0
-	g.w.tracef("gateway joint epoch %d old=%v new=%v", jointEpoch, old, next)
+	old := p.sets[0]
+	p.epoch++
+	p.sets, p.joint, p.jointAcked = [][]string{old, next}, true, 0
+	jointEpoch := p.epoch
+	g.deliver(g.buildManifest(p), deliverP)
+	g.w.tracef("gateway %s joint epoch %d old=%v new=%v", policyID, jointEpoch, old, next)
 	var poll func()
 	poll = func() {
 		if !g.alive {
 			return
 		}
-		if g.jointAcked == 0 {
-			if g.adoptedBy(old, jointEpoch) && g.adoptedBy(next, jointEpoch) {
-				g.jointAcked = g.w.now
+		if p.jointAcked == 0 {
+			if g.adoptedBy(policyID, old, jointEpoch) && g.adoptedBy(policyID, next, jointEpoch) {
+				p.jointAcked = g.w.now
 			} else {
-				g.deliver(g.config, 1)
+				g.deliver(p.block, 1)
 			}
 		}
-		if g.jointAcked != 0 && g.w.now >= g.jointAcked+AcceptorHold*10/9+2*time.Second {
-			g.deliver(g.buildConfig([][]string{next}), deliverP)
-			g.joint = false
-			g.w.tracef("gateway settles epoch %d voters=%v", g.epoch, next)
+		if p.jointAcked != 0 && g.w.now >= p.jointAcked+AcceptorHold*10/9+2*time.Second {
+			p.epoch++
+			p.sets, p.joint = [][]string{next}, false
+			g.deliver(g.buildManifest(p), deliverP)
+			g.w.tracef("gateway %s settles epoch %d voters=%v", policyID, p.epoch, next)
 			return
 		}
 		g.w.after(time.Second, poll)

@@ -103,6 +103,16 @@ func sortKeys(set map[Key]bool) []Key {
 
 func (n *Node) tickKey(pk *proposerKey, now time.Duration, renewDue bool) {
 	manifest := n.manifests[pk.key.PolicyID]
+	slotGone := manifest == nil || pk.key.Slot >= manifest.Slots
+	if slotGone && pk.round != nil {
+		// The adopted manifest removed the slot: originate nothing more for
+		// it. A holder's release is driven by the daemon (A6); without it the
+		// timer fence still applies.
+		pk.round = nil
+		if pk.role == RoleAcquiring || pk.role == RoleBootstrapping {
+			pk.role = RoleNone
+		}
+	}
 	if pk.round != nil {
 		n.tickRound(pk, now)
 	}
@@ -139,7 +149,7 @@ func (n *Node) tickKey(pk *proposerKey, now time.Duration, renewDue bool) {
 		return
 	}
 	retryDue := (pk.retry || pk.role == RoleRecovering) && now >= pk.nextRoundAt
-	if pk.holdsLease() && pk.round == nil && manifest != nil && (renewDue || retryDue) {
+	if pk.holdsLease() && pk.round == nil && !slotGone && (renewDue || retryDue) {
 		if !manifest.isCandidate(n.id) {
 			n.fence(pk, FenceRemoved, now)
 			return
@@ -149,7 +159,7 @@ func (n *Node) tickKey(pk *proposerKey, now time.Duration, renewDue bool) {
 }
 
 func (n *Node) tickCandidate(pk *proposerKey, manifest *Manifest, now time.Duration) {
-	if manifest == nil || manifest.Closed || !manifest.isCandidate(n.id) || !n.ready[manifest.PolicyID] {
+	if manifest == nil || manifest.Closed || !manifest.isCandidate(n.id) || !n.ready[manifest.PolicyID] || pk.key.Slot >= manifest.Slots {
 		pk.role = RoleNone
 		return
 	}
@@ -199,7 +209,7 @@ func (n *Node) tickCandidate(pk *proposerKey, manifest *Manifest, now time.Durat
 }
 
 func (n *Node) sendQuery(key Key) {
-	config := n.currentConfig()
+	config := n.policyConfig(key.PolicyID)
 	if config == nil {
 		return
 	}
@@ -238,7 +248,7 @@ func (n *Node) holdsOtherSlot(key Key) bool {
 // reserved-for-us) observation from a majority of every quorum set; in
 // available mode every fresh observation is free and a voting relay answered.
 func (n *Node) expiredOnQuorum(pk *proposerKey, manifest *Manifest, now time.Duration) bool {
-	config := n.currentConfig()
+	config := manifest.Voters
 	if config == nil {
 		return false
 	}
@@ -293,8 +303,8 @@ func (n *Node) onStatus(from string, msg *pb.LeaseStatus, now time.Duration) {
 	if !ok || pk == nil {
 		return
 	}
-	if manifest, config := n.manifests[key.PolicyID], n.currentConfig(); manifest != nil && config != nil &&
-		(msg.GetEpoch() < config.Epoch || msg.GetManifestVersion() < manifest.Version) {
+	if manifest := n.manifests[key.PolicyID]; manifest != nil &&
+		(msg.GetEpoch() < manifest.Epoch || msg.GetManifestVersion() < manifest.Version) {
 		n.attachBlocks(from, key.PolicyID)
 	}
 	if msg.GetState() == pb.LeaseKeyState_LEASE_KEY_STATE_UNSPECIFIED {

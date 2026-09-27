@@ -345,7 +345,8 @@ enum LeaseMemberRole {
 enum LeaseBlockKind {
   LEASE_BLOCK_KIND_UNSPECIFIED = 0;
   LEASE_BLOCK_KIND_MANIFEST = 1;
-  LEASE_BLOCK_KIND_VOTER_CONFIG = 2;
+  // 2 was a cluster-wide voter config; voters are per policy (A18).
+  reserved 2;
 }
 
 enum LeaseNackReason {
@@ -519,7 +520,7 @@ message LeaseStatus {
 }
 
 // Signed by the relay policy signing key (Ed25519) over
-// "gateway-availability-lease/<kind>/v1" 0x00 || payload, kind = manifest | voter-config.
+// "gateway-availability-lease/manifest/v1" 0x00 || payload.
 message LeaseSignedBlock {
   string signing_key_id = 1;
   LeaseBlockKind kind = 2;
@@ -548,8 +549,9 @@ message LeaseManifest {
   // Ordered: index is the takeover rank (D5).
   repeated LeaseCandidate candidates = 7;
   string spec_fingerprint = 8;
-  // Voter config epoch this manifest was built against.
-  uint64 epoch = 9;
+  // Per-policy voter epoch (A18). Bumped whenever members or quorum_sets
+  // change; proposals carry it as their epoch.
+  uint64 voter_epoch = 9;
   // Lease-closed manifest (A5): acceptors refuse every proposal, holders fence.
   bool closed = 10;
   // Bootstrap reservation (A5); keep it in every version until the holder acked.
@@ -557,6 +559,14 @@ message LeaseManifest {
   repeated LeaseBootstrapSlot bootstrap = 12;
   // Must be 0 or 30000; the timing constants are fixed.
   uint32 lease_term_ms = 13;
+  // The policy's coordination members (A18): its voters (candidate hosts in
+  // rank order plus witnesses, deduplicated by host, at most 7) and every
+  // relay that serves the policy. Relays outside the quorum sets only keep
+  // shadow accepts for the data-path gate. Member ids are unique.
+  repeated LeaseMember members = 14;
+  // One quorum set when settled; two (old, new) during a joint-consensus
+  // voter change (D2, A4). A quorum is a majority of every set.
+  repeated LeaseQuorumSet quorum_sets = 15;
 }
 
 message LeaseMember {
@@ -567,16 +577,6 @@ message LeaseMember {
 
 message LeaseQuorumSet {
   repeated string voter_ids = 1;
-}
-
-// Cluster voter set. One quorum set when settled; two (old, new) during a
-// joint-consensus epoch change (D2, A4). Members outside every quorum set
-// (non-voting relays) only record shadow accepts.
-message LeaseVoterConfig {
-  uint32 schema_version = 1;
-  uint64 epoch = 2;
-  repeated LeaseMember members = 3;
-  repeated LeaseQuorumSet quorum_sets = 4;
 }
 
 // A14: key_id introduced by previous_key_id. The signature is Ed25519 by the
