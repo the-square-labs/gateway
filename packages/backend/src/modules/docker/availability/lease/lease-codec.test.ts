@@ -6,7 +6,6 @@ import {
   decodeLeaseSignedBlock,
   encodeLeaseManifest,
   encodeLeaseSignedBlock,
-  encodeLeaseVoterConfig,
   type LeaseManifestContent,
   leaseBlockMessage,
   leaseKeyRotationMessage,
@@ -44,10 +43,16 @@ const manifest: LeaseManifestContent = {
     { id: 'node-2', publicKey: Buffer.from('key-2') },
   ],
   specFingerprint: 'spec',
-  epoch: 4,
+  voterEpoch: 4,
   closed: false,
   bootstrapId: 77,
   bootstrap: [{ slot: 0, holderId: 'node-1' }],
+  members: [
+    { id: 'node-1', role: 'daemon', publicKey: Buffer.from('key-1') },
+    { id: 'node-2', role: 'daemon', publicKey: Buffer.from('key-2') },
+    { id: 'relay-1', role: 'relay', publicKey: Buffer.from('r') },
+  ],
+  quorumSets: [['node-1', 'node-2', 'relay-1']],
 };
 
 describe('availability lease codec', () => {
@@ -66,8 +71,8 @@ describe('availability lease codec', () => {
   });
 
   it('prefixes every signed statement with its domain and a zero byte', () => {
-    expect(leaseBlockMessage('LEASE_BLOCK_KIND_VOTER_CONFIG', Buffer.from('p')).toString()).toBe(
-      'gateway-availability-lease/voter-config/v1\u0000p'
+    expect(leaseBlockMessage('LEASE_BLOCK_KIND_MANIFEST', Buffer.from('p')).toString()).toBe(
+      'gateway-availability-lease/manifest/v1\u0000p'
     );
     const rotation = leaseKeyRotationMessage('ab', Buffer.from([9]));
     expect(rotation.subarray(0, 43).toString()).toBe('gateway-availability-lease/key-rotation/v1\u0000');
@@ -77,7 +82,7 @@ describe('availability lease codec', () => {
     );
   });
 
-  it('encodes manifests and voter configs as relay.v1 messages', async () => {
+  it('encodes manifests with their per-policy voters as relay.v1 messages (A18)', async () => {
     const decoded = decodeRelayV1Message('LeaseManifest', encodeLeaseManifest(manifest, 9)) as Record<string, unknown>;
     expect(decoded).toMatchObject({
       schemaVersion: 1,
@@ -86,26 +91,18 @@ describe('availability lease codec', () => {
       mode: 'LEASE_POLICY_MODE_FAILOVER',
       partitionMode: 'LEASE_PARTITION_MODE_STRICT',
       slots: 1,
-      epoch: '4',
+      voterEpoch: '4',
       bootstrapId: '77',
       bootstrap: [{ slot: 0, holderId: 'node-1' }],
       leaseTermMs: 30000,
+      members: [
+        { id: 'node-1', role: 'LEASE_MEMBER_ROLE_DAEMON' },
+        { id: 'node-2', role: 'LEASE_MEMBER_ROLE_DAEMON' },
+        { id: 'relay-1', role: 'LEASE_MEMBER_ROLE_RELAY' },
+      ],
+      quorumSets: [{ voterIds: ['node-1', 'node-2', 'relay-1'] }],
     });
-    const config = decodeRelayV1Message(
-      'LeaseVoterConfig',
-      encodeLeaseVoterConfig({
-        epoch: 2,
-        members: [{ id: 'relay-1', role: 'relay', publicKey: Buffer.from('r') }],
-        quorumSets: [['relay-1'], ['relay-1']],
-      })
-    ) as Record<string, unknown>;
-    expect(config).toMatchObject({
-      schemaVersion: 1,
-      epoch: '2',
-      members: [{ id: 'relay-1', role: 'LEASE_MEMBER_ROLE_RELAY' }],
-      quorumSets: [{ voterIds: ['relay-1'] }, { voterIds: ['relay-1'] }],
-    });
-    const block = await signLeaseBlock('LEASE_BLOCK_KIND_VOTER_CONFIG', Buffer.from('payload'), 'k2', signer);
+    const block = await signLeaseBlock('LEASE_BLOCK_KIND_MANIFEST', Buffer.from('payload'), 'k2', signer);
     expect(decodeLeaseSignedBlock(encodeLeaseSignedBlock(block))).toEqual(block);
   });
 
@@ -113,7 +110,16 @@ describe('availability lease codec', () => {
     const digest = leaseManifestDigest(manifest);
     expect(leaseManifestDigest({ ...manifest })).toBe(digest);
     expect(leaseManifestDigest({ ...manifest, closed: true })).not.toBe(digest);
-    expect(leaseManifestDigest({ ...manifest, epoch: 5 })).not.toBe(digest);
+    expect(leaseManifestDigest({ ...manifest, voterEpoch: 5 })).not.toBe(digest);
+    expect(
+      leaseManifestDigest({
+        ...manifest,
+        quorumSets: [
+          ['node-1', 'node-2'],
+          ['node-1', 'relay-1'],
+        ],
+      })
+    ).not.toBe(digest);
     expect(leaseManifestDigest({ ...manifest, candidates: [...manifest.candidates].reverse() })).not.toBe(digest);
   });
 

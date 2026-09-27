@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto';
-import { and, eq, gte, isNotNull } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   type DockerAvailabilityPartitionMode,
@@ -16,12 +16,7 @@ import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { RelayPolicySigningKeyService } from '@/services/relay-policy-signing-key.service.js';
 import { AvailabilityLeaseCluster } from './lease-cluster.js';
 import type { LeaseSigner } from './lease-codec.js';
-import {
-  AVAILABILITY_LEASE_CAPABILITY,
-  LEASE_TERM_MS,
-  MEMBER_REPORT_FRESH_MS,
-  PLANNED_HANDOFF_TTL_MS,
-} from './lease-constants.js';
+import { AVAILABILITY_LEASE_CAPABILITY, MEMBER_REPORT_FRESH_MS, PLANNED_HANDOFF_TTL_MS } from './lease-constants.js';
 import { AvailabilityLeaseDistribution, type RelayLeasePolicyFields } from './lease-distribution.js';
 import { availabilityStandbyCount } from './lease-gating.js';
 import { loadLeaseParticipants } from './lease-participants.js';
@@ -31,6 +26,7 @@ import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseRepor
 import {
   bumpLeaseRevision,
   ensureLeaseState,
+  type LeaseStateRow,
   loadLeaseCluster,
   loadLeaseMembers,
   reachableMemberIds,
@@ -39,10 +35,24 @@ import type {
   DockerAvailabilityLeaseController,
   DockerAvailabilityLeaseHandoffInput,
   DockerAvailabilityLeaseView,
+  DockerAvailabilityLeaseWitnessView,
 } from './lease-types.js';
-import { leaseVoterMargin } from './lease-voters.js';
+import { type LeaseWitnessWarning, leaseVoterMargin } from './lease-voters.js';
+import { validateLeaseWitness } from './lease-witness.js';
 
 const logger = createChildLogger('AvailabilityLeaseService');
+
+function leaseWitnessView(state: LeaseStateRow | null): DockerAvailabilityLeaseWitnessView | null {
+  if (!state) return null;
+  const first = state.witnesses[0];
+  return {
+    memberId: first?.memberId ?? null,
+    kind: first?.kind ?? null,
+    auto: first?.auto ?? true,
+    minRttMs: first?.minRttMs ?? null,
+    warning: (state.witnessWarning as LeaseWitnessWarning | null) ?? null,
+  };
+}
 
 /**
  * Host side of the Availability data-plane lease (OSS). It chooses voters and epochs, signs voter configs and
@@ -117,31 +127,11 @@ export class AvailabilityLeaseService {
     const members = new Map((await loadLeaseMembers(this.db)).map((member) => [member.memberId, member]));
     const participants = await loadLeaseParticipants(this.db, this.registry, members);
     const controllerSupportsLease = this.controller?.leaseModeSupported() === true;
-    const activeLeaseEpochs = (
-      await this.db
-        .select({ epoch: dockerAvailabilityLeaseObservations.epoch })
-        .from(dockerAvailabilityLeaseObservations)
-        .where(
-          and(
-            isNotNull(dockerAvailabilityLeaseObservations.holderId),
-            gte(dockerAvailabilityLeaseObservations.observedAt, new Date(now.getTime() - 2 * LEASE_TERM_MS))
-          )
-        )
-    ).map(({ epoch }) => epoch);
-    const cluster = await this.cluster.reconcile({
-      participants,
-      members,
-      activeLeaseEpochs,
-      wanted: controllerSupportsLease && (await this.policies.wanted()),
-      now,
-    });
+    const cluster = await this.cluster.reconcile({ members });
     const outcome = await this.policies.reconcile({
       participants,
       members,
       cluster: cluster.cluster,
-      clusterReady: cluster.ready,
-      capableVoters: cluster.capableVoters,
-      totalVoters: cluster.totalVoters,
       controllerSupportsLease,
       now,
     });
@@ -198,8 +188,18 @@ export class AvailabilityLeaseService {
   }
 
   private async ingest(sender: LeaseReportSender, report: AvailabilityLeaseReport): Promise<void> {
-    const notices = await this.reports.ingest(sender, report);
+    const { notices, identityChanged } = await this.reports.ingest(sender, report);
     for (const notice of notices) await this.recordHolderChange(notice);
+    // H3: a renewed identity key must reach every manifest that lists the member before its frames are dropped for
+    // long; republish now instead of on the next interval.
+    if (identityChanged) {
+      void this.reconcile().catch((error) => {
+        logger.warn('Availability lease manifests will pick up the renewed identity key on the next reconcile', {
+          memberId: sender.memberId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   }
 
   private async recordHolderChange(notice: LeaseHolderChangeNotice): Promise<void> {
@@ -243,7 +243,7 @@ export class AvailabilityLeaseService {
   }
 
   async getPolicyLease(policyId: string, now = new Date()): Promise<DockerAvailabilityLeaseView> {
-    const [[state], observations, cluster, members] = await Promise.all([
+    const [[state], observations, members] = await Promise.all([
       this.db
         .select()
         .from(dockerAvailabilityLeaseState)
@@ -253,7 +253,6 @@ export class AvailabilityLeaseService {
         .select()
         .from(dockerAvailabilityLeaseObservations)
         .where(eq(dockerAvailabilityLeaseObservations.policyId, policyId)),
-      loadLeaseCluster(this.db),
       loadLeaseMembers(this.db),
     ]);
     const reachable = reachableMemberIds(members, now.getTime(), MEMBER_REPORT_FRESH_MS);
@@ -261,7 +260,7 @@ export class AvailabilityLeaseService {
       mode: state?.mode ?? 'legacy',
       reason: state?.reason ?? null,
       manifestVersion: state?.manifestVersion ?? 0,
-      epoch: state?.manifestEpoch ?? 0,
+      epoch: state?.voterEpoch ?? 0,
       publishedPartitionMode: state?.publishedPartitionMode ?? null,
       holders: observations
         .sort((left, right) => left.slot - right.slot)
@@ -276,8 +275,12 @@ export class AvailabilityLeaseService {
         })),
       bootstrap: (state?.bootstrap ?? []).map((entry) => ({ slot: entry.slot, holderNodeId: entry.holderId })),
       strictPending: state?.mode === 'bootstrapping' && state.strictRequestedAt !== null,
+      surgeSlots: state?.surgeSlots ?? 0,
       copiesStoppedAt: state?.copiesStoppedAt ?? null,
-      voterMargin: cluster ? leaseVoterMargin(cluster.epoch, cluster.quorumSets, reachable) : null,
+      voterMargin: state ? leaseVoterMargin(state.voterEpoch, state.quorumSets, reachable) : null,
+      voters: state?.quorumSets.at(-1) ?? [],
+      witness: leaseWitnessView(state ?? null),
+      witnesses: state?.witnesses ?? [],
     };
   }
 
@@ -289,6 +292,26 @@ export class AvailabilityLeaseService {
     const updated = await this.db
       .update(dockerAvailabilityPolicies)
       .set({ partitionMode, updatedAt: new Date() })
+      .where(eq(dockerAvailabilityPolicies.id, policyId))
+      .returning({ id: dockerAvailabilityPolicies.id });
+    if (updated.length === 0) throw new AppError(404, 'AVAILABILITY_NOT_FOUND', 'Availability policy not found');
+    await this.republishPolicy(policyId);
+  }
+
+  /** A19: checks a configured witness before a policy is enabled or updated with it. */
+  validateWitness(witness: string, scope: { policyId?: string; candidateNodeIds?: readonly string[] }): Promise<void> {
+    return validateLeaseWitness(this.db, witness, scope);
+  }
+
+  /**
+   * A19: sets the policy's witness (a relay instance id or a docker node id), or null for the automatic choice, and
+   * republishes the manifest; a voter change runs through a joint epoch (A4). The caller authorized the mutation.
+   */
+  async setWitness(policyId: string, witness: string | null): Promise<void> {
+    if (witness) await validateLeaseWitness(this.db, witness, { policyId });
+    const updated = await this.db
+      .update(dockerAvailabilityPolicies)
+      .set({ witness, updatedAt: new Date() })
       .where(eq(dockerAvailabilityPolicies.id, policyId))
       .returning({ id: dockerAvailabilityPolicies.id });
     if (updated.length === 0) throw new AppError(404, 'AVAILABILITY_NOT_FOUND', 'Availability policy not found');
@@ -332,6 +355,43 @@ export class AvailabilityLeaseService {
         'The policy is not waiting for a bootstrap holder'
       );
     }
+    await this.republishPolicy(policyId);
+  }
+
+  /**
+   * D9: temporary extra lease slots for a replicated rollout (surge). The manifest then publishes
+   * desiredReplicaCount + count slots under a new version; lowering the count removes the highest slots, whose
+   * holders stop and release. Failover policies have exactly one slot and reject any surge.
+   */
+  async setSurgeSlots(policyId: string, count: number): Promise<void> {
+    const [policy] = await this.db
+      .select({
+        mode: dockerAvailabilityPolicies.mode,
+        desiredReplicaCount: dockerAvailabilityPolicies.desiredReplicaCount,
+        rolloutPolicy: dockerAvailabilityPolicies.rolloutPolicy,
+      })
+      .from(dockerAvailabilityPolicies)
+      .where(eq(dockerAvailabilityPolicies.id, policyId))
+      .limit(1);
+    if (!policy) throw new AppError(404, 'AVAILABILITY_NOT_FOUND', 'Availability policy not found');
+    if (!Number.isInteger(count) || count < 0) {
+      throw new AppError(400, 'AVAILABILITY_LEASE_SURGE_INVALID', 'Surge slots must be a non-negative integer');
+    }
+    if (count > 0 && policy.mode !== 'replicated') {
+      throw new AppError(409, 'AVAILABILITY_LEASE_SURGE_UNSUPPORTED', 'Only replicated policies can surge lease slots');
+    }
+    if (count > policy.rolloutPolicy.maxSurge || policy.desiredReplicaCount + count > 32) {
+      throw new AppError(
+        400,
+        'AVAILABILITY_LEASE_SURGE_INVALID',
+        'Surge slots exceed the rollout policy maxSurge or the 32 slot limit'
+      );
+    }
+    await ensureLeaseState(this.db, policyId);
+    await this.db
+      .update(dockerAvailabilityLeaseState)
+      .set({ surgeSlots: count, updatedAt: new Date() })
+      .where(eq(dockerAvailabilityLeaseState.policyId, policyId));
     await this.republishPolicy(policyId);
   }
 

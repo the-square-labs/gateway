@@ -1,4 +1,5 @@
 import type {
+  AvailabilityLeaseWitness,
   DockerAvailabilityLeaseBallot,
   DockerAvailabilityLeaseMode,
   DockerAvailabilityLeaseObservationSource,
@@ -7,7 +8,7 @@ import type {
 } from '@/db/schema/index.js';
 import type { LeaseModeChange } from './lease-policies.js';
 import type { LeaseHolderChangeNotice } from './lease-reports.js';
-import type { LeaseVoterMargin } from './lease-voters.js';
+import type { LeaseVoterMargin, LeaseWitnessWarning } from './lease-voters.js';
 
 /** A lease mode transition of one policy, delivered to the Availability controller. */
 export type DockerAvailabilityLeaseModeChange = LeaseModeChange;
@@ -48,6 +49,8 @@ export interface DockerAvailabilityLeaseView {
   holders: DockerAvailabilityLeaseHolderView[];
   /** Slots reserved for their current serving placement until it acquires (A5). */
   bootstrap: Array<{ slot: number; holderNodeId: string }>;
+  /** D9: temporary extra lease slots of a replicated rollout; the manifest publishes desired + surgeSlots slots. */
+  surgeSlots: number;
   /** A7: a switch from available to strict is in progress; strict is not active yet. */
   strictPending: boolean;
   /**
@@ -55,7 +58,23 @@ export interface DockerAvailabilityLeaseView {
    * relay gate window (24 s) passed since then (A16); null while other copies may still run.
    */
   copiesStoppedAt: Date | null;
+  /** Per-policy voter reachability margin over its quorum sets (A18). */
   voterMargin: LeaseVoterMargin | null;
+  /** Voters of the newest quorum set: candidate hosts in rank order, then witnesses (A18). */
+  voters: string[];
+  /** The (first) witness and the witness warning (A19); memberId null when none is needed or none is eligible. */
+  witness: DockerAvailabilityLeaseWitnessView | null;
+  witnesses: AvailabilityLeaseWitness[];
+}
+
+export interface DockerAvailabilityLeaseWitnessView {
+  memberId: string | null;
+  kind: 'relay' | 'docker' | null;
+  /** Chosen automatically, or configured on the policy. */
+  auto: boolean;
+  /** Smallest round trip from any candidate, when every candidate measured it. */
+  minRttMs: number | null;
+  warning: LeaseWitnessWarning | null;
 }
 
 export interface DockerAvailabilityLeaseHandoffInput {

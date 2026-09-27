@@ -2,9 +2,10 @@ import { z } from '@hono/zod-openapi';
 import {
   DockerAvailabilityLeaseSchema,
   DockerAvailabilityPartitionModeSchema,
+  DockerAvailabilityWitnessSchema,
 } from './docker-availability-lease.schemas.js';
 
-export { DockerAvailabilityLeaseSchema, DockerAvailabilityPartitionModeSchema };
+export { DockerAvailabilityLeaseSchema, DockerAvailabilityPartitionModeSchema, DockerAvailabilityWitnessSchema };
 
 const UUID = z.string().uuid();
 
@@ -102,6 +103,7 @@ const DockerAvailabilityPolicyValuesSchema = z.object({
   nodePriority: nodePriorityArray.default([]),
   failbackDelaySeconds: failbackDelaySecondsSchema.default(300),
   partitionMode: DockerAvailabilityPartitionModeSchema.default('strict'),
+  witness: DockerAvailabilityWitnessSchema.optional(),
 });
 
 export const DockerAvailabilityPolicyInputSchema = z
@@ -153,6 +155,7 @@ export const DockerAvailabilityPolicyUpdateSchema = z
     nodePriority: nodePriorityArray.optional(),
     failbackDelaySeconds: failbackDelaySecondsSchema.optional(),
     partitionMode: DockerAvailabilityPartitionModeSchema.optional(),
+    witness: DockerAvailabilityWitnessSchema.optional(),
   })
   .superRefine((value, context) => {
     if (value.mode === 'replicated' && value.desiredReplicaCount === 1) {
@@ -417,6 +420,7 @@ export const DockerAvailabilityPolicySchema = z.object({
   nodePriority: z.array(UUID),
   failbackDelaySeconds: failbackDelaySecondsSchema,
   partitionMode: DockerAvailabilityPartitionModeSchema,
+  witness: DockerAvailabilityWitnessSchema,
   status: DockerAvailabilityPolicyStatusSchema,
   lastErrorCode: z.string().nullable(),
   lastErrorMessage: z.string().nullable(),
@@ -440,6 +444,7 @@ export const DockerAvailabilityProposedPolicySchema = z.object({
   nodePriority: z.array(UUID),
   failbackDelaySeconds: failbackDelaySecondsSchema,
   partitionMode: DockerAvailabilityPartitionModeSchema.optional(),
+  witness: DockerAvailabilityWitnessSchema.optional(),
 });
 
 export const DockerAvailabilityIssueSchema = z.object({

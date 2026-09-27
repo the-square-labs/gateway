@@ -169,6 +169,7 @@ describe('Docker Availability routes', () => {
       publishedPartitionMode: 'strict',
       holders: [],
       bootstrap: [],
+      surgeSlots: 0,
       strictPending: false,
       copiesStoppedAt: null,
       voterMargin: { epoch: 2, joint: false, voters: 5, reachable: 4, required: 3, margin: 1 },
@@ -182,7 +183,7 @@ describe('Docker Availability routes', () => {
     const app = appWithScopes(['docker:availability:manage']);
 
     const read = await app.request(`/availability/${POLICY_ID}`);
-    expect(await read.json()).toEqual({ data: { id: POLICY_ID, partitionMode: 'strict', lease } });
+    expect(await read.json()).toEqual({ data: { id: POLICY_ID, partitionMode: 'strict', witness: null, lease } });
 
     const updated = await app.request(`/availability/${POLICY_ID}`, {
       method: 'PATCH',

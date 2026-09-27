@@ -26,6 +26,8 @@ import {
 import { DockerAvailabilityService } from './docker-availability.service.js';
 import {
   applyAvailabilityPartitionMode,
+  applyAvailabilityWitness,
+  validateAvailabilityWitness,
   withAvailabilityLease,
   withOptionalAvailabilityLease,
   withPreflightAvailabilityLease,
@@ -44,10 +46,16 @@ export function registerDockerAvailabilityRoutes(router: OpenAPIHono<AppEnv>) {
     { ...enableDockerAvailabilityRoute, middleware: requireScopeBase('docker:availability:manage') },
     async (c) => {
       const input = DockerAvailabilityPolicyInputSchema.parse(await c.req.json());
+      await validateAvailabilityWitness(input);
       const enabled = await container
         .resolve(DockerAvailabilityService)
         .enable(input, c.get('user')!.id, c.get('effectiveScopes') ?? []);
-      const data = await withAvailabilityLease(await applyAvailabilityPartitionMode(enabled, input.partitionMode));
+      const data = await withAvailabilityLease(
+        await applyAvailabilityWitness(
+          await applyAvailabilityPartitionMode(enabled, input.partitionMode),
+          input.witness
+        )
+      );
       return c.json({ data }, 202);
     }
   );
@@ -90,10 +98,16 @@ export function registerDockerAvailabilityRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const policyId = DockerAvailabilityPolicyIdSchema.parse(c.req.param('id'));
       const input = DockerAvailabilityPolicyUpdateSchema.parse(await c.req.json());
+      await validateAvailabilityWitness(input, policyId);
       const updated = await container
         .resolve(DockerAvailabilityService)
         .update(policyId, input, c.get('user')!.id, c.get('effectiveScopes') ?? []);
-      const data = await withAvailabilityLease(await applyAvailabilityPartitionMode(updated, input.partitionMode));
+      const data = await withAvailabilityLease(
+        await applyAvailabilityWitness(
+          await applyAvailabilityPartitionMode(updated, input.partitionMode),
+          input.witness
+        )
+      );
       return c.json({ data }, 202);
     }
   );

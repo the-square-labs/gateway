@@ -144,6 +144,11 @@ export const dockerAvailabilityPolicies = pgTable(
       .$type<DockerAvailabilityPartitionMode>()
       .notNull()
       .default('strict'),
+    /**
+     * A19: the lease witness, a relay instance id or a docker node id outside the candidates' hosts; null picks one
+     * automatically (largest minimum round trip to the candidates).
+     */
+    witness: varchar('witness', { length: 64 }),
     status: varchar('status', { length: 32 }).$type<DockerAvailabilityPolicyStatus>().notNull().default('single'),
     lastErrorCode: text('last_error_code'),
     lastErrorMessage: text('last_error_message'),

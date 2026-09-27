@@ -30,6 +30,8 @@ export interface DockerAvailabilityLeaseReason {
   code: string;
   message: string;
   nodeIds?: string[];
+  /** Relay instances named by the reason (relays_not_capable). */
+  relayIds?: string[];
 }
 
 /** A lease ballot as reported by the data plane; uint64 parts stay decimal strings. */
@@ -53,6 +55,24 @@ export interface DockerAvailabilityLeasePlannedHandoff {
   expiresAt: string;
 }
 
+/** A member of a policy's voter set as published (A18): candidate hosts and witnesses. */
+export interface AvailabilityLeaseVoterMember {
+  id: string;
+  role: 'relay' | 'daemon';
+  /** Base64 PKIX DER ECDSA P-256 identity key. */
+  publicKey: string;
+}
+
+/** A witness voter (A19): a relay or docker node outside the candidates' hosts. */
+export interface AvailabilityLeaseWitness {
+  memberId: string;
+  kind: 'relay' | 'docker';
+  /** Chosen automatically (true) or configured on the policy (false). */
+  auto: boolean;
+  /** Smallest measured round trip to any candidate, when every candidate measured it. */
+  minRttMs: number | null;
+}
+
 export const dockerAvailabilityLeaseState = pgTable(
   'docker_availability_lease_state',
   {
@@ -62,7 +82,18 @@ export const dockerAvailabilityLeaseState = pgTable(
     mode: varchar('mode', { length: 16 }).$type<DockerAvailabilityLeaseMode>().notNull().default('legacy'),
     reason: jsonb('reason').$type<DockerAvailabilityLeaseReason | null>(),
     manifestVersion: bigint('manifest_version', { mode: 'number' }).notNull().default(0),
-    manifestEpoch: bigint('manifest_epoch', { mode: 'number' }).notNull().default(0),
+    /** Per-policy voter epoch (A18) the published manifest carries; never goes back. */
+    voterEpoch: bigint('voter_epoch', { mode: 'number' }).notNull().default(0),
+    /** Voter quorum sets of the published manifest: one when settled, two (old, new) while joint (A4). */
+    quorumSets: jsonb('quorum_sets').$type<string[][]>().notNull().default([]),
+    /** Keys and roles of the voters in quorum_sets, kept so a departed voter still signs in the old set. */
+    voterMembers: jsonb('voter_members').$type<AvailabilityLeaseVoterMember[]>().notNull().default([]),
+    /** Joint epoch bookkeeping: the manifest version that introduced it, and when both majorities acked it. */
+    jointVersion: bigint('joint_version', { mode: 'number' }).notNull().default(0),
+    jointAckedAt: timestamp('joint_acked_at', { withTimezone: true }),
+    /** Witnesses of the current voter set and the witness warning shown to operators (A19). */
+    witnesses: jsonb('witnesses').$type<AvailabilityLeaseWitness[]>().notNull().default([]),
+    witnessWarning: varchar('witness_warning', { length: 64 }),
     /** Digest of the manifest content without its version; a new digest publishes a new version. */
     manifestDigest: text('manifest_digest'),
     /** Base64 of the serialized relay.v1.LeaseSignedBlock currently published. */
@@ -73,6 +104,8 @@ export const dockerAvailabilityLeaseState = pgTable(
     publishedPartitionMode: varchar('published_partition_mode', { length: 16 }).$type<'strict' | 'available'>(),
     /** The controller asked for the legacy path (for example before disabling Availability); gating stays closed. */
     legacyRequested: boolean('legacy_requested').notNull().default(false),
+    /** D9: temporary extra lease slots during a rollout; published slots = desiredReplicaCount + surgeSlots. */
+    surgeSlots: integer('surge_slots').notNull().default(0),
     /** A7: when the policy switched from available to strict; strict is active once bootstrap settled. */
     strictRequestedAt: timestamp('strict_requested_at', { withTimezone: true }),
     /**
@@ -92,33 +125,21 @@ export const dockerAvailabilityLeaseState = pgTable(
       'docker_availability_lease_state_mode_check',
       sql`${table.mode} IN ('legacy', 'bootstrapping', 'lease', 'closing')`
     ),
+    check('docker_availability_lease_state_surge_check', sql`${table.surgeSlots} BETWEEN 0 AND 32`),
     check(
       'docker_availability_lease_state_version_check',
-      sql`${table.manifestVersion} >= 0 AND ${table.manifestEpoch} >= 0 AND ${table.bootstrapId} >= 0`
+      sql`${table.manifestVersion} >= 0 AND ${table.voterEpoch} >= 0 AND ${table.bootstrapId} >= 0`
     ),
   ]
 );
 
-/** One member of the cluster voter config as published (D2). */
-export interface AvailabilityLeaseClusterMember {
-  id: string;
-  role: 'relay' | 'daemon';
-  /** Base64 PKIX DER ECDSA P-256 identity key. */
-  publicKey: string;
-}
-
-/** The singleton cluster voter config: epoch, members and quorum sets (two while joint, A4). */
+/**
+ * The singleton lease signing state. Voters are per policy (A18) and live in each policy's lease state; this row only
+ * tracks the key that signs manifests and the distribution revision.
+ */
 export const availabilityLeaseCluster = pgTable('availability_lease_cluster', {
   id: varchar('id', { length: 32 }).primaryKey(),
-  epoch: bigint('epoch', { mode: 'number' }).notNull().default(0),
-  members: jsonb('members').$type<AvailabilityLeaseClusterMember[]>().notNull().default([]),
-  quorumSets: jsonb('quorum_sets').$type<string[][]>().notNull().default([]),
-  /** Base64 of the serialized relay.v1.LeaseSignedBlock for the current epoch. */
-  voterConfigBlock: text('voter_config_block'),
-  /** When the joint epoch was published and when both majorities acked it. */
-  jointStartedAt: timestamp('joint_started_at', { withTimezone: true }),
-  jointAckedAt: timestamp('joint_acked_at', { withTimezone: true }),
-  /** Policy key that signs new lease blocks; moves to a new key only after a voter majority trusts it (A14). */
+  /** Policy key that signs new lease blocks; moves to a new key only after the voters of every policy trust it (A14). */
   signingKeyId: varchar('signing_key_id', { length: 64 }),
   /** Distribution revision, bumped whenever any published block or the key chain changes. */
   revision: bigint('revision', { mode: 'number' }).notNull().default(0),
@@ -149,12 +170,18 @@ export const availabilityLeaseMembers = pgTable(
     relayInstanceId: uuid('relay_instance_id').references(() => relayInstances.id, { onDelete: 'cascade' }),
     /** Base64 PKIX DER ECDSA P-256 identity key the member signs frames with. */
     identityPublicKey: text('identity_public_key'),
+    /**
+     * H3: the key the member signed with before its last identity renewal, and when it changed. Manifests republish
+     * with the new key at once; the previous one is kept for a multi-key member entry during the overlap.
+     */
+    previousIdentityPublicKey: text('previous_identity_public_key'),
+    identityRotatedAt: timestamp('identity_rotated_at', { withTimezone: true }),
     watchdogReady: boolean('watchdog_ready').notNull().default(false),
     incarnation: bigint('incarnation', { mode: 'number' }).notNull().default(0),
     epochAck: bigint('epoch_ack', { mode: 'number' }).notNull().default(0),
     trustedKeyIds: text('trusted_key_ids').array().notNull().default([]),
     manifestAcks: jsonb('manifest_acks')
-      .$type<Record<string, { version: number; closed: boolean }>>()
+      .$type<Record<string, { version: number; closed: boolean; voterEpoch?: number }>>()
       .notNull()
       .default({}),
     leaseRevision: bigint('lease_revision', { mode: 'number' }).notNull().default(0),

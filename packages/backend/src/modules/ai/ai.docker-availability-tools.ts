@@ -13,6 +13,8 @@ import {
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import {
   applyAvailabilityPartitionMode,
+  applyAvailabilityWitness,
+  validateAvailabilityWitness,
   withAvailabilityLease,
   withOptionalAvailabilityLease,
   withPreflightAvailabilityLease,
@@ -31,6 +33,7 @@ const POLICY_FIELDS = [
   'nodePriority',
   'failbackDelaySeconds',
   'partitionMode',
+  'witness',
 ] as const;
 const MANAGE_OPERATIONS = new Set(['enable', 'update', 'disable', 'retry_operation']);
 
@@ -39,7 +42,9 @@ const MANAGE_OPERATIONS = new Set(['enable', 'update', 'disable', 'retry_operati
  * like the route middleware; the service authorizes the workload, candidate
  * nodes and dependencies for every operation.
  */
-export async function manageDockerAvailabilityTool(user: User, args: Record<string, unknown>): Promise<unknown> {
+export async function manageDockerAvailabilityTool(user: User, rawArgs: Record<string, unknown>): Promise<unknown> {
+  // The tool schema has no null: 'auto' clears a configured witness.
+  const args = rawArgs.witness === 'auto' ? { ...rawArgs, witness: null } : rawArgs;
   const operation = String(args.operation);
   if (MANAGE_OPERATIONS.has(operation) && !hasScopeBase(user.scopes, 'docker:availability:manage')) {
     throw new Error('PERMISSION_DENIED: Missing required scope docker:availability:manage');
@@ -50,8 +55,14 @@ export async function manageDockerAvailabilityTool(user: User, args: Record<stri
       return withPreflightAvailabilityLease(await service.preflight(policyInput(args), user.scopes));
     case 'enable': {
       const input = policyInput(args);
+      await validateAvailabilityWitness(input);
       const enabled = await service.enable(input, user.id, user.scopes);
-      return withAvailabilityLease(await applyAvailabilityPartitionMode(enabled, input.partitionMode));
+      return withAvailabilityLease(
+        await applyAvailabilityWitness(
+          await applyAvailabilityPartitionMode(enabled, input.partitionMode),
+          input.witness
+        )
+      );
     }
     case 'get_by_resource': {
       const resource = (args.resource ?? {}) as Record<string, unknown>;
@@ -77,13 +88,15 @@ export async function manageDockerAvailabilityTool(user: User, args: Record<stri
     }
     case 'update': {
       const input = DockerAvailabilityPolicyUpdateSchema.parse(pickDefinedArguments(args, POLICY_FIELDS));
-      const updated = await service.update(
-        DockerAvailabilityPolicyIdSchema.parse(args.policyId),
-        input,
-        user.id,
-        user.scopes
+      const policyId = DockerAvailabilityPolicyIdSchema.parse(args.policyId);
+      await validateAvailabilityWitness(input, policyId);
+      const updated = await service.update(policyId, input, user.id, user.scopes);
+      return withAvailabilityLease(
+        await applyAvailabilityWitness(
+          await applyAvailabilityPartitionMode(updated, input.partitionMode),
+          input.witness
+        )
       );
-      return withAvailabilityLease(await applyAvailabilityPartitionMode(updated, input.partitionMode));
     }
     case 'disable':
       return withAvailabilityLease(

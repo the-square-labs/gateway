@@ -6,22 +6,25 @@ export interface LeaseGatingInput {
   /** The controller holds this policy on the legacy path. */
   legacyRequested?: boolean;
   policyMode: 'single' | 'replicated' | 'failover';
-  /** A voter config is published and a policy key can sign lease blocks. */
-  clusterReady: boolean;
+  /** A policy key can sign lease manifests. */
+  signingReady: boolean;
   /** Candidate docker node ids and whether each is capable (capability, identity key, fresh watchdog). */
   candidates: Array<{ nodeId: string; capable: boolean }>;
   /** Ingress nginx node ids of the policy's routes and whether each is capable. */
   ingress: Array<{ nodeId: string; capable: boolean }>;
-  /** Capable voters and the size of the voter set by rule, including relays that cannot vote (D10). */
-  capableVoters: number;
-  totalVoters: number;
+  /**
+   * Relay instances carrying the policy's member endpoints and managed-database routes, and whether each is capable.
+   * An old relay ignores lease_policy_id and would admit a stale holder (A2.4, A11).
+   */
+  relays?: Array<{ relayId: string; capable: boolean }>;
 }
 
 export type LeaseGatingResult = { eligible: true } | { eligible: false; reason: DockerAvailabilityLeaseReason };
 
 /**
- * D10: a policy runs in lease mode only when all its candidates, all ingress nginx nodes of its routes and at least
- * a majority of the voters are capable. Anything else keeps today's backend-driven failover, with the reason exposed.
+ * D10: a policy runs in lease mode only when all its candidates and all ingress nginx nodes of its routes are capable.
+ * Its voters (A18) are the candidates' hosts plus witnesses chosen among capable members, so every voter is capable.
+ * Anything else keeps today's backend-driven failover, with the reason exposed.
  */
 export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult {
   if (!input.controllerSupportsLease) {
@@ -71,21 +74,24 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
       },
     };
   }
-  if (input.totalVoters === 0 || input.capableVoters * 2 <= input.totalVoters) {
+  const incapableRelays = (input.relays ?? []).filter((relay) => !relay.capable).map(({ relayId }) => relayId);
+  if (incapableRelays.length > 0) {
     return {
       eligible: false,
       reason: {
-        code: 'voters_not_capable',
-        message: `Only ${input.capableVoters} of ${input.totalVoters} lease voters (relays and selected daemons) support data-plane failover; a majority is required`,
+        code: 'relays_not_capable',
+        message:
+          'Some relays that carry this workload run a version without the lease data-path gate; update them before data-plane failover can run',
+        relayIds: [...new Set(incapableRelays)].sort(),
       },
     };
   }
-  if (!input.clusterReady) {
+  if (!input.signingReady) {
     return {
       eligible: false,
       reason: {
-        code: 'voter_config_pending',
-        message: 'The lease voter configuration is not published or not yet persisted by a voter majority',
+        code: 'signing_key_pending',
+        message: 'No relay policy signing key can sign lease manifests yet',
       },
     };
   }

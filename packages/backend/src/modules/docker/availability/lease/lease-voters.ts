@@ -1,100 +1,150 @@
-import { MAX_DAEMON_VOTERS, VOTER_OFFLINE_REPLACE_MS } from './lease-constants.js';
+import type { AvailabilityLeaseWitness } from '@/db/schema/index.js';
 
-/** A relay or daemon that may vote (D2, A9). The caller passes only relays of operator-owned enrolled pools. */
-export interface LeaseVoterCandidate {
+/** A18: a policy's quorum set never has more voters. Candidates beyond the cap still acquire (proposers need not vote). */
+export const MAX_POLICY_VOTERS = 7;
+
+/** A19: a witness closer than this to any candidate probably shares its site. */
+export const WITNESS_NEAR_RTT_MS = 2;
+
+export type LeaseWitnessWarning =
+  /** The chosen witness is within 2 ms of a candidate, likely on its site. */
+  | 'witness_near_candidate'
+  /** No eligible witness exists: autonomous failover needs a majority of the candidates. */
+  | 'no_eligible_witness'
+  /** The configured witness is not eligible right now (a candidate, same host, not capable, unknown); auto is used. */
+  | 'configured_witness_unavailable';
+
+/** A candidate docker node of the policy, in manifest rank order. */
+export interface LeaseVoterCandidateNode {
   id: string;
-  role: 'relay' | 'daemon';
-  /** Physical host identity; one vote per host keeps a host failure from taking two votes. */
+  /** Physical host (A20): two daemons, or a daemon and a relay, on one machine share it. */
   hostKey: string;
-  /** The local (combined-mode) relay: the one that stops voting when the total would be even. */
-  local?: boolean;
-  /** Advertises availability_lease_v1, reported an identity key and (daemons) a fresh watchdog. */
+  /** Fault domains of relays running on the same host, for the witness fallback. */
+  faultDomains: readonly string[];
+  publicKey: string | null;
+}
+
+/** A relay or docker node that may be a witness (A19). nginx daemons are observers only and never listed. */
+export interface LeaseWitnessCandidate {
+  id: string;
+  kind: 'relay' | 'docker';
+  hostKey: string;
+  faultDomain: string | null;
   capable: boolean;
   publicKey: string | null;
-  online: boolean;
-  /** Epoch ms since when the member has been offline, when known. */
-  offlineSince?: number | null;
-  /** The node runs a candidate placement of some Availability policy. */
-  hostsCandidate?: boolean;
-  /** The node is an ingress nginx node of some Availability route. */
-  hostsIngress?: boolean;
+  /** Round trip in ms from a candidate node to this member, when that node measured it. */
+  rttFrom(candidateId: string): number | undefined;
 }
 
-export interface LeaseVoterSelection {
-  /** Sorted ids of the voters to publish. */
+export interface PolicyVoterSelection {
+  /** Candidate voters in rank order (distinct hosts), then witnesses. */
   voterIds: string[];
-  /** Relays that are not capable: they belong to the voter set by rule but cannot vote (D10 denominator). */
-  incapableRelayIds: string[];
-  /** The local relay left the set so the total is odd. */
-  localRelayDropped: boolean;
+  witnesses: AvailabilityLeaseWitness[];
+  warning: LeaseWitnessWarning | null;
 }
 
-function eligible(candidate: LeaseVoterCandidate, now: number): boolean {
-  if (!candidate.capable || !candidate.publicKey) return false;
-  if (candidate.role === 'relay' || candidate.online) return true;
-  return candidate.offlineSince == null || now - candidate.offlineSince < VOTER_OFFLINE_REPLACE_MS;
-}
-
-function daemonPriority(candidate: LeaseVoterCandidate, current: ReadonlySet<string>): number[] {
-  return [
-    current.has(candidate.id) ? 0 : 1,
-    candidate.hostsCandidate || candidate.hostsIngress ? 0 : 1,
-    candidate.hostsCandidate ? 0 : 1,
-    candidate.online ? 0 : 1,
-  ];
-}
-
-function comparePriority(left: number[], right: number[]): number {
-  for (let index = 0; index < left.length; index++) {
-    if (left[index] !== right[index]) return left[index]! - right[index]!;
+/** The smallest round trip to all candidates, or null unless every candidate measured this member. */
+export function witnessMinRtt(
+  member: LeaseWitnessCandidate,
+  candidates: readonly LeaseVoterCandidateNode[]
+): number | null {
+  if (candidates.length === 0) return null;
+  let min = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const rtt = member.rttFrom(candidate.id);
+    if (rtt === undefined || !Number.isFinite(rtt)) return null;
+    min = Math.min(min, rtt);
   }
-  return 0;
+  return min;
+}
+
+function smallestOddAtLeast(value: number): number {
+  return value % 2 === 1 ? value : value + 1;
 }
 
 /**
- * Chooses the voter set (D2): every capable relay, plus up to 12 capable daemons on distinct hosts, preferring the
- * current voters (no churn), then hosts that run candidates or ingress. An even total drops the local relay, or the
- * last daemon chosen when no local relay votes, so a quorum never needs a tie break.
+ * The voters of one policy (A18, A19, A20): the distinct hosts among its candidates in rank order, then witnesses so
+ * the count is odd and at least 3, at most 7 in total. A configured witness comes first when eligible; automatic ones
+ * keep the current witnesses while they stay eligible, then prefer the largest minimum round trip to the candidates,
+ * then a relay in a fault domain no candidate host shares, then any relay, then docker nodes.
  */
-export function selectLeaseVoters(
-  candidates: LeaseVoterCandidate[],
-  currentVoterIds: Iterable<string>,
-  now: number
-): LeaseVoterSelection {
-  const current = new Set(currentVoterIds);
-  const relays = candidates.filter((candidate) => candidate.role === 'relay');
-  const votingRelays = relays.filter((relay) => eligible(relay, now));
-  const incapableRelayIds = relays.filter((relay) => !eligible(relay, now)).map((relay) => relay.id);
-  const hosts = new Set(votingRelays.map((relay) => relay.hostKey));
-  const daemons = candidates
-    .filter((candidate) => candidate.role === 'daemon' && eligible(candidate, now))
-    .sort(
-      (left, right) =>
-        comparePriority(daemonPriority(left, current), daemonPriority(right, current)) ||
-        left.id.localeCompare(right.id)
-    );
-  const votingDaemons: LeaseVoterCandidate[] = [];
-  for (const daemon of daemons) {
-    if (votingDaemons.length >= MAX_DAEMON_VOTERS) break;
-    if (hosts.has(daemon.hostKey)) continue;
-    hosts.add(daemon.hostKey);
-    votingDaemons.push(daemon);
+export function selectPolicyVoters(input: {
+  candidates: readonly LeaseVoterCandidateNode[];
+  pool: readonly LeaseWitnessCandidate[];
+  configuredWitness: string | null;
+  currentAutoWitnesses?: readonly string[];
+}): PolicyVoterSelection {
+  const candidates = input.candidates.filter((candidate) => candidate.publicKey);
+  const candidateIds = new Set(input.candidates.map((candidate) => candidate.id));
+  const usedHosts = new Set<string>();
+  const candidateVoters: string[] = [];
+  for (const candidate of candidates) {
+    if (usedHosts.has(candidate.hostKey)) continue;
+    usedHosts.add(candidate.hostKey);
+    candidateVoters.push(candidate.id);
   }
-  let localRelayDropped = false;
-  if ((votingRelays.length + votingDaemons.length) % 2 === 0 && votingRelays.length + votingDaemons.length > 0) {
-    const localIndex = votingRelays.findIndex((relay) => relay.local);
-    if (localIndex >= 0) {
-      votingRelays.splice(localIndex, 1);
-      localRelayDropped = true;
-    } else if (votingDaemons.length > 0) {
-      votingDaemons.pop();
-    }
+  const candidateHosts = new Set(input.candidates.map((candidate) => candidate.hostKey));
+  const candidateDomains = new Set(input.candidates.flatMap((candidate) => candidate.faultDomains));
+  const eligible = (member: LeaseWitnessCandidate) =>
+    member.capable && Boolean(member.publicKey) && !candidateIds.has(member.id) && !candidateHosts.has(member.hostKey);
+  let warning: LeaseWitnessWarning | null = null;
+  const configured = input.configuredWitness
+    ? input.pool.find((member) => member.id === input.configuredWitness && eligible(member))
+    : undefined;
+  if (input.configuredWitness && !configured) warning = 'configured_witness_unavailable';
+  const configuredCount = configured ? 1 : 0;
+  const cappedCandidates = candidateVoters.slice(0, MAX_POLICY_VOTERS - configuredCount);
+  const target = Math.min(
+    MAX_POLICY_VOTERS,
+    smallestOddAtLeast(Math.max(3, cappedCandidates.length + configuredCount))
+  );
+  const hosts = new Set(cappedCandidates.map((id) => candidates.find((candidate) => candidate.id === id)!.hostKey));
+  const chosen: Array<{ member: LeaseWitnessCandidate; auto: boolean }> = [];
+  if (configured) {
+    chosen.push({ member: configured, auto: false });
+    hosts.add(configured.hostKey);
   }
-  return {
-    voterIds: [...votingRelays, ...votingDaemons].map((voter) => voter.id).sort(),
-    incapableRelayIds: incapableRelayIds.sort(),
-    localRelayDropped,
+  const current = new Set(input.currentAutoWitnesses ?? []);
+  const rank = (member: LeaseWitnessCandidate): number[] => {
+    const rtt = witnessMinRtt(member, candidates);
+    const separateDomain =
+      member.kind === 'relay' && member.faultDomain !== null && !candidateDomains.has(member.faultDomain);
+    return [
+      current.has(member.id) ? 0 : 1,
+      rtt !== null ? 0 : 1,
+      rtt !== null ? -rtt : 0,
+      separateDomain ? 0 : 1,
+      member.kind === 'relay' ? 0 : 1,
+    ];
   };
+  const autos = input.pool
+    .filter((member) => eligible(member) && member.id !== configured?.id)
+    .map((member) => ({ member, rank: rank(member) }))
+    .sort((left, right) => {
+      for (let index = 0; index < left.rank.length; index++) {
+        if (left.rank[index] !== right.rank[index]) return left.rank[index]! - right.rank[index]!;
+      }
+      return left.member.id.localeCompare(right.member.id);
+    });
+  for (const { member } of autos) {
+    if (cappedCandidates.length + chosen.length >= target) break;
+    if (hosts.has(member.hostKey)) continue;
+    hosts.add(member.hostKey);
+    chosen.push({ member, auto: true });
+  }
+  if (cappedCandidates.length + chosen.length < target) {
+    warning ??= 'no_eligible_witness';
+  }
+  const witnesses = chosen.map(({ member, auto }) => ({
+    memberId: member.id,
+    kind: member.kind,
+    auto,
+    minRttMs: witnessMinRtt(member, candidates),
+  }));
+  if (!warning && witnesses.some((witness) => witness.minRttMs !== null && witness.minRttMs < WITNESS_NEAR_RTT_MS)) {
+    warning = 'witness_near_candidate';
+  }
+  return { voterIds: [...cappedCandidates, ...witnesses.map((witness) => witness.memberId)], witnesses, warning };
 }
 
 /** Majority of one quorum set. */
@@ -121,7 +171,7 @@ export interface LeaseVoterMargin {
   margin: number;
 }
 
-/** Reachability margin over every quorum set; the smallest one decides (D2 joint consensus). */
+/** Reachability margin of a policy over every quorum set; the smallest one decides (A4). */
 export function leaseVoterMargin(
   epoch: number,
   sets: readonly (readonly string[])[],

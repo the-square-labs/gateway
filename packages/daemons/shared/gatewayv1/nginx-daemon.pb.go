@@ -7890,8 +7890,7 @@ type SyncAvailabilityLeaseCommand struct {
 	PolicyKeys []*AvailabilityLeasePolicyKey `protobuf:"bytes,3,rep,name=policy_keys,json=policyKeys,proto3" json:"policy_keys,omitempty"`
 	// Serialized relay.v1.LeasePolicyKeyRotation links, oldest first (A14).
 	KeyRotations [][]byte `protobuf:"bytes,4,rep,name=key_rotations,json=keyRotations,proto3" json:"key_rotations,omitempty"`
-	// Serialized relay.v1.LeaseSignedBlock of kind VOTER_CONFIG (current epoch).
-	// Empty while no voter config exists yet.
+	// Unused since voters travel in each policy manifest (A18); always empty.
 	VoterConfig []byte `protobuf:"bytes,5,opt,name=voter_config,json=voterConfig,proto3" json:"voter_config,omitempty"`
 	// Serialized relay.v1.LeaseSignedBlock of kind MANIFEST, one per policy in
 	// bootstrapping, lease or closing mode. The set is complete: a policy that is
@@ -8338,8 +8337,17 @@ type AvailabilityLeaseManifestAck struct {
 	PolicyId        string                 `protobuf:"bytes,1,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
 	ManifestVersion uint64                 `protobuf:"varint,2,opt,name=manifest_version,json=manifestVersion,proto3" json:"manifest_version,omitempty"`
 	Closed          bool                   `protobuf:"varint,3,opt,name=closed,proto3" json:"closed,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Per-policy voter epoch persisted with the manifest (A18; Node.Epoch(policy)).
+	// The A4 ack the Gateway waits for before it settles a joint voter change.
+	// Relays fill it; daemons should too. Zero means unknown: the Gateway then
+	// falls back to manifest_version.
+	VoterEpoch uint64 `protobuf:"varint,20,opt,name=voter_epoch,json=voterEpoch,proto3" json:"voter_epoch,omitempty"`
+	// This member is in a quorum set of the policy (relays: it is the witness).
+	Voter bool `protobuf:"varint,21,opt,name=voter,proto3" json:"voter,omitempty"`
+	// This member is listed in the policy's manifest members.
+	Member        bool `protobuf:"varint,22,opt,name=member,proto3" json:"member,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AvailabilityLeaseManifestAck) Reset() {
@@ -8389,6 +8397,27 @@ func (x *AvailabilityLeaseManifestAck) GetManifestVersion() uint64 {
 func (x *AvailabilityLeaseManifestAck) GetClosed() bool {
 	if x != nil {
 		return x.Closed
+	}
+	return false
+}
+
+func (x *AvailabilityLeaseManifestAck) GetVoterEpoch() uint64 {
+	if x != nil {
+		return x.VoterEpoch
+	}
+	return 0
+}
+
+func (x *AvailabilityLeaseManifestAck) GetVoter() bool {
+	if x != nil {
+		return x.Voter
+	}
+	return false
+}
+
+func (x *AvailabilityLeaseManifestAck) GetMember() bool {
+	if x != nil {
+		return x.Member
 	}
 	return false
 }
@@ -12642,11 +12671,15 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x0ewatchdog_ready\x18\n" +
 	" \x01(\bR\rwatchdogReady\x12:\n" +
 	"\x06events\x18\v \x03(\v2\".gateway.v1.AvailabilityLeaseEventR\x06events\x12%\n" +
-	"\x0elease_revision\x18\f \x01(\x04R\rleaseRevision\"~\n" +
+	"\x0elease_revision\x18\f \x01(\x04R\rleaseRevision\"\xcd\x01\n" +
 	"\x1cAvailabilityLeaseManifestAck\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12)\n" +
 	"\x10manifest_version\x18\x02 \x01(\x04R\x0fmanifestVersion\x12\x16\n" +
-	"\x06closed\x18\x03 \x01(\bR\x06closed\"\xb0\x02\n" +
+	"\x06closed\x18\x03 \x01(\bR\x06closed\x12\x1f\n" +
+	"\vvoter_epoch\x18\x14 \x01(\x04R\n" +
+	"voterEpoch\x12\x14\n" +
+	"\x05voter\x18\x15 \x01(\bR\x05voter\x12\x16\n" +
+	"\x06member\x18\x16 \x01(\bR\x06member\"\xb0\x02\n" +
 	"\x15AvailabilityLeaseHeld\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x12\n" +

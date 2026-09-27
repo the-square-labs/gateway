@@ -20,8 +20,12 @@ function link(extra: Record<string, unknown> = {}) {
   } as never;
 }
 
-function db(capabilities: string[]) {
-  const results = [[{ capabilities: { capabilities } }], [{ id: PLACEMENT_ID, policyId: POLICY_ID }]];
+function db(capabilities: string[], leasePolicies: string[] = [POLICY_ID]) {
+  const results = [
+    [{ capabilities: { capabilities } }],
+    [{ id: PLACEMENT_ID, policyId: POLICY_ID }],
+    leasePolicies.map((policyId) => ({ policyId })),
+  ];
   const query = () => {
     const rows = results.shift() ?? [];
     const chain: Record<string, unknown> = {};
@@ -48,6 +52,12 @@ describe('Availability member secure-link sync (D7, D8)', () => {
     const old = await availabilityMemberSyncContext(db(['proxy_secure_links_v1']), 'nginx', [link()]);
     expect(syncableAvailabilityMember(link({ dormant: true }), old)).toBe(false);
     expect(syncableAvailabilityMember(link(), old)).toBe(true);
+  });
+
+  it('gates members by the lease only while their policy is in lease mode (B2)', async () => {
+    const legacy = await availabilityMemberSyncContext(db(['availability_lease_v1'], []), 'nginx', [link()]);
+    expect(availabilityMemberBindingFields(link(), legacy)).toEqual({ dormant: false });
+    expect(availabilityMemberBindingFields(link({ dormant: true }), legacy)).toEqual({ dormant: true });
   });
 
   it('adds nothing to other bindings and queries nothing without Availability members', async () => {

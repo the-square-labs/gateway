@@ -18,7 +18,6 @@ const SYNC_TIMEOUT_MS = 15_000;
 
 export interface LeaseDistributionPayload {
   revision: number;
-  voterConfig: Buffer | null;
   manifests: Buffer[];
   rotations: LeaseKeyRotationValue[];
   policyKeys: Array<{ keyId: string; publicKey: Buffer; publicKeyFingerprint: string }>;
@@ -31,7 +30,7 @@ export interface RelayLeasePolicyFields {
 }
 
 /**
- * Delivers the signed voter config, manifests and key chain (D4, A4, A14): to daemons over CommandStream, to relays
+ * Delivers the signed manifests (with their voters, A18) and key chain (D4, A4, A14): to daemons over CommandStream, to relays
  * inside the signed policy envelope. Blocks are never trusted because of the transport; receivers verify them.
  */
 export class AvailabilityLeaseDistribution {
@@ -62,7 +61,6 @@ export class AvailabilityLeaseDistribution {
     ]);
     return {
       revision: cluster?.revision ?? 0,
-      voterConfig: cluster?.voterConfigBlock ? Buffer.from(cluster.voterConfigBlock, 'base64') : null,
       manifests: states
         .filter((state) => state.block)
         .sort((left, right) => left.policyId.localeCompare(right.policyId))
@@ -84,14 +82,11 @@ export class AvailabilityLeaseDistribution {
     };
   }
 
-  /** PolicyEnvelopePayload lease fields for every relay: all relays are acceptors of every key (D2). */
+  /** PolicyEnvelopePayload lease fields for every relay: each manifest carries its policy's voters and members (A18). */
   async relayFields(): Promise<RelayLeasePolicyFields> {
     const payload = await this.payload();
     return {
-      leaseBlocks: [
-        ...(payload.voterConfig ? [decodeLeaseSignedBlock(payload.voterConfig)] : []),
-        ...payload.manifests.map((manifest) => decodeLeaseSignedBlock(manifest)),
-      ],
+      leaseBlocks: payload.manifests.map((manifest) => decodeLeaseSignedBlock(manifest)),
       leaseKeyRotations: payload.rotations,
     };
   }
@@ -102,7 +97,8 @@ export class AvailabilityLeaseDistribution {
       memberId,
       policyKeys: payload.policyKeys,
       keyRotations: payload.rotations.map((link) => encodeLeaseKeyRotation(link)),
-      voterConfig: payload.voterConfig ?? Buffer.alloc(0),
+      // Voters travel in each manifest since A18; the field stays for older daemons.
+      voterConfig: Buffer.alloc(0),
       manifests: payload.manifests,
     };
   }

@@ -29,6 +29,8 @@ export interface DockerAvailabilityPolicyInput {
   failbackDelaySeconds: number;
   /** Lease-mode behaviour under a partition (D11); strict when omitted. */
   partitionMode?: DockerAvailabilityPartitionMode;
+  /** A19: lease witness (relay instance id or Docker node id); null or omitted picks one automatically. */
+  witness?: string | null;
 }
 
 export interface DockerAvailabilityPolicyUpdateInput {
@@ -42,6 +44,7 @@ export interface DockerAvailabilityPolicyUpdateInput {
   nodePriority?: string[];
   failbackDelaySeconds?: number;
   partitionMode?: DockerAvailabilityPartitionMode;
+  witness?: string | null;
 }
 
 export interface DockerAvailabilityIssue {

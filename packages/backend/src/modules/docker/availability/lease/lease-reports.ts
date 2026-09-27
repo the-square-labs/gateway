@@ -61,15 +61,15 @@ export class AvailabilityLeaseReports {
     sender: LeaseReportSender,
     report: AvailabilityLeaseReport,
     now = new Date()
-  ): Promise<LeaseHolderChangeNotice[]> {
+  ): Promise<{ notices: LeaseHolderChangeNotice[]; identityChanged: boolean }> {
     if (!report.memberId || report.memberId !== sender.memberId) {
       logger.warn('Ignored an availability lease report for another member', {
         memberId: sender.memberId,
         reported: report.memberId,
       });
-      return [];
+      return { notices: [], identityChanged: false };
     }
-    await this.recordMember(sender, report, now);
+    const identityChanged = await this.recordMember(sender, report, now);
     const source: DockerAvailabilityLeaseObservationSource = sender.kind === 'relay' ? 'relay' : 'daemon';
     const candidates = new Map<string, { policyId: string; slot: number; list: LeaseObservationCandidate[] }>();
     const addCandidate = (policyId: string, slot: number, candidate: LeaseObservationCandidate) => {
@@ -152,13 +152,25 @@ export class AvailabilityLeaseReports {
         });
       }
     }
-    return notices;
+    return { notices, identityChanged };
   }
 
-  private async recordMember(sender: LeaseReportSender, report: AvailabilityLeaseReport, now: Date): Promise<void> {
-    const manifestAcks: Record<string, { version: number; closed: boolean }> = {};
+  /** Records the member's report; true when its identity key changed (a certificate renewal, H3). */
+  private async recordMember(sender: LeaseReportSender, report: AvailabilityLeaseReport, now: Date): Promise<boolean> {
+    const [previous] = await this.db
+      .select({ identityPublicKey: availabilityLeaseMembers.identityPublicKey })
+      .from(availabilityLeaseMembers)
+      .where(eq(availabilityLeaseMembers.memberId, sender.memberId))
+      .limit(1);
+    const manifestAcks: Record<string, { version: number; closed: boolean; voterEpoch?: number }> = {};
     for (const ack of report.manifests ?? []) {
-      if (ack.policyId) manifestAcks[ack.policyId] = { version: toNumber(ack.manifestVersion), closed: ack.closed };
+      if (!ack.policyId) continue;
+      const voterEpoch = toNumber(ack.voterEpoch);
+      manifestAcks[ack.policyId] = {
+        version: toNumber(ack.manifestVersion),
+        closed: ack.closed,
+        ...(voterEpoch > 0 ? { voterEpoch } : {}),
+      };
     }
     const values = {
       kind: sender.kind,
@@ -177,10 +189,17 @@ export class AvailabilityLeaseReports {
       reportedAt: now,
       updatedAt: now,
     };
+    const identityChanged = Boolean(
+      previous?.identityPublicKey && values.identityPublicKey && previous.identityPublicKey !== values.identityPublicKey
+    );
+    const rotation = identityChanged
+      ? { previousIdentityPublicKey: previous!.identityPublicKey, identityRotatedAt: now }
+      : {};
     await this.db
       .insert(availabilityLeaseMembers)
-      .values({ memberId: sender.memberId, ...values })
-      .onConflictDoUpdate({ target: availabilityLeaseMembers.memberId, set: values });
+      .values({ memberId: sender.memberId, ...values, ...rotation })
+      .onConflictDoUpdate({ target: availabilityLeaseMembers.memberId, set: { ...values, ...rotation } });
+    return identityChanged;
   }
 
   private async applyKey(

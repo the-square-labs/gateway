@@ -234,45 +234,47 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     await database?.drop();
   });
 
-  it('publishes a signed voter config and waits for a voter majority to persist it', async () => {
-    await ackAll(0);
+  it('keeps legacy admission while the candidates have not reported lease identities', async () => {
     await service.reconcile();
-    const [cluster] = (await q('select epoch, quorum_sets, voter_config_block from availability_lease_cluster')).rows;
-    expect(Number(cluster.epoch)).toBe(1);
-    // One vote per host: the local relay and four daemons make five, an odd total.
-    expect(cluster.quorum_sets).toHaveLength(1);
-    expect(cluster.quorum_sets[0]).toHaveLength(5);
-    const block = decodeLeaseSignedBlock(Buffer.from(cluster.voter_config_block, 'base64'));
-    expect(verify(null, leaseBlockMessage(block.kind, block.payload), policyKey.publicKeyObject, block.signature)).toBe(
-      true
-    );
-    expect((await service.getPolicyLease(policyId)).reason).toMatchObject({ code: 'voter_config_pending' });
-    // Legacy: the relay keeps legacy admission for every endpoint and route.
+    expect((await service.getPolicyLease(policyId)).reason).toMatchObject({ code: 'candidates_not_capable' });
     expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
   });
 
-  it('bootstraps the policy with its serving placement as reserved holder (A5)', async () => {
-    await ackAll(1);
+  it('bootstraps with per-policy voters and every relay as a non-voting member (A5, A18)', async () => {
+    await ackAll(0);
     await service.reconcile();
     const view = await service.getPolicyLease(policyId);
     expect(view.mode).toBe('bootstrapping');
     expect(view.bootstrap).toEqual([{ slot: 0, holderNodeId: nodeIds[0] }]);
+    // Three candidates on three hosts are an odd voter set: no witness needed.
+    expect(view.voters).toEqual([...nodeIds].sort());
+    expect(view.witness).toEqual({ memberId: null, kind: null, auto: true, minRttMs: null, warning: null });
     expect(modeChanges.at(-1)).toMatchObject({ policyId, from: 'legacy', to: 'bootstrapping' });
     const [state] = (await q('select manifest_block from docker_availability_lease_state')).rows;
-    const manifest = decodeRelayV1Message(
-      'LeaseManifest',
-      decodeLeaseSignedBlock(Buffer.from(state.manifest_block, 'base64')).payload
-    ) as { candidates: Array<{ id: string }>; bootstrap: unknown[]; closed: boolean };
+    const block = decodeLeaseSignedBlock(Buffer.from(state.manifest_block, 'base64'));
+    expect(verify(null, leaseBlockMessage(block.kind, block.payload), policyKey.publicKeyObject, block.signature)).toBe(
+      true
+    );
+    const manifest = decodeRelayV1Message('LeaseManifest', block.payload) as {
+      candidates: Array<{ id: string }>;
+      bootstrap: unknown[];
+      voterEpoch: string;
+      members: Array<{ id: string; role: string }>;
+      quorumSets: Array<{ voterIds: string[] }>;
+    };
     expect(manifest.candidates.map((candidate) => candidate.id)).toEqual(nodeIds);
     expect(manifest.bootstrap).toEqual([{ slot: 0, holderId: nodeIds[0] }]);
+    expect(manifest.voterEpoch).toBe('1');
+    expect(manifest.quorumSets).toEqual([{ voterIds: [...nodeIds].sort() }]);
+    // The relay keeps shadow accepts as a non-voting member; the nginx daemon is an observer, never a member.
+    expect(manifest.members.find((member) => member.id === relayId)).toMatchObject({ role: 'LEASE_MEMBER_ROLE_RELAY' });
+    expect(manifest.members.map((member) => member.id)).not.toContain(nginxId);
     const sync = sent.filter(({ command }) => command.syncAvailabilityLease).at(-1)?.command.syncAvailabilityLease;
     expect(sync?.manifests).toHaveLength(1);
+    expect(sync?.voterConfig).toHaveLength(0);
     expect(sync?.policyKeys.map((key) => key.keyId)).toEqual([keyId]);
     const relayFields = await service.relayPolicyFields();
-    expect(relayFields.leaseBlocks.map((block) => block.kind)).toEqual([
-      'LEASE_BLOCK_KIND_VOTER_CONFIG',
-      'LEASE_BLOCK_KIND_MANIFEST',
-    ]);
+    expect(relayFields.leaseBlocks.map((entry) => entry.kind)).toEqual(['LEASE_BLOCK_KIND_MANIFEST']);
     // Bootstrapping keeps legacy admission until the reserved holder committed (A5).
     expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
   });
@@ -300,7 +302,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     await service.ingestDaemonReport(nodeIds[1]!, 'docker', holding(nodeIds[1]!, 7));
     const view = await service.getPolicyLease(policyId);
     expect(view.holders[0]).toMatchObject({ slot: 0, holderNodeId: nodeIds[1], source: 'daemon' });
-    expect(view.voterMargin).toMatchObject({ epoch: 1, voters: 5, reachable: 5, required: 3, margin: 2 });
+    expect(view.voterMargin).toMatchObject({ epoch: 1, voters: 3, reachable: 3, required: 2, margin: 1 });
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'docker.availability.lease_failover',
@@ -320,7 +322,6 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
   });
 
   it('signs with a rotated policy key once a voter majority trusts it, re-signing the same payloads (A14, A16)', async () => {
-    const [before] = (await q('select voter_config_block from availability_lease_cluster')).rows;
     const [stateBefore] = (await q('select manifest_block, manifest_version from docker_availability_lease_state'))
       .rows;
     await q(`update relay_policy_signing_keys set status = 'verification_only' where key_id = $1`, [keyId]);
@@ -343,12 +344,8 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
       );
     }
     await service.reconcile();
-    const [after] = (await q('select signing_key_id, voter_config_block from availability_lease_cluster')).rows;
+    const [after] = (await q('select signing_key_id from availability_lease_cluster')).rows;
     expect(after.signing_key_id).toBe(nextKeyId);
-    const oldConfig = decodeLeaseSignedBlock(Buffer.from(before.voter_config_block, 'base64'));
-    const newConfig = decodeLeaseSignedBlock(Buffer.from(after.voter_config_block, 'base64'));
-    expect(newConfig.signingKeyId).toBe(nextKeyId);
-    expect(newConfig.payload).toEqual(oldConfig.payload);
     const [stateAfter] = (await q('select manifest_block, manifest_version from docker_availability_lease_state')).rows;
     expect(stateAfter.manifest_version).toBe(stateBefore.manifest_version);
     const manifest = decodeLeaseSignedBlock(Buffer.from(stateAfter.manifest_block, 'base64'));
@@ -357,6 +354,59 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     expect(
       verify(null, leaseBlockMessage(manifest.kind, manifest.payload), nextKey.publicKeyObject, manifest.signature)
     ).toBe(true);
+  });
+
+  it('moves the voters through a per-policy joint epoch when a candidate leaves, adding a witness (A4, A18, A19)', async () => {
+    const epochOf = async () => (await service.getPolicyLease(policyId)).epoch;
+    const before = await epochOf();
+    await q(
+      `update docker_availability_placements set desired_state = 'removed' where policy_id = $1 and node_id = $2`,
+      [policyId, nodeIds[2]]
+    );
+    await service.reconcile();
+    const joint = await service.getPolicyLease(policyId);
+    expect(joint.epoch).toBe(before + 1);
+    expect(joint.voterMargin?.joint).toBe(true);
+    // Two candidates need a witness: the relay (no RTT data here, so the fault-domain fallback picks it).
+    expect(joint.voters).toEqual([nodeIds[0], nodeIds[1], relayId].sort());
+    expect(joint.witness).toMatchObject({ memberId: relayId, kind: 'relay', auto: true, warning: null });
+    const jointEpoch = String(joint.epoch);
+    const manifests = [
+      { policyId, manifestVersion: String(joint.manifestVersion), closed: false, voterEpoch: jointEpoch, voter: true },
+    ];
+    for (const id of [nodeIds[0]!, nodeIds[1]!])
+      await service.ingestDaemonReport(id, 'docker', report(id, { manifests }));
+    await service.ingestRelayReport(relayId, report(relayId, { manifests }));
+    await service.reconcile();
+    expect(await epochOf()).toBe(before + 1);
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61_000 });
+    try {
+      await service.reconcile();
+    } finally {
+      vi.useRealTimers();
+    }
+    const settled = await service.getPolicyLease(policyId);
+    expect(settled.epoch).toBe(before + 2);
+    expect(settled.voterMargin?.joint).toBe(false);
+    expect(settled.voters).toEqual([nodeIds[0], nodeIds[1], relayId].sort());
+    await q(
+      `update docker_availability_placements set desired_state = 'standby' where policy_id = $1 and node_id = $2`,
+      [policyId, nodeIds[2]]
+    );
+  });
+
+  it('validates a configured witness (A19)', async () => {
+    await expect(service.validateWitness(relayId, { policyId })).resolves.toBeUndefined();
+    await expect(service.validateWitness(nodeIds[0]!, { policyId })).rejects.toMatchObject({
+      code: 'AVAILABILITY_WITNESS_IS_CANDIDATE',
+    });
+    await expect(service.validateWitness(nginxId, { policyId })).rejects.toMatchObject({
+      code: 'AVAILABILITY_WITNESS_INVALID',
+    });
+    await expect(service.validateWitness(randomUUID(), { policyId })).rejects.toMatchObject({
+      code: 'AVAILABILITY_WITNESS_NOT_FOUND',
+    });
+    await expect(service.setWitness(policyId, 'not-a-uuid')).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it('closes lease mode when a candidate loses the capability and hands back to legacy (A5)', async () => {
@@ -379,6 +429,51 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     expect((await service.getPolicyLease(policyId)).mode).toBe('legacy');
     expect(await service.isReactive(policyId)).toBe(true);
     expect(modeChanges.at(-1)).toMatchObject({ to: 'legacy', lastHolders: [{ slot: 0, holderId: nodeIds[2] }] });
-    expect((await service.relayPolicyFields()).leaseBlocks).toHaveLength(1);
+    expect((await service.relayPolicyFields()).leaseBlocks).toHaveLength(0);
+  });
+
+  it('publishes temporary surge slots for a replicated rollout and rejects surge in failover (D9)', async () => {
+    await expect(service.setSurgeSlots(policyId, 1)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'AVAILABILITY_LEASE_SURGE_UNSUPPORTED',
+    });
+    await q(
+      `update docker_availability_policies set mode = 'replicated', desired_replica_count = 2,
+         rollout_policy = '{"maxUnavailable":0,"maxSurge":1,"drainSeconds":30}' where id = $1`,
+      [policyId]
+    );
+    const manifestSlots = async () => {
+      const [state] = (await q('select manifest_block, manifest_version from docker_availability_lease_state')).rows;
+      const manifest = decodeRelayV1Message(
+        'LeaseManifest',
+        decodeLeaseSignedBlock(Buffer.from(state.manifest_block, 'base64')).payload
+      ) as { slots: number; manifestVersion: string };
+      return { slots: manifest.slots, version: Number(state.manifest_version) };
+    };
+    let now = Date.now();
+    try {
+      // Re-enter lease mode: every member is capable again; let the voter epochs settle.
+      for (let round = 0; round < 10 && (await service.getPolicyLease(policyId)).mode === 'legacy'; round++) {
+        now += 61_000;
+        vi.useFakeTimers({ toFake: ['Date'], now });
+        await ackAll(0);
+        await service.reconcile();
+      }
+      expect((await service.getPolicyLease(policyId)).mode).toBe('bootstrapping');
+      const base = await manifestSlots();
+      expect(base.slots).toBe(2);
+
+      await service.setSurgeSlots(policyId, 1);
+      const raised = await manifestSlots();
+      expect(raised).toEqual({ slots: 3, version: base.version + 1 });
+      expect((await service.getPolicyLease(policyId)).surgeSlots).toBe(1);
+
+      await expect(service.setSurgeSlots(policyId, 2)).rejects.toMatchObject({ statusCode: 400 });
+      await service.setSurgeSlots(policyId, 0);
+      expect(await manifestSlots()).toEqual({ slots: 2, version: base.version + 2 });
+      expect((await service.getPolicyLease(policyId)).surgeSlots).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
