@@ -496,7 +496,7 @@ export class HostingInventoryService {
       providerUrl: snapshot.providerUrl,
       observedAt: snapshot.observedAt,
       ...(connector &&
-      ['hostkey', 'digitalocean'].includes(resource.provider) &&
+      ['hostkey', 'digitalocean', 'cloudblast'].includes(resource.provider) &&
       canViewHostingFinance(user.scopes, connector.id)
         ? { price: snapshot.price }
         : {}),

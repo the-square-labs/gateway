@@ -348,7 +348,7 @@ async function expandHostingAccountScopes(db: DrizzleClient, scopes: readonly st
     const target = scope.slice(base.length + 1);
     if (target.startsWith('provider/')) {
       const provider = target.slice('provider/'.length);
-      return ['proxmox', 'digitalocean', 'hetzner', 'hostkey'].includes(provider)
+      return ['proxmox', 'digitalocean', 'hetzner', 'hostkey', 'cloudblast'].includes(provider)
         ? [{ base, provider, accountId: null }]
         : [];
     }
@@ -361,7 +361,7 @@ async function expandHostingAccountScopes(db: DrizzleClient, scopes: readonly st
   const accounts = await db
     .select({ id: integrationConnectors.id, provider: integrationConnectors.provider })
     .from(integrationConnectors)
-    .where(inArray(integrationConnectors.provider, ['proxmox', 'digitalocean', 'hetzner', 'hostkey']));
+    .where(inArray(integrationConnectors.provider, ['proxmox', 'digitalocean', 'hetzner', 'hostkey', 'cloudblast']));
   const needsVmIds = grants.some(({ base }) => !hostingAccountTarget(base));
   const resources =
     needsVmIds && accounts.length

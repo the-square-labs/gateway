@@ -80,6 +80,7 @@ describe('API token scope targets', () => {
         `logs:tokens:create:folder/${folderId}`,
         'docker:registries:internal:pull:team/app/web',
         'integrations:hosting:view:provider/hetzner',
+        'integrations:hosting:view:provider/cloudblast',
       ],
     });
 

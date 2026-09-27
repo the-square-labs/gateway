@@ -6,6 +6,7 @@ import { checkServerIdentity } from 'node:tls';
 import { isAlwaysBlockedOutboundIp, isPrivateIp, normalizeIp } from '@/lib/ip-cidr.js';
 import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { cloudBlastErrorMessage, digitalOceanErrorMessage, hetznerErrorMessage } from './hosting-http-errors.js';
 import type { HostingConnection } from './hosting-provider.types.js';
 
 export interface HostingRequestOptions {
@@ -27,6 +28,7 @@ const PROVIDER_ORIGINS = {
   hostkey: 'https://invapi.hostkey.com',
   digitalocean: 'https://api.digitalocean.com',
   hetzner: 'https://api.hetzner.cloud',
+  cloudblast: 'https://console.cloudblast.io',
 } as const;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 16 * 1024;
@@ -99,26 +101,6 @@ function hostkeyLoginError(result: Record<string, unknown> | null): AppError {
   );
 }
 
-function digitalOceanErrorMessage(body: string, token: string, status: number, fallback: string): string {
-  try {
-    const payload: unknown = JSON.parse(body);
-    const message = payload && typeof payload === 'object' && 'message' in payload ? payload.message : undefined;
-    if (typeof message !== 'string' || !message.trim() || message.length > 1024) return fallback;
-    // Read one documented scalar, never reflect arbitrary provider dumps or echoed bootstrap data.
-    if (
-      (token && message.includes(token)) ||
-      /gw_node_|dop_v1_|doo_v1_|dor_v1_|PVEAPIToken=|Bearer\s|-----BEGIN|user_data|cloud[-_ ]?init|#!|["']?(?:password|token|secret|privateKey)["']?\s*[:=]/i.test(
-        message
-      )
-    )
-      return fallback;
-    const clean = message.replace(/[\p{Cc}\p{Cf}]+/gu, ' ').trim();
-    return `DigitalOcean: ${clean} (HTTP ${status}).${status === 403 ? ' Check API token scopes and team permissions.' : ''}`;
-  } catch {
-    return fallback;
-  }
-}
-
 /** Map only known codes: raw transport messages may contain credentials or certificate material. */
 function connectionErrorMessage(error: unknown, provider: HostingConnection['provider']): string {
   const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
@@ -180,47 +162,6 @@ function responseErrorMessage(status: number): string {
   if (status === 404)
     return 'Provider API endpoint was not found (HTTP 404). Check the API address and supported provider version.';
   return `Provider returned HTTP ${status}`;
-}
-
-/** Read only documented scalars. Do not reflect provider input or bootstrap data. */
-function hetznerErrorMessage(body: string, status: number, fallback: string): string {
-  try {
-    const error = JSON.parse(body)?.error;
-    const explanations: Record<string, string> = {
-      resource_unavailable:
-        'Selected server type or image is unavailable in this location. Choose another configuration',
-      resource_limit_exceeded: 'The project resource limit has been reached. Check the Hetzner project limits',
-      insufficient_funds: 'The Hetzner account has insufficient funds',
-      server_type_not_supported: 'This server type is not supported in the selected location',
-      invalid_input: 'Hetzner rejected the VM configuration',
-      uniqueness_error: 'A resource with this identity already exists',
-      conflict: 'The resource conflicts with an existing operation',
-    };
-    const code = typeof error?.code === 'string' ? error.code : '';
-    const explanation = explanations[code];
-    if (!explanation) return fallback;
-    const allowedFields = new Set([
-      'name',
-      'location',
-      'server_type',
-      'image',
-      'user_data',
-      'labels',
-      'ssh_keys',
-      'networks',
-      'public_net',
-      'firewalls',
-      'start_after_create',
-    ]);
-    const fields = Array.isArray(error.details?.fields)
-      ? error.details.fields
-          .map((field: { name?: unknown }) => field?.name)
-          .filter((name: unknown) => typeof name === 'string' && allowedFields.has(name))
-      : [];
-    return `Hetzner: ${explanation}${fields.length ? `; check ${[...new Set(fields)].join(', ')}` : ''} (${code}, HTTP ${status}).`;
-  } catch {
-    return fallback;
-  }
 }
 
 function transportError(code: string): Error {
@@ -357,6 +298,12 @@ export class HostingHttpClient implements HostingHttp {
     }
   }
 
+  private errorMessage(body: string, status: number, fallback: string): string {
+    if (this.connection.provider === 'hetzner') return hetznerErrorMessage(body, status, fallback);
+    if (this.connection.provider === 'cloudblast') return cloudBlastErrorMessage(body, status, fallback);
+    return digitalOceanErrorMessage(body, this.connection.token, status, fallback);
+  }
+
   private async rawRequest<T>(path: string, options: HostingRequestOptions = {}): Promise<T> {
     let origin = hostingOrigin(this.connection);
     // doctl uses this separate official origin for current-token introspection.
@@ -462,7 +409,11 @@ export class HostingHttpClient implements HostingHttp {
                   : responseErrorMessage(status);
               const fail = (detail = message) =>
                 reject(new HostingProviderError(status, method !== 'GET' && status >= 500, detail));
-              if (!['digitalocean', 'hetzner'].includes(this.connection.provider) || status < 400 || status >= 500) {
+              if (
+                !['digitalocean', 'hetzner', 'cloudblast'].includes(this.connection.provider) ||
+                status < 400 ||
+                status >= 500
+              ) {
                 response.resume();
                 fail();
                 return;
@@ -480,14 +431,7 @@ export class HostingHttpClient implements HostingHttp {
               response.once('end', () =>
                 fail(
                   bytes <= MAX_ERROR_RESPONSE_BYTES
-                    ? this.connection.provider === 'hetzner'
-                      ? hetznerErrorMessage(Buffer.concat(chunks).toString('utf8'), status, message)
-                      : digitalOceanErrorMessage(
-                          Buffer.concat(chunks).toString('utf8'),
-                          this.connection.token,
-                          status,
-                          message
-                        )
+                    ? this.errorMessage(Buffer.concat(chunks).toString('utf8'), status, message)
                     : message
                 )
               );

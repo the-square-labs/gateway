@@ -94,6 +94,61 @@ describe('Hetzner error diagnostics', () => {
   });
 });
 
+describe('CloudBlast error diagnostics', () => {
+  const client = () =>
+    new HostingHttpClient({ ...connection(), provider: 'cloudblast', baseUrl: 'https://console.cloudblast.io' });
+  it('pins the official console origin and sends the bearer token', async () => {
+    expect(
+      () =>
+        new HostingHttpClient({
+          ...connection(),
+          provider: 'cloudblast',
+          baseUrl: 'https://console.cloudblast.io/api/v2',
+        })
+    ).toThrow(/without a path/);
+    expect(
+      () => new HostingHttpClient({ ...connection(), provider: 'cloudblast', baseUrl: 'https://api.digitalocean.com' })
+    ).toThrow(/official provider API endpoint/);
+    const { socket } = response(200, JSON.stringify({ data: [] }));
+    const pending = client().request('/api/v2/locations');
+    await vi.waitFor(() => expect(socket.listenerCount('secureConnect')).toBe(1));
+    socket.emit('secureConnect');
+    await expect(pending).resolves.toEqual({ data: [] });
+    expect(String(io.request.mock.calls[0]![0])).toBe('https://console.cloudblast.io/api/v2/locations');
+    expect(io.request.mock.calls[0]![1].headers.Authorization).toBe('Bearer private-token');
+  });
+  it('explains documented codes and only allowed field names without reflecting provider text', async () => {
+    const { socket } = response(
+      422,
+      JSON.stringify({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'private-token secret',
+          details: { template_slug: ['private-key'], 'private-token': ['x'] },
+        },
+      })
+    );
+    const pending = client()
+      .request('/api/v2/servers', { method: 'POST', body: {} })
+      .catch((error) => error);
+    await vi.waitFor(() => expect(socket.listenerCount('secureConnect')).toBe(1));
+    socket.emit('secureConnect');
+    const error = await pending;
+    if (!(error instanceof HostingProviderError)) throw new Error('Expected provider rejection');
+    expect(error.outcomeUnknown).toBe(false);
+    expect(error.message).toBe(
+      'CloudBlast: CloudBlast rejected the request; check template_slug (VALIDATION_ERROR, HTTP 422).'
+    );
+  });
+  it('does not echo unknown error codes', async () => {
+    const { socket } = response(409, JSON.stringify({ error: { code: 'private-token', message: 'private-key' } }));
+    const pending = client().request('/api/v2/servers/x/actions', { method: 'POST' });
+    await vi.waitFor(() => expect(socket.listenerCount('secureConnect')).toBe(1));
+    socket.emit('secureConnect');
+    await expect(pending).rejects.toMatchObject({ message: 'Provider returned HTTP 409' });
+  });
+});
+
 function hostkeySequence(...responses: Array<{ status?: number; body: unknown }>) {
   const sent: Array<{ path: string; form: URLSearchParams; authorization?: string }> = [];
   io.request.mockImplementation((url, opts, callback) => {

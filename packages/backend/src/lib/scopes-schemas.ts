@@ -14,7 +14,7 @@ export const MAX_OAUTH_SCOPE_PARAMETER_LENGTH = 16 * 1024;
 const SCOPE_FORMAT = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?::[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*)*$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TARGET_SEGMENT = /^[a-zA-Z0-9_.:-]+$/;
-const HOSTING_PROVIDERS = new Set(['proxmox', 'digitalocean', 'hetzner', 'hostkey']);
+const HOSTING_PROVIDERS = new Set(['proxmox', 'digitalocean', 'hetzner', 'hostkey', 'cloudblast']);
 
 const ALL_SCOPE_SET = new Set<string>(ALL_SCOPES);
 const RESOURCE_SCOPABLE_SET = new Set<string>(RESOURCE_SCOPABLE);

@@ -57,7 +57,7 @@ export class HostingFirewallService {
       !resource?.connectorId ||
       resource.missingSince ||
       resource.origin === 'discovered' ||
-      !['digitalocean', 'proxmox'].includes(resource.provider)
+      !['digitalocean', 'cloudblast', 'proxmox'].includes(resource.provider)
     )
       fail('This node has no supported managed VM firewall');
     if (!resource.incarnation || resource.incarnation !== resource.snapshot.incarnation)
@@ -211,7 +211,7 @@ export class HostingFirewallService {
         .leftJoin(hostingFirewalls, eq(hostingFirewalls.resourceId, hostingResources.id))
         .where(
           and(
-            inArray(hostingResources.provider, ['digitalocean', 'proxmox']),
+            inArray(hostingResources.provider, ['digitalocean', 'cloudblast', 'proxmox']),
             or(
               and(isNotNull(hostingNodeBindings.nodeId), isNull(hostingResources.missingSince)),
               inArray(hostingFirewalls.status, ['pending', 'applying'])
