@@ -41,6 +41,8 @@ export const DockerAvailabilityLeaseSchema = z.object({
     })
   ),
   bootstrap: z.array(z.object({ slot: z.number().int().min(0).max(31), holderNodeId: UUID })),
+  strictPending: z.boolean(),
+  copiesStoppedAt: z.coerce.date().nullable(),
   voterMargin: z
     .object({
       epoch: z.number().int().nonnegative(),

@@ -3,6 +3,8 @@ import type { DockerAvailabilityLeaseReason } from '@/db/schema/index.js';
 export interface LeaseGatingInput {
   /** The paid controller runs the lease-mode branch (edition contract). */
   controllerSupportsLease: boolean;
+  /** The controller holds this policy on the legacy path. */
+  legacyRequested?: boolean;
   policyMode: 'single' | 'replicated' | 'failover';
   /** A voter config is published and a policy key can sign lease blocks. */
   clusterReady: boolean;
@@ -29,6 +31,12 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
         code: 'controller_unsupported',
         message: 'This Gateway edition runs Availability failover from the backend only',
       },
+    };
+  }
+  if (input.legacyRequested) {
+    return {
+      eligible: false,
+      reason: { code: 'legacy_requested', message: 'The Availability controller runs this policy on the backend path' },
     };
   }
   if (input.policyMode === 'single') {

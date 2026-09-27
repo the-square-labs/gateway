@@ -8,6 +8,7 @@ import {
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import {
+  decodeLeaseSignedBlock,
   encodeLeaseSignedBlock,
   encodeLeaseVoterConfig,
   type LeaseSigner,
@@ -71,7 +72,7 @@ export class AvailabilityLeaseCluster {
     let changed = await this.ensureRotationLinks(keys);
     const signingKeyId = this.chooseSigningKey(cluster, keys, input.members);
     if (signingKeyId && signingKeyId !== cluster.signingKeyId) {
-      cluster = await this.update({ signingKeyId });
+      cluster = await this.update({ signingKeyId, ...(await this.resign(cluster, signingKeyId)) });
       changed = true;
     }
     const sets = cluster.quorumSets;
@@ -109,7 +110,8 @@ export class AvailabilityLeaseCluster {
         }
       }
       const renewedUnderJoint = input.activeLeaseEpochs.every((epoch) => epoch >= cluster.epoch);
-      if (jointAckedAt && (renewedUnderJoint || input.now.getTime() - jointAckedAt.getTime() >= EPOCH_SETTLE_MS)) {
+      // A16: both majorities acked, every active lease renewed under the joint epoch, and the drift-safe hold passed.
+      if (jointAckedAt && renewedUnderJoint && input.now.getTime() - jointAckedAt.getTime() >= EPOCH_SETTLE_MS) {
         logger.info('Availability lease voter epoch settles', { epoch: cluster.epoch + 1, voters: next.length });
         cluster = await this.publish(cluster, [next], input.participants, signingKeyId, {
           jointStartedAt: null,
@@ -199,6 +201,18 @@ export class AvailabilityLeaseCluster {
       revision: sql`${availabilityLeaseCluster.revision} + 1`,
       ...joint,
     });
+  }
+
+  /**
+   * A16: after a voter majority trusts a new policy key, the current config is signed again with it (same payload),
+   * so a peer that trusts only the new key can verify blocks forwarded between members.
+   */
+  private async resign(cluster: LeaseClusterRow, signingKeyId: string): Promise<{ voterConfigBlock?: string }> {
+    if (!cluster.voterConfigBlock) return {};
+    const current = decodeLeaseSignedBlock(Buffer.from(cluster.voterConfigBlock, 'base64'));
+    if (current.signingKeyId === signingKeyId) return {};
+    const block = await signLeaseBlock(current.kind, current.payload, signingKeyId, this.sign);
+    return { voterConfigBlock: encodeLeaseSignedBlock(block).toString('base64') };
   }
 
   private async update(

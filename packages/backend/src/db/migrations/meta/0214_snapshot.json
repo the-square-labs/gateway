@@ -1,5 +1,5 @@
 {
-  "id": "f276bf5a-7b13-4a2a-8615-5cdfce183cc6",
+  "id": "b7c5adf4-55e8-413a-829a-0d84821e38fc",
   "prevId": "d9fe077b-3b70-4a18-a188-067488d8dad5",
   "version": "7",
   "dialect": "postgresql",
@@ -8088,6 +8088,25 @@
         "published_partition_mode": {
           "name": "published_partition_mode",
           "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "legacy_requested": {
+          "name": "legacy_requested",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "strict_requested_at": {
+          "name": "strict_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "copies_stopped_at": {
+          "name": "copies_stopped_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },

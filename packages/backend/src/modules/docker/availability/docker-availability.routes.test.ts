@@ -169,6 +169,8 @@ describe('Docker Availability routes', () => {
       publishedPartitionMode: 'strict',
       holders: [],
       bootstrap: [],
+      strictPending: false,
+      copiesStoppedAt: null,
       voterMargin: { epoch: 2, joint: false, voters: 5, reachable: 4, required: 3, margin: 1 },
     };
     const leaseService = {
@@ -192,7 +194,10 @@ describe('Docker Availability routes', () => {
       'docker:availability:manage',
     ]);
     expect(leaseService.setPartitionMode).toHaveBeenCalledWith(POLICY_ID, 'available');
-    expect((await updated.json()).data).toMatchObject({ partitionMode: 'available', lease: { mode: 'lease' } });
+    expect(((await updated.json()) as { data: unknown }).data).toMatchObject({
+      partitionMode: 'available',
+      lease: { mode: 'lease' },
+    });
   });
 
   it('keeps policy and operation reads delegated to the service', async () => {

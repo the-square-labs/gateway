@@ -71,6 +71,15 @@ export const dockerAvailabilityLeaseState = pgTable(
     bootstrap: jsonb('bootstrap').$type<DockerAvailabilityLeaseBootstrapSlot[]>().notNull().default([]),
     /** Partition mode the published manifest carries; available -> strict re-runs bootstrap (A7). */
     publishedPartitionMode: varchar('published_partition_mode', { length: 16 }).$type<'strict' | 'available'>(),
+    /** The controller asked for the legacy path (for example before disabling Availability); gating stays closed. */
+    legacyRequested: boolean('legacy_requested').notNull().default(false),
+    /** A7: when the policy switched from available to strict; strict is active once bootstrap settled. */
+    strictRequestedAt: timestamp('strict_requested_at', { withTimezone: true }),
+    /**
+     * When the reserved holders first held every slot with no other copy reported running. Bootstrap (and a switch to
+     * strict) completes only after the relay gate window passed since then (A5, A7, A16).
+     */
+    copiesStoppedAt: timestamp('copies_stopped_at', { withTimezone: true }),
     closingStartedAt: timestamp('closing_started_at', { withTimezone: true }),
     /** When a voter majority first persisted the lease-closed manifest (A5). */
     closingAckedAt: timestamp('closing_acked_at', { withTimezone: true }),

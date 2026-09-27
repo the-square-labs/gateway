@@ -48,6 +48,13 @@ export interface DockerAvailabilityLeaseView {
   holders: DockerAvailabilityLeaseHolderView[];
   /** Slots reserved for their current serving placement until it acquires (A5). */
   bootstrap: Array<{ slot: number; holderNodeId: string }>;
+  /** A7: a switch from available to strict is in progress; strict is not active yet. */
+  strictPending: boolean;
+  /**
+   * When the reserved holders first held with no other copy running. Bootstrap and a strict switch complete once the
+   * relay gate window (24 s) passed since then (A16); null while other copies may still run.
+   */
+  copiesStoppedAt: Date | null;
   voterMargin: LeaseVoterMargin | null;
 }
 

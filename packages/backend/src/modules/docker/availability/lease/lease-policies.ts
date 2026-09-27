@@ -12,6 +12,7 @@ import {
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import {
+  decodeLeaseSignedBlock,
   encodeLeaseManifest,
   encodeLeaseSignedBlock,
   type LeaseManifestContent,
@@ -19,7 +20,7 @@ import {
   leaseManifestDigest,
   signLeaseBlock,
 } from './lease-codec.js';
-import { CLOSE_SETTLE_MS } from './lease-constants.js';
+import { CLOSE_SETTLE_MS, GATE_WINDOW_MS } from './lease-constants.js';
 import { evaluateLeaseGating } from './lease-gating.js';
 import type { LeaseParticipants } from './lease-participants.js';
 import {
@@ -38,6 +39,13 @@ const logger = createChildLogger('AvailabilityLeasePolicies');
 
 /** A policy that left lease mode waits this long before it may bootstrap again, so a flapping gate cannot thrash. */
 const LEASE_REENTRY_HOLD_MS = 60_000;
+
+/** A7/A16: shown while a switch from available to strict waits for the other copies and the relay gate window. */
+const STRICT_SWITCH_PENDING: DockerAvailabilityLeaseReason = {
+  code: 'strict_switch_pending',
+  message:
+    'Strict partition mode becomes active once every other copy has stopped and the relay gate window (24 s) has passed',
+};
 
 type PolicyRow = Pick<
   typeof dockerAvailabilityPolicies.$inferSelect,
@@ -72,11 +80,20 @@ export interface LeasePoliciesContext {
   now: Date;
 }
 
-function lastHolders(observations: ObservationRow[]): Array<{ slot: number; holderId: string }> {
-  return observations.flatMap((observation) => {
+/**
+ * The last holder per slot; before any holder was observed, the reserved bootstrap holders, whose legacy copies kept
+ * running while they tried to acquire (A5).
+ */
+function lastHolders(
+  observations: ObservationRow[],
+  bootstrap: Array<{ slot: number; holderId: string }>
+): Array<{ slot: number; holderId: string }> {
+  const observed = observations.flatMap((observation) => {
     const holderId = observation.holderId ?? observation.lastHolderId;
     return holderId ? [{ slot: observation.slot, holderId }] : [];
   });
+  const slots = new Set(observed.map(({ slot }) => slot));
+  return [...observed, ...bootstrap.filter((entry) => !slots.has(entry.slot))].sort((a, b) => a.slot - b.slot);
 }
 
 /** Per-policy lease mode (D10, A5, A7) and its signed manifest (D4). */
@@ -198,6 +215,7 @@ export class AvailabilityLeasePolicies {
     const candidateNodes = [...new Set(leaseCandidatePlacements(placements).map((placement) => placement.nodeId))];
     const gating = evaluateLeaseGating({
       controllerSupportsLease: context.controllerSupportsLease,
+      legacyRequested: state.legacyRequested,
       policyMode: policy.mode,
       clusterReady: context.clusterReady && Boolean(context.cluster.signingKeyId),
       candidates: candidateNodes.map((nodeId) => ({
@@ -211,7 +229,6 @@ export class AvailabilityLeasePolicies {
       capableVoters: context.capableVoters,
       totalVoters: context.totalVoters,
     });
-    const reason = gating.eligible ? null : gating.reason;
     const slots = policy.mode === 'replicated' ? policy.desiredReplicaCount : 1;
     const observationBySlot = new Map(observations.map((observation) => [observation.slot, observation]));
     const updates: Partial<typeof dockerAvailabilityLeaseState.$inferInsert> = {};
@@ -227,6 +244,8 @@ export class AvailabilityLeasePolicies {
         next = 'bootstrapping';
         updates.bootstrapId = randomInt(1, 2 ** 47);
         updates.bootstrap = bootstrapFromServing(placements, slots);
+        updates.strictRequestedAt = null;
+        updates.copiesStoppedAt = null;
         updates.closingStartedAt = null;
         updates.closingAckedAt = null;
       }
@@ -246,10 +265,22 @@ export class AvailabilityLeasePolicies {
         observations.map((observation) => ({ slot: observation.slot, holderId: observation.holderId })),
         slots
       );
-    } else if (state.mode === 'bootstrapping' && bootstrapAcknowledged(state.bootstrap, observationBySlot)) {
-      next = 'lease';
-      updates.bootstrap = [];
-      updates.bootstrapId = 0;
+      updates.strictRequestedAt = now;
+      updates.copiesStoppedAt = null;
+    } else if (state.mode === 'bootstrapping') {
+      // A5/A7/A16: the reserved holders hold, nobody else reports a running copy, and the relay gate window passed
+      // since, so no relay still admits another copy. The entry stays in every manifest version until then.
+      if (!bootstrapAcknowledged(state.bootstrap, observationBySlot)) {
+        if (state.copiesStoppedAt) updates.copiesStoppedAt = null;
+      } else if (!state.copiesStoppedAt) {
+        updates.copiesStoppedAt = now;
+      } else if (now.getTime() - state.copiesStoppedAt.getTime() >= GATE_WINDOW_MS) {
+        next = 'lease';
+        updates.bootstrap = [];
+        updates.bootstrapId = 0;
+        updates.strictRequestedAt = null;
+        updates.copiesStoppedAt = null;
+      }
     } else if (state.mode === 'closing') {
       const closedAckers = new Set(
         [...context.members.values()]
@@ -259,8 +290,9 @@ export class AvailabilityLeasePolicies {
           })
           .map((member) => member.memberId)
       );
-      const holders = lastHolders(observations);
-      const holdersAcked = holders.every(({ holderId }) => closedAckers.has(holderId));
+      const holders = lastHolders(observations, state.bootstrap);
+      // Without a known holder only the majority path is safe: someone may hold without the Gateway having seen it.
+      const holdersAcked = holders.length > 0 && holders.every(({ holderId }) => closedAckers.has(holderId));
       let ackedAt = state.closingAckedAt;
       if (!ackedAt && holdsEveryMajority(context.cluster.quorumSets, closedAckers)) {
         ackedAt = now;
@@ -278,6 +310,13 @@ export class AvailabilityLeasePolicies {
       updates.mode = next;
       updates.modeChangedAt = now;
     }
+    const strictRequestedAt =
+      updates.strictRequestedAt !== undefined ? updates.strictRequestedAt : state.strictRequestedAt;
+    const reason = !gating.eligible
+      ? gating.reason
+      : next === 'bootstrapping' && strictRequestedAt
+        ? STRICT_SWITCH_PENDING
+        : null;
     const reasonChanged = JSON.stringify(reason) !== JSON.stringify(state.reason ?? null);
     if (reasonChanged) updates.reason = reason;
     const merged: LeaseStateRow = { ...state, ...(updates as Partial<LeaseStateRow>) };
@@ -297,7 +336,13 @@ export class AvailabilityLeasePolicies {
     }
     const modeChange =
       next !== state.mode
-        ? { policyId: policy.id, from: state.mode, to: next, reason, lastHolders: lastHolders(observations) }
+        ? {
+            policyId: policy.id,
+            from: state.mode,
+            to: next,
+            reason,
+            lastHolders: lastHolders(observations, state.bootstrap),
+          }
         : null;
     if (modeChange) logger.info('Availability lease mode changes', { ...modeChange, lastHolders: undefined });
     return { changed: blockChanged || (next === 'legacy' && state.mode === 'closing'), modeChange };
@@ -333,7 +378,13 @@ export class AvailabilityLeasePolicies {
       bootstrap: state.bootstrap.filter((entry) => entry.slot < slots && known.has(entry.holderId)),
     };
     const digest = leaseManifestDigest(content);
-    if (digest === state.manifestDigest && state.manifestBlock) return null;
+    if (digest === state.manifestDigest && state.manifestBlock) {
+      // A16: once voters trust a new policy key the current manifest is signed again with it, same payload.
+      const current = decodeLeaseSignedBlock(Buffer.from(state.manifestBlock, 'base64'));
+      if (current.signingKeyId === signingKeyId) return null;
+      const resigned = await signLeaseBlock(current.kind, current.payload, signingKeyId, this.sign);
+      return { manifestBlock: encodeLeaseSignedBlock(resigned).toString('base64') };
+    }
     const manifestVersion = state.manifestVersion + 1;
     const block = await signLeaseBlock(
       'LEASE_BLOCK_KIND_MANIFEST',

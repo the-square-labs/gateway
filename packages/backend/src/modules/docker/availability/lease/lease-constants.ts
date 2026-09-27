@@ -16,11 +16,17 @@ export const ACCEPTOR_HOLD_MS = (LEASE_TERM_MS * 11) / 10;
 const DRIFTED_ACCEPTOR_HOLD_MS = Math.ceil((ACCEPTOR_HOLD_MS * 10) / 9);
 
 /**
- * How long after both majorities persisted a joint epoch the Gateway waits before it settles the new epoch when it
- * cannot see every active lease renewed under it. A lease not renewed within this window has expired everywhere.
- * Matches the rule the availabilitylease simulator proves.
+ * A joint epoch settles only after both majorities persisted it, every active lease renewed under it, and at least
+ * T x 1.1 / 0.9 (about 37 s) passed since those acks (A16): the time bound keeps settlement safe even when the
+ * Gateway's view of active leases is incomplete.
  */
 export const EPOCH_SETTLE_MS = DRIFTED_ACCEPTOR_HOLD_MS + 2_000;
+
+/**
+ * Relay gate window (A15): a relay admits a holder for at most this long after its own promise. A bootstrap, and a
+ * switch from available to strict, completes only once every other copy stopped and this window passed (A16).
+ */
+export const GATE_WINDOW_MS = 24_000;
 
 /** Upper bound for a holder's graceful stop after it fenced (D5: min(stop timeout, 10 s) then kill). */
 const FENCE_STOP_MARGIN_MS = 10_000;
@@ -43,8 +49,8 @@ export const VOTER_OFFLINE_REPLACE_MS = 10 * 60_000;
 /** A planned handoff classifies the next holder change as a handoff for this long (D9). */
 export const PLANNED_HANDOFF_TTL_MS = 5 * 60_000;
 
-/** Rotation links kept in the published chain; daemon-shared keeps as many trusted keys. */
-export const MAX_KEY_ROTATION_LINKS = 8;
+/** Rotation links kept in the published chain: with its first key the chain spans the 8 keys a node keeps. */
+export const MAX_KEY_ROTATION_LINKS = 7;
 
 /** A daemon that has not confirmed the current distribution revision gets it again after this long. */
 export const DAEMON_SYNC_RETRY_MS = 30_000;

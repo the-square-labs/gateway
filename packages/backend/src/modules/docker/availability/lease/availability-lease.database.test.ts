@@ -35,6 +35,12 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
   let service: AvailabilityLeaseService;
   const policyKey = edKey();
   const keyId = randomUUID();
+  const nextKey = edKey();
+  const nextKeyId = randomUUID();
+  const signers = new Map<string, ReturnType<typeof edKey>>([
+    [keyId, policyKey],
+    [nextKeyId, nextKey],
+  ]);
   const relayId = randomUUID();
   const nodeIds = [randomUUID(), randomUUID(), randomUUID()];
   const nginxId = randomUUID();
@@ -152,8 +158,9 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     };
     service = new AvailabilityLeaseService(db, registry as never, audit, events as never, {
       signPayload: async (payload: Buffer, signer?: string) => {
-        expect(signer).toBe(keyId);
-        return { signingKeyId: keyId, signature: sign(null, payload, policyKey.privateKey) };
+        const key = signers.get(signer ?? '');
+        if (!key) throw new Error(`unexpected signer ${signer}`);
+        return { signingKeyId: signer!, signature: sign(null, payload, key.privateKey) };
       },
     });
     service.attachController({
@@ -210,9 +217,18 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     ]);
   });
 
-  it('enters lease mode once the reserved holder acquired, and audits an autonomous failover', async () => {
+  it('enters lease mode once the reserved holder acquired and the gate window passed, then audits a failover', async () => {
     await service.ingestDaemonReport(nodeIds[0]!, 'docker', holding(nodeIds[0]!, 3));
     await service.reconcile();
+    const settling = await service.getPolicyLease(policyId);
+    expect(settling.mode).toBe('bootstrapping');
+    expect(settling.copiesStoppedAt).toBeInstanceOf(Date);
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 25_000 });
+    try {
+      await service.reconcile();
+    } finally {
+      vi.useRealTimers();
+    }
     expect((await service.getPolicyLease(policyId)).mode).toBe('lease');
     expect(audit.log).not.toHaveBeenCalled();
 
@@ -237,6 +253,46 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     expect(audit.log).toHaveBeenLastCalledWith(
       expect.objectContaining({ action: 'docker.availability.lease_handoff' })
     );
+  });
+
+  it('signs with a rotated policy key once a voter majority trusts it, re-signing the same payloads (A14, A16)', async () => {
+    const [before] = (await q('select voter_config_block from availability_lease_cluster')).rows;
+    const [stateBefore] = (await q('select manifest_block, manifest_version from docker_availability_lease_state'))
+      .rows;
+    await q(`update relay_policy_signing_keys set status = 'verification_only' where key_id = $1`, [keyId]);
+    await q(
+      `insert into relay_policy_signing_keys (key_id, public_key, public_key_fingerprint, encrypted_private_key,
+         encrypted_dek, status, activated_at, created_at) values ($1, $2, 'sha256:next', 'held', 'held', 'active', now(),
+         now() + interval '1 second')`,
+      [nextKeyId, nextKey.publicKey.toString('base64')]
+    );
+    await service.reconcile();
+    const [link] = (await q('select previous_key_id, signature from availability_lease_key_rotations')).rows;
+    expect(link.previous_key_id).toBe(keyId);
+    expect((await q('select signing_key_id from availability_lease_cluster')).rows[0].signing_key_id).toBe(keyId);
+
+    for (const id of [...nodeIds, nginxId]) {
+      await service.ingestDaemonReport(
+        id,
+        id === nginxId ? 'nginx' : 'docker',
+        report(id, { epoch: '1', trustedPolicyKeyIds: [keyId, nextKeyId] })
+      );
+    }
+    await service.reconcile();
+    const [after] = (await q('select signing_key_id, voter_config_block from availability_lease_cluster')).rows;
+    expect(after.signing_key_id).toBe(nextKeyId);
+    const oldConfig = decodeLeaseSignedBlock(Buffer.from(before.voter_config_block, 'base64'));
+    const newConfig = decodeLeaseSignedBlock(Buffer.from(after.voter_config_block, 'base64'));
+    expect(newConfig.signingKeyId).toBe(nextKeyId);
+    expect(newConfig.payload).toEqual(oldConfig.payload);
+    const [stateAfter] = (await q('select manifest_block, manifest_version from docker_availability_lease_state')).rows;
+    expect(stateAfter.manifest_version).toBe(stateBefore.manifest_version);
+    const manifest = decodeLeaseSignedBlock(Buffer.from(stateAfter.manifest_block, 'base64'));
+    expect(manifest.signingKeyId).toBe(nextKeyId);
+    expect(manifest.payload).toEqual(decodeLeaseSignedBlock(Buffer.from(stateBefore.manifest_block, 'base64')).payload);
+    expect(
+      verify(null, leaseBlockMessage(manifest.kind, manifest.payload), nextKey.publicKeyObject, manifest.signature)
+    ).toBe(true);
   });
 
   it('closes lease mode when a candidate loses the capability and hands back to legacy (A5)', async () => {

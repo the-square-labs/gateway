@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import { and, eq, gte, isNotNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
@@ -143,7 +144,7 @@ export class AvailabilityLeaseService {
       controllerSupportsLease,
       now,
     });
-    if (outcome.changed) await bumpLeaseRevision(this.db);
+    if (cluster.changed || outcome.changed) await bumpLeaseRevision(this.db);
     if (cluster.changed || outcome.changed) {
       void this.relayPublisher?.publishAvailabilityLeaseChange().catch((error) => {
         logger.warn('Relays will receive the availability lease change with the next policy refresh', {
@@ -268,6 +269,8 @@ export class AvailabilityLeaseService {
           source: observation.source,
         })),
       bootstrap: (state?.bootstrap ?? []).map((entry) => ({ slot: entry.slot, holderNodeId: entry.holderId })),
+      strictPending: state?.mode === 'bootstrapping' && state.strictRequestedAt !== null,
+      copiesStoppedAt: state?.copiesStoppedAt ?? null,
       voterMargin: cluster ? leaseVoterMargin(cluster.epoch, cluster.quorumSets, reachable) : null,
     };
   }
@@ -283,6 +286,46 @@ export class AvailabilityLeaseService {
       .where(eq(dockerAvailabilityPolicies.id, policyId))
       .returning({ id: dockerAvailabilityPolicies.id });
     if (updated.length === 0) throw new AppError(404, 'AVAILABILITY_NOT_FOUND', 'Availability policy not found');
+    await this.republishPolicy(policyId);
+  }
+
+  /**
+   * Holds a policy on the legacy path (true) or releases it to the capability gate again (false). Holding it closes a
+   * running lease first (A5): use it before operations that need the backend path, such as disabling Availability.
+   */
+  async setLegacyRequested(policyId: string, requested: boolean): Promise<void> {
+    await ensureLeaseState(this.db, policyId);
+    await this.db
+      .update(dockerAvailabilityLeaseState)
+      .set({ legacyRequested: requested, updatedAt: new Date() })
+      .where(eq(dockerAvailabilityLeaseState.policyId, policyId));
+    await this.republishPolicy(policyId);
+  }
+
+  /**
+   * Replaces the bootstrap reservation of a policy that is still bootstrapping, with a new bootstrap_id (A5). Only for
+   * the stuck state where a reserved holder died before it acquired and no holder was observed since.
+   */
+  async reissueBootstrap(policyId: string, bootstrap: Array<{ slot: number; holderNodeId: string }>): Promise<void> {
+    const updated = await this.db
+      .update(dockerAvailabilityLeaseState)
+      .set({
+        bootstrapId: randomInt(1, 2 ** 47),
+        bootstrap: bootstrap.map((entry) => ({ slot: entry.slot, holderId: entry.holderNodeId })),
+        copiesStoppedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(eq(dockerAvailabilityLeaseState.policyId, policyId), eq(dockerAvailabilityLeaseState.mode, 'bootstrapping'))
+      )
+      .returning({ policyId: dockerAvailabilityLeaseState.policyId });
+    if (updated.length === 0) {
+      throw new AppError(
+        409,
+        'AVAILABILITY_LEASE_NOT_BOOTSTRAPPING',
+        'The policy is not waiting for a bootstrap holder'
+      );
+    }
     await this.republishPolicy(policyId);
   }
 
