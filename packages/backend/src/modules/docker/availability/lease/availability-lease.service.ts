@@ -276,6 +276,7 @@ export class AvailabilityLeaseService {
         })),
       bootstrap: (state?.bootstrap ?? []).map((entry) => ({ slot: entry.slot, holderNodeId: entry.holderId })),
       strictPending: state?.mode === 'bootstrapping' && state.strictRequestedAt !== null,
+      surgeSlots: state?.surgeSlots ?? 0,
       copiesStoppedAt: state?.copiesStoppedAt ?? null,
       voterMargin: cluster ? leaseVoterMargin(cluster.epoch, cluster.quorumSets, reachable) : null,
     };
@@ -332,6 +333,43 @@ export class AvailabilityLeaseService {
         'The policy is not waiting for a bootstrap holder'
       );
     }
+    await this.republishPolicy(policyId);
+  }
+
+  /**
+   * D9: temporary extra lease slots for a replicated rollout (surge). The manifest then publishes
+   * desiredReplicaCount + count slots under a new version; lowering the count removes the highest slots, whose
+   * holders stop and release. Failover policies have exactly one slot and reject any surge.
+   */
+  async setSurgeSlots(policyId: string, count: number): Promise<void> {
+    const [policy] = await this.db
+      .select({
+        mode: dockerAvailabilityPolicies.mode,
+        desiredReplicaCount: dockerAvailabilityPolicies.desiredReplicaCount,
+        rolloutPolicy: dockerAvailabilityPolicies.rolloutPolicy,
+      })
+      .from(dockerAvailabilityPolicies)
+      .where(eq(dockerAvailabilityPolicies.id, policyId))
+      .limit(1);
+    if (!policy) throw new AppError(404, 'AVAILABILITY_NOT_FOUND', 'Availability policy not found');
+    if (!Number.isInteger(count) || count < 0) {
+      throw new AppError(400, 'AVAILABILITY_LEASE_SURGE_INVALID', 'Surge slots must be a non-negative integer');
+    }
+    if (count > 0 && policy.mode !== 'replicated') {
+      throw new AppError(409, 'AVAILABILITY_LEASE_SURGE_UNSUPPORTED', 'Only replicated policies can surge lease slots');
+    }
+    if (count > policy.rolloutPolicy.maxSurge || policy.desiredReplicaCount + count > 32) {
+      throw new AppError(
+        400,
+        'AVAILABILITY_LEASE_SURGE_INVALID',
+        'Surge slots exceed the rollout policy maxSurge or the 32 slot limit'
+      );
+    }
+    await ensureLeaseState(this.db, policyId);
+    await this.db
+      .update(dockerAvailabilityLeaseState)
+      .set({ surgeSlots: count, updatedAt: new Date() })
+      .where(eq(dockerAvailabilityLeaseState.policyId, policyId));
     await this.republishPolicy(policyId);
   }
 

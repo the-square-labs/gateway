@@ -229,7 +229,8 @@ export class AvailabilityLeasePolicies {
       capableVoters: context.capableVoters,
       totalVoters: context.totalVoters,
     });
-    const slots = policy.mode === 'replicated' ? policy.desiredReplicaCount : 1;
+    // D9: a rollout's surge is a temporary extra slot; failover stays at one slot.
+    const slots = policy.mode === 'replicated' ? Math.min(32, policy.desiredReplicaCount + state.surgeSlots) : 1;
     const observationBySlot = new Map(observations.map((observation) => [observation.slot, observation]));
     const updates: Partial<typeof dockerAvailabilityLeaseState.$inferInsert> = {};
     let next: DockerAvailabilityLeaseMode = state.mode;

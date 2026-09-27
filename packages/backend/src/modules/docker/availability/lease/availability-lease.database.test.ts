@@ -381,4 +381,50 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     expect(modeChanges.at(-1)).toMatchObject({ to: 'legacy', lastHolders: [{ slot: 0, holderId: nodeIds[2] }] });
     expect((await service.relayPolicyFields()).leaseBlocks).toHaveLength(1);
   });
+
+  it('publishes temporary surge slots for a replicated rollout and rejects surge in failover (D9)', async () => {
+    await expect(service.setSurgeSlots(policyId, 1)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'AVAILABILITY_LEASE_SURGE_UNSUPPORTED',
+    });
+    await q(
+      `update docker_availability_policies set mode = 'replicated', desired_replica_count = 2,
+         rollout_policy = '{"maxUnavailable":0,"maxSurge":1,"drainSeconds":30}' where id = $1`,
+      [policyId]
+    );
+    const manifestSlots = async () => {
+      const [state] = (await q('select manifest_block, manifest_version from docker_availability_lease_state')).rows;
+      const manifest = decodeRelayV1Message(
+        'LeaseManifest',
+        decodeLeaseSignedBlock(Buffer.from(state.manifest_block, 'base64')).payload
+      ) as { slots: number; manifestVersion: string };
+      return { slots: manifest.slots, version: Number(state.manifest_version) };
+    };
+    let now = Date.now();
+    try {
+      // Re-enter lease mode: every member is capable again; let the voter epochs settle.
+      for (let round = 0; round < 10 && (await service.getPolicyLease(policyId)).mode === 'legacy'; round++) {
+        now += 61_000;
+        vi.useFakeTimers({ toFake: ['Date'], now });
+        const [cluster] = (await q('select epoch from availability_lease_cluster')).rows;
+        await ackAll(Number(cluster.epoch));
+        await service.reconcile();
+      }
+      expect((await service.getPolicyLease(policyId)).mode).toBe('bootstrapping');
+      const base = await manifestSlots();
+      expect(base.slots).toBe(2);
+
+      await service.setSurgeSlots(policyId, 1);
+      const raised = await manifestSlots();
+      expect(raised).toEqual({ slots: 3, version: base.version + 1 });
+      expect((await service.getPolicyLease(policyId)).surgeSlots).toBe(1);
+
+      await expect(service.setSurgeSlots(policyId, 2)).rejects.toMatchObject({ statusCode: 400 });
+      await service.setSurgeSlots(policyId, 0);
+      expect(await manifestSlots()).toEqual({ slots: 2, version: base.version + 2 });
+      expect((await service.getPolicyLease(policyId)).surgeSlots).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

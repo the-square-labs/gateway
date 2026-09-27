@@ -73,6 +73,8 @@ export const dockerAvailabilityLeaseState = pgTable(
     publishedPartitionMode: varchar('published_partition_mode', { length: 16 }).$type<'strict' | 'available'>(),
     /** The controller asked for the legacy path (for example before disabling Availability); gating stays closed. */
     legacyRequested: boolean('legacy_requested').notNull().default(false),
+    /** D9: temporary extra lease slots during a rollout; published slots = desiredReplicaCount + surgeSlots. */
+    surgeSlots: integer('surge_slots').notNull().default(0),
     /** A7: when the policy switched from available to strict; strict is active once bootstrap settled. */
     strictRequestedAt: timestamp('strict_requested_at', { withTimezone: true }),
     /**
@@ -92,6 +94,7 @@ export const dockerAvailabilityLeaseState = pgTable(
       'docker_availability_lease_state_mode_check',
       sql`${table.mode} IN ('legacy', 'bootstrapping', 'lease', 'closing')`
     ),
+    check('docker_availability_lease_state_surge_check', sql`${table.surgeSlots} BETWEEN 0 AND 32`),
     check(
       'docker_availability_lease_state_version_check',
       sql`${table.manifestVersion} >= 0 AND ${table.manifestEpoch} >= 0 AND ${table.bootstrapId} >= 0`

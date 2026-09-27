@@ -169,6 +169,7 @@ describe('Docker Availability routes', () => {
       publishedPartitionMode: 'strict',
       holders: [],
       bootstrap: [],
+      surgeSlots: 0,
       strictPending: false,
       copiesStoppedAt: null,
       voterMargin: { epoch: 2, joint: false, voters: 5, reachable: 4, required: 3, margin: 1 },

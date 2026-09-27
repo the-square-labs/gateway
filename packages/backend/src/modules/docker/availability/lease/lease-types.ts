@@ -48,6 +48,8 @@ export interface DockerAvailabilityLeaseView {
   holders: DockerAvailabilityLeaseHolderView[];
   /** Slots reserved for their current serving placement until it acquires (A5). */
   bootstrap: Array<{ slot: number; holderNodeId: string }>;
+  /** D9: temporary extra lease slots of a replicated rollout; the manifest publishes desired + surgeSlots slots. */
+  surgeSlots: number;
   /** A7: a switch from available to strict is in progress; strict is not active yet. */
   strictPending: boolean;
   /**

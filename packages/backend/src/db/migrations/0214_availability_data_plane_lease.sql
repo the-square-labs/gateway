@@ -75,6 +75,7 @@ CREATE TABLE "docker_availability_lease_state" (
 	"bootstrap" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"published_partition_mode" varchar(16),
 	"legacy_requested" boolean DEFAULT false NOT NULL,
+	"surge_slots" integer DEFAULT 0 NOT NULL,
 	"strict_requested_at" timestamp with time zone,
 	"copies_stopped_at" timestamp with time zone,
 	"closing_started_at" timestamp with time zone,
@@ -83,6 +84,7 @@ CREATE TABLE "docker_availability_lease_state" (
 	"mode_changed_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "docker_availability_lease_state_mode_check" CHECK ("docker_availability_lease_state"."mode" IN ('legacy', 'bootstrapping', 'lease', 'closing')),
+	CONSTRAINT "docker_availability_lease_state_surge_check" CHECK ("docker_availability_lease_state"."surge_slots" BETWEEN 0 AND 32),
 	CONSTRAINT "docker_availability_lease_state_version_check" CHECK ("docker_availability_lease_state"."manifest_version" >= 0 AND "docker_availability_lease_state"."manifest_epoch" >= 0 AND "docker_availability_lease_state"."bootstrap_id" >= 0)
 );
 --> statement-breakpoint
