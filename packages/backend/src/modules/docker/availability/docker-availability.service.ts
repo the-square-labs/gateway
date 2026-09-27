@@ -22,6 +22,7 @@ import type {
 } from './docker-availability.types.js';
 import type { DockerAvailabilityArtifactService } from './docker-availability-artifact.service.js';
 import { DockerWorkloadResolverService } from './docker-workload-resolver.service.js';
+import type { DockerAvailabilityLeaseHolderChange, DockerAvailabilityLeaseModeChange } from './lease/lease-types.js';
 export interface DockerAvailabilityDisableInput {
   survivingPlacementId: string;
   confirmation: string;
@@ -99,6 +100,15 @@ export class DockerAvailabilityService {
   }
   start(): void {}
   stop(): void {}
+  /**
+   * Lease controller contract (AvailabilityLeaseService.attachController). Community has no Availability controller,
+   * so every policy stays on the legacy path and lease transitions have nobody to act on them.
+   */
+  leaseModeSupported(): boolean {
+    return false;
+  }
+  async leaseModeChanged(_change: DockerAvailabilityLeaseModeChange): Promise<void> {}
+  async leaseHolderChanged(_change: DockerAvailabilityLeaseHolderChange): Promise<void> {}
   async preflight(
     _input: DockerAvailabilityPolicyInput,
     _scopes: string[]

@@ -4,6 +4,7 @@ import { isIP } from 'node:net';
 import { Duplex } from 'node:stream';
 import type { PeerCertificate } from 'node:tls';
 import * as grpc from '@grpc/grpc-js';
+import type { AvailabilityLeaseReport } from './generated/types.js';
 import { decodeRelayV1Message, loadRelayV1Proto } from './relay-proto.js';
 
 export const RELAY_MAX_FRAME_BYTES = 1024 * 1024;
@@ -154,6 +155,11 @@ export interface RelayHealthResponse {
   draining?: boolean;
   assignmentTunnels?: Array<{ endpointId: string; assignmentGeneration: string; activeTunnels: string }>;
   policyKeyIds?: string[];
+  /**
+   * Acceptor and data-path gate view of a relay advertising availability_lease_v1, in the shape of gateway.v1
+   * AvailabilityLeaseReport (member_id is the relay instance id).
+   */
+  availabilityLease?: AvailabilityLeaseReport | null;
 }
 
 export interface RelayRouteRuntimeResponse {

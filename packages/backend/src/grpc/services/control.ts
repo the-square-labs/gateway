@@ -951,6 +951,14 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               if (runtimeStateChanged) {
                 deps.registry.publishRelayRuntimeChanged(activeNodeId, instance.id);
               }
+              if (runtime.availabilityLease && deps.availabilityLease) {
+                void deps.availabilityLease.ingestRelayReport(instance.id, runtime.availabilityLease).catch((error) => {
+                  logger.warn('Relay availability lease report was not recorded', {
+                    nodeId: activeNodeId,
+                    error: (error as Error).message,
+                  });
+                });
+              }
             } else if (msg.dockerBuildEvent) {
               const disposition = await dispatchDockerBuildEvent(activeNodeId, msg.dockerBuildEvent);
               const attempt = Number(msg.dockerBuildEvent.attempt ?? 0);
@@ -1033,6 +1041,17 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 deps.registry.handleCommandResult(activeNodeId, msg.commandResult);
               }
             } else if (msg.healthReport) {
+              if (msg.healthReport.availabilityLease && deps.availabilityLease) {
+                const leaseNodeType = deps.registry.getNode(activeNodeId)?.type ?? '';
+                void deps.availabilityLease
+                  .ingestDaemonReport(activeNodeId, leaseNodeType, msg.healthReport.availabilityLease)
+                  .catch((error) => {
+                    logger.warn('Daemon availability lease report was not recorded', {
+                      nodeId: activeNodeId,
+                      error: (error as Error).message,
+                    });
+                  });
+              }
               const diskHealth = decodeHealthDiskMounts(msg.healthReport.diskMounts);
               const healthData = {
                 nginxRunning: msg.healthReport.nginxRunning,

@@ -1,0 +1,362 @@
+import { and, eq, gte, isNotNull } from 'drizzle-orm';
+import type { DrizzleClient } from '@/db/client.js';
+import {
+  type DockerAvailabilityPartitionMode,
+  dockerAvailabilityLeaseObservations,
+  dockerAvailabilityLeaseState,
+  dockerAvailabilityPolicies,
+} from '@/db/schema/index.js';
+import type { AvailabilityLeaseReport, CommandResult } from '@/grpc/generated/types.js';
+import { createChildLogger } from '@/lib/logger.js';
+import { AppError } from '@/middleware/error-handler.js';
+import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
+import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import type { RelayPolicySigningKeyService } from '@/services/relay-policy-signing-key.service.js';
+import { AvailabilityLeaseCluster } from './lease-cluster.js';
+import type { LeaseSigner } from './lease-codec.js';
+import {
+  AVAILABILITY_LEASE_CAPABILITY,
+  LEASE_TERM_MS,
+  MEMBER_REPORT_FRESH_MS,
+  PLANNED_HANDOFF_TTL_MS,
+} from './lease-constants.js';
+import { AvailabilityLeaseDistribution, type RelayLeasePolicyFields } from './lease-distribution.js';
+import { availabilityStandbyCount } from './lease-gating.js';
+import { loadLeaseParticipants } from './lease-participants.js';
+import { AvailabilityLeasePolicies, type LeaseModeChange } from './lease-policies.js';
+import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseReportSender } from './lease-reports.js';
+import {
+  bumpLeaseRevision,
+  ensureLeaseState,
+  loadLeaseCluster,
+  loadLeaseMembers,
+  reachableMemberIds,
+} from './lease-store.js';
+import type {
+  DockerAvailabilityLeaseController,
+  DockerAvailabilityLeaseHandoffInput,
+  DockerAvailabilityLeaseView,
+} from './lease-types.js';
+import { leaseVoterMargin } from './lease-voters.js';
+
+const logger = createChildLogger('AvailabilityLeaseService');
+
+/**
+ * Host side of the Availability data-plane lease (OSS). It chooses voters and epochs, signs voter configs and
+ * manifests with the relay policy key, delivers them, gates policies by capability, ingests lease reports and
+ * audits autonomous transitions. The paid controller decides placements; it attaches here as the lease controller.
+ */
+export class AvailabilityLeaseService {
+  private controller: DockerAvailabilityLeaseController | null = null;
+  private relayPublisher: { publishAvailabilityLeaseChange(): Promise<void> } | null = null;
+  private readonly cluster: AvailabilityLeaseCluster;
+  private readonly policies: AvailabilityLeasePolicies;
+  private readonly reports: AvailabilityLeaseReports;
+  private readonly distribution: AvailabilityLeaseDistribution;
+  private reconciling: Promise<void> | null = null;
+  private rerun: Promise<void> | null = null;
+
+  constructor(
+    private readonly db: DrizzleClient,
+    private readonly registry: NodeRegistryService,
+    private readonly audit: Pick<AuditService, 'log'>,
+    private readonly events: Pick<EventBusService, 'publish'>,
+    policyKeys: Pick<RelayPolicySigningKeyService, 'signPayload'>
+  ) {
+    const sign: LeaseSigner = (message, keyId) => policyKeys.signPayload(message, keyId);
+    this.cluster = new AvailabilityLeaseCluster(db, sign);
+    this.policies = new AvailabilityLeasePolicies(db, sign);
+    this.reports = new AvailabilityLeaseReports(db);
+    this.distribution = new AvailabilityLeaseDistribution(db, registry);
+  }
+
+  /** The paid Availability controller; without one every policy stays legacy. */
+  attachController(controller: DockerAvailabilityLeaseController): void {
+    this.controller = controller;
+  }
+
+  setRelayPublisher(publisher: { publishAvailabilityLeaseChange(): Promise<void> }): void {
+    this.relayPublisher = publisher;
+  }
+
+  /** D7: the fixed standby count, min(2, candidates - slots). */
+  standbyCount(candidateNodes: number, slots: number): number {
+    return availabilityStandbyCount(candidateNodes, slots);
+  }
+
+  /**
+   * Periodic and on-demand reconciliation. A caller that arrives while a run is in flight gets one follow-up run that
+   * starts after it, so a change it just wrote is never judged by a run that read the state before.
+   */
+  reconcile(): Promise<void> {
+    if (this.reconciling) {
+      this.rerun ??= this.reconciling
+        .catch(() => undefined)
+        .then(() => {
+          this.rerun = null;
+          return this.reconcile();
+        });
+      return this.rerun;
+    }
+    this.reconciling = this.reconcileOnce().finally(() => {
+      this.reconciling = null;
+    });
+    return this.reconciling;
+  }
+
+  /** Re-evaluates the lease after the controller changed placements, candidates or the partition mode. */
+  async republishPolicy(_policyId: string): Promise<void> {
+    await this.reconcile();
+  }
+
+  private async reconcileOnce(): Promise<void> {
+    const now = new Date();
+    const members = new Map((await loadLeaseMembers(this.db)).map((member) => [member.memberId, member]));
+    const participants = await loadLeaseParticipants(this.db, this.registry, members);
+    const controllerSupportsLease = this.controller?.leaseModeSupported() === true;
+    const activeLeaseEpochs = (
+      await this.db
+        .select({ epoch: dockerAvailabilityLeaseObservations.epoch })
+        .from(dockerAvailabilityLeaseObservations)
+        .where(
+          and(
+            isNotNull(dockerAvailabilityLeaseObservations.holderId),
+            gte(dockerAvailabilityLeaseObservations.observedAt, new Date(now.getTime() - 2 * LEASE_TERM_MS))
+          )
+        )
+    ).map(({ epoch }) => epoch);
+    const cluster = await this.cluster.reconcile({
+      participants,
+      members,
+      activeLeaseEpochs,
+      wanted: controllerSupportsLease && (await this.policies.wanted()),
+      now,
+    });
+    const outcome = await this.policies.reconcile({
+      participants,
+      members,
+      cluster: cluster.cluster,
+      clusterReady: cluster.ready,
+      capableVoters: cluster.capableVoters,
+      totalVoters: cluster.totalVoters,
+      controllerSupportsLease,
+      now,
+    });
+    if (outcome.changed) await bumpLeaseRevision(this.db);
+    if (cluster.changed || outcome.changed) {
+      void this.relayPublisher?.publishAvailabilityLeaseChange().catch((error) => {
+        logger.warn('Relays will receive the availability lease change with the next policy refresh', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    await this.distribution.syncDaemons(members, now.getTime());
+    for (const change of outcome.modeChanges) await this.notifyModeChange(change);
+  }
+
+  private async notifyModeChange(change: LeaseModeChange): Promise<void> {
+    this.events.publish('docker.availability.changed', { policyId: change.policyId, action: `lease_${change.to}` });
+    try {
+      await this.controller?.leaseModeChanged(change);
+    } catch (error) {
+      logger.warn('The Availability controller did not take a lease mode change', {
+        policyId: change.policyId,
+        to: change.to,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Lease fields of every relay policy envelope (relay.v1 PolicyEnvelopePayload 40, 41). */
+  relayPolicyFields(): Promise<RelayLeasePolicyFields> {
+    return this.distribution.relayFields();
+  }
+
+  /** Policy keys whose private half must survive: the key that signs lease blocks (A14). */
+  async retainedSigningKeyIds(): Promise<string[]> {
+    const cluster = await loadLeaseCluster(this.db);
+    return cluster?.signingKeyId ? [cluster.signingKeyId] : [];
+  }
+
+  /** A docker or nginx daemon's heartbeat lease section. */
+  async ingestDaemonReport(nodeId: string, nodeType: string, report: AvailabilityLeaseReport): Promise<void> {
+    if (nodeType !== 'docker' && nodeType !== 'nginx') return;
+    await this.ingest({ memberId: nodeId, kind: nodeType, nodeId, relayInstanceId: null }, report);
+  }
+
+  /** A relay's acceptor and gate view, from its runtime status or local health. */
+  async ingestRelayReport(relayInstanceId: string, report: AvailabilityLeaseReport): Promise<void> {
+    await this.ingest({ memberId: relayInstanceId, kind: 'relay', nodeId: null, relayInstanceId }, report);
+  }
+
+  private async ingest(sender: LeaseReportSender, report: AvailabilityLeaseReport): Promise<void> {
+    const notices = await this.reports.ingest(sender, report);
+    for (const notice of notices) await this.recordHolderChange(notice);
+  }
+
+  private async recordHolderChange(notice: LeaseHolderChangeNotice): Promise<void> {
+    if (notice.kind) {
+      await this.audit.log({
+        userId: null,
+        action: `docker.availability.lease_${notice.kind}`,
+        resourceType: 'docker_availability_policy',
+        resourceId: notice.policyId,
+        details: {
+          slot: notice.slot,
+          fromNodeId: notice.from,
+          toNodeId: notice.to,
+          placementId: notice.placementId,
+          ballot: notice.ballot,
+          observedBy: notice.sourceId,
+          source: notice.source,
+        },
+      });
+      this.events.publish('docker.availability.changed', { policyId: notice.policyId, action: `lease_${notice.kind}` });
+    }
+    try {
+      await this.controller?.leaseHolderChanged(notice);
+    } catch (error) {
+      logger.warn('The Availability controller did not take a lease holder change', {
+        policyId: notice.policyId,
+        slot: notice.slot,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Legacy policies are driven by the backend; every other lease mode is not (D9, A5). */
+  async isReactive(policyId: string): Promise<boolean> {
+    const [state] = await this.db
+      .select({ mode: dockerAvailabilityLeaseState.mode })
+      .from(dockerAvailabilityLeaseState)
+      .where(eq(dockerAvailabilityLeaseState.policyId, policyId))
+      .limit(1);
+    return (state?.mode ?? 'legacy') === 'legacy';
+  }
+
+  async getPolicyLease(policyId: string, now = new Date()): Promise<DockerAvailabilityLeaseView> {
+    const [[state], observations, cluster, members] = await Promise.all([
+      this.db
+        .select()
+        .from(dockerAvailabilityLeaseState)
+        .where(eq(dockerAvailabilityLeaseState.policyId, policyId))
+        .limit(1),
+      this.db
+        .select()
+        .from(dockerAvailabilityLeaseObservations)
+        .where(eq(dockerAvailabilityLeaseObservations.policyId, policyId)),
+      loadLeaseCluster(this.db),
+      loadLeaseMembers(this.db),
+    ]);
+    const reachable = reachableMemberIds(members, now.getTime(), MEMBER_REPORT_FRESH_MS);
+    return {
+      mode: state?.mode ?? 'legacy',
+      reason: state?.reason ?? null,
+      manifestVersion: state?.manifestVersion ?? 0,
+      epoch: state?.manifestEpoch ?? 0,
+      publishedPartitionMode: state?.publishedPartitionMode ?? null,
+      holders: observations
+        .sort((left, right) => left.slot - right.slot)
+        .map((observation) => ({
+          slot: observation.slot,
+          holderNodeId: observation.holderId,
+          placementId: observation.placementId,
+          ballot: observation.ballot,
+          observedAt: observation.observedAt,
+          holderSince: observation.holderSince,
+          source: observation.source,
+        })),
+      bootstrap: (state?.bootstrap ?? []).map((entry) => ({ slot: entry.slot, holderNodeId: entry.holderId })),
+      voterMargin: cluster ? leaseVoterMargin(cluster.epoch, cluster.quorumSets, reachable) : null,
+    };
+  }
+
+  /**
+   * Writes the partition mode (D11, A7) and republishes the manifest. The caller has already authorized the policy
+   * mutation.
+   */
+  async setPartitionMode(policyId: string, partitionMode: DockerAvailabilityPartitionMode): Promise<void> {
+    const updated = await this.db
+      .update(dockerAvailabilityPolicies)
+      .set({ partitionMode, updatedAt: new Date() })
+      .where(eq(dockerAvailabilityPolicies.id, policyId))
+      .returning({ id: dockerAvailabilityPolicies.id });
+    if (updated.length === 0) throw new AppError(404, 'AVAILABILITY_NOT_FOUND', 'Availability policy not found');
+    await this.republishPolicy(policyId);
+  }
+
+  /** Marks the next holder change of a key as planned, so it is audited as a handoff (D9). */
+  async registerPlannedHandoff(
+    policyId: string,
+    input: {
+      slot: number;
+      fromHolderId: string | null;
+      toHolderId: string;
+      operationId?: string | null;
+      ttlMs?: number;
+    }
+  ): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await ensureLeaseState(tx, policyId);
+      const [state] = await tx
+        .select({ plannedHandoffs: dockerAvailabilityLeaseState.plannedHandoffs })
+        .from(dockerAvailabilityLeaseState)
+        .where(eq(dockerAvailabilityLeaseState.policyId, policyId))
+        .for('update');
+      const now = Date.now();
+      const kept = (state?.plannedHandoffs ?? []).filter(
+        (handoff) => Date.parse(handoff.expiresAt) > now && handoff.slot !== input.slot
+      );
+      kept.push({
+        slot: input.slot,
+        fromHolderId: input.fromHolderId,
+        toHolderId: input.toHolderId,
+        operationId: input.operationId ?? null,
+        expiresAt: new Date(now + (input.ttlMs ?? PLANNED_HANDOFF_TTL_MS)).toISOString(),
+      });
+      await tx
+        .update(dockerAvailabilityLeaseState)
+        .set({ plannedHandoffs: kept, updatedAt: new Date() })
+        .where(eq(dockerAvailabilityLeaseState.policyId, policyId));
+    });
+  }
+
+  /**
+   * Planned handoff (D9, A6): asks the current holder of a key to release it to the successor. The holder checks the
+   * successor is ready, stops its workload, deregisters and only then releases.
+   */
+  async requestHandoff(policyId: string, input: DockerAvailabilityLeaseHandoffInput): Promise<CommandResult> {
+    const view = await this.getPolicyLease(policyId);
+    if (view.mode !== 'lease') {
+      throw new AppError(409, 'AVAILABILITY_LEASE_NOT_ACTIVE', 'Handoff needs the policy to run in lease mode');
+    }
+    const holder = view.holders.find((entry) => entry.slot === input.slot)?.holderNodeId ?? null;
+    if (!holder) throw new AppError(409, 'AVAILABILITY_LEASE_NO_HOLDER', 'The lease has no current holder to hand off');
+    if (!this.registry.hasCapability(holder, AVAILABILITY_LEASE_CAPABILITY)) {
+      throw new AppError(503, 'AVAILABILITY_NODE_DISCONNECTED', 'Waiting for the lease holder to reconnect', {
+        retryable: true,
+      });
+    }
+    await this.registerPlannedHandoff(policyId, {
+      slot: input.slot,
+      fromHolderId: holder,
+      toHolderId: input.successorNodeId,
+      operationId: input.operationId ?? null,
+    });
+    return this.registry.sendCommand(
+      holder,
+      {
+        availabilityLeaseHandoff: {
+          policyId,
+          slot: input.slot,
+          successorId: input.successorNodeId,
+          operationId: input.operationId ?? '',
+          successorGeneration: String(input.successorGeneration),
+          manifestVersion: String(view.manifestVersion),
+        },
+      },
+      input.timeoutMs ?? 60_000
+    );
+  }
+}

@@ -33,6 +33,7 @@ import { AIRunService } from '@/modules/ai/ai-run.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { AuthEmailQueueService } from '@/modules/auth/auth-email-queue.service.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
+import { AvailabilityLeaseService } from '@/modules/docker/availability/lease/availability-lease.service.js';
 import { DockerMigrationService } from '@/modules/docker/docker-migration.service.js';
 import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-reconciler.service.js';
 import { InferenceReservationReconciler } from '@/modules/inference/accounting/inference-reservation-reconciler.js';
@@ -218,6 +219,7 @@ async function main() {
         systemCA,
         relayPeerFingerprint: relayIdentity?.relayClientFingerprint,
         relayPolicy,
+        availabilityLease: container.resolve(AvailabilityLeaseService),
       }
     );
     const relayFinalization = await container.resolve(RelayStartupFinalizerService).finalize();

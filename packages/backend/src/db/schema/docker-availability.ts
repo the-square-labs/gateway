@@ -20,6 +20,11 @@ import { users } from './users.js';
 export type DockerAvailabilityResourceKind = 'container' | 'deployment' | 'compose';
 export type DockerAvailabilityMode = 'single' | 'replicated' | 'failover';
 export type DockerAvailabilityNodeSelectionMode = 'all_compatible' | 'selected';
+/**
+ * What a lease-mode policy does when a partition hides the holder from the voter majority. strict never runs two
+ * copies of a slot; available keeps serving on a reachable candidate and accepts that two copies can run.
+ */
+export type DockerAvailabilityPartitionMode = 'strict' | 'available';
 export type DockerAvailabilityPolicyStatus =
   | 'single'
   | 'enabling'
@@ -135,6 +140,10 @@ export const dockerAvailabilityPolicies = pgTable(
     priorityMode: boolean('priority_mode').notNull().default(false),
     nodePriority: text('node_priority').array().notNull().default([]),
     failbackDelaySeconds: integer('failback_delay_seconds').notNull().default(300),
+    partitionMode: varchar('partition_mode', { length: 16 })
+      .$type<DockerAvailabilityPartitionMode>()
+      .notNull()
+      .default('strict'),
     status: varchar('status', { length: 32 }).$type<DockerAvailabilityPolicyStatus>().notNull().default('single'),
     lastErrorCode: text('last_error_code'),
     lastErrorMessage: text('last_error_message'),
@@ -164,6 +173,7 @@ export const dockerAvailabilityPolicies = pgTable(
       'docker_availability_policies_priority_check',
       sql`${table.failbackDelaySeconds} BETWEEN 0 AND 3600 AND (NOT ${table.priorityMode} OR cardinality(${table.nodePriority}) > 0)`
     ),
+    check('docker_availability_policies_partition_mode_check', sql`${table.partitionMode} IN ('strict', 'available')`),
     uniqueIndex('docker_availability_policies_container_unique')
       .on(table.sourceNodeId, table.containerName)
       .where(sql`${table.resourceKind} = 'container'`),

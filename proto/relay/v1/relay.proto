@@ -149,6 +149,11 @@ message PolicyEnvelopePayload {
   AdmissionPolicy admission_policy = 11;
   repeated string capabilities = 12;
   repeated PolicySigningKey policy_signing_keys = 13;
+  // Availability lease (T3): the signed voter config and every lease-mode
+  // policy manifest, plus the policy key rotation chain that lets a relay
+  // verify blocks signed by a key it has not pinned yet (A4, A14).
+  repeated LeaseSignedBlock lease_blocks = 40;
+  repeated LeasePolicyKeyRotation lease_key_rotations = 41;
 }
 
 message SignedPolicyEnvelope {
@@ -276,3 +281,279 @@ message SetDrainResponse {
   bool draining = 1;
   uint64 disconnected_tunnels = 2;
 }
+
+// ===== BEGIN copied verbatim from T1 (availabilitylease); T1's version wins at integration =====
+// ---------------------------------------------------------------------------
+// Availability lease coordination (Docker Availability data-plane failover).
+// Protocol logic lives in daemon-shared/availabilitylease; see its doc.go for
+// the state machines and how every message below is used. Frames travel over
+// the relay Coordinate stream. Relays route them by destination_id and cannot
+// forge them: the payload is signed with the sender's ECDSA P-256 identity key.
+// ---------------------------------------------------------------------------
+
+enum LeasePolicyMode {
+  LEASE_POLICY_MODE_UNSPECIFIED = 0;
+  LEASE_POLICY_MODE_FAILOVER = 1;
+  LEASE_POLICY_MODE_REPLICATED = 2;
+}
+
+enum LeasePartitionMode {
+  LEASE_PARTITION_MODE_UNSPECIFIED = 0;
+  LEASE_PARTITION_MODE_STRICT = 1;
+  LEASE_PARTITION_MODE_AVAILABLE = 2;
+}
+
+enum LeaseMemberRole {
+  LEASE_MEMBER_ROLE_UNSPECIFIED = 0;
+  LEASE_MEMBER_ROLE_RELAY = 1;
+  LEASE_MEMBER_ROLE_DAEMON = 2;
+}
+
+enum LeaseBlockKind {
+  LEASE_BLOCK_KIND_UNSPECIFIED = 0;
+  LEASE_BLOCK_KIND_MANIFEST = 1;
+  LEASE_BLOCK_KIND_VOTER_CONFIG = 2;
+}
+
+enum LeaseNackReason {
+  LEASE_NACK_REASON_UNSPECIFIED = 0;
+  LEASE_NACK_REASON_BALLOT_TOO_LOW = 1;
+  LEASE_NACK_REASON_HELD = 2;
+  LEASE_NACK_REASON_RESERVED = 3;
+  LEASE_NACK_REASON_RELEASED = 4;
+  LEASE_NACK_REASON_STALE_EPOCH = 5;
+  LEASE_NACK_REASON_STALE_MANIFEST = 6;
+  LEASE_NACK_REASON_ACCEPTOR_BEHIND = 7;
+  LEASE_NACK_REASON_LEASE_CLOSED = 8;
+  LEASE_NACK_REASON_NOT_CANDIDATE = 9;
+  LEASE_NACK_REASON_UNKNOWN_POLICY = 10;
+}
+
+enum LeaseKeyState {
+  LEASE_KEY_STATE_UNSPECIFIED = 0;
+  LEASE_KEY_STATE_FREE = 1;
+  LEASE_KEY_STATE_HELD = 2;
+  LEASE_KEY_STATE_RESERVED = 3;
+  LEASE_KEY_STATE_ABSTAINING = 4;
+  LEASE_KEY_STATE_CLOSED = 5;
+}
+
+enum LeaseReleasePhase {
+  LEASE_RELEASE_PHASE_UNSPECIFIED = 0;
+  // Sent to relays first: close the data-path gate for the ballot and ack.
+  LEASE_RELEASE_PHASE_RELINQUISH = 1;
+  // Sent to acceptors once every relay acked or the gate window elapsed.
+  LEASE_RELEASE_PHASE_FINAL = 2;
+}
+
+message CoordinationFrame {
+  // Routing only; both are repeated inside the signed payload.
+  string destination_id = 1;
+  string sender_id = 2;
+  // Encoded LeaseBatch.
+  bytes payload = 3;
+  // ECDSA P-256 ASN.1 signature over SHA-256("gateway-availability-lease/frame/v1" 0x00 || payload).
+  bytes signature = 4;
+}
+
+message LeaseBatch {
+  string message_id = 1;
+  string sender_id = 2;
+  uint64 sender_incarnation = 3;
+  string destination_id = 4;
+  repeated LeaseItem items = 5;
+  // Signed manifests and voter configs forwarded so lagging peers adopt them (A4).
+  repeated LeaseSignedBlock blocks = 6;
+  // Policy key rotation chain for the forwarded blocks (A14).
+  repeated LeasePolicyKeyRotation key_rotations = 7;
+}
+
+message LeaseKey {
+  string policy_id = 1;
+  uint32 slot = 2;
+}
+
+// Ordered by (round, incarnation, proposer_id).
+message LeaseBallot {
+  uint64 round = 1;
+  uint64 incarnation = 2;
+  string proposer_id = 3;
+}
+
+message LeaseItem {
+  oneof body {
+    LeasePrepare prepare = 1;
+    LeasePromise promise = 2;
+    LeasePropose propose = 3;
+    LeaseAccepted accepted = 4;
+    LeaseNack nack = 5;
+    LeaseCommit commit = 6;
+    LeaseRelease release = 7;
+    LeaseReleaseAck release_ack = 8;
+    LeaseQuery query = 9;
+    LeaseStatus status = 10;
+  }
+}
+
+message LeasePrepare {
+  LeaseKey key = 1;
+  LeaseBallot ballot = 2;
+  uint64 epoch = 3;
+  uint64 manifest_version = 4;
+}
+
+message LeasePromise {
+  LeaseKey key = 1;
+  LeaseBallot ballot = 2;
+  // Nonce the proposer echoes in its propose; anchors the relay gate (A11).
+  uint64 echo = 3;
+  // True while the acceptor abstains (A3) or does not vote: never counted.
+  bool shadow = 4;
+  uint64 acceptor_incarnation = 5;
+}
+
+message LeasePropose {
+  LeaseKey key = 1;
+  LeaseBallot ballot = 2;
+  uint64 epoch = 3;
+  uint64 manifest_version = 4;
+  uint64 echo = 5;
+}
+
+// A signed accept. The signature covers the canonical accept statement
+// described in availabilitylease/doc.go, so accepts form a forwardable QC.
+message LeaseAccepted {
+  LeaseKey key = 1;
+  LeaseBallot ballot = 2;
+  uint64 epoch = 3;
+  uint64 manifest_version = 4;
+  string acceptor_id = 5;
+  uint64 acceptor_incarnation = 6;
+  bytes signature = 7;
+}
+
+message LeaseNack {
+  LeaseKey key = 1;
+  LeaseBallot ballot = 2;
+  LeaseNackReason reason = 3;
+  LeaseBallot promised = 4;
+  string holder_id = 5;
+  // Latest valid commit the acceptor stores (A13).
+  LeaseCommit latest_commit = 6;
+  uint64 epoch = 7;
+  uint64 manifest_version = 8;
+  uint64 acceptor_incarnation = 9;
+}
+
+// Commit certificate: accepts from a majority of every quorum set of the epoch (A11).
+message LeaseCommit {
+  LeaseKey key = 1;
+  LeaseBallot ballot = 2;
+  uint64 epoch = 3;
+  uint64 manifest_version = 4;
+  repeated LeaseAccepted quorum = 5;
+}
+
+message LeaseRelease {
+  LeaseKey key = 1;
+  // Highest ballot the releasing holder ever issued for the key (A6).
+  LeaseBallot ballot = 2;
+  LeaseReleasePhase phase = 3;
+  // Designated successor (D9); empty opens the key to anyone.
+  string successor_id = 4;
+}
+
+message LeaseReleaseAck {
+  LeaseKey key = 1;
+  LeaseBallot ballot = 2;
+  LeaseReleasePhase phase = 3;
+}
+
+message LeaseQuery {
+  repeated LeaseKey keys = 1;
+}
+
+message LeaseStatus {
+  LeaseKey key = 1;
+  LeaseKeyState state = 2;
+  string holder_id = 3;
+  LeaseBallot promised = 4;
+  LeaseCommit latest_commit = 5;
+  uint64 epoch = 6;
+  uint64 manifest_version = 7;
+  // Reserved-for holder while state is RESERVED (bootstrap or successor).
+  string reserved_for = 8;
+}
+
+// Signed by the relay policy signing key (Ed25519) over
+// "gateway-availability-lease/<kind>/v1" 0x00 || payload, kind = manifest | voter-config.
+message LeaseSignedBlock {
+  string signing_key_id = 1;
+  LeaseBlockKind kind = 2;
+  bytes payload = 3;
+  bytes signature = 4;
+}
+
+message LeaseCandidate {
+  string id = 1;
+  // PKIX DER ECDSA P-256 identity public key.
+  bytes public_key = 2;
+}
+
+message LeaseBootstrapSlot {
+  uint32 slot = 1;
+  string holder_id = 2;
+}
+
+message LeaseManifest {
+  uint32 schema_version = 1;
+  string policy_id = 2;
+  uint64 manifest_version = 3;
+  LeasePolicyMode mode = 4;
+  LeasePartitionMode partition_mode = 5;
+  uint32 slots = 6;
+  // Ordered: index is the takeover rank (D5).
+  repeated LeaseCandidate candidates = 7;
+  string spec_fingerprint = 8;
+  // Voter config epoch this manifest was built against.
+  uint64 epoch = 9;
+  // Lease-closed manifest (A5): acceptors refuse every proposal, holders fence.
+  bool closed = 10;
+  // Bootstrap reservation (A5); keep it in every version until the holder acked.
+  uint64 bootstrap_id = 11;
+  repeated LeaseBootstrapSlot bootstrap = 12;
+  // Must be 0 or 30000; the timing constants are fixed.
+  uint32 lease_term_ms = 13;
+}
+
+message LeaseMember {
+  string id = 1;
+  bytes public_key = 2;
+  LeaseMemberRole role = 3;
+}
+
+message LeaseQuorumSet {
+  repeated string voter_ids = 1;
+}
+
+// Cluster voter set. One quorum set when settled; two (old, new) during a
+// joint-consensus epoch change (D2, A4). Members outside every quorum set
+// (non-voting relays) only record shadow accepts.
+message LeaseVoterConfig {
+  uint32 schema_version = 1;
+  uint64 epoch = 2;
+  repeated LeaseMember members = 3;
+  repeated LeaseQuorumSet quorum_sets = 4;
+}
+
+// A14: key_id introduced by previous_key_id. The signature is Ed25519 by the
+// previous key over "gateway-availability-lease/key-rotation/v1" 0x00 ||
+// be32(len(key_id)) || key_id || public_key.
+message LeasePolicyKeyRotation {
+  string previous_key_id = 1;
+  string key_id = 2;
+  bytes public_key = 3;
+  string public_key_fingerprint = 4;
+  bytes signature = 5;
+}
+// ===== END copied verbatim from T1 =====

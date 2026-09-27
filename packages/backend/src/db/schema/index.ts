@@ -16,6 +16,7 @@ export * from './database-connection-folders.js';
 export * from './databases.js';
 export * from './docker-access-resources.js';
 export * from './docker-availability.js';
+export * from './docker-availability-lease.js';
 export * from './docker-builds.js';
 export * from './docker-compose.js';
 export * from './docker-container-folder-assignments.js';

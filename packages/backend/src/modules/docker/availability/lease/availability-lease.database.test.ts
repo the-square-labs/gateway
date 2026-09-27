@@ -1,0 +1,263 @@
+import { createHash, generateKeyPairSync, type KeyObject, randomUUID, sign, verify } from 'node:crypto';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import type pg from 'pg';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { DrizzleClient } from '@/db/client.js';
+import { disposableDatabase, migrateDatabase } from '@/db/migration-database.test-helpers.js';
+import * as schema from '@/db/schema/index.js';
+import type { AvailabilityLeaseReport, GatewayCommand } from '@/grpc/generated/types.js';
+import { decodeRelayV1Message } from '@/grpc/relay-proto.js';
+import { AvailabilityLeaseService } from './availability-lease.service.js';
+import { decodeLeaseSignedBlock, leaseBlockMessage } from './lease-codec.js';
+import type { DockerAvailabilityLeaseHolderChange, DockerAvailabilityLeaseModeChange } from './lease-types.js';
+
+const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
+
+function edKey(): { privateKey: KeyObject; publicKeyObject: KeyObject; publicKey: Buffer } {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+  const { x } = publicKey.export({ format: 'jwk' }) as { x: string };
+  return { privateKey, publicKeyObject: publicKey, publicKey: Buffer.from(x, 'base64url') };
+}
+
+function identityKey(): Buffer {
+  return generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
+}
+
+/**
+ * Opt-in (GATEWAY_MIGRATION_TEST_DATABASE_URL, see migration-database.test-helpers): the lease host end to end on
+ * PostgreSQL. Voters and epoch, capability gating, bootstrap, signed manifests, holder reports with audit, and the
+ * lease-closed handover back to legacy.
+ */
+describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => {
+  let database: Awaited<ReturnType<typeof disposableDatabase>>;
+  let pool: pg.Pool;
+  let db: DrizzleClient;
+  let service: AvailabilityLeaseService;
+  const policyKey = edKey();
+  const keyId = randomUUID();
+  const relayId = randomUUID();
+  const nodeIds = [randomUUID(), randomUUID(), randomUUID()];
+  const nginxId = randomUUID();
+  const policyId = randomUUID();
+  const identities = new Map<string, Buffer>();
+  const sent: Array<{ nodeId: string; command: Partial<GatewayCommand> }> = [];
+  const audit = { log: vi.fn(async () => true) };
+  const events = { publish: vi.fn() };
+  const modeChanges: DockerAvailabilityLeaseModeChange[] = [];
+  const holderChanges: DockerAvailabilityLeaseHolderChange[] = [];
+  const connected = [...nodeIds.map((id) => ({ id, type: 'docker' })), { id: nginxId, type: 'nginx' }].map(
+    ({ id, type }) => ({ nodeId: id, connectionId: `c-${id}`, type, capabilities: new Set(['availability_lease_v1']) })
+  );
+  const q = (text: string, values: unknown[] = []) => pool.query(text, values);
+
+  const report = (memberId: string, extra: Partial<AvailabilityLeaseReport> = {}): AvailabilityLeaseReport => ({
+    memberId,
+    identityPublicKey: identities.get(memberId)!,
+    incarnation: '1',
+    epoch: '0',
+    trustedPolicyKeyIds: [keyId],
+    manifests: [],
+    held: [],
+    acceptor: [],
+    acceptorAbstaining: false,
+    watchdogReady: true,
+    events: [],
+    leaseRevision: '0',
+    ...extra,
+  });
+  const ackAll = async (epoch: number, manifests: AvailabilityLeaseReport['manifests'] = []) => {
+    for (const id of nodeIds)
+      await service.ingestDaemonReport(id, 'docker', report(id, { epoch: String(epoch), manifests }));
+    await service.ingestDaemonReport(nginxId, 'nginx', report(nginxId, { epoch: String(epoch), manifests }));
+    await service.ingestRelayReport(relayId, report(relayId, { epoch: String(epoch), manifests }));
+  };
+  const holding = (nodeId: string, round: number) =>
+    report(nodeId, {
+      epoch: '1',
+      held: [
+        {
+          policyId,
+          slot: 0,
+          role: 'holding',
+          ballot: { round: String(round), incarnation: '1', proposerId: nodeId },
+          epoch: '1',
+          manifestVersion: '1',
+          placementId: '',
+          placementGeneration: '1',
+        },
+      ],
+    });
+
+  beforeAll(async () => {
+    database = await disposableDatabase(url!, 'lease');
+    pool = database.pool;
+    await migrateDatabase(pool);
+    db = drizzle(pool, { schema }) as unknown as DrizzleClient;
+    await q(
+      `insert into relay_policy_signing_keys (key_id, public_key, public_key_fingerprint, encrypted_private_key,
+         encrypted_dek, status, activated_at) values ($1, $2, $3, 'held', 'held', 'active', now())`,
+      [
+        keyId,
+        policyKey.publicKey.toString('base64'),
+        `sha256:${createHash('sha256').update(policyKey.publicKey).digest('hex')}`,
+      ]
+    );
+    await q(`insert into relay_pools (id) values ('system') on conflict do nothing`);
+    await q(
+      `insert into relay_instances (id, pool_id, kind, fault_domain_id, display_name, state, capabilities)
+       values ($1, 'system', 'local', gen_random_uuid(), 'local', 'ready', $2)`,
+      [relayId, JSON.stringify({ protocolMajor: 1, features: ['relay_pool_v1', 'availability_lease_v1'] })]
+    );
+    for (const [index, id] of [...nodeIds, nginxId].entries()) {
+      await q(
+        `insert into nodes (id, type, hostname, slug, status, host_identity_id, capabilities)
+         values ($1, $2, $3, $3, 'online', gen_random_uuid(), $4)`,
+        [
+          id,
+          id === nginxId ? 'nginx' : 'docker',
+          `node-${index}`,
+          JSON.stringify({ capabilities: ['availability_lease_v1'] }),
+        ]
+      );
+    }
+    for (const id of [relayId, ...nodeIds, nginxId]) identities.set(id, identityKey());
+    await q(
+      `insert into docker_availability_policies (id, resource_kind, source_node_id, container_name, mode,
+         desired_replica_count, status) values ($1, 'container', $2, 'app', 'failover', 1, 'healthy')`,
+      [policyId, nodeIds[0]]
+    );
+    for (const [index, id] of nodeIds.entries()) {
+      await q(
+        `insert into docker_availability_placements (policy_id, node_id, generation, desired_state, actual_state,
+           serving, spec_fingerprint, created_at) values ($1, $2, 1, $3, $4, $5, 'spec', now() + ($6 || ' seconds')::interval)`,
+        [
+          policyId,
+          id,
+          index === 0 ? 'serving' : 'standby',
+          index === 0 ? 'serving' : 'ready',
+          index === 0,
+          String(index),
+        ]
+      );
+    }
+    const registry = {
+      getNode: (id: string) => connected.find((node) => node.nodeId === id),
+      getAllNodes: () => connected,
+      hasCapability: (id: string, capability: string) =>
+        connected.find((node) => node.nodeId === id)?.capabilities.has(capability) ?? false,
+      sendCommand: vi.fn(async (nodeId: string, command: Partial<GatewayCommand>) => {
+        sent.push({ nodeId, command });
+        return { commandId: 'c', success: true, error: '', detail: '', data: Buffer.alloc(0) };
+      }),
+    };
+    service = new AvailabilityLeaseService(db, registry as never, audit, events as never, {
+      signPayload: async (payload: Buffer, signer?: string) => {
+        expect(signer).toBe(keyId);
+        return { signingKeyId: keyId, signature: sign(null, payload, policyKey.privateKey) };
+      },
+    });
+    service.attachController({
+      leaseModeSupported: () => true,
+      leaseModeChanged: async (change) => {
+        modeChanges.push(change);
+      },
+      leaseHolderChanged: async (change) => {
+        holderChanges.push(change);
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await database?.drop();
+  });
+
+  it('publishes a signed voter config and waits for a voter majority to persist it', async () => {
+    await ackAll(0);
+    await service.reconcile();
+    const [cluster] = (await q('select epoch, quorum_sets, voter_config_block from availability_lease_cluster')).rows;
+    expect(Number(cluster.epoch)).toBe(1);
+    // One vote per host: the local relay and four daemons make five, an odd total.
+    expect(cluster.quorum_sets).toHaveLength(1);
+    expect(cluster.quorum_sets[0]).toHaveLength(5);
+    const block = decodeLeaseSignedBlock(Buffer.from(cluster.voter_config_block, 'base64'));
+    expect(verify(null, leaseBlockMessage(block.kind, block.payload), policyKey.publicKeyObject, block.signature)).toBe(
+      true
+    );
+    expect((await service.getPolicyLease(policyId)).reason).toMatchObject({ code: 'voter_config_pending' });
+  });
+
+  it('bootstraps the policy with its serving placement as reserved holder (A5)', async () => {
+    await ackAll(1);
+    await service.reconcile();
+    const view = await service.getPolicyLease(policyId);
+    expect(view.mode).toBe('bootstrapping');
+    expect(view.bootstrap).toEqual([{ slot: 0, holderNodeId: nodeIds[0] }]);
+    expect(modeChanges.at(-1)).toMatchObject({ policyId, from: 'legacy', to: 'bootstrapping' });
+    const [state] = (await q('select manifest_block from docker_availability_lease_state')).rows;
+    const manifest = decodeRelayV1Message(
+      'LeaseManifest',
+      decodeLeaseSignedBlock(Buffer.from(state.manifest_block, 'base64')).payload
+    ) as { candidates: Array<{ id: string }>; bootstrap: unknown[]; closed: boolean };
+    expect(manifest.candidates.map((candidate) => candidate.id)).toEqual(nodeIds);
+    expect(manifest.bootstrap).toEqual([{ slot: 0, holderId: nodeIds[0] }]);
+    const sync = sent.filter(({ command }) => command.syncAvailabilityLease).at(-1)?.command.syncAvailabilityLease;
+    expect(sync?.manifests).toHaveLength(1);
+    expect(sync?.policyKeys.map((key) => key.keyId)).toEqual([keyId]);
+    const relayFields = await service.relayPolicyFields();
+    expect(relayFields.leaseBlocks.map((block) => block.kind)).toEqual([
+      'LEASE_BLOCK_KIND_VOTER_CONFIG',
+      'LEASE_BLOCK_KIND_MANIFEST',
+    ]);
+  });
+
+  it('enters lease mode once the reserved holder acquired, and audits an autonomous failover', async () => {
+    await service.ingestDaemonReport(nodeIds[0]!, 'docker', holding(nodeIds[0]!, 3));
+    await service.reconcile();
+    expect((await service.getPolicyLease(policyId)).mode).toBe('lease');
+    expect(audit.log).not.toHaveBeenCalled();
+
+    await service.ingestDaemonReport(nodeIds[0]!, 'docker', report(nodeIds[0]!, { epoch: '1' }));
+    await service.ingestDaemonReport(nodeIds[1]!, 'docker', holding(nodeIds[1]!, 7));
+    const view = await service.getPolicyLease(policyId);
+    expect(view.holders[0]).toMatchObject({ slot: 0, holderNodeId: nodeIds[1], source: 'daemon' });
+    expect(view.voterMargin).toMatchObject({ epoch: 1, voters: 5, reachable: 5, required: 3, margin: 2 });
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'docker.availability.lease_failover',
+        resourceId: policyId,
+        details: expect.objectContaining({ fromNodeId: nodeIds[0], toNodeId: nodeIds[1] }),
+      })
+    );
+    expect(holderChanges.at(-1)).toMatchObject({ kind: 'failover', to: nodeIds[1] });
+  });
+
+  it('audits a planned move as a handoff (D9)', async () => {
+    await service.registerPlannedHandoff(policyId, { slot: 0, fromHolderId: nodeIds[1]!, toHolderId: nodeIds[2]! });
+    await service.ingestDaemonReport(nodeIds[2]!, 'docker', holding(nodeIds[2]!, 9));
+    expect(audit.log).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: 'docker.availability.lease_handoff' })
+    );
+  });
+
+  it('closes lease mode when a candidate loses the capability and hands back to legacy (A5)', async () => {
+    await service.ingestDaemonReport(nodeIds[1]!, 'docker', report(nodeIds[1]!, { epoch: '1', watchdogReady: false }));
+    await service.reconcile();
+    const closing = await service.getPolicyLease(policyId);
+    expect(closing.mode).toBe('closing');
+    expect(closing.reason).toMatchObject({ code: 'candidates_not_capable', nodeIds: [nodeIds[1]] });
+    expect(await service.isReactive(policyId)).toBe(false);
+    await service.ingestDaemonReport(
+      nodeIds[2]!,
+      'docker',
+      report(nodeIds[2]!, {
+        epoch: '1',
+        manifests: [{ policyId, manifestVersion: String(closing.manifestVersion), closed: true }],
+      })
+    );
+    await service.reconcile();
+    expect((await service.getPolicyLease(policyId)).mode).toBe('legacy');
+    expect(await service.isReactive(policyId)).toBe(true);
+    expect(modeChanges.at(-1)).toMatchObject({ to: 'legacy', lastHolders: [{ slot: 0, holderId: nodeIds[2] }] });
+    expect((await service.relayPolicyFields()).leaseBlocks).toHaveLength(1);
+  });
+});

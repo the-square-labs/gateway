@@ -944,6 +944,38 @@ describe('RelayPolicyService policy signing trust', () => {
     ]);
   });
 
+  it('carries the availability lease blocks and key chain in every signed relay snapshot', async () => {
+    const { service, keys } = localPoolFixture();
+    const block = {
+      signingKeyId: 'active',
+      kind: 'LEASE_BLOCK_KIND_MANIFEST',
+      payload: Buffer.from('manifest'),
+      signature: Buffer.alloc(64, 7),
+    };
+    const rotation = {
+      previousKeyId: 'old',
+      keyId: 'active',
+      publicKey: Buffer.alloc(32, 1),
+      publicKeyFingerprint: 'sha256:a',
+      signature: Buffer.alloc(64, 3),
+    };
+    service.setAvailabilityLeaseSource({
+      relayPolicyFields: async () => ({ leaseBlocks: [block], leaseKeyRotations: [rotation] }),
+      retainedSigningKeyIds: async () => ['old'],
+    });
+
+    await (service as any).buildInstanceSnapshot('local', ['active']);
+
+    const [payload] = keys.signPayload.mock.calls[0] as unknown as [Buffer, string];
+    const decoded = decodeRelayV1Message('PolicyEnvelopePayload', payload) as {
+      leaseBlocks: unknown[];
+      leaseKeyRotations: unknown[];
+    };
+    expect(decoded.leaseBlocks).toEqual([block]);
+    expect(decoded.leaseKeyRotations).toEqual([rotation]);
+    await expect((keys as any).retainedKeyIds()).resolves.toEqual(['old']);
+  });
+
   it('pins the active key on the local relay and signs with it', async () => {
     const { service, relay, keys } = localPoolFixture();
     await expect(service.syncSnapshot()).resolves.toBe(101);

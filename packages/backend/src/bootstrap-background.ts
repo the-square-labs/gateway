@@ -19,6 +19,7 @@ import { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
 import { backupRuntime } from '@/modules/backups/backup-runtime.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
+import { AvailabilityLeaseService } from '@/modules/docker/availability/lease/availability-lease.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import { DockerBuildRunnerService } from '@/modules/docker/docker-build-runner.service.js';
@@ -249,6 +250,9 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('docker-health-check', 10000, () => dockerHealthCheckService.runDueChecks());
   scheduler.registerInterval('docker-availability-controller', 5000, () =>
     dockerAvailabilityService.processPendingOperations()
+  );
+  scheduler.registerInterval('docker-availability-lease', 5000, () =>
+    container.resolve(AvailabilityLeaseService).reconcile()
   );
   scheduler.registerInterval('docker-build-lease-recovery', 15000, async () => {
     await dockerBuildService.recoverExpiredLeases();

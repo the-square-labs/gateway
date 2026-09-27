@@ -217,6 +217,8 @@ export class RelayPolicyService {
   /** Per daemon: consecutive grant bundle refusals that named no revision. */
   private readonly staleGrantRefusals = new Map<string, number>();
   private lastLocalPolicyTrustResetAt = 0;
+  /** Availability lease blocks and key chain for PolicyEnvelopePayload fields 40 and 41. */
+  private availabilityLeaseSource?: () => Promise<{ leaseBlocks: unknown[]; leaseKeyRotations: unknown[] }>;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -240,6 +242,24 @@ export class RelayPolicyService {
 
   setAuditService(audit: Pick<AuditService, 'log'>): void {
     this.audit = audit;
+  }
+
+  /**
+   * Every relay snapshot carries the signed lease voter config, manifests and policy key chain; the lease service also
+   * names the policy key that signs lease blocks so its private half is never destroyed (A14).
+   */
+  setAvailabilityLeaseSource(source: {
+    relayPolicyFields(): Promise<{ leaseBlocks: unknown[]; leaseKeyRotations: unknown[] }>;
+    retainedSigningKeyIds(): Promise<string[]>;
+  }): void {
+    this.availabilityLeaseSource = () => source.relayPolicyFields();
+    this.policyKeys.setRetainedKeyIds(() => source.retainedSigningKeyIds());
+  }
+
+  /** A lease block changed: publish a new revision to the local relay and push it to remote relays. */
+  async publishAvailabilityLeaseChange(): Promise<void> {
+    await this.db.transaction((tx) => bumpRelayPolicyRevision(tx));
+    await this.syncSnapshot();
   }
 
   setEventBus(events: EventBusService): void {
@@ -1943,6 +1963,13 @@ export class RelayPolicyService {
       reportedPolicyKeyIds
     );
     const endpointById = new Map(projection.endpoints.map((endpoint) => [endpoint.id, endpoint]));
+    const lease = this.availabilityLeaseSource
+      ? await this.availabilityLeaseSource().catch((error) => {
+          // Relays keep the lease blocks they have; the next snapshot carries them again.
+          logger.warn('Relay snapshot is built without availability lease blocks', { error: errorMessage(error) });
+          return null;
+        })
+      : null;
     const payload = encodeRelayV1Message('PolicyEnvelopePayload', {
       schemaVersion: 2,
       gatewayInstanceId: projection.state.gatewayInstanceId,
@@ -2006,6 +2033,7 @@ export class RelayPolicyService {
         ),
         verifyUntilUnix: String(key.verifyUntil ? Math.floor(key.verifyUntil.getTime() / 1000) : 0),
       })),
+      ...(lease ? { leaseBlocks: lease.leaseBlocks, leaseKeyRotations: lease.leaseKeyRotations } : {}),
     });
     const signed = await this.policyKeys.signPayload(payload, policyKeys.signingKeyId);
     return {

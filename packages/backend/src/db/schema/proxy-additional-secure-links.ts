@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   index,
   integer,
@@ -36,6 +37,9 @@ export const proxyAdditionalSecureLinks = pgTable(
       .default('user_managed'),
     referenceId: uuid('reference_id'),
     availabilityOwnerKey: text('availability_owner_key'),
+    // Availability members of standby placements (D7): provisioned end to end, but the nginx daemon keeps the
+    // socket closed until the member's candidate holds the lease, and it is never probed.
+    dormant: boolean('dormant').notNull().default(false),
     upstreamKind: proxyUpstreamKindEnum('upstream_kind').notNull(),
     forwardScheme: forwardSchemeEnum('forward_scheme').notNull().default('http'),
     sourceNodeId: uuid('source_node_id')
@@ -76,6 +80,10 @@ export const proxyAdditionalSecureLinks = pgTable(
       'proxy_additional_secure_links_availability_owner_check',
       sql`(${table.purpose} = 'availability_member' AND ${table.availabilityOwnerKey} IS NOT NULL AND ${table.referenceId} IS NOT NULL)
         OR (${table.purpose} <> 'availability_member' AND ${table.availabilityOwnerKey} IS NULL)`
+    ),
+    dormantCheck: check(
+      'proxy_additional_secure_links_dormant_check',
+      sql`NOT ${table.dormant} OR ${table.purpose} = 'availability_member'`
     ),
     hostNameUnique: unique('proxy_additional_secure_links_host_name_unique').on(table.proxyHostId, table.name),
     hostIdx: index('proxy_additional_secure_links_host_idx').on(table.proxyHostId),

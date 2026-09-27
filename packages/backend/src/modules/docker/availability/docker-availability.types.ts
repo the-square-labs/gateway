@@ -3,6 +3,7 @@ import type {
   DockerAvailabilityNodeSelectionMode,
   DockerAvailabilityOperationPhase,
   DockerAvailabilityOperationType,
+  DockerAvailabilityPartitionMode,
   DockerAvailabilityResourceKind,
   DockerAvailabilityRolloutPolicy,
 } from '@/db/schema/index.js';
@@ -26,6 +27,8 @@ export interface DockerAvailabilityPolicyInput {
   nodePriority: string[];
   /** How long a returning higher-priority node must stay healthy before the workload moves back. */
   failbackDelaySeconds: number;
+  /** Lease-mode behaviour under a partition (D11); strict when omitted. */
+  partitionMode?: DockerAvailabilityPartitionMode;
 }
 
 export interface DockerAvailabilityPolicyUpdateInput {
@@ -38,6 +41,7 @@ export interface DockerAvailabilityPolicyUpdateInput {
   priorityMode?: boolean;
   nodePriority?: string[];
   failbackDelaySeconds?: number;
+  partitionMode?: DockerAvailabilityPartitionMode;
 }
 
 export interface DockerAvailabilityIssue {

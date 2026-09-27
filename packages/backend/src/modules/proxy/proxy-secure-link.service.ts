@@ -16,6 +16,11 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 import type { ProxyDockerUpstreamService } from './proxy-docker-upstream.service.js';
+import {
+  availabilityMemberBindingFields,
+  availabilityMemberSyncContext,
+  syncableAvailabilityMember,
+} from './proxy-secure-link-availability.js';
 
 type ProxyHostRow = typeof proxyHosts.$inferSelect;
 export type ProxyAdditionalSecureLinkRow = typeof proxyAdditionalSecureLinks.$inferSelect;
@@ -56,6 +61,11 @@ export interface AvailabilitySecureLinkMemberInput {
   dockerHostPort: number;
   targetNetwork: string;
   targetContainer: string;
+  /**
+   * A standby placement's member (D7): provisioned end to end but never probed, and served only by daemons that
+   * open it while its candidate holds the data-plane lease.
+   */
+  dormant?: boolean;
 }
 
 const PROXY_SECURE_LINK_PROBE_ATTEMPTS = 6;
@@ -222,6 +232,7 @@ export class ProxySecureLinkService {
         eq(proxyAdditionalSecureLinks.referenceId, input.placementId)
       ),
     });
+    const dormant = input.dormant === true;
     const unchanged =
       existing?.status === 'active' &&
       !existing.lastError &&
@@ -229,7 +240,8 @@ export class ProxySecureLinkService {
       existing.targetNetwork === input.targetNetwork &&
       existing.targetContainer === input.targetContainer &&
       existing.dockerHostPort === input.dockerHostPort;
-    if (unchanged) return existing;
+    if (unchanged && existing.dormant === dormant) return existing;
+    if (unchanged) return this.setAvailabilityMemberDormant(host, input.placementId, input.ingressOwnerKey, dormant);
     if (existing) {
       const [reprovisioning] = await this.db
         .update(proxyAdditionalSecureLinks)
@@ -245,6 +257,7 @@ export class ProxySecureLinkService {
           dockerHostPort: input.dockerHostPort,
           targetNetwork: input.targetNetwork,
           targetContainer: input.targetContainer,
+          dormant,
           status: 'provisioning',
           lastError: null,
           updatedAt: new Date(),
@@ -287,6 +300,7 @@ export class ProxySecureLinkService {
         dockerHostPort: input.dockerHostPort,
         targetNetwork: input.targetNetwork,
         targetContainer: input.targetContainer,
+        dormant,
         status: 'provisioning',
       })
       .returning();
@@ -301,6 +315,33 @@ export class ProxySecureLinkService {
       );
     }
     return ready;
+  }
+
+  /**
+   * Marks an Availability member dormant (its placement became a standby) or live (it serves). Sockets and connectors
+   * follow on both daemons; in lease mode they additionally follow the lease holder (D8).
+   */
+  async setAvailabilityMemberDormant(
+    host: ProxyHostRow,
+    placementId: string,
+    ingressOwnerKey: string,
+    dormant: boolean
+  ): Promise<ProxyAdditionalSecureLinkRow> {
+    const [updated] = await this.db
+      .update(proxyAdditionalSecureLinks)
+      .set({ dormant, updatedAt: new Date() })
+      .where(
+        and(
+          eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+          eq(proxyAdditionalSecureLinks.purpose, 'availability_member'),
+          eq(proxyAdditionalSecureLinks.availabilityOwnerKey, ingressOwnerKey),
+          eq(proxyAdditionalSecureLinks.referenceId, placementId)
+        )
+      )
+      .returning();
+    if (!updated) throw new AppError(404, 'AVAILABILITY_INGRESS_MEMBER_NOT_FOUND', 'Availability member not found');
+    await Promise.all([this.syncSourceNode(updated.sourceNodeId), this.syncTargetNode(updated.dockerNodeId)]);
+    return updated;
   }
 
   async deleteAvailabilityMember(
@@ -1224,7 +1265,8 @@ export class ProxySecureLinkService {
             binding.dockerNodeId
           );
         } else {
-          await this.syncTargetNode(binding.dockerNodeId, undefined, binding.id);
+          // A dormant member's container is created but not started, so the daemon may report it unavailable.
+          await this.syncTargetNode(binding.dockerNodeId, undefined, binding.dormant ? undefined : binding.id);
           // Target sync advances the generation itself when the daemon reselects the
           // container network (always, for a binding recorded without one). Adopt that
           // generation; any other concurrent change still fails the guards below.
@@ -1233,12 +1275,14 @@ export class ProxySecureLinkService {
           await this.relayPolicy.ensureProxySecureLink(binding.id, binding.sourceNodeId, binding.dockerNodeId);
         }
         await this.syncSourceNode(binding.sourceNodeId);
-        await this.probeSecureLink(binding.sourceNodeId, {
-          linkId: binding.id,
-          scheme: binding.forwardScheme,
-          path: '/',
-          timeoutSeconds: 10,
-        });
+        if (!binding.dormant) {
+          await this.probeSecureLink(binding.sourceNodeId, {
+            linkId: binding.id,
+            scheme: binding.forwardScheme,
+            path: '/',
+            timeoutSeconds: 10,
+          });
+        }
         const [active] = await this.db
           .update(proxyAdditionalSecureLinks)
           .set({ status: 'active', lastError: null, updatedAt: new Date() })
@@ -2018,6 +2062,7 @@ export class ProxySecureLinkService {
             ),
           })
         : [];
+      const members = await availabilityMemberSyncContext(this.db, nodeId, additional);
       const targetBindings = [
         ...hosts.map((host) => ({
           linkId: host.id,
@@ -2030,17 +2075,20 @@ export class ProxySecureLinkService {
           connectorImage: this.connectorImage,
           allowNetworkReselection: host.upstreamKind === 'docker_container',
         })),
-        ...additional.map((binding) => ({
-          linkId: binding.id,
-          role: 'target' as const,
-          generation: binding.generation,
-          targetNetwork: binding.targetNetwork,
-          targetContainer: binding.targetContainer,
-          targetHost: '',
-          targetPort: binding.dockerHostPort,
-          connectorImage: this.connectorImage,
-          allowNetworkReselection: binding.upstreamKind === 'docker_container',
-        })),
+        ...additional
+          .filter((binding) => syncableAvailabilityMember(binding, members))
+          .map((binding) => ({
+            linkId: binding.id,
+            role: 'target' as const,
+            generation: binding.generation,
+            targetNetwork: binding.targetNetwork,
+            targetContainer: binding.targetContainer,
+            targetHost: '',
+            targetPort: binding.dockerHostPort,
+            connectorImage: this.connectorImage,
+            allowNetworkReselection: binding.upstreamKind === 'docker_container',
+            ...availabilityMemberBindingFields(binding, members),
+          })),
       ].filter(
         (binding) => !excludedNetwork || (binding.targetNetwork !== excludedNetwork && !binding.allowNetworkReselection)
       );
@@ -2204,6 +2252,7 @@ export class ProxySecureLinkService {
     if (forceSocketOnlyLinkId && !hosts.some((host) => host.id === forceSocketOnlyLinkId)) {
       throw new Error('Secure Link state changed before socket-only activation');
     }
+    const members = await availabilityMemberSyncContext(this.db, nodeId, additional);
     const result = await this.dispatch.sendProxySecureLinks(nodeId, [
       ...hosts.map((host) => {
         const sourceConfigManaged =
@@ -2223,15 +2272,18 @@ export class ProxySecureLinkService {
           socketOnly: sourceConfigManaged,
         };
       }),
-      ...additional.map((binding) => ({
-        linkId: binding.id,
-        role: 'source' as const,
-        generation: binding.generation,
-        listenerPort: binding.listenerPort ?? 0,
-        sourceConfigManaged: false,
-        rotateListener: binding.id === rotateLinkId,
-        socketOnly: true,
-      })),
+      ...additional
+        .filter((binding) => syncableAvailabilityMember(binding, members))
+        .map((binding) => ({
+          linkId: binding.id,
+          role: 'source' as const,
+          generation: binding.generation,
+          listenerPort: binding.listenerPort ?? 0,
+          sourceConfigManaged: false,
+          rotateListener: binding.id === rotateLinkId,
+          socketOnly: true,
+          ...availabilityMemberBindingFields(binding, members),
+        })),
     ]);
     if (!result.success) throw new Error(result.error || 'Nginx daemon rejected secure-link listeners');
     const additionalIds = new Set(additional.map((binding: ProxyAdditionalSecureLinkRow) => binding.id));

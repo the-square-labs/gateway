@@ -24,11 +24,19 @@ import {
   dockerAvailabilityResourceFromQuery,
 } from './docker-availability.schemas.js';
 import { DockerAvailabilityService } from './docker-availability.service.js';
+import {
+  applyAvailabilityPartitionMode,
+  withAvailabilityLease,
+  withOptionalAvailabilityLease,
+  withPreflightAvailabilityLease,
+} from './docker-availability-lease-view.js';
 
 export function registerDockerAvailabilityRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(preflightDockerAvailabilityRoute, async (c) => {
     const input = DockerAvailabilityPolicyInputSchema.parse(await c.req.json());
-    const data = await container.resolve(DockerAvailabilityService).preflight(input, c.get('effectiveScopes') ?? []);
+    const data = await withPreflightAvailabilityLease(
+      await container.resolve(DockerAvailabilityService).preflight(input, c.get('effectiveScopes') ?? [])
+    );
     return c.json({ data });
   });
 
@@ -36,24 +44,27 @@ export function registerDockerAvailabilityRoutes(router: OpenAPIHono<AppEnv>) {
     { ...enableDockerAvailabilityRoute, middleware: requireScopeBase('docker:availability:manage') },
     async (c) => {
       const input = DockerAvailabilityPolicyInputSchema.parse(await c.req.json());
-      const data = await container
+      const enabled = await container
         .resolve(DockerAvailabilityService)
         .enable(input, c.get('user')!.id, c.get('effectiveScopes') ?? []);
+      const data = await withAvailabilityLease(await applyAvailabilityPartitionMode(enabled, input.partitionMode));
       return c.json({ data }, 202);
     }
   );
 
   router.openapi(getDockerAvailabilityByResourceRoute, async (c) => {
     const resource = dockerAvailabilityResourceFromQuery(DockerAvailabilityByResourceQuerySchema.parse(c.req.query()));
-    const data = await container
-      .resolve(DockerAvailabilityService)
-      .getByResource(resource, c.get('effectiveScopes') ?? []);
+    const data = await withOptionalAvailabilityLease(
+      await container.resolve(DockerAvailabilityService).getByResource(resource, c.get('effectiveScopes') ?? [])
+    );
     return c.json({ data });
   });
 
   router.openapi(getDockerAvailabilityRoute, async (c) => {
     const policyId = DockerAvailabilityPolicyIdSchema.parse(c.req.param('id'));
-    const data = await container.resolve(DockerAvailabilityService).get(policyId, c.get('effectiveScopes') ?? []);
+    const data = await withAvailabilityLease(
+      await container.resolve(DockerAvailabilityService).get(policyId, c.get('effectiveScopes') ?? [])
+    );
     return c.json({ data });
   });
 
@@ -79,9 +90,10 @@ export function registerDockerAvailabilityRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const policyId = DockerAvailabilityPolicyIdSchema.parse(c.req.param('id'));
       const input = DockerAvailabilityPolicyUpdateSchema.parse(await c.req.json());
-      const data = await container
+      const updated = await container
         .resolve(DockerAvailabilityService)
         .update(policyId, input, c.get('user')!.id, c.get('effectiveScopes') ?? []);
+      const data = await withAvailabilityLease(await applyAvailabilityPartitionMode(updated, input.partitionMode));
       return c.json({ data }, 202);
     }
   );
@@ -91,9 +103,11 @@ export function registerDockerAvailabilityRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const policyId = DockerAvailabilityPolicyIdSchema.parse(c.req.param('id'));
       const input = DockerAvailabilityDisableInputSchema.parse(await c.req.json());
-      const data = await container
-        .resolve(DockerAvailabilityService)
-        .disable(policyId, input, c.get('user')!.id, c.get('effectiveScopes') ?? []);
+      const data = await withAvailabilityLease(
+        await container
+          .resolve(DockerAvailabilityService)
+          .disable(policyId, input, c.get('user')!.id, c.get('effectiveScopes') ?? [])
+      );
       return c.json({ data }, 202);
     }
   );
