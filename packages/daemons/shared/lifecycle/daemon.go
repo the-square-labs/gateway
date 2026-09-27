@@ -204,6 +204,7 @@ func runProcessRelayPool(
 	identityChanged <-chan struct{},
 	logger *slog.Logger,
 ) {
+	go runRelayLatencyProbes(ctx, connector, plugin)
 	// Each relay target runs on its own. A grant refresh that adds, removes or
 	// changes one relay must not reconnect the lanes to the others: every tunnel
 	// on those lanes (database, storage and backup streams) would drop with them.
@@ -350,6 +351,7 @@ func runRelayPoolTarget(
 			continue
 		}
 		targetCtx, cancelTarget := context.WithCancel(ctx)
+		liveRelayTransports.set(target.ID, connections[0])
 		laneEnded := make(chan struct{}, len(connections))
 		for _, conn := range connections {
 			conn := conn
@@ -363,6 +365,7 @@ func runRelayPoolTarget(
 		case <-laneEnded:
 		}
 		cancelTarget()
+		liveRelayTransports.clear(target.ID, connections[0])
 		for _, conn := range connections {
 			_ = conn.Close()
 		}
