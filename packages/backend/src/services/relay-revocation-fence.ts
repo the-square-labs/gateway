@@ -208,12 +208,12 @@ export function describeRelayRevocation(
     .sort()
     .at(0) as string;
   const requiredRevision = Math.max(...revoked.map((entry) => entry.removedAtRevision ?? 0));
-  const count = (value: number) => `${value} revoked route${value === 1 ? '' : 's'}`;
+  // Counts and the start time are separate fields; the message says what it means and what clears it.
   return {
     state: staleRoutes.size ? 'stale' : 'pending',
     message: staleRoutes.size
-      ? `This relay has not applied the policy that revoked ${count(staleRoutes.size)}. Daemons refuse those routes through it until it applies policy revision ${requiredRevision} or later; its other routes keep working.`
-      : `Waiting for this relay to apply the policy that revoked ${count(pendingRoutes.size)}.`,
+      ? `The relay did not apply the revoking policy in time. Daemons refuse the revoked routes through it until it applies policy revision ${requiredRevision} or later; its other routes keep working.`
+      : `Waiting for the relay to apply policy revision ${requiredRevision}, which revokes these routes.`,
     staleRoutes: staleRoutes.size,
     pendingRoutes: pendingRoutes.size,
     requiredRevision,

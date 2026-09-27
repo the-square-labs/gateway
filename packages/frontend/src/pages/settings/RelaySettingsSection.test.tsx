@@ -714,6 +714,50 @@ describe("RelaySettingsSection", () => {
       expect(screen.queryByText(/The relay certificate expired/)).not.toBeInTheDocument()
     );
   });
+
+  it.each([
+    ["stale", /Stale for revocation of 2 revoked routes since/, "alert"],
+    ["pending", /Revocation of 1 revoked route pending since/, null],
+  ] as const)("shows a relay's %s route revocation next to its state", async (state, summary, role) => {
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    const since = new Date(Date.now() - 5 * 60_000).toISOString();
+    const relay = {
+      id: "11111111-1111-4111-8111-111111111111",
+      kind: "remote" as const,
+      nodeId: "22222222-2222-4222-8222-222222222222",
+      faultDomainId: "33333333-3333-4333-8333-333333333333",
+      displayName: "relay-eu-2",
+      advertisedAddresses: ["relay.example.test"],
+      servicePort: 9443,
+      state: "offline" as const,
+      buildVersion: "v2.7.0",
+      protocolMajor: 1,
+      appliedPolicyRevision: 12,
+      policyExpiresAt: "2099-08-20T20:00:00.000Z",
+      lastSeenAt: "2026-08-20T19:59:00.000Z",
+      activeAssignments: 1,
+      health: { activeTunnels: 0, registeredEndpoints: 0, pressurePercent: 0 },
+      revocation: {
+        state,
+        message:
+          "Daemons refuse the revoked routes through it until it applies policy revision 42 or later.",
+        staleRoutes: state === "stale" ? 2 : 0,
+        pendingRoutes: state === "stale" ? 0 : 1,
+        requiredRevision: 42,
+        since,
+      },
+    };
+    vi.spyOn(api, "getRelayStatus").mockResolvedValue({ ...relayStatus(), instances: [relay] });
+
+    renderRelaySettings();
+
+    const line = await screen.findByText(summary);
+    expect(line).toHaveTextContent("5m ago");
+    expect(line).toHaveTextContent("until it applies policy revision 42 or later");
+    expect(within(line).getByText("5m ago")).toHaveAttribute("dateTime", since);
+    if (role) expect(line).toHaveAttribute("role", role);
+    else expect(line).not.toHaveAttribute("role");
+  });
 });
 
 function relaySettings(): AuthProvisioningSettings {
