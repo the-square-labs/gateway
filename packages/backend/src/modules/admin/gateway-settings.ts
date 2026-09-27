@@ -181,6 +181,7 @@ export async function readGatewaySettings(
       gatewayGrpcLocalIp: null,
       relayAutoRecovery: false,
       relayGrantTtlHours: 4,
+      relayPolicyLeaseHours: 72,
       shutdown: {
         userRequestDrainSeconds: 30,
         structuredLogDrainSeconds: 5,

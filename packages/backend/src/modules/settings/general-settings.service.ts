@@ -18,7 +18,33 @@ export const FILE_OPEN_DEFAULT_BYTES = 10 * 1024 * 1024;
 export const FILE_OPEN_MAX_BYTES = 100 * 1024 * 1024;
 export const RELAY_GRANT_TTL_DEFAULT_HOURS = 4;
 export const RELAY_GRANT_TTL_MIN_HOURS = 1;
-export const RELAY_GRANT_TTL_MAX_HOURS = 48;
+// Raised from 48 so a grant can still cover the longest policy lease (see
+// RELAY_POLICY_LEASE_MAX_HOURS): effectiveGrantTtlHours below needs headroom up
+// to ceil(leaseHours * 4 / 3). A relay that has not advertised
+// policy_long_lease_v1 still only ever receives a grant capped at
+// LEGACY_RELAY_GRANT_TTL_MAX_HOURS, regardless of this setting.
+export const RELAY_GRANT_TTL_MAX_HOURS = 224;
+/** The grant lifetime cap a relay that predates long-lease support still enforces. */
+export const LEGACY_RELAY_GRANT_TTL_MAX_HOURS = 48;
+export const RELAY_POLICY_LEASE_DEFAULT_HOURS = 72;
+export const RELAY_POLICY_LEASE_MIN_HOURS = 1;
+export const RELAY_POLICY_LEASE_MAX_HOURS = 168;
+/** The policy lease a relay that predates long-lease support still enforces. */
+export const LEGACY_RELAY_POLICY_LEASE_SECONDS = 15 * 60;
+/**
+ * Mirrors policy.LeaseExpiryClockSkew in packages/relay/internal/policy/store.go: how long past
+ * its issued lease a relay whose clock runs ahead still admits. A relay that is genuinely
+ * isolated cannot still be admitting past lease + this skew, so that bound is safe to treat as
+ * "the relay has stopped admitting on the pre-rotation policy" when nothing else confirms it.
+ */
+export const RELAY_LEASE_EXPIRY_CLOCK_SKEW_MS = 2 * 60 * 1000;
+/**
+ * Advertised by relay builds that accept a policy lease and grant lifetime longer than the legacy
+ * 15-minute lease / 48-hour grant caps (see policy.LongLeaseCapability in the relay). Gateway must
+ * not issue the longer lease or grant to an instance that has not reported this, or it refuses the
+ * envelope outright.
+ */
+export const LONG_POLICY_LEASE_CAPABILITY = 'policy_long_lease_v1';
 export const RELAY_DATA_LANES_DEFAULT = 4;
 export const RELAY_DATA_LANES_MIN = 1;
 export const RELAY_DATA_LANES_MAX = 16;
@@ -59,7 +85,18 @@ export interface GeneralSettings {
   relay: GeneralRelaySettings;
   shutdown: GeneralShutdownSettings;
   relayGrantTtlHours: number;
+  /** Lifetime of the signed policy envelope Gateway pushes to a relay; see relayGrantTtlHours. */
+  relayPolicyLeaseHours: number;
   features: GeneralFeatureSettings;
+}
+
+/**
+ * The grant lifetime a relay pool member actually gets once its lease is known: long enough that
+ * a grant refreshed a quarter of its life before an outage still covers the whole policy lease,
+ * so a relay never runs out of grants while it is still admitting on its last known policy.
+ */
+export function effectiveRelayGrantTtlHours(relayGrantTtlHours: number, relayPolicyLeaseHours: number): number {
+  return Math.max(relayGrantTtlHours, Math.ceil((relayPolicyLeaseHours * 4) / 3));
 }
 
 export type UpdateChannel = 'stable' | 'preview';
@@ -110,6 +147,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
     hardPressurePercent: RELAY_HARD_PRESSURE_DEFAULT_PERCENT,
   },
   relayGrantTtlHours: RELAY_GRANT_TTL_DEFAULT_HOURS,
+  relayPolicyLeaseHours: RELAY_POLICY_LEASE_DEFAULT_HOURS,
   shutdown: {
     userRequestDrainSeconds: 30,
     structuredLogDrainSeconds: 5,
@@ -433,6 +471,10 @@ export class GeneralSettingsService {
     const relayGrantTtlHours = Number.isInteger(rawRelayGrantTtlHours)
       ? rawRelayGrantTtlHours
       : DEFAULT_GENERAL_SETTINGS.relayGrantTtlHours;
+    const rawRelayPolicyLeaseHours = Number(record.relayPolicyLeaseHours);
+    const relayPolicyLeaseHours = Number.isInteger(rawRelayPolicyLeaseHours)
+      ? rawRelayPolicyLeaseHours
+      : DEFAULT_GENERAL_SETTINGS.relayPolicyLeaseHours;
     const relayRecord =
       typeof record.relay === 'object' && record.relay !== null ? (record.relay as Record<string, unknown>) : {};
     const relayDataLanes = numberOrDefault(relayRecord.dataLanes, DEFAULT_GENERAL_SETTINGS.relay.dataLanes);
@@ -468,6 +510,11 @@ export class GeneralSettingsService {
     if (relayGrantTtlHours < RELAY_GRANT_TTL_MIN_HOURS || relayGrantTtlHours > RELAY_GRANT_TTL_MAX_HOURS) {
       throw new Error(
         `Relay grant TTL must be between ${RELAY_GRANT_TTL_MIN_HOURS} and ${RELAY_GRANT_TTL_MAX_HOURS} hours`
+      );
+    }
+    if (relayPolicyLeaseHours < RELAY_POLICY_LEASE_MIN_HOURS || relayPolicyLeaseHours > RELAY_POLICY_LEASE_MAX_HOURS) {
+      throw new Error(
+        `Relay policy lease must be between ${RELAY_POLICY_LEASE_MIN_HOURS} and ${RELAY_POLICY_LEASE_MAX_HOURS} hours`
       );
     }
     if (relayDataLanes < RELAY_DATA_LANES_MIN || relayDataLanes > RELAY_DATA_LANES_MAX) {
@@ -540,6 +587,7 @@ export class GeneralSettingsService {
       },
       shutdown,
       relayGrantTtlHours,
+      relayPolicyLeaseHours,
       features: {
         pkiEnabled:
           typeof features.pkiEnabled === 'boolean' ? features.pkiEnabled : DEFAULT_GENERAL_SETTINGS.features.pkiEnabled,

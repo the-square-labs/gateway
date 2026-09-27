@@ -243,14 +243,14 @@ func TestSignedPolicyLeaseReplayAndRestart(t *testing.T) {
 	if _, _, err := store.Apply(request); err == nil {
 		t.Fatal("valid older signed policy replay was accepted")
 	}
-	if err := store.AdmissionError(now.Add(PolicyLease - time.Second)); err != nil {
+	if err := store.AdmissionError(now.Add(MaxPolicyLease - time.Second)); err != nil {
 		t.Fatalf("policy expired early: %v", err)
 	}
 	// A relay clock running slightly ahead of Gateway keeps the lease.
-	if err := store.AdmissionError(now.Add(PolicyLease + LeaseExpiryClockSkew - time.Second)); err != nil {
+	if err := store.AdmissionError(now.Add(MaxPolicyLease + LeaseExpiryClockSkew - time.Second)); err != nil {
 		t.Fatalf("policy expired within the clock skew allowance: %v", err)
 	}
-	now = now.Add(PolicyLease + LeaseExpiryClockSkew)
+	now = now.Add(MaxPolicyLease + LeaseExpiryClockSkew)
 	if err := store.AdmissionError(now); err == nil {
 		t.Fatal("expired policy still admitted new tunnels")
 	}
@@ -375,7 +375,7 @@ func signedSnapshotWithPolicyKeysForTarget(t *testing.T, privateKey ed25519.Priv
 	t.Helper()
 	payload := &relayv1.PolicyEnvelopePayload{
 		SchemaVersion: 2, GatewayInstanceId: "gateway-1", PoolId: poolID, RelayInstanceId: relayInstanceID,
-		Revision: revision, IssuedAtUnix: now.Unix(), ExpiresAtUnix: now.Add(PolicyLease).Unix(),
+		Revision: revision, IssuedAtUnix: now.Unix(), ExpiresAtUnix: now.Add(MaxPolicyLease).Unix(),
 		GrantPublicKeys: []*relayv1.PublicKey{{KeyId: "grant-1", PublicKey: grantPublic}},
 		Endpoints: []*relayv1.EndpointPolicy{{
 			EndpointId: "endpoint-1", Generation: 1, SubjectKind: "daemon", SubjectId: "node-target",
@@ -476,7 +476,7 @@ func TestLeaseExpiryAllowsRelayClockAheadOfGateway(t *testing.T) {
 	grantPublic, _, _ := ed25519.GenerateKey(nil)
 	gatewayNow := time.Unix(1_800_000_000, 0)
 	// Gateway issued the lease a full lease ago by the relay's clock, which runs ahead.
-	relayNow := gatewayNow.Add(PolicyLease + time.Minute)
+	relayNow := gatewayNow.Add(MaxPolicyLease + time.Minute)
 	store := remoteStore(t, t.TempDir(), &relayNow)
 	defer store.Close()
 	if _, err := store.BootstrapPolicyTrust("policy-1", policyPublic, PublicKeyFingerprint(policyPublic)); err != nil {
@@ -488,7 +488,7 @@ func TestLeaseExpiryAllowsRelayClockAheadOfGateway(t *testing.T) {
 	if !store.Ready(relayNow) {
 		t.Fatal("lease inside the clock skew allowance did not admit tunnels")
 	}
-	relayNow = gatewayNow.Add(PolicyLease + LeaseExpiryClockSkew)
+	relayNow = gatewayNow.Add(MaxPolicyLease + LeaseExpiryClockSkew)
 	if store.Ready(relayNow) {
 		t.Fatal("lease past the clock skew allowance still admitted tunnels")
 	}
@@ -516,7 +516,7 @@ func TestPersistedSnapshotLoadsAfterSignerWindowCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.Close()
-	now = now.Add(2 * time.Hour)
+	now = now.Add(MaxPolicyLease + LeaseExpiryClockSkew + time.Minute)
 	reopened := remoteStore(t, dir, &now)
 	defer reopened.Close()
 	if reopened.Current().Revision != 1 {
@@ -744,7 +744,7 @@ func signedSnapshotForGateway(t *testing.T, privateKey ed25519.PrivateKey, keyID
 	t.Helper()
 	payload := &relayv1.PolicyEnvelopePayload{
 		SchemaVersion: 2, GatewayInstanceId: gatewayInstanceID, PoolId: "system", RelayInstanceId: "relay-1",
-		Revision: revision, IssuedAtUnix: now.Unix(), ExpiresAtUnix: now.Add(PolicyLease).Unix(),
+		Revision: revision, IssuedAtUnix: now.Unix(), ExpiresAtUnix: now.Add(MaxPolicyLease).Unix(),
 		GrantPublicKeys:   []*relayv1.PublicKey{{KeyId: "grant-1", PublicKey: grantPublic}},
 		Capabilities:      []string{PoolCapability},
 		PolicySigningKeys: []*relayv1.PolicySigningKey{policyKey(keyID, policyPublic)},

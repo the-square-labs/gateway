@@ -17,6 +17,8 @@ import {
 const logger = createChildLogger('RelaySupervisor');
 const CONTROL_STATE_KEY = 'relay:control-state';
 const MAX_ATTEMPTS = 3;
+/** The legacy policy lease; a gap past this is long enough that the relay served stale policy. */
+const RELAY_STALE_POLICY_GAP_MS = 15 * 60 * 1000;
 
 export const RELAY_HEALTH_REASONS = [
   'unreachable',
@@ -608,6 +610,12 @@ export class RelaySupervisorService {
   private async recordLocalInstance(response: RelayHealthResponse, unavailableState?: 'synchronizing'): Promise<void> {
     if (!response.relayInstanceId || response.poolId !== 'system') return;
     const expiresAtUnix = Number(response.policyExpiresAtUnix || 0);
+    const reportedAt = new Date();
+    const [previous] = await this.db
+      .select({ lastSeenAt: relayInstances.lastSeenAt })
+      .from(relayInstances)
+      .where(eq(relayInstances.id, response.relayInstanceId))
+      .limit(1);
     await this.db
       .update(relayInstances)
       .set({
@@ -620,7 +628,7 @@ export class RelaySupervisorService {
         },
         appliedPolicyRevision: Number(response.appliedRevision || 0),
         policyExpiresAt: expiresAtUnix > 0 ? new Date(expiresAtUnix * 1000) : null,
-        lastSeenAt: new Date(),
+        lastSeenAt: reportedAt,
         health: {
           activeTunnels: Number(response.activeTunnels || 0),
           registeredEndpoints: Number(response.registeredEndpoints || 0),
@@ -639,6 +647,17 @@ export class RelaySupervisorService {
         updatedAt: new Date(),
       })
       .where(eq(relayInstances.id, response.relayInstanceId));
+    // A gap this long means the relay ran unreachable on whatever policy it last held; the audit
+    // trail records what it served through, not just that it reconnected.
+    if (previous?.lastSeenAt && reportedAt.getTime() - previous.lastSeenAt.getTime() > RELAY_STALE_POLICY_GAP_MS) {
+      await this.audit.log({
+        userId: null,
+        action: 'relay.instance.policy.stale_period',
+        resourceType: 'relay_instance',
+        resourceId: response.relayInstanceId,
+        details: { from: previous.lastSeenAt.toISOString(), to: reportedAt.toISOString() },
+      });
+    }
   }
 
   /** Read through a method: a relay update can switch maintenance on while a cycle awaits. */

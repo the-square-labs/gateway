@@ -185,6 +185,9 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const [grantTtlHours, setGrantTtlHours] = useState(
     initialSnapshot.settings?.generalSettings.relayGrantTtlHours ?? 4
   );
+  const [policyLeaseHours, setPolicyLeaseHours] = useState(
+    initialSnapshot.settings?.generalSettings.relayPolicyLeaseHours ?? 72
+  );
   const [autoRecovery, setAutoRecovery] = useState(
     initialSnapshot.settings?.generalSettings.relayAutoRecovery ?? true
   );
@@ -237,6 +240,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         : 2
     );
     setGrantTtlHours(nextSettings.generalSettings.relayGrantTtlHours);
+    setPolicyLeaseHours(nextSettings.generalSettings.relayPolicyLeaseHours);
     setAutoRecovery(nextSettings.generalSettings.relayAutoRecovery);
     setAdaptiveAdmissionEnabled(
       nextSettings.generalSettings.relay?.adaptiveAdmissionEnabled ?? true
@@ -293,6 +297,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         generalSettings: {
           relayAutoRecovery: autoRecovery,
           relayGrantTtlHours: grantTtlHours,
+          relayPolicyLeaseHours: policyLeaseHours,
           relay: {
             dataLanes,
             readChunkBytes,
@@ -498,6 +503,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     databaseReservePercent !== (persistedRelay?.databaseReservePercent ?? 20) ||
     hardPressurePercent !== (persistedRelay?.hardPressurePercent ?? 95) ||
     grantTtlHours !== settings.generalSettings.relayGrantTtlHours ||
+    policyLeaseHours !== settings.generalSettings.relayPolicyLeaseHours ||
     autoRecovery !== settings.generalSettings.relayAutoRecovery;
   const instances = sortRelayInstances(status?.instances ?? []);
   const readyInstances = instances.filter((instance) => instance.state === "ready").length;
@@ -1115,14 +1121,27 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         </SettingsControlRow>
         <SettingsControlRow
           title="Grant lifetime"
-          description="Lifetime of newly issued endpoint and connection grants, in hours (1–48)"
-          help="A grant authorizes a relay endpoint or connection until it expires. Shorter lifetimes rotate authorization sooner; longer lifetimes reduce renewal frequency."
+          description="Lifetime of newly issued endpoint and connection grants, in hours (1–224)"
+          help="A grant authorizes a relay endpoint or connection until it expires. Shorter lifetimes rotate authorization sooner; longer lifetimes reduce renewal frequency. A relay pool member that has not upgraded still caps its own grants at 48 hours."
         >
           <NumericInput
             value={grantTtlHours}
             onChange={setGrantTtlHours}
             min={1}
-            max={48}
+            max={224}
+            disabled={!canEdit || saving}
+          />
+        </SettingsControlRow>
+        <SettingsControlRow
+          title="Policy lease"
+          description="Lifetime of the signed policy Gateway pushes to a relay, in hours (1–168)"
+          help="A relay keeps admitting on its last known policy until this lease expires, so it can keep serving through a Gateway outage. A relay pool member that has not upgraded still caps its own lease at 15 minutes."
+        >
+          <NumericInput
+            value={policyLeaseHours}
+            onChange={setPolicyLeaseHours}
+            min={1}
+            max={168}
             disabled={!canEdit || saving}
           />
         </SettingsControlRow>

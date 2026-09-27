@@ -23,6 +23,10 @@ import {
 import { encodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import {
+  LEGACY_RELAY_POLICY_LEASE_SECONDS,
+  LONG_POLICY_LEASE_CAPABILITY,
+} from '@/modules/settings/general-settings.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
 import type { EventBusService } from './event-bus.service.js';
@@ -225,7 +229,7 @@ export class RelayPolicyService {
     private readonly relay: RelayControlClient
   ) {
     this.grantIssuer = new RelayGrantIssuerService(db, cryptoService, settings);
-    this.grantKeys = new RelayGrantKeyService(db, cryptoService);
+    this.grantKeys = new RelayGrantKeyService(db, cryptoService, settings);
     this.policyKeys = new RelayPolicySigningKeyService(db, cryptoService);
   }
 
@@ -1859,9 +1863,9 @@ export class RelayPolicyService {
     globalRevision: number;
     expiresAtUnix: number;
   }> {
-    const relaySettings = (await this.settings.getConfig()).relay;
+    const generalSettings = await this.settings.getConfig();
+    const relaySettings = generalSettings.relay;
     const issuedAt = new Date();
-    const expiresAtUnix = Math.floor((issuedAt.getTime() + 15 * 60 * 1000) / 1000);
     const projection = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-remote-policy-revision'))`);
       // Writers bump this row in the same transaction as projection changes.
@@ -1934,6 +1938,16 @@ export class RelayPolicyService {
       if (!poolRevision) throw new Error('Relay pool is unavailable');
       return { instance, state, grantKeys, selectedAssignments, endpoints, routes, revision: poolRevision.revision };
     });
+
+    // An instance that has not reported policy_long_lease_v1 may still be running a relay build
+    // that rejects any envelope lease over 15 minutes; keep it on the legacy lease until it upgrades.
+    const instanceFeatures = Array.isArray(projection.instance.capabilities?.features)
+      ? projection.instance.capabilities.features
+      : [];
+    const leaseSeconds = instanceFeatures.includes(LONG_POLICY_LEASE_CAPABILITY)
+      ? generalSettings.relayPolicyLeaseHours * 60 * 60
+      : LEGACY_RELAY_POLICY_LEASE_SECONDS;
+    const expiresAtUnix = Math.floor((issuedAt.getTime() + leaseSeconds * 1000) / 1000);
 
     // The relay's own trust decides the signer: a relay that missed a rotation gets its snapshot
     // signed by an old key it still trusts, and learns the active key from that snapshot.

@@ -157,6 +157,7 @@ export interface AuthProvisioningSettings {
       hardPressurePercent: number;
     };
     relayGrantTtlHours: number;
+    relayPolicyLeaseHours: number;
     shutdown: {
       userRequestDrainSeconds: number;
       structuredLogDrainSeconds: number;

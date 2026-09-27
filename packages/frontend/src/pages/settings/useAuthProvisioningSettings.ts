@@ -47,6 +47,7 @@ const DEFAULT_GENERAL_SETTINGS = {
   gatewayGrpcLocalIp: null as string | null,
   relayAutoRecovery: true,
   relayGrantTtlHours: 4,
+  relayPolicyLeaseHours: 72,
   shutdown: DEFAULT_SHUTDOWN_SETTINGS,
   features: DEFAULT_GENERAL_FEATURES,
 };
@@ -321,6 +322,12 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
         ?.relayGrantTtlHours ?? 4
     )
   );
+  const [relayPolicyLeaseHours, setRelayPolicyLeaseHours] = useState(() =>
+    String(
+      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
+        ?.relayPolicyLeaseHours ?? 72
+    )
+  );
   const [pkiEnabled, setPkiEnabled] = useState(
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
@@ -369,6 +376,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       setGatewayGrpcPublicTarget(settingsData.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(settingsData.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(settingsData.generalSettings.relayGrantTtlHours));
+      setRelayPolicyLeaseHours(String(settingsData.generalSettings.relayPolicyLeaseHours));
       setPkiEnabled(settingsData.generalSettings.features?.pkiEnabled ?? true);
       setSiemEnabled(settingsData.generalSettings.features?.siemEnabled ?? true);
       setInferenceEnabled(settingsData.generalSettings.features?.inferenceEnabled ?? false);
@@ -570,6 +578,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       setGatewayGrpcPublicTarget(updated.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(updated.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(updated.generalSettings.relayGrantTtlHours));
+      setRelayPolicyLeaseHours(String(updated.generalSettings.relayPolicyLeaseHours));
       setPublicUrl(updated.generalSettings.publicUrl ?? "");
       setHideExternalBranding(updated.generalSettings.hideExternalBranding ?? false);
       setUpdateChannel(nextSettings.generalSettings.updateChannel);
@@ -596,6 +605,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       setGatewayGrpcPublicTarget(previous.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(previous.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(previous.generalSettings.relayGrantTtlHours));
+      setRelayPolicyLeaseHours(String(previous.generalSettings.relayPolicyLeaseHours));
       setPublicUrl(previous.generalSettings.publicUrl ?? "");
       setHideExternalBranding(previous.generalSettings.hideExternalBranding ?? false);
       setUpdateChannel(previous.generalSettings.updateChannel);
@@ -635,6 +645,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
   const draftGatewayGrpcLocalIp = gatewayGrpcLocalIp.trim() || null;
   const draftPublicUrl = publicUrl.trim().replace(/\/$/, "");
   const draftRelayGrantTtlHours = Number(relayGrantTtlHours);
+  const draftRelayPolicyLeaseHours = Number(relayPolicyLeaseHours);
   const accessSettingsHaveChanges =
     draftPublicUrl !== (settings?.generalSettings.publicUrl ?? "") ||
     (draftFileUploadLimitBytes != null &&
@@ -644,7 +655,9 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     draftGatewayGrpcPublicTarget !== settings?.generalSettings.gatewayGrpcPublicTarget ||
     draftGatewayGrpcLocalIp !== settings?.generalSettings.gatewayGrpcLocalIp ||
     (Number.isInteger(draftRelayGrantTtlHours) &&
-      draftRelayGrantTtlHours !== settings?.generalSettings.relayGrantTtlHours);
+      draftRelayGrantTtlHours !== settings?.generalSettings.relayGrantTtlHours) ||
+    (Number.isInteger(draftRelayPolicyLeaseHours) &&
+      draftRelayPolicyLeaseHours !== settings?.generalSettings.relayPolicyLeaseHours);
   const featureSettingsHaveChanges =
     hideExternalBranding !== (settings?.generalSettings.hideExternalBranding ?? false) ||
     updateChannel !== (settings?.generalSettings.updateChannel ?? "stable") ||
@@ -675,9 +688,17 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     if (
       !Number.isInteger(draftRelayGrantTtlHours) ||
       draftRelayGrantTtlHours < 1 ||
-      draftRelayGrantTtlHours > 48
+      draftRelayGrantTtlHours > 224
     ) {
-      toast.error("Relay grant lifetime must be between 1 and 48 hours");
+      toast.error("Relay grant lifetime must be between 1 and 224 hours");
+      return;
+    }
+    if (
+      !Number.isInteger(draftRelayPolicyLeaseHours) ||
+      draftRelayPolicyLeaseHours < 1 ||
+      draftRelayPolicyLeaseHours > 168
+    ) {
+      toast.error("Relay policy lease must be between 1 and 168 hours");
       return;
     }
     if (!/^https?:\/\/[^/]+$/i.test(draftPublicUrl)) {
@@ -690,7 +711,8 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       nextOpenBytes === settings.generalSettings.fileOpenMaxBytes &&
       draftGatewayGrpcPublicTarget === settings.generalSettings.gatewayGrpcPublicTarget &&
       draftGatewayGrpcLocalIp === settings.generalSettings.gatewayGrpcLocalIp &&
-      draftRelayGrantTtlHours === settings.generalSettings.relayGrantTtlHours
+      draftRelayGrantTtlHours === settings.generalSettings.relayGrantTtlHours &&
+      draftRelayPolicyLeaseHours === settings.generalSettings.relayPolicyLeaseHours
     ) {
       return;
     }
@@ -714,6 +736,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       gatewayGrpcPublicTarget: draftGatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: draftGatewayGrpcLocalIp,
       relayGrantTtlHours: draftRelayGrantTtlHours,
+      relayPolicyLeaseHours: draftRelayPolicyLeaseHours,
     });
   };
 
@@ -1109,6 +1132,8 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     setGatewayGrpcLocalIp,
     relayGrantTtlHours,
     setRelayGrantTtlHours,
+    relayPolicyLeaseHours,
+    setRelayPolicyLeaseHours,
     pkiEnabled,
     setPkiEnabled,
     siemEnabled,

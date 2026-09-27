@@ -41,6 +41,8 @@ function clearPendingCommandRegistration(nodeId: string, token: symbol): void {
 // Throttle health history writes — track last recorded timestamp per node
 const lastRecordedTs = new Map<string, number>();
 const HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000; // one entry per 30s
+/** The legacy policy lease; a gap past this is long enough that the relay served stale policy. */
+const RELAY_STALE_POLICY_GAP_MS = 15 * 60 * 1000;
 
 async function markRelayInstanceOffline(deps: GrpcServerDeps, nodeId: string): Promise<void> {
   if (deps.registry.getNode(nodeId)) return;
@@ -885,6 +887,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                   state: relayInstances.state,
                   appliedPolicyRevision: relayInstances.appliedPolicyRevision,
                   health: relayInstances.health,
+                  lastSeenAt: relayInstances.lastSeenAt,
                 })
                 .from(relayInstances)
                 .where(eq(relayInstances.nodeId, activeNodeId))
@@ -907,6 +910,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               // A report that raced the stream's replacement must not overwrite the state the
               // close hook (or the heartbeat fence) recorded.
               if (!isCurrentCommandStream()) return;
+              const reportedAt = new Date();
               await deps.db
                 .update(relayInstances)
                 .set({
@@ -925,7 +929,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                   policyExpiresAt: Number(runtime.policyExpiresAtUnix || 0)
                     ? new Date(Number(runtime.policyExpiresAtUnix) * 1000)
                     : null,
-                  lastSeenAt: new Date(),
+                  lastSeenAt: reportedAt,
                   health: {
                     activeTunnels: Number(runtime.activeTunnels || 0),
                     registeredEndpoints: Number(runtime.registeredEndpoints || 0),
@@ -950,6 +954,17 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 .where(eq(relayInstances.id, instance.id));
               if (runtimeStateChanged) {
                 deps.registry.publishRelayRuntimeChanged(activeNodeId, instance.id);
+              }
+              // A gap this long means the relay ran unreachable on whatever policy it last
+              // held; the audit trail records what it served through, not just that it reconnected.
+              if (instance.lastSeenAt && reportedAt.getTime() - instance.lastSeenAt.getTime() > RELAY_STALE_POLICY_GAP_MS) {
+                await deps.auditService.log({
+                  userId: null,
+                  action: 'relay.instance.policy.stale_period',
+                  resourceType: 'relay_instance',
+                  resourceId: instance.id,
+                  details: { from: instance.lastSeenAt.toISOString(), to: reportedAt.toISOString() },
+                });
               }
             } else if (msg.dockerBuildEvent) {
               const disposition = await dispatchDockerBuildEvent(activeNodeId, msg.dockerBuildEvent);

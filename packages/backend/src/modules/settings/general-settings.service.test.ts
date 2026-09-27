@@ -109,7 +109,7 @@ describe('GeneralSettingsService feature settings', () => {
     expect(await service.getConfig()).not.toHaveProperty('gatewayPublicIps');
   });
 
-  it('uses a four-hour relay grant TTL and enforces the 1-48 hour range', async () => {
+  it('uses a four-hour relay grant TTL and enforces the 1-224 hour range', async () => {
     const limit = vi.fn().mockResolvedValue([{ value: {} }]);
     const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
     const db = {
@@ -124,9 +124,31 @@ describe('GeneralSettingsService feature settings', () => {
       hideExternalBranding: true,
     });
     await expect(service.updateConfig({ relayGrantTtlHours: 1 })).resolves.toMatchObject({ relayGrantTtlHours: 1 });
-    await expect(service.updateConfig({ relayGrantTtlHours: 48 })).resolves.toMatchObject({ relayGrantTtlHours: 48 });
+    await expect(service.updateConfig({ relayGrantTtlHours: 224 })).resolves.toMatchObject({
+      relayGrantTtlHours: 224,
+    });
     await expect(service.updateConfig({ relayGrantTtlHours: 0 })).rejects.toThrow();
-    await expect(service.updateConfig({ relayGrantTtlHours: 49 })).rejects.toThrow();
+    await expect(service.updateConfig({ relayGrantTtlHours: 225 })).rejects.toThrow();
+  });
+
+  it('uses a seventy-two-hour relay policy lease and enforces the 1-168 hour range', async () => {
+    const limit = vi.fn().mockResolvedValue([{ value: {} }]);
+    const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) })),
+    };
+    const service = new GeneralSettingsService(transactional(db) as never);
+
+    expect((await service.getConfig()).relayPolicyLeaseHours).toBe(72);
+    await expect(service.updateConfig({ relayPolicyLeaseHours: 1 })).resolves.toMatchObject({
+      relayPolicyLeaseHours: 1,
+    });
+    await expect(service.updateConfig({ relayPolicyLeaseHours: 168 })).resolves.toMatchObject({
+      relayPolicyLeaseHours: 168,
+    });
+    await expect(service.updateConfig({ relayPolicyLeaseHours: 0 })).rejects.toThrow();
+    await expect(service.updateConfig({ relayPolicyLeaseHours: 169 })).rejects.toThrow();
   });
 
   it('backfills disabled and applies persisted updates without a restart', async () => {

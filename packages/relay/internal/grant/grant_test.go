@@ -143,7 +143,7 @@ func TestRemoteRelayRequiresInstanceBoundV2Grant(t *testing.T) {
 	}
 	payload := &relayv1.PolicyEnvelopePayload{
 		SchemaVersion: 2, GatewayInstanceId: "gateway-1", PoolId: "system", RelayInstanceId: "relay-1",
-		Revision: 1, IssuedAtUnix: now.Unix(), ExpiresAtUnix: now.Add(policy.PolicyLease).Unix(),
+		Revision: 1, IssuedAtUnix: now.Unix(), ExpiresAtUnix: now.Add(policy.MaxPolicyLease).Unix(),
 		GrantPublicKeys:   []*relayv1.PublicKey{{KeyId: "key-1", PublicKey: grantPublic}},
 		Endpoints:         []*relayv1.EndpointPolicy{{EndpointId: "endpoint-1", Generation: 1, SubjectKind: "daemon", SubjectId: "node-target", CertificateSha256: "sha256:target", PoolId: "system", RelayInstanceId: "relay-1", AssignmentGeneration: 7}},
 		Routes:            []*relayv1.RoutePolicy{{RouteId: "route-1", Generation: 1, SourceKind: "daemon", SourceId: "node-source", SourceCertificateSha256: "sha256:source", TargetEndpointId: "endpoint-1", AssignmentGeneration: 7}},
