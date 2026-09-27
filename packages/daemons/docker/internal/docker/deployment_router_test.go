@@ -445,3 +445,41 @@ func TestStartDeploymentRefusesToReplaceForeignRouter(t *testing.T) {
 		t.Fatal("an unowned container must never be removed")
 	}
 }
+
+func TestSwitchDeploymentStartsAStoppedRouter(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	configs, _ := simulateNginxRouter(engine)
+	engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-blue", Labels: deploymentLabels("app", "blue")})
+	engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-green", Labels: deploymentLabels("app", "green"), Running: true})
+	options, err := deploymentRouterCreateOptions(deploymentCommandPayload{
+		DeploymentID: "dep-1", RouterName: "gwdep-dep-1-router", NetworkName: "gwdep-dep-1", Routes: testDeploymentRoutes,
+	}, "blue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stopped when the deployment was killed.
+	router := engine.addContainer(&fakeContainer{
+		Name:          "gwdep-dep-1-router",
+		Cmd:           options.Config.Cmd,
+		Labels:        options.Config.Labels,
+		RestartPolicy: options.HostConfig.RestartPolicy.Name,
+		PortBindings:  options.HostConfig.PortBindings,
+	})
+	configs[router.ID] = renderDeploymentNginx(testDeploymentRoutes, "blue")
+
+	if _, err := client.SwitchDeployment(context.Background(), deploymentCommandPayload{
+		DeploymentID: "dep-1",
+		ActiveSlot:   "green",
+		Force:        true,
+		Deployment:   testDeploymentSnapshot("blue"),
+	}); err != nil {
+		t.Fatalf("switch deployment: %v", err)
+	}
+	current := engine.byName("gwdep-dep-1-router")
+	if !current.Running {
+		t.Fatal("switch must start the stopped router")
+	}
+	if !strings.Contains(configs[current.ID], "green:3000") {
+		t.Fatalf("router serves %q after switch", configs[current.ID])
+	}
+}

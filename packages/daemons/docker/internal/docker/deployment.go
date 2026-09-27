@@ -482,6 +482,11 @@ func (c *Client) SwitchDeployment(ctx context.Context, payload deploymentCommand
 			return nil, err
 		}
 	}
+	// A deployment that was stopped or killed has a stopped router; switching
+	// traffic must bring it back instead of failing on the config reload.
+	if _, err := c.ensureDeploymentRouterRunning(ctx, dep); err != nil {
+		return nil, err
+	}
 	config := renderDeploymentNginx(dep.Routes, activeSlot)
 	if err := c.writeRouterConfig(ctx, dep.RouterName, config); err != nil {
 		return nil, err
@@ -527,6 +532,11 @@ func (c *Client) UpdateDeploymentRouter(ctx context.Context, payload deploymentC
 		}
 		return map[string]string{"routerId": routerID}, nil
 	}
+	routerDep := dep
+	routerDep.RouterName, routerDep.RouterImage, routerDep.NetworkName, routerDep.Routes = payload.RouterName, payload.RouterImage, payload.NetworkName, routes
+	if _, err := c.ensureDeploymentRouterRunning(ctx, routerDep); err != nil {
+		return nil, err
+	}
 	if err := c.writeRouterConfig(ctx, payload.RouterName, renderDeploymentNginx(routes, dep.ActiveSlot)); err != nil {
 		if killErr := c.KillDeployment(ctx, payload); killErr != nil {
 			return nil, fmt.Errorf("%w; deployment kill after router failure failed: %v", err, killErr)
@@ -570,13 +580,15 @@ func (c *Client) StartDeployment(ctx context.Context, payload deploymentCommandP
 	if err != nil {
 		return nil, err
 	}
+	// The router comes back even when the active slot is unhealthy, so a
+	// following deploy to the other slot can switch traffic.
+	if _, err := c.ensureDeploymentRouterRunning(ctx, dep); err != nil {
+		return nil, err
+	}
 	if !payload.Force {
 		if err := c.waitDeploymentReady(ctx, dep.NetworkName, slotName, dep.Routes, dep.HealthConfig); err != nil {
 			return nil, err
 		}
-	}
-	if _, err := c.ensureDeploymentRouterRunning(ctx, dep); err != nil {
-		return nil, err
 	}
 	if err := c.writeRouterConfig(ctx, dep.RouterName, renderDeploymentNginx(dep.Routes, dep.ActiveSlot)); err != nil {
 		return nil, err
