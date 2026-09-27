@@ -28,8 +28,8 @@ type round struct {
 }
 
 func (n *Node) startRound(pk *proposerKey, manifest *Manifest, purpose Role, now time.Duration) {
-	config := n.currentConfig()
-	if config == nil {
+	config := manifest.Voters
+	if config == nil || len(config.sets) == 0 || pk.key.Slot >= manifest.Slots {
 		return
 	}
 	next := pk.maxRound

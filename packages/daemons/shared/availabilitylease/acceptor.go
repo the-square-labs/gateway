@@ -119,17 +119,18 @@ func (n *Node) nextEcho() uint64 {
 	return n.incarnation<<32 | n.echoSeq&0xffffffff
 }
 
-// voting reports whether this node's votes count now: it is in a quorum set
-// and the restart abstention (A3) has passed.
-func (n *Node) voting(now time.Duration) bool {
-	config := n.currentConfig()
+// voting reports whether this node's votes for a policy count now: it is in
+// one of the policy's quorum sets (A18) and the restart abstention (A3) has
+// passed.
+func (n *Node) voting(policyID string, now time.Duration) bool {
+	config := n.policyConfig(policyID)
 	return config != nil && config.isVoter(n.id) && now >= n.startedAt+AbstainAfterStart
 }
 
 // validateProposal applies the manifest, epoch and candidacy checks (A4).
 func (n *Node) validateProposal(from string, key Key, epoch, version uint64) (*Manifest, pb.LeaseNackReason) {
 	manifest := n.manifests[key.PolicyID]
-	config := n.currentConfig()
+	config := n.policyConfig(key.PolicyID)
 	switch {
 	case manifest == nil:
 		return nil, pb.LeaseNackReason_LEASE_NACK_REASON_UNKNOWN_POLICY
@@ -180,7 +181,7 @@ func (n *Node) nack(to string, key Key, ballot Ballot, reason pb.LeaseNackReason
 		Key: key.proto(), Ballot: ballot.proto(), Reason: reason, HolderId: holder,
 		AcceptorIncarnation: n.incarnation,
 	}
-	if config := n.currentConfig(); config != nil {
+	if config := n.policyConfig(key.PolicyID); config != nil {
 		nack.Epoch = config.Epoch
 	}
 	if manifest := n.manifests[key.PolicyID]; manifest != nil {
@@ -214,7 +215,7 @@ func (n *Node) onPrepare(from string, msg *pb.LeasePrepare, now time.Duration) {
 		n.nack(from, key, ballot, reason, holder, ak)
 		return
 	}
-	voting := n.voting(now)
+	voting := n.voting(key.PolicyID, now)
 	if voting {
 		if ak.rec.Promised.Less(ballot) {
 			ak.rec.Promised = ballot
@@ -246,7 +247,7 @@ func (n *Node) onPropose(from string, msg *pb.LeasePropose, now time.Duration) {
 		n.nack(from, key, ballot, reason, holder, ak)
 		return
 	}
-	voting := n.voting(now)
+	voting := n.voting(key.PolicyID, now)
 	if voting {
 		if ak.rec.Promised.Less(ballot) {
 			ak.rec.Promised = ballot
@@ -347,7 +348,7 @@ func (n *Node) keyState(ak *acceptorKey, manifest *Manifest, key Key, now time.D
 	switch {
 	case manifest.Closed:
 		return pb.LeaseKeyState_LEASE_KEY_STATE_CLOSED, "", ""
-	case !n.voting(now):
+	case !n.voting(key.PolicyID, now):
 		return pb.LeaseKeyState_LEASE_KEY_STATE_ABSTAINING, ak.lease.holder, ""
 	}
 	if holder := manifest.Bootstrap[key.Slot]; holder != "" && ak.rec.BootstrapSatisfied != manifest.BootstrapID {
@@ -363,13 +364,12 @@ func (n *Node) keyState(ak *acceptorKey, manifest *Manifest, key Key, now time.D
 }
 
 func (n *Node) onQuery(from string, msg *pb.LeaseQuery, now time.Duration) {
-	config := n.currentConfig()
 	for _, value := range msg.GetKeys() {
 		key, ok := keyFromProto(value)
 		if !ok {
 			continue
 		}
-		manifest := n.manifests[key.PolicyID]
+		manifest, config := n.manifests[key.PolicyID], n.policyConfig(key.PolicyID)
 		if manifest == nil || config == nil {
 			// Report that we lag so the querier forwards its blocks (A4).
 			status := &pb.LeaseStatus{Key: key.proto()}

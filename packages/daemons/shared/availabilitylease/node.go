@@ -51,8 +51,10 @@ type Node struct {
 	incarnation uint64
 	startedAt   time.Duration
 	chain       *keyChain
-	configs     []*VoterConfig
-	manifests   map[string]*Manifest
+	// history keeps each policy's recent voter configs, oldest first, to
+	// verify commits formed under an earlier voter epoch.
+	history   map[string][]*VoterConfig
+	manifests map[string]*Manifest
 
 	acceptors map[Key]*acceptorKey
 	proposers map[Key]*proposerKey
@@ -93,7 +95,7 @@ func NewNode(cfg Config) (*Node, error) {
 	n := &Node{
 		id: cfg.ID, clock: cfg.Clock, store: cfg.Store, transport: cfg.Transport, signer: cfg.Signer,
 		verifier: cfg.Verifier, logf: cfg.Logf, chain: newKeyChain(), manifests: map[string]*Manifest{},
-		acceptors: map[Key]*acceptorKey{}, proposers: map[Key]*proposerKey{}, ready: map[string]bool{},
+		history: map[string][]*VoterConfig{}, acceptors: map[Key]*acceptorKey{}, proposers: map[Key]*proposerKey{}, ready: map[string]bool{},
 		outbox: map[string][]*pb.LeaseItem{}, attach: map[string]map[string]bool{}, dirty: map[Key]bool{},
 		dirtyOther: map[string][]byte{}, seen: map[string]struct{}{}, peers: map[string]uint64{},
 		forwarded: map[string]forwardMark{},
@@ -144,13 +146,13 @@ func (n *Node) restore(records map[string][]byte) error {
 			if proto.Unmarshal(data, link) == nil {
 				n.chain.links[link.GetKeyId()] = link
 			}
-		case strings.HasPrefix(name, prefixConfig):
+		case strings.HasPrefix(name, prefixVoters):
 			block := &pb.LeaseSignedBlock{}
 			if proto.Unmarshal(data, block) != nil {
 				continue
 			}
-			if config, err := parseVoterConfig(block); err == nil {
-				n.configs = append(n.configs, config)
+			if manifest, err := parseManifest(block); err == nil {
+				n.rememberVoters(manifest.Voters)
 			}
 		case strings.HasPrefix(name, prefixManifest):
 			block := &pb.LeaseSignedBlock{}
@@ -159,6 +161,7 @@ func (n *Node) restore(records map[string][]byte) error {
 			}
 			if manifest, err := parseManifest(block); err == nil {
 				n.manifests[manifest.PolicyID] = manifest
+				n.rememberVoters(manifest.Voters)
 			}
 		case strings.HasPrefix(name, prefixKey):
 			record, err := decodeKeyRecord(data)
@@ -178,7 +181,6 @@ func (n *Node) restore(records map[string][]byte) error {
 			n.acceptors[key] = restoreAcceptorKey(record)
 		}
 	}
-	sort.Slice(n.configs, func(i, j int) bool { return n.configs[i].Epoch < n.configs[j].Epoch })
 	return nil
 }
 
@@ -329,9 +331,6 @@ func (n *Node) commitLocked(now time.Duration) []outgoing {
 			SenderId:  n.id, SenderIncarnation: n.incarnation, DestinationId: dest, Items: n.outbox[dest],
 		}
 		if policies := n.attach[dest]; len(policies) > 0 {
-			if config := n.currentConfig(); config != nil {
-				batch.Blocks = append(batch.Blocks, config.block)
-			}
 			for _, policyID := range sortedKeys(policies) {
 				if manifest := n.manifests[policyID]; manifest != nil {
 					batch.Blocks = append(batch.Blocks, manifest.block)
@@ -365,15 +364,17 @@ func (n *Node) send(out []outgoing) {
 
 func (n *Node) markDirty(key Key) { n.dirty[key] = true }
 
-func (n *Node) currentConfig() *VoterConfig {
-	if len(n.configs) == 0 {
-		return nil
+// policyConfig returns the current voter set of a policy (A18).
+func (n *Node) policyConfig(policyID string) *VoterConfig {
+	if manifest := n.manifests[policyID]; manifest != nil {
+		return manifest.Voters
 	}
-	return n.configs[len(n.configs)-1]
+	return nil
 }
 
-func (n *Node) configByEpoch(epoch uint64) *VoterConfig {
-	for _, config := range n.configs {
+// configByEpoch returns a policy's voter config of an epoch, when known.
+func (n *Node) configByEpoch(policyID string, epoch uint64) *VoterConfig {
+	for _, config := range n.history[policyID] {
 		if config.Epoch == epoch {
 			return config
 		}
@@ -381,16 +382,51 @@ func (n *Node) configByEpoch(epoch uint64) *VoterConfig {
 	return nil
 }
 
-// identityKey resolves a frame sender among config members and candidates.
+// rememberVoters records a policy's voter config in its bounded history.
+// It reports whether the epoch was new.
+func (n *Node) rememberVoters(config *VoterConfig) bool {
+	if config == nil || config.Epoch == 0 {
+		return false
+	}
+	list := n.history[config.PolicyID]
+	for i, known := range list {
+		if known.Epoch == config.Epoch {
+			list[i] = config
+			return false
+		}
+	}
+	list = append(list, config)
+	sort.Slice(list, func(i, j int) bool { return list[i].Epoch < list[j].Epoch })
+	for len(list) > configHistory {
+		n.deletes = append(n.deletes, votersRecordName(config.PolicyID, list[0].Epoch))
+		list = list[1:]
+	}
+	n.history[config.PolicyID] = list
+	return true
+}
+
+func votersRecordName(policyID string, epoch uint64) string {
+	return fmt.Sprintf("%s%s/%020d", prefixVoters, policyID, epoch)
+}
+
+// identityKey resolves a frame sender among every policy's members and
+// candidates. Being known to one policy does not make a node a voter of
+// another: votes are always checked against the key's own policy.
 func (n *Node) identityKey(id string) ([]byte, bool) {
-	for i := len(n.configs) - 1; i >= 0; i-- {
-		if key, ok := n.configs[i].publicKey(id); ok {
+	for _, policyID := range sortedKeys(n.manifests) {
+		manifest := n.manifests[policyID]
+		if key, ok := manifest.keys[id]; ok {
+			return key, true
+		}
+		if key, ok := manifest.Voters.publicKey(id); ok {
 			return key, true
 		}
 	}
-	for _, policyID := range sortedKeys(n.manifests) {
-		if key, ok := n.manifests[policyID].keys[id]; ok {
-			return key, true
+	for _, policyID := range sortedKeys(n.history) {
+		for _, config := range n.history[policyID] {
+			if key, ok := config.publicKey(id); ok {
+				return key, true
+			}
 		}
 	}
 	return nil, false

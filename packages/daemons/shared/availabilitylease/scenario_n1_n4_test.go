@@ -53,7 +53,7 @@ func TestN1ResumedHolderReachingOnlyStaleRelayIsRefused(t *testing.T) {
 	// the gate either. The resumed proposer cannot send a propose without a
 	// quorum of promises, so inject one.
 	fresh := Ballot{Round: 5000, Incarnation: d1.node.Incarnation(), Proposer: "d1"}
-	epoch, version := r2.node.Epoch(), r2.node.ManifestVersion("p1")
+	epoch, version := r2.node.Epoch("p1"), r2.node.ManifestVersion("p1")
 	w.injectFrom("d1", "r2", &pb.LeaseItem{Body: &pb.LeaseItem_Prepare{Prepare: &pb.LeasePrepare{
 		Key: keyP1.proto(), Ballot: fresh.proto(), Epoch: epoch, ManifestVersion: version}}})
 	w.runUntil(w.now + time.Second)
@@ -85,7 +85,7 @@ func TestN1ResumedHolderReachingOnlyStaleRelayIsRefused(t *testing.T) {
 		if !w.waitFor(2*RenewInterval, func() bool { return r1.node.Gate(keyP1).Open }) {
 			t.Fatalf("gate at the restarted relay closed for more than two renewals: %+v", r1.node.Gate(keyP1))
 		}
-		if r1.node.voting(r1.local()) {
+		if r1.node.voting("p1", r1.local()) {
 			t.Fatal("restarted relay should still abstain")
 		}
 		w.requireClean(t)
@@ -145,7 +145,7 @@ func TestN3HigherBallotNackRetriesInsteadOfFencing(t *testing.T) {
 	r3 := w.nodes["r3"].node
 	high := Ballot{Round: 1000, Incarnation: w.nodes["d2"].node.Incarnation(), Proposer: "d2"}
 	w.injectFrom("d2", "r3", &pb.LeaseItem{Body: &pb.LeaseItem_Prepare{Prepare: &pb.LeasePrepare{
-		Key: keyP1.proto(), Ballot: high.proto(), Epoch: r3.Epoch(), ManifestVersion: r3.ManifestVersion("p1"),
+		Key: keyP1.proto(), Ballot: high.proto(), Epoch: r3.Epoch("p1"), ManifestVersion: r3.ManifestVersion("p1"),
 	}}})
 	w.runUntil(w.now + time.Second)
 	if r3.acceptors[keyP1].promised() != high {
