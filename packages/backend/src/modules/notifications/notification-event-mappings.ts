@@ -300,7 +300,8 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
     {
       category: 'gateway',
       eventId: 'relay.unavailable',
-      match: () => true,
+      // A revocation report concerns one relay instance, not the Gateway relay's availability.
+      match: (p) => p.action !== 'revocation_fence',
       extractResource: () => ({ type: 'gateway', id: 'gateway-relay', name: 'Gateway relay' }),
       extractData: (p) => ({ failure_code: p.reason ?? null, attempt: p.attempt ?? 0 }),
       stateful: {
@@ -311,6 +312,21 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
               ? 'relay.recovering'
               : 'relay.healthy',
         observedPatterns: ['relay.recovering', 'relay.unavailable'],
+      },
+    },
+    {
+      category: 'gateway',
+      eventId: 'relay.revocation_stale',
+      match: (p) => p.action === 'revocation_fence' && typeof p.instanceId === 'string',
+      extractResource: (p) => ({
+        type: 'gateway',
+        id: `gateway-relay-instance:${p.instanceId}`,
+        name: p.instanceName ?? p.instanceId,
+      }),
+      extractData: (p) => ({ relay_instance_id: p.instanceId, stale_routes: p.staleRoutes ?? 0 }),
+      stateful: {
+        currentState: (p) => (p.revocationStale ? 'relay.revocation_stale' : 'relay.revocation_applied'),
+        observedPatterns: ['relay.revocation_stale'],
       },
     },
   ],

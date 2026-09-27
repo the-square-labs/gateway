@@ -794,6 +794,20 @@ export interface SyncRelayGrantsCommand {
   grants: RelayGrantAssignment[];
   dataLanes?: number;
   readChunkBytes?: number;
+  revocationFences?: RelayRevocationFence[];
+}
+
+/** A relay that missed a revoking policy; the endpoint refuses the listed routes through it. */
+export interface RelayRevocationFence {
+  relayInstanceId: string;
+  endpointId: string;
+  routes: RelayRevokedRoute[];
+}
+
+export interface RelayRevokedRoute {
+  routeId: string;
+  /** uint64 as string; "0" when the route no longer targets the endpoint. */
+  allowedGeneration: string;
 }
 
 /** Complete desired set of Proxy Host secure-link listeners or bindings. */

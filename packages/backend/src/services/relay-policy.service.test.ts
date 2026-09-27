@@ -227,6 +227,36 @@ describe('RelayPolicyService route runtime', () => {
     );
     expect(expression.params).toEqual([900, 0, 900, 1_000_000]);
   });
+  it('records the route tuples each relay snapshot carries and keeps dropped ones until acknowledged', async () => {
+    const dropped = { routeId: 'route-old', endpointId: 'endpoint', routeGeneration: 1, endpointGeneration: 2 };
+    const rows = [
+      [{ revision: 900, gatewayInstanceId: 'gateway' }],
+      [{ id: 'remote', poolId: 'system', policyRoutes: [dropped] }],
+      [],
+      [{ endpointId: 'endpoint', assignmentGeneration: 3, generationState: 'active' }],
+      [{ id: 'endpoint', generation: 2, subjectKind: 'daemon', subjectId: 'node', certificateSha256: 'sha256:n' }],
+      [{ id: 'route-new', generation: 5, targetEndpointId: 'endpoint', sourceKind: 'daemon', ownerKind: 'x' }],
+    ];
+    const select = () => {
+      const q: any = Promise.resolve(rows.shift());
+      for (const method of ['from', 'where', 'limit', 'innerJoin', 'for']) q[method] = () => q;
+      return q;
+    };
+    const set = vi.fn(() => ({ where: () => ({ returning: async () => [{ revision: 901 }] }) }));
+    const db: any = { select, execute: vi.fn(), update: () => ({ set }) };
+    db.transaction = (fn: any) => fn(db);
+    const service = createService(db, { applySnapshot: vi.fn() });
+    (service as any).policyKeys.resolveInstancePolicyKeys = async () => ({ signingKeyId: 'test', keys: [] });
+    (service as any).policyKeys.signPayload = async () => ({ signingKeyId: 'test', signature: Buffer.alloc(64) });
+    await (service as any).buildInstanceSnapshot('remote');
+    expect((set.mock.calls[1] as any)[0]).toEqual({
+      policyRoutes: [
+        { routeId: 'route-new', endpointId: 'endpoint', routeGeneration: 5, endpointGeneration: 2 },
+        { ...dropped, removedAtRevision: 901 },
+      ],
+    });
+  });
+
   it('reads managed database binding runtime from its owned Relay route', async () => {
     const limit = vi.fn().mockResolvedValue([{ id: 'route-binding-1' }]);
     const where = vi.fn(() => ({ limit }));

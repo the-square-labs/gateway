@@ -83,6 +83,25 @@ export interface RelayInstanceHealth {
   lastError?: string;
 }
 
+/**
+ * One route tuple a relay may admit, as the policy snapshots built for it carried it. A tuple
+ * missing from a later snapshot stays until the relay acknowledges that snapshot. A tuple Gateway
+ * no longer allows (route deleted, or its generation or target endpoint generation changed) is a
+ * revocation; unacknowledged past the deadline, the relay is stale for that route.
+ */
+export interface RelayPolicyRouteEntry {
+  routeId: string;
+  endpointId: string;
+  routeGeneration: number;
+  endpointGeneration: number;
+  /** First pool revision built without this tuple (or issued after it was revoked). */
+  removedAtRevision?: number;
+  /** When Gateway first saw the tuple revoked while the relay could still admit it. */
+  revokedAt?: string;
+  /** When the relay missed the acknowledgement deadline for the revocation. */
+  staleAt?: string;
+}
+
 export interface RelayManagedDatabaseListenerConfig {
   networkName: string;
   listenAddress: string;
@@ -272,6 +291,7 @@ export const relayInstances = pgTable(
     policyExpiresAt: timestamp('policy_expires_at', { withTimezone: true }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     health: jsonb('health').$type<RelayInstanceHealth>(),
+    policyRoutes: jsonb('policy_routes').$type<RelayPolicyRouteEntry[]>(),
     desiredArtifact: jsonb('desired_artifact').$type<RelayArtifactDescriptor>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

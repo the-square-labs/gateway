@@ -295,6 +295,35 @@ describe('evaluateWindowRatio', () => {
     expect(mapping.stateful?.currentState({ status: 'valid', plan: 'business' })).toBe('license.healthy');
   });
 
+  it('alerts per relay instance on a missed route revocation without touching relay availability', () => {
+    const [availability, revocation] = EVENT_BUS_MAPPINGS['system.relay.health.changed'];
+    const stale = {
+      poolId: 'system',
+      instanceId: 'relay-1',
+      instanceName: 'edge-1',
+      action: 'revocation_fence',
+      revocationStale: true,
+      staleRoutes: 2,
+    };
+
+    expect(availability.match(stale)).toBe(false);
+    expect(availability.match({ state: 'critical' })).toBe(true);
+    expect(revocation.match(stale)).toBe(true);
+    expect(revocation.match({ state: 'critical' })).toBe(false);
+    expect(revocation.extractResource(stale)).toEqual({
+      type: 'gateway',
+      id: 'gateway-relay-instance:relay-1',
+      name: 'edge-1',
+    });
+    expect(revocation.extractData?.(stale)).toEqual({ relay_instance_id: 'relay-1', stale_routes: 2 });
+    expect(revocation.stateful?.currentState(stale)).toBe('relay.revocation_stale');
+    expect(revocation.stateful?.currentState({ ...stale, revocationStale: false })).toBe('relay.revocation_applied');
+    expect(eventSupportsThreshold('gateway', 'relay.revocation_stale')).toBe(true);
+    expect(ALERT_CATEGORIES.find(({ id }) => id === 'gateway')?.events.map(({ id }) => id)).toContain(
+      'relay.revocation_stale'
+    );
+  });
+
   it('skips Docker container state-only rows for metric extraction', () => {
     const result = extractMetricFromHealthReport('container', 'cpu', {
       containerStats: [
