@@ -113,6 +113,8 @@ export function AuthProvisioningSection({
     setGatewayGrpcLocalIp,
     relayGrantTtlHours,
     setRelayGrantTtlHours,
+    relayPolicyLeaseHours,
+    setRelayPolicyLeaseHours,
     pkiEnabled,
     setPkiEnabled,
     siemEnabled,
@@ -247,19 +249,46 @@ export function AuthProvisioningSection({
                   />
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Lifetime of newly issued relay grants, in hours (1–48)
+                  Lifetime of newly issued relay grants, in hours (1–224)
                 </p>
               </div>
               <Input
                 className="w-28 shrink-0"
                 type="number"
                 min={1}
-                max={48}
+                max={224}
                 step={1}
                 value={relayGrantTtlHours}
                 disabled={!canEdit || isSavingGeneral}
                 aria-label="Relay grant lifetime hours"
                 onChange={(event) => setRelayGrantTtlHours(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void saveAccessSettings();
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium">
+                  <SettingsHelpTitle
+                    label="Relay policy lease"
+                    help="A relay keeps admitting on its last known policy until this lease expires, so it can keep serving through a Gateway outage."
+                  />
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Lifetime of the signed policy pushed to a relay, in hours (1–168)
+                </p>
+              </div>
+              <Input
+                className="w-28 shrink-0"
+                type="number"
+                min={1}
+                max={168}
+                step={1}
+                value={relayPolicyLeaseHours}
+                disabled={!canEdit || isSavingGeneral}
+                aria-label="Relay policy lease hours"
+                onChange={(event) => setRelayPolicyLeaseHours(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void saveAccessSettings();
                 }}

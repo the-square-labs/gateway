@@ -29,6 +29,7 @@ const SETTINGS: AuthProvisioningSettings = {
     gatewayGrpcLocalIp: null,
     relayAutoRecovery: true,
     relayGrantTtlHours: 4,
+    relayPolicyLeaseHours: 72,
     shutdown: {
       userRequestDrainSeconds: 30,
       structuredLogDrainSeconds: 5,
