@@ -90,6 +90,7 @@ describe("Availability request stability", () => {
       nodePriority: [],
       failbackDelaySeconds: 300,
       partitionMode: "strict",
+      witness: null,
       status: "disabling",
       lastErrorCode: null,
       lastErrorMessage: null,

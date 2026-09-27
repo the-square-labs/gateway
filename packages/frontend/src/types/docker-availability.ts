@@ -24,9 +24,25 @@ export interface DockerAvailabilityPolicyInput {
   nodePriority: string[];
   failbackDelaySeconds: number;
   partitionMode: DockerAvailabilityPartitionMode;
+  /** A relay instance id or node id that is not a candidate of this policy; null means automatic
+   * selection (the eligible member with the largest minimum RTT to every candidate). */
+  witness: string | null;
 }
 
 export type DockerAvailabilityLeaseMode = "legacy" | "bootstrapping" | "lease" | "closing";
+
+export type DockerAvailabilityLeaseWitnessKind = "relay" | "node";
+export type DockerAvailabilityLeaseWitnessWarning = "same_site" | "none_eligible";
+
+/** Read-only resolved witness of a policy's lease: the chosen member, whether it was picked
+ * automatically, its minimum RTT to the candidates, and any siting warning. */
+export interface DockerAvailabilityLeaseWitness {
+  memberId: string;
+  kind: DockerAvailabilityLeaseWitnessKind;
+  auto: boolean;
+  minRttMs: number | null;
+  warning: DockerAvailabilityLeaseWitnessWarning | null;
+}
 
 export interface DockerAvailabilityLeaseReason {
   code: string;
@@ -71,6 +87,7 @@ export interface DockerAvailabilityLease {
   strictPending: boolean;
   copiesStoppedAt: string | null;
   voterMargin: DockerAvailabilityLeaseVoterMargin | null;
+  witness: DockerAvailabilityLeaseWitness | null;
 }
 
 export interface DockerAvailabilityIssue {
@@ -196,6 +213,7 @@ export interface DockerAvailabilityPolicy {
   nodePriority: string[];
   failbackDelaySeconds: number;
   partitionMode: DockerAvailabilityPartitionMode;
+  witness: string | null;
   status:
     | "single"
     | "enabling"

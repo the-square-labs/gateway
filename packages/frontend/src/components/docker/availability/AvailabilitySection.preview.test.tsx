@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { AvailabilitySection, canKeepPlacement } from "./AvailabilitySection";
@@ -25,6 +26,7 @@ beforeEach(() => {
     warnings: [],
   } as never);
   vi.spyOn(api, "enableDockerAvailability").mockResolvedValue({} as never);
+  vi.spyOn(api, "getRelayStatus").mockResolvedValue(null);
 });
 
 describe("Availability public preview consent", () => {
@@ -116,6 +118,33 @@ describe("Availability public preview consent", () => {
     await waitFor(() => expect(api.enableDockerAvailability).toHaveBeenCalledOnce());
     expect(api.enableDockerAvailability).toHaveBeenCalledWith(
       expect.objectContaining({ partitionMode: "available" })
+    );
+  });
+
+  it("lets an operator pick a witness relay instance, and wires it through enable", async () => {
+    vi.spyOn(api, "getRelayStatus").mockResolvedValue({
+      instances: [{ id: "relay-1", displayName: "Relay One" }],
+    } as never);
+    const user = userEvent.setup();
+    render(
+      <AvailabilitySection
+        resource={{ type: "deployment", deploymentId: "deployment-1" }}
+        canManage
+      />
+    );
+    await screen.findByText("Tech Preview");
+    fireEvent.click(screen.getByRole("button", { name: "Enable Availability" }));
+
+    const witnessSelect = await screen.findByRole("combobox", { name: "Witness" });
+    expect(within(witnessSelect).getByText("Auto (farthest by latency)")).toBeInTheDocument();
+    await user.click(witnessSelect);
+    await user.click(await screen.findByRole("option", { name: "Relay One" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enable Tech Preview" }));
+    await waitFor(() => expect(api.enableDockerAvailability).toHaveBeenCalledOnce());
+    expect(api.enableDockerAvailability).toHaveBeenCalledWith(
+      expect.objectContaining({ witness: "relay-1" })
     );
   });
 });

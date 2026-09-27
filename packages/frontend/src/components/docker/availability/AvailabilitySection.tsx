@@ -30,6 +30,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type {
+  DashboardRelayInstance,
   DockerAvailabilityIssue,
   DockerAvailabilityMode,
   DockerAvailabilityPartitionMode,
@@ -40,6 +41,7 @@ import type {
   Node,
 } from "@/types";
 import { AvailabilityPriorityControls } from "./AvailabilityPriorityControls";
+import { AvailabilityWitnessControls } from "./AvailabilityWitnessControls";
 import { effectivePriorityOrder } from "./availability-priority";
 import { resolveAvailabilitySurfaceStatus } from "./availability-status";
 import { useStableAvailabilityResource } from "./use-stable-availability-resource";
@@ -185,6 +187,7 @@ export function AvailabilitySection({
 }) {
   const [policy, setPolicy] = useState<DockerAvailabilityPolicy | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
+  const [relayInstances, setRelayInstances] = useState<DashboardRelayInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -203,6 +206,7 @@ export function AvailabilitySection({
   const [nodePriority, setNodePriority] = useState<string[]>([]);
   const [failbackDelay, setFailbackDelay] = useState("300");
   const [partitionMode, setPartitionMode] = useState<DockerAvailabilityPartitionMode>("strict");
+  const [witness, setWitness] = useState<string | null>(null);
   const [disableOpen, setDisableOpen] = useState(false);
   const [survivorId, setSurvivorId] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -213,12 +217,15 @@ export function AvailabilitySection({
   const load = useCallback(
     async (preserveDraft = dirtyRef.current) => {
       try {
-        const [nextPolicy, nodeResult] = await Promise.all([
+        const [nextPolicy, nodeResult, relayStatus] = await Promise.all([
           api.getDockerAvailability(stableResource),
           api.listNodes({ type: "docker", limit: 100 }),
+          // Missing relay-view access just leaves the witness selector without relay candidates.
+          api.getRelayStatus().catch(() => null),
         ]);
         setPolicy(nextPolicy);
         setNodes(nodeResult.data);
+        setRelayInstances(relayStatus?.instances ?? []);
         const syncDraft = !preserveDraft || !nextPolicy || nextPolicy.status === "disabling";
         if (syncDraft) {
           setEnabledDraft(
@@ -247,6 +254,7 @@ export function AvailabilitySection({
             setNodePriority(nextPolicy.nodePriority);
             setFailbackDelay(String(nextPolicy.failbackDelaySeconds));
             setPartitionMode(nextPolicy.partitionMode);
+            setWitness(nextPolicy.witness);
           }
         }
       } catch (error) {
@@ -300,6 +308,7 @@ export function AvailabilitySection({
       nodePriority: priorityMode ? priorityOrder : nodePriority,
       failbackDelaySeconds: Math.min(3600, Math.max(0, Number(failbackDelay) || 0)),
       partitionMode,
+      witness,
     }),
     [
       drainSeconds,
@@ -316,6 +325,7 @@ export function AvailabilitySection({
       stableResource,
       selectedNodeIds,
       selectionMode,
+      witness,
     ]
   );
   const compatibleNodeIds = new Set(
@@ -357,6 +367,7 @@ export function AvailabilitySection({
       Number(maxSurge) !== policy.rolloutPolicy.maxSurge ||
       Number(drainSeconds) !== policy.rolloutPolicy.drainSeconds ||
       partitionMode !== policy.partitionMode ||
+      witness !== policy.witness ||
       priorityMode !== policy.priorityMode ||
       (priorityMode &&
         (Number(failbackDelay) !== policy.failbackDelaySeconds ||
@@ -644,6 +655,14 @@ export function AvailabilitySection({
             (indexers, queue consumers, cron).
           </p>
         )}
+        <AvailabilityWitnessControls
+          nodes={nodes}
+          relayInstances={relayInstances}
+          candidateNodeIds={new Set(eligibleNodeIds)}
+          witness={witness}
+          onWitnessChange={setWitness}
+          disabled={!canManage || !enabledDraft}
+        />
         <SettingsControlRow
           title="Replacement grace"
           description="Wait briefly for a disconnected node before creating a replacement."
