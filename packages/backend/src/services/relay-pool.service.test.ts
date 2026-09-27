@@ -949,6 +949,51 @@ describe('RelayPoolService placement during updates and mixed versions', () => {
     );
   });
 
+  it('keeps the plan of a first latency placement stable while round trips jitter', async () => {
+    const enrolled = (id: string) => ({
+      ...instance(id, `${id}-host`),
+      certificateIdentity: id,
+      certificateFingerprint: `sha256:${id}`,
+      capabilities: { features: ['relay_pool_v1'] },
+    });
+    const active = { id: 'old', endpointId: 'endpoint', generation: 1, state: 'active' };
+    const rounds = 6;
+    const rows = Array.from({ length: rounds }, () => [
+      [enrolled('near-a'), enrolled('near-b'), enrolled('far')],
+      [{ id: 'endpoint', ownerKind: 'managed_database', subjectKind: 'daemon', subjectId: 'node' }],
+      [active],
+      [
+        { assignmentGenerationId: 'old', relayInstanceId: 'near-a', role: 'active' },
+        { assignmentGenerationId: 'old', relayInstanceId: 'far', role: 'active' },
+      ],
+      [],
+      [],
+      [],
+    ]).flat();
+    const { pool, policy } = service(queuedDb(rows).db);
+    (policy as any).poolIncapableEndpointIds = vi.fn().mockResolvedValue(new Set());
+    let round = 0;
+    // near-b alternates across the line 20% above near-a on every reconciliation.
+    const endpointPaths = vi.fn(async () => {
+      const nearB = round++ % 2 ? 12.3 : 11.9;
+      const endpoint = new Map([
+        ['near-a', 10],
+        ['near-b', nearB],
+        ['far', 40],
+      ]);
+      return new Map([['endpoint', { endpoint, sources: [] }]]);
+    });
+    pool.setTopology({ endpointPaths });
+    const keys = new Set<string>();
+    for (let index = 0; index < rounds; index += 1) {
+      const snapshot = await pool.getSnapshot();
+      expect(snapshot.rebalanceEndpointIds).toEqual(['endpoint']);
+      keys.add(snapshot.rebalancePlanKey);
+    }
+    // One plan throughout, so the 30 s settle completes and the placement is staged.
+    expect(keys.size).toBe(1);
+  });
+
   it('keeps a workload whose path has a daemon without pool support on the local relay', async () => {
     const local = {
       ...instance('local', 'gateway-host'),

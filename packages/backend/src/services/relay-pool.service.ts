@@ -80,20 +80,20 @@ function effectiveCount(spread: RelayAssignmentSpread, readyCount: number): numb
  * Places one endpoint. A path with a daemon that lacks Relay Pool support runs on legacy grants,
  * which only the local relay serves: such workloads stay there until every participant is updated.
  */
-function planEndpoint(
+function planRelays(
   endpointId: string,
   instances: RelayInstanceRow[],
   desiredCount: number,
   localOnly: boolean,
   path: EndpointLatencyPath | undefined,
-  current: Array<{ relayInstanceId: string; role: string }>
+  reference: ReadonlyArray<{ relayInstanceId: string; role: string }>
 ): PlannedRelayAssignment[] {
   if (localOnly) {
     return instances
       .filter(({ kind, state }) => kind === 'local' && state === 'ready')
       .map((instance) => ({ instance, role: 'active' }));
   }
-  return chooseRelayAssignments(endpointId, instances, desiredCount, path, current);
+  return chooseRelayAssignments(endpointId, instances, desiredCount, path, reference);
 }
 
 export class RelayPoolService {
@@ -113,6 +113,8 @@ export class RelayPoolService {
     'renewDueIfScheduled' | 'describeCertificates' | 'renewInstanceCertificate'
   >;
   private topology?: Pick<RelayTopologyService, 'endpointPaths'>;
+  /** The roles last planned per endpoint; see planEndpoint. */
+  private readonly plannedRoles = new Map<string, Array<{ relayInstanceId: string; role: string }>>();
   constructor(
     private readonly db: DrizzleClient,
     private readonly policy: RelayPolicyService,
@@ -159,6 +161,29 @@ export class RelayPoolService {
   /** Enables placement by measured network distance; without it relays are placed by hash. */
   setTopology(topology: Pick<RelayTopologyService, 'endpointPaths'>): void {
     this.topology = topology;
+  }
+
+  /**
+   * Plans one endpoint against the roles last planned for it, falling back to its active roles,
+   * and remembers the result. Relays inside the primary hysteresis band then keep the planned role
+   * from one reconciliation to the next, so jittery round trips never change the plan key and an
+   * endpoint's first latency placement settles like any other.
+   */
+  private planEndpoint(
+    endpointId: string,
+    instances: RelayInstanceRow[],
+    desiredCount: number,
+    localOnly: boolean,
+    path: EndpointLatencyPath | undefined,
+    active: Array<{ relayInstanceId: string; role: string }>
+  ): PlannedRelayAssignment[] {
+    const reference = this.plannedRoles.get(endpointId) ?? active;
+    const planned = planRelays(endpointId, instances, desiredCount, localOnly, path, reference);
+    this.plannedRoles.set(
+      endpointId,
+      planned.map(({ instance, role }) => ({ relayInstanceId: instance.id, role }))
+    );
+    return planned;
   }
 
   /** Latency is advisory: a failure to read it places endpoints as if nothing was measured. */
@@ -663,6 +688,10 @@ export class RelayPoolService {
       endpoints.filter(({ ownerKind }) => ownerKind !== 'internal_registry').map(({ id }) => id)
     );
     const latencyPaths = await this.latencyPaths(endpoints);
+    const activeEndpointIds = new Set(endpoints.map(({ id }) => id));
+    for (const endpointId of this.plannedRoles.keys()) {
+      if (!activeEndpointIds.has(endpointId)) this.plannedRoles.delete(endpointId);
+    }
     const rebalancePlan =
       readyFaultDomains.size === 0
         ? []
@@ -671,7 +700,7 @@ export class RelayPoolService {
             const spread = effectiveSpreads.get(endpoint.id) ?? generalSettings.relay.assignmentSpread;
             const active = activeByEndpoint.get(endpoint.id);
             const current = active ? (assignmentsByGeneration.get(active.id) ?? []) : [];
-            const planned = planEndpoint(
+            const planned = this.planEndpoint(
               endpoint.id,
               instances,
               effectiveCount(spread, readyFaultDomains.size),
@@ -1042,7 +1071,7 @@ export class RelayPoolService {
           ({ assignmentGenerationId }) => assignmentGenerationId === active?.id
         );
         const spread = effectiveSpreads.get(endpoint.id) ?? globalSpread;
-        const planned = planEndpoint(
+        const planned = this.planEndpoint(
           endpoint.id,
           readyInstances,
           effectiveCount(spread, readyFaultDomains),

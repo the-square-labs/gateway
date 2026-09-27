@@ -11,8 +11,9 @@ const (
 	RolePrimary = "primary"
 	RoleStandby = "standby"
 
-	// Relays whose path cost is within this band of the nearest one count as
-	// equally near and share connections by load; Gateway uses the same band.
+	// Relays of one role whose path cost is within this band of the nearest
+	// one count as equally near and share connections by load. It only orders
+	// tunnels; Gateway decides the roles with its own, hysteretic band.
 	costBandRatio = 1.2
 	costBandFloor = 3 * time.Millisecond
 )

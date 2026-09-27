@@ -22,11 +22,14 @@ export interface EndpointLatencyPath {
 }
 
 /**
- * Relays whose path cost is within this band of the best one are equally near: all become
- * primaries and share the load. The daemons order candidates with the same band.
+ * The primary group has its own hysteresis. A relay joins it within both 20% and 3 ms of the
+ * group's anchor cost, and leaves it only beyond 35% or 6 ms; in between it keeps the role it
+ * has, so a relay whose cost wobbles across one line never flips and never restarts the settle.
  */
-const PRIMARY_BAND_RATIO = 1.2;
-const PRIMARY_BAND_MS = 3;
+const PRIMARY_ENTER_RATIO = 1.2;
+const PRIMARY_ENTER_MS = 3;
+const PRIMARY_LEAVE_RATIO = 1.35;
+const PRIMARY_LEAVE_MS = 6;
 /**
  * Moving primaries means a new generation and a drain, so a nearer relay replaces the current
  * primaries only when it is clearly nearer, both relatively and absolutely.
@@ -91,23 +94,31 @@ export function relayPathCost(path: EndpointLatencyPath, instanceId: string): nu
   return endpointRtt + total / path.sources.length;
 }
 
-function withinPrimaryBand(cost: number, best: number): boolean {
-  return cost <= Math.max(best * PRIMARY_BAND_RATIO, best + PRIMARY_BAND_MS);
+function entersPrimaryGroup(cost: number, anchor: number): boolean {
+  return cost <= anchor * PRIMARY_ENTER_RATIO && cost <= anchor + PRIMARY_ENTER_MS;
+}
+
+function leavesPrimaryGroup(cost: number, anchor: number): boolean {
+  return cost > anchor * PRIMARY_LEAVE_RATIO || cost > anchor + PRIMARY_LEAVE_MS;
 }
 
 /**
- * Places one endpoint on `desiredCount` relays. With latency data, the nearest relays (within the
- * primary band) are primaries and the remaining slots are standbys by rendezvous score. Without
- * it, every relay is active by rendezvous score, as before latency placement existed. The current
- * primaries stay while they serve unless a relay is clearly nearer, so measurement noise never
- * moves an endpoint.
+ * Places one endpoint on `desiredCount` relays. With latency data, the nearest relays form the
+ * primary group and the remaining slots are standbys by rendezvous score. Without it, every relay
+ * is active by rendezvous score, as before latency placement existed.
+ *
+ * `reference` holds the roles the placement is judged against: the last plan for the endpoint, or
+ * its active assignments. Relays keep their role inside the hysteresis band, a relay that is
+ * merely nearer than the current primaries does not displace them, and the group is anchored on
+ * the current primaries until a relay is clearly nearer. Measurement noise so never changes the
+ * planned roles, neither of a placed endpoint nor of one waiting for its first latency placement.
  */
 export function chooseRelayAssignments(
   endpointId: string,
   instances: RelayInstanceRow[],
   desiredCount: number,
   path: EndpointLatencyPath | undefined,
-  current: ReadonlyArray<{ relayInstanceId: string; role: string }> = []
+  reference: ReadonlyArray<{ relayInstanceId: string; role: string }> = []
 ): PlannedRelayAssignment[] {
   const ready = instances.filter(({ state }) => state === 'ready');
   const costs = new Map<string, number>();
@@ -115,13 +126,15 @@ export function chooseRelayAssignments(
     const cost = relayPathCost(path!, instance.id);
     if (cost !== undefined) costs.set(instance.id, cost);
   }
-  const currentPrimaryIds = new Set(current.filter(({ role }) => role === 'primary').map((row) => row.relayInstanceId));
-  const keptPrimaries = ready.filter(({ id }) => currentPrimaryIds.has(id));
+  const referencePrimaryIds = new Set(
+    reference.filter(({ role }) => role === 'primary').map(({ relayInstanceId }) => relayInstanceId)
+  );
+  const keptPrimaries = ready.filter(({ id }) => referencePrimaryIds.has(id));
   let primaries: RelayInstanceRow[];
   if (!costs.size) {
     // Latency reports lapsed (a daemon restarts, a node goes quiet): keep a latency placement
     // whose primaries all still serve instead of flapping back to hashing and forth again.
-    if (!currentPrimaryIds.size || keptPrimaries.length !== currentPrimaryIds.size) {
+    if (!referencePrimaryIds.size || keptPrimaries.length !== referencePrimaryIds.size) {
       return chooseByRendezvous(endpointId, instances, desiredCount).map((instance) => ({ instance, role: 'active' }));
     }
     primaries = keptPrimaries;
@@ -131,7 +144,9 @@ export function chooseRelayAssignments(
     const currentCost = keptCosts.length ? Math.min(...keptCosts) : undefined;
     const clearlyNearer =
       currentCost === undefined || (best < currentCost * SWITCH_COST_RATIO && currentCost - best >= SWITCH_MIN_GAIN_MS);
-    primaries = clearlyNearer ? nearestRelays(endpointId, ready, costs, best) : keptPrimaries;
+    primaries = primaryGroup(endpointId, ready, costs, referencePrimaryIds, clearlyNearer ? best : currentCost!, {
+      admitNewcomers: clearlyNearer,
+    });
   }
   primaries = primaries.slice(0, desiredCount);
   const standbys = chooseByRendezvous(endpointId, instances, desiredCount, primaries);
@@ -141,17 +156,33 @@ export function chooseRelayAssignments(
   ];
 }
 
-function nearestRelays(
+/**
+ * The measured relays in the primary group around `anchor`: current members stay until they
+ * leave the wider band, others join within the narrow one (only while the group may change
+ * membership at all). Members come first, so the spread cap never swaps equal relays either.
+ */
+function primaryGroup(
   endpointId: string,
   ready: RelayInstanceRow[],
   costs: ReadonlyMap<string, number>,
-  best: number
+  memberIds: ReadonlySet<string>,
+  anchor: number,
+  options: { admitNewcomers: boolean }
 ): RelayInstanceRow[] {
   const rendezvous = byRendezvous(endpointId);
   const faultDomains = new Set<string>();
+  const member = (id: string) => (memberIds.has(id) ? 0 : 1);
   return ready
-    .filter(({ id }) => costs.has(id) && withinPrimaryBand(costs.get(id)!, best))
-    .sort((left, right) => costs.get(left.id)! - costs.get(right.id)! || rendezvous(left, right))
+    .filter(({ id }) => {
+      const cost = costs.get(id);
+      if (cost === undefined) return false;
+      if (memberIds.has(id)) return !leavesPrimaryGroup(cost, anchor);
+      return options.admitNewcomers && entersPrimaryGroup(cost, anchor);
+    })
+    .sort(
+      (left, right) =>
+        member(left.id) - member(right.id) || costs.get(left.id)! - costs.get(right.id)! || rendezvous(left, right)
+    )
     .filter(({ faultDomainId }) => {
       if (faultDomains.has(faultDomainId)) return false;
       faultDomains.add(faultDomainId);

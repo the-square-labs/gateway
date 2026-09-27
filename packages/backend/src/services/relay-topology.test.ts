@@ -20,7 +20,7 @@ const pool = [nearA, nearB, far, farther];
 
 /** Endpoint and source both sit next to near-a and near-b. */
 function path(overrides: Record<string, number> = {}): EndpointLatencyPath {
-  const rtts = { 'near-a': 0.4, 'near-b': 0.9, far: 18, farther: 35, ...overrides };
+  const rtts = { 'near-a': 0.8, 'near-b': 0.9, far: 18, farther: 35, ...overrides };
   return { endpoint: new Map(Object.entries(rtts)), sources: [new Map(Object.entries(rtts))] };
 }
 
@@ -63,16 +63,74 @@ describe('relay placement by network distance', () => {
     expect(plan(chooseRelayAssignments(ENDPOINT, pool, 1, path()))).toEqual(['near-a:primary']);
   });
 
-  it('counts a relay as equally near within 20% or 3 ms of the best', () => {
-    // 0.8 ms against 3.6 ms: within 3 ms.
-    const planned = chooseRelayAssignments(ENDPOINT, pool, 2, path({ 'near-a': 0.4, 'near-b': 1.8 }));
-    expect(plan(planned)).toEqual(['near-a:primary', 'near-b:primary']);
-    // 60 ms against 70 ms: within 20%.
-    const distant = chooseRelayAssignments(ENDPOINT, pool, 2, path({ 'near-a': 30, 'near-b': 35, far: 50 }));
-    expect(plan(distant)).toEqual(['near-a:primary', 'near-b:primary']);
-    // 20 ms against 30 ms: outside both.
-    const apart = chooseRelayAssignments(ENDPOINT, [nearA, nearB], 2, path({ 'near-a': 10, 'near-b': 15 }));
-    expect(plan(apart)).toEqual(['near-a:primary', 'near-b:fallback']);
+  it('lets a relay join the primaries only within both 20% and 3 ms of the best', () => {
+    const pair = [nearA, nearB];
+    // 20 ms against 23 ms: within both.
+    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 10, 'near-b': 11.5 })))).toEqual([
+      'near-a:primary',
+      'near-b:primary',
+    ]);
+    // 1 ms against 2 ms: within 3 ms, but twice the cost.
+    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 0.5, 'near-b': 1 })))).toEqual([
+      'near-a:primary',
+      'near-b:fallback',
+    ]);
+    // 60 ms against 70 ms: within 20%, but 10 ms slower.
+    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 30, 'near-b': 35 })))).toEqual([
+      'near-a:primary',
+      'near-b:fallback',
+    ]);
+  });
+
+  it('keeps a primary until it is beyond 35% or 6 ms of the best', () => {
+    const pair = [nearA, nearB];
+    const both = [
+      { relayInstanceId: 'near-a', role: 'primary' },
+      { relayInstanceId: 'near-b', role: 'primary' },
+    ];
+    // 20 ms against 26 ms: past the joining line, inside the leaving one.
+    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 10, 'near-b': 13 }), both))).toEqual([
+      'near-a:primary',
+      'near-b:primary',
+    ]);
+    // 20 ms against 28 ms: 40% slower.
+    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 10, 'near-b': 14 }), both))).toEqual([
+      'near-a:primary',
+      'near-b:fallback',
+    ]);
+  });
+
+  it('never changes the roles of a placed endpoint for a cost wobbling across the 20% line', () => {
+    const pair = [nearA, nearB];
+    // near-a costs 20 ms; near-b alternates between 23.8 ms and 24.6 ms around the 24 ms line.
+    for (const nearBRole of ['primary', 'fallback']) {
+      const active = [
+        { relayInstanceId: 'near-a', role: 'primary' },
+        { relayInstanceId: 'near-b', role: nearBRole },
+      ];
+      for (let round = 0; round < 8; round += 1) {
+        const measured = path({ 'near-a': 10, 'near-b': round % 2 ? 12.3 : 11.9 });
+        const planned = chooseRelayAssignments(ENDPOINT, pair, 2, measured, active);
+        expect(samePlannedAssignments(active, planned)).toBe(true);
+      }
+    }
+  });
+
+  it('settles the first latency placement under jittery round trips', () => {
+    const hashed = chooseByRendezvous(ENDPOINT, pool, 3).map(({ id }) => ({ relayInstanceId: id, role: 'active' }));
+    for (const firstNearB of [11.9, 12.3]) {
+      // The pool service judges each plan against the one before it.
+      let reference: Array<{ relayInstanceId: string; role: string }> = hashed;
+      const plans = new Set<string>();
+      for (let round = 0; round < 8; round += 1) {
+        const nearB = round % 2 ? (firstNearB === 11.9 ? 12.3 : 11.9) : firstNearB;
+        const planned = chooseRelayAssignments(ENDPOINT, pool, 3, path({ 'near-a': 10, 'near-b': nearB }), reference);
+        reference = planned.map(({ instance, role }) => ({ relayInstanceId: instance.id, role }));
+        plans.add(plan(planned).join(','));
+      }
+      expect(plans.size).toBe(1);
+      expect([...plans][0]?.startsWith('near-a:primary')).toBe(true);
+    }
   });
 
   it('leaves unmeasured relays out of the primaries', () => {
