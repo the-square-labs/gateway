@@ -198,6 +198,9 @@ func (r *Runtime) Step() {
 		}
 	}
 	hbFresh := r.opts.Fence.HeartbeatFresh(now)
+	if listener, ok := r.opts.Signer.(KeyListener); ok {
+		listener.ObserveListedKeys(r.node.ListedKeys(r.opts.NodeID))
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

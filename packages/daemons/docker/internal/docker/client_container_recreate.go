@@ -503,6 +503,10 @@ func (c *Client) createContainerFromInspect(
 
 	// Preserve the original running state. A stopped container should stay stopped.
 	if expectedRunning {
+		if err := c.gateStart(ctx, createResult.ID); err != nil {
+			// Created but not started: the lease holder starts it (A5).
+			return "", err
+		}
 		if _, err := c.cli.ContainerStart(ctx, createResult.ID, client.ContainerStartOptions{}); err != nil {
 			c.removeContainerQuietly(ctx, createResult.ID)
 			return "", fmt.Errorf("start container: %w", err)

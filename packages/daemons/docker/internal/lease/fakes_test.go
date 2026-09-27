@@ -29,6 +29,7 @@ type fakeEngine struct {
 	containers map[string]*Container
 	hung       bool
 	stopFails  bool
+	listFails  bool
 }
 
 var errHung = errors.New("dockerd does not answer")
@@ -43,7 +44,7 @@ func (e *fakeEngine) running() bool {
 }
 
 func (e *fakeEngine) ListLeaseContainers(context.Context) ([]Container, error) {
-	if e.hung {
+	if e.hung || e.listFails {
 		return nil, errHung
 	}
 	out := make([]Container, 0, len(e.containers))

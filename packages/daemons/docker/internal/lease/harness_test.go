@@ -335,6 +335,8 @@ func (w *world) checkSingleCopy() {
 	if w.available {
 		return
 	}
+	// Copies are counted per host: containers of one holder (a rollout's
+	// second slot) are one copy bound to one lease.
 	var running []string
 	for _, h := range w.daemons {
 		if h.down {
@@ -343,6 +345,7 @@ func (w *world) checkSingleCopy() {
 		for _, c := range h.engine.containers {
 			if c.Running && c.PolicyID == w.policyID {
 				running = append(running, h.id)
+				break
 			}
 		}
 	}

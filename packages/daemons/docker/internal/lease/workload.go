@@ -215,19 +215,14 @@ func (r *Runtime) serveLocked(wl *workload, status availabilitylease.HolderStatu
 }
 
 // armRecordsLocked writes the watchdog deadline of every container of a held
-// policy before any start (A12.1): the serving set gets the lease deadline,
-// other containers of the policy the always-stale 0.
-func (r *Runtime) armRecordsLocked(status availabilitylease.HolderStatus, serve, containers []Container) {
-	serveIDs := map[string]bool{}
-	for _, c := range serve {
-		serveIDs[c.ID] = true
-	}
+// policy before the runtime starts any of them (A12.1).
+func (r *Runtime) armRecordsLocked(status availabilitylease.HolderStatus, _, containers []Container) {
+	// Every container of the policy is bound to the lease while this node
+	// holds it: the serving set, and anything a gated backend start (rollout
+	// slot, recreate, compose) started under BeforeStart. None may outlive
+	// the lease, and a record is never lowered to 0 under a running copy.
 	for _, c := range containers {
-		deadline := time.Duration(0)
-		if serveIDs[c.ID] {
-			deadline = status.Deadline
-		}
-		r.writeRecordLocked(c, status.Key.Slot, deadline)
+		r.writeRecordLocked(c, status.Key.Slot, status.Deadline)
 	}
 }
 
@@ -247,6 +242,9 @@ func (r *Runtime) writeRecordLocked(c Container, slot uint32, deadline time.Dura
 		return
 	}
 	current, ok := r.records[c.ID]
+	if ok && c.CgroupPath == "" {
+		c.CgroupPath = current.CgroupPath
+	}
 	if ok && current.CgroupPath == c.CgroupPath && current.Slot == slot {
 		delta := deadline - current.Deadline()
 		// Lower deadlines are always written (ObserveSuspend moves them
@@ -357,6 +355,10 @@ func (r *Runtime) stopLocked(wl *workload, status availabilitylease.HolderStatus
 	targets := append([]Container(nil), containers...)
 	r.launch(wl, "stop", func(ctx context.Context) func() {
 		r.opts.Endpoints.SetServing(policyID, false)
+		// The snapshot may predate a container a gated backend start created
+		// moments ago: re-list the policy and stop and confirm that list too
+		// (A6). A failed re-list leaves the stop unconfirmed: no release.
+		targets, listErr := r.relistPolicy(ctx, policyID, targets)
 		for _, c := range targets {
 			if !c.Running && purpose != purposeAbandon && purpose != purposeKill {
 				continue
@@ -374,7 +376,7 @@ func (r *Runtime) stopLocked(wl *workload, status availabilitylease.HolderStatus
 				cancelKill()
 			}
 		}
-		confirmed := true
+		confirmed := listErr == nil
 		for _, c := range targets {
 			empty, err := r.opts.Engine.CgroupEmpty(ctx, c)
 			if err != nil || !empty {
@@ -414,6 +416,34 @@ func (r *Runtime) stopLocked(wl *workload, status availabilitylease.HolderStatus
 			r.logger.Info("availability lease workload stopped", "policy_id", policyID, "slot", key.Slot, "purpose", purpose)
 		}
 	})
+}
+
+// relistPolicy merges the policy's current containers into the stop targets;
+// the fresh state wins for containers present in both.
+func (r *Runtime) relistPolicy(ctx context.Context, policyID string, targets []Container) ([]Container, error) {
+	current, err := r.opts.Engine.ListLeaseContainers(ctx)
+	if err != nil {
+		r.logger.Warn("availability lease stop could not re-list the workload; the stop stays unconfirmed", "policy_id", policyID, "error", err)
+		return targets, err
+	}
+	merged := make([]Container, 0, len(targets))
+	index := map[string]int{}
+	for _, c := range targets {
+		index[c.ID] = len(merged)
+		merged = append(merged, c)
+	}
+	for _, c := range current {
+		if c.PolicyID != policyID {
+			continue
+		}
+		if i, ok := index[c.ID]; ok {
+			merged[i] = c
+			continue
+		}
+		index[c.ID] = len(merged)
+		merged = append(merged, c)
+	}
+	return merged, nil
 }
 
 func (r *Runtime) updateReadyLocked(manifest availabilitylease.ManifestInfo, wl *workload, serve, containers []Container, now time.Duration) {

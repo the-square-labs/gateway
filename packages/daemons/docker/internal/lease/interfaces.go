@@ -75,6 +75,14 @@ type Endpoints interface {
 	SetServing(policyID string, serving bool)
 }
 
+// KeyListener is implemented by a Signer that keeps its previous identity
+// key across a certificate renewal (H3). Every step it learns, per adopted
+// manifest naming this node, the key that manifest lists for it, and signs
+// with the old key until every entry is the new one.
+type KeyListener interface {
+	ObserveListedKeys(listed [][]byte)
+}
+
 // Placement is this node's placement of a policy (D12 mapping).
 type Placement struct {
 	PlacementID string

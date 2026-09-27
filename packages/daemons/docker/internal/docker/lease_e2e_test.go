@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -169,6 +170,8 @@ func (f *e2eFence) DeleteRecord(id string) error {
 type e2eDaemon struct {
 	id     string
 	key    *ecdsa.PrivateKey
+	dir    string
+	signer *identityKeySigner
 	plugin *DockerPlugin
 	engine *e2eEngine
 }
@@ -234,10 +237,18 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 		d.engine = &e2eEngine{container: lease.Container{
 			ID: e2eContainerID(d.id), Name: "app-" + d.id, PolicyID: e2ePolicy, RestartPolicy: "unless-stopped", Labels: map[string]string{},
 		}}
-		key := d.key
-		integration := &leaseIntegration{plugin: d.plugin, serving: map[string]bool{}, identity: func() []byte { return e2eDER(key) }}
+		// The production signer over mTLS files, so a certificate renewal
+		// can happen mid-lease (H3).
+		d.dir = t.TempDir()
+		certPath, keyPath := writeIdentityFiles(t, d.dir, d.key)
+		signer, err := newIdentityKeySigner(certPath, keyPath, filepath.Join(d.dir, "previous-identity.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.signer = signer
+		integration := &leaseIntegration{plugin: d.plugin, serving: map[string]bool{}, identity: signer.publicKeyDER}
 		runtime, err := lease.New(lease.Options{
-			NodeID: d.id, StateDir: t.TempDir(), Clock: clock, Wall: clock.wall, Signer: availabilitylease.ECDSASigner{Key: d.key},
+			NodeID: d.id, StateDir: t.TempDir(), Clock: clock, Wall: clock.wall, Signer: signer,
 			Engine: d.engine, Fence: &e2eFence{records: map[string]leasefence.Record{}}, Endpoints: integration, Placements: integration,
 			Logger: e2eDiscard(),
 		})
@@ -308,6 +319,60 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 		len(report.GetHeld()) != 1 || report.GetHeld()[0].GetRole() != "holding" || report.GetHeld()[0].GetBallot().GetProposerId() != "node-1" ||
 		len(report.GetManifests()) != 1 || report.GetManifests()[0].GetManifestVersion() != 1 || len(report.GetTrustedPolicyKeyIds()) != 1 {
 		t.Fatalf("holder report incomplete: %v", report)
+	}
+
+	// H3: the holder's certificate renews mid-lease. Every manifest still
+	// lists the old key, so frames stay signed with it and nothing fences.
+	renewed := e2eKey()
+	writeIdentityFiles(t, daemons[0].dir, renewed)
+	fencedDuringRenewal := false
+	runUntil(40*time.Second, func() bool {
+		fencedDuringRenewal = fencedDuringRenewal || !daemons[0].engine.running()
+		return false
+	})
+	if fencedDuringRenewal || !serving(daemons[0]) {
+		t.Fatal("a certificate renewal mid-lease must not fence the holder")
+	}
+	if string(daemons[0].plugin.availabilityLeaseReport().GetIdentityPublicKey()) != string(e2eDER(renewed)) {
+		t.Fatal("the report must carry the renewed key so the Gateway republishes")
+	}
+	// The Gateway republishes the manifest with the renewed key (v2); once
+	// every adopted manifest lists it, the holder switches keys, still holding.
+	manifest.ManifestVersion = 2
+	for _, candidate := range manifest.Candidates {
+		if candidate.GetId() == "node-1" {
+			candidate.PublicKey = e2eDER(renewed)
+		}
+	}
+	for _, member := range manifest.Members {
+		if member.GetId() == "node-1" {
+			member.PublicKey = e2eDER(renewed)
+		}
+	}
+	renewedPayload, _ := proto.Marshal(manifest)
+	renewedBlock := availabilitylease.SignPolicyBlock("k1", policyPrivate, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, renewedPayload)
+	for _, relay := range relays {
+		if _, err := relay.node.AdoptManifest(renewedBlock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range daemons {
+		result := d.plugin.HandleCommand(&pb.GatewayCommand{CommandId: "sync-2", Payload: &pb.GatewayCommand_SyncAvailabilityLease{
+			SyncAvailabilityLease: &pb.SyncAvailabilityLeaseCommand{
+				Revision: 2, MemberId: d.id, Manifests: [][]byte{mustMarshal(t, renewedBlock)},
+				PolicyKeys: []*pb.AvailabilityLeasePolicyKey{{KeyId: "k1", PublicKey: policyPublic}},
+			},
+		}})
+		if !result.Success {
+			t.Fatalf("%s sync v2 failed: %s", d.id, result.Error)
+		}
+	}
+	runUntil(20*time.Second, func() bool {
+		fencedDuringRenewal = fencedDuringRenewal || !daemons[0].engine.running()
+		return false
+	})
+	if fencedDuringRenewal || !serving(daemons[0]) || !signedBy(t, daemons[0].signer, renewed) {
+		t.Fatal("after the republish the holder must sign with the renewed key and keep its lease")
 	}
 
 	voterView := daemons[1].plugin.availabilityLeaseReport().GetAcceptor()

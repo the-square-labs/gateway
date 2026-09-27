@@ -33,8 +33,11 @@ var detailedContainerTopArgs = []string{"-eo", "pid,user,%cpu,%mem,vsz,rss,tty,s
 
 // Client wraps the Docker SDK client with convenience methods.
 type Client struct {
-	cli                      *client.Client
-	logger                   *slog.Logger
+	cli    *client.Client
+	logger *slog.Logger
+	// beforeStart gates every user-workload start (availability lease A5,
+	// A12.1); nil outside lease-capable daemons.
+	beforeStart              func(ctx context.Context, containerID string) error
 	gpuInventory             gpuInventory
 	recreateStateDirectory   string
 	runscHealthy             atomic.Bool
@@ -208,6 +211,9 @@ func (c *Client) InspectContainer(ctx context.Context, id string) (json.RawMessa
 
 // StartContainer starts a stopped container.
 func (c *Client) StartContainer(ctx context.Context, id string) error {
+	if err := c.gateStart(ctx, id); err != nil {
+		return err
+	}
 	if _, err := c.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("container start: %w", err)
 	}
@@ -224,6 +230,9 @@ func (c *Client) StopContainer(ctx context.Context, id string, timeoutSec int) e
 
 // RestartContainer restarts a container with a timeout in seconds.
 func (c *Client) RestartContainer(ctx context.Context, id string, timeoutSec int) error {
+	if err := c.gateStart(ctx, id); err != nil {
+		return err
+	}
 	if _, err := c.cli.ContainerRestart(ctx, id, client.ContainerRestartOptions{Timeout: &timeoutSec}); err != nil {
 		return fmt.Errorf("container restart: %w", err)
 	}

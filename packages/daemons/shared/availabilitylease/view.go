@@ -93,6 +93,28 @@ func (n *Node) HeldCommit(key Key) (epoch, manifestVersion uint64, ok bool) {
 	return pk.commit.GetEpoch(), pk.commit.GetManifestVersion(), true
 }
 
+// ListedKeys returns, for every adopted manifest that names id as a
+// candidate or member, the identity key it lists for id. A node that rotated
+// its identity key signs with the old key until every entry is the new one.
+func (n *Node) ListedKeys(id string) [][]byte {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out [][]byte
+	for _, policyID := range sortedKeys(n.manifests) {
+		manifest := n.manifests[policyID]
+		if key, ok := manifest.keys[id]; ok {
+			out = append(out, append([]byte(nil), key...))
+			continue
+		}
+		if manifest.Voters != nil {
+			if key, ok := manifest.Voters.publicKey(id); ok {
+				out = append(out, append([]byte(nil), key...))
+			}
+		}
+	}
+	return out
+}
+
 // TrustedPolicyKeyIDs lists the policy keys of the persisted chain, oldest
 // first, for the A14 acks in lease reports.
 func (n *Node) TrustedPolicyKeyIDs() []string {

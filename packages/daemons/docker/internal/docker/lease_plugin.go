@@ -2,16 +2,11 @@ package docker
 
 import (
 	"context"
-	"crypto"
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
-	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
 	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
 	"github.com/wiolett-industries/gateway/daemon-shared/state"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/lease"
@@ -52,7 +47,7 @@ func (p *DockerPlugin) initAvailabilityLease() {
 		p.logger.Info("availability lease disabled until the node is enrolled")
 		return
 	}
-	signer, err := newIdentityKeySigner(p.cfg.TLS.ClientCert, p.cfg.TLS.ClientKey)
+	signer, err := newIdentityKeySigner(p.cfg.TLS.ClientCert, p.cfg.TLS.ClientKey, filepath.Join(p.cfg.StateDir, "availability-lease", "previous-identity.json"))
 	if err != nil {
 		p.logger.Warn("availability lease disabled: node identity key unavailable", "error", err)
 		return
@@ -80,6 +75,8 @@ func (p *DockerPlugin) initAvailabilityLease() {
 			time.Sleep(250 * time.Millisecond)
 		}
 	}
+	// Every user-workload start passes the lease start hook (A5, A12.1).
+	p.client.beforeStart = integration.beforeStart
 	ctx, cancel := context.WithCancel(context.Background())
 	integration.cancel = cancel
 	go runtime.Run(ctx)
@@ -205,69 +202,4 @@ func (l *leaseIntegration) MarkServing(policyID string, serving bool) {
 	if err := l.plugin.availability.markLeaseLifecycle(policyID, serving); err != nil {
 		l.plugin.logger.Warn("could not record the availability placement lifecycle", "policy_id", policyID, "serving", serving, "error", err)
 	}
-}
-
-// identityKeySigner signs lease frames with the node's mTLS identity key
-// (ECDSA P-256, D3), reloading it after certificate renewal.
-type identityKeySigner struct {
-	certPath, keyPath string
-	mu                sync.Mutex
-	modTime           time.Time
-	key               crypto.Signer
-}
-
-func newIdentityKeySigner(certPath, keyPath string) (*identityKeySigner, error) {
-	signer := &identityKeySigner{certPath: certPath, keyPath: keyPath}
-	if _, err := signer.current(); err != nil {
-		return nil, err
-	}
-	return signer, nil
-}
-
-func (s *identityKeySigner) current() (crypto.Signer, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	info, err := os.Stat(s.keyPath)
-	if err != nil {
-		if s.key != nil {
-			return s.key, nil
-		}
-		return nil, err
-	}
-	if s.key != nil && info.ModTime().Equal(s.modTime) {
-		return s.key, nil
-	}
-	pair, err := tls.LoadX509KeyPair(s.certPath, s.keyPath)
-	if err != nil {
-		if s.key != nil {
-			return s.key, nil
-		}
-		return nil, err
-	}
-	key, ok := pair.PrivateKey.(crypto.Signer)
-	if !ok {
-		return nil, errors.New("node identity key cannot sign")
-	}
-	s.key, s.modTime = key, info.ModTime()
-	return key, nil
-}
-
-func (s *identityKeySigner) publicKeyDER() []byte {
-	key, err := s.current()
-	if err != nil {
-		return nil
-	}
-	der, err := x509.MarshalPKIXPublicKey(key.Public())
-	if err != nil {
-		return nil
-	}
-	return der
-}
-
-func (s *identityKeySigner) Sign(message []byte) ([]byte, error) {
-	key, err := s.current()
-	if err != nil {
-		return nil, fmt.Errorf("load node identity key: %w", err)
-	}
-	return availabilitylease.ECDSASigner{Key: key}.Sign(message)
 }

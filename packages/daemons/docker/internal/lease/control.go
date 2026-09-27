@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
+	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/protobuf/proto"
 )
@@ -66,6 +67,48 @@ func (r *Runtime) ApplyLeaseBlocks(update BlockUpdate) error {
 	r.mu.Unlock()
 	r.kick()
 	return errors.Join(errs...)
+}
+
+// BeforeStart is called at every Docker start site of this daemon, right
+// before a container of policyID starts (A12.1, A5). For a lease-mode policy
+// it allows the start only while this node may start under a fresh watchdog
+// heartbeat and no stop or release is under way, and it writes the
+// container's deadline record with the holder's deadline before returning.
+// For a policy outside lease mode it clears stale records so the watchdog
+// does not kill the legacy start.
+func (r *Runtime) BeforeStart(containerID, policyID, cgroupPath string) error {
+	manifest, ok := r.node.ManifestInfo(policyID)
+	if !ok || manifest.Closed {
+		return r.clearLegacyRecords(policyID)
+	}
+	if !leasefence.ValidContainerID(containerID) {
+		return fmt.Errorf("%w: container id %q cannot carry a deadline record", ErrLeaseNotHeld, containerID)
+	}
+	now := r.opts.Clock.Now()
+	if !r.opts.Fence.HeartbeatFresh(now) {
+		return fmt.Errorf("%w: the lease watchdog is not running", ErrLeaseNotHeld)
+	}
+	var status availabilitylease.HolderStatus
+	for slot := uint32(0); slot < manifest.Slots; slot++ {
+		if candidate := r.node.HolderStatus(availabilitylease.Key{PolicyID: policyID, Slot: slot}); candidate.MayStart {
+			status = candidate
+			break
+		}
+	}
+	if !status.MayStart || status.Deadline <= now {
+		return ErrLeaseNotHeld
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if wl := r.workloads[policyID]; wl != nil && (wl.release != nil || (wl.busy && wl.op == "stop")) {
+		return fmt.Errorf("%w: the workload is being stopped", ErrLeaseNotHeld)
+	}
+	r.writeRecordLocked(Container{ID: containerID, PolicyID: policyID, CgroupPath: cgroupPath}, status.Key.Slot, status.Deadline)
+	record, ok := r.records[containerID]
+	if !ok || record.Deadline() <= now {
+		return fmt.Errorf("%w: the deadline record could not be written", ErrLeaseNotHeld)
+	}
+	return nil
 }
 
 // Holds reports whether this node holds (or recovers) a slot of the policy.
