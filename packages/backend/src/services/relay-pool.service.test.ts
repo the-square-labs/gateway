@@ -647,7 +647,7 @@ describe('RelayPoolService status', () => {
       [relay],
       [{ id: 'endpoint', ownerKind: kind }],
       kind === 'internal_registry' ? [] : [active],
-      [{ assignmentGenerationId: 'old', relayInstanceId: 'relay' }],
+      [{ assignmentGenerationId: 'old', relayInstanceId: 'relay', role: 'active' }],
       latest,
       updateState ? [{ id: 'update', state: updateState, targetArtifact: { version: 'next' } }] : [],
       ...(updateState ? [[]] : []),
@@ -899,6 +899,101 @@ describe('RelayPoolService placement during updates and mixed versions', () => {
     await expect(manualPool.drainInstance('remote', 'user', true)).rejects.toThrow('no ready relay');
   });
 
+  it('moves a workload to the relays nearest to its path and keeps the rest as standbys', async () => {
+    const enrolled = (id: string) => ({
+      ...instance(id, `${id}-host`),
+      certificateIdentity: id,
+      certificateFingerprint: `sha256:${id}`,
+      capabilities: { features: ['relay_pool_v1'] },
+    });
+    const active = { id: 'old', endpointId: 'endpoint', generation: 1, state: 'active' };
+    const { pool, policy } = service(
+      queuedDb([
+        [enrolled('near'), enrolled('far')],
+        [{ id: 'endpoint', ownerKind: 'managed_database', subjectKind: 'daemon', subjectId: 'node' }],
+        [active],
+        [
+          { assignmentGenerationId: 'old', relayInstanceId: 'near', role: 'active' },
+          { assignmentGenerationId: 'old', relayInstanceId: 'far', role: 'active' },
+        ],
+        [],
+        [],
+        [],
+      ]).db
+    );
+    (policy as any).poolIncapableEndpointIds = vi.fn().mockResolvedValue(new Set());
+    const endpointPaths = vi.fn().mockResolvedValue(
+      new Map([
+        [
+          'endpoint',
+          {
+            endpoint: new Map([
+              ['near', 0.5],
+              ['far', 40],
+            ]),
+            sources: [],
+          },
+        ],
+      ])
+    );
+    pool.setTopology({ endpointPaths });
+    const snapshot = await pool.getSnapshot();
+    expect(endpointPaths).toHaveBeenCalledWith([expect.objectContaining({ id: 'endpoint' })]);
+    expect(snapshot.rebalanceEndpointIds).toEqual(['endpoint']);
+    expect(snapshot.rebalancePlanKey).toBe(
+      createHash('sha256')
+        .update(
+          JSON.stringify([{ endpointId: 'endpoint', instanceIds: ['far', 'near'], primaryIds: ['near'], blockers: [] }])
+        )
+        .digest('hex')
+    );
+  });
+
+  it('keeps the plan of a first latency placement stable while round trips jitter', async () => {
+    const enrolled = (id: string) => ({
+      ...instance(id, `${id}-host`),
+      certificateIdentity: id,
+      certificateFingerprint: `sha256:${id}`,
+      capabilities: { features: ['relay_pool_v1'] },
+    });
+    const active = { id: 'old', endpointId: 'endpoint', generation: 1, state: 'active' };
+    const rounds = 6;
+    const rows = Array.from({ length: rounds }, () => [
+      [enrolled('near-a'), enrolled('near-b'), enrolled('far')],
+      [{ id: 'endpoint', ownerKind: 'managed_database', subjectKind: 'daemon', subjectId: 'node' }],
+      [active],
+      [
+        { assignmentGenerationId: 'old', relayInstanceId: 'near-a', role: 'active' },
+        { assignmentGenerationId: 'old', relayInstanceId: 'far', role: 'active' },
+      ],
+      [],
+      [],
+      [],
+    ]).flat();
+    const { pool, policy } = service(queuedDb(rows).db);
+    (policy as any).poolIncapableEndpointIds = vi.fn().mockResolvedValue(new Set());
+    let round = 0;
+    // near-b alternates across the joining line (near-a + 3 ms) on every reconciliation.
+    const endpointPaths = vi.fn(async () => {
+      const nearB = round++ % 2 ? 13.1 : 12.9;
+      const endpoint = new Map([
+        ['near-a', 10],
+        ['near-b', nearB],
+        ['far', 40],
+      ]);
+      return new Map([['endpoint', { endpoint, sources: [] }]]);
+    });
+    pool.setTopology({ endpointPaths });
+    const keys = new Set<string>();
+    for (let index = 0; index < rounds; index += 1) {
+      const snapshot = await pool.getSnapshot();
+      expect(snapshot.rebalanceEndpointIds).toEqual(['endpoint']);
+      keys.add(snapshot.rebalancePlanKey);
+    }
+    // One plan throughout, so the 30 s settle completes and the placement is staged.
+    expect(keys.size).toBe(1);
+  });
+
   it('keeps a workload whose path has a daemon without pool support on the local relay', async () => {
     const local = {
       ...instance('local', 'gateway-host'),
@@ -913,7 +1008,7 @@ describe('RelayPoolService placement during updates and mixed versions', () => {
           [local, remote],
           [{ id: 'endpoint', ownerKind: 'managed_database' }],
           [active],
-          [{ assignmentGenerationId: 'old', relayInstanceId: assignedTo }],
+          [{ assignmentGenerationId: 'old', relayInstanceId: assignedTo, role: 'active' }],
           [],
           [],
           [],
@@ -927,7 +1022,7 @@ describe('RelayPoolService placement during updates and mixed versions', () => {
     expect(moved.rebalanceEndpointIds).toEqual(['endpoint']);
     expect(moved.rebalancePlanKey).toBe(
       createHash('sha256')
-        .update(JSON.stringify([{ endpointId: 'endpoint', instanceIds: ['local'], blockers: [] }]))
+        .update(JSON.stringify([{ endpointId: 'endpoint', instanceIds: ['local'], primaryIds: [], blockers: [] }]))
         .digest('hex')
     );
     // Already on the local relay: nothing to do, even though spread would add the remote relay.

@@ -180,6 +180,14 @@ message HealthReport {
   // Physical GPU inventory and capability-aware telemetry. Metrics are only
   // meaningful when their name is present in GpuDevice.available_metrics.
   repeated GpuDevice gpu_devices = 35;
+  // Smoothed round-trip time from this node to each relay it measured
+  // recently. Gateway places relay assignments by network distance with it.
+  repeated RelayLatencySample relay_latencies = 40;
+}
+
+message RelayLatencySample {
+  string relay_instance_id = 1;
+  uint32 rtt_micros = 2;
 }
 
 message StatsReport {
@@ -548,6 +556,15 @@ message SyncRelayGrantsCommand {
   int64 generated_at_unix_ms = 3;
   uint32 data_lanes = 4;
   uint32 read_chunk_bytes = 5;
+  // Every relay of the pool, so the daemon measures its distance to relays
+  // it holds no transport to yet. Measurement only: never a tunnel target.
+  repeated RelayLatencyTarget relay_latency_targets = 20;
+}
+
+message RelayLatencyTarget {
+  string relay_instance_id = 1;
+  repeated string addresses = 2;
+  uint32 port = 3;
 }
 
 message RelayGrantAssignment {
@@ -591,6 +608,14 @@ message RelayDataCandidate {
   repeated string capabilities = 8;
   RelaySignedGrant grant = 9;
   string assignment_state = 10; // "active", "staging", or "draining"
+  // Absent when Gateway placed the endpoint without latency data.
+  RelayCandidateTopology topology = 20;
+}
+
+message RelayCandidateTopology {
+  string role = 1; // "primary" or "standby"; standbys serve when no primary does
+  // Last known round trip between this relay and the endpoint's node; 0 when unknown.
+  uint32 endpoint_rtt_micros = 2;
 }
 
 message ProbeRelayCandidateCommand {

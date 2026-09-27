@@ -59,3 +59,18 @@ func TestOrderRelayCandidatesBalancesEqualLoadAndPrefersLeastActive(t *testing.T
 		t.Fatalf("least-active candidate = %q, want relay-b", got)
 	}
 }
+
+func TestOrderRelayCandidatesTriesTheStandbyOnlyAfterPrimaries(t *testing.T) {
+	candidates := []*pb.RelayDataCandidate{
+		{RelayInstanceId: "relay-standby", Topology: &pb.RelayCandidateTopology{Role: "standby"}},
+		{RelayInstanceId: "relay-primary", Topology: &pb.RelayCandidateTopology{Role: "primary"}},
+	}
+	busy := &nginxRelayTunnel{targetID: "relay-primary"}
+	busy.active.Store(5)
+	plugin := &NginxPlugin{relayTunnels: []*nginxRelayTunnel{{targetID: "relay-standby"}, busy}}
+	for range 2 {
+		if got := plugin.orderRelayCandidates(candidates)[0].GetRelayInstanceId(); got != "relay-primary" {
+			t.Fatalf("first candidate = %q, want relay-primary", got)
+		}
+	}
+}

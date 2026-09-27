@@ -20,6 +20,8 @@ import {
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
+import { candidateTopology } from './relay-topology.js';
+import { type RelayLatencyTarget, RelayTopologyService } from './relay-topology.service.js';
 
 const POLICY_ID = 'current';
 
@@ -78,6 +80,8 @@ export interface RelayDataCandidate {
   capabilities: string[];
   grant: SignedRelayGrant;
   assignmentState: 'active' | 'staging' | 'draining';
+  /** Absent when Gateway placed the endpoint without latency data. */
+  topology?: { role: 'primary' | 'standby'; endpointRttMicros: number };
 }
 
 export interface RelayGrantBundle {
@@ -86,6 +90,7 @@ export interface RelayGrantBundle {
   grants: RelayGrantAssignment[];
   dataLanes?: number;
   readChunkBytes?: number;
+  relayLatencyTargets?: RelayLatencyTarget[];
 }
 
 export class RelayPolicyNotAcknowledgedError extends Error {
@@ -100,12 +105,15 @@ export class RelayGrantIssuerService {
   /** A revision grants may be signed for without the local relay's acknowledgement. */
   private fenceBypassRevision = 0;
   private lastBundleGeneratedAtMs = 0;
+  private readonly topology: RelayTopologyService;
 
   constructor(
     private readonly db: DrizzleClient,
     private readonly cryptoService: CryptoService,
     private readonly settings: GeneralSettingsService
-  ) {}
+  ) {
+    this.topology = new RelayTopologyService(db);
+  }
 
   acknowledgeRevision(revision: number): void {
     this.acknowledgedRevision = Math.max(this.acknowledgedRevision, revision);
@@ -230,8 +238,15 @@ export class RelayGrantIssuerService {
           : undefined,
       });
     }
+    // Latency only orders relays; it must never hold grants back.
+    const relayLatencyTargets = await this.topology.completeGrantBundle(grants, targetEndpoints).catch(() => []);
     this.lastBundleGeneratedAtMs = Math.max(Date.now(), this.lastBundleGeneratedAtMs + 1);
-    return { revision: String(state.revision), generatedAtUnixMs: String(this.lastBundleGeneratedAtMs), grants };
+    return {
+      revision: String(state.revision),
+      generatedAtUnixMs: String(this.lastBundleGeneratedAtMs),
+      grants,
+      relayLatencyTargets,
+    };
   }
 
   private async getPoolProjection() {
@@ -334,6 +349,7 @@ export class RelayGrantIssuerService {
               maxFrameBytes: route!.maxFrameBytes,
             }),
       });
+      const topology = candidateTopology(assignment.role);
       result.push({
         poolId: assignment.poolId,
         relayInstanceId: assignment.instanceId,
@@ -348,6 +364,7 @@ export class RelayGrantIssuerService {
           assignment.instanceState === 'draining'
             ? 'draining'
             : (assignment.state as 'active' | 'staging' | 'draining'),
+        ...(topology ? { topology } : {}),
       });
     }
     return result;

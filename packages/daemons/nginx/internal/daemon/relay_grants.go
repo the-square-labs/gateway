@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -89,4 +90,16 @@ func findRelayAssignment(bundle *pb.SyncRelayGrantsCommand, role, ownerKind, own
 		}
 	}
 	return nil
+}
+
+var _ lifecycle.RelayLatencyTargetPlugin = (*NginxPlugin)(nil)
+
+// RelayLatencyTargets names every pool relay for the lifecycle's latency probes.
+func (p *NginxPlugin) RelayLatencyTargets() []lifecycle.RelayTunnelTarget {
+	targets := relaybridge.LatencyTargets(p.relayGrants.get())
+	result := make([]lifecycle.RelayTunnelTarget, 0, len(targets))
+	for _, target := range targets {
+		result = append(result, lifecycle.RelayTunnelTarget{ID: target.ID, Addresses: relaybridge.TargetAddresses(target)})
+	}
+	return result
 }

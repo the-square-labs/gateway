@@ -25,6 +25,14 @@ import type { EventBusService } from './event-bus.service.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
 import type { RelayPolicyService, RelayPolicyTrustStatus } from './relay-policy.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
+import {
+  chooseByRendezvous,
+  chooseRelayAssignments,
+  type EndpointLatencyPath,
+  type PlannedRelayAssignment,
+  samePlannedAssignments,
+} from './relay-topology.js';
+import type { RelayTopologyService } from './relay-topology.service.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
@@ -60,31 +68,6 @@ function poolBlockers(instances: RelayInstanceRow[]): string[] {
   );
 }
 
-function rendezvousScore(endpointId: string, instance: RelayInstanceRow): bigint {
-  const digest = createHash('sha256').update(`${endpointId}:${instance.id}`).digest();
-  const raw = digest.readBigUInt64BE(0);
-  const pressure = BigInt(Math.max(0, Math.min(99, instance.health?.pressurePercent ?? 0)));
-  return raw * (100n - pressure);
-}
-
-function chooseCandidates(endpointId: string, instances: RelayInstanceRow[], desiredCount: number) {
-  const ranked = instances
-    .filter(({ state }) => state === 'ready')
-    .sort((left, right) => {
-      const delta = rendezvousScore(endpointId, right) - rendezvousScore(endpointId, left);
-      return delta > 0n ? 1 : delta < 0n ? -1 : left.id.localeCompare(right.id);
-    });
-  const selected: RelayInstanceRow[] = [];
-  const faultDomains = new Set<string>();
-  for (const instance of ranked) {
-    if (faultDomains.has(instance.faultDomainId)) continue;
-    faultDomains.add(instance.faultDomainId);
-    selected.push(instance);
-    if (selected.length >= desiredCount) break;
-  }
-  return selected;
-}
-
 function isEnrolledRelayInstance(instance: RelayInstanceRow): boolean {
   return instance.kind === 'local' || Boolean(instance.certificateIdentity && instance.certificateFingerprint);
 }
@@ -93,11 +76,24 @@ function effectiveCount(spread: RelayAssignmentSpread, readyCount: number): numb
   return Math.min(readyCount, spread.mode === 'all' ? readyCount : spread.count);
 }
 
-function sameAssignmentSet(assignments: Array<{ relayInstanceId: string }>, instanceIds: string[]): boolean {
-  return (
-    assignments.length === instanceIds.length &&
-    assignments.every(({ relayInstanceId }) => instanceIds.includes(relayInstanceId))
-  );
+/**
+ * Places one endpoint. A path with a daemon that lacks Relay Pool support runs on legacy grants,
+ * which only the local relay serves: such workloads stay there until every participant is updated.
+ */
+function planRelays(
+  endpointId: string,
+  instances: RelayInstanceRow[],
+  desiredCount: number,
+  localOnly: boolean,
+  path: EndpointLatencyPath | undefined,
+  reference: ReadonlyArray<{ relayInstanceId: string; role: string }>
+): PlannedRelayAssignment[] {
+  if (localOnly) {
+    return instances
+      .filter(({ kind, state }) => kind === 'local' && state === 'ready')
+      .map((instance) => ({ instance, role: 'active' }));
+  }
+  return chooseRelayAssignments(endpointId, instances, desiredCount, path, reference);
 }
 
 export class RelayPoolService {
@@ -116,6 +112,9 @@ export class RelayPoolService {
     RelayCertificateRenewalService,
     'renewDueIfScheduled' | 'describeCertificates' | 'renewInstanceCertificate'
   >;
+  private topology?: Pick<RelayTopologyService, 'endpointPaths'>;
+  /** The roles last planned per endpoint; see planEndpoint. */
+  private readonly plannedRoles = new Map<string, Array<{ relayInstanceId: string; role: string }>>();
   constructor(
     private readonly db: DrizzleClient,
     private readonly policy: RelayPolicyService,
@@ -157,6 +156,47 @@ export class RelayPoolService {
     >
   ): void {
     this.certificateRenewal = renewal;
+  }
+
+  /** Enables placement by measured network distance; without it relays are placed by hash. */
+  setTopology(topology: Pick<RelayTopologyService, 'endpointPaths'>): void {
+    this.topology = topology;
+  }
+
+  /**
+   * Plans one endpoint against the roles last planned for it, falling back to its active roles,
+   * and remembers the result. Relays inside the primary hysteresis band then keep the planned role
+   * from one reconciliation to the next, so jittery round trips never change the plan key and an
+   * endpoint's first latency placement settles like any other.
+   */
+  private planEndpoint(
+    endpointId: string,
+    instances: RelayInstanceRow[],
+    desiredCount: number,
+    localOnly: boolean,
+    path: EndpointLatencyPath | undefined,
+    active: Array<{ relayInstanceId: string; role: string }>
+  ): PlannedRelayAssignment[] {
+    const reference = this.plannedRoles.get(endpointId) ?? active;
+    const planned = planRelays(endpointId, instances, desiredCount, localOnly, path, reference);
+    this.plannedRoles.set(
+      endpointId,
+      planned.map(({ instance, role }) => ({ relayInstanceId: instance.id, role }))
+    );
+    return planned;
+  }
+
+  /** Latency is advisory: a failure to read it places endpoints as if nothing was measured. */
+  private async latencyPaths(
+    endpoints: Array<Pick<typeof relayEndpoints.$inferSelect, 'id' | 'subjectKind' | 'subjectId'>>
+  ): Promise<Map<string, EndpointLatencyPath>> {
+    if (!this.topology) return new Map();
+    try {
+      return await this.topology.endpointPaths(endpoints);
+    } catch (error) {
+      logger.warn('Relay latency data is unavailable; placing relays without it', { error: String(error) });
+      return new Map();
+    }
   }
 
   /** Renews one remote relay's certificate now. */
@@ -647,20 +687,30 @@ export class RelayPoolService {
     const localOnly = await this.poolIncapableEndpoints(
       endpoints.filter(({ ownerKind }) => ownerKind !== 'internal_registry').map(({ id }) => id)
     );
+    const latencyPaths = await this.latencyPaths(endpoints);
+    const activeEndpointIds = new Set(endpoints.map(({ id }) => id));
+    for (const endpointId of this.plannedRoles.keys()) {
+      if (!activeEndpointIds.has(endpointId)) this.plannedRoles.delete(endpointId);
+    }
     const rebalancePlan =
       readyFaultDomains.size === 0
         ? []
         : endpoints.flatMap((endpoint) => {
             if (endpoint.ownerKind === 'internal_registry') return [];
             const spread = effectiveSpreads.get(endpoint.id) ?? generalSettings.relay.assignmentSpread;
-            const selectedIds = (
-              localOnly.has(endpoint.id)
-                ? instances.filter(({ kind, state }) => kind === 'local' && state === 'ready')
-                : chooseCandidates(endpoint.id, instances, effectiveCount(spread, readyFaultDomains.size))
-            ).map(({ id }) => id);
-            if (!selectedIds.length) return [];
             const active = activeByEndpoint.get(endpoint.id);
-            if (active && sameAssignmentSet(assignmentsByGeneration.get(active.id) ?? [], selectedIds)) return [];
+            const current = active ? (assignmentsByGeneration.get(active.id) ?? []) : [];
+            const planned = this.planEndpoint(
+              endpoint.id,
+              instances,
+              effectiveCount(spread, readyFaultDomains.size),
+              localOnly.has(endpoint.id),
+              latencyPaths.get(endpoint.id),
+              current
+            );
+            const selectedIds = planned.map(({ instance }) => instance.id);
+            if (!selectedIds.length) return [];
+            if (active && samePlannedAssignments(current, planned)) return [];
             const participants = new Set(selectedIds);
             for (const retained of generations.filter(
               (generation) => generation.endpointId === endpoint.id && ['active', 'draining'].includes(generation.state)
@@ -672,6 +722,10 @@ export class RelayPoolService {
               {
                 endpointId: endpoint.id,
                 instanceIds: selectedIds.sort(),
+                primaryIds: planned
+                  .filter(({ role }) => role === 'primary')
+                  .map(({ instance }) => instance.id)
+                  .sort(),
                 blockers: poolBlockers(instances.filter(({ id }) => participants.has(id))),
               },
             ];
@@ -945,6 +999,7 @@ export class RelayPoolService {
     const globalSpread = (await this.settings.getConfig()).relay.assignmentSpread;
     const effectiveSpreads = await this.resolveEffectiveSpreads(endpoints, globalSpread);
     const localOnly = await this.poolIncapableEndpoints(endpoints.map(({ id }) => id));
+    const latencyPaths = await this.latencyPaths(endpoints);
     const staged = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-pool-rebalance'))`);
       // An update run pauses automatic placement, but never the evacuation of a relay it drains:
@@ -1016,13 +1071,16 @@ export class RelayPoolService {
           ({ assignmentGenerationId }) => assignmentGenerationId === active?.id
         );
         const spread = effectiveSpreads.get(endpoint.id) ?? globalSpread;
-        // A path with a daemon that lacks Relay Pool support runs on legacy grants, which only
-        // the local relay serves: keep such workloads there until every participant is updated.
-        const selected = localOnly.has(endpoint.id)
-          ? readyInstances.filter(({ kind }) => kind === 'local')
-          : chooseCandidates(endpoint.id, readyInstances, effectiveCount(spread, readyFaultDomains));
-        const selectedIds = selected.map(({ id }) => id);
-        if (!selectedIds.length || sameAssignmentSet(activeAssignments, selectedIds)) continue;
+        const planned = this.planEndpoint(
+          endpoint.id,
+          readyInstances,
+          effectiveCount(spread, readyFaultDomains),
+          localOnly.has(endpoint.id),
+          latencyPaths.get(endpoint.id),
+          activeAssignments
+        );
+        const selectedIds = planned.map(({ instance }) => instance.id);
+        if (!selectedIds.length || samePlannedAssignments(activeAssignments, planned)) continue;
         const participantIds = new Set([
           ...selectedIds,
           ...retainedAssignments.map(({ relayInstanceId }) => relayInstanceId),
@@ -1054,10 +1112,10 @@ export class RelayPoolService {
         });
         if (blockers.length) continue;
         await tx.insert(relayEndpointAssignments).values(
-          selectedIds.map((relayInstanceId) => ({
+          planned.map(({ instance, role }) => ({
             assignmentGenerationId: generation.id,
-            relayInstanceId,
-            role: 'active' as const,
+            relayInstanceId: instance.id,
+            role,
           }))
         );
         const routes = await tx.select().from(relayRoutes).where(eq(relayRoutes.targetEndpointId, endpoint.id));
@@ -1645,4 +1703,4 @@ export class RelayPoolService {
   }
 }
 
-export const relayPoolInternals = { chooseCandidates, isEnrolledRelayInstance };
+export const relayPoolInternals = { chooseCandidates: chooseByRendezvous, isEnrolledRelayInstance };

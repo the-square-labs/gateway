@@ -15,6 +15,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	"github.com/wiolett-industries/gateway/daemon-shared/exec"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
 	"google.golang.org/grpc"
@@ -503,8 +504,11 @@ func runHealthReporter(ctx context.Context, d *DaemonBase, writer *stream.Writer
 
 // collectFullHealth gathers system metrics and enriches them with plugin-specific data.
 func collectFullHealth(d *DaemonBase) *pb.HealthReport {
-	report := d.sysReporter.CollectSystemHealth(nil)
-	return d.plugin.CollectHealth(report)
+	report := d.plugin.CollectHealth(d.sysReporter.CollectSystemHealth(nil))
+	if report != nil {
+		report.RelayLatencies = relaybridge.Latency.Samples()
+	}
+	return report
 }
 
 // Client certificate renewal timing. The node renews once a third of the

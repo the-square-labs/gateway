@@ -126,8 +126,8 @@ describe('Relay Pool per-workload isolation', () => {
         { id: 'retained', endpointId: A, state: 'draining' },
       ],
       [
-        { assignmentGenerationId: 'current', relayInstanceId: 'R2' },
-        { assignmentGenerationId: 'retained', relayInstanceId: 'R2' },
+        { assignmentGenerationId: 'current', relayInstanceId: 'R2', role: 'active' },
+        { assignmentGenerationId: 'retained', relayInstanceId: 'R2', role: 'active' },
       ],
       [],
       [],
@@ -177,7 +177,7 @@ describe('Relay Pool per-workload isolation', () => {
       relays,
       [endpoint(A)],
       [{ id: 'old', endpointId: A, state: 'draining' }],
-      [{ assignmentGenerationId: 'old', relayInstanceId: 'R2' }],
+      [{ assignmentGenerationId: 'old', relayInstanceId: 'R2', role: 'active' }],
       [],
       [],
     ]);

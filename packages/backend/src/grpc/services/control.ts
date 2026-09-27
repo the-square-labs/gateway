@@ -19,7 +19,7 @@ import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate, promotePendingNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
-import { decodeHealthDiskMounts } from './health-report.js';
+import { decodeHealthDiskMounts, relayLatencyHealth } from './health-report.js';
 
 const logger = createChildLogger('GrpcControl');
 /**
@@ -1130,6 +1130,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                     }
                   : {}),
                 gpuDevices: mapGpuHealthDevices(msg.healthReport.gpuDevices),
+                ...relayLatencyHealth(msg.healthReport.relayLatencies),
               };
 
               const connectedNode = deps.registry.getNode(activeNodeId);

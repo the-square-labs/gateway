@@ -130,6 +130,8 @@ export interface NodeHealthReport {
   // Physical GPU inventory. Optional telemetry fields are only present when
   // the daemon explicitly reports the corresponding available metric.
   gpuDevices?: NodeGpuDevice[];
+  // Smoothed round trip from this node to each relay it measured recently.
+  relayLatencies?: Array<{ relayInstanceId: string; rttMs: number }>;
 }
 
 export interface NodeStatsReport {

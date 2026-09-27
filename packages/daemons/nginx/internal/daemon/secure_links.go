@@ -798,36 +798,19 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 }
 
 func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
-	ordered := append([]*pb.RelayDataCandidate(nil), candidates...)
-	if len(ordered) < 2 {
-		return ordered
+	if len(candidates) < 2 {
+		return append([]*pb.RelayDataCandidate(nil), candidates...)
 	}
 	p.relayTunnelMu.Lock()
-	loads := make(map[string]int64, len(ordered))
-	available := make(map[string]bool, len(ordered))
+	transports := make(map[string]relaybridge.TransportLoad, len(p.relayTunnels))
 	for _, tunnel := range p.relayTunnels {
-		available[tunnel.targetID] = true
-		loads[tunnel.targetID] += tunnel.active.Load()
+		load := transports[tunnel.targetID]
+		transports[tunnel.targetID] = relaybridge.TransportLoad{Available: true, Active: load.Active + tunnel.active.Load()}
 	}
-	start := int(p.relaySelection % uint64(len(ordered)))
+	rotation := p.relaySelection
 	p.relaySelection++
 	p.relayTunnelMu.Unlock()
-	rank := make(map[string]int, len(ordered))
-	for offset := range ordered {
-		candidate := ordered[(start+offset)%len(ordered)]
-		rank[candidate.GetRelayInstanceId()] = offset
-	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		leftID, rightID := ordered[i].GetRelayInstanceId(), ordered[j].GetRelayInstanceId()
-		if available[leftID] != available[rightID] {
-			return available[leftID]
-		}
-		if loads[leftID] != loads[rightID] {
-			return loads[leftID] < loads[rightID]
-		}
-		return rank[leftID] < rank[rightID]
-	})
-	return ordered
+	return relaybridge.OrderCandidates(candidates, transports, rotation, relaybridge.Latency.RTT)
 }
 
 func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
