@@ -36,6 +36,12 @@ type leaseGateEntry struct {
 // N, and that view is younger than min(remaining_ms, 30000) ms since receipt
 // on the nginx node's own monotonic clock. When the stream breaks, views age
 // out by that TTL; do not extend them."
+//
+// A view with lease_mode=false additionally opens every member of that
+// policy: it means the policy is not lease-bound (legacy, or lease-closed),
+// so legacy admission applies and nothing about it is gated (B2 fix). A
+// missing or expired view never opens anything by itself: a lease-bound
+// member with no fresh view at all stays closed (fail closed).
 type leaseGateTracker struct {
 	mu      sync.Mutex
 	entries map[leaseGateKey]map[string]leaseGateEntry // key -> relay member id -> entry
@@ -45,7 +51,11 @@ func newLeaseGateTracker() *leaseGateTracker {
 	return &leaseGateTracker{entries: map[leaseGateKey]map[string]leaseGateEntry{}}
 }
 
-// apply records one relay's gate snapshot, timestamped at receipt.
+// apply records one relay's gate snapshot, timestamped at receipt. A
+// lease_mode=false gate's remaining_ms is not meaningful (the relay only
+// fills it in while it is admitting a holder), so that view is trusted for
+// the full lease term instead, refreshed by the relay's own at-least-once-
+// per-second broadcast; it is still aged out at no more than T (B2, D8, A8).
 func (t *leaseGateTracker) apply(relayID string, snapshot *relayv1.LeaseGateSnapshot, now time.Time) {
 	if snapshot == nil {
 		return
@@ -54,9 +64,13 @@ func (t *leaseGateTracker) apply(relayID string, snapshot *relayv1.LeaseGateSnap
 	defer t.mu.Unlock()
 	for _, gate := range snapshot.GetGates() {
 		key := leaseGateKey{policyID: gate.GetPolicyId(), slot: gate.GetSlot()}
-		ttlMs := gate.GetRemainingMs()
-		if maxMs := uint64(leaseGateMaxTTL.Milliseconds()); ttlMs > maxMs {
-			ttlMs = maxMs
+		ttl := leaseGateMaxTTL
+		if gate.GetLeaseMode() {
+			ttlMs := gate.GetRemainingMs()
+			if maxMs := uint64(leaseGateMaxTTL.Milliseconds()); ttlMs > maxMs {
+				ttlMs = maxMs
+			}
+			ttl = time.Duration(ttlMs) * time.Millisecond
 		}
 		byRelay := t.entries[key]
 		if byRelay == nil {
@@ -67,14 +81,20 @@ func (t *leaseGateTracker) apply(relayID string, snapshot *relayv1.LeaseGateSnap
 			leaseMode: gate.GetLeaseMode(),
 			open:      gate.GetOpen(),
 			holderID:  gate.GetHolderId(),
-			expiresAt: now.Add(time.Duration(ttlMs) * time.Millisecond),
+			expiresAt: now.Add(ttl),
 		}
 	}
 }
 
-// openFor reports whether some relay's latest, unexpired view admits
-// candidateID for policyID in any slot (D8, A8). A stale view never counts:
-// the caller does not wait for a broadcast to say so.
+// openFor reports whether policyID currently admits candidateID (D8, A8,
+// B2). It is open when some relay's latest, unexpired view either:
+//   - says the policy is not lease-bound (lease_mode=false: legacy or
+//     lease-closed), so legacy admission applies to every member; or
+//   - says the lease is open and candidateID holds it.
+//
+// A stale or absent view never opens anything by itself: a genuinely
+// lease-bound member with no fresh view at all stays closed, and the caller
+// never waits for a broadcast to say a view is gone.
 func (t *leaseGateTracker) openFor(policyID, candidateID string, now time.Time) bool {
 	if policyID == "" || candidateID == "" {
 		return false
@@ -86,7 +106,13 @@ func (t *leaseGateTracker) openFor(policyID, candidateID string, now time.Time) 
 			continue
 		}
 		for _, entry := range byRelay {
-			if entry.leaseMode && entry.open && entry.holderID == candidateID && now.Before(entry.expiresAt) {
+			if !now.Before(entry.expiresAt) {
+				continue
+			}
+			if !entry.leaseMode {
+				return true
+			}
+			if entry.open && entry.holderID == candidateID {
 				return true
 			}
 		}

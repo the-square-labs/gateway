@@ -25,21 +25,33 @@ func TestLeaseGateTrackerOpensOnlyForTheReportedHolder(t *testing.T) {
 	}
 }
 
-func TestLeaseGateTrackerClosesOnLeaseModeFalseOrClosedGate(t *testing.T) {
+// TestLeaseGateTrackerLeaseModeFalseOpensForEveryCandidate covers the B2
+// fix: a policy that is not lease-bound (legacy, or after its lease closed)
+// admits every member once a relay reports lease_mode=false, regardless of
+// holder_id. Without this, a lease-bound member loses ingress permanently
+// the moment its policy leaves lease mode.
+func TestLeaseGateTrackerLeaseModeFalseOpensForEveryCandidate(t *testing.T) {
 	tracker := newLeaseGateTracker()
 	now := time.Now()
 	tracker.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{
-		{PolicyId: "policy-1", Slot: 0, LeaseMode: false, Open: false, HolderId: "node-a"},
+		{PolicyId: "policy-1", Slot: 0, LeaseMode: false, Open: false, HolderId: ""},
 	}}, now)
-	if tracker.openFor("policy-1", "node-a", now) {
-		t.Fatal("a legacy (lease_mode=false) view must never open a socket")
+	if !tracker.openFor("policy-1", "node-a", now) {
+		t.Fatal("a fresh lease_mode=false view must open every candidate's socket (legacy admission, B2)")
 	}
+	if !tracker.openFor("policy-1", "node-b", now) {
+		t.Fatal("legacy admission must not depend on which candidate is asking")
+	}
+}
 
+func TestLeaseGateTrackerClosesOnAClosedLeaseModeGate(t *testing.T) {
+	tracker := newLeaseGateTracker()
+	now := time.Now()
 	tracker.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{
 		{PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: false, HolderId: "node-a", Reason: "expired"},
 	}}, now)
 	if tracker.openFor("policy-1", "node-a", now) {
-		t.Fatal("a closed gate must not open a socket")
+		t.Fatal("a closed lease-mode gate must not open a socket")
 	}
 }
 
