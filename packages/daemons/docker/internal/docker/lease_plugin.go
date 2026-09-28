@@ -14,7 +14,10 @@ import (
 )
 
 const (
-	availabilityLeaseCapability = "availability_lease_v1"
+	// availabilityLeaseCapability is versioned (D3): v2 carries the sender
+	// clock in lease frames (peer-time freeze detection, D4) and releases
+	// after a confirmed local fence. Gateway treats v1 as outdated.
+	availabilityLeaseCapability = "availability_lease_v2"
 	// leaseWatchdogStartupWait lets a watchdog that boots after the daemon
 	// prove itself before the registration capabilities are computed.
 	leaseWatchdogStartupWait = 5 * time.Second
@@ -102,7 +105,7 @@ func (l *leaseIntegration) attachRelay(ctx context.Context, conn grpc.ClientConn
 	})
 }
 
-// leaseCapabilities advertises availability_lease_v1 only with a live
+// leaseCapabilities advertises availability_lease_v2 only with a live
 // watchdog (A12.4), and the missing-watchdog marker when this daemon cannot
 // install one, so the policy mode reason asks to re-run the node installer.
 func (p *DockerPlugin) leaseCapabilities() []string {

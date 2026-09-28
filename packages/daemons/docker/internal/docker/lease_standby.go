@@ -8,7 +8,7 @@ import (
 
 // Standby preparation for lease-mode Availability (D7, T6 §3.2): the image
 // is pulled and the workload created, but never started. Only the lease
-// holder starts it (A2.1). availability_lease_v1 implies these actions.
+// holder starts it (A2.1). availability_lease_v2 implies these actions.
 
 const (
 	deploymentActionCreateStandby = "create_standby"
