@@ -4,6 +4,7 @@ import (
 	"context"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 )
@@ -55,9 +56,14 @@ func (r *relayTunnelRouter) admitIncoming(assignment *pb.RelayGrantAssignment, i
 	}
 	if refusal = relaybridge.RevocationRefusal(r.plugin.relayGrants.get(), tunnel.relayInstanceID, tunnel.endpointID, tunnel.route); refusal != "" {
 		release()
-		r.plugin.logger.Warn("relay endpoint tunnel refused", "relay_instance_id", tunnel.relayInstanceID, "endpoint_id", tunnel.endpointID,
+		attrs := []any{"relay_instance_id", tunnel.relayInstanceID, "endpoint_id", tunnel.endpointID,
 			"route_id", tunnel.route.GetRouteId(), "route_generation", tunnel.route.GetRouteGeneration(),
-			"source_kind", tunnel.route.GetSourceKind(), "source_id", tunnel.route.GetSourceId(), "reason", refusal)
+			"source_kind", tunnel.route.GetSourceKind(), "source_id", tunnel.route.GetSourceId(), "reason", refusal}
+		// A source that keeps opening a revoked route is refused per request: reported per owner, apart from the
+		// endpoint's other failures so a failing endpoint does not hide it, and summarised while it goes on (L-1).
+		r.plugin.logger.Debug("relay endpoint tunnel refused", attrs...)
+		r.plugin.relayTunnelOutcomes.Failed(r.plugin.logger,
+			logepisode.Subject{Name: "relay endpoint tunnels on revoked routes", IDAttr: "owner_id", ID: assignment.GetOwnerId()}, attrs...)
 		return nil, refusal
 	}
 	return release, ""

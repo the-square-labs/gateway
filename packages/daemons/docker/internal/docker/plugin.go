@@ -14,6 +14,7 @@ import (
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
+	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
@@ -75,6 +76,8 @@ type DockerPlugin struct {
 	// (D6); memberProbe replaces its probe in tests.
 	memberReadiness *memberReadiness
 	memberProbe     func(ctx context.Context, links []string, cheap bool) memberProbeResult
+	// relayTunnelOutcomes logs failing incoming relay tunnels per endpoint owner and state change (L-1).
+	relayTunnelOutcomes logepisode.Tracker
 
 	// Log stream follow support
 	writer           *stream.Writer

@@ -22,6 +22,7 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
@@ -976,11 +977,27 @@ func retryableRelayOpenError(err error) bool {
 	return !strings.Contains(message, "dormant") && !strings.Contains(message, "built-in local service")
 }
 
+// secureLinkAttemptFailure describes a failed relay attempt of one connection.
+type secureLinkAttemptFailure struct {
+	relay, stage, err string
+}
+
+func (f *secureLinkAttemptFailure) attrs() []any {
+	if f == nil {
+		return nil
+	}
+	return []any{"relay_instance_id", f.relay, "stage", f.stage, "error", f.err}
+}
+
 func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connection net.Conn) {
 	defer connection.Close()
+	// Outcomes are logged per link and state change (L-1): while a target is down every request of its route
+	// fails, and the 3 s hold retries every 150 ms, so per-attempt lines went to about 20 WARN per request.
+	outcome := logepisode.Subject{Name: logName + " connections", IDAttr: "link_id", ID: linkID}
 	assignment := findRelayAssignment(p.relayGrants.get(), "connect", ownerKind, linkID)
 	if assignment == nil {
-		p.logger.Warn(logName+" connection rejected", "link_id", linkID, "stage", "grant")
+		p.logger.Debug(logName+" connection rejected", "link_id", linkID, "stage", "grant")
+		p.secureLinkOutcomes.Failed(p.logger, outcome, "stage", "grant", "error", "no relay grant for the link")
 		return
 	}
 	candidates := relaybridge.PoolCandidates(assignment, false)
@@ -1000,6 +1017,19 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	var memberSetupDeadline time.Time
 	started := time.Now()
 	restarting := false
+	failedAttempts, waited := 0, false
+	var lastFailure *secureLinkAttemptFailure
+	// Recorded once the tunnel is ready, before the bridge: a connection that lives on must not report its
+	// outcome when it ends, after the outcomes of later connections.
+	opened := func() {
+		if failedAttempts == 0 && !waited {
+			p.secureLinkOutcomes.Succeeded(p.logger, outcome)
+			return
+		}
+		// Held or failed over to another relay: served, but the path was not healthy.
+		p.secureLinkOutcomes.Retried(p.logger, outcome, append(lastFailure.attrs(),
+			"failed_attempts", failedAttempts, "waited", time.Since(started).Round(time.Millisecond).String())...)
+	}
 	for {
 		retryable := false
 		reachedRelay := false
@@ -1010,6 +1040,9 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 			if tunnel == nil {
 				// No lane to this relay yet: a lane that comes up counts.
 				retryable = true
+				if lastFailure == nil {
+					lastFailure = &secureLinkAttemptFailure{relay: candidate.GetRelayInstanceId(), stage: "lane", err: "no relay lane"}
+				}
 				continue
 			}
 			reachedRelay = true
@@ -1028,9 +1061,13 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 					break
 				}
 			}
-			switch p.openProxySecureLinkOnTunnel(linkID, connection, tunnel, grant, setup) {
-			case secureLinkOpened:
+			result, failure := p.openProxySecureLinkOnTunnel(linkID, connection, tunnel, grant, setup, opened)
+			if result == secureLinkOpened {
 				return
+			}
+			failedAttempts++
+			lastFailure = failure
+			switch result {
 			case secureLinkRetryable:
 				retryable = true
 			case secureLinkRestarting:
@@ -1053,9 +1090,12 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 			!time.Now().Add(secureLinkTransientRetry).Before(deadline) {
 			break
 		}
+		waited = true
 		time.Sleep(secureLinkTransientRetry)
 	}
-	p.logger.Warn(logName+" connection failed on all relay candidates", "link_id", linkID)
+	p.logger.Debug(logName+" connection failed on all relay candidates", "link_id", linkID, "failed_attempts", failedAttempts)
+	p.secureLinkOutcomes.Failed(p.logger, outcome, append(lastFailure.attrs(),
+		"failed_attempts", failedAttempts, "waited", time.Since(started).Round(time.Millisecond).String())...)
 }
 
 // availabilityMember reports a binding of an availability policy member.
@@ -1108,42 +1148,46 @@ func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
 	return selected
 }
 
-func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, setupTimeout time.Duration) secureLinkOpenResult {
+// openProxySecureLinkOnTunnel opens and bridges one connection through a relay lane. A failed attempt is logged at
+// debug only; openSecureLink reports the connection's outcome per link and state change (L-1).
+func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, setupTimeout time.Duration, opened func()) (secureLinkOpenResult, *secureLinkAttemptFailure) {
 	defer tunnel.active.Add(-1)
 	ctx, cancel, finishSetup := proxySecureLinkSetupContext(tunnel.ctx, setupTimeout)
 	defer cancel()
+	failed := func(stage, message string) *secureLinkAttemptFailure {
+		p.logger.Debug("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", stage, "error", message)
+		return &secureLinkAttemptFailure{relay: tunnel.targetID, stage: stage, err: message}
+	}
 	stream, err := tunnel.client.OpenTunnel(ctx)
 	if err != nil {
-		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "open", "error", err)
-		return openFailure(err)
+		return openFailure(err), failed("open", err.Error())
 	}
 	if err := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}}); err != nil {
-		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "send", "error", err)
-		return openFailure(err)
+		return openFailure(err), failed("send", err.Error())
 	}
 	first, err := stream.Recv()
 	if err != nil {
-		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "ready", "error", err)
-		return openFailure(err)
+		return openFailure(err), failed("ready", err.Error())
 	}
 	if first.GetReady() == nil {
 		code := "unexpected_frame"
 		if relayError := first.GetError(); relayError != nil {
 			code = relayError.GetCode()
 		}
-		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "ready", "error", code)
-		return secureLinkFailed
+		return secureLinkFailed, failed("ready", code)
 	}
 	if !finishSetup() {
-		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "deadline", "error", "setup timeout")
-		return secureLinkFailed
+		return secureLinkFailed, failed("deadline", "setup timeout")
+	}
+	if opened != nil {
+		opened()
 	}
 	readChunk := int(p.relayGrants.get().GetReadChunkBytes())
 	if readChunk == 0 {
 		readChunk = relaybridge.DefaultChunkBytes
 	}
 	_ = relaybridge.BridgeWithChunk(ctx, connection, stream, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
-	return secureLinkOpened
+	return secureLinkOpened, nil
 }
 
 func openFailure(err error) secureLinkOpenResult {
