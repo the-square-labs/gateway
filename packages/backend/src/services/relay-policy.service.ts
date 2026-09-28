@@ -29,6 +29,7 @@ import {
   LEGACY_RELAY_POLICY_LEASE_SECONDS,
   LONG_POLICY_LEASE_CAPABILITY,
 } from '@/modules/settings/general-settings.service.js';
+import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import type { CryptoService } from './crypto.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
@@ -481,6 +482,8 @@ export class RelayPolicyService {
       nodeId,
       Math.max(this.remotePolicyRevisions.get(nodeId) ?? 0, snapshot.globalRevision)
     );
+    // The relay answers again: pushes of later changes must not wait out an earlier failure's cooldown.
+    this.remotePolicyPushFailedAt.delete(nodeId);
     return snapshot.revision;
   }
 
@@ -885,6 +888,13 @@ export class RelayPolicyService {
         this.remotePolicyPushFailedAt.delete(nodeId);
         return;
       }
+      if (isNodeNotConnectedError(result.reason)) {
+        // A relay that is not connected gets its snapshot when it reconnects (forced push on connect). No cooldown:
+        // it would also hold back the pushes of the changes made right after it reconnected, and daemons would
+        // present grants the relay does not know yet ("grant does not match policy", B-18).
+        logger.debug('Remote relay policy push waits for the relay to reconnect', { nodeId });
+        return;
+      }
       // An unresponsive relay must not slow every local sync; the lease refresh keeps trying.
       this.remotePolicyPushFailedAt.set(nodeId, Date.now());
       logger.warn('Remote relay policy push deferred to the next lease refresh', {
@@ -1185,6 +1195,23 @@ export class RelayPolicyService {
       this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
     ]);
     return routeId;
+  }
+
+  /** Whether relay policy already carries this Secure Link to the given target node (it may be serving now). */
+  async hasProxySecureLinkEndpoint(linkId: string, targetNodeId: string): Promise<boolean> {
+    const [endpoint] = await this.db
+      .select({ id: relayEndpoints.id })
+      .from(relayEndpoints)
+      .where(
+        and(
+          eq(relayEndpoints.ownerKind, 'proxy_host_secure_link'),
+          eq(relayEndpoints.ownerId, linkId),
+          eq(relayEndpoints.subjectId, targetNodeId),
+          eq(relayEndpoints.status, 'active')
+        )
+      )
+      .limit(1);
+    return Boolean(endpoint);
   }
 
   async ensureProxySecureLink(linkId: string, sourceNodeId: string, targetNodeId: string): Promise<string> {

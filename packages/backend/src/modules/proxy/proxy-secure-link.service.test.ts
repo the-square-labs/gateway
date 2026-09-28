@@ -43,6 +43,87 @@ describe('ProxySecureLinkService migration rollback', () => {
     if (fail) expect(db.update).not.toHaveBeenCalled();
     else expect(where).toHaveBeenCalledOnce();
   });
+  it('keeps the serving path of a member whose re-provision fails while its ingress has not reconnected (B-18)', async () => {
+    const host = { id: 'host' } as any;
+    // The holder's member: it took over while Gateway was away and serves through relay endpoint f526d903.
+    const binding = {
+      id: 'member-3acf26af',
+      proxyHostId: 'host',
+      purpose: 'availability_member',
+      generation: 3,
+      status: 'provisioning',
+      dormant: false,
+      upstreamKind: 'docker_container',
+      sourceNodeId: 'ingress-1',
+      dockerNodeId: 'app-node-1',
+      forwardScheme: 'http',
+    };
+    const writes: Array<Record<string, unknown>> = [];
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn(async () => binding) } },
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          writes.push(values);
+          return { where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ ...binding, ...values }]) })) };
+        }),
+      })),
+    };
+    const relay = {
+      hasProxySecureLinkEndpoint: vi.fn().mockResolvedValue(true),
+      ensureProxySecureLink: vi.fn(),
+      revokeOwner: vi.fn(),
+    };
+    const service = new ProxySecureLinkService(db as never, {} as never, relay as never, 'image');
+    vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'syncSourceNode').mockRejectedValue(new Error('Node ingress-1 is not connected'));
+
+    const result = await (service as any).createAdditionalFromExisting(host, binding.id);
+
+    expect(relay.hasProxySecureLinkEndpoint).toHaveBeenCalledWith('member-3acf26af', 'app-node-1');
+    expect(relay.revokeOwner).not.toHaveBeenCalled();
+    expect(writes.at(-1)).toMatchObject({ status: 'active', lastError: 'Node ingress-1 is not connected' });
+    expect(result).toMatchObject({ status: 'active', lastError: 'Node ingress-1 is not connected' });
+  });
+
+  it('still revokes relay state a failed first provisioning created', async () => {
+    const host = { id: 'host' } as any;
+    const binding = {
+      id: 'new-member',
+      proxyHostId: 'host',
+      generation: 1,
+      status: 'provisioning',
+      dormant: false,
+      upstreamKind: 'docker_container',
+      sourceNodeId: 'ingress-1',
+      dockerNodeId: 'app-node-2',
+      forwardScheme: 'http',
+    };
+    const writes: Array<Record<string, unknown>> = [];
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn(async () => binding) } },
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          writes.push(values);
+          return { where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ ...binding, ...values }]) })) };
+        }),
+      })),
+    };
+    const relay = {
+      hasProxySecureLinkEndpoint: vi.fn().mockResolvedValue(false),
+      ensureProxySecureLink: vi.fn(),
+      revokeOwner: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new ProxySecureLinkService(db as never, {} as never, relay as never, 'image');
+    vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'probeSecureLink').mockRejectedValue(new Error('probe failed'));
+
+    await (service as any).createAdditionalFromExisting(host, binding.id);
+
+    expect(relay.revokeOwner).toHaveBeenCalledWith('proxy_host_secure_link', 'new-member');
+    expect(writes.at(-1)).toMatchObject({ status: 'failed' });
+  });
+
   it('activates a binding whose generation advanced because target sync reselected the network', async () => {
     const host = { id: 'host' } as any;
     const binding = {
@@ -306,6 +387,54 @@ describe('ProxySecureLinkService migration rollback', () => {
       'proxy_host_secure_link',
       '22222222-2222-4222-8222-222222222222'
     );
+  });
+
+  it('retries a member whose re-provision kept the serving path but could not finish (B-18)', async () => {
+    const host = { id: 'host-1', type: 'proxy', rawConfigEnabled: false, nodeId: 'ingress-1' } as any;
+    const existing = {
+      id: 'member-1',
+      proxyHostId: host.id,
+      purpose: 'availability_member',
+      referenceId: 'placement-1',
+      availabilityOwnerKey: `proxy-host:${host.id}`,
+      status: 'active',
+      lastError: 'target container is unavailable',
+      dockerNodeId: 'app-node-1',
+      targetNetwork: 'bridge',
+      targetContainer: 'hafo',
+      dockerHostPort: 9898,
+      dormant: true,
+    } as any;
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn().mockResolvedValue(existing) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ ...existing, status: 'provisioning' }]) })),
+        })),
+      })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'createAdditionalFromExisting').mockResolvedValue({
+      ...existing,
+      status: 'active',
+      lastError: 'Node ingress-1 is not connected',
+    });
+
+    await expect(
+      service.ensureAvailabilityMember(host, {
+        placementId: existing.referenceId,
+        ingressOwnerKey: existing.availabilityOwnerKey,
+        dockerNodeId: existing.dockerNodeId,
+        upstreamKind: 'docker_container',
+        forwardScheme: 'http',
+        dockerContainerPort: 9898,
+        dockerHostPort: existing.dockerHostPort,
+        targetNetwork: existing.targetNetwork,
+        targetContainer: existing.targetContainer,
+        dormant: false,
+      })
+    ).rejects.toMatchObject({ code: 'AVAILABILITY_INGRESS_MEMBER_NOT_READY', details: { retryable: true } });
   });
 
   it('quarantines an unavailable sibling target instead of blocking a new route on the same node', async () => {
