@@ -61,8 +61,17 @@ describe('hosting management semantics', () => {
     });
     await expect(validate({ provider: 'proxmox' }, vm, { action: 'resize', diskGb: 64 })).resolves.toBeUndefined();
   });
-  function destroyRunner() {
+  function destroyRunner(options: { unenrolled?: boolean } = {}) {
     const firewalls: unknown[] = [];
+    // A node reserved by the VM's failed installation: pending, never enrolled, not bound.
+    const pendingNodes: Array<{
+      id: string;
+      status: string;
+      certificateFingerprint: string | null;
+      hostIdentityId: string | null;
+    }> = options.unenrolled
+      ? [{ id: 'pending', status: 'pending', certificateFingerprint: null, hostIdentityId: null }]
+      : [];
     let row = {
       id: 'destroy',
       resourceId: 'resource',
@@ -76,7 +85,9 @@ describe('hosting management semantics', () => {
         idempotencyKey: '11111111-1111-4111-8111-111111111111',
         expectedIncarnation: vm.incarnation,
       },
-      result: { destroyNodeIds: ['node'] },
+      result: options.unenrolled
+        ? { destroyNodeIds: ['node', 'pending'], destroyUnenrolledNodeIds: ['pending'] }
+        : { destroyNodeIds: ['node'] },
       providerOperation: null,
       generation: 1,
       leaseOwner: 'worker',
@@ -142,7 +153,7 @@ describe('hosting management semantics', () => {
                     : table === permissionGroups
                       ? []
                       : table === nodes
-                        ? bound.map((n) => ({ id: n.nodeId, hostIdentityId: 'host' }))
+                        ? [...bound.map((n) => ({ id: n.nodeId, hostIdentityId: 'host' })), ...pendingNodes]
                         : table === hostingNodeBindings
                           ? bound
                           : [];
@@ -155,15 +166,23 @@ describe('hosting management semantics', () => {
       update: () => ({ set: () => ({ where: async () => {} }) }),
     };
     const nodeService = {
-      remove: vi.fn(async (_id, _actorId, options) => {
+      remove: vi.fn(async (id, _actorId, options) => {
         await options.hostingDelete.guard(tx);
-        bound.length = 0;
+        if (id === 'pending') pendingNodes.length = 0;
+        else bound.length = 0;
       }),
     };
     const db = {
       update: () => ({ set: () => ({ where: async () => {} }) }),
       select: () => ({
-        from: (table: unknown) => ({ where: async () => (table === hostingFirewalls ? firewalls : [{ id: 'node' }]) }),
+        from: (table: unknown) => ({
+          where: async () =>
+            table === hostingFirewalls
+              ? firewalls
+              : table === nodes && options.unenrolled
+                ? pendingNodes
+                : [{ id: 'node' }],
+        }),
       }),
       transaction: async (callback: (executor: unknown) => Promise<void>) => callback(tx),
     };
@@ -197,9 +216,97 @@ describe('hosting management semantics', () => {
       tx,
       lookup,
       firewalls,
+      pendingNodes,
       row: () => row,
     };
   }
+  it('records unenrolled installation nodes the actor may delete when a VM deletion is requested', async () => {
+    const reserve = vi.fn(async (_input, initialize: (tx: unknown) => Promise<{ result?: unknown }>) => {
+      const unenrolled = [{ nodeId: 'pending' }, { nodeId: 'pending' }, { nodeId: 'forbidden' }, { nodeId: 'node' }];
+      const query: Record<'from' | 'innerJoin' | 'leftJoin', () => unknown> & { where: () => Promise<unknown> } = {
+        from: () => query,
+        innerJoin: () => query,
+        leftJoin: () => query,
+        where: async () => unenrolled,
+      };
+      const patch = await initialize({ select: () => query });
+      return { operation: { id: 'destroy', action: 'delete', phase: 'pending', ...patch }, created: false };
+    });
+    const service = new HostingManagementService(
+      {} as never,
+      { adapter: () => ({ provider: 'cloudblast' }), changed: vi.fn() } as never,
+      { findIntent: async () => null, reserve } as never,
+      {} as never,
+      { isNodeConnected: () => false },
+      { log: vi.fn() } as never,
+      {} as never
+    );
+    vi.spyOn(
+      service as unknown as { resource: (...args: unknown[]) => Promise<unknown> },
+      'resource'
+    ).mockResolvedValue({
+      resource: {
+        id: 'resource',
+        incarnation: vm.incarnation,
+        snapshot: { ...vm, capabilities: hostingCapabilities({ delete: true }) },
+      },
+      bound: [{ nodeId: 'node' }],
+      connector: { id: 'connector', provider: 'cloudblast' },
+    });
+    const user = {
+      id: 'actor',
+      scopes: [
+        'hosting:resources:delete:resource',
+        ...['node', 'pending', 'forbidden'].map((id) => `nodes:details:${id}`),
+        'nodes:delete:node',
+        'nodes:delete:pending',
+      ],
+    };
+    const operation = await service.action(
+      'resource',
+      {
+        action: 'delete',
+        confirmed: true,
+        idempotencyKey: '11111111-1111-4111-8111-111111111111',
+        expectedIncarnation: vm.incarnation,
+      } as never,
+      user as never
+    );
+    // Bound roles first, then the unenrolled node; one the actor may not delete stays untouched.
+    expect(operation.result).toEqual({ destroyNodeIds: ['node', 'pending'], destroyUnenrolledNodeIds: ['pending'] });
+  });
+  it('removes the never-enrolled node of a failed installation together with the deleted VM', async () => {
+    const test = destroyRunner({ unenrolled: true });
+    test.adapter.getResource.mockResolvedValue(null);
+    await test.service.reconcileDue();
+    expect(test.nodeService.remove.mock.calls.map(([id]) => id)).toEqual(['node', 'pending']);
+    expect(test.nodeService.remove).toHaveBeenLastCalledWith(
+      'pending',
+      'actor',
+      expect.objectContaining({ hostingDelete: { operationId: 'destroy', guard: expect.any(Function) } })
+    );
+    expect(test.pendingNodes).toHaveLength(0);
+    expect(test.row()).toMatchObject({ phase: 'ready', result: { providerDeleted: true } });
+  });
+  it('leaves an installation node that enrolled after all, and fences one enrolling during removal', async () => {
+    const enrolled = destroyRunner({ unenrolled: true });
+    enrolled.adapter.getResource.mockResolvedValue(null);
+    enrolled.pendingNodes[0].certificateFingerprint = 'sha256:enrolled';
+    await enrolled.service.reconcileDue();
+    expect(enrolled.nodeService.remove.mock.calls.map(([id]) => id)).toEqual(['node']);
+    expect(enrolled.row().phase).toBe('ready');
+
+    const racing = destroyRunner({ unenrolled: true });
+    racing.adapter.getResource.mockResolvedValue(null);
+    const guardedRemove = racing.nodeService.remove.getMockImplementation()!;
+    racing.nodeService.remove.mockImplementation(async (...args) => {
+      if (args[0] === 'pending') racing.pendingNodes[0].hostIdentityId = 'host-2';
+      await guardedRemove(...args);
+    });
+    await racing.service.reconcileDue();
+    expect(racing.pendingNodes).toHaveLength(1);
+    expect(racing.row().phase).not.toBe('ready');
+  });
   it('checkpoints owned firewall cleanup before removing local nodes for an absent VM', async () => {
     const test = destroyRunner();
     test.connector.provider = 'digitalocean';
