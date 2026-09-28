@@ -51,6 +51,9 @@ type relayEndpointRegistration struct {
 	// renewed again: Gateway resends unchanged bundles, and each renewal is a relay round trip.
 	latest *pb.RelayGrantAssignment
 	state  relayv1.EndpointServingState
+	// restartAck closes once the relay confirmed a RESTARTING renewal (B-13);
+	// guarded by the router's mu.
+	restartAck chan struct{}
 }
 
 // relayRegistrationUpdate is what one registration sends the relay: its grant and whether the
@@ -149,6 +152,10 @@ func (p *DockerPlugin) RelayTunnelRuntimeChanged() <-chan struct{} {
 // reconcileRegistrations returns the done channels of the registrations it
 // cancelled, so a lease release can wait until they are gone (A6).
 func (r *relayTunnelRouter) reconcileRegistrations() []chan struct{} {
+	if r.plugin.restartAnnounced.Load() {
+		// The relays hold these registrations for the next process (B-13).
+		return nil
+	}
 	bundle := r.plugin.relayGrants.get()
 	r.enforceRevocationFences(bundle)
 	if r.plugin.relayGrants.registrationHold(time.Now()) > 0 {
@@ -372,6 +379,10 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayReg
 						r.mu.Lock()
 						if registration := r.registrations[relayRegistrationKey(current)]; registration != nil {
 							registration.ready.Store(true)
+							if state == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_RESTARTING && registration.restartAck != nil {
+								close(registration.restartAck)
+								registration.restartAck = nil
+							}
 						}
 						r.mu.Unlock()
 						continue
@@ -467,6 +478,13 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 			break
 		}
 		connection, err = r.plugin.secureLinks.dial(ctx, assignment.OwnerId)
+		if err == nil {
+			// Tracked so a restart finishes the request in flight and closes
+			// the tunnel once it is idle (B-13).
+			tracked := newDrainConn(connection)
+			connection = tracked
+			defer r.plugin.proxyTunnels.add(tracked, cancel)()
+		}
 	case "managed_storage", "managed_storage_binding", "managed_storage_gateway":
 		if r.plugin.storageManager == nil {
 			return
@@ -738,7 +756,9 @@ func (p *DockerPlugin) ProbeRelayCandidate(command *pb.ProbeRelayCandidateComman
 				}
 			}
 			cancel()
-			if err == nil {
+			if err == nil || relaybridge.ProbeReachedGatedEndpoint(err) {
+				// A route gated by an Availability lease (a standby source or
+				// target) still proves the relay authorizes it (B-17).
 				lastErr = nil
 				break
 			}

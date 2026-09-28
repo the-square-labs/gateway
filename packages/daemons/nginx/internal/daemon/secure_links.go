@@ -947,6 +947,10 @@ var (
 	// members never wait; the upstream moves on to the next member at once.
 	secureLinkTransientWait  = 3 * time.Second
 	secureLinkTransientRetry = 150 * time.Millisecond
+	// secureLinkRestartHold is how long a new connection waits for a target
+	// whose daemon announced a graceful restart to register again (B-13): its
+	// shutdown, start and registration take a few seconds.
+	secureLinkRestartHold = 8 * time.Second
 )
 
 type secureLinkOpenResult int
@@ -955,6 +959,8 @@ const (
 	secureLinkOpened secureLinkOpenResult = iota
 	// The lane's transport is not ready or the target is not registered yet: worth another try shortly.
 	secureLinkRetryable
+	// The target's daemon restarts gracefully: worth holding the connection (B-13).
+	secureLinkRestarting
 	secureLinkFailed
 )
 
@@ -992,9 +998,12 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	// registration until it notices, and each would take the whole setup
 	// timeout (three relays: 6 s). nginx retries the next member instead.
 	var memberSetupDeadline time.Time
+	started := time.Now()
+	restarting := false
 	for {
 		retryable := false
 		reachedRelay := false
+		memberSetupDeadline = time.Time{}
 		ordered := p.orderRelayCandidates(candidates)
 		for index, candidate := range ordered {
 			tunnel := p.selectRelayTunnel(candidate.GetRelayInstanceId())
@@ -1024,12 +1033,24 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 				return
 			case secureLinkRetryable:
 				retryable = true
+			case secureLinkRestarting:
+				retryable = true
+				if !restarting {
+					// The target's daemon restarts gracefully (B-13): hold the
+					// connection until its next process registered.
+					restarting = true
+					deadline = started.Add(secureLinkRestartHold)
+				}
 			}
 			if index+1 < len(ordered) {
 				time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
 			}
 		}
-		if !retryable || (member && reachedRelay) || !time.Now().Add(secureLinkTransientRetry).Before(deadline) {
+		// A member moves on at once when a relay refused it, unless its daemon
+		// restarts and no other member of the policy serves: then the held
+		// connection is its only way to succeed.
+		if !retryable || (member && reachedRelay && !(restarting && !p.memberHasServingAlternative(linkID))) ||
+			!time.Now().Add(secureLinkTransientRetry).Before(deadline) {
 			break
 		}
 		time.Sleep(secureLinkTransientRetry)
@@ -1126,10 +1147,33 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.
 }
 
 func openFailure(err error) secureLinkOpenResult {
+	if current, ok := status.FromError(err); ok && current.Code() == codes.Unavailable &&
+		strings.Contains(current.Message(), "target endpoint is restarting") {
+		return secureLinkRestarting
+	}
 	if retryableRelayOpenError(err) {
 		return secureLinkRetryable
 	}
 	return secureLinkFailed
+}
+
+// memberHasServingAlternative reports an availability member link whose
+// policy has another member serving now, per the relays' gate views.
+func (p *NginxPlugin) memberHasServingAlternative(linkID string) bool {
+	if p.availabilityLease == nil || p.secureLinks == nil {
+		return false
+	}
+	p.secureLinks.mu.Lock()
+	binding := p.secureLinks.bindings[linkID]
+	p.secureLinks.mu.Unlock()
+	if binding == nil {
+		return false
+	}
+	policyID, candidateID, gated := binding.leaseGate()
+	if !gated {
+		return false
+	}
+	return p.availabilityLease.gates.otherMemberServes(policyID, candidateID, time.Now())
 }
 
 func (p *NginxPlugin) ProbeRelayCandidate(command *pb.ProbeRelayCandidateCommand) (string, error) {
@@ -1164,7 +1208,9 @@ func (p *NginxPlugin) ProbeRelayCandidate(command *pb.ProbeRelayCandidateCommand
 		}
 		cancel()
 		tunnel.active.Add(-1)
-		if err == nil {
+		if err == nil || relaybridge.ProbeReachedGatedEndpoint(err) {
+			// A member that takes no traffic now (standby, dormant) still
+			// proves the relay authorizes the staged route (B-17).
 			lastErr = nil
 			break
 		}

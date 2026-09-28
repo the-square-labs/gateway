@@ -1,6 +1,8 @@
 package broker
 
 import (
+	"time"
+
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"github.com/wiolett-industries/gateway/relay/internal/grant"
 	"github.com/wiolett-industries/gateway/relay/internal/peer"
@@ -25,7 +27,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 	if err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
-	registration := &endpointRegistration{endpointID: claims.EndpointID, generation: claims.EndpointGeneration, assignmentGeneration: claims.AssignmentGeneration, incoming: make(chan *relayv1.IncomingTunnel, 32), stop: make(chan struct{})}
+	registration := &endpointRegistration{endpointID: claims.EndpointID, generation: claims.EndpointGeneration, assignmentGeneration: claims.AssignmentGeneration, incoming: make(chan *relayv1.IncomingTunnel, 32), stop: make(chan struct{}), restarting: make(chan struct{})}
 	registration.state.Store(int32(servingState(register.GetState())))
 	registration.expiresAt.Store(claims.ExpiresAt)
 	registration.maxSessions.Store(claims.MaxConcurrentSessions)
@@ -57,8 +59,16 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 		b.mu.Lock()
 		key := policyAssignmentKey(registration.endpointID, registration.assignmentGeneration)
 		if b.endpoints[key] == registration {
-			delete(b.endpoints, key)
-			b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
+			if registration.restartingAt(time.Now()) {
+				// The daemon announced a restart (B-13): the registration stays
+				// until its next process registers again, answering new tunnels
+				// "restarting" meanwhile, or until the grace ends. The tunnels
+				// of the old process end with its connections.
+				b.forgetRestartedLater(key, registration)
+			} else {
+				delete(b.endpoints, key)
+				b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
+			}
 		}
 		b.mu.Unlock()
 		registration.close()
@@ -112,6 +122,21 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 				b.mu.Unlock()
 				return status.Error(codes.PermissionDenied, err.Error())
 			}
+			if renew.GetState() == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_RESTARTING {
+				// The daemon restarts (service restart, update): keep the
+				// registration and its serving state, refuse new tunnels with a
+				// retryable answer until the next process registers (B-13).
+				registration.announceRestart(time.Now())
+				registration.expiresAt.Store(next.ExpiresAt)
+				b.mu.Unlock()
+				if err := sendRegistered(stream, registration); err != nil {
+					return err
+				}
+				continue
+			}
+			// Any other renewal means the daemon serves on (or stops serving)
+			// without restarting after all.
+			registration.restartingSince.Store(0)
 			state := servingState(renew.GetState())
 			if state == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED && registration.stateful() {
 				// The endpoint's policy left lease mode (its link is plain again)
@@ -146,6 +171,20 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 			}
 		}
 	}
+}
+
+// forgetRestartedLater removes a restarting registration whose daemon did not
+// register again within the grace.
+func (b *Broker) forgetRestartedLater(key string, registration *endpointRegistration) {
+	since := time.Unix(0, registration.restartingSince.Load())
+	time.AfterFunc(time.Until(since.Add(EndpointRestartGrace)), func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.endpoints[key] == registration {
+			delete(b.endpoints, key)
+			b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
+		}
+	})
 }
 
 // servingState maps states this relay does not know to DORMANT: an endpoint

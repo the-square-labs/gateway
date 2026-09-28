@@ -93,6 +93,15 @@ type RegistrationRefreshPlugin interface {
 	RegistrationChanged() <-chan struct{}
 }
 
+// RestartAnnouncerPlugin is implemented by plugins that tell their peers the
+// daemon is about to restart, while it can still reach them (B-13): the
+// relays then hold the daemon's traffic for its next process instead of
+// treating it as gone. It runs once, before the context of Run is cancelled
+// or Run returns to hand over to an update.
+type RestartAnnouncerPlugin interface {
+	AnnounceRestart()
+}
+
 type ShutdownPlugin interface {
 	Shutdown()
 }

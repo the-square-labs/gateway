@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
@@ -28,27 +29,32 @@ type DockerPlugin struct {
 	client  *Client
 	version string // Docker engine version
 
-	allowlist                *AllowlistChecker
-	envStore                 *EnvStore
-	taskMgr                  *TaskManager
-	deploymentOpMu           sync.Mutex
-	deploymentOps            map[string]map[uint64]deploymentOperation
-	deploymentLocks          map[string]*deploymentLock
-	deploymentOpSeq          uint64
-	registryMu               sync.RWMutex
-	registryCreds            map[string]string // registry URL -> base64-encoded auth
-	statsCollector           *StatsCollector
-	execMgr                  *ExecManager
-	migrationStore           *migrationArtifactStore
-	archiveStreams           *archiveLiveStore
-	databaseManager          *managedDatabaseManager
-	storageManager           *managedStorageManager
-	backupHandler            backupCommandHandler
-	composeExecutor          *composeExecutor
-	volumeImages             *volumeImageManager
-	relayGrants              *relayGrantStore
-	relayTunnelMu            sync.Mutex
-	relayTunnels             map[string]*relayTunnelRouter
+	allowlist       *AllowlistChecker
+	envStore        *EnvStore
+	taskMgr         *TaskManager
+	deploymentOpMu  sync.Mutex
+	deploymentOps   map[string]map[uint64]deploymentOperation
+	deploymentLocks map[string]*deploymentLock
+	deploymentOpSeq uint64
+	registryMu      sync.RWMutex
+	registryCreds   map[string]string // registry URL -> base64-encoded auth
+	statsCollector  *StatsCollector
+	execMgr         *ExecManager
+	migrationStore  *migrationArtifactStore
+	archiveStreams  *archiveLiveStore
+	databaseManager *managedDatabaseManager
+	storageManager  *managedStorageManager
+	backupHandler   backupCommandHandler
+	composeExecutor *composeExecutor
+	volumeImages    *volumeImageManager
+	relayGrants     *relayGrantStore
+	relayTunnelMu   sync.Mutex
+	relayTunnels    map[string]*relayTunnelRouter
+	// restartAnnounced freezes relay registrations once the daemon told its
+	// relays it restarts (B-13); proxyTunnels are the Secure Link tunnels it
+	// serves, drained before it exits.
+	restartAnnounced         atomic.Bool
+	proxyTunnels             proxyTunnelSet
 	relaySelection           uint64
 	relayListener            net.Listener
 	storageConnectorListener net.Listener

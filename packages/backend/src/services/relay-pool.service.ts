@@ -26,6 +26,12 @@ import type { EventBusService } from './event-bus.service.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
 import type { RelayPolicyService, RelayPolicyTrustStatus } from './relay-policy.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
+import {
+  isGatedProbeRefusal,
+  isRetryableDispatchError,
+  isTransientRelayPoolError,
+  relayPoolErrorMessage,
+} from './relay-pool-errors.js';
 import { describeRelayRevocation } from './relay-revocation-fence.js';
 import { loadRelayRouteHistories, RelayRevocationFenceService } from './relay-revocation-fence.service.js';
 import {
@@ -52,7 +58,28 @@ export interface RelayPoolWarning {
 }
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
 const AUTO_REBALANCE_RETRY_MS = 5 * 60_000;
+/**
+ * A workload a transient condition deferred is retried after this long, doubling while the condition lasts, up to
+ * the failure cooldown. A deferral is not a failure: see relay-pool-errors.
+ */
+const TRANSIENT_RETRY_MS = 30_000;
 const STAGING_RECOVERY_MS = 2 * 60_000;
+/**
+ * Candidate probes in flight per daemon. A daemon runs four asynchronous commands at a time and refuses every
+ * further one as busy; a batch that probed dozens of workloads at once took all of them (rc.20 B-17), failing its
+ * own probes and every other command sent to that daemon meanwhile.
+ */
+const PROBES_PER_NODE = 2;
+/** Pauses before probing again when the daemon did not run the probe (busy, or not connected). */
+const PROBE_RETRY_DELAYS_MS: readonly number[] = [2_000, 5_000];
+const DEFERRED_NOTE = 'Deferred by a transient condition and retried automatically';
+/** The outcome of one candidate probe; see RelayPoolService.runProbe. */
+type ProbeResult = { ready: true } | { ready: false; error: string; transient: boolean };
+/**
+ * A generation rolled back before it was ever active (see deferStaging). Every generation that was active has an
+ * activation time, and only a drained active generation retires otherwise.
+ */
+const deferredGeneration = sql`(${relayEndpointAssignmentGenerations.state} = 'retired' and ${relayEndpointAssignmentGenerations.activatedAt} is null)`;
 const MANUAL_DRAIN_TIMEOUT_MS = 10 * 60_000;
 /** Supervisors report every 5 s; a remote relay silent this long is offline. */
 const REMOTE_HEARTBEAT_TIMEOUT_MS = 90_000;
@@ -162,6 +189,11 @@ export class RelayPoolService {
   private stablePlan: { key: string; since: number } | null = null;
   private retryAfter = 0;
   private readonly startedAt = Date.now();
+  /** Workloads a transient condition deferred, and when to try them again; see deferStaging. */
+  private readonly deferrals = new Map<string, { count: number; retryAt: number }>();
+  /** Probe commands in flight per daemon, and the probes waiting for a slot; see withProbeSlot. */
+  private readonly probeSlots = new Map<string, { active: number; waiting: Array<() => void> }>();
+  private probeRetryDelaysMs = PROBE_RETRY_DELAYS_MS;
   private readonly revocations: Pick<RelayRevocationFenceService, 'evaluate'>;
   private nextUpdateDrainReleaseAt = 0;
   private certificateRenewal?: Pick<
@@ -184,11 +216,16 @@ export class RelayPoolService {
   startReconciliation(): void {
     if (this.reconciliationTimer) return;
     this.reconciliationTimer = setInterval(() => {
-      void this.reconcile().catch((error) =>
-        logger.warn('Relay pool reconciliation failed', {
-          error: error instanceof Error ? error.message : String(error),
-        })
-      );
+      // A pass still running reports its own outcome. Joining it would log one failure once per tick
+      // it outlasted: a two-minute rebalance repeated the same warning 22 times (rc.20 B-17).
+      if (this.reconciliationFlight) return;
+      void this.reconcile().catch((error) => {
+        const message = relayPoolErrorMessage(error);
+        // The next pass retries it; the condition itself (a restarting relay, an unreachable node) is reported
+        // where it lives.
+        if (isTransientRelayPoolError(error)) logger.debug('Relay pool reconciliation deferred', { error: message });
+        else logger.warn('Relay pool reconciliation failed', { error: message });
+      });
     }, 5_000);
     this.reconciliationTimer.unref();
   }
@@ -396,8 +433,10 @@ export class RelayPoolService {
       );
       if (abandoned.length) {
         // Do not replay a partially acknowledged generation: stale acknowledgements
-        // must never activate it ahead of the next full set of probes.
-        await this.failStaging(
+        // must never activate it ahead of the next full set of probes. An interrupted
+        // preparation (a Gateway restart) proved nothing about the placement either, so
+        // it is rolled back as not attempted rather than failed.
+        await this.deferStaging(
           abandoned.map(({ id }) => id),
           new Error('Rebalance preparation was interrupted; a fresh verified attempt is required')
         );
@@ -414,13 +453,19 @@ export class RelayPoolService {
     }
     const failedAt = new Map(snapshot.failures.map((failure) => [failure.endpointId, failure.updatedAt.getTime()]));
     const endpointIds = snapshot.rebalanceEndpointIds.filter(
-      (id) => now >= (failedAt.get(id) ?? 0) + AUTO_REBALANCE_RETRY_MS
+      (id) => now >= (failedAt.get(id) ?? 0) + AUTO_REBALANCE_RETRY_MS && now >= (this.deferrals.get(id)?.retryAt ?? 0)
     );
     if (now - this.stablePlan.since < AUTO_REBALANCE_SETTLE_MS || now < this.retryAfter || !endpointIds.length) return;
     // Set the guard before any await, including failures before a generation can
     // be persisted. A broken dependency must not produce a five-second storm.
     this.retryAfter = now + AUTO_REBALANCE_RETRY_MS;
-    await this.stageRebalance(undefined, { allowNoop: true, automatic: true, endpointIds });
+    try {
+      await this.stageRebalance(undefined, { allowNoop: true, automatic: true, endpointIds });
+    } catch (error) {
+      // The local relay restarting, say: try again soon rather than after the failure cooldown.
+      if (isTransientRelayPoolError(error)) this.retryAfter = Date.now() + TRANSIENT_RETRY_MS;
+      throw error;
+    }
     // Persisted failed generations carry their own cooldown. Successful/no-op
     // runs must not delay a subsequent independent topology change for minutes.
     this.retryAfter = 0;
@@ -845,9 +890,12 @@ export class RelayPoolService {
           .where(inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining'])),
         this.db.select().from(relayEndpointAssignments),
         this.settings.getConfig(),
+        // The latest attempt per endpoint, deferred ones aside: a transient condition proves nothing about the
+        // placement, so it neither clears a failure before it nor counts as one (see deferStaging).
         this.db
           .selectDistinctOn([relayEndpointAssignmentGenerations.endpointId])
           .from(relayEndpointAssignmentGenerations)
+          .where(sql`not ${deferredGeneration}`)
           .orderBy(relayEndpointAssignmentGenerations.endpointId, desc(relayEndpointAssignmentGenerations.generation)),
       ]);
     const instances = persistedInstances.filter(isEnrolledRelayInstance);
@@ -891,6 +939,9 @@ export class RelayPoolService {
     const activeEndpointIds = new Set(endpoints.map(({ id }) => id));
     for (const endpointId of this.plannedRoles.keys()) {
       if (!activeEndpointIds.has(endpointId)) this.plannedRoles.delete(endpointId);
+    }
+    for (const endpointId of this.deferrals.keys()) {
+      if (!activeEndpointIds.has(endpointId)) this.deferrals.delete(endpointId);
     }
     const gatewayHostOnly: Array<(typeof endpoints)[number]> = [];
     const rebalancePlan =
@@ -1366,6 +1417,17 @@ export class RelayPoolService {
     // below through daemon control; apply the local snapshot explicitly first.
     await this.prepareGenerations(staged.filter(({ state }) => state === 'staging'));
     const outcomes = await this.generationOutcomes(staged.map(({ id }) => id));
+    const outcomeById = new Map(outcomes.map((outcome) => [outcome.id, outcome]));
+    // Revoking an owner deletes its endpoint and, by cascade, every generation of it: a Secure Link the lifecycle
+    // re-provisions after a failover, a deleted host or database. A workload removed while its move was prepared has
+    // nothing left to place, so it leaves the batch instead of failing it (rc.20 B-17: one such link failed every
+    // other workload's outcome and repeated as a reconciliation failure).
+    const withdrawn = staged.filter(({ id }) => !outcomeById.has(id));
+    if (withdrawn.length) {
+      logger.info('Relay rebalance skipped workloads removed while their move was prepared', {
+        endpointIds: withdrawn.map(({ endpointId }) => endpointId),
+      });
+    }
     await this.audit.log({
       userId: userId ?? null,
       action: 'relay.pool.rebalance.stage',
@@ -1373,15 +1435,15 @@ export class RelayPoolService {
       resourceId: 'system',
       details: {
         generations: outcomes,
+        ...(withdrawn.length ? { withdrawnEndpointIds: withdrawn.map(({ endpointId }) => endpointId) } : {}),
         endpointIds: options.endpointIds ?? null,
         automatic: options.automatic === true,
       },
     });
     this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_finished' });
-    return staged.map((generation) => {
-      const outcome = outcomes.find(({ id }) => id === generation.id);
-      if (!outcome) throw new Error(`Relay assignment generation ${generation.id} disappeared during rebalance`);
-      return { ...generation, ...outcome };
+    return staged.flatMap((generation) => {
+      const outcome = outcomeById.get(generation.id);
+      return outcome ? [{ ...generation, ...outcome }] : [];
     });
   }
 
@@ -1403,7 +1465,7 @@ export class RelayPoolService {
     try {
       await this.policy.syncSnapshot();
     } catch (error) {
-      await this.failStaging(
+      await this.closeStaging(
         generations.map(({ id }) => id),
         error
       );
@@ -1436,9 +1498,18 @@ export class RelayPoolService {
     const publicationErrors: unknown[] = [];
     for (const [index, result] of results.entries()) {
       try {
-        if (result.status === 'rejected') await this.failStaging([generations[index].id], result.reason);
+        if (result.status === 'rejected') await this.closeStaging([generations[index].id], result.reason);
         else await this.tryActivate(generations[index].id);
       } catch (error) {
+        // An activation commits before it is published. When the local relay is restarting, the policy sync that
+        // runs every 30 seconds publishes it; the transition itself stands.
+        if (isTransientRelayPoolError(error)) {
+          logger.debug('Relay rebalance outcome is published by the next policy sync', {
+            generationId: generations[index].id,
+            error: relayPoolErrorMessage(error),
+          });
+          continue;
+        }
         publicationErrors.push(error);
       }
     }
@@ -1459,13 +1530,20 @@ export class RelayPoolService {
       );
   }
 
-  private async withdrawFailedGenerations(ids: string[]): Promise<void> {
-    // Keep the committed failure and original diagnostic even if a disconnected
+  private async withdrawGenerations(ids: string[]): Promise<void> {
+    // Keep the committed outcome and original diagnostic even if a disconnected
     // participant cannot receive revocation yet. Normal policy refresh retries it.
+    const pending = (error: unknown) => {
+      const message = relayPoolErrorMessage(error);
+      // A relay that is restarting or reconnecting gets the policy from the regular sync; nothing to report.
+      if (isTransientRelayPoolError(error))
+        logger.debug('Relay generation policy cleanup deferred', { error: message });
+      else logger.warn('Relay generation policy cleanup remains pending', { error: message });
+    };
     try {
       await this.policy.reconcileAndSync();
     } catch (error) {
-      logger.warn('Failed relay generation policy cleanup remains pending', { error: String(error) });
+      pending(error);
     }
     try {
       const remoteNodes = await this.remoteNodesForGenerations(ids);
@@ -1473,16 +1551,49 @@ export class RelayPoolService {
         remoteNodes.flatMap(({ nodeId }) => (nodeId ? [this.policy.syncRemoteInstancePolicy(nodeId)] : []))
       );
       for (const result of results) {
-        if (result.status === 'rejected')
-          logger.warn('Failed relay generation remote cleanup remains pending', { error: String(result.reason) });
+        if (result.status === 'rejected') pending(result.reason);
       }
     } catch (error) {
-      logger.warn('Failed relay generation remote cleanup remains pending', { error: String(error) });
+      pending(error);
     }
   }
 
+  /** Ends a preparation that did not complete: a transient cause defers it, any other fails it. */
+  private closeStaging(ids: string[], error: unknown): Promise<void> {
+    return isTransientRelayPoolError(error) ? this.deferStaging(ids, error) : this.failStaging(ids, error);
+  }
+
   private async failStaging(ids: string[], error: unknown): Promise<void> {
-    const failed: string[] = [];
+    await this.endStaging(ids, 'failed', relayPoolErrorMessage(error));
+  }
+
+  /**
+   * Rolls staged generations back as not attempted: a transient condition (a busy or disconnected daemon, the local
+   * relay restarting, a restart that interrupted the preparation) proves nothing about the placement. The
+   * generation retires without ever having been active, which keeps its number and the cause for the attempt
+   * history while it neither fails the workload nor degrades the pool; the reconciler tries again shortly.
+   */
+  private async deferStaging(ids: string[], cause: unknown): Promise<void> {
+    const deferred = await this.endStaging(ids, 'retired', `${DEFERRED_NOTE}: ${relayPoolErrorMessage(cause)}`);
+    if (!deferred.length) return;
+    const now = Date.now();
+    for (const { endpointId } of deferred) {
+      const count = (this.deferrals.get(endpointId)?.count ?? 0) + 1;
+      const delay = Math.min(TRANSIENT_RETRY_MS * 2 ** (count - 1), AUTO_REBALANCE_RETRY_MS);
+      this.deferrals.set(endpointId, { count, retryAt: now + delay });
+    }
+    logger.info('Relay rebalance deferred by a transient condition; it is retried automatically', {
+      endpointIds: deferred.map(({ endpointId }) => endpointId),
+      cause: relayPoolErrorMessage(cause),
+    });
+  }
+
+  private async endStaging(
+    ids: string[],
+    state: 'failed' | 'retired',
+    activationError: string
+  ): Promise<Array<{ id: string; endpointId: string }>> {
+    const ended: Array<{ id: string; endpointId: string }> = [];
     try {
       for (const id of ids) {
         const changed = await this.db.transaction(async (tx) => {
@@ -1492,8 +1603,9 @@ export class RelayPoolService {
           const changed = await tx
             .update(relayEndpointAssignmentGenerations)
             .set({
-              state: 'failed',
-              activationError: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
+              state,
+              activationError: activationError.slice(0, 1000),
+              ...(state === 'retired' ? { retiredAt: new Date() } : {}),
               updatedAt: new Date(),
             })
             .where(
@@ -1502,20 +1614,27 @@ export class RelayPoolService {
                 eq(relayEndpointAssignmentGenerations.state, 'staging')
               )
             )
-            .returning({ id: relayEndpointAssignmentGenerations.id });
+            .returning({
+              id: relayEndpointAssignmentGenerations.id,
+              endpointId: relayEndpointAssignmentGenerations.endpointId,
+            });
           if (changed.length) await bumpRelayPolicyRevision(tx);
           return changed;
         });
         // Record only committed transitions. Later DB failures must not skip
         // withdrawal of generations already changed by this batch.
-        failed.push(...changed.map(({ id }) => id));
+        ended.push(...changed);
       }
     } finally {
-      if (failed.length) {
-        await this.withdrawFailedGenerations(failed);
-        this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_failed' });
+      if (ended.length) {
+        await this.withdrawGenerations(ended.map(({ id }) => id));
+        this.events.publish('system.relay.health.changed', {
+          poolId: 'system',
+          action: state === 'failed' ? 'rebalance_failed' : 'rebalance_deferred',
+        });
       }
     }
+    return ended;
   }
 
   async stageProxyWorkloadRebalance(proxyHostId: string, userId: string) {
@@ -1714,6 +1833,7 @@ export class RelayPoolService {
   private async tryActivate(generationId: string): Promise<boolean> {
     if (this.preparingGenerations.has(generationId)) return false;
     let failed = false;
+    let endpointId: string | undefined;
     const activated = await this.db.transaction(async (tx) => {
       // Removal must not delete a staged assignment between this readiness read
       // and activation. Use the same pool fence as placement and member removal.
@@ -1725,6 +1845,7 @@ export class RelayPoolService {
         .where(eq(relayEndpointAssignmentGenerations.id, generationId))
         .limit(1);
       if (!generation || generation.state !== 'staging') return false;
+      endpointId = generation.endpointId;
       const [assignments, probes] = await Promise.all([
         tx
           .select()
@@ -1787,12 +1908,58 @@ export class RelayPoolService {
       await bumpRelayPolicyRevision(tx);
       return true;
     });
-    if (failed) await this.withdrawFailedGenerations([generationId]);
+    // A verified outcome ends the deferral backoff: a failure carries its own cooldown.
+    if ((failed || activated) && endpointId) this.deferrals.delete(endpointId);
+    if (failed) await this.withdrawGenerations([generationId]);
     if (activated) {
       await this.policy.reconcileAndSync();
       this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_activated' });
     }
     return activated;
+  }
+
+  /**
+   * Runs one candidate probe. A daemon that did not run it (busy, not connected) is asked again after a short
+   * pause; a gated refusal of a source probe counts as verified (see relay-pool-errors). A failure that survives
+   * that is transient when its cause passes by itself, and then defers the generation instead of failing it.
+   */
+  private async runProbe(
+    nodeId: string | null,
+    role: 'target' | 'source',
+    probe: () => Promise<void>
+  ): Promise<ProbeResult> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await (nodeId ? this.withProbeSlot(nodeId, probe) : probe());
+        return { ready: true };
+      } catch (error) {
+        if (role === 'source' && isGatedProbeRefusal(error)) return { ready: true };
+        const pause = this.probeRetryDelaysMs[attempt];
+        if (pause === undefined || !isRetryableDispatchError(error)) {
+          return { ready: false, error: relayPoolErrorMessage(error), transient: isTransientRelayPoolError(error) };
+        }
+        await new Promise((resolve) => setTimeout(resolve, pause));
+      }
+    }
+  }
+
+  /** Holds one of the daemon's probe slots (PROBES_PER_NODE) while probe runs. */
+  private async withProbeSlot<T>(nodeId: string, probe: () => Promise<T>): Promise<T> {
+    const slots = this.probeSlots.get(nodeId) ?? { active: 0, waiting: [] };
+    this.probeSlots.set(nodeId, slots);
+    if (slots.active >= PROBES_PER_NODE) await new Promise<void>((resolve) => slots.waiting.push(resolve));
+    else slots.active += 1;
+    try {
+      return await probe();
+    } finally {
+      // Hand the slot straight to the next waiting probe, so a late arrival cannot overtake it.
+      const next = slots.waiting.shift();
+      if (next) next();
+      else {
+        slots.active -= 1;
+        if (!slots.active) this.probeSlots.delete(nodeId);
+      }
+    }
   }
 
   private async prepareStagedGeneration(generation: {
@@ -1812,7 +1979,8 @@ export class RelayPoolService {
         .from(relayAssignmentSourceProbes)
         .where(eq(relayAssignmentSourceProbes.assignmentGenerationId, generation.id)),
     ]);
-    if (!endpoint) throw new Error(`Relay endpoint ${generation.endpointId} disappeared during rebalance`);
+    // The owner was revoked meanwhile: the endpoint and, by cascade, this generation are gone.
+    if (!endpoint) return;
     const daemonNodeIds = [
       endpoint.subjectId,
       ...routes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ sourceId }) => sourceId),
@@ -1832,67 +2000,72 @@ export class RelayPoolService {
       }
       return bundle;
     };
+    // The first transient probe failure ends the preparation: the generation is deferred and probed afresh by the
+    // next attempt. A genuine failure recorded before it still fails the generation.
+    const outcome: { transient?: string; failed: boolean } = { failed: false };
+    const settle = async (result: ProbeResult, acknowledge: (ready: boolean, error?: string) => Promise<unknown>) => {
+      if (result.ready) await acknowledge(true);
+      else if (result.transient) outcome.transient = result.error;
+      else {
+        outcome.failed = true;
+        await acknowledge(false, result.error);
+      }
+    };
     const targetBundle = await getBundle(endpoint.subjectId);
     const targetGrant = targetBundle.grants.find(
       ({ role, endpointId }) => role === 'endpoint' && endpointId === generation.endpointId
     );
     for (const assignment of assignments) {
+      if (outcome.transient) break;
+      const acknowledge = (ready: boolean, error?: string) =>
+        this.acknowledgeTarget(generation.id, assignment.relayInstanceId, ready, error);
       const candidate = targetGrant?.candidates?.find(
         ({ relayInstanceId, assignmentGeneration }) =>
           relayInstanceId === assignment.relayInstanceId && assignmentGeneration === String(generation.generation)
       );
       if (!candidate) {
-        await this.acknowledgeTarget(
-          generation.id,
-          assignment.relayInstanceId,
-          false,
-          'Pool candidate grant is unavailable'
-        );
+        outcome.failed = true;
+        await acknowledge(false, 'Pool candidate grant is unavailable');
         continue;
       }
-      try {
-        await this.policy.probeRelayCandidate(endpoint.subjectId, {
+      const result = await this.runProbe(endpoint.subjectId, 'target', () =>
+        this.policy.probeRelayCandidate(endpoint.subjectId, {
           probeId: assignment.id,
           role: 'target',
           endpointId: generation.endpointId,
           assignmentGeneration: String(generation.generation),
           candidate,
-        });
-        await this.acknowledgeTarget(generation.id, assignment.relayInstanceId, true);
-      } catch (error) {
-        await this.acknowledgeTarget(
-          generation.id,
-          assignment.relayInstanceId,
-          false,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
+        })
+      );
+      await settle(result, acknowledge);
     }
 
     for (const probe of probes) {
+      if (outcome.transient) break;
+      const acknowledge = (ready: boolean, error?: string) => this.acknowledgeProbe(probe.id, ready, error);
       const route = routes.find(
         ({ sourceKind, sourceId }) => sourceKind === probe.sourceKind && sourceId === probe.sourceId
       );
       if (!route) {
-        await this.acknowledgeProbe(probe.id, false, 'Relay source route is unavailable');
+        outcome.failed = true;
+        await acknowledge(false, 'Relay source route is unavailable');
         continue;
       }
       if (route.sourceKind === 'gateway') {
-        try {
-          await this.policy.probeGatewayRelayCandidate(
+        const result = await this.runProbe(null, 'source', () =>
+          this.policy.probeGatewayRelayCandidate(
             route.id,
             probe.certificateFingerprint,
             probe.relayInstanceId,
             String(generation.generation)
-          );
-          await this.acknowledgeProbe(probe.id, true);
-        } catch (error) {
-          await this.acknowledgeProbe(probe.id, false, error instanceof Error ? error.message : String(error));
-        }
+          )
+        );
+        await settle(result, acknowledge);
         continue;
       }
       if (route.sourceKind !== 'daemon') {
-        await this.acknowledgeProbe(probe.id, false, `Unsupported relay source kind ${route.sourceKind}`);
+        outcome.failed = true;
+        await acknowledge(false, `Unsupported relay source kind ${route.sourceKind}`);
         continue;
       }
       const sourceBundle = await getBundle(route.sourceId);
@@ -1902,23 +2075,23 @@ export class RelayPoolService {
           relayInstanceId === probe.relayInstanceId && assignmentGeneration === String(generation.generation)
       );
       if (!candidate) {
-        await this.acknowledgeProbe(probe.id, false, 'Pool candidate grant is unavailable');
+        outcome.failed = true;
+        await acknowledge(false, 'Pool candidate grant is unavailable');
         continue;
       }
-      try {
-        await this.policy.probeRelayCandidate(route.sourceId, {
+      const result = await this.runProbe(route.sourceId, 'source', () =>
+        this.policy.probeRelayCandidate(route.sourceId, {
           probeId: probe.id,
           role: 'source',
           endpointId: generation.endpointId,
           routeId: route.id,
           assignmentGeneration: String(generation.generation),
           candidate,
-        });
-        await this.acknowledgeProbe(probe.id, true);
-      } catch (error) {
-        await this.acknowledgeProbe(probe.id, false, error instanceof Error ? error.message : String(error));
-      }
+        })
+      );
+      await settle(result, acknowledge);
     }
+    if (outcome.transient && !outcome.failed) throw new Error(outcome.transient);
   }
 }
 

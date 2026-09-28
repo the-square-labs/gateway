@@ -164,7 +164,9 @@ func (b *Broker) enforceLeaseGatesLocked() time.Duration {
 // registered serving (a standby's dormant registration, or a new holder whose
 // workload is not ready yet), and UNKNOWN when this relay carries no
 // lease-bound endpoint of the holder for the policy (not assigned here, or the
-// policy is still bootstrapping), which says nothing either way.
+// policy is still bootstrapping), which says nothing either way. RESTARTING
+// when its only serving registrations belong to a daemon that announced a
+// restart (B-13): it serves again once the next process registers.
 func (b *Broker) HolderEndpoint(policyID, holderID string) relayv1.LeaseHolderEndpoint {
 	if policyID == "" || holderID == "" {
 		return relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN
@@ -175,14 +177,24 @@ func (b *Broker) HolderEndpoint(policyID, holderID string) relayv1.LeaseHolderEn
 	holderOwns := func(endpoint *relayv1.EndpointPolicy) bool {
 		return endpoint != nil && endpoint.LeasePolicyId == policyID && endpoint.SubjectId == holderID
 	}
-	now := time.Now().Unix()
+	now := time.Now()
+	restarting := false
 	for _, registration := range b.endpoints {
-		if !holderOwns(snapshot.Endpoint(registration.endpointID, registration.assignmentGeneration)) || now > registration.expiresAt.Load() {
+		if !holderOwns(snapshot.Endpoint(registration.endpointID, registration.assignmentGeneration)) || now.Unix() > registration.expiresAt.Load() {
 			continue
 		}
-		if !registration.dormant() {
-			return relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY
+		if registration.dormant() {
+			continue
 		}
+		if registration.restartingAt(now) {
+			restarting = true
+			continue
+		}
+		return relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY
+	}
+	if restarting {
+		// Served, and its daemon restarts: nginx holds its traffic (B-13).
+		return relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_RESTARTING
 	}
 	for _, endpoints := range []map[string]*relayv1.EndpointPolicy{snapshot.EndpointAssignments, snapshot.Endpoints} {
 		for _, endpoint := range endpoints {

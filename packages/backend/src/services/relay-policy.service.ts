@@ -169,6 +169,8 @@ const LOCAL_POLICY_LOSS_SYNC_INTERVAL_MS = 2_000;
 /** How long a grant dispatch waits for remote relays to take the policy it depends on. */
 const REMOTE_POLICY_PUSH_GRACE_MS = 3_000;
 const REVISION_RAISE_INTERVAL_MS = 5 * 60 * 1000;
+/** A grant refresh that stays pending the same way is reported again after this long. */
+const PENDING_GRANT_REFRESH_REPORT_MS = 5 * 60 * 1000;
 /** Largest revision floor a relay report may impose; beyond it JavaScript numbers lose precision. */
 const MAX_REVISION_FLOOR = Number.MAX_SAFE_INTEGER - 1_000_000;
 /**
@@ -244,6 +246,8 @@ export class RelayPolicyService {
   private readonly staleGrantRefusals = new Map<string, number>();
   private lastLocalPolicyTrustResetAt = 0;
   private lastLocalPolicyLossSyncAt = 0;
+  /** The pending grant refresh last reported; see reportPendingGrantRefresh. */
+  private pendingGrantRefresh: { message: string; reportedAt: number } | null = null;
   private initialAssignmentPlanner?: (
     endpointId: string
   ) => Promise<Array<{ relayInstanceId: string; role: RelayAssignmentRole }> | null>;
@@ -895,12 +899,29 @@ export class RelayPolicyService {
     await reconcileManagedDatabaseRelayPolicy(this.db);
     await reconcileManagedStorageRelayPolicy(this.db);
     const revision = await this.syncSnapshot();
-    await this.refreshAllNodeGrantsIfDue().catch((error) => {
-      logger.warn('Relay policy reconciled but some daemon grant bundles remain pending', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+    await this.refreshAllNodeGrantsIfDue().then(
+      () => {
+        this.pendingGrantRefresh = null;
+      },
+      (error) => this.reportPendingGrantRefresh(error)
+    );
     return revision;
+  }
+
+  /**
+   * Every reconcile refreshes the daemons' grants, and every relay rebalance activation reconciles: while one daemon
+   * is disconnected each of them failed the same way, and the rc.20 main stand logged this warning every 2 s (B-17).
+   * The same pending refresh is reported once per interval; a different one, at once.
+   */
+  private reportPendingGrantRefresh(error: unknown, now = Date.now()): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const last = this.pendingGrantRefresh;
+    if (last?.message === message && now - last.reportedAt < PENDING_GRANT_REFRESH_REPORT_MS) {
+      logger.debug('Relay policy reconciled but some daemon grant bundles remain pending', { error: message });
+      return;
+    }
+    this.pendingGrantRefresh = { message, reportedAt: now };
+    logger.warn('Relay policy reconciled but some daemon grant bundles remain pending', { error: message });
   }
 
   async rotateIfDue(now = new Date()): Promise<boolean> {

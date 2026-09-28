@@ -269,3 +269,89 @@ func TestMemberOnAnUnreachableHostCostsOneSetupBudget(t *testing.T) {
 		}
 	}
 }
+
+// B-17: the source probe of a staged move of an Availability member that is a standby is refused by the relay's
+// lease gate. The refusal proves the relay authorizes the route, so the probe succeeds instead of failing the move.
+func TestSourceProbeOfAGatedMemberSucceeds(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"standby without a slot": status.Error(codes.FailedPrecondition, "availability lease gate closed: b839311a holds no committed slot"),
+		"dormant member":         status.Error(codes.Unavailable, "target endpoint is dormant"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			broker := &scriptedBroker{errors: []error{refusal}}
+			plugin := relayOpenPlugin(t, broker, false)
+			detail, err := plugin.ProbeRelayCandidate(&pb.ProbeRelayCandidateCommand{
+				Role: "source", ProbeId: "probe-1", AssignmentGeneration: 3,
+				Candidate: &pb.RelayDataCandidate{RelayInstanceId: relaybridge.LegacyTargetID, AssignmentGeneration: 3, Grant: &pb.RelaySignedGrant{KeyId: "k", Payload: []byte("p")}},
+			})
+			if err != nil || detail == "" {
+				t.Fatalf("probe = %q, %v", detail, err)
+			}
+			if got := broker.attempts.Load(); got != 1 {
+				t.Fatalf("attempts = %d", got)
+			}
+		})
+	}
+}
+
+func restarting() error { return status.Error(codes.Unavailable, "target endpoint is restarting") }
+
+// B-13: the holder's daemon restarts gracefully and no other member serves. Its link holds the connection until the
+// next process registered, instead of failing the only member at once.
+func TestMemberLinkHoldsWhileItsDaemonRestarts(t *testing.T) {
+	previous := secureLinkTransientRetry
+	secureLinkTransientRetry = 20 * time.Millisecond
+	t.Cleanup(func() { secureLinkTransientRetry = previous })
+	broker := &scriptedBroker{errors: []error{restarting(), restarting(), restarting(), nil}}
+	plugin := relayOpenPlugin(t, broker, true)
+
+	elapsed := openThroughRelay(plugin)
+
+	if got := broker.attempts.Load(); got != 4 {
+		t.Fatalf("attempts = %d, want three restarting answers and then the opened tunnel", got)
+	}
+	if elapsed >= secureLinkRestartHold {
+		t.Fatalf("took %s", elapsed)
+	}
+}
+
+// A replica whose daemon restarts while another replica serves moves on at once: nginx sends the request there.
+func TestReplicaWithAServingAlternativeDoesNotHoldWhileRestarting(t *testing.T) {
+	broker := &scriptedBroker{errors: []error{restarting(), nil}}
+	plugin := relayOpenPlugin(t, broker, true)
+	binding := plugin.secureLinks.bindings["link-1"]
+	binding.leaseGated, binding.availabilityCandidateID = true, "node-a"
+	plugin.availabilityLease = newAvailabilityLeaseCoordinator(t.TempDir(), plugin.secureLinks, nil)
+	t.Cleanup(plugin.availabilityLease.close)
+	plugin.availabilityLease.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-b", RemainingMs: 20000,
+		HolderEndpoint: relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY,
+	}}}, time.Now())
+
+	openThroughRelay(plugin)
+
+	if got := broker.attempts.Load(); got != 1 {
+		t.Fatalf("attempts = %d, a replica with a serving alternative must fail over at once", got)
+	}
+}
+
+// A plain link waits for its restarting target longer than for a transient refusal.
+func TestPlainLinkHoldsForARestartingTargetBeyondTheTransientWait(t *testing.T) {
+	previousWait, previousRetry, previousHold := secureLinkTransientWait, secureLinkTransientRetry, secureLinkRestartHold
+	secureLinkTransientWait, secureLinkTransientRetry, secureLinkRestartHold = 100*time.Millisecond, 20*time.Millisecond, time.Second
+	t.Cleanup(func() {
+		secureLinkTransientWait, secureLinkTransientRetry, secureLinkRestartHold = previousWait, previousRetry, previousHold
+	})
+	errors := make([]error, 0, 12)
+	for i := 0; i < 12; i++ {
+		errors = append(errors, restarting())
+	}
+	broker := &scriptedBroker{errors: append(errors, nil)}
+	plugin := relayOpenPlugin(t, broker, false)
+
+	openThroughRelay(plugin)
+
+	if got := broker.attempts.Load(); got != 13 {
+		t.Fatalf("attempts = %d, want the tunnel opened after the restart", got)
+	}
+}

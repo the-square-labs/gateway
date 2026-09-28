@@ -553,3 +553,124 @@ func TestLostEndpointConnectionTakesTheMemberOutAtOnce(t *testing.T) {
 		t.Fatalf("refusing a tunnel to the lost endpoint took %s", elapsed)
 	}
 }
+
+func (f *leaseFixture) announceRestart(t *testing.T, stream *registerStream, result chan error) {
+	t.Helper()
+	f.renew(t, stream, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_RESTARTING)
+	waitRegistered(t, stream, result)
+}
+
+// B-13: a graceful restart of the holder's daemon (service restart, update) looks like a short hold, not a dead
+// member. Announced, the registration stays through the restart: tunnels are answered "restarting" (the opener
+// retries), the holder's endpoint reads RESTARTING (nginx keeps the member socket), and the daemon's next process
+// takes over the registration.
+func TestRestartingEndpointIsHeldUntilItsNextProcessRegisters(t *testing.T) {
+	f := newLeaseFixture(t)
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	stream, result, disconnect := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, stream, result)
+
+	// A tunnel was handed to the old process, which starts shutting down.
+	openCtx, cancelOpen := context.WithCancel(f.ctx)
+	defer cancelOpen()
+	pending := f.openProxyTunnel(t, openCtx)
+	select {
+	case message := <-stream.sent:
+		if message.GetIncoming() == nil {
+			t.Fatalf("got %v instead of an incoming tunnel", message)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no incoming tunnel")
+	}
+	f.announceRestart(t, stream, result)
+	waitOpenError(t, pending, codes.Unavailable, "target endpoint is restarting")
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_RESTARTING {
+		t.Fatalf("holder endpoint while its daemon restarts = %v", got)
+	}
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.Unavailable, "target endpoint is restarting")
+
+	// The old process exits: the registration stays for its successor.
+	disconnect()
+	select {
+	case <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the old registration stream did not end")
+	}
+	if registered, _ := f.broker.Counts(); registered != 1 {
+		t.Fatalf("registrations after the old process left = %d", registered)
+	}
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_RESTARTING {
+		t.Fatalf("holder endpoint between the processes = %v", got)
+	}
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.Unavailable, "target endpoint is restarting")
+
+	// The next process registers: traffic flows to it.
+	next, nextResult, _ := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, next, nextResult)
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+		t.Fatalf("holder endpoint once the next process registered = %v", got)
+	}
+	opened := f.openProxyTunnel(t, openCtx)
+	select {
+	case message := <-next.sent:
+		if message.GetIncoming() == nil {
+			t.Fatalf("got %v instead of an incoming tunnel", message)
+		}
+	case err := <-opened:
+		t.Fatalf("tunnel to the restarted endpoint refused: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restarted endpoint received no tunnel")
+	}
+}
+
+// A daemon that announced a restart but never comes back is forgotten after the grace, like one that disconnected.
+func TestRestartingEndpointThatDoesNotComeBackIsForgotten(t *testing.T) {
+	previous := EndpointRestartGrace
+	EndpointRestartGrace = 200 * time.Millisecond
+	t.Cleanup(func() { EndpointRestartGrace = previous })
+	f := newLeaseFixture(t)
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	stream, result, disconnect := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, stream, result)
+	f.announceRestart(t, stream, result)
+	disconnect()
+	<-result
+	deadline := time.Now().Add(5 * time.Second)
+	for f.broker.HolderEndpoint("policy-1", "node-a") != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY {
+		if time.Now().After(deadline) {
+			t.Fatalf("holder endpoint after the grace = %v", f.broker.HolderEndpoint("policy-1", "node-a"))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if registered, _ := f.broker.Counts(); registered != 0 {
+		t.Fatalf("registrations after the grace = %d", registered)
+	}
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.Unavailable, "target endpoint is not registered")
+}
+
+// A dormant member takes no traffic whether or not its daemon restarts; a registration that renews as serving
+// after announcing a restart serves on.
+func TestRestartAnnouncementOnlyHoldsServingEndpoints(t *testing.T) {
+	f := newLeaseFixture(t)
+	stream, result, disconnect := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT)
+	waitRegistered(t, stream, result)
+	f.announceRestart(t, stream, result)
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY {
+		t.Fatalf("dormant holder endpoint after a restart announcement = %v", got)
+	}
+	disconnect()
+	<-result
+	if registered, _ := f.broker.Counts(); registered != 0 {
+		t.Fatalf("a dormant registration outlived its stream: %d", registered)
+	}
+
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	serving, servingResult, _ := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, serving, servingResult)
+	f.announceRestart(t, serving, servingResult)
+	f.renew(t, serving, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, serving, servingResult)
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+		t.Fatalf("holder endpoint after the restart was called off = %v", got)
+	}
+}

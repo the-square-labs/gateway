@@ -35,6 +35,13 @@ const (
 	EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED EndpointServingState = 0
 	EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT     EndpointServingState = 1
 	EndpointServingState_ENDPOINT_SERVING_STATE_SERVING     EndpointServingState = 2
+	// The endpoint's daemon is shutting down to restart (service restart,
+	// update) and serves again once it registers anew (B-13). Sent as a renewal
+	// only to relays advertising endpoint_restart_v1: such a relay keeps the
+	// registration for a short grace after its stream ends, answers new tunnels
+	// with a retryable "target endpoint is restarting" and reports the holder's
+	// endpoint RESTARTING. A relay without it would read the value as DORMANT.
+	EndpointServingState_ENDPOINT_SERVING_STATE_RESTARTING EndpointServingState = 3
 )
 
 // Enum value maps for EndpointServingState.
@@ -43,11 +50,13 @@ var (
 		0: "ENDPOINT_SERVING_STATE_UNSPECIFIED",
 		1: "ENDPOINT_SERVING_STATE_DORMANT",
 		2: "ENDPOINT_SERVING_STATE_SERVING",
+		3: "ENDPOINT_SERVING_STATE_RESTARTING",
 	}
 	EndpointServingState_value = map[string]int32{
 		"ENDPOINT_SERVING_STATE_UNSPECIFIED": 0,
 		"ENDPOINT_SERVING_STATE_DORMANT":     1,
 		"ENDPOINT_SERVING_STATE_SERVING":     2,
+		"ENDPOINT_SERVING_STATE_RESTARTING":  3,
 	}
 )
 
@@ -513,6 +522,11 @@ const (
 	LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN   LeaseHolderEndpoint = 0
 	LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY LeaseHolderEndpoint = 1
 	LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY     LeaseHolderEndpoint = 2
+	// The holder's endpoint served and its daemon is restarting (B-13): nginx
+	// keeps the member socket open and holds new connections until it serves
+	// again, unless another member of the policy is READY. Receivers built
+	// before the value existed open on the gate alone.
+	LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_RESTARTING LeaseHolderEndpoint = 3
 )
 
 // Enum value maps for LeaseHolderEndpoint.
@@ -521,11 +535,13 @@ var (
 		0: "LEASE_HOLDER_ENDPOINT_UNKNOWN",
 		1: "LEASE_HOLDER_ENDPOINT_NOT_READY",
 		2: "LEASE_HOLDER_ENDPOINT_READY",
+		3: "LEASE_HOLDER_ENDPOINT_RESTARTING",
 	}
 	LeaseHolderEndpoint_value = map[string]int32{
-		"LEASE_HOLDER_ENDPOINT_UNKNOWN":   0,
-		"LEASE_HOLDER_ENDPOINT_NOT_READY": 1,
-		"LEASE_HOLDER_ENDPOINT_READY":     2,
+		"LEASE_HOLDER_ENDPOINT_UNKNOWN":    0,
+		"LEASE_HOLDER_ENDPOINT_NOT_READY":  1,
+		"LEASE_HOLDER_ENDPOINT_READY":      2,
+		"LEASE_HOLDER_ENDPOINT_RESTARTING": 3,
 	}
 )
 
@@ -7032,11 +7048,12 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\fsuccessor_id\x18\x05 \x01(\tR\vsuccessorId\x12\x16\n" +
 	"\x06reason\x18\x06 \x01(\tR\x06reason\x12\x1c\n" +
 	"\n" +
-	"at_unix_ms\x18\a \x01(\x03R\batUnixMs*\x86\x01\n" +
+	"at_unix_ms\x18\a \x01(\x03R\batUnixMs*\xad\x01\n" +
 	"\x14EndpointServingState\x12&\n" +
 	"\"ENDPOINT_SERVING_STATE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eENDPOINT_SERVING_STATE_DORMANT\x10\x01\x12\"\n" +
-	"\x1eENDPOINT_SERVING_STATE_SERVING\x10\x02*g\n" +
+	"\x1eENDPOINT_SERVING_STATE_SERVING\x10\x02\x12%\n" +
+	"!ENDPOINT_SERVING_STATE_RESTARTING\x10\x03*g\n" +
 	"\tRelayMode\x12\x1a\n" +
 	"\x16RELAY_MODE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19RELAY_MODE_LOCAL_COMBINED\x10\x01\x12\x1f\n" +
@@ -7080,11 +7097,12 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x11LeaseReleasePhase\x12#\n" +
 	"\x1fLEASE_RELEASE_PHASE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eLEASE_RELEASE_PHASE_RELINQUISH\x10\x01\x12\x1d\n" +
-	"\x19LEASE_RELEASE_PHASE_FINAL\x10\x02*~\n" +
+	"\x19LEASE_RELEASE_PHASE_FINAL\x10\x02*\xa4\x01\n" +
 	"\x13LeaseHolderEndpoint\x12!\n" +
 	"\x1dLEASE_HOLDER_ENDPOINT_UNKNOWN\x10\x00\x12#\n" +
 	"\x1fLEASE_HOLDER_ENDPOINT_NOT_READY\x10\x01\x12\x1f\n" +
-	"\x1bLEASE_HOLDER_ENDPOINT_READY\x10\x022\xfd\x02\n" +
+	"\x1bLEASE_HOLDER_ENDPOINT_READY\x10\x02\x12$\n" +
+	" LEASE_HOLDER_ENDPOINT_RESTARTING\x10\x032\xfd\x02\n" +
 	"\fTunnelBroker\x12L\n" +
 	"\x10RegisterEndpoint\x12\x19.relay.v1.EndpointControl\x1a\x19.relay.v1.EndpointControl(\x010\x01\x12>\n" +
 	"\n" +

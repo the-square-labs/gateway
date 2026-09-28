@@ -260,11 +260,15 @@ export class ProxySecureLinkService {
       ),
     });
     const dormant = input.dormant === true;
+    // A container's member names no network: its daemon selects the container's network and the link records it on
+    // the first serving provision. That recorded choice is the same target, not a change. Treating it as one
+    // re-provisioned the member at every lease handoff (the old holder going dormant, the successor serving), and a
+    // failed re-provision re-issued its relay endpoint: 4.6 s of the handoff gap (N-13).
     const unchanged =
       existing?.status === 'active' &&
       !existing.lastError &&
       existing.dockerNodeId === input.dockerNodeId &&
-      existing.targetNetwork === input.targetNetwork &&
+      (!input.targetNetwork || existing.targetNetwork === input.targetNetwork) &&
       existing.targetContainer === input.targetContainer &&
       existing.dockerHostPort === input.dockerHostPort;
     if (unchanged && existing.dormant === dormant) return existing;
@@ -1388,7 +1392,13 @@ export class ProxySecureLinkService {
       } catch (error) {
         const current = await this.requireAdditional(host.id, binding.id);
         if (current.generation !== binding.generation || current.status !== 'provisioning') return current;
-        await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id).catch(() => undefined);
+        // An Availability member keeps its relay endpoint and route through a failed provision (N-13): the next
+        // attempt reuses them, so a lease handoff or a transient failure never re-issues the endpoint and its grants
+        // (a new endpoint had to be placed, granted and registered again: 4.6 s). The member is revoked only when it
+        // is deleted; while it is failed nginx leaves it out of the upstream.
+        if (binding.purpose !== 'availability_member') {
+          await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id).catch(() => undefined);
+        }
         const [failed] = await this.db
           .update(proxyAdditionalSecureLinks)
           .set({

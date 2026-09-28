@@ -212,6 +212,102 @@ describe('ProxySecureLinkService migration rollback', () => {
     expect(provision).toHaveBeenCalledWith(host, existing.id);
   });
 
+  it('flips a container member at a lease handoff in place, whatever network its daemon selected (N-13)', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'proxy',
+      rawConfigEnabled: false,
+      nodeId: 'nginx-node',
+    } as any;
+    // The old holder: provisioned serving, its daemon recorded the container's network.
+    const existing = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      purpose: 'availability_member',
+      referenceId: '33333333-3333-4333-8333-333333333333',
+      availabilityOwnerKey: `proxy-host:${host.id}`,
+      status: 'active',
+      lastError: null,
+      dormant: false,
+      dockerNodeId: 'docker-node',
+      targetNetwork: 'bridge',
+      targetContainer: 'gwav-container-42bcd483-ae986892',
+      dockerHostPort: 9898,
+    } as any;
+    const db = { query: { proxyAdditionalSecureLinks: { findFirst: vi.fn().mockResolvedValue(existing) } } } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    const provision = vi.spyOn(service as any, 'createAdditionalFromExisting');
+    const flip = vi
+      .spyOn(service, 'setAvailabilityMemberDormant')
+      .mockImplementation(async (_host, _placement, _owner, dormant) => ({ ...existing, dormant }));
+
+    const member = await service.ensureAvailabilityMember(host, {
+      placementId: existing.referenceId,
+      ingressOwnerKey: existing.availabilityOwnerKey,
+      dockerNodeId: existing.dockerNodeId,
+      upstreamKind: 'docker_container',
+      forwardScheme: 'http',
+      dockerContainerPort: 9898,
+      dockerHostPort: 9898,
+      // A container member names no network (the adapter leaves it to the daemon).
+      targetNetwork: '',
+      targetContainer: existing.targetContainer,
+      dormant: true,
+    });
+
+    expect(member.dormant).toBe(true);
+    expect(flip).toHaveBeenCalledWith(host, existing.referenceId, existing.availabilityOwnerKey, true);
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("keeps an Availability member's relay endpoint through a failed provision, unlike other links (N-13)", async () => {
+    const host = { id: '11111111-1111-4111-8111-111111111111', nodeId: 'nginx-node' } as any;
+    const run = async (purpose: string) => {
+      const binding = {
+        id: '22222222-2222-4222-8222-222222222222',
+        proxyHostId: host.id,
+        purpose,
+        status: 'provisioning',
+        generation: 4,
+        dormant: false,
+        upstreamKind: 'docker_container',
+        sourceNodeId: 'nginx-node',
+        dockerNodeId: 'docker-node',
+      } as any;
+      const db = {
+        query: { proxyAdditionalSecureLinks: { findFirst: vi.fn().mockResolvedValue(binding) } },
+        update: vi.fn(() => ({
+          set: vi.fn((values: Record<string, unknown>) => ({
+            where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ ...binding, ...values }]) })),
+          })),
+        })),
+      } as any;
+      const relayPolicy = {
+        revokeOwner: vi.fn().mockResolvedValue(undefined),
+        ensureProxySecureLink: vi.fn().mockResolvedValue(undefined),
+      } as any;
+      const service = new ProxySecureLinkService(db, {} as any, relayPolicy, 'connector@sha256:test');
+      vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+      vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
+      vi.spyOn(service as any, 'probeSecureLink').mockRejectedValue(new Error('member is not ready yet'));
+      vi.spyOn(service as any, 'emitAdditionalState').mockImplementation(() => undefined);
+      const result = await (service as any).createAdditionalFromExisting(host, binding.id);
+      return { result, relayPolicy };
+    };
+
+    const member = await run('availability_member');
+    expect(member.result.status).toBe('failed');
+    expect(member.relayPolicy.revokeOwner).not.toHaveBeenCalled();
+
+    const plain = await run('user_managed');
+    expect(plain.result.status).toBe('failed');
+    expect(plain.relayPolicy.revokeOwner).toHaveBeenCalledWith(
+      'proxy_host_secure_link',
+      '22222222-2222-4222-8222-222222222222'
+    );
+  });
+
   it('quarantines an unavailable sibling target instead of blocking a new route on the same node', async () => {
     const unavailableId = '6a7998b4-7a37-464d-905b-92f34cf6a32f';
     const requiredId = '77777777-7777-4777-8777-777777777777';
