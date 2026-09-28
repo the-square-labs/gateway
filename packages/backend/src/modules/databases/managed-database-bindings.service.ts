@@ -139,6 +139,11 @@ export class ManagedDatabaseBindingService {
   > {
     return commercialModuleUnavailable();
   }
+  async availabilityProjectionRecords(
+    _context: Pick<DockerAvailabilityAdapterContext, 'resource' | 'nodeId' | 'placementId'>
+  ): Promise<Array<Record<string, unknown>>> {
+    return commercialModuleUnavailable();
+  }
   async cleanupAvailabilityPlacement(_availabilityPlacementId: string): Promise<void> {
     return commercialModuleUnavailable();
   }
