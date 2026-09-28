@@ -312,6 +312,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		}
 		// Runs for the life of the process, like the lease runtime.
 		go p.runMemberReadiness(context.Background())
+		go p.runDeploymentRouterAddresses(context.Background())
 	}
 
 	// Initialize registry credentials map

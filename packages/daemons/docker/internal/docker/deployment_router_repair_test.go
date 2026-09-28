@@ -2,6 +2,8 @@ package docker
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"testing"
@@ -392,5 +394,41 @@ func TestRepairUpgradesAPerRequestRouterConfig(t *testing.T) {
 	repairs, err = client.repairServingDeploymentRouters(context.Background(), deploymentRouterRepairScope{}, nil)
 	if err != nil || len(repairs) != 0 || len(*writes) != 1 {
 		t.Fatalf("second repair = %+v, %v, writes %d", repairs, err, len(*writes))
+	}
+}
+
+// Item 3 of the rc.20 review (B-8 for nginx before 1.27.3): the router config
+// carries the active slot's address, and a slot that comes back at another
+// address gets its router re-rendered, so the fallback variant never asks
+// dockerd's DNS.
+func TestRouterFollowsItsActiveSlotsAddress(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	configs, writes := simulateNginxRouter(engine)
+	addDeploymentSlots(engine, nil, "green")
+	green := engine.byName("gwdep-dep-1-green")
+	green.Networks = map[string]netip.Addr{"gwdep-dep-1": netip.MustParseAddr("172.21.0.9")}
+	router := currentRouter(t, container.RestartPolicyUnlessStopped, true)
+	router.Files = map[string]string{deploymentRouterConfigPath: renderDeploymentNginxAt(testDeploymentRoutes, "green", "172.21.0.5")}
+	added := engine.addContainer(router)
+	plugin := &DockerPlugin{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	plugin.reconcileDeploymentRouterAddresses(context.Background())
+	written := configs[added.ID]
+	if len(*writes) != 1 || deploymentRouterConfigAddress(written) != "172.21.0.9" || deploymentRouterConfigSlot(written) != "green" ||
+		!strings.Contains(written, "# gateway:fallback upstream gateway_deployment_green_3000 { server 172.21.0.9:3000; }") {
+		t.Fatalf("config after the slot moved = %q (%d writes)", written, len(*writes))
+	}
+
+	// Unchanged address: nothing is written.
+	added.Files[deploymentRouterConfigPath] = written
+	plugin.reconcileDeploymentRouterAddresses(context.Background())
+	if len(*writes) != 1 {
+		t.Fatalf("an unchanged address was re-rendered: %d writes", len(*writes))
+	}
+	// The slot stopped: the last config stays, nothing to follow.
+	green.Running = false
+	plugin.reconcileDeploymentRouterAddresses(context.Background())
+	if len(*writes) != 1 {
+		t.Fatalf("a stopped slot changed the router: %d writes", len(*writes))
 	}
 }

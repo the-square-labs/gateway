@@ -197,6 +197,51 @@ func TestRenderDeploymentNginxResolvesActiveSlotOffTheRequestPath(t *testing.T) 
 	}
 }
 
+// With the slot's address known, nginx without "resolve" proxies to that
+// address and resolves nothing: its fallback has no resolver and no
+// per-request upstream (B-8 for nginx before 1.27.3).
+func TestRenderDeploymentNginxGivesOldNginxTheSlotAddress(t *testing.T) {
+	routes := []deploymentRouteConfig{{HostPort: 18080, ContainerPort: 3000, IsPrimary: true}, {HostPort: 18443, ContainerPort: 8443}}
+	config := renderDeploymentNginxAt(routes, "blue", "172.21.0.2")
+	if deploymentRouterConfigAddress(config) != "172.21.0.2" || !deploymentRouterConfigCurrent(config) {
+		t.Fatalf("config does not name its slot address:\n%s", config)
+	}
+	var fallback []string
+	for _, line := range strings.Split(config, "\n") {
+		if strings.HasSuffix(line, deploymentRouterResolveTag) {
+			continue
+		}
+		fallback = append(fallback, strings.Replace(line, deploymentRouterFallbackTag, "", 1))
+	}
+	old := strings.Join(fallback, "\n")
+	for _, want := range []string{
+		"upstream gateway_deployment_blue_3000 { server 172.21.0.2:3000; }",
+		"upstream gateway_deployment_blue_8443 { server 172.21.0.2:8443; }",
+		"    proxy_pass http://gateway_deployment_blue_3000;",
+		"    proxy_pass http://gateway_deployment_blue_8443;",
+	} {
+		if !strings.Contains(old, want) {
+			t.Fatalf("fallback is missing %q:\n%s", want, old)
+		}
+	}
+	for _, unwanted := range []string{"resolver ", "proxy_pass http://$deployment_upstream", " resolve;"} {
+		if strings.Contains(old, unwanted) {
+			t.Fatalf("fallback with a known address still has %q:\n%s", unwanted, old)
+		}
+	}
+	slot, parsed, err := deploymentRouterConfigRoutes(old, testRouterPortBindingsFor(t, 18080, 18443))
+	if err != nil || slot != "blue" || len(parsed) != 2 {
+		t.Fatalf("fallback routes = %s %+v %v", slot, parsed, err)
+	}
+	// IPv6 addresses are bracketed; an invalid address is ignored.
+	if v6 := renderDeploymentNginxAt(routes[:1], "blue", "fd00::5"); !strings.Contains(v6, "{ server [fd00::5]:3000; }") {
+		t.Fatalf("IPv6 slot address:\n%s", v6)
+	}
+	if bad := renderDeploymentNginxAt(routes[:1], "blue", "blue"); deploymentRouterConfigAddress(bad) != "" || bad != renderDeploymentNginx(routes[:1], "blue") {
+		t.Fatalf("an invalid address was rendered:\n%s", bad)
+	}
+}
+
 func testRouterPortBindingsFor(t *testing.T, ports ...int) network.PortMap {
 	t.Helper()
 	bindings := network.PortMap{}
@@ -391,6 +436,15 @@ func TestDeploymentRouterScriptsKeepLastWrittenConfig(t *testing.T) {
 	}
 	if got := readConf(); got != fallback(green)+"\n" {
 		t.Fatalf("old nginx config after switch = %q", got)
+	}
+	// With the slot's address the old nginx proxies to it and resolves nothing.
+	addressed := renderDeploymentNginxAt(testDeploymentRoutes, "green", "172.21.0.9")
+	if err := run(deploymentRouterWriteScript(addressed), "NGINX_NO_RESOLVE=1"); err != nil {
+		t.Fatalf("write an addressed config on an old nginx: %v", err)
+	}
+	if got := readConf(); got != fallback(addressed)+"\n" || strings.Contains(got, "resolver ") ||
+		!strings.Contains(got, "upstream gateway_deployment_green_3000 { server 172.21.0.9:3000; }") {
+		t.Fatalf("old nginx addressed config = %q", got)
 	}
 	for _, leftover := range []string{conf + ".next", conf + ".prev", conf + ".fallback"} {
 		if _, err := os.Stat(leftover); !os.IsNotExist(err) {

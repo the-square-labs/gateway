@@ -489,7 +489,7 @@ func (c *Client) SwitchDeployment(ctx context.Context, payload deploymentCommand
 	if _, err := c.ensureDeploymentRouterRunning(ctx, dep); err != nil {
 		return nil, err
 	}
-	config := renderDeploymentNginx(dep.Routes, activeSlot)
+	config := c.deploymentRouterConfigFor(ctx, dep.NetworkName, slotName, dep.Routes, activeSlot)
 	if err := c.writeRouterConfig(ctx, dep.RouterName, config); err != nil {
 		return nil, err
 	}
@@ -539,7 +539,8 @@ func (c *Client) UpdateDeploymentRouter(ctx context.Context, payload deploymentC
 	if _, err := c.ensureDeploymentRouterRunning(ctx, routerDep); err != nil {
 		return nil, err
 	}
-	if err := c.writeRouterConfig(ctx, payload.RouterName, renderDeploymentNginx(routes, dep.ActiveSlot)); err != nil {
+	routerConfig := c.deploymentRouterConfigFor(ctx, payload.NetworkName, dep.slotName(dep.ActiveSlot), routes, dep.ActiveSlot)
+	if err := c.writeRouterConfig(ctx, payload.RouterName, routerConfig); err != nil {
 		if killErr := c.KillDeployment(ctx, payload); killErr != nil {
 			return nil, fmt.Errorf("%w; deployment kill after router failure failed: %v", err, killErr)
 		}
@@ -592,7 +593,7 @@ func (c *Client) StartDeployment(ctx context.Context, payload deploymentCommandP
 			return nil, err
 		}
 	}
-	if err := c.writeRouterConfig(ctx, dep.RouterName, renderDeploymentNginx(dep.Routes, dep.ActiveSlot)); err != nil {
+	if err := c.writeRouterConfig(ctx, dep.RouterName, c.deploymentRouterConfigFor(ctx, dep.NetworkName, slotName, dep.Routes, dep.ActiveSlot)); err != nil {
 		return nil, err
 	}
 	return map[string]string{"containerId": containerID}, nil
@@ -638,7 +639,7 @@ func (c *Client) RestartDeployment(ctx context.Context, payload deploymentComman
 	if err != nil {
 		return nil, err
 	}
-	if err := c.writeRouterConfig(ctx, dep.RouterName, renderDeploymentNginx(dep.Routes, dep.ActiveSlot)); err != nil {
+	if err := c.writeRouterConfig(ctx, dep.RouterName, c.deploymentRouterConfigFor(ctx, dep.NetworkName, slotName, dep.Routes, dep.ActiveSlot)); err != nil {
 		return nil, err
 	}
 	slotID, err := c.containerID(ctx, slotName)
