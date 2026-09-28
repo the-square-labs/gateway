@@ -36,9 +36,15 @@ const (
 	FormatVersion = 1
 	// HeartbeatInterval is how often the watchdog proves its kill loop runs.
 	HeartbeatInterval = time.Second
-	// HeartbeatMaxAge is how old a heartbeat may be before the daemon treats
-	// the watchdog as absent and stops acquiring, starting and renewing.
+	// HeartbeatMaxAge is how old a heartbeat may be for the daemon to acquire
+	// a lease, start a container or open the backend gate.
 	HeartbeatMaxAge = 3 * time.Second
+	// HeartbeatLostAge is how old a heartbeat must be before the daemon
+	// treats the watchdog as gone: a holder then stops renewing and kills its
+	// containers, and the node reports no watchdog. A watchdog that is only
+	// slow (CPU-starved) stays below it; the lease timing bound is in the
+	// docker daemon's lease runtime.
+	HeartbeatLostAge = 10 * time.Second
 
 	recordsDirName = "records"
 	heartbeatName  = "heartbeat"
@@ -78,10 +84,34 @@ type Heartbeat struct {
 	Build   string `json:"build,omitempty"`
 }
 
+// Age returns how long ago the heartbeat was written. A heartbeat written
+// after the reader took now (the watchdog wrote between the reader's clock
+// read and its file read) has age 0; one further ahead than HeartbeatMaxAge
+// cannot come from this host's clock and is invalid.
+func (h Heartbeat) Age(now time.Duration) (time.Duration, bool) {
+	if h.NowNs <= 0 {
+		return 0, false
+	}
+	age := now - time.Duration(h.NowNs)
+	if age < 0 {
+		if -age > HeartbeatMaxAge {
+			return 0, false
+		}
+		age = 0
+	}
+	return age, true
+}
+
 // Fresh reports whether the heartbeat was written within HeartbeatMaxAge.
 func (h Heartbeat) Fresh(now time.Duration) bool {
-	written := time.Duration(h.NowNs)
-	return h.NowNs > 0 && now >= written && now-written <= HeartbeatMaxAge
+	age, ok := h.Age(now)
+	return ok && age <= HeartbeatMaxAge
+}
+
+// Alive reports whether the heartbeat was written within HeartbeatLostAge.
+func (h Heartbeat) Alive(now time.Duration) bool {
+	age, ok := h.Age(now)
+	return ok && age <= HeartbeatLostAge
 }
 
 // Dir addresses the shared tmpfs directory.

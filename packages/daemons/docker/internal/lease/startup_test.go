@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
+	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
 )
 
 // restartDaemon simulates a daemon process restart on a live host: the
@@ -80,13 +81,52 @@ func TestStartupKillsWhenWatchdogIsMissing(t *testing.T) {
 	w := twoCandidateWorld(t)
 	w.waitServing("d1", 45*time.Second)
 	d1 := w.daemon("d1")
-	d1.fence.heartbeat = false
+	d1.fence.removeWatchdog()
 	w.restartDaemon("d1")
 	w.run(150 * time.Millisecond)
 	requireKilledAtStart(t, w, "d1")
 	w.run(60 * time.Second)
 	if d1.engine.running() {
 		t.Fatalf("without a watchdog the daemon must never start a lease-mode container\n%s", w.dump())
+	}
+}
+
+// N2: a fresh process reports the named holder's bootstrap reservation
+// pending until it hears a commit. Once the bootstrap committed, the live
+// records prove the lease was held: the running copy is recovered, never
+// stopped as unowned.
+func TestBootstrapHolderRecoversItsCopyAfterTheBootstrapCommitted(t *testing.T) {
+	w := newWorld(t, worldSpec{relays: []string{"r1", "r2", "r3"}, daemons: []string{"d1", "d2"}, candidates: []string{"d1", "d2"}, bootstrap: "d2"})
+	w.daemon("d1").addContainer(testPolicy, false)
+	w.daemon("d2").addContainer(testPolicy, true)
+	w.waitServing("d2", 45*time.Second)
+	w.run(3 * time.Second)
+	d2 := w.restartDaemon("d2")
+	w.run(500 * time.Millisecond)
+	role := d2.runtime.Node().HolderStatus(availabilitylease.Key{PolicyID: testPolicy}).Role
+	if !d2.engine.running() || (role != availabilitylease.RoleRecovering && role != availabilitylease.RoleHolding) {
+		t.Fatalf("the bootstrap holder's copy must be recovered after a restart, role %s\n%s", role, w.dump())
+	}
+	w.run(60 * time.Second)
+	w.requireClean()
+	if w.lastIndexOf("d2 docker stop") > w.lastIndexOf("d2 daemon restarted") || w.holderOf() != "d2" || !d2.engine.running() {
+		t.Fatalf("the recovered bootstrap holder must keep serving without a restart\n%s", w.dump())
+	}
+}
+
+func TestStartupRecoversWithASlowWatchdog(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	w.run(3 * time.Second)
+	d1 := w.daemon("d1")
+	d1.fence.lag = leasefence.HeartbeatMaxAge + 2*time.Second
+	w.restartDaemon("d1")
+	w.run(5 * time.Second)
+	d1.fence.lag = 0
+	w.run(30 * time.Second)
+	w.requireClean()
+	if w.lastIndexOf("d1 docker stop") > w.lastIndexOf("d1 daemon restarted") || w.holderOf() != "d1" {
+		t.Fatalf("a slow watchdog at daemon start must not kill a recoverable container\n%s", w.dump())
 	}
 }
 

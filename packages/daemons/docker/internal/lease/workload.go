@@ -103,8 +103,8 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 	switch status.Role {
 	case availabilitylease.RoleHolding:
 		switch {
-		case !r.hbFresh:
-			r.abandonLocked(wl, status, "watchdog heartbeat is stale")
+		case r.watchdog.lost:
+			r.abandonLocked(wl, status, "watchdog heartbeat is lost")
 		case wl.release != nil:
 			r.stopLocked(wl, status, containers, purposeRelease)
 		case status.FenceNow:
@@ -113,8 +113,8 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 			r.serveLocked(wl, status, serve, containers, fresh, now)
 		}
 	case availabilitylease.RoleRecovering:
-		if !r.hbFresh {
-			r.abandonLocked(wl, status, "watchdog heartbeat is stale")
+		if r.watchdog.lost {
+			r.abandonLocked(wl, status, "watchdog heartbeat is lost")
 			break
 		}
 		if wl.release != nil {
@@ -291,7 +291,7 @@ func (r *Runtime) startLocked(wl *workload, key availabilitylease.Key, serve, co
 		// Re-check right before starting: the lease or the watchdog may have
 		// gone while the operation waited (A12.4).
 		status := r.node.HolderStatus(key)
-		if !status.MayStart || !r.opts.Fence.HeartbeatFresh(r.opts.Clock.Now()) {
+		if !status.MayStart || !HeartbeatFresh(r.opts.Fence, r.opts.Clock.Now()) {
 			return nil
 		}
 		var failed []string
@@ -447,7 +447,7 @@ func (r *Runtime) relistPolicy(ctx context.Context, policyID string, targets []C
 }
 
 func (r *Runtime) updateReadyLocked(manifest availabilitylease.ManifestInfo, wl *workload, serve, containers []Container, now time.Duration) {
-	ready := !manifest.Closed && manifest.IsCandidate(r.opts.NodeID) && r.hbFresh && now >= wl.cooldownUntil &&
+	ready := !manifest.Closed && manifest.IsCandidate(r.opts.NodeID) && r.watchdog.fresh && now >= wl.cooldownUntil &&
 		len(serve) > 0 && r.snapshotFreshLocked(now) && !(wl.busy && wl.op == "stop")
 	for _, c := range containers {
 		if c.RestartPolicy != "no" {

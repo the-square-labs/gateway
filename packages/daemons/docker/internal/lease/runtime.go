@@ -83,7 +83,7 @@ type Runtime struct {
 	observing   bool
 	nextObserve time.Duration
 	records     map[string]leasefence.Record
-	hbFresh     bool
+	watchdog    watchdogState
 	started     bool
 	ready       map[string]bool
 	events      []ReportEvent
@@ -201,7 +201,7 @@ func (r *Runtime) Step() {
 			holders[status.Key.PolicyID] = status
 		}
 	}
-	hbFresh := r.opts.Fence.HeartbeatFresh(now)
+	hbAge, hbPresent := r.opts.Fence.HeartbeatAge(now)
 	r.rotateIdentity()
 
 	r.mu.Lock()
@@ -211,7 +211,7 @@ func (r *Runtime) Step() {
 	for _, done := range results {
 		done()
 	}
-	r.hbFresh = hbFresh
+	r.observeWatchdogLocked(now, hbAge, hbPresent)
 	r.collectEventsLocked()
 	r.loadRecordsLocked()
 	r.maybeObserveLocked(now, manifests, holders)

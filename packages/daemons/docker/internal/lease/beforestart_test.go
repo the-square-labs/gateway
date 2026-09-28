@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
+	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
 )
 
 func TestBeforeStartGatesEveryStartAndArmsTheRecordFirst(t *testing.T) {
@@ -33,11 +34,11 @@ func TestBeforeStartGatesEveryStartAndArmsTheRecordFirst(t *testing.T) {
 	if rec := d1.fence.records[late.ID]; rec.DeadlineNs == 0 {
 		t.Fatal("a running container of the holder must never be lowered to a stale record")
 	}
-	d1.fence.heartbeat = false
+	d1.fence.lag = leasefence.HeartbeatMaxAge + time.Second
 	if err := d1.runtime.BeforeStart(late.ID, testPolicy, ""); err == nil {
 		t.Fatal("a start without a fresh watchdog heartbeat must be refused")
 	}
-	d1.fence.heartbeat = true
+	d1.fence.lag = 0
 	if err := d1.runtime.Handoff(handoffRequest(w, "d2")); err != nil {
 		t.Fatal(err)
 	}

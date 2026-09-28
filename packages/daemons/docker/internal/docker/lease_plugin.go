@@ -131,7 +131,7 @@ func (p *DockerPlugin) signalRegistrationChanged() {
 }
 
 func (l *leaseIntegration) watchdogReady() bool {
-	return l.fence.HeartbeatFresh(leasefence.Now())
+	return lease.HeartbeatAlive(l.fence, leasefence.Now())
 }
 
 // SetServing implements lease.Endpoints: it flips the policy's endpoint gate,
