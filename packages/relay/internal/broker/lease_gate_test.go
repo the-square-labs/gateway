@@ -138,10 +138,15 @@ func (f *leaseFixture) register(t *testing.T, endpointID string) (*registerStrea
 
 func (f *leaseFixture) endpointGrant(t *testing.T, endpointID string) *relayv1.SignedGrant {
 	t.Helper()
+	return f.endpointGrantAt(t, endpointID, 1)
+}
+
+func (f *leaseFixture) endpointGrantAt(t *testing.T, endpointID string, generation uint64) *relayv1.SignedGrant {
+	t.Helper()
 	now := time.Now().Unix()
 	payload, err := json.Marshal(grant.Claims{
 		SchemaVersion: 1, Audience: grant.Audience, GrantID: "grant-" + endpointID, GatewayInstanceID: "gateway-1", Kind: "endpoint",
-		SubjectKind: "node", SubjectID: "node-a", CertificateSHA256: f.fingerprint, EndpointID: endpointID, EndpointGeneration: 1,
+		SubjectKind: "node", SubjectID: "node-a", CertificateSHA256: f.fingerprint, EndpointID: endpointID, EndpointGeneration: generation,
 		IssuedAt: now - 10, NotBefore: now - 10, ExpiresAt: now + 3600,
 	})
 	if err != nil {

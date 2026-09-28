@@ -15,6 +15,8 @@ import (
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -304,6 +306,30 @@ func TestRelayRegistrationRetryBacksOffWithJitter(t *testing.T) {
 		if low != want[0] || high < want[1]-time.Millisecond || high > want[1] {
 			t.Fatalf("attempt %d delays [%s, %s], want [%s, %s)", attempt, low, high, want[0], want[1])
 		}
+	}
+}
+
+// E's B-18 leftover: a registration refused because its grant and the relay's policy do not match yet is retried on
+// a short cadence for the first seconds (the policy or the grant follows within seconds), then with the backoff.
+func TestPolicyMismatchRetriesOnAShortCadence(t *testing.T) {
+	mismatch := status.Error(codes.PermissionDenied, "endpoint grant does not match policy")
+	low, high := func() float64 { return 0 }, func() float64 { return 0.999999 }
+	for _, failures := range []int{1, 5, 20} {
+		for _, random := range []func() float64{low, high} {
+			if delay := nextRegistrationRetry(mismatch, failures, 3*time.Second, random); delay < 200*time.Millisecond || delay > 400*time.Millisecond {
+				t.Fatalf("policy mismatch retry after %d failures = %s", failures, delay)
+			}
+		}
+	}
+	if delay := nextRegistrationRetry(mismatch, 5, 11*time.Second, low); delay != relayRegistrationRetryDelay(5, low) {
+		t.Fatalf("a mismatch that outlived the window retried after %s", delay)
+	}
+	other := status.Error(codes.Unavailable, "connection refused")
+	if delay := nextRegistrationRetry(other, 3, 0, low); delay != relayRegistrationRetryDelay(3, low) {
+		t.Fatalf("another refusal retried after %s", delay)
+	}
+	if relayPolicyCatchingUp(status.Error(codes.PermissionDenied, "grant subject is invalid")) {
+		t.Fatal("a refused identity counted as a policy catching up")
 	}
 }
 

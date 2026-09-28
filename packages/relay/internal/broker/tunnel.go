@@ -163,7 +163,7 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	}
 	metrics.opened.Add(1)
 	metrics.touch()
-	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, assignmentGeneration: claims.AssignmentGeneration, trafficClass: trafficClass, metrics: metrics, stop: make(chan struct{})}
+	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, assignmentGeneration: claims.AssignmentGeneration, trafficClass: trafficClass, metrics: metrics, registration: registration, stop: make(chan struct{})}
 	pending := &pendingTunnel{endpoint: endpoint, session: session, accepted: make(chan acceptedConnection, 1)}
 	metrics.active.Add(1)
 	b.pending[token] = pending
@@ -384,6 +384,19 @@ func policyAssignmentKey(id string, generation uint64) string {
 		return id
 	}
 	return fmt.Sprintf("%s:%d", id, generation)
+}
+
+// closeRegistrationSessionsLocked closes the tunnels bridged through one
+// registration: those of another registration of the same endpoint (a newer
+// generation that registered before this one ended) keep running.
+func (b *Broker) closeRegistrationSessionsLocked(registration *endpointRegistration) {
+	for _, tunnel := range b.active {
+		unbound := tunnel.registration == nil && tunnel.endpointID == registration.endpointID &&
+			tunnel.assignmentGeneration == registration.assignmentGeneration
+		if tunnel.registration == registration || unbound {
+			tunnel.close()
+		}
+	}
 }
 
 func (b *Broker) closeEndpointSessionsLocked(endpointID string, assignmentGenerations ...uint64) {
