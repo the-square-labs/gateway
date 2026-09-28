@@ -4,8 +4,7 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
-import { IngressGroupService } from '@/modules/ingress-groups/ingress-group.service.js';
-import { assertCanPlaceOnMembers } from '@/modules/ingress-groups/ingress-group-access.js';
+import { assertRoutePlacementOnGroup } from '@/modules/ingress-groups/ingress-group-operations.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import type { AppEnv } from '@/types.js';
@@ -53,6 +52,7 @@ import {
   ValidateAdvancedConfigSchema,
 } from './proxy.schemas.js';
 import { ProxyService } from './proxy.service.js';
+import { hasProxyDestinationScope } from './proxy-destination-scope.js';
 import { ProxyMaintenanceAccessService } from './proxy-maintenance-access.service.js';
 import { redactRawProxyConfigForBrowser } from './raw-visibility.js';
 import { assertTlsResyncAccess } from './tls-resync-access.js';
@@ -86,33 +86,6 @@ function normalizedAdvancedConfig(value: unknown): string | null {
 function requestOnlyUpdatesRawProxyConfig(input: Record<string, unknown>): boolean {
   const rawKeys = new Set(['rawConfig']);
   return Object.keys(input).length > 0 && Object.keys(input).every((key) => rawKeys.has(key));
-}
-
-/**
- * Destination-scoped proxy permissions for a route that does not exist yet (or
- * is being moved): a broad grant, a grant on the destination folder, or a grant
- * on the destination ingress node.
- */
-function hasProxyDestinationScope(
-  scopes: string[],
-  baseScope: string,
-  folderId: string | null | undefined,
-  nodeId: string | null | undefined | readonly string[]
-): boolean {
-  // A route on an ingress group is created on every member: a node grant must cover each of them.
-  if (Array.isArray(nodeId)) {
-    return (
-      hasScope(scopes, baseScope) ||
-      (!!folderId && !folderId.includes('/') && hasScope(scopes, `${baseScope}:folder/${folderId}`)) ||
-      (nodeId.length > 0 && nodeId.every((id) => hasProxyDestinationScope(scopes, baseScope, null, id)))
-    );
-  }
-  const singleNodeId = nodeId as string | null | undefined;
-  return (
-    hasScope(scopes, baseScope) ||
-    (!!folderId && !folderId.includes('/') && hasScope(scopes, `${baseScope}:folder/${folderId}`)) ||
-    (!!singleNodeId && !singleNodeId.includes('/') && hasScope(scopes, `${baseScope}:node/${singleNodeId}`))
-  );
 }
 
 function canReadRawProxyConfig(scopes: string[], id: string) {
@@ -365,12 +338,9 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
       : await proxyService.resolveRouteIngressNode(scopes, request);
   const input = { ...request, nodeId: placement.nodeId, ingressGroupId: placement.ingressGroupId ?? undefined };
   const destinationNodes: string | string[] = placement.ingressGroupId
-    ? await container.resolve(IngressGroupService).memberNodeIds(placement.ingressGroupId)
+    ? await assertRoutePlacementOnGroup(scopes, placement.ingressGroupId, input.folderId)
     : input.nodeId;
-  if (placement.ingressGroupId) {
-    assertCanPlaceOnMembers(scopes, 'proxy:create', input.folderId, destinationNodes as string[]);
-    await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
-  } else if (!hasScopeForCreation(scopes, 'proxy:create', input.folderId, input.nodeId)) {
+  if (!placement.ingressGroupId && !hasScopeForCreation(scopes, 'proxy:create', input.folderId, input.nodeId)) {
     throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
   }
   await container.resolve(FolderService).assertFolderExists(input.folderId);
@@ -499,9 +469,7 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   const existingGroupId = (existing as { ingressGroupId?: string | null }).ingressGroupId ?? null;
   if (input.ingressGroupId && input.ingressGroupId !== existingGroupId) {
     // Moving onto an ingress group creates the route on every member.
-    const members = await container.resolve(IngressGroupService).memberNodeIds(input.ingressGroupId);
-    assertCanPlaceOnMembers(scopes, 'proxy:create', destinationFolderId, members);
-    await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
+    await assertRoutePlacementOnGroup(scopes, input.ingressGroupId, destinationFolderId);
   } else if (
     input.nodeId &&
     input.nodeId !== existing.nodeId &&
@@ -530,14 +498,11 @@ proxyRoutes.openapi(
     const proxyService = container.resolve(ProxyService);
     const existing = await proxyService.getProxyHost(id);
     if (input.ingressGroupId) {
-      const members = await container.resolve(IngressGroupService).memberNodeIds(input.ingressGroupId);
-      assertCanPlaceOnMembers(
+      await assertRoutePlacementOnGroup(
         scopes,
-        'proxy:create',
-        (existing as { folderId?: string | null }).folderId ?? null,
-        members
+        input.ingressGroupId,
+        (existing as { folderId?: string | null }).folderId ?? null
       );
-      await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
     }
     await proxyService.changeRoutePlacement(
       id,

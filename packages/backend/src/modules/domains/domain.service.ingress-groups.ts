@@ -3,6 +3,10 @@ import { domains } from '@/db/schema/domains.js';
 import { pageWildcardProfiles } from '@/db/schema/pages.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { AppError } from '@/middleware/error-handler.js';
+import {
+  type IngressGroupDestination,
+  loadIngressGroupDestinations,
+} from '@/modules/ingress-groups/ingress-group-destinations.js';
 import { requireRoutableIngressGroup } from '@/modules/ingress-groups/ingress-group-routing.js';
 import { ingressGroupMemberRows } from '@/modules/ingress-groups/ingress-nodes.js';
 import { getRegisteredDomainCandidates } from '@/modules/proxy/proxy-domain-node.js';
@@ -10,8 +14,17 @@ import { probeDnsRecords } from './dns.utils.js';
 import type { DomainIngressPlacementInput, PreviewDomainInput } from './domain.schemas.js';
 import { DomainsServiceRuntime } from './domain.service.runtime.js';
 import { type DomainIngressPlacement, type EligibleNginxNode, logger } from './domain.service.shared.js';
+import { canPickDomainNginxNode } from './domain-creation-access.js';
 
 type DomainRow = typeof domains.$inferSelect;
+
+/** A member of an ingress group offered for a new domain. */
+export interface DomainIngressGroupMember {
+  id: string;
+  hostname: string;
+  displayName: string | null;
+  effectiveAddress: string;
+}
 
 /** The DNS view of an ingress group: what to publish and what DNS may already point at. */
 export interface IngressGroupDnsPlan {
@@ -35,6 +48,26 @@ export interface IngressGroupDnsPlan {
  * are joining or draining are never published. External DNS is the operator's: Gateway only validates it.
  */
 export abstract class DomainsServiceIngressGroups extends DomainsServiceRuntime {
+  /**
+   * Ingress groups a new domain may be placed on: every member has a public ingress address and is open to the
+   * caller's domains:create grant, and some member is active. Members in site order, with their state.
+   */
+  async getIngressGroupOptions(
+    scopes: readonly string[],
+    options?: { eligibleNodes: EligibleNginxNode[] }
+  ): Promise<IngressGroupDestination<DomainIngressGroupMember>[]> {
+    const { eligibleNodes } = options ?? (await this.getNginxNodeOptions());
+    const usable = eligibleNodes
+      .filter((node) => canPickDomainNginxNode([...scopes], node.id))
+      .map((node) => ({
+        id: node.id,
+        hostname: node.hostname,
+        displayName: node.displayName,
+        effectiveAddress: node.effectiveAddress,
+      }));
+    return loadIngressGroupDestinations(this.db, usable);
+  }
+
   async ingressGroupDnsPlan(groupId: string): Promise<IngressGroupDnsPlan> {
     const members = await ingressGroupMemberRows(this.db, groupId);
     const options = await this.getNginxNodeOptions();

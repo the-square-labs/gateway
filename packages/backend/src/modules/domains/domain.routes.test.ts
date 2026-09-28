@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
     deleteDomain: vi.fn(),
     getDomain: vi.fn(),
     getNginxNodeOptions: vi.fn(),
+    getIngressGroupOptions: vi.fn(),
     resolveCloudflareMigration: vi.fn(),
   },
   sslService: {
@@ -113,6 +114,7 @@ describe('domain routes authorization', () => {
   beforeEach(() => {
     mocks.scopes = [];
     vi.clearAllMocks();
+    mocks.domainsService.getIngressGroupOptions.mockResolvedValue([]);
     mocks.domainsService.previewDomain.mockResolvedValue({ domain: 'example.com' });
     mocks.domainsService.createDomain.mockResolvedValue({ id: DOMAIN_ID, domain: 'example.com' });
     mocks.domainsService.updateDomain.mockResolvedValue({ id: DOMAIN_ID, domain: 'example.com', dnsProxied: true });
@@ -351,8 +353,18 @@ describe('domain routes authorization', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      data: { eligibleNodes: [{ id: NODE_A }], unconfiguredNodes: [], totalNginxNodes: 1, unconfiguredNginxNodes: 0 },
+      data: {
+        eligibleNodes: [{ id: NODE_A }],
+        unconfiguredNodes: [],
+        totalNginxNodes: 1,
+        unconfiguredNginxNodes: 0,
+        ingressGroups: [],
+      },
     });
+    expect(mocks.domainsService.getIngressGroupOptions).toHaveBeenCalledWith(
+      mocks.scopes,
+      expect.objectContaining({ eligibleNodes: [{ id: NODE_A }, { id: 'node-b' }] })
+    );
   });
 
   it('previews DNS for node-only creators only on a node of their grant', async () => {

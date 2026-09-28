@@ -2,6 +2,7 @@ import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { assertRoutePlacementOnGroup } from '@/modules/ingress-groups/ingress-group-operations.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { getNginxLogHistory } from '@/modules/monitoring/log-relay.service.js';
 import { requestNginxHostLogHistory } from '@/modules/monitoring/nginx-log-subscriptions.js';
@@ -17,6 +18,7 @@ import {
   ValidateAdvancedConfigSchema,
 } from '@/modules/proxy/proxy.schemas.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
+import { hasProxyDestinationScope } from '@/modules/proxy/proxy-destination-scope.js';
 import { ProxyMaintenanceAccessService } from '@/modules/proxy/proxy-maintenance-access.service.js';
 import {
   reservedTemplateVariableNames,
@@ -49,25 +51,13 @@ export const PROXY_TOOL_NAMES = new Set([
   'manage_route',
 ]);
 
-/**
- * Mirrors the route REST handlers: a grant for a route that does not exist yet (or is being moved) may be broad,
- * on the destination folder, or on the destination ingress node.
- */
-function hasProxyDestinationScope(
-  scopes: string[],
-  baseScope: string,
-  folderId: string | null | undefined,
-  nodeId: string | null | undefined
-): boolean {
-  return (
-    hasScope(scopes, baseScope) ||
-    (!!folderId && !folderId.includes('/') && hasScope(scopes, `${baseScope}:folder/${folderId}`)) ||
-    (!!nodeId && !nodeId.includes('/') && hasScope(scopes, `${baseScope}:node/${nodeId}`))
-  );
-}
-
 /** update_route accepts the shared field list plus the Compose service target that create_route accepts. */
-const ROUTE_UPDATE_FIELDS = [...PROXY_HOST_UPDATE_FIELDS, 'dockerComposeProjectId', 'dockerComposeServiceName'];
+const ROUTE_UPDATE_FIELDS = [
+  ...PROXY_HOST_UPDATE_FIELDS,
+  'dockerComposeProjectId',
+  'dockerComposeServiceName',
+  'ingressGroupId',
+];
 
 export interface ProxyToolContext {
   proxyService: ProxyService;
@@ -107,13 +97,18 @@ export async function executeProxyTool(
     case 'list_route_ingress_nodes': {
       // Mirrors GET /proxy-hosts/ingress-nodes: any proxy:create grant form, no node permission.
       const { folderId } = RouteIngressNodeListQuerySchema.parse({ folderId: a.folderId ?? undefined });
-      return { data: await context.proxyService.listRouteIngressNodes(user.scopes, folderId) };
+      const [data, groups] = await Promise.all([
+        context.proxyService.listRouteIngressNodes(user.scopes, folderId),
+        context.proxyService.listRouteIngressGroups(user.scopes, folderId),
+      ]);
+      return { data, groups };
     }
     case 'create_route': {
       const request = CreateProxyHostSchema.parse({
         type: a.type,
         upstreamKind: a.upstreamKind,
         nodeId: a.nodeId,
+        ingressGroupId: a.ingressGroupId,
         domainNames: a.domainNames,
         forwardHost: a.forwardHost,
         forwardPort: a.forwardPort,
@@ -158,19 +153,27 @@ export async function executeProxyTool(
         healthCheckSlowThreshold: a.healthCheckSlowThreshold,
       });
       if (request.upstreamKind === 'pages') await requirePagesAvailable();
-      // Like POST /proxy-hosts: without nodeId the route takes the node of its registered domains or the
-      // caller's only eligible node, and every destination check below runs against that node.
-      const nodeId =
-        request.nodeId ?? (await context.proxyService.resolveRouteIngressNode(user.scopes, request)).nodeId;
-      const input = { ...request, nodeId };
-      if (!hasScopeForCreation(user.scopes, 'proxy:create', input.folderId, input.nodeId)) {
+      // Like POST /proxy-hosts: without nodeId the route takes the node or ingress group of its registered domains
+      // or the caller's only eligible node, and every destination check below runs against it (each group member).
+      const placement =
+        request.nodeId && !request.ingressGroupId
+          ? { nodeId: request.nodeId, ingressGroupId: null }
+          : await context.proxyService.resolveRouteIngressNode(user.scopes, request);
+      const input = { ...request, nodeId: placement.nodeId, ingressGroupId: placement.ingressGroupId ?? undefined };
+      const destination: string | string[] = placement.ingressGroupId
+        ? await assertRoutePlacementOnGroup(user.scopes, placement.ingressGroupId, input.folderId)
+        : input.nodeId;
+      if (
+        !placement.ingressGroupId &&
+        !hasScopeForCreation(user.scopes, 'proxy:create', input.folderId, input.nodeId)
+      ) {
         throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
       }
       await context.folderService.assertFolderExists(input.folderId);
       // Advanced, raw and unrestricted grants apply to the new route's destination folder or node.
       if (
         input.advancedConfig &&
-        !hasProxyDestinationScope(user.scopes, 'proxy:advanced', input.folderId, input.nodeId)
+        !hasProxyDestinationScope(user.scopes, 'proxy:advanced', input.folderId, destination)
       ) {
         throw new AppError(
           403,
@@ -181,12 +184,12 @@ export async function executeProxyTool(
       if (input.upstreamKind === 'pages') requirePageProjectAccess(user, input.pageProjectId);
       if (
         togglesRawMode(input) &&
-        !hasProxyDestinationScope(user.scopes, 'proxy:raw:write', input.folderId, input.nodeId)
+        !hasProxyDestinationScope(user.scopes, 'proxy:raw:write', input.folderId, destination)
       ) {
         throw new AppError(403, 'FORBIDDEN', 'Enabling raw mode requires proxy:raw:write scope');
       }
       await context.proxyService.assertReferenceAccess(user.scopes, input);
-      const unrestricted = hasProxyDestinationScope(user.scopes, 'proxy:unrestricted', input.folderId, input.nodeId);
+      const unrestricted = hasProxyDestinationScope(user.scopes, 'proxy:unrestricted', input.folderId, destination);
       return compact(
         await context.proxyService.createProxyHost(input, user.id, {
           actorScopes: user.scopes,
@@ -277,10 +280,15 @@ export async function executeProxyTool(
         updateFields.folderId !== undefined
           ? ((updateFields.folderId as string | null) ?? null)
           : ((existing as { folderId?: string | null }).folderId ?? null);
-      if (
+      const existingGroupId = (existing as { ingressGroupId?: string | null }).ingressGroupId ?? null;
+      if (typeof updateFields.ingressGroupId === 'string' && updateFields.ingressGroupId !== existingGroupId) {
+        // Moving onto an ingress group creates the route on every member.
+        await assertRoutePlacementOnGroup(user.scopes, updateFields.ingressGroupId, destinationFolderId);
+      } else if (
         typeof updateFields.nodeId === 'string' &&
         updateFields.nodeId &&
         updateFields.nodeId !== existing.nodeId &&
+        !(existingGroupId && updateFields.ingressGroupId === null) &&
         !hasScopeForCreation(user.scopes, 'proxy:create', destinationFolderId, updateFields.nodeId)
       ) {
         throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:node/${updateFields.nodeId}`);

@@ -64,6 +64,7 @@ function proxyServiceWithIngressData() {
       return real.resolveRouteIngressNode(scopes, input as never);
     }),
     listRouteIngressNodes: vi.fn((scopes: string[], folderId?: string) => real.listRouteIngressNodes(scopes, folderId)),
+    listRouteIngressGroups: vi.fn(async () => []),
     createProxyHost: vi.fn(async (input: { nodeId: string; domainNames: string[]; folderId?: string }) => ({
       id: ROUTE_ID,
       slug: 'route',

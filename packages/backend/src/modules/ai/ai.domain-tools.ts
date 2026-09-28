@@ -14,11 +14,15 @@ import {
 } from '@/modules/domains/domain.schemas.js';
 import type { DomainsService } from '@/modules/domains/domain.service.js';
 import {
-  canPickDomainNginxNode,
   domainNginxNodeOptionsForScopes,
   resolveDomainCreationNginxNodeId,
 } from '@/modules/domains/domain-creation-access.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
+import {
+  assertCanPreviewDomainDestination,
+  assertDomainCreationOnGroup,
+  assertDomainPlacementAccess,
+} from '@/modules/ingress-groups/ingress-group-operations.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import type { User } from '@/types.js';
@@ -60,13 +64,17 @@ export async function executeDomainTool(
         proxied: a.proxied,
         overwriteDns: a.overwriteDns,
         nginxNodeId: a.nginxNodeId,
+        ingressGroupId: a.ingressGroupId,
       });
       // Like POST /domains: a node-limited creator that omits nginxNodeId gets its only granted node.
       const nginxNodeId = await resolveDomainCreationNginxNodeId(user.scopes, request, () =>
         context.domainsService.getNginxNodeOptions()
       );
-      const input = nginxNodeId ? { ...request, nginxNodeId } : request;
-      if (!hasScopeForCreation(user.scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
+      const input = nginxNodeId && !request.ingressGroupId ? { ...request, nginxNodeId } : request;
+      if (input.ingressGroupId) {
+        // A domain on an ingress group is served by every member.
+        await assertDomainCreationOnGroup(user.scopes, input.ingressGroupId, input.folderId);
+      } else if (!hasScopeForCreation(user.scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
         throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');
       }
       await container.resolve(DomainFolderService).assertFolderExists(input.folderId);
@@ -94,7 +102,11 @@ async function manageDomain(context: DomainToolContext, user: User, a: Record<st
       throw new AppError(403, 'FORBIDDEN', 'Missing required scope: domains:create');
     }
     if (a.operation === 'list_nginx_nodes') {
-      return domainNginxNodeOptionsForScopes(await context.domainsService.getNginxNodeOptions(), user.scopes);
+      const options = await context.domainsService.getNginxNodeOptions();
+      return {
+        ...domainNginxNodeOptionsForScopes(options, user.scopes),
+        ingressGroups: await context.domainsService.getIngressGroupOptions(user.scopes, options),
+      };
     }
     const input = PreviewDomainSchema.parse({
       domain: a.domain,
@@ -102,14 +114,11 @@ async function manageDomain(context: DomainToolContext, user: User, a: Record<st
       ttl: a.ttl,
       proxied: a.proxied,
       nginxNodeId: a.nginxNodeId,
+      ingressGroupId: a.ingressGroupId,
     });
-    // The preview returns the node's hostname and addresses: node-only creators may preview only on a
-    // node of their grant (and must name it), exactly like REST.
-    if (!canPickDomainNginxNode(user.scopes, input.nginxNodeId)) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected Nginx node', {
-        requiredScope: input.nginxNodeId ? `domains:create:node/${input.nginxNodeId}` : 'domains:create',
-      });
-    }
+    // The preview returns node hostnames and addresses: node-only creators may preview only on nodes of their
+    // grant (and must name them; every member for an ingress group), exactly like REST.
+    await assertCanPreviewDomainDestination(user.scopes, input);
     return context.domainsService.previewDomain(input);
   }
 
@@ -121,11 +130,15 @@ async function manageDomain(context: DomainToolContext, user: User, a: Record<st
   }
   if (a.operation === 'update') {
     context.ensureToolScopeForResource(user, 'domains:edit', domainId);
-    return context.domainsService.updateDomain(
-      domainId,
-      UpdateDomainSchema.parse({ description: a.description, proxied: a.proxied }),
-      user.id
-    );
+    const input = UpdateDomainSchema.parse({
+      description: a.description,
+      proxied: a.proxied,
+      ingressGroupId: a.ingressGroupId,
+      nginxNodeId: a.ingressGroupId === null ? a.nginxNodeId : undefined,
+    });
+    // Like PUT /domains/{id}: moving onto an ingress group needs domains:create on every member.
+    if (input.ingressGroupId !== undefined) await assertDomainPlacementAccess(user.scopes, domainId, input);
+    return context.domainsService.updateDomain(domainId, input, user.id);
   }
   if (a.operation === 'check_dns') {
     context.ensureToolScopeForResource(user, 'domains:edit', domainId);

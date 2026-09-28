@@ -13,14 +13,15 @@ import {
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
 import {
-  canPickDomainNginxNode,
   domainNginxNodeOptionsForScopes,
   resolveDomainCreationNginxNodeId,
 } from '@/modules/domains/domain-creation-access.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
-import { IngressGroupService } from '@/modules/ingress-groups/ingress-group.service.js';
-import { assertCanPlaceOnMembers } from '@/modules/ingress-groups/ingress-group-access.js';
-import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import {
+  assertCanPreviewDomainDestination,
+  assertDomainCreationOnGroup,
+  assertDomainPlacementAccess,
+} from '@/modules/ingress-groups/ingress-group-operations.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -70,23 +71,6 @@ import {
 import { DomainsService } from './domain.service.js';
 
 export const domainRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
-
-/**
- * Moving a domain onto an ingress group places it (and its routes) on every member: domains:create must cover each
- * member, and the multi-node availability entitlement is required. Moving it back to one member node only shrinks
- * the runtime and needs neither.
- */
-async function assertDomainPlacementAccess(
-  scopes: string[],
-  domainId: string,
-  input: { ingressGroupId?: string | null }
-): Promise<void> {
-  if (!input.ingressGroupId) return;
-  const domain = await container.resolve(DomainsService).getDomain(domainId);
-  const members = await container.resolve(IngressGroupService).memberNodeIds(input.ingressGroupId);
-  assertCanPlaceOnMembers(scopes, 'domains:create', domain.folderId ?? null, members);
-  await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
-}
 
 domainRoutes.use('*', authMiddleware);
 
@@ -210,21 +194,23 @@ domainRoutes.openapi({ ...searchDomainsRoute, middleware: requireScopeBase('doma
 // the create call itself checks the chosen destination.
 domainRoutes.openapi({ ...listDomainNginxNodesRoute, middleware: requireScopeBase('domains:create') }, async (c) => {
   const domainsService = container.resolve(DomainsService);
+  const scopes = c.get('effectiveScopes') || [];
   const options = await domainsService.getNginxNodeOptions();
-  return c.json({ data: domainNginxNodeOptionsForScopes(options, c.get('effectiveScopes') || []) });
+  return c.json({
+    data: {
+      ...domainNginxNodeOptionsForScopes(options, scopes),
+      ingressGroups: await domainsService.getIngressGroupOptions(scopes, options),
+    },
+  });
 });
 
 // Preview domain DNS (must be before /:id)
 domainRoutes.openapi({ ...previewDomainRoute, middleware: requireScopeBase('domains:create') }, async (c) => {
   const body = await c.req.json();
   const input = PreviewDomainSchema.parse(body);
-  // The preview returns the node's hostname and addresses: node-only creators may
-  // preview only on a node of their grant (and must name it).
-  if (!canPickDomainNginxNode(c.get('effectiveScopes') || [], input.nginxNodeId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected Nginx node', {
-      requiredScope: input.nginxNodeId ? `domains:create:node/${input.nginxNodeId}` : 'domains:create',
-    });
-  }
+  // The preview returns node hostnames and addresses: node-only creators may preview only on nodes of
+  // their grant (and must name them; every member for an ingress group).
+  await assertCanPreviewDomainDestination(c.get('effectiveScopes') || [], input);
   const domainsService = container.resolve(DomainsService);
   try {
     const preview = await domainsService.previewDomain(input);
@@ -262,9 +248,7 @@ domainRoutes.openapi(createDomainRoute, async (c) => {
   const input = nginxNodeId && !request.ingressGroupId ? { ...request, nginxNodeId } : request;
   if (input.ingressGroupId) {
     // A domain on an ingress group is served by every member.
-    const members = await container.resolve(IngressGroupService).memberNodeIds(input.ingressGroupId);
-    assertCanPlaceOnMembers(scopes, 'domains:create', input.folderId, members);
-    await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
+    await assertDomainCreationOnGroup(scopes, input.ingressGroupId, input.folderId);
   } else if (!hasScopeForCreation(scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
     throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');
   }

@@ -30,7 +30,7 @@ import {
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 import { IngressDeliveryError } from './proxy-ingress-delivery.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
-import { loadRouteIngressGroupCandidates, type RouteIngressGroup } from './route-ingress-groups.js';
+import { loadRouteIngressGroups, type RouteIngressGroup } from './route-ingress-groups.js';
 import {
   type RouteIngressNode,
   type RouteIngressNodeCandidate,
@@ -99,12 +99,7 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
    */
   async listRouteIngressGroups(scopes: readonly string[], folderId?: string | null): Promise<RouteIngressGroup[]> {
     const candidates = await this.loadRouteIngressNodeCandidates();
-    const allowed = new Set(routeIngressNodesForScopes(candidates, scopes, folderId).map((node) => node.id));
-    return (await loadRouteIngressGroupCandidates(this.db, candidates)).filter(
-      (group) =>
-        group.members.some((member) => member.state === 'active') &&
-        group.members.every((member) => allowed.has(member.id))
-    );
+    return loadRouteIngressGroups(this.db, routeIngressNodesForScopes(candidates, scopes, folderId));
   }
 
   /**

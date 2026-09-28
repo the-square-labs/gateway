@@ -275,6 +275,7 @@ describe('AI tool scope filtering', () => {
       'create_access_list',
       'delete_access_list',
       'manage_access_list',
+      'manage_ingress_group',
       'list_nodes',
       'get_node',
       'execute_node_console_command',
@@ -306,7 +307,6 @@ describe('AI tool scope filtering', () => {
       'get_gateway_settings',
       'update_gateway_settings',
       'manage_system_updates',
-      'get_audit_log',
     ]);
     expect(TOOL_STORE_INVALIDATION_MAP.create_root_ca).toEqual(['ca']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_certificate).toEqual(['certificates', 'ca']);
