@@ -85,6 +85,14 @@ type EnrollmentBundlePlugin interface {
 	PersistEnrollmentBundle(response *pb.EnrollResponse) error
 }
 
+// RegistrationRefreshPlugin is implemented by plugins whose registration
+// capabilities can change while the process runs (for example once a lease
+// watchdog becomes available): a signal reconnects the control session so
+// the gateway receives a fresh RegisterMessage.
+type RegistrationRefreshPlugin interface {
+	RegistrationChanged() <-chan struct{}
+}
+
 type ShutdownPlugin interface {
 	Shutdown()
 }

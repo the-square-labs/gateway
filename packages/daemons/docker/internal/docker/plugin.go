@@ -63,6 +63,7 @@ type DockerPlugin struct {
 	runtimeStatus            runtimemanager.Status
 	availability             *availabilityManager
 	lease                    *leaseIntegration
+	registrationChanged      chan struct{}
 
 	// Log stream follow support
 	writer           *stream.Writer
@@ -93,7 +94,7 @@ func dockerTimeoutProvided(configJSON string) bool {
 
 // NewDockerPlugin creates a new DockerPlugin with the given configuration.
 func NewDockerPlugin(cfg *config.Config) *DockerPlugin {
-	return &DockerPlugin{cfg: cfg}
+	return &DockerPlugin{cfg: cfg, registrationChanged: make(chan struct{}, 1)}
 }
 
 // backupCommandHandler is deliberately narrow: backup runtime files can
@@ -421,9 +422,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		}
 		// Advertised only with a live watchdog (A12.4); the lease report's
 		// watchdog_ready carries later changes within the session.
-		if p.lease != nil && p.lease.watchdogReady() {
-			values = append(values, availabilityLeaseCapability)
-		}
+		values = append(values, p.leaseCapabilities()...)
 		values = append(values, "managed_database_binding_listener_v1")
 		if p.volumeImages != nil && p.volumeImages.supported {
 			values = append(values, "docker_volume_storage_images_v1")

@@ -22,6 +22,11 @@ type DockerConfig struct {
 	// LeaseWatchdogDir is the tmpfs directory shared with the independent
 	// lease watchdog; empty means /run/gateway-lease-watchdog.
 	LeaseWatchdogDir string `yaml:"lease_watchdog_dir"`
+	// LeaseWatchdogReleasesURL and LeaseWatchdogArtifactBaseURL override the
+	// update service used to bootstrap a missing watchdog (default: the
+	// installer's updates.thesqlabs.com endpoints).
+	LeaseWatchdogReleasesURL     string `yaml:"lease_watchdog_releases_url"`
+	LeaseWatchdogArtifactBaseURL string `yaml:"lease_watchdog_artifact_base_url"`
 }
 
 func (c DockerConfig) IsStorageProfile() bool {

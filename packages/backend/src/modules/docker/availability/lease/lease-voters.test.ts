@@ -231,6 +231,19 @@ describe('availability lease capability gating (D10)', () => {
       reason: { code: 'candidates_not_capable', nodeIds: ['22222222-2222-4222-8222-222222222222'] },
     });
     expect(
+      evaluateLeaseGating({
+        ...eligible,
+        candidates: [eligible.candidates[0]!, { ...eligible.candidates[1]!, capable: false, watchdogMissing: true }],
+      })
+    ).toMatchObject({
+      eligible: false,
+      reason: {
+        code: 'watchdog_missing',
+        message: expect.stringContaining('re-run the node installer'),
+        nodeIds: ['22222222-2222-4222-8222-222222222222'],
+      },
+    });
+    expect(
       evaluateLeaseGating({ ...eligible, ingress: [{ nodeId: eligible.ingress[0]!.nodeId, capable: false }] })
     ).toMatchObject({ eligible: false, reason: { code: 'ingress_not_capable' } });
     // H4: every relay carrying the policy's endpoints and DB routes must run the lease gate.
