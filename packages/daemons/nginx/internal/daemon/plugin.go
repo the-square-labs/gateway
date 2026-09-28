@@ -198,10 +198,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	// Ensure the managed HTTPS catch-all default server is present, so an
 	// unmatched SNI/Host cannot fall through to an arbitrary route (this
 	// covers nodes provisioned before the installer wrote it).
-	if modified, err := nginx.EnsureDefaultServer(p.cfg.Nginx.ConfigDir); err != nil {
-		logger.Warn("failed to write managed default HTTPS server", "error", err)
-	} else if modified {
-		logger.Info("wrote managed default HTTPS server (TLS catch-all)")
+	if p.ensureManagedDefaultServer(logger) {
 		configDirModified = true
 	}
 
@@ -666,4 +663,41 @@ func (p *NginxPlugin) runLogStreamSession(ctx context.Context, conn *grpc.Client
 	}
 
 	return ctx.Err()
+}
+
+// ensureManagedDefaultServer writes the managed HTTPS catch-all and reports whether the config
+// directory changed. A node whose nginx already has its own 443 default_server (integrate mode)
+// rejects a second one, and an invalid tree would block every later route sync, so the file stays
+// only when the configuration is valid with it or was already invalid without it.
+func (p *NginxPlugin) ensureManagedDefaultServer(logger *slog.Logger) bool {
+	modified, err := nginx.EnsureDefaultServer(p.cfg.Nginx.ConfigDir)
+	if err != nil {
+		logger.Warn("failed to write managed default HTTPS server", "error", err)
+		return false
+	}
+	if !modified {
+		return false
+	}
+	valid, output := p.mgr.TestConfig()
+	if valid {
+		logger.Info("wrote managed default HTTPS server (TLS catch-all)")
+		return true
+	}
+	if err := nginx.RemoveFile(nginx.DefaultServerConfigPath(p.cfg.Nginx.ConfigDir)); err != nil {
+		logger.Warn("failed to remove conflicting managed default HTTPS server", "error", err)
+		return true
+	}
+	if validWithout, _ := p.mgr.TestConfig(); validWithout {
+		logger.Warn(
+			"managed default HTTPS server not installed: it conflicts with this node's nginx configuration, whose own default server keeps answering unmatched TLS hostnames",
+			"output", output,
+		)
+		return false
+	}
+	if _, err := nginx.EnsureDefaultServer(p.cfg.Nginx.ConfigDir); err != nil {
+		logger.Warn("failed to restore managed default HTTPS server", "error", err)
+		return true
+	}
+	logger.Info("wrote managed default HTTPS server (TLS catch-all); the nginx configuration was already invalid")
+	return true
 }
