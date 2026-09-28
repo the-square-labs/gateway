@@ -416,6 +416,7 @@ export class AvailabilityLeaseService {
       strictPending: state?.mode === 'bootstrapping' && state.strictRequestedAt !== null,
       surgeSlots: state?.surgeSlots ?? 0,
       copiesStoppedAt: state?.copiesStoppedAt ?? null,
+      modeChangedAt: state?.modeChangedAt ?? null,
       excludedNodes,
       retainedHolders:
         state?.mode === 'closing'

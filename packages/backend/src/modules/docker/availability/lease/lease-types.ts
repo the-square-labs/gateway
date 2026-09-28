@@ -77,6 +77,8 @@ export interface DockerAvailabilityLeaseView {
    * relay gate window (24 s) passed since then (A16); null while other copies may still run.
    */
   copiesStoppedAt: Date | null;
+  /** When the policy entered its current lease mode: a bootstrap that makes no progress is diagnosed from it (B-23). */
+  modeChangedAt?: Date | null;
   /**
    * Candidates left out of holding and of standby provisioning right now, with the reason (D3). Voters and manifest
    * candidates follow an outdated or unidentified node only after the condition lasted 2 minutes; offline and
