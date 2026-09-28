@@ -31,6 +31,8 @@ export interface AdditionalRuntimeConfigProgress {
   routeId: string;
   hostId: string;
   nodeId: string;
+  /** Every node the change reached (a host on an ingress group); older progress only has nodeId. */
+  nodeIds?: string[];
   from: number;
   to: number;
   fromRouteGeneration: number;

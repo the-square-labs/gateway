@@ -282,7 +282,9 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
           if (!this.pageRoutes || !input.pageProjectId || !input.pageTagId) {
             throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route service is unavailable');
           }
-          await this.pageRoutes.activateNewHost(host.id, host.nodeId!, input.pageProjectId, input.pageTagId);
+          // A Pages route on an ingress group is materialised on every member.
+          const pageNodes = host.ingressGroupId ? await this.ingressNodesOf(host) : host.nodeId!;
+          await this.pageRoutes.activateNewHost(host.id, pageNodes, input.pageProjectId, input.pageTagId);
         } else if (isDockerUpstream(host.upstreamKind)) {
           if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
           host = await this.secureLinks.prepare(host, true);
@@ -329,7 +331,10 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
             // daemon cleanup so reconciliation never infers ownership from a
             // generic staging row.
             await this.pageRoutes?.claimFailedCreateCleanup(host.id);
-            await this.pageRoutes?.removeHost(host.id, host.nodeId);
+            await this.pageRoutes?.removeHost(
+              host.id,
+              host.ingressGroupId ? await this.ingressNodesOf(host) : host.nodeId
+            );
           } catch (cleanupError) {
             preservePageRouteOwnership = true;
             logger.warn('Preserving Pages Route ownership after proxy create rollback cleanup failure', {

@@ -44,6 +44,10 @@ export class PageNodeRuntimeService {
   async preflight(_nodeId: string, _requiredBytes: number): Promise<void> {
     return commercialModuleUnavailable();
   }
+  /** Whether the node's daemon is connected now (offline members of an ingress group catch up later). */
+  isNodeConnected(_nodeId: string): boolean {
+    return commercialModuleUnavailable();
+  }
   async publish(_deploymentId: string): Promise<void> {
     return commercialModuleUnavailable();
   }

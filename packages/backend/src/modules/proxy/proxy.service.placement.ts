@@ -131,6 +131,7 @@ export abstract class ProxyServicePlacement extends ProxyServiceDelivery {
         // 2. Secure-link sources, Pages artifacts, config and certificates on every serving node.
         await this.secureLinks?.syncHostSources(moved, before);
         if (moved.upstreamKind === 'pages') await this.syncPagesServingNodes(moved, added, []);
+        await this.additionalRoutes?.syncServingNodes(moved, added, []);
         if (moved.enabled) {
           await this.deliverHost(moved, { certOptions: { preserveLegacyOnUnsupported: true } });
         }
@@ -150,7 +151,15 @@ export abstract class ProxyServicePlacement extends ProxyServiceDelivery {
             error: error instanceof Error ? error.message : String(error),
           });
         }
-        if (moved.upstreamKind === 'pages') await this.syncPagesServingNodes(moved, [], removed);
+        await Promise.all([
+          moved.upstreamKind === 'pages' ? this.syncPagesServingNodes(moved, [], removed) : undefined,
+          this.additionalRoutes?.syncServingNodes(moved, [], removed),
+        ]).catch((error) =>
+          logger.warn('Pages bindings of former ingress nodes are removed on the next Pages reconciliation', {
+            hostId: moved.id,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        );
         await this.secureLinks?.syncHostSources(moved, before).catch((error) =>
           logger.warn('Secure Link sources of former ingress nodes are removed on the next reconciliation', {
             hostId: moved.id,
@@ -189,6 +198,7 @@ export abstract class ProxyServicePlacement extends ProxyServiceDelivery {
         members.filter((member) => member !== nodeId)
       );
       if (host.upstreamKind === 'pages') await this.syncPagesServingNodes(host, [nodeId], []);
+      await this.additionalRoutes?.syncServingNodes(host, [nodeId], []);
       if (host.enabled) {
         await this.deliverHost(host, { certOptions: { preserveLegacyOnUnsupported: true }, nodeIds: [nodeId] });
       }
@@ -209,6 +219,7 @@ export abstract class ProxyServicePlacement extends ProxyServiceDelivery {
       await this.withdrawHost(host, { nodeIds: [nodeId] });
       await this.secureLinks?.syncHostSources(host, [...members, nodeId]);
       if (host.upstreamKind === 'pages') await this.syncPagesServingNodes(host, [], [nodeId]);
+      await this.additionalRoutes?.syncServingNodes(host, [], [nodeId]);
     });
   }
 
@@ -248,6 +259,7 @@ export abstract class ProxyServicePlacement extends ProxyServiceDelivery {
       if (added.length > 0) {
         await this.withdrawHost(moved, { nodeIds: added }).catch(() => undefined);
         if (moved.upstreamKind === 'pages') await this.syncPagesServingNodes(moved, [], added).catch(() => undefined);
+        await this.additionalRoutes?.syncServingNodes(moved, [], added).catch(() => undefined);
       }
       await this.secureLinks?.syncHostSources(existing, [...before, ...added]);
       if (existing.enabled) {

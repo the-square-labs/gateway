@@ -337,6 +337,17 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
               error,
             });
           }
+          // A member of an ingress group may have missed Pages publications of the host's Additional Routes while it
+          // was offline: bring its bindings up to date before the config that includes them is applied.
+          if (host.ingressGroupId) {
+            await this.additionalRoutes?.syncServingNodes(host, [nodeId], []).catch((error) =>
+              logger.warn('Additional Pages Routes of a reconnected ingress member are retried on its next resync', {
+                hostId: host.id,
+                nodeId,
+                error: error instanceof Error ? error.message : String(error),
+              })
+            );
+          }
           // Existing hosts on an old daemon retain their legacy config and
           // certificate paths. A new bundle is never initiated for that fleet.
           // A group route is re-applied on this member only.

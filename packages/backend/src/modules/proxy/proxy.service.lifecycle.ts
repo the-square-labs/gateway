@@ -68,7 +68,11 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
       await this.secureLinks?.cleanup(existing);
     }
     if (existing.upstreamKind === 'pages') {
-      await this.pageRoutes?.removeHost(id, existing.nodeId, abandoningOfflineNode);
+      await this.pageRoutes?.removeHost(
+        id,
+        existing.ingressGroupId ? await this.ingressNodesOf(existing) : existing.nodeId,
+        abandoningOfflineNode
+      );
     }
     await this.additionalRoutes?.cleanupForHost(existing, abandoningOfflineNode);
     try {

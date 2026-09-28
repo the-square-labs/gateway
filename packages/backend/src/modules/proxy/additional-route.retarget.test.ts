@@ -94,7 +94,7 @@ describe('AdditionalRouteService retargeting', () => {
     ).resolves.toMatchObject({ targetKind: 'manual', status: 'ready' });
 
     expect(reconcileAdditionalRouteHost).toHaveBeenCalledWith('host-1');
-    expect(cleanupPages).toHaveBeenCalledWith(existing, 'node-1');
+    expect(cleanupPages).toHaveBeenCalledWith(existing, expect.objectContaining({ id: 'host-1', nodeId: 'node-1' }));
     expect(reconcileAdditionalRouteHost.mock.invocationCallOrder[0]).toBeLessThan(
       cleanupPages.mock.invocationCallOrder[0]!
     );
