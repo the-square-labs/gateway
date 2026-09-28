@@ -46,11 +46,22 @@ const (
 )
 
 var (
-	bucketState    = []byte("relay-state-v1")
-	keySnapshot    = []byte("snapshot")
-	keyDigest      = []byte("digest")
-	keyPolicyTrust = []byte("policy-trust")
+	bucketState = []byte("relay-state-v1")
+	// keySnapshot is the snapshot relays before policy_long_lease_v1 load at
+	// start; they refuse to start on one whose lease is longer than
+	// legacyPolicyLease ("validate persisted snapshot: policy envelope lease
+	// is invalid"). It only ever holds a snapshot they accept; keySnapshotFull
+	// holds every snapshot (B-10: a relay rolled back to its previous binary
+	// must start).
+	keySnapshot     = []byte("snapshot")
+	keyDigest       = []byte("digest")
+	keySnapshotFull = []byte("snapshot-full")
+	keyPolicyTrust  = []byte("policy-trust")
 )
+
+// legacyPolicyLease is the longest policy lease relays without
+// policy_long_lease_v1 accept.
+const legacyPolicyLease = 15 * time.Minute
 
 type Options struct {
 	Mode       relayv1.RelayMode
@@ -290,12 +301,11 @@ func (s *Store) ResetLocalPolicyTrust(keyID string, raw []byte, fingerprint stri
 	next := map[string]trustedPolicyKey{keyID: {PublicKey: publicKey, Fingerprint: fingerprint}}
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(bucketState)
-		if signer, signed := persistedSnapshotSigner(bucket); signed && signer != keyID {
-			if err := bucket.Delete(keySnapshot); err != nil {
-				return err
-			}
-			if err := bucket.Delete(keyDigest); err != nil {
-				return err
+		for _, key := range [][]byte{keySnapshot, keySnapshotFull} {
+			if signer, signed := persistedSnapshotSigner(bucket, key); signed && signer != keyID {
+				if err := deleteSnapshot(bucket, key); err != nil {
+					return err
+				}
 			}
 		}
 		return persistTrust(bucket, next)
@@ -307,8 +317,18 @@ func (s *Store) ResetLocalPolicyTrust(keyID string, raw []byte, fingerprint stri
 	return replaced, nil
 }
 
-func persistedSnapshotSigner(bucket *bolt.Bucket) (string, bool) {
-	value := bucket.Get(keySnapshot)
+func deleteSnapshot(bucket *bolt.Bucket, key []byte) error {
+	if err := bucket.Delete(key); err != nil {
+		return err
+	}
+	if bytes.Equal(key, keySnapshot) {
+		return bucket.Delete(keyDigest)
+	}
+	return nil
+}
+
+func persistedSnapshotSigner(bucket *bolt.Bucket, key []byte) (string, bool) {
+	value := bucket.Get(key)
 	if len(value) == 0 {
 		return "", false
 	}
@@ -348,10 +368,17 @@ func (s *Store) Apply(request *relayv1.ApplySnapshotRequest) (*Snapshot, bool, e
 	}
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(bucketState)
-		if err := bucket.Put(keySnapshot, encoded); err != nil {
+		if err := bucket.Put(keySnapshotFull, encoded); err != nil {
 			return err
 		}
-		if err := bucket.Put(keyDigest, digest[:]); err != nil {
+		if legacySnapshotCompatible(request) {
+			if err := bucket.Put(keySnapshot, encoded); err != nil {
+				return err
+			}
+			if err := bucket.Put(keyDigest, digest[:]); err != nil {
+				return err
+			}
+		} else if err := deleteSnapshot(bucket, keySnapshot); err != nil {
 			return err
 		}
 		return persistTrust(bucket, nextTrust)
@@ -416,34 +443,64 @@ func persistTrust(bucket *bolt.Bucket, keys map[string]trustedPolicyKey) error {
 	return bucket.Put(keyPolicyTrust, encoded)
 }
 
+// legacySnapshotCompatible reports whether relays before policy_long_lease_v1
+// start on this snapshot: an unsigned local snapshot, or a signed one whose
+// lease is at most legacyPolicyLease.
+func legacySnapshotCompatible(request *relayv1.ApplySnapshotRequest) bool {
+	envelope := request.GetSignedEnvelope()
+	if envelope == nil {
+		return true
+	}
+	payload := &relayv1.PolicyEnvelopePayload{}
+	if proto.Unmarshal(envelope.GetPayload(), payload) != nil {
+		return false
+	}
+	lease := time.Unix(payload.GetExpiresAtUnix(), 0).Sub(time.Unix(payload.GetIssuedAtUnix(), 0))
+	return lease > 0 && lease <= legacyPolicyLease
+}
+
+// load restores the newest persisted snapshot. The full copy is the one this
+// build writes; the legacy copy is newer when an older relay build ran on this
+// relay.db after it (a rollback) and applied a later revision.
 func (s *Store) load() error {
-	var encoded []byte
+	var full, legacy []byte
 	if err := s.db.View(func(tx *bolt.Tx) error {
-		value := tx.Bucket(bucketState).Get(keySnapshot)
-		encoded = append([]byte(nil), value...)
+		bucket := tx.Bucket(bucketState)
+		full = append([]byte(nil), bucket.Get(keySnapshotFull)...)
+		legacy = append([]byte(nil), bucket.Get(keySnapshot)...)
 		return nil
 	}); err != nil {
 		return err
 	}
-	if len(encoded) == 0 {
-		return nil
+	var chosen *Snapshot
+	var chosenTrust map[string]trustedPolicyKey
+	for _, encoded := range [][]byte{full, legacy} {
+		if len(encoded) == 0 {
+			continue
+		}
+		request := &relayv1.ApplySnapshotRequest{}
+		if err := proto.Unmarshal(encoded, request); err != nil {
+			slog.Warn("ignoring persisted relay policy snapshot that does not decode", "error", err)
+			continue
+		}
+		_, _, snapshot, nextTrust, err := s.normalizeLocked(request, true)
+		if err != nil {
+			// A persisted snapshot that no longer validates must not keep the
+			// relay from starting, or it restarts forever: for example one
+			// written for another relay instance before a re-enrollment. The
+			// relay starts without a policy, admits nothing and keeps its
+			// pinned trust until Gateway sends a new snapshot.
+			slog.Warn("ignoring persisted relay policy snapshot that no longer validates", "error", err)
+			continue
+		}
+		if chosen == nil || snapshot.Revision > chosen.Revision {
+			chosen, chosenTrust = snapshot, nextTrust
+		}
 	}
-	request := &relayv1.ApplySnapshotRequest{}
-	if err := proto.Unmarshal(encoded, request); err != nil {
-		return fmt.Errorf("decode persisted snapshot: %w", err)
+	if chosen != nil {
+		s.current = chosen
+		s.policyTrust = chosenTrust
 	}
-	_, _, snapshot, nextTrust, err := s.normalizeLocked(request, true)
-	if err != nil {
-		// A persisted snapshot that no longer validates must not keep the relay
-		// from starting, or it restarts forever: for example one written for
-		// another relay instance before a re-enrollment. The relay starts
-		// without a policy, admits nothing and keeps its pinned trust until
-		// Gateway sends a new snapshot.
-		slog.Warn("ignoring persisted relay policy snapshot that no longer validates", "error", err)
-		return nil
-	}
-	s.current = snapshot
-	s.policyTrust = nextTrust
 	return nil
 }
 

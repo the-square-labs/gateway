@@ -3,7 +3,6 @@ package daemon
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -11,28 +10,33 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
-	"google.golang.org/protobuf/encoding/protojson"
+	"github.com/wiolett-industries/gateway/daemon-shared/statecompat"
 	"google.golang.org/protobuf/proto"
 )
 
 type relayGrantStore struct {
-	path    string
+	file    statecompat.File
 	mu      sync.RWMutex
 	current *pb.SyncRelayGrantsCommand
 	changed chan struct{}
 }
 
+// relay-grants.json is what every daemon since v2.10.0 reads at start and
+// only holds the fields v2.10.0 knows; relay-grants.full.json holds the whole
+// bundle (statecompat, B-10: a node rolled back to an older binary must
+// start).
 func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
-	store := &relayGrantStore{path: filepath.Join(stateDir, "relay-grants.json"), current: &pb.SyncRelayGrantsCommand{}, changed: make(chan struct{}, 1)}
-	data, err := os.ReadFile(store.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return store, nil
+	store := &relayGrantStore{
+		file:    statecompat.File{Legacy: filepath.Join(stateDir, "relay-grants.json"), Full: filepath.Join(stateDir, "relay-grants.full.json")},
+		current: &pb.SyncRelayGrantsCommand{}, changed: make(chan struct{}, 1),
 	}
+	command := &pb.SyncRelayGrantsCommand{}
+	found, err := store.file.Read(command)
 	if err != nil {
-		return nil, err
-	}
-	if err := protojson.Unmarshal(data, store.current); err != nil {
 		return nil, fmt.Errorf("decode relay grants: %w", err)
+	}
+	if found {
+		store.current = command
 	}
 	return store, nil
 }
@@ -50,19 +54,7 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 	if proto.Equal(command, s.current) {
 		return nil
 	}
-	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(command)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
-	temporary := fmt.Sprintf("%s.pending-%d", s.path, os.Getpid())
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(temporary, s.path); err != nil {
-		_ = os.Remove(temporary)
+	if err := s.file.Write(command); err != nil {
 		return err
 	}
 	runtimeChanged := s.current.GetDataLanes() != command.GetDataLanes() ||

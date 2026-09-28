@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -14,11 +13,21 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
-	"google.golang.org/protobuf/encoding/protojson"
+	"github.com/wiolett-industries/gateway/daemon-shared/statecompat"
 	"google.golang.org/protobuf/proto"
 )
 
-const relayGrantFile = "relay-grants.json"
+// relayGrantFile is what every daemon since v2.10.0 reads at start; it only
+// holds the fields v2.10.0 knows. relayGrantFullFile holds the whole bundle
+// (statecompat, B-10: a node rolled back to an older binary must start).
+const (
+	relayGrantFile     = "relay-grants.json"
+	relayGrantFullFile = "relay-grants.full.json"
+)
+
+func relayGrantStateFile(stateDir string) statecompat.File {
+	return statecompat.File{Legacy: filepath.Join(stateDir, relayGrantFile), Full: filepath.Join(stateDir, relayGrantFullFile)}
+}
 
 // relayGrantRestoreHold bounds how long a restarted daemon keeps its endpoint
 // registrations back for the first grant bundle from Gateway. Policy may have
@@ -29,7 +38,7 @@ const relayGrantFile = "relay-grants.json"
 const relayGrantRestoreHold = 10 * time.Second
 
 type relayGrantStore struct {
-	path    string
+	file    statecompat.File
 	mu      sync.RWMutex
 	current *pb.SyncRelayGrantsCommand
 	changed chan struct{}
@@ -39,17 +48,14 @@ type relayGrantStore struct {
 }
 
 func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
-	store := &relayGrantStore{path: filepath.Join(stateDir, relayGrantFile), current: &pb.SyncRelayGrantsCommand{}, changed: make(chan struct{}, 1)}
-	data, err := os.ReadFile(store.path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return store, nil
-		}
-		return nil, err
-	}
+	store := &relayGrantStore{file: relayGrantStateFile(stateDir), current: &pb.SyncRelayGrantsCommand{}, changed: make(chan struct{}, 1)}
 	command := &pb.SyncRelayGrantsCommand{}
-	if err := protojson.Unmarshal(data, command); err != nil {
+	found, err := store.file.Read(command)
+	if err != nil {
 		return nil, fmt.Errorf("decode relay grants: %w", err)
+	}
+	if !found {
+		return store, nil
 	}
 	store.current = command
 	store.restoredUntil = time.Now().Add(relayGrantRestoreHold)
@@ -86,44 +92,7 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 		s.restoredUntil = time.Time{}
 		return nil
 	}
-	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(command)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
-		return err
-	}
-	temporary := fmt.Sprintf("%s.pending-%d", s.path, os.Getpid())
-	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	if _, err = file.Write(data); err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	if err := os.Rename(temporary, s.path); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	if err := os.Chmod(s.path, 0600); err != nil {
-		return err
-	}
-	directory, err := os.Open(filepath.Dir(s.path))
-	if err != nil {
-		return err
-	}
-	err = directory.Sync()
-	if closeErr := directory.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	if err := s.file.Write(command); err != nil {
 		return err
 	}
 	runtimeChanged := s.current.GetDataLanes() != command.GetDataLanes() ||
