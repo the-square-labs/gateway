@@ -210,7 +210,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Migrations, triggers, uniqueness, the rc.10 upgrade and leases
+      - name: Migrations, triggers, uniqueness, the rc.10 upgrade, leases, relay revocation and availability leases
         working-directory: packages/backend
         run: |
           pnpm exec vitest run \
@@ -218,6 +218,9 @@ jobs:
             src/db/migrations.reservation-holds.database.test.ts \
             src/db/migrations.upgrade.database.test.ts \
             src/db/operation-lease.database.test.ts \
+            src/services/relay-revocation-fence.database.test.ts \
+            src/modules/docker/availability/lease/availability-lease.database.test.ts \
+            src/modules/docker/availability/lease/availability-lease-gates.database.test.ts \
             --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/database-tests.json"
 
       # The suites are opt-in; a missing or renamed URL would skip them and still pass.
