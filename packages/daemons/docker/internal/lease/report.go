@@ -38,6 +38,9 @@ type AcceptorView struct {
 	availabilitylease.KeyView
 	VoterEpoch      uint64
 	ManifestVersion uint64
+	// HolderSinceUnixMs is CommitSince on the wall clock: when this node
+	// first stored a commit of the committed holder (N-5); zero when unknown.
+	HolderSinceUnixMs int64
 }
 
 // Held is one key this node proposes for, with the D12 mapping of the lease
@@ -83,12 +86,17 @@ func (r *Runtime) Report() Report {
 		}
 		report.Held = append(report.Held, held)
 	}
+	now, wall := r.opts.Clock.Now(), r.opts.Wall()
 	for _, view := range r.node.AcceptorView() {
 		manifest, votes := voting[view.Key.PolicyID]
 		if !votes {
 			continue
 		}
-		report.Acceptor = append(report.Acceptor, AcceptorView{KeyView: view, VoterEpoch: manifest.Epoch, ManifestVersion: manifest.Version})
+		entry := AcceptorView{KeyView: view, VoterEpoch: manifest.Epoch, ManifestVersion: manifest.Version}
+		if view.CommitSince > 0 && view.CommitSince <= now {
+			entry.HolderSinceUnixMs = wall.Add(-(now - view.CommitSince)).UnixMilli()
+		}
+		report.Acceptor = append(report.Acceptor, entry)
 		report.AcceptorAbstaining = report.AcceptorAbstaining || view.Abstaining
 	}
 	report.TrustedPolicyKeyIDs = r.node.TrustedPolicyKeyIDs()

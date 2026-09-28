@@ -49,6 +49,12 @@ function keyOf(policyId: string, slot: number): string {
   return `${policyId}/${slot}`;
 }
 
+/** A reported wall-clock time in Unix ms (int64 as a string or number); null when absent or zero. */
+function reportedTime(value: string | number | undefined | null): Date | null {
+  const ms = Number(value ?? 0);
+  return Number.isSafeInteger(ms) && ms > 0 ? new Date(ms) : null;
+}
+
 /**
  * Lease reports from daemon heartbeats and relay health (D9): persisted acks per member and the holder of every
  * key. A holder change without a planned handoff is audited as docker.availability.lease_failover, a planned one as
@@ -82,6 +88,15 @@ export class AvailabilityLeaseReports {
       candidates.set(key, entry);
     };
     const reporterRoles = new Map<string, { policyId: string; slot: number; role: string }>();
+    // The holder's own acquired events carry its takeover time (N-5).
+    const acquiredAt = new Map<string, Date>();
+    for (const event of report.events ?? []) {
+      const at = reportedTime(event.atUnixMs);
+      if (event.kind !== 'acquired' || !event.policyId || !at) continue;
+      const key = keyOf(event.policyId, event.slot);
+      const known = acquiredAt.get(key);
+      if (!known || at < known) acquiredAt.set(key, at);
+    }
     if (sender.kind !== 'relay') {
       for (const held of report.held ?? []) {
         if (!held.policyId) continue;
@@ -99,12 +114,16 @@ export class AvailabilityLeaseReports {
           manifestVersion: toNumber(held.manifestVersion),
           source: 'daemon',
           sourceId: sender.memberId,
+          since: acquiredAt.get(keyOf(held.policyId, held.slot)) ?? null,
         });
       }
     }
     for (const view of report.acceptor ?? []) {
       if (!view.policyId) continue;
       const ballot = normalizeLeaseBallot(view.committed);
+      // When this voter first stored a commit of the committed ballot's proposer (N-5).
+      const commitSince = reportedTime(view.holderSinceUnixMs);
+      const sinceFor = (holderId: string) => (commitSince && ballot?.proposerId === holderId ? commitSince : null);
       if (view.state === 'held' && view.holderId && ballot) {
         addCandidate(view.policyId, view.slot, {
           holderId: view.holderId,
@@ -113,6 +132,7 @@ export class AvailabilityLeaseReports {
           manifestVersion: toNumber(view.manifestVersion),
           source: source === 'relay' ? 'relay' : 'acceptor',
           sourceId: sender.memberId,
+          since: sinceFor(view.holderId),
         });
         continue;
       }
@@ -128,6 +148,7 @@ export class AvailabilityLeaseReports {
           manifestVersion: toNumber(view.manifestVersion),
           source: 'relay',
           sourceId: sender.memberId,
+          since: sinceFor(view.gateHolderId),
         });
       }
     }

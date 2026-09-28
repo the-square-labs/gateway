@@ -519,9 +519,15 @@ func (p *DockerPlugin) repairDeploymentRouters(policyID string, timeout time.Dur
 	if policyID != "" {
 		// The lease holder serves the policy's deployments right now.
 		scope.serving = true
+		identities := p.availability.leaseRuntimeIdentities()
 		scope.include = func(apps []ContainerInfo) bool {
 			for _, app := range apps {
 				if app.Labels[availabilityPolicyLabel] == policyID {
+					return true
+				}
+				// The origin deployment of a policy carries no availability
+				// labels; its placement recorded its slot containers (D1).
+				if placement, ok := identities.match(app.ID, []string{app.Name}, app.Labels); ok && placement.PolicyID == policyID {
 					return true
 				}
 			}

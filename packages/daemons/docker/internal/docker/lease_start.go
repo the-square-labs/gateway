@@ -41,6 +41,14 @@ func (p *DockerPlugin) leaseContainerRef(ctx context.Context, idOrName string) (
 			ref.PolicyID = placement.PolicyID
 		}
 	}
+	if ref.PolicyID == "" {
+		// An origin container or deployment slot the policy adopted without
+		// recreating it carries no availability label; its placement recorded
+		// it as its runtime (D1). Its starts pass the lease gate like any other.
+		if placement, ok := p.availability.leaseRuntimeIdentities().match(result.Container.ID, []string{result.Container.Name}, labels); ok {
+			ref.PolicyID = placement.PolicyID
+		}
+	}
 	return ref, nil
 }
 

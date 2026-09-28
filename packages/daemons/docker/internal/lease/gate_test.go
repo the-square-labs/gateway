@@ -56,6 +56,11 @@ func TestDaemonVoterPersistsAndHoldsAcrossARestart(t *testing.T) {
 	if len(views) != 1 || views[0].Holder != "d1" || views[0].Abstaining {
 		t.Fatalf("daemon voter must accept the holder: %+v", views)
 	}
+	// N-5: the voter reports when it first saw the holder's commit, on its wall clock.
+	if acceptor := d2.runtime.Report().Acceptor; len(acceptor) != 1 || acceptor[0].HolderSinceUnixMs <= 0 ||
+		acceptor[0].HolderSinceUnixMs > d2.runtime.opts.Wall().UnixMilli() {
+		t.Fatalf("voter report must carry when it saw the holder take over: %+v", acceptor)
+	}
 	incarnation := d2.runtime.Node().Incarnation()
 	w.startDaemon(d2)
 	if d2.runtime.Node().Incarnation() <= incarnation {
@@ -80,6 +85,9 @@ func TestDaemonVoterPersistsAndHoldsAcrossARestart(t *testing.T) {
 	if report.MemberID != "d2" || len(report.Manifests) != 1 || report.Manifests[0].VoterEpoch != 1 || len(report.TrustedPolicyKeyIDs) != 1 ||
 		len(report.Acceptor) != 1 || report.Acceptor[0].VoterEpoch != 1 || report.Acceptor[0].Holder != "d1" {
 		t.Fatalf("voter report incomplete: %+v", report)
+	}
+	if report.Acceptor[0].HolderSinceUnixMs != 0 {
+		t.Fatalf("a commit restored after a restart has no known takeover time: %+v", report.Acceptor[0])
 	}
 }
 

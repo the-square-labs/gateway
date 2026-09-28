@@ -5944,9 +5944,14 @@ type AvailabilityLeaseKeyView struct {
 	GateRemainingMs uint64                   `protobuf:"varint,23,opt,name=gate_remaining_ms,json=gateRemainingMs,proto3" json:"gate_remaining_ms,omitempty"`
 	// This relay does not vote for the key: restart abstention or not in a
 	// quorum set (shadow accepts only).
-	Abstaining    bool `protobuf:"varint,24,opt,name=abstaining,proto3" json:"abstaining,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Abstaining bool `protobuf:"varint,24,opt,name=abstaining,proto3" json:"abstaining,omitempty"`
+	// When this member first stored a commit of the committed ballot's
+	// proposer (its wall clock, Unix ms): the takeover time the Gateway records
+	// for a holder change it learns later, for example after it was down
+	// (N-5). Zero when unknown.
+	HolderSinceUnixMs int64 `protobuf:"varint,25,opt,name=holder_since_unix_ms,json=holderSinceUnixMs,proto3" json:"holder_since_unix_ms,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AvailabilityLeaseKeyView) Reset() {
@@ -6082,6 +6087,13 @@ func (x *AvailabilityLeaseKeyView) GetAbstaining() bool {
 		return x.Abstaining
 	}
 	return false
+}
+
+func (x *AvailabilityLeaseKeyView) GetHolderSinceUnixMs() int64 {
+	if x != nil {
+		return x.HolderSinceUnixMs
+	}
+	return 0
 }
 
 type AvailabilityLeaseBallot struct {
@@ -6687,7 +6699,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x05epoch\x18\x05 \x01(\x04R\x05epoch\x12)\n" +
 	"\x10manifest_version\x18\x06 \x01(\x04R\x0fmanifestVersion\x12!\n" +
 	"\fplacement_id\x18\a \x01(\tR\vplacementId\x121\n" +
-	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\"\xd6\x04\n" +
+	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\"\x87\x05\n" +
 	"\x18AvailabilityLeaseKeyView\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x14\n" +
@@ -6708,7 +6720,8 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x11gate_remaining_ms\x18\x17 \x01(\x04R\x0fgateRemainingMs\x12\x1e\n" +
 	"\n" +
 	"abstaining\x18\x18 \x01(\bR\n" +
-	"abstaining\"r\n" +
+	"abstaining\x12/\n" +
+	"\x14holder_since_unix_ms\x18\x19 \x01(\x03R\x11holderSinceUnixMs\"r\n" +
 	"\x17AvailabilityLeaseBallot\x12\x14\n" +
 	"\x05round\x18\x01 \x01(\x04R\x05round\x12 \n" +
 	"\vincarnation\x18\x02 \x01(\x04R\vincarnation\x12\x1f\n" +

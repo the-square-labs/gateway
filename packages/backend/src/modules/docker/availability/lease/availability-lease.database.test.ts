@@ -261,6 +261,31 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
   });
 
+  it('waits for an in-flight enable or rollout before it bootstraps (D1, stand run rc20 B-1)', async () => {
+    // B-1: the switch landed 5 s into the enable, before the origin was recorded serving, so the bootstrap reserved no
+    // holder and the daemons' lease gate then refused the enable's own activation of the origin.
+    const [operation] = (
+      await q(
+        `insert into docker_availability_operations (policy_id, type, status, target_generation, idempotency_key)
+         values ($1, 'enable', 'running', 1, $2) returning id`,
+        [policyId, `enable-${randomUUID()}`]
+      )
+    ).rows;
+    try {
+      await ackAll(0);
+      await service.reconcile();
+      expect((await service.getPolicyLease(policyId)).mode).toBe('legacy');
+      await q(`update docker_availability_operations set type = 'rollout', status = 'waiting' where id = $1`, [
+        operation.id,
+      ]);
+      await service.reconcile();
+      expect((await service.getPolicyLease(policyId)).mode).toBe('legacy');
+      expect(modeChanges).toEqual([]);
+    } finally {
+      await q(`update docker_availability_operations set status = 'completed' where id = $1`, [operation.id]);
+    }
+  });
+
   it('bootstraps with per-policy voters and every relay as a non-voting member (A5, A18)', async () => {
     await ackAll(0);
     await service.reconcile();
@@ -356,7 +381,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
   it('learns the holder and the reachable voters from the local relay before any node reconnects', async () => {
     // Stand run ha18/b: after a takeover while Gateway was down, the nodes reconnected only after their backoff and
     // the non-voting local relay's report was ignored, so Gateway showed the dead holder and no reachable voter.
-    const relayReport = (holder: string, round: number) =>
+    const relayReport = (holder: string, round: number, holderSinceUnixMs = '0') =>
       decodeRelayV1Message(
         'AvailabilityLeaseReport',
         encodeRelayV1Message('AvailabilityLeaseReport', {
@@ -376,7 +401,9 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
               gateOpen: true,
               gateHolderId: holder,
               gateBallot: { round: String(round), incarnation: '1', proposerId: holder },
+              committed: { round: String(round), incarnation: '1', proposerId: holder },
               abstaining: true,
+              holderSinceUnixMs,
             },
           ],
         })
@@ -385,9 +412,18 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     try {
       expect((await service.getPolicyLease(policyId)).voterMargin).toMatchObject({ reachable: 0 });
       audit.log.mockClear();
-      await service.ingestRelayReport(relayId, relayReport(nodeIds[1]!, 11));
+      // N-5: the relay saw the takeover 30 s before Gateway hears of it; that is the recorded time.
+      const takeoverAt = new Date(Date.now() - 30_000);
+      await service.ingestRelayReport(relayId, relayReport(nodeIds[1]!, 11, String(takeoverAt.getTime())));
       const view = await service.getPolicyLease(policyId);
-      expect(view.holders[0]).toMatchObject({ holderNodeId: nodeIds[1], source: 'relay' });
+      expect(view.holders[0]).toMatchObject({ holderNodeId: nodeIds[1], source: 'relay', holderSince: takeoverAt });
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'docker.availability.lease_failover',
+          occurredAt: takeoverAt,
+          details: expect.objectContaining({ takeoverAt: takeoverAt.toISOString() }),
+        })
+      );
       expect(view.voterMargin).toMatchObject({ voters: 3, reachable: 2, required: 2, margin: 0 });
       expect(audit.log).toHaveBeenCalledWith(
         expect.objectContaining({

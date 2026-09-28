@@ -1091,6 +1091,10 @@ message AvailabilityLeaseKeyView {
   // vote, so the Gateway records it as a holder observation.
   string gate_holder_id = 20;
   AvailabilityLeaseBallot gate_ballot = 21;
+  // As in relay.v1 (same field number): when this member first stored a
+  // commit of the committed ballot's proposer, Unix ms of its wall clock;
+  // zero when unknown.
+  int64 holder_since_unix_ms = 25;
 }
 
 message AvailabilityLeaseEvent {

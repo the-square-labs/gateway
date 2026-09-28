@@ -889,6 +889,8 @@ export interface AvailabilityLeaseKeyView {
   /** Relays only: the holder and committed ballot the open gate admits. */
   gateHolderId?: string;
   gateBallot?: AvailabilityLeaseBallot | null;
+  /** Unix ms when this member first stored a commit of the committed ballot's proposer; '0' when unknown. */
+  holderSinceUnixMs?: string;
 }
 
 export interface AvailabilityLeaseEvent {

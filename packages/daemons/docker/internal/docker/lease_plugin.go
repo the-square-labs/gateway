@@ -75,8 +75,11 @@ func (p *DockerPlugin) initAvailabilityLease() {
 	}
 	runtime, err := lease.New(lease.Options{
 		NodeID: stored.NodeID, StateDir: p.cfg.StateDir, Signer: keys.InitialSigner(), Identity: keys,
-		Engine: &leaseEngine{client: p.client, cgroupRoot: leasefence.DefaultCgroupRoot, composeProjects: p.availability.leaseComposeProjects},
-		Fence:  integration.fence, Endpoints: integration, Placements: integration, Logger: p.logger,
+		Engine: &leaseEngine{
+			client: p.client, cgroupRoot: leasefence.DefaultCgroupRoot,
+			composeProjects: p.availability.leaseComposeProjects, runtimeIdentities: p.availability.leaseRuntimeIdentities,
+		},
+		Fence: integration.fence, Endpoints: integration, Placements: integration, Logger: p.logger,
 	})
 	if err != nil {
 		p.logger.Warn("availability lease disabled", "error", err)

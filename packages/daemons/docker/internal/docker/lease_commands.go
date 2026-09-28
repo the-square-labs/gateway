@@ -96,7 +96,7 @@ func leaseReportProto(report lease.Report, identity []byte) *pb.AvailabilityLeas
 			State:    strings.ToLower(strings.TrimPrefix(view.State.String(), "LEASE_KEY_STATE_")),
 			HolderId: view.Holder, ReservedFor: view.ReservedFor,
 			Promised: leaseBallotProto(view.Promised), Committed: leaseBallotProto(view.CommitBallot),
-			Epoch: view.VoterEpoch, ManifestVersion: view.ManifestVersion,
+			Epoch: view.VoterEpoch, ManifestVersion: view.ManifestVersion, HolderSinceUnixMs: view.HolderSinceUnixMs,
 		})
 	}
 	for _, event := range report.Events {

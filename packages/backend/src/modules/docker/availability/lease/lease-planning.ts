@@ -89,12 +89,39 @@ export interface LeaseObservationCandidate {
   manifestVersion: number;
   source: DockerAvailabilityLeaseObservationSource;
   sourceId: string;
+  /**
+   * When the reporter saw this holder take the key: a voter's first commit of the holder, or the holder's own
+   * acquired event (N-5). Absent when the reporter does not know.
+   */
+  since?: Date | null;
 }
 
 export interface LeaseHolderChange {
   from: string | null;
   to: string;
   ballot: DockerAvailabilityLeaseBallot | null;
+  /** The takeover time: what the voters reported, or when Gateway noticed it when none did. */
+  holderSince?: Date;
+}
+
+/**
+ * N-5: the takeover time of a new holder as the voters report it, not when Gateway noticed it (after an autonomous
+ * failover while Gateway was down that can be minutes later). The earliest report for the new holder wins; it is
+ * never before the previous holder was last seen holding, nor in the future.
+ */
+export function leaseTakeoverTime(
+  holderId: string,
+  candidates: LeaseObservationCandidate[],
+  bounds: { notBefore: Date | null; now: Date }
+): Date {
+  const reported = candidates
+    .filter((candidate) => candidate.holderId === holderId && candidate.since instanceof Date)
+    .map((candidate) => candidate.since!.getTime())
+    .filter((time) => Number.isFinite(time) && time <= bounds.now.getTime());
+  if (reported.length === 0) return bounds.now;
+  const earliest = Math.min(...reported);
+  const floor = bounds.notBefore?.getTime() ?? Number.NEGATIVE_INFINITY;
+  return new Date(Math.max(earliest, floor));
 }
 
 /**
@@ -145,10 +172,14 @@ export function mergeLeaseObservation(
     (winner, candidate) => (!winner || compareLeaseBallots(candidate.ballot, winner.ballot) > 0 ? candidate : winner),
     null
   );
+  // The previous holder was last seen holding when it was last observed; a takeover cannot be earlier.
+  const previousSeenAt = stored?.holderId ? stored.observedAt : null;
   if (best) {
     const order = compareLeaseBallots(best.ballot, next.ballot);
     if (order > 0) {
-      if (next.holderId !== best.holderId) next.holderSince = now;
+      if (next.holderId !== best.holderId) {
+        next.holderSince = leaseTakeoverTime(best.holderId, input.candidates, { notBefore: previousSeenAt, now });
+      }
       next.holderId = best.holderId;
       next.ballot = best.ballot;
       next.epoch = best.epoch;
@@ -167,7 +198,7 @@ export function mergeLeaseObservation(
   if (next.holderId) next.lastHolderId = next.holderId;
   const change =
     next.holderId && next.holderId !== previousHolder && next.holderId !== lastKnown
-      ? { from: lastKnown, to: next.holderId, ballot: next.ballot }
+      ? { from: lastKnown, to: next.holderId, ballot: next.ballot, holderSince: next.holderSince ?? now }
       : null;
   return { next, change };
 }
