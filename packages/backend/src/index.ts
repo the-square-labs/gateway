@@ -274,6 +274,11 @@ async function main() {
               container.resolve(AISandboxService).stopPolicyReconciliation()
             ),
             shutdownWork('scheduler', scheduler.stop()),
+            // B-14: holder changes still waiting for their takeover time are audited with the best time known.
+            shutdownWork(
+              'availability_lease_takeover_audit',
+              container.resolve(AvailabilityLeaseService).flushTakeoverAudits()
+            ),
             shutdownWork('relay_supervisor', container.resolve(RelaySupervisorService).stop()),
             shutdownWork('notification_evaluator', container.resolve(NotificationEvaluatorService).stop()),
             shutdownWork('inference_providers', container.resolve(InferenceProviderService).stop()),

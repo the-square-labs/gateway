@@ -109,7 +109,8 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     await service.ingestDaemonReport(nginxId, 'nginx', nginxReport());
     await service.ingestRelayReport(relayId, report(relayId, { epoch: String(epoch), manifests }));
   };
-  const holding = (nodeId: string, round: number) =>
+  // A current daemon reports when it acquired the key with every report (B-14).
+  const holding = (nodeId: string, round: number, heldSince = new Date(Date.now() - 1_000)) =>
     report(nodeId, {
       epoch: '1',
       held: [
@@ -122,6 +123,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
           manifestVersion: '1',
           placementId: '',
           placementGeneration: '1',
+          heldSinceUnixMs: String(heldSince.getTime()),
         },
       ],
     });
@@ -417,22 +419,133 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
       await service.ingestRelayReport(relayId, relayReport(nodeIds[1]!, 11, String(takeoverAt.getTime())));
       const view = await service.getPolicyLease(policyId);
       expect(view.holders[0]).toMatchObject({ holderNodeId: nodeIds[1], source: 'relay', holderSince: takeoverAt });
+      expect(view.voterMargin).toMatchObject({ voters: 3, reachable: 2, required: 2, margin: 0 });
+      // B-14: a voter's sighting is an upper bound; the audit waits for the holder or an earlier sighting, then
+      // settles with the earliest one.
+      expect(audit.log).not.toHaveBeenCalled();
+      vi.setSystemTime(Date.now() + 61_000);
+      await service.reconcile();
       expect(audit.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'docker.availability.lease_failover',
           occurredAt: takeoverAt,
-          details: expect.objectContaining({ takeoverAt: takeoverAt.toISOString() }),
-        })
-      );
-      expect(view.voterMargin).toMatchObject({ voters: 3, reachable: 2, required: 2, margin: 0 });
-      expect(audit.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'docker.availability.lease_failover',
-          details: expect.objectContaining({ fromNodeId: nodeIds[2], toNodeId: nodeIds[1], observedBy: relayId }),
+          details: expect.objectContaining({
+            fromNodeId: nodeIds[2],
+            toNodeId: nodeIds[1],
+            observedBy: relayId,
+            takeoverAt: takeoverAt.toISOString(),
+            takeoverSource: 'voters',
+          }),
         })
       );
       // The holder moves back for the tests below.
       await service.ingestRelayReport(relayId, relayReport(nodeIds[2]!, 12));
+      expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({ holderNodeId: nodeIds[2] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Stand run rc20 c (B-14): Gateway, the local relay and relay-137 down; app-node-2 killed; app-node-1 acquired through
+  // relay-136. When Gateway came back the restarted local relay reported first and its first sighting, 86 s after the
+  // takeover, became holderSince and the audit time.
+  it('records the takeover time the new holder acquired at, not a restarted voter its first sighting', async () => {
+    // After the previous test's clock: the previous holder was last seen about 180 s from now.
+    const base = Date.now() + 300_000;
+    const acquired = new Date(base - 89_697);
+    const ballotOf = (holder: string, round: number) => ({
+      round: String(round),
+      incarnation: '1',
+      proposerId: holder,
+    });
+    const failovers = () =>
+      (audit.log.mock.calls as unknown as Array<[Record<string, any>]>)
+        .map(([entry]) => entry)
+        .filter(
+          (entry) => entry.action === 'docker.availability.lease_failover' && entry.details.toNodeId === nodeIds[1]
+        );
+    vi.useFakeTimers({ toFake: ['Date'], now: base });
+    try {
+      audit.log.mockClear();
+      // The local relay started 10 s ago and stored app-node-1's commit 3.5 s ago: only its catching up.
+      const restartedRelay = decodeRelayV1Message(
+        'AvailabilityLeaseReport',
+        encodeRelayV1Message('AvailabilityLeaseReport', {
+          memberId: relayId,
+          identityPublicKey: identities.get(relayId)!,
+          incarnation: String(base - 10_000),
+          trustedPolicyKeyIds: [keyId],
+          connectedMemberIds: [nodeIds[0], nodeIds[1]],
+          acceptor: [
+            {
+              policyId,
+              slot: 0,
+              state: 'held',
+              holderId: nodeIds[1],
+              epoch: '1',
+              manifestVersion: '1',
+              gateOpen: true,
+              gateHolderId: nodeIds[1],
+              gateBallot: ballotOf(nodeIds[1]!, 30),
+              committed: ballotOf(nodeIds[1]!, 30),
+              holderSinceUnixMs: String(base - 3_453),
+            },
+          ],
+        })
+      ) as AvailabilityLeaseReport;
+      await service.ingestRelayReport(relayId, restartedRelay);
+      let holder = (await service.getPolicyLease(policyId)).holders[0];
+      expect(holder).toMatchObject({ holderNodeId: nodeIds[1], holderSince: new Date(base) });
+      expect(failovers()).toEqual([]);
+
+      // A voter that was up during the takeover saw the commit 150 ms in.
+      vi.setSystemTime(base + 6_000);
+      await service.ingestDaemonReport(
+        nodeIds[0]!,
+        'docker',
+        report(nodeIds[0]!, {
+          epoch: '1',
+          acceptor: [
+            {
+              policyId,
+              slot: 0,
+              state: 'held',
+              holderId: nodeIds[1]!,
+              reservedFor: '',
+              committed: ballotOf(nodeIds[1]!, 31),
+              epoch: '1',
+              manifestVersion: '1',
+              gateOpen: false,
+              holderSinceUnixMs: String(acquired.getTime() + 150),
+            },
+          ],
+        })
+      );
+      holder = (await service.getPolicyLease(policyId)).holders[0];
+      expect(holder).toMatchObject({ holderNodeId: nodeIds[1], holderSince: new Date(acquired.getTime() + 150) });
+      expect(failovers()).toEqual([]);
+
+      // app-node-1 reconnects: its own acquisition time is exact and settles the audit.
+      vi.setSystemTime(base + 21_650);
+      await service.ingestDaemonReport(nodeIds[1]!, 'docker', holding(nodeIds[1]!, 32, acquired));
+      holder = (await service.getPolicyLease(policyId)).holders[0];
+      expect(holder).toMatchObject({ holderNodeId: nodeIds[1], holderSince: acquired });
+      expect(failovers()).toEqual([
+        expect.objectContaining({
+          occurredAt: acquired,
+          details: expect.objectContaining({
+            fromNodeId: nodeIds[2],
+            observedBy: relayId,
+            takeoverAt: acquired.toISOString(),
+            takeoverSource: 'holder',
+            noticedAt: new Date(base).toISOString(),
+          }),
+        }),
+      ]);
+
+      // The holder moves back for the tests below.
+      await service.ingestDaemonReport(nodeIds[2]!, 'docker', holding(nodeIds[2]!, 40));
+      await service.ingestDaemonReport(nodeIds[1]!, 'docker', report(nodeIds[1]!, { epoch: '1' }));
       expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({ holderNodeId: nodeIds[2] });
     } finally {
       vi.useRealTimers();

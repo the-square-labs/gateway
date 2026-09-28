@@ -33,6 +33,13 @@ export interface LeaseHolderChangeNotice extends LeaseHolderChange {
   sourceId: string;
 }
 
+/** Every holder report of a key in one lease report, for settling a takeover time noticed earlier (B-14). */
+export interface LeaseTakeoverSighting {
+  policyId: string;
+  slot: number;
+  candidates: LeaseObservationCandidate[];
+}
+
 export interface LeaseReportSender {
   memberId: string;
   kind: AvailabilityLeaseMemberKind;
@@ -56,6 +63,29 @@ function reportedTime(value: string | number | undefined | null): Date | null {
 }
 
 /**
+ * A running voter hears the holder at least every renewal (5 s). One that first stores a new holder's commit within
+ * three renewals of its own start may be catching up on a takeover that happened while it was down (stand run rc20
+ * B-14: the local relay, restarted with Gateway, reported its first sighting 86 s after the takeover).
+ */
+export const LEASE_VOTER_RESTART_GRACE_MS = 15_000;
+
+/**
+ * When the reporter started: incarnations are raised to the start's wall clock in ms (A3, IncarnationFloor). Null for
+ * a value that is not such a timestamp.
+ */
+function reporterStartedAt(incarnation: string | number | undefined | null): Date | null {
+  const started = reportedTime(incarnation);
+  return started && started.getTime() >= Date.UTC(2020, 0, 1) ? started : null;
+}
+
+/** A voter's first sighting of the holder, unless it may only be the voter catching up after its own restart. */
+function voterSighting(since: Date | null, startedAt: Date | null): Date | null {
+  if (!since) return null;
+  if (startedAt && since.getTime() - startedAt.getTime() < LEASE_VOTER_RESTART_GRACE_MS) return null;
+  return since;
+}
+
+/**
  * Lease reports from daemon heartbeats and relay health (D9): persisted acks per member and the holder of every
  * key. A holder change without a planned handoff is audited as docker.availability.lease_failover, a planned one as
  * docker.availability.lease_handoff.
@@ -67,7 +97,7 @@ export class AvailabilityLeaseReports {
     sender: LeaseReportSender,
     report: AvailabilityLeaseReport,
     now = new Date()
-  ): Promise<{ notices: LeaseHolderChangeNotice[]; identityChanged: boolean }> {
+  ): Promise<{ notices: LeaseHolderChangeNotice[]; sightings: LeaseTakeoverSighting[]; identityChanged: boolean }> {
     // Nginx daemons only observe leases and report just the applied revision, without a member id; the sender
     // itself comes from the authenticated control stream.
     const reportedMemberId = report.memberId || (sender.kind === 'nginx' ? sender.memberId : '');
@@ -76,7 +106,7 @@ export class AvailabilityLeaseReports {
         memberId: sender.memberId,
         reported: report.memberId,
       });
-      return { notices: [], identityChanged: false };
+      return { notices: [], sightings: [], identityChanged: false };
     }
     const identityChanged = await this.recordMember(sender, report, now);
     const source: DockerAvailabilityLeaseObservationSource = sender.kind === 'relay' ? 'relay' : 'daemon';
@@ -88,6 +118,7 @@ export class AvailabilityLeaseReports {
       candidates.set(key, entry);
     };
     const reporterRoles = new Map<string, { policyId: string; slot: number; role: string }>();
+    const startedAt = reporterStartedAt(report.incarnation);
     // The holder's own acquired events carry its takeover time (N-5).
     const acquiredAt = new Map<string, Date>();
     for (const event of report.events ?? []) {
@@ -107,6 +138,9 @@ export class AvailabilityLeaseReports {
         });
         const ballot = normalizeLeaseBallot(held.ballot);
         if (!ballot || !HOLDING_LEASE_ROLES.has(held.role)) continue;
+        // B-14: the holder reports when it acquired the key with every report; the acquired event is lost when the
+        // report carrying it could not be delivered.
+        const since = reportedTime(held.heldSinceUnixMs) ?? acquiredAt.get(keyOf(held.policyId, held.slot)) ?? null;
         addCandidate(held.policyId, held.slot, {
           holderId: sender.memberId,
           ballot,
@@ -114,15 +148,17 @@ export class AvailabilityLeaseReports {
           manifestVersion: toNumber(held.manifestVersion),
           source: 'daemon',
           sourceId: sender.memberId,
-          since: acquiredAt.get(keyOf(held.policyId, held.slot)) ?? null,
+          since,
+          exact: since !== null,
         });
       }
     }
     for (const view of report.acceptor ?? []) {
       if (!view.policyId) continue;
       const ballot = normalizeLeaseBallot(view.committed);
-      // When this voter first stored a commit of the committed ballot's proposer (N-5).
-      const commitSince = reportedTime(view.holderSinceUnixMs);
+      // When this voter first stored a commit of the committed ballot's proposer (N-5), unless that was right after
+      // its own start (B-14).
+      const commitSince = voterSighting(reportedTime(view.holderSinceUnixMs), startedAt);
       const sinceFor = (holderId: string) => (commitSince && ballot?.proposerId === holderId ? commitSince : null);
       if (view.state === 'held' && view.holderId && ballot) {
         addCandidate(view.policyId, view.slot, {
@@ -200,7 +236,26 @@ export class AvailabilityLeaseReports {
         });
       }
     }
-    return { notices, identityChanged };
+    const sightings = [...candidates.values()].map(({ policyId, slot, list }) => ({
+      policyId,
+      slot,
+      candidates: list,
+    }));
+    return { notices, sightings, identityChanged };
+  }
+
+  /** B-14: a better takeover time for the key's current holder, found after the change was recorded. */
+  async correctHolderSince(policyId: string, slot: number, holderId: string, since: Date): Promise<void> {
+    await this.db
+      .update(dockerAvailabilityLeaseObservations)
+      .set({ holderSince: since })
+      .where(
+        and(
+          eq(dockerAvailabilityLeaseObservations.policyId, policyId),
+          eq(dockerAvailabilityLeaseObservations.slot, slot),
+          eq(dockerAvailabilityLeaseObservations.holderId, holderId)
+        )
+      );
   }
 
   /** Records the member's report; true when its identity key changed (a certificate renewal, H3). */

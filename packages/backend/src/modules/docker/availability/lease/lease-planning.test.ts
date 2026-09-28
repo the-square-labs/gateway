@@ -78,7 +78,14 @@ describe('availability lease observations', () => {
   it('names the holder of the highest ballot and detects a change of holder', () => {
     const first = mergeLeaseObservation(null, { candidates: [holding('n-1', 2)], now: NOW });
     expect(first.next.holderId).toBe('n-1');
-    expect(first.change).toEqual({ from: null, to: 'n-1', ballot: ballot(2, 'n-1'), holderSince: NOW });
+    expect(first.change).toEqual({
+      from: null,
+      to: 'n-1',
+      ballot: ballot(2, 'n-1'),
+      holderSince: NOW,
+      takeoverSource: 'noticed',
+      takeoverNotBefore: null,
+    });
 
     const stale = mergeLeaseObservation(first.next, { candidates: [holding('n-2', 1)], now: at(1) });
     expect(stale.next.holderId).toBe('n-1');
@@ -90,7 +97,14 @@ describe('availability lease observations', () => {
 
     const failover = mergeLeaseObservation(first.next, { candidates: [holding('n-2', 9, 'relay')], now: at(3) });
     expect(failover.next).toMatchObject({ holderId: 'n-2', source: 'relay', lastHolderId: 'n-2', holderSince: at(3) });
-    expect(failover.change).toEqual({ from: 'n-1', to: 'n-2', ballot: ballot(9, 'n-2'), holderSince: at(3) });
+    expect(failover.change).toEqual({
+      from: 'n-1',
+      to: 'n-2',
+      ballot: ballot(9, 'n-2'),
+      holderSince: at(3),
+      takeoverSource: 'noticed',
+      takeoverNotBefore: NOW,
+    });
   });
 
   it('clears a holder that reports another role and never revives it from the released ballot', () => {
@@ -109,7 +123,7 @@ describe('availability lease observations', () => {
     expect(replay.next.holderId).toBeNull();
 
     const successor = mergeLeaseObservation(released.next, { candidates: [holding('n-2', 5)], now: at(7) });
-    expect(successor.change).toEqual({ from: 'n-1', to: 'n-2', ballot: ballot(5, 'n-2'), holderSince: at(7) });
+    expect(successor.change).toMatchObject({ from: 'n-1', to: 'n-2', ballot: ballot(5, 'n-2'), holderSince: at(7) });
 
     const reacquired = mergeLeaseObservation(released.next, { candidates: [holding('n-1', 6)], now: at(8) });
     expect(reacquired.next.holderId).toBe('n-1');
@@ -147,6 +161,41 @@ describe('availability lease observations', () => {
     );
     expect(mergeLeaseObservation(first, { candidates: [holding('n-2', 9)], now: at(120) }).next.holderSince).toEqual(
       at(120)
+    );
+  });
+
+  // Stand run rc20 c (B-14): the local relay, restarted with Gateway after the takeover, reported first; its first
+  // sighting (86 s late) became the recorded time. The holder's own acquisition time is exact and wins.
+  it('takes the holder its own acquisition time over any voter sighting, and corrects an earlier guess with it', () => {
+    const first = mergeLeaseObservation(null, { candidates: [holding('n-1', 2)], now: NOW }).next;
+    const sighted = (since: Date): LeaseObservationCandidate => ({ ...holding('n-2', 30, 'relay'), since });
+    const own = (since: Date, round = 31): LeaseObservationCandidate => ({
+      ...holding('n-2', round),
+      since,
+      exact: true,
+    });
+
+    const both = mergeLeaseObservation(first, { candidates: [sighted(at(95)), own(at(9))], now: at(120) });
+    expect(both.next.holderSince).toEqual(at(9));
+    expect(both.change).toMatchObject({
+      to: 'n-2',
+      holderSince: at(9),
+      takeoverSource: 'holder',
+      takeoverNotBefore: NOW,
+    });
+
+    // First noticed from a late voter sighting only; the holder's next report corrects the recorded time.
+    const late = mergeLeaseObservation(first, { candidates: [sighted(at(95))], now: at(120) });
+    expect(late.change).toMatchObject({ holderSince: at(95), takeoverSource: 'voters' });
+    const corrected = mergeLeaseObservation(late.next, { candidates: [own(at(9), 40)], now: at(150) });
+    expect(corrected.change).toBeNull();
+    expect(corrected.next.holderSince).toEqual(at(9));
+    // A voter sighting never moves a recorded holder's time, the holder's own time from the future is ignored.
+    expect(
+      mergeLeaseObservation(corrected.next, { candidates: [sighted(at(5))], now: at(160) }).next.holderSince
+    ).toEqual(at(9));
+    expect(mergeLeaseObservation(late.next, { candidates: [own(at(900), 41)], now: at(160) }).next.holderSince).toEqual(
+      at(95)
     );
   });
 

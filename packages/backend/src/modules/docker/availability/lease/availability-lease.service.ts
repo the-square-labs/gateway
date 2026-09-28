@@ -40,6 +40,7 @@ import {
   loadLeaseMembers,
   type RelayConnectedMembers,
 } from './lease-store.js';
+import { LeaseTakeoverAudit, type SettledLeaseTakeover } from './lease-takeover-audit.js';
 import type {
   DockerAvailabilityLeaseController,
   DockerAvailabilityLeaseExcludedNode,
@@ -95,6 +96,8 @@ export class AvailabilityLeaseService {
   private readonly relayConnections = new Map<string, RelayConnectedMembers>();
   /** D3: since when each member lacks the current capability, for the 2-minute grace of voters and candidates. */
   private readonly capabilities = new LeaseCapabilityTracker();
+  /** B-14: holder changes whose audit waits for the takeover time. */
+  private readonly takeovers: LeaseTakeoverAudit;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -108,6 +111,10 @@ export class AvailabilityLeaseService {
     this.policies = new AvailabilityLeasePolicies(db, sign);
     this.reports = new AvailabilityLeaseReports(db);
     this.distribution = new AvailabilityLeaseDistribution(db, registry);
+    this.takeovers = new LeaseTakeoverAudit(
+      (settled) => this.auditTakeover(settled),
+      (policyId, slot, holderId, since) => this.reports.correctHolderSince(policyId, slot, holderId, since)
+    );
   }
 
   /** The paid Availability controller; without one every policy stays legacy. */
@@ -149,8 +156,18 @@ export class AvailabilityLeaseService {
     await this.reconcile();
   }
 
+  /** Shutdown: writes the audit of every holder change still waiting for its takeover time (B-14). */
+  async flushTakeoverAudits(): Promise<void> {
+    await this.takeovers.flush();
+  }
+
   private async reconcileOnce(): Promise<void> {
     const now = new Date();
+    await this.takeovers.settleDue(now).catch((error) => {
+      logger.warn('Availability lease holder changes will be audited on the next reconcile', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     const members = new Map((await loadLeaseMembers(this.db)).map((member) => [member.memberId, member]));
     const participants = await loadLeaseParticipants(this.db, this.registry, members, now.getTime());
     this.capabilities.observe(participants, now.getTime());
@@ -224,8 +241,9 @@ export class AvailabilityLeaseService {
   }
 
   private async ingest(sender: LeaseReportSender, report: AvailabilityLeaseReport): Promise<void> {
-    const { notices, identityChanged } = await this.reports.ingest(sender, report);
+    const { notices, sightings, identityChanged } = await this.reports.ingest(sender, report);
     for (const notice of notices) await this.recordHolderChange(notice);
+    await this.takeovers.observe(sightings);
     // H3: a renewed identity key must reach every manifest that lists the member before its frames are dropped for
     // long; republish now instead of on the next interval.
     if (identityChanged) {
@@ -240,27 +258,7 @@ export class AvailabilityLeaseService {
 
   private async recordHolderChange(notice: LeaseHolderChangeNotice): Promise<void> {
     if (notice.kind) {
-      const takeoverAt = notice.holderSince ?? new Date();
-      await this.audit.log({
-        userId: null,
-        action: `docker.availability.lease_${notice.kind}`,
-        resourceType: 'docker_availability_policy',
-        resourceId: notice.policyId,
-        // N-5: the transition happened when the voters saw the new holder take over, which after an autonomous
-        // failover while Gateway was down is well before Gateway learns about it.
-        occurredAt: takeoverAt,
-        details: {
-          slot: notice.slot,
-          fromNodeId: notice.from,
-          toNodeId: notice.to,
-          placementId: notice.placementId,
-          ballot: notice.ballot,
-          observedBy: notice.sourceId,
-          source: notice.source,
-          takeoverAt: takeoverAt.toISOString(),
-          noticedAt: new Date().toISOString(),
-        },
-      });
+      await this.takeovers.record(notice);
       this.events.publish('docker.availability.changed', { policyId: notice.policyId, action: `lease_${notice.kind}` });
     }
     try {
@@ -272,6 +270,32 @@ export class AvailabilityLeaseService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async auditTakeover({ notice, takeoverAt, source, noticedAt }: SettledLeaseTakeover): Promise<void> {
+    await this.audit.log({
+      userId: null,
+      action: `docker.availability.lease_${notice.kind}`,
+      resourceType: 'docker_availability_policy',
+      resourceId: notice.policyId,
+      // N-5 / B-14: the transition happened when the new holder took over, which after an autonomous failover while
+      // Gateway was down is well before Gateway learns about it.
+      occurredAt: takeoverAt,
+      details: {
+        slot: notice.slot,
+        fromNodeId: notice.from,
+        toNodeId: notice.to,
+        placementId: notice.placementId,
+        ballot: notice.ballot,
+        observedBy: notice.sourceId,
+        source: notice.source,
+        takeoverAt: takeoverAt.toISOString(),
+        // holder: the new holder's own acquisition time; voters: the earliest voter sighting; noticed: nobody reported
+        // a time, this is when Gateway noticed the change.
+        takeoverSource: source,
+        noticedAt: noticedAt.toISOString(),
+      },
+    });
   }
 
   /** Legacy policies are driven by the backend; every other lease mode is not (D9, A5). */

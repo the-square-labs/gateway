@@ -873,6 +873,8 @@ export interface AvailabilityLeaseHeld {
   manifestVersion: string;
   placementId: string;
   placementGeneration: string;
+  /** Docker daemons: when this node acquired the key for its current holding, Unix ms; '0' when unknown (B-14). */
+  heldSinceUnixMs?: string;
 }
 
 export interface AvailabilityLeaseKeyView {
