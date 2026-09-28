@@ -178,6 +178,27 @@ export interface RelayPoolUpdateRuntime {
   dispatchSupervisorUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
 }
 
+/** First relay release whose shutdown drains for at most 5 s while it keeps serving its tunnels. */
+const RELAY_BOUNDED_DRAIN_VERSION = 'v2.11.0-rc.7';
+/** Docker's stop timeout, which relays with a bounded drain stay well inside. */
+const RELAY_DEFAULT_STOP_TIMEOUT_SECONDS = 10;
+/** Enough for an older relay to close its tunnels; it serves no new request once it got SIGTERM. */
+const RELAY_UNBOUNDED_DRAIN_STOP_TIMEOUT_SECONDS = 2;
+
+/**
+ * Stop timeout for recreating the local relay. A relay older than v2.11.0-rc.7 answers SIGTERM with an unbounded
+ * graceful gRPC stop: it refuses every new stream at once but never exits on its own while daemons keep their
+ * endpoint registrations open, so Docker killed it only after its 10 s stop timeout and every Secure Link route was
+ * down for that long before the new relay could even start (2.10.1 upgrade: 11-14 s). Such a relay is stopped after
+ * 2 s. Newer relays keep serving their tunnels through a drain of at most 5 s and exit themselves.
+ */
+export function relayRecreateStopTimeoutSeconds(runningRelayVersion: string | undefined | null): number {
+  if (!runningRelayVersion || !parseSemver(runningRelayVersion)) return RELAY_DEFAULT_STOP_TIMEOUT_SECONDS;
+  return compareSemver(runningRelayVersion, RELAY_BOUNDED_DRAIN_VERSION) < 0
+    ? RELAY_UNBOUNDED_DRAIN_STOP_TIMEOUT_SECONDS
+    : RELAY_DEFAULT_STOP_TIMEOUT_SECONDS;
+}
+
 export function isGatewayReleaseTag(tag: string): boolean {
   return /^v?\d+\.\d+\.\d+$/.test(tag);
 }
@@ -1480,6 +1501,7 @@ chmod 700 "$backup"
       throw new Error(`Refusing to use unexpected relay foundation backup path: ${migrationOutput.backupDir}`);
     }
     const backupDir = migrationOutput.backupDir?.replace(/^\/host(?=\/)/, composeDir) ?? '';
+    const stopTimeoutSeconds = relayRecreateStopTimeoutSeconds(this.env.GATEWAY_RELAY_BUILD_VERSION);
     await this.relayRuntime?.setMaintenance(true);
     try {
       const result = await this.dockerService.runOneShot({
@@ -1501,7 +1523,7 @@ rollback() {
 }
 on_exit() { code=$?; trap - EXIT; if [ "$code" -ne 0 ]; then rollback; fi; exit "$code"; }
 trap on_exit EXIT
-compose up -d --no-deps --force-recreate relay
+compose up -d --no-deps --force-recreate --timeout ${stopTimeoutSeconds} relay
 attempt=0
 while [ "$attempt" -lt 90 ]; do
   relay_id="$(compose ps -q relay)"

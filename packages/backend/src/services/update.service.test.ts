@@ -12,10 +12,30 @@ import {
   isGatewayReleaseTag,
   isRelayReleaseTag,
   isRelayTooOldForGatewayUpdate,
+  relayRecreateStopTimeoutSeconds,
   selectLatestGatewayRelease,
   selectLatestRelayRelease,
   UpdateService,
 } from './update.service.js';
+
+describe('relayRecreateStopTimeoutSeconds', () => {
+  it('stops a relay without a bounded drain after 2 s instead of waiting for Docker to kill it', () => {
+    expect(relayRecreateStopTimeoutSeconds('v2.10.1')).toBe(2);
+    expect(relayRecreateStopTimeoutSeconds('v2.10.2-rc.9')).toBe(2);
+    expect(relayRecreateStopTimeoutSeconds('v2.11.0-rc.4')).toBe(2);
+  });
+
+  it('lets a relay with a bounded drain finish it on its own', () => {
+    expect(relayRecreateStopTimeoutSeconds('v2.11.0-rc.7')).toBe(10);
+    expect(relayRecreateStopTimeoutSeconds('v2.11.0-rc.19')).toBe(10);
+    expect(relayRecreateStopTimeoutSeconds('v2.11.0')).toBe(10);
+  });
+
+  it('keeps Docker default when the running relay version is unknown', () => {
+    expect(relayRecreateStopTimeoutSeconds(undefined)).toBe(10);
+    expect(relayRecreateStopTimeoutSeconds('dev')).toBe(10);
+  });
+});
 
 describe('UpdateService release selection', () => {
   it('passes the persisted Preview channel to Gateway and Relay resolution', async () => {
@@ -513,7 +533,8 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(1, relay.imageRef);
     expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(2, DOCKER_COMPOSE_CLI_IMAGE_REF);
     const updateCommand = dockerService.runOneShot.mock.calls[2]?.[0]?.Cmd?.[2];
-    expect(updateCommand).toContain('compose up -d --no-deps --force-recreate relay');
+    // v2.4.2 predates the relay's bounded drain: it would hang until Docker's 10 s kill (C-3).
+    expect(updateCommand).toContain('compose up -d --no-deps --force-recreate --timeout 2 relay');
     expect(updateCommand).not.toContain('force-recreate app');
     expect(dockerService.runDetached).not.toHaveBeenCalled();
     expect(relayRuntime.setMaintenance).toHaveBeenNthCalledWith(1, true);
