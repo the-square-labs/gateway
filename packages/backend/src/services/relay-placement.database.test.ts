@@ -163,6 +163,9 @@ describe.skipIf(!url)('relay placement on disposable PostgreSQL', () => {
       {
         describePolicyTrust: vi.fn(async () => new Map()),
         poolIncapableEndpointIds: vi.fn(async (ids: string[]) => new Set(ids.filter((id) => incapable.has(id)))),
+        syncSnapshot: vi.fn(async () => undefined),
+        syncRemoteInstancePolicy: vi.fn(async () => 0),
+        reconcileAndSync: vi.fn(async () => undefined),
       } as never,
       { publish: vi.fn() } as never,
       { log: vi.fn() } as never,
@@ -282,5 +285,30 @@ describe.skipIf(!url)('relay placement on disposable PostgreSQL', () => {
     const plainLink = await create(randomUUID());
     await (policy as any).ensureLegacyCompatibleAssignment(plainLink);
     expect((await assigned(plainLink)).map(({ relay }) => relay)).toEqual([localRelay]);
+  });
+
+  it('probes a daemon once per relay when several of its routes reach the moved endpoint (M-3)', async () => {
+    // rc.20 stand: two managed database bindings from one daemon to the database's endpoint. Every rebalance of
+    // that endpoint failed on relay_source_probes_generation_source_instance_unique, every 5 minutes.
+    const endpointId = await endpointOnLocalRelay(randomUUID());
+    const daemonId = randomUUID();
+    for (let binding = 0; binding < 2; binding++) {
+      await q(
+        `insert into relay_routes (owner_kind, owner_id, source_kind, source_id, source_certificate_sha256,
+           target_endpoint_id) values ('managed_database_binding', $1, 'daemon', $2, 'sha256:source', $3)`,
+        [randomUUID(), daemonId, endpointId]
+      );
+    }
+    const staged = await service.stageRebalance(undefined, { endpointIds: [endpointId] });
+    expect(staged).toHaveLength(1);
+    expect(staged[0]!.instanceIds).toEqual([relay136]);
+    const probes = (
+      await q(
+        `select source_kind, source_id, relay_instance_id from relay_assignment_source_probes
+          where assignment_generation_id = $1`,
+        [staged[0]!.id]
+      )
+    ).rows;
+    expect(probes).toEqual([{ source_kind: 'daemon', source_id: daemonId, relay_instance_id: relay136 }]);
   });
 });
