@@ -45,7 +45,7 @@ const (
 	memberProbeDialWait    = time.Second
 	// A running container's closed port refuses at once; a connection the
 	// target accepted stays open this long without a byte from us.
-	memberProbeTCPSettle = 750 * time.Millisecond
+	memberProbeTCPSettle = 300 * time.Millisecond
 	memberProbeHTTPWait  = 3 * time.Second
 	// memberProbeRestoreEvery bounds the binding restores a probe starts for a
 	// serving member whose link is not bound yet.
