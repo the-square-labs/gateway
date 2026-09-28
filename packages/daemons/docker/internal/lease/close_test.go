@@ -232,6 +232,81 @@ func TestRetainedHolderWithoutARunningCopyReleases(t *testing.T) {
 	}
 }
 
+// B-13: a same-boot daemon restart of the holder keeps its copy serving: the
+// runtime recovers it on the live watchdog record and opens its endpoints at
+// once, before the renewal, and never takes them out of service. A restart
+// that outlasted the lease budget (stale records, as after a new boot, where
+// records are gone) does not: that copy is killed and serves again only after
+// it acquires anew.
+func TestSameBootRestartKeepsTheHolderServing(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	w.run(3 * time.Second)
+	d1 := w.daemon("d1")
+	stops := d1.endpoints.stops
+	d1.daemonOff = true
+	w.run(5 * time.Second)
+	// A fresh process knows nothing of the previous one's serving state.
+	d1.endpoints.serving = map[string]bool{}
+	w.startDaemon(d1)
+	d1.daemonOff = false
+	restarted := w.clock.now
+	var servedAt time.Duration
+	var servedWhile availabilitylease.Role
+	for w.clock.now < restarted+10*time.Second {
+		w.run(worldTick)
+		if servedAt == 0 && d1.endpoints.serving[testPolicy] {
+			servedAt = w.clock.now
+			servedWhile = d1.runtime.Node().HolderStatus(availabilitylease.Key{PolicyID: testPolicy}).Role
+		}
+	}
+	if servedAt == 0 || servedAt-restarted > time.Second || servedWhile != availabilitylease.RoleRecovering {
+		t.Fatalf("recovered holder served at +%s as %s, want within a second while still recovering\n%s", servedAt-restarted, servedWhile, w.dump())
+	}
+	if d1.endpoints.stops != stops || w.lastIndexOf("d1 docker stop") > w.indexOf("d1 daemon started") && w.indexOf("d1 daemon started") >= 0 {
+		t.Fatalf("the restart took the copy out of service\n%s", w.dump())
+	}
+	w.run(30 * time.Second)
+	w.requireClean()
+	if w.holderOf() != "d1" || !d1.engine.running() || !d1.endpoints.serving[testPolicy] {
+		t.Fatalf("holder after the restart %q\n%s", w.holderOf(), w.dump())
+	}
+}
+
+func TestRestartPastTheLeaseBudgetDoesNotServeTheOldCopy(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1 := w.daemon("d1")
+	w.watchdogOn = false // the stale copy is the daemon's to kill in this test
+	d1.daemonOff = true
+	w.run(availabilitylease.FenceCompleteAfter + 5*time.Second)
+	d1.endpoints.serving = map[string]bool{}
+	w.startDaemon(d1)
+	d1.daemonOff = false
+	from := len(w.log)
+	for end := w.clock.now + 5*time.Second; w.clock.now < end; {
+		w.run(worldTick)
+		if d1.endpoints.serving[testPolicy] {
+			// Only a copy started anew under a new lease may serve.
+			stop, start := -1, -1
+			for i, line := range w.log[from:] {
+				if stop < 0 && strings.Contains(line, "d1 docker stop") {
+					stop = i
+				}
+				if stop >= 0 && strings.Contains(line, "d1 docker start") {
+					start = i
+				}
+			}
+			if stop < 0 || start < 0 || !d1.runtime.Holds(testPolicy) {
+				t.Fatalf("a copy whose lease lapsed served again without being restarted under a new lease\n%s", w.dump())
+			}
+		}
+	}
+	if w.indexOf("d1 docker stop") < 0 {
+		t.Fatalf("the copy whose lease lapsed was not killed at the daemon start\n%s", w.dump())
+	}
+}
+
 // Closing from bootstrapping (agent B): Gateway closes while the reserved
 // bootstrap holder still runs its legacy copy. A holder that has not acquired
 // yet was never lease-bound: the closed manifest leaves its copy, endpoints

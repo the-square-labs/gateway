@@ -185,8 +185,20 @@ func (p *DockerPlugin) memberEndpointState(linkID string) relayv1.EndpointServin
 	if policyID == "" {
 		return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED
 	}
-	if !p.lease.endpointAllowed(linkID) || !p.memberReadiness.ready(policyID) {
+	if !p.lease.endpointAllowed(linkID) {
 		return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+	}
+	if !p.memberReadiness.ready(policyID) {
+		// A copy recovered serving after a same-boot daemon restart served
+		// before it; it stays serving until this process's first probe
+		// judges it (B-13).
+		probed := false
+		if p.memberReadiness != nil {
+			_, probed = p.memberReadiness.entry(policyID)
+		}
+		if !p.lease.recoveredUnprobed(policyID, probed) {
+			return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+		}
 	}
 	return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
 }

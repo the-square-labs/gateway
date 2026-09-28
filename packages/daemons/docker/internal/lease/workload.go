@@ -152,11 +152,16 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 			break
 		}
 		// Unconfirmed container after a restart (A2.3): it keeps running on
-		// its recorded budget; nothing starts and no endpoint opens until a
-		// renewal succeeds.
+		// its recorded budget, which proves the lease is still this node's
+		// until then, and nothing starts until a renewal succeeds. A copy
+		// that runs keeps serving meanwhile (B-13): its endpoints never go
+		// dormant for a same-boot daemon restart (a new boot has no records).
 		r.armRecordsLocked(status, serve, containers)
 		if anyRunning(serve) && wl.phase == phaseIdle {
 			adoptServingLocked(wl, serve, now-stableBeforeReady)
+		}
+		if anyRunning(serve) && !wl.endpointsOn && !wl.busy && !status.FenceNow {
+			r.setEndpointsLocked(wl, true)
 		}
 	case availabilitylease.RoleFencing:
 		// A freeze of this host moves the deadline back (D4): the watchdog
