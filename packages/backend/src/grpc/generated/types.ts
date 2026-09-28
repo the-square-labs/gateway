@@ -873,6 +873,11 @@ export interface AvailabilityLeaseHeld {
   manifestVersion: string;
   placementId: string;
   placementGeneration: string;
+  /**
+   * Graceful close: this node kept its copy of the slot running after the lease closed; a majority of every quorum set
+   * of the closed manifest confirmed it (role "retained"). Adopt the copy as RUNNING.
+   */
+  retained?: boolean;
 }
 
 export interface AvailabilityLeaseKeyView {

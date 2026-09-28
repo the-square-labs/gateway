@@ -83,6 +83,12 @@ export interface DockerAvailabilityLeaseView {
    * watchdog conditions never change them (the data plane itself keeps such a node from holding).
    */
   excludedNodes: DockerAvailabilityLeaseExcludedNode[];
+  /**
+   * Graceful close, while closing: per slot, the holder the closed manifest lets keep its copy running (retained) and
+   * whether it confirmed that (a majority of every quorum set confirmed the close to it). Legacy then adopts a
+   * confirmed one as running; one that never confirms fences and legacy starts the slot again after the lease expired.
+   */
+  retainedHolders: Array<{ slot: number; holderNodeId: string; confirmed: boolean }>;
   /** Per-policy voter reachability margin over its quorum sets (A18). */
   voterMargin: LeaseVoterMargin | null;
   /** Voters of the newest quorum set: candidate hosts in rank order, then witnesses (A18). */

@@ -11,7 +11,7 @@ import {
 import type { AvailabilityLeaseReport } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { normalizeLeaseBallot } from './lease-codec.js';
-import { HOLDING_LEASE_ROLES } from './lease-constants.js';
+import { HOLDING_LEASE_ROLES, RETAINED_LEASE_ROLE } from './lease-constants.js';
 import {
   classifyLeaseHolderChange,
   type LeaseHolderChange,
@@ -100,13 +100,15 @@ export class AvailabilityLeaseReports {
     if (sender.kind !== 'relay') {
       for (const held of report.held ?? []) {
         if (!held.policyId) continue;
+        // Graceful close: a retained holder reports retained = true (role "retained"); either marks it.
+        const role = held.retained === true ? RETAINED_LEASE_ROLE : held.role;
         reporterRoles.set(keyOf(held.policyId, held.slot), {
           policyId: held.policyId,
           slot: held.slot,
-          role: held.role,
+          role,
         });
         const ballot = normalizeLeaseBallot(held.ballot);
-        if (!ballot || !HOLDING_LEASE_ROLES.has(held.role)) continue;
+        if (!ballot || !HOLDING_LEASE_ROLES.has(role)) continue;
         addCandidate(held.policyId, held.slot, {
           holderId: sender.memberId,
           ballot,

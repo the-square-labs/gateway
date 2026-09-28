@@ -65,6 +65,10 @@ export const DockerAvailabilityLeaseSchema = z.object({
       reason: DockerAvailabilityLeaseExclusionReasonSchema,
     })
   ),
+  /** Graceful close, while closing: the holders that keep their copy running, and whether each confirmed it. */
+  retainedHolders: z.array(
+    z.object({ slot: z.number().int().min(0).max(31), holderNodeId: UUID, confirmed: z.boolean() })
+  ),
   voters: z.array(UUID),
   witness: z
     .object({

@@ -17,7 +17,7 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { RelayPolicySigningKeyService } from '@/services/relay-policy-signing-key.service.js';
 import { AvailabilityLeaseCluster } from './lease-cluster.js';
-import type { LeaseSigner } from './lease-codec.js';
+import { type LeaseSigner, leaseManifestClosure } from './lease-codec.js';
 import {
   AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES,
   MEMBER_REPORT_FRESH_MS,
@@ -28,7 +28,7 @@ import { AvailabilityLeaseDistribution, type RelayLeasePolicyFields } from './le
 import { availabilityStandbyCount } from './lease-gating.js';
 import { LeaseCapabilityTracker, type LeaseParticipants, loadLeaseParticipants } from './lease-participants.js';
 import { leaseCandidatePlacements } from './lease-planning.js';
-import { AvailabilityLeasePolicies, type LeaseModeChange } from './lease-policies.js';
+import { AvailabilityLeasePolicies, type LeaseModeChange, reportsRetained } from './lease-policies.js';
 import { type RelayLeaseOwner, type RelayLeasePolicyIds, relayLeasePolicyIds } from './lease-relay-gate.js';
 import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseReportSender } from './lease-reports.js';
 import {
@@ -351,6 +351,17 @@ export class AvailabilityLeaseService {
       surgeSlots: state?.surgeSlots ?? 0,
       copiesStoppedAt: state?.copiesStoppedAt ?? null,
       excludedNodes,
+      retainedHolders:
+        state?.mode === 'closing'
+          ? (leaseManifestClosure(state.manifestBlock)?.retained ?? []).map((entry) => ({
+              slot: entry.slot,
+              holderNodeId: entry.holderId,
+              confirmed: reportsRetained(
+                observations.find((observation) => observation.slot === entry.slot),
+                entry.holderId
+              ),
+            }))
+          : [],
       voterMargin: state ? leaseVoterMargin(state.voterEpoch, state.quorumSets, reachable) : null,
       voters: state?.quorumSets.at(-1) ?? [],
       witness: leaseWitnessView(state ?? null),

@@ -114,10 +114,17 @@ export const ACTIVE_LEASE_ROLES: ReadonlySet<string> = new Set([
   'fencing',
   'abandoned',
   'releasing',
+  'retained',
 ]);
 
-/** Roles in which a daemon holds a committed lease and may serve. */
-export const HOLDING_LEASE_ROLES: ReadonlySet<string> = new Set(['holding', 'recovering']);
+/**
+ * Graceful close: the role of a slot's named holder once a majority of every quorum set of the closed manifest
+ * confirmed the close to it (gateway.v1 AvailabilityLeaseHeld.retained). Its copy keeps running without a lease.
+ */
+export const RETAINED_LEASE_ROLE = 'retained';
+
+/** Roles in which a daemon holds a committed lease (or, retained, keeps serving after the close) and may serve. */
+export const HOLDING_LEASE_ROLES: ReadonlySet<string> = new Set(['holding', 'recovering', RETAINED_LEASE_ROLE]);
 
 /** Cluster row id of the singleton voter config. */
 export const LEASE_CLUSTER_ID = 'default';
