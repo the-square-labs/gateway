@@ -79,6 +79,7 @@ func leaseReportProto(report lease.Report, identity []byte) *pb.AvailabilityLeas
 		MemberId: report.MemberID, IdentityPublicKey: identity, Incarnation: report.Incarnation,
 		TrustedPolicyKeyIds: report.TrustedPolicyKeyIDs, AcceptorAbstaining: report.AcceptorAbstaining,
 		WatchdogReady: report.WatchdogReady, LeaseRevision: report.LeaseRevision,
+		ReportedAtUnixMs: report.ReportedAtUnixMs,
 	}
 	for _, manifest := range report.Manifests {
 		out.Manifests = append(out.Manifests, &pb.AvailabilityLeaseManifestAck{PolicyId: manifest.PolicyID, ManifestVersion: manifest.Version, Closed: manifest.Closed})

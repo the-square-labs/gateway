@@ -25,3 +25,11 @@ func TestLeaseReportCarriesARetainedSlot(t *testing.T) {
 		t.Fatalf("events = %v", events)
 	}
 }
+
+// N-15: the report states the wall clock its times were converted with.
+func TestLeaseReportCarriesItsWallClock(t *testing.T) {
+	report := leaseReportProto(lease.Report{MemberID: "node-1", ReportedAtUnixMs: 1_800_000_123_456}, nil)
+	if got := report.GetReportedAtUnixMs(); got != 1_800_000_123_456 {
+		t.Fatalf("reported at %d", got)
+	}
+}

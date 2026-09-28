@@ -17,6 +17,7 @@ type RegistryBindingContext = 'build' | 'container' | 'deployment' | 'compose_pr
 export class RelayRegistryService {
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private readonly nodeSyncs = new Map<string, Promise<void>>();
+  private readonly queuedNodeSyncs = new Map<string, Promise<void>>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -237,13 +238,24 @@ export class RelayRegistryService {
   }
 
   async syncNode(nodeId: string): Promise<void> {
+    // A sync that has not started yet reads the bindings when it starts, so it serves every later caller too.
+    // Without this, refresh ticks queued behind a slow sync without bound and a new binding waited for all of them.
+    const queued = this.queuedNodeSyncs.get(nodeId);
+    if (queued) return queued;
     const previous = this.nodeSyncs.get(nodeId) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => this.syncNodeLocked(nodeId));
+    const current: Promise<void> = previous
+      .catch(() => undefined)
+      .then(() => {
+        if (this.queuedNodeSyncs.get(nodeId) === current) this.queuedNodeSyncs.delete(nodeId);
+        return this.syncNodeLocked(nodeId);
+      });
+    this.queuedNodeSyncs.set(nodeId, current);
     this.nodeSyncs.set(nodeId, current);
     try {
       await current;
     } finally {
       if (this.nodeSyncs.get(nodeId) === current) this.nodeSyncs.delete(nodeId);
+      if (this.queuedNodeSyncs.get(nodeId) === current) this.queuedNodeSyncs.delete(nodeId);
     }
   }
 
@@ -275,9 +287,16 @@ export class RelayRegistryService {
       }
       return representative;
     });
+    // One policy publish and one grant sync for all routes, then tokens: each lives its full lifetime once sent.
+    if (transportBindings.length > 0) {
+      await this.relayPolicy.ensureInternalRegistryRoutes(
+        transportBindings.map(({ id }) => id),
+        nodeId,
+        'registry_secure_link'
+      );
+    }
     const desired = [];
     for (const binding of transportBindings) {
-      await this.relayPolicy.ensureInternalRegistryRoute(binding.id, nodeId, 'registry_secure_link');
       const requested = [{ repository: binding.repository, actions: binding.actions as Array<'pull' | 'push'> }];
       const issued = await this.registry.issueToken({
         subject: `${binding.role}:${nodeId}:${binding.contextKind}:${binding.contextId}`,

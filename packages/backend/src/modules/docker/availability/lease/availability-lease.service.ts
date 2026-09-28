@@ -31,7 +31,12 @@ import { LeaseCapabilityTracker, type LeaseParticipants, loadLeaseParticipants }
 import { leaseCandidatePlacements } from './lease-planning.js';
 import { AvailabilityLeasePolicies, keepsRunningThroughClose, type LeaseModeChange } from './lease-policies.js';
 import { type RelayLeaseOwner, type RelayLeasePolicyIds, relayLeasePolicyIds } from './lease-relay-gate.js';
-import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseReportSender } from './lease-reports.js';
+import {
+  AvailabilityLeaseReports,
+  type LeaseHolderChangeNotice,
+  type LeaseReporterClock,
+  type LeaseReportSender,
+} from './lease-reports.js';
 import {
   bumpLeaseRevision,
   ensureLeaseState,
@@ -231,10 +236,15 @@ export class AvailabilityLeaseService {
     return cluster?.signingKeyId ? [cluster.signingKeyId] : [];
   }
 
-  /** A docker or nginx daemon's heartbeat lease section. */
-  async ingestDaemonReport(nodeId: string, nodeType: string, report: AvailabilityLeaseReport): Promise<void> {
+  /** A docker or nginx daemon's heartbeat lease section, with the daemon's clock as measured on arrival (N-15). */
+  async ingestDaemonReport(
+    nodeId: string,
+    nodeType: string,
+    report: AvailabilityLeaseReport,
+    clock?: LeaseReporterClock
+  ): Promise<void> {
     if (nodeType !== 'docker' && nodeType !== 'nginx') return;
-    await this.ingest({ memberId: nodeId, kind: nodeType, nodeId, relayInstanceId: null }, report);
+    await this.ingest({ memberId: nodeId, kind: nodeType, nodeId, relayInstanceId: null }, report, clock);
   }
 
   /** A relay's acceptor and gate view, from its runtime status or local health. */
@@ -250,8 +260,12 @@ export class AvailabilityLeaseService {
     await this.ingest({ memberId: relayInstanceId, kind: 'relay', nodeId: null, relayInstanceId }, report);
   }
 
-  private async ingest(sender: LeaseReportSender, report: AvailabilityLeaseReport): Promise<void> {
-    const { notices, sightings, identityChanged } = await this.reports.ingest(sender, report);
+  private async ingest(
+    sender: LeaseReportSender,
+    report: AvailabilityLeaseReport,
+    clock?: LeaseReporterClock
+  ): Promise<void> {
+    const { notices, sightings, identityChanged } = await this.reports.ingest(sender, report, new Date(), clock);
     for (const notice of notices) await this.recordHolderChange(notice);
     await this.takeovers.observe(sightings);
     // H3: a renewed identity key must reach every manifest that lists the member before its frames are dropped for

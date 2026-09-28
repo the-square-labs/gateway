@@ -1073,7 +1073,10 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               if (msg.healthReport.availabilityLease && deps.availabilityLease) {
                 const leaseNodeType = deps.registry.getNode(activeNodeId)?.type ?? '';
                 void deps.availabilityLease
-                  .ingestDaemonReport(activeNodeId, leaseNodeType, msg.healthReport.availabilityLease)
+                  .ingestDaemonReport(activeNodeId, leaseNodeType, msg.healthReport.availabilityLease, {
+                    healthTimestampMs: Number(msg.healthReport.timestamp ?? 0) * 1000,
+                    receivedAtMs: Date.now(),
+                  })
                   .catch((error) => {
                     logger.warn('Daemon availability lease report was not recorded', {
                       nodeId: activeNodeId,

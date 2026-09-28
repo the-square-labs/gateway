@@ -49,6 +49,7 @@ func (r *Runtime) startupFenceLocked(now time.Duration, manifests []availability
 		r.logger.Info("recovering an unconfirmed lease-mode container after a daemon start",
 			"policy_id", key.PolicyID, "slot", key.Slot, "budget", deadline-now)
 		r.node.Recover(key, deadline)
+		r.markRecoveringLocked(key)
 	}
 }
 
@@ -109,6 +110,7 @@ func (r *Runtime) startupRetainedLocked(now time.Duration, manifest availability
 	if recovered, deadline, ok := r.recoverableLocked(running, now); ok && recovered.Slot == slot && r.watchdog.alive {
 		r.logger.Info("recovering a closing lease's retained copy after a daemon start", "policy_id", key.PolicyID, "slot", key.Slot, "budget", deadline-now)
 		r.node.Recover(key, deadline)
+		r.markRecoveringLocked(key)
 	}
 	// Otherwise its records are stale: the budget ran out before the close
 	// was confirmed, and the watchdog fences it as before.

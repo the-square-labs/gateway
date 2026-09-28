@@ -1088,22 +1088,36 @@ export class RelayPolicyService {
     sourceNodeId: string,
     ownerKind: RegistryRouteOwnerKind = 'registry_secure_link'
   ): Promise<string> {
+    const routeIds = await this.ensureInternalRegistryRoutes([bindingId], sourceNodeId, ownerKind);
+    return routeIds.get(bindingId)!;
+  }
+
+  /**
+   * The registry routes of one node's bindings, published and granted once for all of them. Per binding, a node with
+   * a dozen HA repositories rebuilt the policy snapshot and resent its grants a dozen times on every 15-s token
+   * refresh; its sync outlived the tokens it carried and blocked image preparation for minutes (stand rc20pre3, N-14).
+   */
+  async ensureInternalRegistryRoutes(
+    bindingIds: readonly string[],
+    sourceNodeId: string,
+    ownerKind: RegistryRouteOwnerKind = 'registry_secure_link'
+  ): Promise<Map<string, string>> {
     if (!(REGISTRY_ROUTE_OWNER_KINDS as readonly string[]).includes(ownerKind)) {
       throw new Error('Unsupported registry relay route owner kind');
     }
+    const routeIds = new Map<string, string>();
+    if (bindingIds.length === 0) return routeIds;
     const endpointId = await this.reconcileInternalRegistryEndpoint();
     const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
-    const routeId = await this.ensureRoute(
-      ownerKind,
-      bindingId,
-      'daemon',
-      sourceNodeId,
-      source.certificateFingerprint,
-      endpointId
-    );
+    for (const bindingId of new Set(bindingIds)) {
+      routeIds.set(
+        bindingId,
+        await this.ensureRoute(ownerKind, bindingId, 'daemon', sourceNodeId, source.certificateFingerprint, endpointId)
+      );
+    }
     await this.syncSnapshot();
     await this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC);
-    return routeId;
+    return routeIds;
   }
 
   async getInternalRegistryRouteRuntime(bindingId: string, ownerKind: RegistryRouteOwnerKind = 'registry_secure_link') {
@@ -1658,6 +1672,14 @@ export class RelayPolicyService {
             detail: '',
             data: Buffer.alloc(0),
           };
+        }
+        // A bundle the daemon holds already depends on no new policy: skip it before waiting for remote pushes,
+        // which with a busy pool cost every routine sync the whole grace (stand rc20pre3, N-14).
+        if (options.skipUnchanged) {
+          const unchanged = await this.getNodeGrantBundle(nodeId);
+          if (await this.deliveredRecently(nodeId, relayGrantBundleFingerprint(unchanged))) {
+            return { commandId: '', success: true, error: '', detail: 'unchanged', data: Buffer.alloc(0) };
+          }
         }
         // Give the remote relays a moment to take the policy these grants depend on.
         await this.waitForRemotePush();

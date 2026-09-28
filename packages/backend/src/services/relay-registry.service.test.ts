@@ -31,7 +31,7 @@ describe('RelayRegistryService shared repository reconciliation', () => {
       update: vi.fn(() => ({ set: updateSet })),
     };
     const relay = {
-      ensureInternalRegistryRoute: vi.fn().mockResolvedValue('route'),
+      ensureInternalRegistryRoutes: vi.fn().mockResolvedValue(new Map()),
       revokeOwner: vi.fn().mockResolvedValue(undefined),
     };
     const dispatch = { sendDockerRegistryBindings: vi.fn().mockResolvedValue({ success: true }) };
@@ -177,6 +177,72 @@ describe('RelayRegistryService shared repository reconciliation', () => {
     expect(h.updateSet).toHaveBeenCalledWith(
       expect.objectContaining({ lastError: 'Docker daemon rejected internal registry bindings' })
     );
+  });
+});
+
+describe('RelayRegistryService node sync cost (N-14)', () => {
+  const repositoryBinding = (index: number) => ({
+    id: `binding-${index}`,
+    nodeId: 'node-1',
+    role: 'runtime',
+    repository: `gateway/availability/policy-${index}`,
+    actions: ['pull'],
+    contextKind: 'availability',
+    contextId: `policy-${index}`,
+    generation: 1,
+    status: 'active',
+  });
+
+  function setup(bindings: Array<ReturnType<typeof repositoryBinding>>) {
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(async () => bindings) })) })),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
+    };
+    const relay = {
+      ensureInternalRegistryRoutes: vi.fn().mockResolvedValue(new Map()),
+      revokeOwner: vi.fn().mockResolvedValue(undefined),
+    };
+    const dispatch = { sendDockerRegistryBindings: vi.fn().mockResolvedValue({ success: true }) };
+    const registry = {
+      issueToken: vi.fn().mockResolvedValue({ token: 'token', issuedAt: new Date().toISOString(), expiresIn: 120 }),
+    };
+    const service = new RelayRegistryService(db as never, relay as never, dispatch as never, registry as never);
+    return { service, relay, dispatch, registry };
+  }
+
+  it('publishes routes once per node sync and issues tokens after them', async () => {
+    const h = setup([repositoryBinding(1), repositoryBinding(2), repositoryBinding(3)]);
+    await h.service.syncNode('node-1');
+    expect(h.relay.ensureInternalRegistryRoutes).toHaveBeenCalledTimes(1);
+    expect(h.relay.ensureInternalRegistryRoutes).toHaveBeenCalledWith(
+      ['binding-1', 'binding-2', 'binding-3'],
+      'node-1',
+      'registry_secure_link'
+    );
+    expect(h.registry.issueToken).toHaveBeenCalledTimes(3);
+    // A token is issued only once its route is published, so a slow publish never ages it.
+    expect(h.registry.issueToken.mock.invocationCallOrder[0]).toBeGreaterThan(
+      h.relay.ensureInternalRegistryRoutes.mock.invocationCallOrder[0]!
+    );
+    expect(h.dispatch.sendDockerRegistryBindings.mock.calls[0]![1]).toHaveLength(3);
+  });
+
+  it('coalesces syncs requested while one runs into a single queued sync', async () => {
+    const h = setup([repositoryBinding(1)]);
+    let release!: () => void;
+    h.dispatch.sendDockerRegistryBindings.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve({ success: true })))
+    );
+    const running = h.service.syncNode('node-1');
+    await vi.waitFor(() => expect(h.dispatch.sendDockerRegistryBindings).toHaveBeenCalledTimes(1));
+    // Refresh ticks and new bindings arriving meanwhile share one sync that starts after the running one.
+    const queued = [h.service.syncNode('node-1'), h.service.syncNode('node-1'), h.service.syncNode('node-1')];
+    release();
+    await Promise.all([running, ...queued]);
+    expect(h.dispatch.sendDockerRegistryBindings).toHaveBeenCalledTimes(2);
+    // Once idle, the next request syncs again.
+    await h.service.syncNode('node-1');
+    expect(h.dispatch.sendDockerRegistryBindings).toHaveBeenCalledTimes(3);
   });
 });
 
