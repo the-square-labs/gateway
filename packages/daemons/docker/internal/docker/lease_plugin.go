@@ -34,7 +34,12 @@ type leaseIntegration struct {
 	plugin  *DockerPlugin
 	runtime *lease.Runtime
 	fence   lease.DirFence
-	cancel  context.CancelFunc
+	// ctx lives as long as the lease integration: stop cancels it, which ends the runtime loop, the watchdog
+	// bootstrap and every Coordinate lane.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// workers counts those goroutines (stop waits for them).
+	workers sync.WaitGroup
 
 	// watchdog bootstraps a missing lease watchdog (nodes installed before it).
 	watchdog *watchdogBootstrap
@@ -100,17 +105,16 @@ func (p *DockerPlugin) initAvailabilityLease() {
 	}
 	// Every user-workload start passes the lease start hook (A5, A12.1).
 	p.client.beforeStart = integration.beforeStart
-	ctx, cancel := context.WithCancel(context.Background())
-	integration.cancel = cancel
+	integration.ctx, integration.cancel = context.WithCancel(context.Background())
 	// Recover copies that run on live records before any relay registration,
 	// so they register serving, not dormant, after a daemon restart (B-13).
 	runtime.Prime(leaseStartupPrimeWait)
-	go runtime.Run(ctx)
+	integration.goWorker(runtime.Run)
 	p.lease = integration
 	integration.watchdog = newWatchdogBootstrap(p.logger, integration.watchdogReady, p.cfg.Docker.LeaseWatchdogReleasesURL, p.cfg.Docker.LeaseWatchdogArtifactBaseURL)
 	integration.watchdog.onPresent = p.signalRegistrationChanged
 	integration.watchdog.Unavailable()
-	go integration.watchdog.Run(ctx)
+	integration.goWorker(integration.watchdog.Run)
 	p.logger.Info("availability lease runtime started", "node_id", stored.NodeID, "watchdog_ready", integration.watchdogReady())
 }
 
@@ -120,9 +124,47 @@ func (l *leaseIntegration) attachRelay(ctx context.Context, conn grpc.ClientConn
 	if l == nil || l.runtime == nil {
 		return
 	}
-	go l.runtime.Transport().Run(ctx, relayInstanceID, func(streamCtx context.Context) (lease.FrameStream, error) {
-		return lease.OpenCoordinateStream(streamCtx, conn)
+	laneCtx, cancel := context.WithCancel(ctx)
+	detach := func() bool { return false }
+	if l.ctx != nil {
+		// The lane also ends when the lease integration stops, before the relay transport does.
+		detach = context.AfterFunc(l.ctx, cancel)
+	}
+	l.goWorker(func(context.Context) {
+		defer detach()
+		defer cancel()
+		l.runtime.Transport().Run(laneCtx, relayInstanceID, func(streamCtx context.Context) (lease.FrameStream, error) {
+			return lease.OpenCoordinateStream(streamCtx, conn)
+		})
 	})
+}
+
+// goWorker runs work on the integration's context as a goroutine stop waits for.
+func (l *leaseIntegration) goWorker(work func(context.Context)) {
+	ctx := l.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.workers.Add(1)
+	go func() {
+		defer l.workers.Done()
+		work(ctx)
+	}()
+}
+
+// stop ends the lease integration: it cancels its context, waits until the runtime loop, the watchdog bootstrap
+// and every relay lane returned (no lane delivers a frame any more), then stops the runtime's background
+// operations. Nothing of the lease integration writes to the state directory afterwards. Lanes attached with a
+// context of their own (tests) end with it.
+func (l *leaseIntegration) stop() {
+	if l == nil || l.runtime == nil {
+		return
+	}
+	if l.cancel != nil {
+		l.cancel()
+	}
+	l.workers.Wait()
+	l.runtime.Stop()
 }
 
 // leaseCapabilities advertises availability_lease_v2 whenever the lease

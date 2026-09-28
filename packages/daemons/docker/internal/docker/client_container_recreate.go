@@ -15,6 +15,8 @@ import (
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 func (c *Client) UpdateContainer(ctx context.Context, id string, newTag string, envOverrides map[string]string, envRemovals []string, registryAuth string, expectedState string) error {
@@ -547,16 +549,7 @@ func (c *Client) persistRecreateExpectedRunning(name string, expectedRunning boo
 	if expectedRunning {
 		value = []byte("running\n")
 	}
-	path := c.recreateExpectedStatePath(name)
-	temporaryPath := path + ".tmp"
-	if err := os.WriteFile(temporaryPath, value, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		_ = os.Remove(temporaryPath)
-		return err
-	}
-	return nil
+	return atomicfile.WriteFile(c.recreateExpectedStatePath(name), value, 0o600)
 }
 
 func (c *Client) readRecreateExpectedRunning(name string) (bool, error) {

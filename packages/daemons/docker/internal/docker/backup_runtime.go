@@ -23,6 +23,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	mobyclient "github.com/moby/moby/client"
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 const (
@@ -1162,16 +1163,7 @@ func (r *backupRuntime) persist(status backupRunStatus) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(r.root, status.RunID+".json")
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, data, 0600); err != nil {
-		return err
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	return nil
+	return atomicfile.WriteFile(filepath.Join(r.root, status.RunID+".json"), data, 0600)
 }
 func (r *backupRuntime) load(runID string) (backupRunStatus, error) {
 	data, err := os.ReadFile(filepath.Join(r.root, runID+".json"))

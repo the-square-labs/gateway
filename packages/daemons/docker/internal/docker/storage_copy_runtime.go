@@ -19,6 +19,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	mobyclient "github.com/moby/moby/client"
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
 
@@ -646,24 +647,7 @@ func (r *storageCopyRuntime) persist(status storageCopyStatus) error {
 			return nil
 		}
 	}
-	temporary, err := os.CreateTemp(r.root, status.JobID+".*.tmp")
-	if err != nil {
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		_ = temporary.Close()
-		_ = os.Remove(temporary.Name())
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporary.Name())
-		return err
-	}
-	if err := os.Rename(temporary.Name(), path); err != nil {
-		_ = os.Remove(temporary.Name())
-		return err
-	}
-	return nil
+	return atomicfile.WriteFile(path, data, 0o600)
 }
 
 func (r *storageCopyRuntime) load(jobID string) (storageCopyStatus, error) {

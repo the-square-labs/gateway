@@ -18,6 +18,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	mobyclient "github.com/moby/moby/client"
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"golang.org/x/sys/unix"
 )
@@ -67,7 +68,7 @@ func (m *managedStorageManager) stageSFTPHostKey(record managedStorageRecord, ho
 		return "", err
 	}
 	path := filepath.Join(directory, "host-key")
-	if err := os.WriteFile(path, []byte(hostKeyPEM), 0600); err != nil {
+	if err := atomicfile.WriteFile(path, []byte(hostKeyPEM), 0600); err != nil {
 		return "", fmt.Errorf("stage managed storage SFTP host key: %w", err)
 	}
 	return path, nil
@@ -324,11 +325,7 @@ func (m *managedStorageManager) saveRecord(record managedStorageRecord) error {
 	if err != nil {
 		return err
 	}
-	temporary := m.recordPath(record.ID) + ".pending"
-	if err := os.WriteFile(temporary, raw, 0600); err != nil {
-		return err
-	}
-	return os.Rename(temporary, m.recordPath(record.ID))
+	return atomicfile.WriteFile(m.recordPath(record.ID), raw, 0600)
 }
 func (m *managedStorageManager) storageStatus(ctx context.Context, record managedStorageRecord) string {
 	if record.Removed {

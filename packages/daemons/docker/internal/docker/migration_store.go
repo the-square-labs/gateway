@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 const migrationArtifactMaxAge = 72 * time.Hour
@@ -139,12 +141,8 @@ func (s *migrationArtifactStore) saveMetadata(migrationID string, meta migration
 	if err != nil {
 		return fmt.Errorf("encode artifact metadata: %w", err)
 	}
-	tmp := path + ".meta.json.tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	if err := atomicfile.WriteFile(path+".meta.json", data, 0600); err != nil {
 		return fmt.Errorf("write artifact metadata: %w", err)
-	}
-	if err := os.Rename(tmp, path+".meta.json"); err != nil {
-		return fmt.Errorf("commit artifact metadata: %w", err)
 	}
 	return nil
 }

@@ -80,7 +80,11 @@ type Runtime struct {
 	logger    *slog.Logger
 	wake      chan struct{}
 
+	// ops counts the background operations in flight (Stop waits for them).
+	ops sync.WaitGroup
+
 	mu          sync.Mutex
+	stopped     bool
 	workloads   map[string]*workload
 	results     []func()
 	snapshot    *snapshot
@@ -127,6 +131,7 @@ func New(opts Options) (*Runtime, error) {
 	if opts.Async == nil {
 		opts.Async = func(fn func()) { go fn() }
 	}
+	async := opts.Async
 	if opts.Suspends == nil {
 		opts.Suspends = availabilitylease.NewSuspendWatch()
 	}
@@ -140,6 +145,18 @@ func New(opts Options) (*Runtime, error) {
 	r := &Runtime{
 		opts: opts, logger: opts.Logger, wake: make(chan struct{}, 1), workloads: map[string]*workload{},
 		records: map[string]leasefence.Record{}, ready: map[string]bool{},
+	}
+	// Operations are counted so Stop can wait for them. Both callers hold r.mu, as Stop does when it sets stopped:
+	// an operation is either counted before Stop waits or not started at all.
+	r.opts.Async = func(fn func()) {
+		if r.stopped {
+			return
+		}
+		r.ops.Add(1)
+		async(func() {
+			defer r.ops.Done()
+			fn()
+		})
 	}
 	r.transport = NewRelayTransport(opts.Logger)
 	var transport availabilitylease.Transport = r.transport
@@ -157,6 +174,16 @@ func New(opts Options) (*Runtime, error) {
 	r.node = node
 	r.transport.setReceiver(node.ReceiveFrame)
 	return r, nil
+}
+
+// Stop starts no further background operation and waits for those in flight (Docker calls bounded by opTimeout,
+// endpoint changes). Run and the relay lanes end with their context; after Stop and their end nothing of the runtime
+// runs any more. The daemon process does not call it: its operations end with the process.
+func (r *Runtime) Stop() {
+	r.mu.Lock()
+	r.stopped = true
+	r.mu.Unlock()
+	r.ops.Wait()
 }
 
 // Node exposes the protocol node (acceptor view, gate evaluation in tests).

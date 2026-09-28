@@ -21,6 +21,8 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	mobyclient "github.com/moby/moby/client"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 // SeaweedFS runtime contract (rc.8): one `weed server` container per cluster
@@ -510,24 +512,16 @@ func (m *managedStorageManager) sealStagingDirs(dirs ...string) error {
 // writeRuntimeFile atomically replaces path with a 0400 file owned by the
 // runtime user.
 func (m *managedStorageManager) writeRuntimeFile(path string, content []byte) error {
-	temporary := path + ".pending"
-	_ = os.Remove(temporary)
-	if err := os.WriteFile(temporary, content, 0o600); err != nil {
-		return fmt.Errorf("stage %s: %w", filepath.Base(path), err)
-	}
-	if err := m.chownRuntime(temporary); err != nil {
-		_ = os.Remove(temporary)
-		return fmt.Errorf("assign %s: %w", filepath.Base(path), err)
-	}
-	if err := os.Chmod(temporary, 0o400); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
-		return err
-	}
-	return nil
+	_ = os.Remove(path + ".pending") // left by versions that staged it there
+	return atomicfile.Write(path, 0o400, func(file *os.File) error {
+		if _, err := file.Write(content); err != nil {
+			return fmt.Errorf("stage %s: %w", filepath.Base(path), err)
+		}
+		if err := m.chownRuntime(file.Name()); err != nil {
+			return fmt.Errorf("assign %s: %w", filepath.Base(path), err)
+		}
+		return nil
+	})
 }
 
 func (m *managedStorageManager) chownRuntime(path string) error {

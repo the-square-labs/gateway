@@ -21,6 +21,8 @@ import (
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 	"golang.org/x/sys/unix"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 const (
@@ -139,12 +141,7 @@ func (m *volumeImageManager) saveRecord(record volumeImageRecord) error {
 	if err != nil {
 		return err
 	}
-	target := m.recordPath(record.Name)
-	tmp := target + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, target)
+	return atomicfile.WriteFile(m.recordPath(record.Name), data, 0600)
 }
 
 func (m *volumeImageManager) loadRecord(name string) (volumeImageRecord, error) {
@@ -620,15 +617,8 @@ func replaceFstab(data []byte) error {
 	if err != nil {
 		return err
 	}
-	tmp := volumeImageFstabPath + ".gateway-volume-images.tmp"
-	if err := os.WriteFile(tmp, data, info.Mode().Perm()); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, volumeImageFstabPath); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	// The host's fstab: a partial file after a crash would break the next boot.
+	return atomicfile.WriteFile(volumeImageFstabPath, data, info.Mode().Perm())
 }
 
 func (m *volumeImageManager) metrics(ctx context.Context, name string) (volumeMetrics, error) {
