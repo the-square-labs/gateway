@@ -1,7 +1,8 @@
 import { randomInt } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  auditLog,
   type DockerAvailabilityPartitionMode,
   dockerAvailabilityLeaseObservations,
   dockerAvailabilityLeaseState,
@@ -111,10 +112,11 @@ export class AvailabilityLeaseService {
     this.policies = new AvailabilityLeasePolicies(db, sign);
     this.reports = new AvailabilityLeaseReports(db);
     this.distribution = new AvailabilityLeaseDistribution(db, registry);
-    this.takeovers = new LeaseTakeoverAudit(
-      (settled) => this.auditTakeover(settled),
-      (policyId, slot, holderId, since) => this.reports.correctHolderSince(policyId, slot, holderId, since)
-    );
+    this.takeovers = new LeaseTakeoverAudit(db, {
+      write: (settled) => this.auditTakeover(settled),
+      written: (settled) => this.takeoverAudited(settled),
+      correct: (policyId, slot, holderId, since) => this.reports.correctHolderSince(policyId, slot, holderId, since),
+    });
   }
 
   /** The paid Availability controller; without one every policy stays legacy. */
@@ -161,13 +163,21 @@ export class AvailabilityLeaseService {
     await this.takeovers.flush();
   }
 
-  private async reconcileOnce(): Promise<void> {
-    const now = new Date();
+  /**
+   * Writes the audit of every holder change whose wait for its takeover time is over (B-14). The periodic reconcile
+   * runs it; its first run after a start also writes what a crashed process left waiting.
+   */
+  async settleTakeoverAudits(now = new Date()): Promise<void> {
     await this.takeovers.settleDue(now).catch((error) => {
       logger.warn('Availability lease holder changes will be audited on the next reconcile', {
         error: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  private async reconcileOnce(): Promise<void> {
+    const now = new Date();
+    await this.settleTakeoverAudits(now);
     const members = new Map((await loadLeaseMembers(this.db)).map((member) => [member.memberId, member]));
     const participants = await loadLeaseParticipants(this.db, this.registry, members, now.getTime());
     this.capabilities.observe(participants, now.getTime());
@@ -272,8 +282,8 @@ export class AvailabilityLeaseService {
     }
   }
 
-  private async auditTakeover({ notice, takeoverAt, source, noticedAt }: SettledLeaseTakeover): Promise<void> {
-    await this.audit.log({
+  private auditTakeover({ takeoverId, notice, takeoverAt, source, noticedAt }: SettledLeaseTakeover): Promise<boolean> {
+    return this.audit.log({
       userId: null,
       action: `docker.availability.lease_${notice.kind}`,
       resourceType: 'docker_availability_policy',
@@ -294,8 +304,26 @@ export class AvailabilityLeaseService {
         // a time, this is when Gateway noticed the change.
         takeoverSource: source,
         noticedAt: noticedAt.toISOString(),
+        takeoverId,
       },
     });
+  }
+
+  /** A crash between writing a takeover's audit row and clearing its waiting entry must not audit it twice. */
+  private async takeoverAudited({ takeoverId, notice }: SettledLeaseTakeover): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: auditLog.id })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.resourceType, 'docker_availability_policy'),
+          eq(auditLog.resourceId, notice.policyId),
+          eq(auditLog.action, `docker.availability.lease_${notice.kind}`),
+          sql`${auditLog.details}->>'takeoverId' = ${takeoverId}`
+        )
+      )
+      .limit(1);
+    return Boolean(row);
   }
 
   /** Legacy policies are driven by the backend; every other lease mode is not (D9, A5). */

@@ -10,6 +10,7 @@ import { decodeRelayV1Message, encodeRelayV1Message } from '@/grpc/relay-proto.j
 import { AvailabilityLeaseService } from './availability-lease.service.js';
 import { decodeLeaseSignedBlock, leaseBlockMessage } from './lease-codec.js';
 import { leaseLaneNodeIds, leaseLaneRelays } from './lease-relay-lanes.js';
+import { LEASE_TAKEOVER_SETTLE_MS } from './lease-takeover-audit.js';
 import type { DockerAvailabilityLeaseHolderChange, DockerAvailabilityLeaseModeChange } from './lease-types.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
@@ -547,6 +548,133 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
       await service.ingestDaemonReport(nodeIds[2]!, 'docker', holding(nodeIds[2]!, 40));
       await service.ingestDaemonReport(nodeIds[1]!, 'docker', report(nodeIds[1]!, { epoch: '1' }));
       expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({ holderNodeId: nodeIds[2] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // B-14 follow-up: a failover audit that waits for its takeover time is stored with the holder change, so a Gateway
+  // crash during the wait loses nothing; the next process continues the wait and writes it once.
+  it('never loses a waiting takeover audit across a Gateway crash', async () => {
+    // After the previous test's clock: the third node was last seen holding about 322 s from now.
+    const base = Date.now() + 360_000;
+    const acquired = new Date(base - 30_000);
+    const ballotOf = (holder: string, round: number) => ({
+      round: String(round),
+      incarnation: '1',
+      proposerId: holder,
+    });
+    const startProcess = () =>
+      new AvailabilityLeaseService(
+        db,
+        { getNode: () => undefined, getAllNodes: () => [] } as never,
+        audit,
+        events as never,
+        { signPayload: async () => Promise.reject(new Error('not signing in this test')) } as never
+      );
+    const relayReport = (holder: string, round: number, startedAt: number, sinceMs: number) =>
+      decodeRelayV1Message(
+        'AvailabilityLeaseReport',
+        encodeRelayV1Message('AvailabilityLeaseReport', {
+          memberId: relayId,
+          identityPublicKey: identities.get(relayId)!,
+          incarnation: String(startedAt),
+          trustedPolicyKeyIds: [keyId],
+          acceptor: [
+            {
+              policyId,
+              slot: 0,
+              state: 'held',
+              holderId: holder,
+              epoch: '1',
+              manifestVersion: '1',
+              gateOpen: true,
+              gateHolderId: holder,
+              gateBallot: ballotOf(holder, round),
+              committed: ballotOf(holder, round),
+              holderSinceUnixMs: String(sinceMs),
+            },
+          ],
+        })
+      ) as AvailabilityLeaseReport;
+    const waiting = async () =>
+      (await q(`select key, value from settings where key like 'availability.lease.takeover:%'`)).rows as Array<{
+        key: string;
+        value: Record<string, any>;
+      }>;
+    const failoversTo = (nodeId: string) =>
+      (audit.log.mock.calls as unknown as Array<[Record<string, any>]>)
+        .map(([entry]) => entry)
+        .filter((entry) => entry.action === 'docker.availability.lease_failover' && entry.details.toNodeId === nodeId);
+    vi.useFakeTimers({ toFake: ['Date'], now: base });
+    try {
+      audit.log.mockClear();
+      const crashed = startProcess();
+      // The restarted local relay names app-node-1 (its sighting is only its catching up), a live voter saw it 150 ms in.
+      await crashed.ingestRelayReport(relayId, relayReport(nodeIds[1]!, 50, base - 10_000, base - 3_000));
+      await crashed.ingestDaemonReport(
+        nodeIds[0]!,
+        'docker',
+        report(nodeIds[0]!, {
+          epoch: '1',
+          acceptor: [
+            {
+              policyId,
+              slot: 0,
+              state: 'held',
+              holderId: nodeIds[1]!,
+              reservedFor: '',
+              committed: ballotOf(nodeIds[1]!, 51),
+              epoch: '1',
+              manifestVersion: '1',
+              gateOpen: false,
+              holderSinceUnixMs: String(acquired.getTime() + 150),
+            },
+          ],
+        })
+      );
+      expect(failoversTo(nodeIds[1]!)).toEqual([]);
+      expect(await waiting()).toEqual([
+        expect.objectContaining({
+          value: expect.objectContaining({ best: new Date(acquired.getTime() + 150).toISOString(), exact: null }),
+        }),
+      ]);
+
+      // Crash: no shutdown flush. The next process continues the wait from the database.
+      const restarted = startProcess();
+      vi.setSystemTime(base + 20_000);
+      await restarted.settleTakeoverAudits();
+      expect(failoversTo(nodeIds[1]!)).toEqual([]);
+      await restarted.ingestDaemonReport(nodeIds[1]!, 'docker', holding(nodeIds[1]!, 52, acquired));
+      expect(failoversTo(nodeIds[1]!)).toEqual([
+        expect.objectContaining({
+          occurredAt: acquired,
+          details: expect.objectContaining({ takeoverSource: 'holder', noticedAt: new Date(base).toISOString() }),
+        }),
+      ]);
+      expect(await waiting()).toEqual([]);
+
+      // A change noticed from a voter only, then a crash: the first settle after the restart writes it when due.
+      vi.setSystemTime(base + 30_000);
+      const crashedAgain = startProcess();
+      await crashedAgain.ingestRelayReport(relayId, relayReport(nodeIds[2]!, 60, base - 10_000, base + 25_000));
+      expect(await waiting()).toHaveLength(1);
+      const restartedAgain = startProcess();
+      await restartedAgain.settleTakeoverAudits();
+      expect(failoversTo(nodeIds[2]!)).toEqual([]);
+      vi.setSystemTime(base + 30_000 + LEASE_TAKEOVER_SETTLE_MS);
+      await restartedAgain.settleTakeoverAudits();
+      await restartedAgain.settleTakeoverAudits();
+      expect(failoversTo(nodeIds[2]!)).toEqual([
+        expect.objectContaining({
+          occurredAt: new Date(base + 25_000),
+          details: expect.objectContaining({ takeoverSource: 'voters' }),
+        }),
+      ]);
+      expect(await waiting()).toEqual([]);
+      // The holder is back on the third node for the tests below.
+      expect((await restartedAgain.getPolicyLease(policyId)).holders[0]).toMatchObject({ holderNodeId: nodeIds[2] });
+      await restartedAgain.ingestDaemonReport(nodeIds[1]!, 'docker', report(nodeIds[1]!, { epoch: '1' }));
     } finally {
       vi.useRealTimers();
     }

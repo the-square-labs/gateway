@@ -20,6 +20,7 @@ import {
   type LeaseObservationState,
   mergeLeaseObservation,
 } from './lease-planning.js';
+import { pendingLeaseTakeover, persistPendingLeaseTakeover } from './lease-takeover-audit.js';
 
 const logger = createChildLogger('AvailabilityLeaseReports');
 
@@ -31,6 +32,8 @@ export interface LeaseHolderChangeNotice extends LeaseHolderChange {
   placementId: string | null;
   source: DockerAvailabilityLeaseObservationSource;
   sourceId: string;
+  /** When Gateway noticed the change: the report that carried it arrived. */
+  noticedAt?: Date;
 }
 
 /** Every holder report of a key in one lease report, for settling a takeover time noticed earlier (B-14). */
@@ -366,7 +369,7 @@ export class AvailabilityLeaseReports {
         await tx.insert(dockerAvailabilityLeaseObservations).values({ policyId, slot, ...row });
       }
       if (!change) return null;
-      return {
+      const notice: LeaseHolderChangeNotice = {
         ...change,
         policyId,
         slot,
@@ -374,7 +377,11 @@ export class AvailabilityLeaseReports {
         placementId,
         source: next.source,
         sourceId: next.sourceId,
+        noticedAt: input.now,
       };
+      // B-14: its audit is stored with the change itself, so a crash before the audit row is written loses nothing.
+      if (notice.kind) await persistPendingLeaseTakeover(tx, pendingLeaseTakeover(notice));
+      return notice;
     });
   }
 
