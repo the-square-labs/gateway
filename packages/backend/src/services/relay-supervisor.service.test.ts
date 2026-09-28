@@ -17,7 +17,14 @@ function healthy() {
   };
 }
 
-function harness(options: { getHealth?: ReturnType<typeof vi.fn>; recover?: ReturnType<typeof vi.fn> } = {}) {
+function harness(
+  options: {
+    getHealth?: ReturnType<typeof vi.fn>;
+    recover?: ReturnType<typeof vi.fn>;
+    inspectRelay?: ReturnType<typeof vi.fn>;
+    readinessWaitMs?: number;
+  } = {}
+) {
   let persisted: unknown = null;
   const cache = {
     get: vi.fn(async () => persisted),
@@ -27,6 +34,7 @@ function harness(options: { getHealth?: ReturnType<typeof vi.fn>; recover?: Retu
   };
   const getHealth = options.getHealth ?? vi.fn().mockResolvedValue(healthy());
   const recover = options.recover ?? vi.fn().mockResolvedValue('restart');
+  const inspectRelay = options.inspectRelay ?? vi.fn().mockResolvedValue(null);
   const events = { publish: vi.fn() };
   const audit = { log: vi.fn() };
   const supervisor = new RelaySupervisorService(
@@ -36,7 +44,7 @@ function harness(options: { getHealth?: ReturnType<typeof vi.fn>; recover?: Retu
     } as never,
     cache as never,
     { getHealth } as never,
-    { recover } as never,
+    { recover, inspectRelay } as never,
     { getConfig: vi.fn().mockResolvedValue({ relayAutoRecovery: true }) } as never,
     events as never,
     audit as never,
@@ -49,12 +57,16 @@ function harness(options: { getHealth?: ReturnType<typeof vi.fn>; recover?: Retu
       expectedProtocolMajor: 1,
       probeIntervalMs: 60_000,
       recoveryDelaysMs: [0, 0, 0],
-      readinessWaitMs: 1,
+      readinessWaitMs: options.readinessWaitMs ?? 1,
       readinessPollMs: 1,
       sleep: async () => {},
     }
   );
-  return { supervisor, getHealth, recover, events, audit, cache };
+  return { supervisor, getHealth, recover, inspectRelay, events, audit, cache };
+}
+
+function publishedStates(events: { publish: ReturnType<typeof vi.fn> }) {
+  return events.publish.mock.calls.map(([, payload]) => `${payload.state}:${payload.reason}`);
 }
 
 describe('RelaySupervisorService', () => {
@@ -389,6 +401,69 @@ describe('RelaySupervisorService', () => {
     for (let probe = 0; probe < 6; probe += 1) await supervisor.probeNow();
     expect(recover).toHaveBeenCalledTimes(1);
     expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'critical', canRetry: true });
+  });
+
+  it('waits for a relay someone else just restarted instead of restarting it again', async () => {
+    const connectRefused = new Error('connect refused');
+    const getHealth = vi
+      .fn()
+      .mockResolvedValueOnce(healthy())
+      .mockRejectedValueOnce(connectRefused)
+      .mockRejectedValueOnce(connectRefused)
+      .mockRejectedValueOnce(connectRefused)
+      .mockResolvedValue(healthy());
+    // `docker restart` by an operator: a new run started after the last healthy probe.
+    const inspectRelay = vi.fn(async () => ({
+      id: 'relay-id',
+      running: true,
+      startedAt: new Date(Date.now() + 5).toISOString(),
+    }));
+    const { supervisor, recover, events } = harness({ getHealth, inspectRelay, readinessWaitMs: 60_000 });
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy', attempt: 0 }));
+    expect(recover).not.toHaveBeenCalled();
+    expect(publishedStates(events)).not.toContain('critical:docker_unavailable');
+  });
+
+  it('still restarts a relay whose current run was healthy before it stopped answering', async () => {
+    const getHealth = vi
+      .fn()
+      .mockResolvedValueOnce(healthy())
+      .mockRejectedValueOnce(new Error('connect refused'))
+      .mockRejectedValueOnce(new Error('connect refused'))
+      .mockResolvedValue(healthy());
+    const inspectRelay = vi.fn().mockResolvedValue({
+      id: 'relay-id',
+      running: true,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const { supervisor, recover } = harness({ getHealth, inspectRelay, readinessWaitMs: 60_000 });
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy' }));
+    expect(recover).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a relay that came back after a failed Docker call as healthy, not docker_unavailable', async () => {
+    const getHealth = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('connect refused'))
+      .mockRejectedValueOnce(new Error('connect refused'))
+      .mockResolvedValue(healthy());
+    const recover = vi.fn().mockRejectedValue(
+      new RelayRecoverySafetyError('docker_unavailable', 'Docker relay recovery action failed', {
+        cause: new Error('Docker API request timed out'),
+      })
+    );
+    const { supervisor, events } = harness({ getHealth, recover, readinessWaitMs: 60_000 });
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy', reason: null }));
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(publishedStates(events)).not.toContain('critical:docker_unavailable');
   });
 
   it('keeps the attempt budget across failure causes until the relay recovers or an admin retries', async () => {

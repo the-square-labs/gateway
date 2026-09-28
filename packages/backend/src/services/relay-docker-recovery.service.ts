@@ -18,6 +18,14 @@ export class RelayRecoverySafetyError extends Error {
 export type RelayRecoveryAction = 'start' | 'restart' | 'compose_up';
 export type RelayStartupAction = 'already_running' | 'start' | 'compose_up' | 'recreate';
 
+/** What Docker reports for the owned relay container; read-only. */
+export interface RelayContainerObservation {
+  id: string;
+  running: boolean;
+  /** Docker's State.StartedAt of the current run, or null when unknown. */
+  startedAt: string | null;
+}
+
 interface RelayOwnership {
   container: DockerContainerFullInspect | null;
   composeProject: string;
@@ -77,6 +85,20 @@ export class RelayDockerRecoveryService {
 
     await this.composeUp(ownership, expectedImage, false);
     return 'compose_up';
+  }
+
+  /**
+   * Reads the owned relay container without acting on it, so recovery can tell a relay someone
+   * else just started (an operator, Docker's restart policy) from one that is really gone.
+   */
+  async inspectRelay(): Promise<RelayContainerObservation | null> {
+    const { container } = await this.runDockerAction(() => this.inspectOwnership());
+    if (!container) return null;
+    return {
+      id: container.Id,
+      running: container.State?.Running === true,
+      startedAt: container.State?.StartedAt || null,
+    };
   }
 
   async ensureStarted(): Promise<RelayStartupAction> {

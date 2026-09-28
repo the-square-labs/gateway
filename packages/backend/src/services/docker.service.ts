@@ -8,6 +8,13 @@ import { createChildLogger } from '@/lib/logger.js';
 const logger = createChildLogger('DockerService');
 
 const API_VERSION = '/v1.46';
+/**
+ * A request without its own timeout inherits Node's global agent socket timeout (5 s), which cuts
+ * off a stop or restart that waits for the container's graceful shutdown while Docker carries on
+ * with it. Container lifecycle calls therefore set a timeout that covers Docker's own wait.
+ */
+const CONTAINER_START_TIMEOUT_MS = 60_000;
+const stopRequestTimeoutMs = (timeoutSeconds: number) => (Math.max(0, timeoutSeconds) + 30) * 1000;
 
 export class DockerService {
   constructor(
@@ -671,7 +678,12 @@ export class DockerService {
    * Start a container by ID.
    */
   async startContainer(id: string): Promise<void> {
-    const res = await this.request('POST', `${API_VERSION}/containers/${encodeURIComponent(id)}/start`);
+    const res = await this.request(
+      'POST',
+      `${API_VERSION}/containers/${encodeURIComponent(id)}/start`,
+      undefined,
+      CONTAINER_START_TIMEOUT_MS
+    );
     // 204 = started, 304 = already running
     if (res.statusCode !== 204 && res.statusCode !== 304) {
       throw new Error(`Docker container start failed (${res.statusCode}): ${res.body}`);
@@ -681,7 +693,9 @@ export class DockerService {
   async restartContainer(id: string, timeoutSeconds = 10): Promise<void> {
     const res = await this.request(
       'POST',
-      `${API_VERSION}/containers/${encodeURIComponent(id)}/restart?t=${encodeURIComponent(String(timeoutSeconds))}`
+      `${API_VERSION}/containers/${encodeURIComponent(id)}/restart?t=${encodeURIComponent(String(timeoutSeconds))}`,
+      undefined,
+      stopRequestTimeoutMs(timeoutSeconds) + CONTAINER_START_TIMEOUT_MS
     );
     if (res.statusCode !== 204) {
       throw new Error(`Docker container restart failed (${res.statusCode}): ${res.body}`);
@@ -738,7 +752,9 @@ export class DockerService {
   async stopContainer(id: string, timeoutSeconds = 5): Promise<void> {
     const res = await this.request(
       'POST',
-      `${API_VERSION}/containers/${encodeURIComponent(id)}/stop?t=${encodeURIComponent(String(timeoutSeconds))}`
+      `${API_VERSION}/containers/${encodeURIComponent(id)}/stop?t=${encodeURIComponent(String(timeoutSeconds))}`,
+      undefined,
+      stopRequestTimeoutMs(timeoutSeconds)
     );
     if (res.statusCode !== 204 && res.statusCode !== 304 && res.statusCode !== 404) {
       throw new Error(`Docker container stop failed (${res.statusCode}): ${res.body}`);
