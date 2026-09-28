@@ -431,12 +431,17 @@ func (n *Node) onQuery(from string, msg *pb.LeaseQuery, now time.Duration) {
 }
 
 // bootstrapSatisfiedBy reports whether a verified commit proves the bootstrap
-// reservation of its key was satisfied (A5): it is the named holder's, or it
-// was formed under this very manifest version, whose acceptors only accept
-// another proposer after they saw the named holder's commit.
+// reservation of its key was satisfied (A5): it was formed under a manifest
+// version that carries this reservation (bootstrapSince) and it is the named
+// holder's, or it was formed under this very manifest version, whose
+// acceptors only accept another proposer after they saw the named holder's
+// commit. A commit from an earlier lease period of the policy (lease mode was
+// left and entered again) never satisfies a new reservation: it would let the
+// named holder, whose copy runs, look like it already acquired (stand run
+// rc.20 B-12a: the copy was stopped as unowned and restarted a second later).
 func bootstrapSatisfiedBy(manifest *Manifest, key Key, commit *pb.LeaseCommit) bool {
 	holder := manifest.Bootstrap[key.Slot]
-	if manifest.BootstrapID == 0 || holder == "" {
+	if manifest.BootstrapID == 0 || holder == "" || commit.GetManifestVersion() < manifest.bootstrapSince {
 		return false
 	}
 	return commit.GetBallot().GetProposerId() == holder || commit.GetManifestVersion() == manifest.Version

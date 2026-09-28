@@ -213,6 +213,54 @@ func TestCloseNeedsAMajorityOfEveryQuorumSet(t *testing.T) {
 	})
 }
 
+// Entering lease mode again: the retained copy's node is the bootstrap holder
+// and acquires while its copy keeps running (D1, B-12a).
+func TestReentryAfterACloseKeepsTheRetainedCopy(t *testing.T) {
+	w := closeWorld(t)
+	requireCopyRunsThrough(t, w, "d1", keyP1, w.now+3*time.Minute)
+	w.gw.closeLease("p1", false, 1)
+	w.waitFor(5*time.Second, func() bool { return w.nodes["d1"].node.HolderStatus(keyP1).Retained })
+	w.runUntil(w.now + time.Minute)
+	w.gw.reopenLease("p1", 1)
+	if w.gw.policies["p1"].bootstrap[0] != "d1" {
+		t.Fatalf("bootstrap %v", w.gw.policies["p1"].bootstrap)
+	}
+	w.waitHolderIs(t, keyP1, "d1", 60*time.Second)
+	w.runUntil(w.now + time.Minute)
+	w.requireClean(t)
+}
+
+// B-12a: a commit from an earlier lease period of the policy does not satisfy
+// a new bootstrap reservation, so the named holder's running copy is not
+// taken for unowned, and it acquires as the bootstrap holder.
+func TestOldCommitDoesNotSatisfyANewBootstrap(t *testing.T) {
+	w := closeWorld(t)
+	d1 := w.nodes["d1"]
+	oldCommit := d1.node.proposers[keyP1].commit
+	// The lease closes the old way (no retained holder named) and legacy runs
+	// d1's copy on; then lease mode is entered again naming d1.
+	policy := w.gw.policies["p1"]
+	policy.closed = true
+	w.gw.republish("p1", 1)
+	w.runUntil(w.now + 10*time.Second)
+	d1.containers[keyP1] = &simContainer{live: true, legacy: true}
+	policy.closed = false
+	policy.bootstrapID++
+	policy.bootstrap = map[uint32]string{0: "d1"}
+	w.gw.republish("p1", 1)
+	manifest := d1.node.manifests["p1"]
+	if bootstrapSatisfiedBy(manifest, keyP1, oldCommit) {
+		t.Fatal("a commit from the previous lease period satisfied the new bootstrap")
+	}
+	if !d1.node.BootstrapPending(keyP1) {
+		t.Fatal("the named holder with an old commit is not bootstrap-pending")
+	}
+	requireCopyRunsThrough(t, w, "d1", keyP1, w.now+time.Minute)
+	w.waitHolderIs(t, keyP1, "d1", 30*time.Second)
+	w.runUntil(w.now + time.Minute)
+	w.requireClean(t)
+}
+
 func TestClosedManifestRetainedHolderIsValidated(t *testing.T) {
 	_, key, _ := ed25519.GenerateKey(nil)
 	parse := func(mutate func(*pb.LeaseManifest)) (*Manifest, error) {

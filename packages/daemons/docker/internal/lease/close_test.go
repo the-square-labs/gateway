@@ -138,6 +138,75 @@ func TestRetainedCopySurvivesADaemonRestart(t *testing.T) {
 	}
 }
 
+// B-12a: entering lease mode again (after a close of either kind) never stops
+// the named holders' running copies or takes their endpoints out of service:
+// they acquire as bootstrap holders while the copies keep running.
+func TestReentryKeepsTheServingCopies(t *testing.T) {
+	for _, graceful := range []bool{true, false} {
+		name := "after a graceful close"
+		if !graceful {
+			name = "after a close that stopped the copy and a legacy restart"
+		}
+		t.Run(name, func(t *testing.T) {
+			w := twoCandidateWorld(t)
+			w.waitServing("d1", 45*time.Second)
+			d1 := w.daemon("d1")
+			if graceful {
+				w.closeGracefully()
+				w.runUntil(5*time.Second, func() bool { return len(d1.fence.records) == 0 })
+			} else {
+				w.closeLease()
+				w.run(10 * time.Second)
+				// Legacy starts the copy again (BeforeStart clears records).
+				for id, c := range d1.engine.containers {
+					c.Running = true
+					delete(d1.fence.records, id)
+				}
+				w.logf("legacy restarted d1's copy")
+			}
+			w.run(time.Minute)
+			check := requireUninterrupted(t, w, "d1")
+			w.reopen(map[uint32]string{0: "d1"})
+			w.waitServing("d1", 45*time.Second)
+			w.run(time.Minute)
+			w.requireClean()
+			check()
+			if w.holderOf() != "d1" {
+				t.Fatalf("holder %q after re-entry", w.holderOf())
+			}
+		})
+	}
+}
+
+// B-12a for a replicated policy: both slots' copies keep running across a
+// graceful close and the re-entry, and every slot stays where it was.
+func TestReplicatedCloseAndReentryKeepBothSlots(t *testing.T) {
+	w := replicatedPair(t)
+	before := waitTwoSlots(t, w)
+	checks := []func(){requireUninterrupted(t, w, "d1"), requireUninterrupted(t, w, "d2")}
+	w.closeGracefully()
+	w.run(time.Minute)
+	for _, id := range []string{"d1", "d2"} {
+		if held := w.daemon(id).runtime.Report().Held; len(held) != 1 || !held[0].Retained {
+			t.Fatalf("%s not retained: %+v", id, held)
+		}
+	}
+	bootstrap := map[uint32]string{}
+	for _, entry := range before {
+		parts := strings.Split(entry, "/")
+		bootstrap[map[string]uint32{"0": 0, "1": 1}[parts[1]]] = parts[0]
+	}
+	w.reopen(bootstrap)
+	if !w.runUntil(60*time.Second, func() bool { return strings.Join(slotHolders(w), ",") == strings.Join(before, ",") }) {
+		t.Fatalf("slots after re-entry %v, want %v\n%s", slotHolders(w), before, w.dump())
+	}
+	w.run(time.Minute)
+	w.requireClean()
+	for _, check := range checks {
+		check()
+	}
+}
+
 // A retained holder whose copy is not running (a start the close cut short)
 // releases the slot instead of reporting a running copy.
 func TestRetainedHolderWithoutARunningCopyReleases(t *testing.T) {

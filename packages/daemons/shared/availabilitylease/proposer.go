@@ -184,7 +184,7 @@ func (n *Node) tickCandidate(pk *proposerKey, manifest *Manifest, now time.Durat
 	}
 	reserved := false
 	if holder, ok := manifest.Bootstrap[pk.key.Slot]; ok && pk.bootstrapDone != manifest.BootstrapID &&
-		!(pk.commit != nil && pk.commitBallot.Proposer == holder) {
+		!(pk.commit != nil && bootstrapSatisfiedBy(manifest, pk.key, pk.commit)) {
 		if holder == n.id && !n.holdsOtherSlot(pk.key) {
 			n.startRound(pk, manifest, RoleBootstrapping, now)
 			return
