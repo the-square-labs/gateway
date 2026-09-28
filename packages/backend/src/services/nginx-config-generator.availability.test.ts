@@ -40,9 +40,11 @@ describe('NginxConfigGenerator Availability upstreams', () => {
     expect(config).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=1s;');
     expect(config).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=1s;');
     expect(config).not.toContain('primary.sock');
-    // D8: a refused member socket moves the request to the next member, explicitly.
+    // D8: a refused member socket moves the request to the next member, explicitly; D6: so does a 502/503/504
+    // from a member (for requests nginx may repeat), within bounded tries and time.
     expect(config).toMatch(
-      /proxy_pass http:\/\/gateway_secure_link_[0-9a-f_]+;\n\s+proxy_next_upstream error timeout;/
+      /proxy_pass http:\/\/gateway_secure_link_[0-9a-f_]+;\n\s+proxy_next_upstream error timeout http_502 http_503 http_504;\n\s+proxy_next_upstream_tries 5;\n\s+proxy_next_upstream_timeout 10s;/
     );
+    expect(config).not.toContain('non_idempotent');
   });
 });
