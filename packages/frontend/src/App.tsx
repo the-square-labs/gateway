@@ -65,6 +65,8 @@ import {
   resolveContainerOrPendingSource,
 } from "@/pages/docker-detail/DockerPendingContainerDetail";
 import { HostingPage } from "@/pages/hosting/HostingPage";
+import { IngressGroupDetail } from "@/pages/IngressGroupDetail";
+import { IngressGroups } from "@/pages/IngressGroups";
 import { Logging } from "@/pages/Logging";
 import { NginxTemplateEdit } from "@/pages/NginxTemplateEdit";
 import { NodeConsolePopout } from "@/pages/NodeConsolePopout";
@@ -649,6 +651,15 @@ function NodeDetailGuard() {
   return (
     <AdminNodeDetail resolvedNodeId={resolved.data.id} resolvedNodeSlug={resolved.data.slug} />
   );
+}
+
+/** Ingress groups use node permissions (broadly or on the group's node folder). */
+function IngressGroupsGuard({ children }: { children: React.ReactElement }) {
+  const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
+  if (!hasScopedAccess("nodes:details") && !hasScopedAccess("nodes:manage")) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
 }
 
 function NodesPageGuard() {
@@ -1523,6 +1534,22 @@ function GatewayApp() {
                 element={scoped("ssl:cert:view", <SSLCertificates />)}
               />
               <Route path="/domains" element={<DomainsPageGuard />} />
+              <Route
+                path="/ingress-groups"
+                element={
+                  <IngressGroupsGuard>
+                    <IngressGroups />
+                  </IngressGroupsGuard>
+                }
+              />
+              <Route
+                path="/ingress-groups/:groupId"
+                element={
+                  <IngressGroupsGuard>
+                    <IngressGroupDetail />
+                  </IngressGroupsGuard>
+                }
+              />
               <Route path="/access-lists" element={scoped("acl:view", <AccessLists />)} />
               <Route path="/cas" element={<CAsPageGuard />} />
               <Route path="/cas/:id" element={<CADetailGuard />} />

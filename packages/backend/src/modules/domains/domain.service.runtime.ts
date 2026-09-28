@@ -108,6 +108,7 @@ export abstract class DomainsServiceRuntime {
         dnsStatus: domains.dnsStatus,
         dnsProvider: domains.dnsProvider,
         nginxNodeId: domains.nginxNodeId,
+        ingressGroupId: domains.ingressGroupId,
       })
       .from(domains)
       .where(and(...conditions))

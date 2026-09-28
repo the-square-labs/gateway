@@ -9,6 +9,7 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SwitchCard } from "@/components/common/SwitchCard";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
+import { type IngressTarget, IngressTargetSelect } from "@/components/proxy/IngressTargetSelect";
 import {
   DEFAULT_PROXY_UPSTREAM,
   isProxyUpstreamValid,
@@ -18,7 +19,6 @@ import {
   proxyUpstreamRequest,
 } from "@/components/proxy/ProxyUpstreamEditor";
 import { REDIRECT_STATUS_OPTIONS } from "@/components/proxy/redirect-status-options";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -43,7 +43,6 @@ import {
   creationFolderChoices,
   flattenCreationFolders,
 } from "@/lib/creation-folders";
-import { nodeTypeLabel } from "@/lib/node-appearance";
 import { supportsPagesRouteTemplate } from "@/lib/proxy-template-capabilities";
 import { canCreateInFolder } from "@/lib/scope-utils";
 import { cn } from "@/lib/utils";
@@ -56,6 +55,7 @@ import type {
   Node,
   ProxyHost,
   ProxyHostType,
+  RouteIngressGroupOption,
   SSLCertificate,
 } from "@/types";
 import { isNodeIncompatible } from "@/types";
@@ -68,6 +68,8 @@ interface CreateProxyHostDialogProps {
   /** Optional entrypoint defaults when creating a route from a registered domain. */
   initialDomainName?: string;
   initialNodeId?: string;
+  /** Create the route on this ingress group (a domain served by the group). */
+  initialIngressGroupId?: string;
   /** Called on successful create/update with the host ID and returned host payload when available. */
   onSuccess?: (hostId: string, host?: ProxyHost) => void;
 }
@@ -98,8 +100,6 @@ function getCachedNodeOptions(): NodeOption[] {
 
 const NO_SCOPES: string[] = [];
 const ROOT_FOLDER_VALUE = "__root__";
-/** Create without a node: the server uses the registered domain's ingress node (or the only eligible one). */
-const AUTO_NODE_VALUE = "__auto__";
 
 const STEP_ANIMATION = {
   initial: { opacity: 0, y: 8 },
@@ -125,6 +125,7 @@ export function CreateProxyHostDialog({
   existingHost,
   initialDomainName,
   initialNodeId,
+  initialIngressGroupId,
   onSuccess,
 }: CreateProxyHostDialogProps) {
   const isEditing = !!existingHost;
@@ -141,6 +142,8 @@ export function CreateProxyHostDialog({
   const [type, setType] = useState<ProxyHostType>("proxy");
   const [nodeId, setNodeId] = useState<string>("");
   const [autoNode, setAutoNode] = useState(false);
+  const [ingressGroupId, setIngressGroupId] = useState("");
+  const [ingressGroups, setIngressGroups] = useState<RouteIngressGroupOption[]>([]);
   const [domainNames, setDomainNames] = useState<string[]>([""]);
   // Create only: destination folder ("" = root). Moving an existing route uses the move dialog.
   const [folderId, setFolderId] = useState<string>("");
@@ -193,6 +196,7 @@ export function CreateProxyHostDialog({
     setType("proxy");
     setNodeId("");
     setAutoNode(false);
+    setIngressGroupId("");
     setFolderId("");
     setDomainNames([""]);
     setUpstream(DEFAULT_PROXY_UPSTREAM);
@@ -219,6 +223,7 @@ export function CreateProxyHostDialog({
     if (!open || !existingHost) return;
     setType(existingHost.type);
     setNodeId((existingHost as any).nodeId || "");
+    setIngressGroupId(existingHost.ingressGroupId || "");
     setDomainNames(existingHost.domainNames.length > 0 ? [...existingHost.domainNames] : [""]);
     setUpstream(proxyUpstreamFromHost(existingHost));
     upstreamTouchedRef.current = false;
@@ -239,8 +244,9 @@ export function CreateProxyHostDialog({
   useEffect(() => {
     if (!open || existingHost) return;
     setNodeId(initialNodeId ?? "");
+    setIngressGroupId(initialIngressGroupId ?? "");
     setDomainNames(initialDomainName ? [initialDomainName] : [""]);
-  }, [existingHost, initialDomainName, initialNodeId, open]);
+  }, [existingHost, initialDomainName, initialIngressGroupId, initialNodeId, open]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -252,6 +258,23 @@ export function CreateProxyHostDialog({
       setNodesLoading(true);
     }
   }, [nodes.length, open]);
+
+  // Ingress groups a new route may use (every member open to the caller's grant).
+  useEffect(() => {
+    if (!open || existingHost) return;
+    let cancelled = false;
+    void api
+      .listRouteIngressGroups()
+      .then((groups) => {
+        if (!cancelled) setIngressGroups(groups);
+      })
+      .catch(() => {
+        if (!cancelled) setIngressGroups([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [existingHost, open]);
 
   // Fetch related data when dialog opens
   useEffect(() => {
@@ -374,10 +397,10 @@ export function CreateProxyHostDialog({
   // A node-free destination check needs a broad or folder grant; node-only creators pick their node.
   const canUseAutomaticNode =
     !isEditing && (canCreateInFolder(scopes, "proxy:create", null) || hasFolderCreationGrant);
-  const nodeChoice = autoNode ? AUTO_NODE_VALUE : nodeId || "__none__";
-  const chooseNode = (value: string) => {
-    setAutoNode(value === AUTO_NODE_VALUE);
-    setNodeId(value === AUTO_NODE_VALUE || value === "__none__" ? "" : value);
+  const chooseTarget = (target: IngressTarget) => {
+    setAutoNode(target.auto);
+    setNodeId(target.nodeId);
+    setIngressGroupId(target.ingressGroupId);
   };
   const showFolderPicker =
     !isEditing && (folderChoices.folders.length > 0 || !folderChoices.allowRoot);
@@ -395,7 +418,7 @@ export function CreateProxyHostDialog({
 
   // Validation
   const isStep1Valid =
-    (nodeId !== "" || (autoNode && canUseAutomaticNode)) &&
+    (nodeId !== "" || ingressGroupId !== "" || (autoNode && canUseAutomaticNode)) &&
     !selectedLockedForCreation &&
     canCreateInSelectedFolder &&
     domainNames.some((d) => d.trim() !== "");
@@ -422,7 +445,8 @@ export function CreateProxyHostDialog({
   const buildUpdateRequest = (host: ProxyHost): Partial<CreateProxyHostRequest> => {
     const req: Partial<CreateProxyHostRequest> = {
       type,
-      nodeId,
+      // A route on an ingress group changes its placement from the route page, not here.
+      ...(host.ingressGroupId ? {} : { nodeId }),
       domainNames: domainNames.filter((d) => d.trim() !== ""),
     };
     if (rawConfigEnabled !== (host.rawConfigEnabled ?? false)) {
@@ -443,7 +467,8 @@ export function CreateProxyHostDialog({
     const domains = domainNames.filter((d) => d.trim() !== "");
     const req: CreateProxyHostRequest = {
       type,
-      nodeId: autoNode ? undefined : nodeId,
+      nodeId: autoNode || ingressGroupId ? undefined : nodeId,
+      ...(ingressGroupId ? { ingressGroupId } : {}),
       domainNames: domains,
       folderId: folderId || undefined,
       websocketSupport: upstream.kind === "pages" ? false : websocketSupport,
@@ -515,13 +540,6 @@ export function CreateProxyHostDialog({
     }
   };
 
-  // Node status badge variant
-  const nodeStatusVariant = (status: string) => {
-    if (status === "online") return "success";
-    if (status === "error") return "destructive";
-    return "secondary";
-  };
-
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
@@ -576,63 +594,21 @@ export function CreateProxyHostDialog({
                   </Select>
                 </div>
 
-                {/* Node Selector */}
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium">Ingress node</label>
-                  <Select value={nodeChoice} onValueChange={chooseNode} disabled={nodesLoading}>
-                    <SelectTrigger aria-label="Ingress node" aria-busy={nodesLoading}>
-                      {selectedNode ? (
-                        <div className="flex min-w-0 items-center gap-3 pr-2">
-                          <span className="min-w-0 flex-1 truncate">{selectedNode.hostname}</span>
-                          <Badge variant="secondary" size="inline" className="shrink-0">
-                            {nodeTypeLabel(selectedNode.type)}
-                          </Badge>
-                          <Badge
-                            variant={nodeStatusVariant(selectedNode.status)}
-                            size="inline"
-                            className="shrink-0"
-                          >
-                            {selectedNode.status}
-                          </Badge>
-                        </div>
-                      ) : autoNode ? (
-                        <span className="min-w-0 flex-1 truncate">
-                          Automatic (from the registered domain)
-                        </span>
-                      ) : (
-                        <SelectValue placeholder="Select a node..." />
-                      )}
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__" disabled>
-                        Select a node...
-                      </SelectItem>
-                      {canUseAutomaticNode && (
-                        <SelectItem value={AUTO_NODE_VALUE}>
-                          Automatic (from the registered domain)
-                        </SelectItem>
-                      )}
-                      {visibleNodes.map((node) => {
-                        const lockedForCreation =
-                          node.serviceCreationLocked &&
-                          (!isEditing || node.id !== (existingHost as any)?.nodeId);
-                        return (
-                          <SelectItem key={node.id} value={node.id} disabled={lockedForCreation}>
-                            <div className="flex items-center justify-between w-full gap-3">
-                              <span className="min-w-0 truncate">{node.hostname}</span>
-                              <Badge variant="secondary" size="inline">
-                                {nodeTypeLabel(node.type)}
-                              </Badge>
-                              <Badge variant={nodeStatusVariant(node.status)} size="inline">
-                                {node.status}
-                              </Badge>
-                            </div>
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {/* Node or ingress group */}
+                <IngressTargetSelect
+                  target={{ nodeId, ingressGroupId, auto: autoNode }}
+                  onChange={chooseTarget}
+                  nodes={visibleNodes}
+                  groups={ingressGroups}
+                  loading={nodesLoading}
+                  allowAutomatic={canUseAutomaticNode}
+                  currentNodeId={isEditing ? ((existingHost as any)?.nodeId ?? null) : null}
+                  lockedGroupName={
+                    isEditing && existingHost?.ingressGroupId
+                      ? (existingHost.ingressGroup?.name ?? "Ingress group")
+                      : null
+                  }
+                />
 
                 {showFolderPicker && (
                   <div className="space-y-1.5">
@@ -686,7 +662,13 @@ export function CreateProxyHostDialog({
                               setDomainNames(next);
                             }}
                             onDomainSelect={(selectedDomain) => {
-                              if (selectedDomain?.nginxNodeId) {
+                              if (selectedDomain?.ingressGroupId && !isEditing) {
+                                chooseTarget({
+                                  nodeId: "",
+                                  ingressGroupId: selectedDomain.ingressGroupId,
+                                  auto: false,
+                                });
+                              } else if (selectedDomain?.nginxNodeId && !ingressGroupId) {
                                 setAutoNode(false);
                                 setNodeId(selectedDomain.nginxNodeId);
                               }

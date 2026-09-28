@@ -31,6 +31,7 @@ import { withDockerApi } from "./api-docker";
 import { withHostingApi } from "./api-hosting";
 import { withInferenceApi } from "./api-inference";
 import { withInferenceCoreApi } from "./api-inference-core";
+import { withIngressGroupsApi } from "./api-ingress-groups";
 import { withIntegrationsApi } from "./api-integrations";
 import { withLoggingApi } from "./api-logging";
 import { withNotificationApi } from "./api-notifications";
@@ -41,19 +42,21 @@ import { withProxyApi } from "./api-proxy";
 import { withSystemApi } from "./api-system";
 import { type BackgroundPrewarmTask, runBackgroundPrewarm } from "./background-prewarm";
 
-class ApiClient extends withPagesDomainsApi(
-  withAIStatusApi(
-    withInferenceCoreApi(
-      withInferenceApi(
-        withIntegrationsApi(
-          withLoggingApi(
-            withNotificationApi(
-              withAuthApi(
-                withSystemApi(
-                  withDockerApi(
-                    withBackupApi(
-                      withObjectStorageApi(
-                        withDatabaseApi(withPkiApi(withProxyApi(withHostingApi(ApiClientBase))))
+class ApiClient extends withIngressGroupsApi(
+  withPagesDomainsApi(
+    withAIStatusApi(
+      withInferenceCoreApi(
+        withInferenceApi(
+          withIntegrationsApi(
+            withLoggingApi(
+              withNotificationApi(
+                withAuthApi(
+                  withSystemApi(
+                    withDockerApi(
+                      withBackupApi(
+                        withObjectStorageApi(
+                          withDatabaseApi(withPkiApi(withProxyApi(withHostingApi(ApiClientBase))))
+                        )
                       )
                     )
                   )

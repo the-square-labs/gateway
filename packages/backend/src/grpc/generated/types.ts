@@ -236,6 +236,22 @@ export interface HealthReport {
   /** Present when the daemon advertises availability_lease_v1. */
   availabilityLease?: AvailabilityLeaseReport | null;
   relayLatencies?: RelayLatencySample[];
+  /** Present when the daemon advertises ingress_group_v1 (field 195). */
+  ingressHealth?: IngressHealthReport | null;
+}
+
+/** What the reserved /.well-known/gateway-ingress-health endpoint answers on the node right now. */
+export interface IngressHealthReport {
+  serving: boolean;
+  reason: string;
+  /** int64 as string (proto-loader). */
+  configGeneration: string;
+  nginxRunning: boolean;
+  configApplied: boolean;
+  secureLinkSources: number;
+  usableRelayTransports: number;
+  /** int64 as string (proto-loader). */
+  checkedAtUnixMs: string;
 }
 
 export interface RelayLatencySample {

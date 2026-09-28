@@ -29,6 +29,7 @@ export interface IngressGroupMemberView {
   lastError: string | null;
   node: {
     id: string;
+    slug: string;
     hostname: string;
     displayName: string | null;
     status: string;
@@ -75,6 +76,7 @@ async function memberViews(context: IngressGroupViewContext, groupIds: string[])
       ? context.db
           .select({
             id: nodes.id,
+            slug: nodes.slug,
             hostname: nodes.hostname,
             displayName: nodes.displayName,
             status: nodes.status,
@@ -117,6 +119,7 @@ async function memberViews(context: IngressGroupViewContext, groupIds: string[])
           node: node
             ? {
                 id: node.id,
+                slug: node.slug,
                 hostname: node.hostname,
                 displayName: node.displayName,
                 status: node.status,

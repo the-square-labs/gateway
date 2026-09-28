@@ -42,6 +42,8 @@ import type {
   StatusPageSourceType,
 } from "@/types";
 
+import { StatusPageIngressSelect } from "./StatusPageIngressSelect";
+
 interface StatusPageSectionProps {
   nodesList: Node[];
 }
@@ -162,12 +164,14 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
       domain: config.domain,
       upstreamUrl: config.upstreamUrl?.trim() ? config.upstreamUrl.trim() : null,
       nodeId: config.nodeId || null,
+      ingressGroupId: config.ingressGroupId || null,
       sslCertificateId: config.sslCertificateId,
       proxyTemplateId: config.proxyTemplateId,
     }),
     [
       config.domain,
       config.enabled,
+      config.ingressGroupId,
       config.nodeId,
       config.proxyTemplateId,
       config.sslCertificateId,
@@ -181,12 +185,14 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
       domain: savedConfig.domain,
       upstreamUrl: savedConfig.upstreamUrl?.trim() ? savedConfig.upstreamUrl.trim() : null,
       nodeId: savedConfig.nodeId || null,
+      ingressGroupId: savedConfig.ingressGroupId || null,
       sslCertificateId: savedConfig.sslCertificateId,
       proxyTemplateId: savedConfig.proxyTemplateId,
     }),
     [
       savedConfig.domain,
       savedConfig.enabled,
+      savedConfig.ingressGroupId,
       savedConfig.nodeId,
       savedConfig.proxyTemplateId,
       savedConfig.sslCertificateId,
@@ -281,25 +287,17 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
         </SettingsRow>
         <SettingsRow
           label="Ingress node"
-          description="Online Ingress node that serves the public status page"
-          help="The selected Nginx node owns the public virtual host, terminates TLS, and proxies status-page requests back to Gateway."
+          description="Online Ingress node, or ingress group, that serves the public status page"
+          help="The selected Nginx node owns the public virtual host, terminates TLS, and proxies status-page requests back to Gateway. An ingress group serves it from every member, so the page stays reachable while one site is down."
         >
-          <Select
-            value={config.nodeId ?? ""}
-            disabled={!canManage || config.enabled || savingSettings}
-            onValueChange={(nodeId) => setConfig((prev) => ({ ...prev, nodeId }))}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select an online Ingress node" />
-            </SelectTrigger>
-            <SelectContent>
-              {onlineNginxNodes.map((node) => (
-                <SelectItem key={node.id} value={node.id} disabled={node.serviceCreationLocked}>
-                  {node.displayName || node.hostname}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <StatusPageIngressSelect
+            nodeId={config.nodeId}
+            ingressGroupId={config.ingressGroupId ?? null}
+            enabled={savedConfig.enabled && config.enabled}
+            disabled={!canManage || savingSettings}
+            onlineNginxNodes={onlineNginxNodes}
+            onChange={(target) => setConfig((prev) => ({ ...prev, ...target }))}
+          />
         </SettingsRow>
         <SettingsRow
           label="SSL certificate"

@@ -42,6 +42,8 @@ export interface Domain {
   cloudflareMigrationStatus: DomainCloudflareMigrationStatus | null;
   cloudflareMigrationCheckedAt: string | null;
   nginxNodeId: string | null;
+  /** Set when the domain (and its routes) is served by every member of an ingress group. */
+  ingressGroupId?: string | null;
   ingressMigrationId?: string | null;
   ingressMigrationSourceNodeId?: string | null;
   ingressMigrationStatus?: string | null;
@@ -74,7 +76,25 @@ export interface DomainUsage {
 
 export interface DomainWithUsage extends Domain {
   nginxNode: DomainNginxNode | null;
+  ingressGroup?: DomainIngressGroupSummary | null;
   usage: DomainUsage;
+}
+
+/** The ingress group of a domain: its members and the addresses DNS publishes for them. */
+export interface DomainIngressGroupSummary {
+  id: string;
+  name: string;
+  slug: string;
+  dnsFailoverMode: string;
+  targetIps: string[];
+  unpublishedNodeIds: string[];
+  members: Array<{
+    nodeId: string;
+    state: "joining" | "active" | "draining";
+    priority: number;
+    node: (DomainNginxNode & { effectiveAddress?: string }) | null;
+    addresses: string[];
+  }>;
 }
 
 export interface DomainNginxNode {
@@ -89,6 +109,8 @@ export interface DomainNginxNode {
 export interface DomainNginxNodeOptions {
   eligibleNodes: Array<DomainNginxNode & { effectiveAddress: string }>;
   unconfiguredNodes: DomainNginxNode[];
+  /** Ingress groups a new domain may use (every member eligible and open to the caller). */
+  ingressGroups?: import("./ingress-groups").DomainIngressGroupOption[];
   totalNginxNodes: number;
   unconfiguredNginxNodes: number;
 }
@@ -124,6 +146,8 @@ export interface DomainSearchResult {
   dnsStatus: DnsStatus;
   dnsProvider: DomainDnsProvider;
   nginxNodeId: string | null;
+  /** Set when the domain is served by an ingress group (a route on it goes to the group). */
+  ingressGroupId?: string | null;
 }
 
 export interface CreateDomainRequest {
@@ -135,6 +159,8 @@ export interface CreateDomainRequest {
   proxied?: boolean;
   overwriteDns?: boolean;
   nginxNodeId?: string;
+  /** Serve the domain (and its routes) from every member of this ingress group instead of one node. */
+  ingressGroupId?: string;
 }
 
 export interface DeleteDomainRequest {

@@ -10,6 +10,7 @@ import {
   HardDrive,
   LayoutDashboard,
   Lock,
+  Network,
   PanelsTopLeft,
   ScrollText,
   Server,
@@ -29,6 +30,7 @@ export type AppNavigationItemId =
   | "profile"
   | "proxy-hosts"
   | "domains"
+  | "ingress-groups"
   | "ssl-certificates"
   | "authorities"
   | "certificates"
@@ -123,6 +125,13 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
         icon: Globe2,
         shortcutKey: "2",
         keywords: ["dns", "cloudflare"],
+      },
+      {
+        id: "ingress-groups",
+        name: "Ingress Groups",
+        href: "/ingress-groups",
+        icon: Network,
+        keywords: ["sites", "failover", "multi-node", "availability", "nginx nodes"],
       },
     ],
   },
@@ -324,6 +333,8 @@ export function canAccessNavigationItem(
       return hasScopeBase(scopes, "proxy:view") || scopeMatches(scopes, "proxy:folders:manage");
     case "domains":
       return hasScopeBase(scopes, "domains:view");
+    case "ingress-groups":
+      return hasScopeBase(scopes, "nodes:details") || hasScopeBase(scopes, "nodes:manage");
     case "ssl-certificates":
       return hasScopeBase(scopes, "ssl:cert:view");
     case "authorities":

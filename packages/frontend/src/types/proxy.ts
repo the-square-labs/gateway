@@ -40,6 +40,11 @@ export interface ProxyHost {
   maintenanceEnabled: boolean;
   maintenanceStartedAt: string | null;
   nodeId?: string | null;
+  /** Set when the route is served by every member of an ingress group (nodeId is then its first active member). */
+  ingressGroupId?: string | null;
+  servingNodeIds?: import("./ingress-groups").RouteIngressPlacementView["servingNodeIds"];
+  ingressGroup?: import("./ingress-groups").RouteIngressPlacementView["ingressGroup"];
+  ingressDelivery?: import("./ingress-groups").RouteIngressPlacementView["ingressDelivery"];
   upstreamKind?: ProxyUpstreamKind;
   forwardHost: string | null;
   forwardPort: number | null;
@@ -352,6 +357,8 @@ export interface CreateProxyHostRequest {
   type: ProxyHostType;
   /** Omitted: the ingress node of the registered domains, or the only node the caller may use. */
   nodeId?: string;
+  /** Serve the route from every member of this ingress group instead of one node. */
+  ingressGroupId?: string | null;
   domainNames: string[];
   upstreamKind?: ProxyUpstreamKind;
   forwardHost?: string;

@@ -23,6 +23,7 @@ export type * from "./environment-settings";
 export type * from "./housekeeping";
 export type * from "./inference";
 export type * from "./inference-core";
+export type * from "./ingress-groups";
 export type * from "./integrations";
 export type * from "./logging";
 export type {

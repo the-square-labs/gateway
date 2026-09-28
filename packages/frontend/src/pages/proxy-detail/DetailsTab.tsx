@@ -5,6 +5,7 @@ import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
+import { RouteIngressPlacementPanel } from "@/components/ingress-groups/RouteIngressPlacementPanel";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { nodeRoute } from "@/lib/resource-routes";
@@ -102,7 +103,9 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
             <Server className="h-5 w-5 text-muted-foreground" />
             <div>
               <p className="text-sm font-medium">{nodeInfo.name}</p>
-              <p className="text-xs text-muted-foreground">Ingress node</p>
+              <p className="text-xs text-muted-foreground">
+                {host.ingressGroupId ? "First active member of the ingress group" : "Ingress node"}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -124,6 +127,8 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
           </div>
         </PanelShell>
       )}
+
+      <RouteIngressPlacementPanel host={host} onChanged={() => undefined} />
 
       {/* Host Info + Health Check in one row */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
