@@ -52,7 +52,7 @@ What Gateway still does in lease mode:
 
 `get` returns a `lease` object:
 - `mode`: `legacy`, `bootstrapping`, `lease` or `closing`;
-- `reason`: why a policy is still legacy, for example Nodes without the capability;
+- `reason`: why a policy is still legacy, for example Nodes without the capability. With `watchdog_missing`, the daemon on the listed Nodes could not install the lease watchdog itself (it runs without root); re-run the node installer there;
 - `holders` per slot, with Node, placement and holder time;
 - `voterMargin` with `voters`, `reachable`, `required` and `margin`.
 
