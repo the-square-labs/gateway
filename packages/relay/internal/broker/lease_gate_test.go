@@ -516,3 +516,40 @@ func TestPlainRenewalOfAServingRegistrationIsNotDroppedByTheGate(t *testing.T) {
 	}
 	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.FailedPrecondition, "availability lease gate closed")
 }
+
+// N-12: when the relay drops the connection of a daemon whose host became unreachable (peer liveness), the member's
+// registration goes with it: its tunnels close, the holder's endpoint reads NOT_READY (nginx closes the member socket)
+// and a new tunnel is refused at once instead of waiting for an accept that never comes.
+func TestLostEndpointConnectionTakesTheMemberOutAtOnce(t *testing.T) {
+	f := newLeaseFixture(t)
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	stream, result, disconnect := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, stream, result)
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+		t.Fatalf("serving holder endpoint = %v", got)
+	}
+	session := &activeTunnel{routeID: "proxy-route", routeGeneration: 1, endpointID: "lease-ep", endpointGeneration: 1, stop: make(chan struct{})}
+	f.broker.mu.Lock()
+	f.broker.active["proxy"] = session
+	f.broker.mu.Unlock()
+
+	disconnect() // the transport closed under the registration stream
+	select {
+	case <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("registration outlived its connection")
+	}
+	select {
+	case <-session.stop:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a tunnel to the lost endpoint stayed open")
+	}
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY {
+		t.Fatalf("holder endpoint after its connection was lost = %v", got)
+	}
+	started := time.Now()
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.Unavailable, "target endpoint is not registered")
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("refusing a tunnel to the lost endpoint took %s", elapsed)
+	}
+}

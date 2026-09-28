@@ -70,7 +70,7 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 		grpc.Creds(credentials.NewTLS(identityStore.ServerTLSConfig())),
 		grpc.ForceServerCodec(codec.Codec{}),
 		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
-		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
+		grpc.KeepaliveParams(peerKeepalive()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             clientKeepaliveMinTime,
 			PermitWithoutStream: true,
@@ -113,6 +113,7 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 		state.Close()
 		return nil, err
 	}
+	listener = withPeerLiveness(listener)
 	runtime := &Runtime{GRPC: grpcServer, Listener: listener, State: state, Proxy: proxyHandler, Lease: coordinator}
 	go func() { _ = grpcServer.Serve(listener) }()
 	return runtime, nil
