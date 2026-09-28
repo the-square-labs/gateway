@@ -295,6 +295,10 @@ func (n *Node) BeaconRelays() {
 			for _, id := range manifest.Voters.relayIDs {
 				if id != n.id {
 					n.beacons[id] = true
+					// Like any first frame to a relay after it (re)started,
+					// carry the manifest that names this node, so the relay
+					// authorizes the stream it arrives on (D3).
+					n.forwardOnce(id, manifest.PolicyID)
 				}
 			}
 		}
