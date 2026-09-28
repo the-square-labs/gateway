@@ -180,7 +180,8 @@ func (b *Broker) HolderEndpoint(policyID, holderID string) relayv1.LeaseHolderEn
 	now := time.Now()
 	restarting := false
 	for _, registration := range b.endpoints {
-		if !holderOwns(snapshot.Endpoint(registration.endpointID, registration.assignmentGeneration)) || now.Unix() > registration.expiresAt.Load() {
+		if !holderOwns(snapshot.Endpoint(registration.endpointID, registration.assignmentGeneration)) || now.Unix() > registration.expiresAt.Load() ||
+			(registration.subjectID != "" && registration.subjectID != holderID) {
 			continue
 		}
 		if registration.dormant() {

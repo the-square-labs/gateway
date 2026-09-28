@@ -31,7 +31,11 @@ const (
 var EndpointRestartGrace = 15 * time.Second
 
 type endpointRegistration struct {
-	endpointID           string
+	endpointID string
+	// subjectID is the daemon the registration's grant names (its node):
+	// while a registration of a previous generation serves, the endpoint's
+	// policy may already name another node.
+	subjectID            string
 	generation           uint64
 	assignmentGeneration uint64
 	expiresAt            atomic.Int64
@@ -49,6 +53,18 @@ type endpointRegistration struct {
 	restartingSince atomic.Int64
 	restarting      chan struct{}
 	restartOnce     sync.Once
+	// supersededAt is when the policy moved the endpoint to a newer
+	// generation (certificate rotation, new target node) while this
+	// registration of the previous one serves, in Unix nanoseconds; 0 while it
+	// is current. It keeps serving until the new generation registers or its
+	// grant expires (make-before-break).
+	supersededAt atomic.Int64
+	// pending is a renewal whose grant is ahead of this relay's policy (the
+	// daemon got its grant before the relay got the policy): applied as soon
+	// as the policy arrives. Guarded by the broker's mu; recheck wakes the
+	// registration's stream handler to try it again.
+	pending *relayv1.RenewEndpoint
+	recheck chan struct{}
 	// stopReason is written before stop closes, so readers of a closed stop
 	// see it without a lock.
 	stopReason string
@@ -68,6 +84,17 @@ func (r *endpointRegistration) stateful() bool {
 
 func (r *endpointRegistration) dormant() bool {
 	return r.servingState() == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+}
+
+// nudge wakes the registration's stream handler to retry a pending renewal.
+func (r *endpointRegistration) nudge() {
+	if r.recheck == nil {
+		return
+	}
+	select {
+	case r.recheck <- struct{}{}:
+	default:
+	}
 }
 
 // announceRestart marks a registration whose daemon restarts. A dormant
@@ -127,8 +154,11 @@ type activeTunnel struct {
 	assignmentGeneration uint64
 	trafficClass         string
 	metrics              *routeMetrics
-	stop                 chan struct{}
-	stopOnce             sync.Once
+	// registration is the endpoint registration the tunnel was bridged
+	// through (nil for built-in local services).
+	registration *endpointRegistration
+	stop         chan struct{}
+	stopOnce     sync.Once
 }
 
 func (t *activeTunnel) close() { t.stopOnce.Do(func() { close(t.stop) }) }
@@ -154,13 +184,16 @@ type Broker struct {
 	draining         atomic.Bool
 	dialLocalService func(context.Context, string) (net.Conn, error)
 	lease            LeaseGate
+	// policyChanged closes, and is replaced, whenever a new policy snapshot
+	// applies: registrations waiting for the policy their grant needs retry.
+	policyChanged chan struct{}
 }
 
 func New(store *policy.Store) *Broker {
 	controller := admission.New()
 	controller.UpdatePolicy(store.Current().Admission)
 	dialer := net.Dialer{}
-	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, registryByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now(), dialLocalService: func(ctx context.Context, target string) (net.Conn, error) {
+	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, registryByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now(), policyChanged: make(chan struct{}), dialLocalService: func(ctx context.Context, target string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "tcp", target)
 	}}
 }
@@ -411,18 +444,46 @@ func (b *Broker) reconcileLocked(next *policy.Snapshot) {
 			delete(b.routeMetrics, routeID)
 		}
 	}
+	now := time.Now().UnixNano()
 	for id, registration := range b.endpoints {
 		endpoint := next.Endpoint(registration.endpointID, registration.assignmentGeneration)
-		if endpoint == nil || endpoint.AssignmentGeneration != registration.assignmentGeneration || endpoint.Generation != registration.generation {
+		if endpoint == nil || endpoint.AssignmentGeneration != registration.assignmentGeneration || endpoint.Generation < registration.generation {
 			registration.close()
 			delete(b.endpoints, id)
+			continue
+		}
+		if endpoint.Generation > registration.generation {
+			// The endpoint moved to a newer generation (its target's
+			// certificate rotated, or its target node changed) while this
+			// registration serves: it keeps serving, bounded by its grant,
+			// until the new generation registers, instead of leaving a gap of
+			// one grant sync (make-before-break).
+			registration.supersededAt.CompareAndSwap(0, now)
+		}
+		if registration.pending != nil || registration.supersededAt.Load() != 0 {
+			registration.nudge()
 		}
 	}
 	for _, tunnel := range b.active {
 		route := next.Route(tunnel.routeID, tunnel.assignmentGeneration)
 		endpoint := next.Endpoint(tunnel.endpointID, tunnel.assignmentGeneration)
-		if route == nil || route.AssignmentGeneration != tunnel.assignmentGeneration || route.Generation != tunnel.routeGeneration || endpoint == nil || endpoint.AssignmentGeneration != tunnel.assignmentGeneration || endpoint.Generation != tunnel.endpointGeneration {
+		// A newer endpoint generation alone does not end a tunnel: it keeps
+		// running on the registration it was bridged through until that ends.
+		if route == nil || route.AssignmentGeneration != tunnel.assignmentGeneration || route.Generation != tunnel.routeGeneration || endpoint == nil || endpoint.AssignmentGeneration != tunnel.assignmentGeneration || endpoint.Generation < tunnel.endpointGeneration {
 			tunnel.close()
 		}
 	}
+	if b.policyChanged != nil {
+		close(b.policyChanged)
+	}
+	b.policyChanged = make(chan struct{})
+}
+
+// policyAhead reports a grant that names an endpoint generation or assignment
+// this relay's policy does not have yet: the daemon got its grant before the
+// relay got the policy, which follows within seconds.
+func policyAhead(claims grant.Claims, snapshot *policy.Snapshot) bool {
+	endpoint := snapshot.Endpoint(claims.EndpointID, claims.AssignmentGeneration)
+	return endpoint == nil || endpoint.Generation < claims.EndpointGeneration ||
+		(claims.AssignmentGeneration > 0 && endpoint.AssignmentGeneration < claims.AssignmentGeneration)
 }

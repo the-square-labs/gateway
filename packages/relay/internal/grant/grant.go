@@ -52,6 +52,21 @@ type Verifier struct {
 }
 
 func (v Verifier) Verify(envelope *relayv1.SignedGrant, wantKind string, identity peer.Identity) (Claims, error) {
+	claims, err := v.VerifyEnvelope(envelope, wantKind, identity)
+	if err != nil {
+		return Claims{}, err
+	}
+	if err := ValidatePolicy(claims, wantKind, v.Store.Current()); err != nil {
+		return Claims{}, err
+	}
+	return claims, nil
+}
+
+// VerifyEnvelope authenticates a grant (signature, scope, subject, lifetime)
+// without binding it to the policy: the caller validates it against the
+// policy snapshot it admits under (ValidatePolicy), and may wait for a policy
+// the grant is ahead of.
+func (v Verifier) VerifyEnvelope(envelope *relayv1.SignedGrant, wantKind string, identity peer.Identity) (Claims, error) {
 	if envelope == nil || envelope.KeyId == "" || len(envelope.Payload) == 0 || len(envelope.Signature) != ed25519.SignatureSize {
 		return Claims{}, fmt.Errorf("signed grant is incomplete")
 	}
@@ -100,9 +115,6 @@ func (v Verifier) Verify(envelope *relayv1.SignedGrant, wantKind string, identit
 	}
 	if now.Add(ClockSkew).Before(issuedAt) || now.Add(ClockSkew).Before(notBefore) || now.Add(-ClockSkew).After(expiresAt) {
 		return Claims{}, fmt.Errorf("grant is not currently valid")
-	}
-	if err := ValidatePolicy(claims, wantKind, snapshot); err != nil {
-		return Claims{}, err
 	}
 	return claims, nil
 }
