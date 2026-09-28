@@ -140,8 +140,13 @@ proxyRoutes.openapi({ ...listProxyHostsRoute, middleware: requireScopeBase('prox
 // nodes it can create routes on, without nodes:details.
 proxyRoutes.openapi({ ...listRouteIngressNodesRoute, middleware: requireScopeBase('proxy:create') }, async (c) => {
   const { folderId } = RouteIngressNodeListQuerySchema.parse(c.req.query());
-  const data = await container.resolve(ProxyService).listRouteIngressNodes(c.get('effectiveScopes') || [], folderId);
-  return c.json({ data });
+  const scopes = c.get('effectiveScopes') || [];
+  const proxyService = container.resolve(ProxyService);
+  const [data, groups] = await Promise.all([
+    proxyService.listRouteIngressNodes(scopes, folderId),
+    proxyService.listRouteIngressGroups(scopes, folderId),
+  ]);
+  return c.json({ data, groups });
 });
 
 proxyRoutes.openapi(getProxyHostBySlugRoute, async (c) => {

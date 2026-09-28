@@ -1206,6 +1206,7 @@ describe('proxy routes programmatic raw config handling', () => {
       proxyService.listRouteIngressNodes = vi
         .fn()
         .mockResolvedValue([{ id: EDGE, displayName: 'Edge', hostname: 'edge-1', status: 'online' }]);
+      proxyService.listRouteIngressGroups = vi.fn().mockResolvedValue([]);
     });
 
     it('lists the ingress nodes a creator may use, for its scopes and the requested folder', async () => {
@@ -1216,8 +1217,10 @@ describe('proxy routes programmatic raw config handling', () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({
         data: [{ id: EDGE, displayName: 'Edge', hostname: 'edge-1', status: 'online' }],
+        groups: [],
       });
       expect(proxyService.listRouteIngressNodes).toHaveBeenCalledWith(mocks.scopes, FOLDER_ID);
+      expect(proxyService.listRouteIngressGroups).toHaveBeenCalledWith(mocks.scopes, FOLDER_ID);
       expect(mocks.proxyService.getProxyHost).not.toHaveBeenCalled();
     });
 

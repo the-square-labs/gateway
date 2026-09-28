@@ -30,6 +30,7 @@ import {
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 import { IngressDeliveryError } from './proxy-ingress-delivery.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
+import { loadRouteIngressGroupCandidates, type RouteIngressGroup } from './route-ingress-groups.js';
 import {
   type RouteIngressNode,
   type RouteIngressNodeCandidate,
@@ -89,6 +90,20 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
   async listRouteIngressNodes(scopes: readonly string[], folderId?: string | null): Promise<RouteIngressNode[]> {
     return routeIngressNodesForScopes(await this.loadRouteIngressNodeCandidates(), scopes, folderId).map(
       toRouteIngressNode
+    );
+  }
+
+  /**
+   * Ingress groups the caller may place a new route on: every member must be a node the caller may create routes
+   * on (see listRouteIngressNodes) and the group must have an active member. Members are listed in site order.
+   */
+  async listRouteIngressGroups(scopes: readonly string[], folderId?: string | null): Promise<RouteIngressGroup[]> {
+    const candidates = await this.loadRouteIngressNodeCandidates();
+    const allowed = new Set(routeIngressNodesForScopes(candidates, scopes, folderId).map((node) => node.id));
+    return (await loadRouteIngressGroupCandidates(this.db, candidates)).filter(
+      (group) =>
+        group.members.some((member) => member.state === 'active') &&
+        group.members.every((member) => allowed.has(member.id))
     );
   }
 
