@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"hash"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -69,6 +70,11 @@ func writeConfigTreeFingerprint(digest hash.Hash, name, root string) {
 			info.ModTime().UnixNano(),
 			inode,
 		)
+		// File timestamps come from a coarse clock, so two same-size writes a few milliseconds apart
+		// can leave identical metadata; hash the content of files written that recently.
+		if info.Mode().IsRegular() && time.Since(info.ModTime()) < configRecentWriteWindow {
+			writeFileContentFingerprint(digest, path)
+		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(path)
 			if err != nil {
@@ -79,6 +85,24 @@ func writeConfigTreeFingerprint(digest hash.Hash, name, root string) {
 		}
 		return nil
 	})
+}
+
+// configRecentWriteWindow bounds how long after a write a file's content is part of the fingerprint.
+const configRecentWriteWindow = 2 * time.Second
+
+func writeFileContentFingerprint(digest hash.Hash, path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		fmt.Fprintf(digest, "content-error\x00%s\x00%s\n", path, err)
+		return
+	}
+	defer file.Close()
+	content := sha256.New()
+	if _, err := io.Copy(content, file); err != nil {
+		fmt.Fprintf(digest, "content-error\x00%s\x00%s\n", path, err)
+		return
+	}
+	fmt.Fprintf(digest, "content\x00%s\x00%x\n", path, content.Sum(nil))
 }
 
 func writeActiveCertificatesFingerprint(digest hash.Hash, root string) {

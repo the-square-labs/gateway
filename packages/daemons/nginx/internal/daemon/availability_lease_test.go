@@ -48,7 +48,7 @@ func TestAvailabilityLeaseCoordinatorApplyIsAnObserverNoOpThatTracksRevision(t *
 	}
 
 	command := &pb.SyncAvailabilityLeaseCommand{
-		Revision: 5,
+		Revision:   5,
 		PolicyKeys: []*pb.AvailabilityLeasePolicyKey{{KeyId: "k1", PublicKey: []byte("not a real key")}},
 		Manifests:  [][]byte{[]byte("not a real manifest")},
 	}
