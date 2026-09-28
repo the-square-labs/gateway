@@ -53,6 +53,22 @@ describe('nginx node installer baseline', () => {
     expect(serviceAction).toBeGreaterThan(tokenCheck);
   });
 
+  it('can re-add the nginx.org repository after a failed run and under a strict umask', () => {
+    const source = readFileSync(nginxNodeInstaller, 'utf8');
+    const repoStart = source.indexOf('install_nginx_stable_repo() {');
+    const repo = source.slice(repoStart, source.indexOf('\nnginx_version_at_least() {', repoStart));
+
+    expect(repoStart).toBeGreaterThanOrEqual(0);
+    // Without --yes gpg refuses to overwrite the keyring left by the first run.
+    expect(repo).toContain('gpg --batch --yes --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg');
+    // apt verifies as an unprivileged user; umask 077 would leave NO_PUBKEY.
+    expect(repo).toContain('chmod 0644 /usr/share/keyrings/nginx-archive-keyring.gpg');
+    expect(repo).toContain('chmod 0644 /etc/apt/sources.list.d/nginx.list');
+    expect(repo.indexOf('chmod 0644 /usr/share/keyrings/nginx-archive-keyring.gpg')).toBeLessThan(
+      repo.indexOf('run_apt_with_lock_retry update -qq')
+    );
+  });
+
   it('retries apt lock contention without retrying unrelated package errors', () => {
     const source = readFileSync(nginxNodeInstaller, 'utf8');
     const helperStart = source.indexOf('run_apt_with_lock_retry() {');
