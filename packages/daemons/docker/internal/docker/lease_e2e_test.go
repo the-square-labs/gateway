@@ -259,6 +259,10 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 		}
 		integration.runtime = runtime
 		d.plugin.lease = integration
+		// Runs after the deferred cancel and before the temporary directories are removed (cleanups run in
+		// reverse): the relay lanes and lease operations still in flight wrote into them after the test (flaky
+		// TempDir cleanup).
+		t.Cleanup(integration.stop)
 		for id, conn := range conns {
 			integration.attachRelay(ctx, conn, id)
 		}
