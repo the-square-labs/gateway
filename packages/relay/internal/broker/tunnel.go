@@ -132,6 +132,15 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		metrics.recordFailedOpen(time.Since(startedAt))
 		return status.Error(codes.Unavailable, "target endpoint is not registered")
 	}
+	if registration.restartingAt(time.Now()) {
+		// Its daemon restarts (B-13): the opener retries until the next
+		// process registered, instead of treating the endpoint as gone.
+		metrics.opened.Add(1)
+		metrics.touch()
+		b.mu.Unlock()
+		metrics.recordFailedOpen(time.Since(startedAt))
+		return status.Error(codes.Unavailable, errEndpointRestarting)
+	}
 	if registration.dormant() {
 		// A standby, or a holder whose workload is not ready yet (D6, D7).
 		metrics.opened.Add(1)
@@ -191,6 +200,9 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	var accepted acceptedConnection
 	select {
 	case accepted = <-pending.accepted:
+	case <-registration.restarting:
+		// The daemon began restarting before it accepted this tunnel.
+		return status.Error(codes.Unavailable, errEndpointRestarting)
 	case <-timer.C:
 		return status.Error(codes.DeadlineExceeded, "target endpoint did not accept tunnel")
 	case <-session.stop:
@@ -211,6 +223,11 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	accepted.result <- bridgeErr
 	return bridgeErr
 }
+
+// errEndpointRestarting answers tunnels to an endpoint whose daemon restarts.
+// Openers treat it as transient and retry; nginx daemons hold the connection
+// (B-13).
+const errEndpointRestarting = "target endpoint is restarting"
 
 // incomingTunnel names the route the tunnel was admitted for, so an endpoint
 // can refuse a route Gateway revoked while this relay missed that policy.

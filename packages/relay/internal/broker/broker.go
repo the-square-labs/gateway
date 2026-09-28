@@ -19,7 +19,16 @@ const (
 	AcceptTimeout         = 30 * time.Second
 	IdleTimeout           = 5 * time.Minute
 	ProxyHalfCloseTimeout = 30 * time.Second
+	// EndpointRestartCapability tells daemons that this relay keeps a
+	// restarting endpoint's registration (ENDPOINT_SERVING_STATE_RESTARTING).
+	EndpointRestartCapability = "endpoint_restart_v1"
 )
+
+// EndpointRestartGrace is how long a registration whose daemon announced a
+// restart is kept after its stream ended, waiting for the daemon's next
+// process to register again (B-13). A daemon that does not come back by then
+// is treated as gone.
+var EndpointRestartGrace = 15 * time.Second
 
 type endpointRegistration struct {
 	endpointID           string
@@ -33,6 +42,13 @@ type endpointRegistration struct {
 	state    atomic.Int32
 	stop     chan struct{}
 	stopOnce sync.Once
+	// restartingSince is when a serving endpoint announced that its daemon
+	// restarts (B-13), in Unix nanoseconds; 0 while it does not. restarting
+	// closes at that moment, so tunnels waiting for the old process to accept
+	// are answered at once.
+	restartingSince atomic.Int64
+	restarting      chan struct{}
+	restartOnce     sync.Once
 	// stopReason is written before stop closes, so readers of a closed stop
 	// see it without a lock.
 	stopReason string
@@ -52,6 +68,28 @@ func (r *endpointRegistration) stateful() bool {
 
 func (r *endpointRegistration) dormant() bool {
 	return r.servingState() == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+}
+
+// announceRestart marks a registration whose daemon restarts. A dormant
+// registration takes no traffic either way and is left as it is.
+func (r *endpointRegistration) announceRestart(now time.Time) bool {
+	if r.dormant() {
+		return false
+	}
+	r.restartingSince.CompareAndSwap(0, now.UnixNano())
+	r.restartOnce.Do(func() {
+		if r.restarting != nil {
+			close(r.restarting)
+		}
+	})
+	return true
+}
+
+// restartingAt reports a registration whose daemon announced a restart less
+// than EndpointRestartGrace ago.
+func (r *endpointRegistration) restartingAt(now time.Time) bool {
+	since := r.restartingSince.Load()
+	return since != 0 && now.Sub(time.Unix(0, since)) < EndpointRestartGrace
 }
 
 func (r *endpointRegistration) closeWith(reason string) {

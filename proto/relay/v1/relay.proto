@@ -64,6 +64,13 @@ enum EndpointServingState {
   ENDPOINT_SERVING_STATE_UNSPECIFIED = 0;
   ENDPOINT_SERVING_STATE_DORMANT = 1;
   ENDPOINT_SERVING_STATE_SERVING = 2;
+  // The endpoint's daemon is shutting down to restart (service restart,
+  // update) and serves again once it registers anew (B-13). Sent as a renewal
+  // only to relays advertising endpoint_restart_v1: such a relay keeps the
+  // registration for a short grace after its stream ends, answers new tunnels
+  // with a retryable "target endpoint is restarting" and reports the holder's
+  // endpoint RESTARTING. A relay without it would read the value as DORMANT.
+  ENDPOINT_SERVING_STATE_RESTARTING = 3;
 }
 
 message RegisterEndpoint {
@@ -724,6 +731,11 @@ enum LeaseHolderEndpoint {
   LEASE_HOLDER_ENDPOINT_UNKNOWN = 0;
   LEASE_HOLDER_ENDPOINT_NOT_READY = 1;
   LEASE_HOLDER_ENDPOINT_READY = 2;
+  // The holder's endpoint served and its daemon is restarting (B-13): nginx
+  // keeps the member socket open and holds new connections until it serves
+  // again, unless another member of the policy is READY. Receivers built
+  // before the value existed open on the gate alone.
+  LEASE_HOLDER_ENDPOINT_RESTARTING = 3;
 }
 
 // The messages below mirror gateway.v1 AvailabilityLeaseReport and its parts
