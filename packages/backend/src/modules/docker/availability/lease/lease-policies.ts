@@ -6,6 +6,7 @@ import {
   type DockerAvailabilityLeaseReason,
   dockerAvailabilityLeaseObservations,
   dockerAvailabilityLeaseState,
+  dockerAvailabilityOperations,
   dockerAvailabilityPlacements,
   dockerAvailabilityPolicies,
   proxyAdditionalSecureLinks,
@@ -41,6 +42,14 @@ const logger = createChildLogger('AvailabilityLeasePolicies');
 
 /** A policy that left lease mode waits this long before it may bootstrap again, so a flapping gate cannot thrash. */
 const LEASE_REENTRY_HOLD_MS = 60_000;
+
+/**
+ * D1: operations that change the workload's runtime on the legacy path. Lease bootstrap waits until none of them is
+ * pending, waiting or running: the switch never lands in the middle of one (stand run rc20 B-1: bootstrapping began 5 s
+ * into an enable, reserved no holder because the origin was not recorded serving yet, and the daemons' lease gate
+ * then refused the enable's own activation).
+ */
+const BOOTSTRAP_WAITS_FOR_OPERATIONS = ['enable', 'rollout'] as const;
 
 /** A7/A16: shown while a switch from available to strict waits for the other copies and the relay gate window. */
 const STRICT_SWITCH_PENDING: DockerAvailabilityLeaseReason = {
@@ -140,7 +149,7 @@ export class AvailabilityLeasePolicies {
     };
     if (relevant.length === 0) return outcome;
     const policyIds = relevant.map((policy) => policy.id);
-    const [placements, observations] = await Promise.all([
+    const [placements, observations, runtimeOperations] = await Promise.all([
       this.db
         .select({
           id: dockerAvailabilityPlacements.id,
@@ -156,7 +165,18 @@ export class AvailabilityLeasePolicies {
         .select()
         .from(dockerAvailabilityLeaseObservations)
         .where(inArray(dockerAvailabilityLeaseObservations.policyId, policyIds)),
+      this.db
+        .select({ policyId: dockerAvailabilityOperations.policyId })
+        .from(dockerAvailabilityOperations)
+        .where(
+          and(
+            inArray(dockerAvailabilityOperations.policyId, policyIds),
+            inArray(dockerAvailabilityOperations.type, [...BOOTSTRAP_WAITS_FOR_OPERATIONS]),
+            inArray(dockerAvailabilityOperations.status, ['pending', 'waiting', 'running'])
+          )
+        ),
     ]);
+    const runtimeChanging = new Set(runtimeOperations.map((operation) => operation.policyId));
     const placementIds = placements.map((placement) => placement.id);
     const ingressRows = placementIds.length
       ? await this.db
@@ -188,7 +208,8 @@ export class AvailabilityLeasePolicies {
           ingressNodes,
           observations.filter((observation) => observation.policyId === policy.id),
           [...(policyRelays.get(policy.id) ?? [])],
-          context
+          context,
+          runtimeChanging.has(policy.id)
         );
         outcome.changed ||= result.changed;
         if (result.modeChange) outcome.modeChanges.push(result.modeChange);
@@ -209,7 +230,8 @@ export class AvailabilityLeasePolicies {
     ingressNodes: string[],
     observations: ObservationRow[],
     relayIds: string[],
-    context: LeasePoliciesContext
+    context: LeasePoliciesContext,
+    runtimeChanging = false
   ): Promise<{ changed: boolean; modeChange: LeaseModeChange | null }> {
     const now = context.now;
     const candidateNodes = [...new Set(leaseCandidatePlacements(placements).map((placement) => placement.nodeId))];
@@ -244,7 +266,7 @@ export class AvailabilityLeasePolicies {
       // Only a policy that already left lease mode waits; a policy that never ran one bootstraps right away.
       const settled =
         state.manifestVersion === 0 || now.getTime() - state.modeChangedAt.getTime() >= LEASE_REENTRY_HOLD_MS;
-      if (gating.eligible && settled) {
+      if (gating.eligible && settled && !runtimeChanging) {
         next = 'bootstrapping';
         updates.bootstrapId = randomInt(1, 2 ** 47);
         updates.bootstrap = bootstrapFromServing(placements, slots);

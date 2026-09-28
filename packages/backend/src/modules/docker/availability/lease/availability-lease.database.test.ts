@@ -256,6 +256,31 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
   });
 
+  it('waits for an in-flight enable or rollout before it bootstraps (D1, stand run rc20 B-1)', async () => {
+    // B-1: the switch landed 5 s into the enable, before the origin was recorded serving, so the bootstrap reserved no
+    // holder and the daemons' lease gate then refused the enable's own activation of the origin.
+    const [operation] = (
+      await q(
+        `insert into docker_availability_operations (policy_id, type, status, target_generation, idempotency_key)
+         values ($1, 'enable', 'running', 1, $2) returning id`,
+        [policyId, `enable-${randomUUID()}`]
+      )
+    ).rows;
+    try {
+      await ackAll(0);
+      await service.reconcile();
+      expect((await service.getPolicyLease(policyId)).mode).toBe('legacy');
+      await q(`update docker_availability_operations set type = 'rollout', status = 'waiting' where id = $1`, [
+        operation.id,
+      ]);
+      await service.reconcile();
+      expect((await service.getPolicyLease(policyId)).mode).toBe('legacy');
+      expect(modeChanges).toEqual([]);
+    } finally {
+      await q(`update docker_availability_operations set status = 'completed' where id = $1`, [operation.id]);
+    }
+  });
+
   it('bootstraps with per-policy voters and every relay as a non-voting member (A5, A18)', async () => {
     await ackAll(0);
     await service.reconcile();
