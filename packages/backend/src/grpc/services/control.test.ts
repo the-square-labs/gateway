@@ -1623,3 +1623,60 @@ describe('CommandStream post-registration reconciliation', () => {
     }
   });
 });
+
+describe('CommandStream close during shutdown', () => {
+  it('lets shutdown wait for the node.disconnected row of a stream that ends (N-6)', async () => {
+    const { backgroundWrites } = await import('@/services/background-writes.js');
+    const deps = makeDeps(makeDbNode({ type: 'builder' }));
+    let finishAudit!: () => void;
+    deps.auditService.log = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishAudit = () => resolve(true);
+        })
+    );
+    const sourcesBefore = backgroundWrites.openSources;
+    const stream = makeStream({ serialNumber: 'aa01' });
+    createControlHandlers(deps).CommandStream(stream);
+    expect(backgroundWrites.openSources).toBe(sourcesBefore + 1);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'builder-1',
+        daemonVersion: 'dev',
+        daemonType: 'docker',
+        capabilities: ['docker_builder_profile_v1', 'docker_registry_proxy_v1'],
+      },
+    });
+    await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalled());
+
+    // The daemon closes its stream while Gateway stops; the handler still has to write its rows.
+    stream.emit('end');
+    let drained = false;
+    const drain = backgroundWrites
+      .drain({ deadline: Date.now() + 5_000, sourcesDeadline: 0 })
+      .then((settled) => (drained = settled));
+    await vi.waitFor(() =>
+      expect(deps.auditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'node.disconnected', resourceId: nodeId })
+      )
+    );
+    expect(drained).toBe(false);
+
+    finishAudit();
+    await drain;
+    expect(drained).toBe(true);
+    expect(backgroundWrites.openSources).toBe(sourcesBefore);
+  });
+
+  it('releases a cancelled stream that never ends or fails', async () => {
+    const { backgroundWrites } = await import('@/services/background-writes.js');
+    const sourcesBefore = backgroundWrites.openSources;
+    const stream = makeStream({ serialNumber: 'aa01' });
+    createControlHandlers(makeDeps(makeDbNode({ type: 'builder' }))).CommandStream(stream);
+    expect(backgroundWrites.openSources).toBe(sourcesBefore + 1);
+    stream.emit('cancelled', 'cancelled');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(backgroundWrites.openSources).toBe(sourcesBefore);
+  });
+});

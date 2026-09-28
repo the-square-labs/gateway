@@ -23,6 +23,33 @@ describe('AuditService MCP context', () => {
     expect(db.select).not.toHaveBeenCalled();
   });
 
+  it('tracks every audit write so shutdown closes the pool only after it', async () => {
+    const { backgroundWrites } = await import('@/services/background-writes.js');
+    let finishInsert!: () => void;
+    const values = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishInsert = resolve;
+        })
+    );
+    const service = new AuditService({ insert: vi.fn(() => ({ values })) } as any);
+    const before = backgroundWrites.pendingWrites;
+
+    const written = service.log({ userId: null, action: 'node.disconnected', resourceType: 'node' });
+    expect(backgroundWrites.pendingWrites).toBe(before + 1);
+    let drained = false;
+    const drain = backgroundWrites
+      .drain({ deadline: Date.now() + 5_000, sourcesDeadline: 0 })
+      .then(() => (drained = true));
+    await vi.waitFor(() => expect(values).toHaveBeenCalled());
+    expect(drained).toBe(false);
+
+    finishInsert();
+    await expect(written).resolves.toBe(true);
+    await drain;
+    expect(drained).toBe(true);
+  });
+
   it('publishes an audit change after a successful insert', async () => {
     const values = vi.fn().mockResolvedValue(undefined);
     const eventBus = { publish: vi.fn() };
