@@ -202,6 +202,79 @@ export class InternalCertificateRenewalService {
     return result;
   }
 
+  /**
+   * Internal PKI certificates put into service before their issuer chain was
+   * served (linked SSL certificates and proxy hosts that reference a PKI leaf
+   * directly) went out without their intermediate CAs. Deliver them again
+   * with the chain. Returns how many certificates were repaired.
+   */
+  async repairMissingIssuerChains(): Promise<number> {
+    let repaired = 0;
+    const linked = await this.db
+      .select({ id: sslCertificates.id })
+      .from(sslCertificates)
+      .where(
+        and(
+          eq(sslCertificates.type, 'internal'),
+          isNotNull(sslCertificates.internalCertId),
+          isNull(sslCertificates.chainPem)
+        )
+      );
+    for (const row of linked) {
+      try {
+        if (await this.sslService.repairInternalIssuerChain(row.id)) repaired += 1;
+      } catch (error) {
+        logger.warn('Issuer chain could not be added to a linked internal certificate', {
+          sslCertificateId: row.id,
+          error: errorMessage(error),
+        });
+      }
+    }
+
+    const directHosts = await this.db
+      .select({ id: proxyHosts.id, internalCertId: proxyHosts.internalCertificateId })
+      .from(proxyHosts)
+      .where(
+        and(
+          isNotNull(proxyHosts.internalCertificateId),
+          isNull(proxyHosts.sslCertificateId),
+          eq(proxyHosts.enabled, true),
+          eq(proxyHosts.sslEnabled, true)
+        )
+      );
+    const hostsByCertificate = new Map<string, string[]>();
+    for (const host of directHosts) {
+      if (!host.internalCertId) continue;
+      hostsByCertificate.set(host.internalCertId, [...(hostsByCertificate.get(host.internalCertId) ?? []), host.id]);
+    }
+    for (const [certificateId, hostIds] of hostsByCertificate) {
+      try {
+        const refreshed = await this.certificateDistribution.refreshMissingIssuerChain({
+          type: 'internal',
+          id: certificateId,
+        });
+        if (!refreshed) continue;
+        repaired += 1;
+        for (const hostId of hostIds) {
+          await this.proxyService?.resyncTlsHost(hostId, SYSTEM_USER_ID).catch((error: unknown) =>
+            logger.warn('Proxy host did not receive the internal certificate issuer chain', {
+              certificateId,
+              hostId,
+              error: errorMessage(error),
+            })
+          );
+        }
+      } catch (error) {
+        logger.warn('Issuer chain could not be added to an internal certificate', {
+          certificateId,
+          error: errorMessage(error),
+        });
+      }
+    }
+    if (repaired > 0) logger.info('Issuer chains added to internal certificates in service', { repaired });
+    return repaired;
+  }
+
   /** Manual renew of a linked `internal` SSL certificate (REST, MCP and AI renew). */
   async renewSslCertificate(sslCertificateId: string, userId: string, options?: { actorScopes?: string[] }) {
     const [row] = await this.db

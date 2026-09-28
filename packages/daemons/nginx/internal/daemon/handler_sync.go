@@ -160,6 +160,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	valid, output := h.mgr.TestConfig()
 	result.Detail = output
 	if !valid {
+		h.logConfigTestFailure("full sync", output, "version_hash", cmd.VersionHash)
 		rollback()
 		_, _ = h.mgr.TestConfig()
 		result.Success = false
@@ -210,6 +211,7 @@ func (h *Handler) handleUpdateGlobalConfig(cmd *pb.UpdateGlobalConfigCommand, re
 	valid, output := h.mgr.TestConfig()
 	result.Detail = output
 	if !valid {
+		h.logConfigTestFailure("update global config", output)
 		rollbackErr := rollback()
 		_, _ = h.mgr.TestConfig()
 		result.Success = false

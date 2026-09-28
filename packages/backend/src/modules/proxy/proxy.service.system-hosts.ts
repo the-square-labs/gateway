@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { proxyHosts } from '@/db/schema/index.js';
+import { getEnv } from '@/config/env.js';
+import { nodes, proxyHosts } from '@/db/schema/index.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
@@ -7,7 +8,12 @@ import {
   INTERNAL_REGISTRY_INGRESS_PORT,
 } from '@/modules/docker/docker-registry.constants.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
-import { buildStatusPageSystemHostRollbackData, getStatusPageUpstream } from './proxy.service-helpers.js';
+import type { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
+import {
+  buildStatusPageSystemHostRollbackData,
+  defaultStatusPageUpstreamUrl,
+  getStatusPageUpstream,
+} from './proxy.service-helpers.js';
 import { clearDockerUpstreamFields } from './proxy-docker-upstream.service.js';
 import { restoringProxyHostState, rethrowProxyHostDomainConflict } from './proxy-domain-overlap.js';
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
@@ -23,6 +29,40 @@ import {
 import { ProxyServiceReconciliation } from './proxy.service.reconciliation.js';
 
 export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
+  protected webTransportSettings?: Pick<WebTransportSettingsService, 'getConfig'>;
+
+  /** Gateway's web listener protocol, which the default status page upstream follows. */
+  setWebTransportSettings(settings: Pick<WebTransportSettingsService, 'getConfig'>) {
+    this.webTransportSettings = settings;
+  }
+
+  /**
+   * Without a configured upstream URL, the status page ingress node reaches
+   * Gateway on loopback only when it runs on the Gateway host; any other node
+   * uses the Gateway address nodes enroll with.
+   */
+  private async resolveStatusPageUpstreamUrl(nodeId: string, upstreamUrl: string | null | undefined) {
+    if (upstreamUrl) return upstreamUrl;
+    const node = await this.db.query.nodes.findFirst({
+      where: eq(nodes.id, nodeId),
+      columns: { lastHealthReport: true },
+    });
+    const endpoints = await this.generalSettings?.getGatewayEndpointSettings().catch(() => null);
+    const transport = await this.webTransportSettings?.getConfig().catch(() => null);
+    const env = getEnv();
+    return defaultStatusPageUpstreamUrl({
+      nodeAddresses: [
+        ...(node?.lastHealthReport?.localIpAddresses ?? []),
+        ...(node?.lastHealthReport?.publicIpAddresses ?? []),
+      ],
+      gatewayHostAddresses: env.GATEWAY_LOCAL_HOSTS?.split(',') ?? [],
+      gatewayLocalTarget: endpoints?.gatewayGrpcLocalIp,
+      gatewayPublicTarget: endpoints?.gatewayGrpcPublicTarget,
+      tlsEnabled: transport?.tlsEnabled === true,
+      port: env.PORT,
+    });
+  }
+
   /**
    * Serialize one system-host kind and fence the host plus its target node
    * against concurrent edits and reconnect cleanup. Keys are taken together in
@@ -64,7 +104,7 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
       await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
     }
     const sslEnabled = !!input.sslCertificateId;
-    const upstream = getStatusPageUpstream(input.upstreamUrl);
+    const upstream = getStatusPageUpstream(await this.resolveStatusPageUpstreamUrl(input.nodeId, input.upstreamUrl));
     const data = {
       type: 'proxy' as const,
       domainNames: [input.domain],

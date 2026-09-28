@@ -563,3 +563,69 @@ describe('NginxCertificateDistributionService internal certificate guards', () =
     expect(cryptoService.decryptPrivateKey).not.toHaveBeenCalled();
   });
 });
+
+describe('NginxCertificateDistributionService internal certificate chain', () => {
+  function chainHarness(query: Record<string, unknown>, selects: unknown[][]) {
+    const chain: Record<string, unknown> = {};
+    for (const method of ['from', 'where']) chain[method] = vi.fn(() => chain);
+    chain.limit = vi.fn(async () => selects.shift() ?? []);
+    const db = { query, select: vi.fn(() => chain) };
+    const cryptoService = { decryptPrivateKey: vi.fn().mockReturnValue('KEY') };
+    const service = new NginxCertificateDistributionService(
+      db as never,
+      cryptoService as never,
+      {} as never,
+      {} as never
+    );
+    (service as any).validateCertificatePair = vi.fn();
+    return service;
+  }
+
+  it('serves a PKI certificate with its intermediate CAs but without the root', async () => {
+    const service = chainHarness(
+      {
+        certificates: {
+          findFirst: vi.fn().mockResolvedValue({
+            caId: 'issuing-ca',
+            certificatePem: 'LEAF',
+            encryptedPrivateKey: 'enc',
+            encryptedDek: 'dek',
+            status: 'active',
+            type: 'tls-server',
+          }),
+        },
+      },
+      [
+        [{ isSystem: false }],
+        [{ type: 'intermediate', parentId: 'root-ca', certificatePem: 'ISSUING' }],
+        [{ type: 'root', parentId: null, certificatePem: 'ROOT' }],
+      ]
+    );
+
+    const material = await (service as any).loadGatewayMaterial({ type: 'internal', id: 'pki-1' });
+
+    expect(material.chainPem).toBe('ISSUING\n');
+  });
+
+  it('adds the issuer chain to a certificate linked from the PKI before the chain was stored', async () => {
+    const service = chainHarness(
+      {
+        sslCertificates: {
+          findFirst: vi.fn().mockResolvedValue({
+            type: 'internal',
+            internalCertId: 'pki-1',
+            certificatePem: 'LEAF',
+            privateKeyPem: 'KEY',
+            encryptedDek: null,
+            chainPem: null,
+          }),
+        },
+      },
+      [[{ caId: 'issuing-ca' }], [{ type: 'intermediate', parentId: null, certificatePem: 'ISSUING' }]]
+    );
+
+    const material = await (service as any).loadGatewayMaterial({ type: 'ssl', id: 'ssl-1' });
+
+    expect(material.chainPem).toBe('ISSUING\n');
+  });
+});

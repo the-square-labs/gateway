@@ -9,10 +9,12 @@ const logger = createChildLogger('DockerService');
 
 const API_VERSION = '/v1.46';
 /**
- * A request without its own timeout inherits Node's global agent socket timeout (5 s), which cuts
- * off a stop or restart that waits for the container's graceful shutdown while Docker carries on
- * with it. Container lifecycle calls therefore set a timeout that covers Docker's own wait.
+ * A request without its own timeout would inherit Node's global agent socket timeout (5 s), which
+ * cuts off a call while Docker still works on it: a container create that unpacks a freshly pulled
+ * image with the containerd image store, or a stop waiting for a graceful shutdown. Such requests
+ * get this idle bound instead; lifecycle calls that wait on Docker set a timeout covering the wait.
  */
+export const DOCKER_REQUEST_DEFAULT_TIMEOUT_MS = 5 * 60_000;
 const CONTAINER_START_TIMEOUT_MS = 60_000;
 const stopRequestTimeoutMs = (timeoutSeconds: number) => (Math.max(0, timeoutSeconds) + 30) * 1000;
 
@@ -233,6 +235,7 @@ export class DockerService {
     timeoutMs?: number,
     headers: Record<string, string> = {}
   ): Promise<{ statusCode: number; body: string; bodyRaw: Buffer }> {
+    const requestTimeoutMs = timeoutMs ?? DOCKER_REQUEST_DEFAULT_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       const payload =
         body === undefined ? undefined : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body), 'utf-8');
@@ -242,7 +245,7 @@ export class DockerService {
           socketPath: this.socketPath,
           method,
           path,
-          timeout: timeoutMs,
+          timeout: requestTimeoutMs,
           headers: {
             ...headers,
             ...(payload !== undefined
@@ -269,7 +272,7 @@ export class DockerService {
       );
 
       req.on('timeout', () => {
-        req.destroy(new Error(`Docker API request timed out after ${timeoutMs}ms`));
+        req.destroy(new Error(`Docker API request timed out after ${requestTimeoutMs}ms`));
       });
       req.on('error', reject);
 
@@ -292,6 +295,7 @@ export class DockerService {
     timeoutMs: number | undefined,
     onChunk: (chunk: string) => void
   ): Promise<{ statusCode: number }> {
+    const requestTimeoutMs = timeoutMs ?? DOCKER_REQUEST_DEFAULT_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       const payload =
         body === undefined ? undefined : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body), 'utf-8');
@@ -301,7 +305,7 @@ export class DockerService {
           socketPath: this.socketPath,
           method,
           path,
-          timeout: timeoutMs,
+          timeout: requestTimeoutMs,
           headers:
             payload !== undefined ? { 'Content-Type': 'application/json', 'Content-Length': payload.byteLength } : {},
         },
@@ -313,7 +317,7 @@ export class DockerService {
       );
 
       req.on('timeout', () => {
-        req.destroy(new Error(`Docker API request timed out after ${timeoutMs}ms`));
+        req.destroy(new Error(`Docker API request timed out after ${requestTimeoutMs}ms`));
       });
       req.on('error', reject);
 

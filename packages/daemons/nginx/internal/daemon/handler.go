@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
@@ -149,6 +150,12 @@ func (h *Handler) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	return result
 }
 
+// logConfigTestFailure records the nginx -t output of a rejected change on the
+// node, where it stays available even when Gateway stores only a summary.
+func (h *Handler) logConfigTestFailure(action, output string, attrs ...any) {
+	h.logger.Error("nginx config test failed", append([]any{"action", action, "output", strings.TrimSpace(output)}, attrs...)...)
+}
+
 func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.CommandResult) {
 	path := h.mgr.ConfigPath(cmd.HostId)
 
@@ -178,6 +185,7 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 	result.Detail = output
 
 	if !valid {
+		h.logConfigTestFailure("apply proxy host config", output, "host_id", cmd.HostId)
 		_ = rollbackConfig()
 		restoreOwnership()
 		_, _ = h.mgr.TestConfig()
@@ -225,6 +233,7 @@ func (h *Handler) handleRemoveConfig(cmd *pb.RemoveConfigCommand, result *pb.Com
 	valid, output := h.mgr.TestConfig()
 	result.Detail = output
 	if !valid {
+		h.logConfigTestFailure("remove proxy host config", output, "host_id", cmd.HostId)
 		if oldConfig != nil {
 			_ = nginx.WriteAtomic(path, oldConfig)
 		}

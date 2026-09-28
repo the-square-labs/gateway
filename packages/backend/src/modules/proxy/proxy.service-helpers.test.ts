@@ -164,4 +164,31 @@ describe('ProxyService helpers', () => {
     expect(() => __testOnly.getStatusPageUpstream('tcp://127.0.0.1:3000')).toThrow(AppError);
     expect(() => __testOnly.getStatusPageUpstream('http://127.0.0.1:3000/status')).toThrow(AppError);
   });
+
+  it('defaults the status page upstream to loopback only on the Gateway host', () => {
+    const context = {
+      nodeAddresses: ['10.0.0.20'],
+      gatewayHostAddresses: ['10.0.0.5', '203.0.113.5'],
+      gatewayLocalTarget: '10.0.0.5:9443',
+      gatewayPublicTarget: 'gateway.example.com:9443',
+      tlsEnabled: false,
+      port: 3000,
+    };
+
+    expect(__testOnly.defaultStatusPageUpstreamUrl({ ...context, nodeAddresses: ['10.0.0.5'] })).toBe(
+      'http://127.0.0.1:3000'
+    );
+    // Another node reaches Gateway on the address nodes enroll with, local first.
+    expect(__testOnly.defaultStatusPageUpstreamUrl(context)).toBe('http://10.0.0.5:3000');
+    expect(__testOnly.defaultStatusPageUpstreamUrl({ ...context, gatewayLocalTarget: null })).toBe(
+      'http://gateway.example.com:3000'
+    );
+    expect(
+      __testOnly.defaultStatusPageUpstreamUrl({ ...context, gatewayLocalTarget: '[fd00::5]:9443', tlsEnabled: true })
+    ).toBe('https://[fd00::5]:3000');
+    // Nothing known about the Gateway host keeps the previous loopback default.
+    expect(
+      __testOnly.defaultStatusPageUpstreamUrl({ ...context, gatewayLocalTarget: null, gatewayPublicTarget: null })
+    ).toBe('http://127.0.0.1:3000');
+  });
 });

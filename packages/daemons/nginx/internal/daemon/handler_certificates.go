@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/nginx"
@@ -100,15 +102,17 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 	valid, output := h.mgr.TestConfig()
 	result.Detail = output
 	if !valid {
+		h.logConfigTestFailure("apply TLS bundle", output, "host_id", cmd.HostId)
 		rollback()
 		result.Success = false
-		result.Error = "nginx config test failed"
+		result.Error = fmt.Sprintf("nginx config test failed: %s", strings.TrimSpace(output))
 		return
 	}
 	if err := h.mgr.Reload(); err != nil {
+		h.logger.Error("nginx reload failed", "action", "apply TLS bundle", "host_id", cmd.HostId, "error", err)
 		rollback()
 		result.Success = false
-		result.Error = "nginx reload failed"
+		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
 		return
 	}
 	h.state.SetExtra("last_tls_bundle_generation", cmd.Generation)

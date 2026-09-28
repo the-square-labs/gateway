@@ -67,6 +67,10 @@ const CHEATSHEET_HELPERS: ReferenceTableRow[] = [
   { term: "{{#if sslEnabled}} ... {{/if}}", description: "Conditional rendering" },
   { term: "{{#unless sslForced}} ... {{/unless}}", description: "Inverse conditional rendering" },
   { term: "{{sanitize value}}", description: "Strip dangerous characters from values" },
+  {
+    term: "{{sanitizeRewrite value}}",
+    description: "Like sanitize, but keeps $ for rewrite regexes",
+  },
   { term: "{{#if (eq a b)}} ... {{/if}}", description: "Equality comparison" },
 ];
 

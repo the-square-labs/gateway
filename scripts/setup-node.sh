@@ -987,9 +987,14 @@ install_nginx_stable_repo() {
     case "$OS_LIKE" in
         *debian*|*ubuntu*)
             run_apt_with_lock_retry install -y -qq gnupg2 ca-certificates lsb-release
-            curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>> "$LOG_FILE"
+            # --yes lets a re-run after a failed install replace the keyring; apt
+            # verifies with an unprivileged user, so it must stay world-readable
+            # whatever the umask of the shell running the installer.
+            curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --batch --yes --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg 2>> "$LOG_FILE"
+            chmod 0644 /usr/share/keyrings/nginx-archive-keyring.gpg
             echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/$(. /etc/os-release && echo "$ID") $(lsb_release -cs) nginx" \
                 > /etc/apt/sources.list.d/nginx.list
+            chmod 0644 /etc/apt/sources.list.d/nginx.list
             run_apt_with_lock_retry update -qq
             ;;
         *rhel*|*fedora*|*centos*)

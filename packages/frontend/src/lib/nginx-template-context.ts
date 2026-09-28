@@ -57,6 +57,7 @@ export const NGINX_TEMPLATE_HELPERS: readonly string[] = [
   "lookup",
   "renderAdditionalRoutes",
   "sanitize",
+  "sanitizeRewrite",
   "unless",
   "with",
 ];

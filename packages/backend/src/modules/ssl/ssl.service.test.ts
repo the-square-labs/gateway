@@ -1077,6 +1077,83 @@ describe('SSLService linked internal certificate renewal', () => {
 
     expect(values).toHaveBeenCalledWith(expect.objectContaining({ type: 'internal', autoRenew: true }));
   });
+
+  it('stores the intermediate CAs of a linked certificate as its chain, without the root', async () => {
+    const certId = '11111111-1111-4111-8111-111111111111';
+    const values = vi.fn((row: Record<string, unknown>) => ({
+      returning: vi.fn().mockResolvedValue([{ id: 'ssl-new', ...row }]),
+    }));
+    const db = {
+      query: {
+        certificates: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: certId,
+            caId: 'issuing-ca',
+            type: 'tls-server',
+            status: 'active',
+            commonName: 'api.example.com',
+            certificatePem: 'LEAF',
+            notBefore: new Date(),
+            notAfter: new Date(Date.now() + 30 * DAY_MS),
+            encryptedPrivateKey: null,
+            encryptedDek: null,
+          }),
+        },
+      },
+      select: selectChain([
+        [{ isSystem: false }],
+        [{ type: 'intermediate', parentId: 'policy-ca', certificatePem: 'ISSUING\n' }],
+        [{ type: 'intermediate', parentId: 'root-ca', certificatePem: 'POLICY' }],
+        [{ type: 'root', parentId: null, certificatePem: 'ROOT' }],
+      ]),
+      insert: vi.fn(() => ({ values })),
+    } as any;
+    const service = new SSLService(db, {} as any, {} as any, { log: vi.fn() } as any, {} as any);
+
+    await service.linkInternalCert({ internalCertId: certId }, 'user-1', [
+      'ssl:cert:issue',
+      `pki:cert:export:${certId}`,
+    ]);
+
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({ chainPem: 'ISSUING\nPOLICY\n' }));
+  });
+
+  it('adds the issuer chain to a certificate linked without one and delivers it again', async () => {
+    const set = vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) }));
+    const db = {
+      query: {
+        sslCertificates: {
+          findFirst: vi.fn().mockResolvedValue({ ...linked, chainPem: null }),
+        },
+      },
+      select: selectChain([
+        [{ caId: 'issuing-ca' }],
+        [{ type: 'intermediate', parentId: null, certificatePem: 'ISSUING' }],
+      ]),
+      update: vi.fn(() => ({ set })),
+    } as any;
+    const distribution = { upsertGatewayAsset: vi.fn() };
+    const service = new SSLService(db, {} as any, {} as any, { log: vi.fn() } as any, distribution as any);
+
+    await expect(service.repairInternalIssuerChain('ssl-1')).resolves.toBe(true);
+
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({ chainPem: 'ISSUING\n' }));
+    expect(distribution.upsertGatewayAsset).toHaveBeenCalledWith({ type: 'ssl', id: 'ssl-1' });
+  });
+
+  it('leaves a linked certificate alone when it has a chain or a root issued it', async () => {
+    const withChain = internalHarness({ ...linked, chainPem: 'ISSUING\n' });
+    await expect(withChain.service.repairInternalIssuerChain('ssl-1')).resolves.toBe(false);
+    expect(withChain.set).not.toHaveBeenCalled();
+
+    const rootIssued = internalHarness({ ...linked, chainPem: null });
+    rootIssued.db.select = selectChain([
+      [{ caId: 'root-ca' }],
+      [{ type: 'root', parentId: null, certificatePem: 'R' }],
+    ]);
+    await expect(rootIssued.service.repairInternalIssuerChain('ssl-1')).resolves.toBe(false);
+    expect(rootIssued.set).not.toHaveBeenCalled();
+  });
 });
 
 describe('SSLService ACME single flight', () => {

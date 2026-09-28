@@ -268,7 +268,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
         <SettingsRow
           label="Gateway upstream URL"
           description="Internal Gateway URL used by the generated proxy host"
-          help="Address the selected ingress node uses to reach Gateway. Use an internal address that is reachable from that node, not necessarily the public browser URL."
+          help="Address the selected ingress node uses to reach Gateway. Use an internal address that is reachable from that node, not necessarily the public browser URL. Leave empty to use loopback on the Gateway host, or the Gateway address nodes enroll with (local first) from any other node."
         >
           <Input
             value={config.upstreamUrl ?? ""}

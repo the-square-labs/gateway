@@ -55,3 +55,42 @@ describe('NginxTemplateService advanced config rendering', () => {
     expect(rendered).toContain('add_header X-Upstream "app";');
   });
 });
+
+describe('NginxTemplateService custom rewrites', () => {
+  const rewriteHost: ProxyHostConfig = {
+    ...host,
+    advancedConfig: null,
+    templateVariables: {},
+    customRewrites: [{ source: '^/old-shop/(.*)$', destination: '/$1', type: 'permanent' }],
+  };
+
+  it('keeps regex anchors and capture references in the built-in template', async () => {
+    const db = { query: { nginxTemplates: { findFirst: async () => undefined } } };
+    const rendered = await new NginxTemplateService(
+      db as never,
+      {} as never,
+      new ConfigValidatorService()
+    ).renderForHost(rewriteHost, null);
+
+    expect(rendered).toContain('rewrite ^/old-shop/(.*)$ /$1 permanent;');
+  });
+
+  it('upgrades custom templates cloned before regex rewrites worked', () => {
+    const legacy =
+      '{{#each customRewrites}}rewrite {{sanitize this.source}} {{sanitize this.destination}} redirect;{{/each}}';
+
+    expect(service().renderTemplate(legacy, rewriteHost)).toBe('rewrite ^/old-shop/(.*)$ /$1 redirect;');
+  });
+
+  it('still removes characters that would end or break out of the directive', () => {
+    const rendered = service().renderTemplate(
+      '{{#each customRewrites}}rewrite {{sanitizeRewrite this.source}} {{sanitizeRewrite this.destination}};{{/each}}',
+      {
+        ...rewriteHost,
+        customRewrites: [{ source: '^/a$; return 200 "x"; #', destination: '/b{}`\n', type: 'temporary' }],
+      }
+    );
+
+    expect(rendered).toBe('rewrite ^/a$ return 200 x  /b;');
+  });
+});

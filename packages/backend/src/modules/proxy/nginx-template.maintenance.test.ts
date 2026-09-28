@@ -148,9 +148,11 @@ describe('canonical Gateway nginx pages', () => {
 
     expect(rendered).toContain('server unix:/run/gateway-registry-links/00000000-0000-4000-8000-000000000002.sock;');
     expect(rendered).toContain('proxy_hide_header WWW-Authenticate;');
-    expect(rendered).toContain('map $upstream_http_www_authenticate $gateway_registry_challenge_');
+    const challengeVariable = rendered.match(/map \$upstream_http_www_authenticate \$(\w+) \{/)?.[1];
+    // Longer names overflow the stock variables_hash_bucket_size 64 and fail nginx -t.
+    expect(challengeVariable).toMatch(/^gw_rc_[0-9a-f]{16}$/);
     expect(rendered).toContain('https://gateway.example.com/api/docker/registry/token');
-    expect(rendered).toContain('add_header WWW-Authenticate $gateway_registry_challenge_');
+    expect(rendered).toContain(`add_header WWW-Authenticate $${challengeVariable} always;`);
     expect(rendered).toContain('proxy_send_timeout 2h;');
     expect(rendered).toContain('client_max_body_size 0;');
     expect(rendered).not.toContain('gateway.invalid');

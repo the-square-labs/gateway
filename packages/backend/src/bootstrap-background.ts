@@ -237,8 +237,19 @@ export async function initializeBackgroundServices(): Promise<void> {
   // Linked internal PKI leaves are reissued from their CA on the same daily cadence.
   const internalCertificateRenewal = container.resolve(InternalCertificateRenewalService);
   scheduler.register('internal-certificate-renewal', env.ACME_RENEWAL_CRON, async () => {
+    await internalCertificateRenewal.repairMissingIssuerChains();
     await internalCertificateRenewal.runDue();
   });
+  // Internal certificates delivered by older releases lack their intermediate
+  // CAs; add them shortly after start, once Nginx daemons have reconnected.
+  setTimeout(
+    () => {
+      internalCertificateRenewal
+        .repairMissingIssuerChains()
+        .catch((error) => logger.warn('Initial internal certificate issuer chain repair failed', { error }));
+    },
+    2 * 60 * 1000
+  ).unref?.();
   // Scan at the minimum supported per-host cadence; the job itself evaluates
   // each host's configured interval and skips hosts that are not due.
   scheduler.registerInterval('health-check', Math.min(Math.max(env.HEALTH_CHECK_INTERVAL_SECONDS, 1), 5) * 1000, () =>
