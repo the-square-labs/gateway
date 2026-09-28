@@ -191,6 +191,29 @@ function primaryGroup(
     });
 }
 
+/**
+ * Makes a placement include a relay that is not co-located with Gateway (the local relay is) whenever such a relay
+ * is ready, keeping its size: the local relay's slot goes to the best remote relay by rendezvous, in the same role.
+ * A placement of the local relay alone does not survive the loss of the Gateway host (stand run c).
+ */
+export function includeRemoteRelay(
+  endpointId: string,
+  planned: PlannedRelayAssignment[],
+  instances: RelayInstanceRow[]
+): PlannedRelayAssignment[] {
+  if (!planned.length || planned.some(({ instance }) => instance.kind !== 'local')) return planned;
+  const taken = new Set(planned.map(({ instance }) => instance.id));
+  const [remote] = chooseByRendezvous(
+    endpointId,
+    instances.filter((instance) => instance.kind !== 'local' && !taken.has(instance.id)),
+    1
+  );
+  if (!remote) return planned;
+  let index = planned.length - 1;
+  while (index > 0 && planned[index]!.instance.kind !== 'local') index -= 1;
+  return planned.map((entry, position) => (position === index ? { instance: remote, role: entry.role } : entry));
+}
+
 /** Whether a generation's assignments already are the planned relays in the planned roles. */
 export function samePlannedAssignments(
   assignments: ReadonlyArray<{ relayInstanceId: string; role: string }>,

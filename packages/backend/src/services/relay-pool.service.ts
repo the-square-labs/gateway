@@ -19,6 +19,7 @@ import {
 import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { AVAILABILITY_LEASE_CAPABILITY } from '@/modules/docker/availability/lease/lease-constants.js';
 import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from '@/modules/nodes/node-enrollment-token.js';
 import type { GeneralSettingsService, RelayAssignmentSpread } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from './event-bus.service.js';
@@ -31,6 +32,7 @@ import {
   chooseByRendezvous,
   chooseRelayAssignments,
   type EndpointLatencyPath,
+  includeRemoteRelay,
   type PlannedRelayAssignment,
   samePlannedAssignments,
 } from './relay-topology.js';
@@ -81,21 +83,41 @@ function effectiveCount(spread: RelayAssignmentSpread, readyCount: number): numb
 /**
  * Places one endpoint. A path with a daemon that lacks Relay Pool support runs on legacy grants,
  * which only the local relay serves: such workloads stay there until every participant is updated.
+ *
+ * An Availability member (serving or dormant standby) goes on every ready relay that runs the lease
+ * protocol (D7): at a takeover the successor is then already registered wherever traffic may arrive,
+ * and a single surviving relay carries it (stand run c). Every other endpoint keeps its configured
+ * redundancy but includes a relay that is not co-located with Gateway whenever one is ready, so the
+ * data plane survives the loss of the Gateway host.
  */
-function planRelays(
+export function planRelays(
   endpointId: string,
   instances: RelayInstanceRow[],
   desiredCount: number,
   localOnly: boolean,
   path: EndpointLatencyPath | undefined,
-  reference: ReadonlyArray<{ relayInstanceId: string; role: string }>
+  reference: ReadonlyArray<{ relayInstanceId: string; role: string }>,
+  availabilityMember = false
 ): PlannedRelayAssignment[] {
   if (localOnly) {
     return instances
       .filter(({ kind, state }) => kind === 'local' && state === 'ready')
       .map((instance) => ({ instance, role: 'active' }));
   }
-  return chooseRelayAssignments(endpointId, instances, desiredCount, path, reference);
+  if (availabilityMember) {
+    const leaseRelays = instances.filter(
+      (instance) =>
+        instance.state === 'ready' && instance.capabilities?.features?.includes(AVAILABILITY_LEASE_CAPABILITY)
+    );
+    if (leaseRelays.length) {
+      return chooseRelayAssignments(endpointId, leaseRelays, leaseRelays.length, path, reference);
+    }
+  }
+  return includeRemoteRelay(
+    endpointId,
+    chooseRelayAssignments(endpointId, instances, desiredCount, path, reference),
+    instances
+  );
 }
 
 export class RelayPoolService {
@@ -180,15 +202,39 @@ export class RelayPoolService {
     desiredCount: number,
     localOnly: boolean,
     path: EndpointLatencyPath | undefined,
-    active: Array<{ relayInstanceId: string; role: string }>
+    active: Array<{ relayInstanceId: string; role: string }>,
+    availabilityMember = false
   ): PlannedRelayAssignment[] {
     const reference = this.plannedRoles.get(endpointId) ?? active;
-    const planned = planRelays(endpointId, instances, desiredCount, localOnly, path, reference);
+    const planned = planRelays(endpointId, instances, desiredCount, localOnly, path, reference, availabilityMember);
     this.plannedRoles.set(
       endpointId,
       planned.map(({ instance, role }) => ({ relayInstanceId: instance.id, role }))
     );
     return planned;
+  }
+
+  /** The endpoints of Availability member Secure Links (serving and dormant alike), placed on every lease relay. */
+  private async availabilityMemberEndpointIds(
+    endpoints: Array<Pick<typeof relayEndpoints.$inferSelect, 'id' | 'ownerKind' | 'ownerId'>>
+  ): Promise<Set<string>> {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const byLink = new Map(
+      endpoints
+        .filter(({ ownerKind, ownerId }) => ownerKind === 'proxy_host_secure_link' && uuid.test(ownerId))
+        .map(({ id, ownerId }) => [ownerId, id])
+    );
+    if (!byLink.size) return new Set();
+    const members = await this.db
+      .select({ id: proxyAdditionalSecureLinks.id })
+      .from(proxyAdditionalSecureLinks)
+      .where(
+        and(
+          eq(proxyAdditionalSecureLinks.purpose, 'availability_member'),
+          inArray(proxyAdditionalSecureLinks.id, [...byLink.keys()])
+        )
+      );
+    return new Set(members.flatMap(({ id }) => (byLink.has(id) ? [byLink.get(id)!] : [])));
   }
 
   /** Latency is advisory: a failure to read it places endpoints as if nothing was measured. */
@@ -730,6 +776,7 @@ export class RelayPoolService {
       endpoints.filter(({ ownerKind }) => ownerKind !== 'internal_registry').map(({ id }) => id)
     );
     const latencyPaths = await this.latencyPaths(endpoints);
+    const members = await this.availabilityMemberEndpointIds(endpoints);
     const activeEndpointIds = new Set(endpoints.map(({ id }) => id));
     for (const endpointId of this.plannedRoles.keys()) {
       if (!activeEndpointIds.has(endpointId)) this.plannedRoles.delete(endpointId);
@@ -748,7 +795,8 @@ export class RelayPoolService {
               effectiveCount(spread, readyFaultDomains.size),
               localOnly.has(endpoint.id),
               latencyPaths.get(endpoint.id),
-              current
+              current,
+              members.has(endpoint.id)
             );
             const selectedIds = planned.map(({ instance }) => instance.id);
             if (!selectedIds.length) return [];
@@ -1050,6 +1098,7 @@ export class RelayPoolService {
     const effectiveSpreads = await this.resolveEffectiveSpreads(endpoints, globalSpread);
     const localOnly = await this.poolIncapableEndpoints(endpoints.map(({ id }) => id));
     const latencyPaths = await this.latencyPaths(endpoints);
+    const members = await this.availabilityMemberEndpointIds(endpoints);
     const staged = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-pool-rebalance'))`);
       // An update run pauses automatic placement, but never the evacuation of a relay it drains:
@@ -1127,7 +1176,8 @@ export class RelayPoolService {
           effectiveCount(spread, readyFaultDomains),
           localOnly.has(endpoint.id),
           latencyPaths.get(endpoint.id),
-          activeAssignments
+          activeAssignments,
+          members.has(endpoint.id)
         );
         const selectedIds = planned.map(({ instance }) => instance.id);
         if (!selectedIds.length || samePlannedAssignments(activeAssignments, planned)) continue;
