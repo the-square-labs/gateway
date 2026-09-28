@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 // EnvStore manages per-container env override files stored as KEY=VALUE lines
@@ -49,25 +51,16 @@ func (s *EnvStore) Save(containerName string, env map[string]string) error {
 		}
 		return nil
 	}
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	err := atomicfile.Write(path, 0o600, func(f *os.File) error {
+		for k, v := range env {
+			if _, err := fmt.Fprintf(f, "%s=%s\n", k, v); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("write env file: %w", err)
-	}
-	for k, v := range env {
-		if _, err := fmt.Fprintf(f, "%s=%s\n", k, v); err != nil {
-			f.Close()
-			os.Remove(tmp)
-			return fmt.Errorf("write env file: %w", err)
-		}
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("close env file: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("rename env file: %w", err)
 	}
 	return nil
 }

@@ -173,7 +173,12 @@ func TestSeaweedFSStagingIsOwnedReadOnlyAndReusable(t *testing.T) {
 	manager := &managedStorageManager{root: t.TempDir(), chown: func(path string, uid, gid int) error {
 		mu.Lock()
 		defer mu.Unlock()
-		chowned = append(chowned, recordedChown{filepath.Base(strings.TrimSuffix(path, ".pending")), uid, gid})
+		// Files are staged as ".<name>.tmp-*" next to their target, then renamed.
+		name := filepath.Base(path)
+		if index := strings.LastIndex(name, ".tmp-"); strings.HasPrefix(name, ".") && index > 0 {
+			name = name[1:index]
+		}
+		chowned = append(chowned, recordedChown{name, uid, gid})
 		return nil
 	}}
 	record := managedStorageRecord{ID: "11111111-1111-4111-8111-111111111111", Engine: managedStorageEngineSeaweedFS, TLSEnabled: true}

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	runtimemanager "github.com/wiolett-industries/gateway/docker-daemon/internal/runtime"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 // Secure Runtime (runsc) verification at daemon start.
@@ -108,12 +110,7 @@ func (p *DockerPlugin) persistVerifiedRuntimeStatus(status runtimemanager.Status
 	if err != nil {
 		return
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		p.logRuntimeStatusPersistError(err)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := atomicfile.WriteFile(path, data, 0o600); err != nil {
 		p.logRuntimeStatusPersistError(err)
 	}
 }

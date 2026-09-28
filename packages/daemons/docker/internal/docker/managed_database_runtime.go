@@ -19,6 +19,8 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	mobyclient "github.com/moby/moby/client"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 func (m *managedDatabaseManager) createContainer(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) (string, error) {
@@ -706,13 +708,8 @@ func (m *managedDatabaseManager) saveRecord(record managedDatabaseRecord) error 
 	if err != nil {
 		return fmt.Errorf("marshal managed database record: %w", err)
 	}
-	path := m.recordPath(record.ID)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	if err := atomicfile.WriteFile(m.recordPath(record.ID), data, 0600); err != nil {
 		return fmt.Errorf("write managed database record: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("commit managed database record: %w", err)
 	}
 	return nil
 }

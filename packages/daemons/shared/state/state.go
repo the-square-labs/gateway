@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 // State holds persistent daemon state with thread-safe access.
@@ -56,13 +58,9 @@ func (s *State) Save() error {
 		return fmt.Errorf("marshal state: %w", err)
 	}
 
-	tmpPath := s.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	// The node's identity: a kill -9 mid-write must leave the previous file, not a partial one.
+	if err := atomicfile.WriteFile(s.path, data, 0644); err != nil {
 		return fmt.Errorf("write state: %w", err)
-	}
-	if err := os.Rename(tmpPath, s.path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename state: %w", err)
 	}
 	return nil
 }

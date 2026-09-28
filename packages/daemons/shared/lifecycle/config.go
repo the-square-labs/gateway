@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 // GatewayConfig holds the gateway connection settings.
@@ -73,7 +75,7 @@ func ClearTokenFromFile(path string) error {
 		return err
 	}
 
-	return os.WriteFile(path, out, 0600)
+	return atomicfile.WriteFile(path, out, 0600)
 }
 
 // LoadBaseConfig loads only the base config fields from a YAML file.

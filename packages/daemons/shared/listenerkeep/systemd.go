@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
 // SystemdDropInName is the drop-in that gives a daemon's systemd unit a file
@@ -61,12 +63,7 @@ func ensureSystemdStore(runtimeDir, cgroupPath, unitDir string, systemctl func(.
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return false, err
 	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, []byte(systemdDropIn), 0o644); err != nil {
-		return false, err
-	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	if err := atomicfile.WriteFile(path, []byte(systemdDropIn), 0o644); err != nil {
 		return false, err
 	}
 	if output, err := systemctl("daemon-reload"); err != nil {
