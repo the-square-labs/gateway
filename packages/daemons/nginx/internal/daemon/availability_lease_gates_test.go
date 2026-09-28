@@ -165,3 +165,38 @@ func TestLeaseGateTrackerKeepsTheRetainedHolderOpenAcrossAClose(t *testing.T) {
 		}
 	}
 }
+
+// B-13: a holder whose daemon restarts gracefully keeps its socket open (nginx holds its connections) unless another
+// member of the policy serves; RESTARTING wins over a relay that only lost the registration (NOT_READY).
+func TestRestartingHolderStaysOpenUnlessAnotherMemberServes(t *testing.T) {
+	now := time.Now()
+	view := func(slot uint32, holder string, endpoint relayv1.LeaseHolderEndpoint) *relayv1.LeaseGateSnapshot {
+		return &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+			PolicyId: "policy-1", Slot: slot, LeaseMode: true, Open: true, HolderId: holder, RemainingMs: 20000, HolderEndpoint: endpoint,
+		}}}
+	}
+	restarting := relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_RESTARTING
+
+	failover := newLeaseGateTracker()
+	failover.apply("relay-1", view(0, "node-a", restarting), now)
+	failover.apply("relay-old", view(0, "node-a", relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY), now)
+	if !failover.openFor("policy-1", "node-a", now) {
+		t.Fatal("the only member, restarting, was closed")
+	}
+	if failover.otherMemberServes("policy-1", "node-a", now) {
+		t.Fatal("no other member serves")
+	}
+
+	replicated := newLeaseGateTracker()
+	replicated.apply("relay-1", view(1, "node-a", restarting), now)
+	replicated.apply("relay-2", view(0, "node-b", relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY), now)
+	if replicated.openFor("policy-1", "node-a", now) {
+		t.Fatal("a restarting replica stayed open while another replica serves")
+	}
+	if !replicated.openFor("policy-1", "node-b", now) {
+		t.Fatal("the serving replica was closed")
+	}
+	if !replicated.otherMemberServes("policy-1", "node-a", now) {
+		t.Fatal("the serving replica was not seen")
+	}
+}

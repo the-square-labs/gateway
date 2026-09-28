@@ -113,7 +113,7 @@ func (t *leaseGateTracker) openFor(policyID, candidateID string, now time.Time) 
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	unknown, notReady := false, false
+	unknown, notReady, restarting, otherServing := false, false, false, false
 	for key, byRelay := range t.entries {
 		if key.policyID != policyID {
 			continue
@@ -125,7 +125,13 @@ func (t *leaseGateTracker) openFor(policyID, candidateID string, now time.Time) 
 			if !entry.leaseMode {
 				return true
 			}
-			if !entry.open || entry.holderID != candidateID {
+			if !entry.open {
+				continue
+			}
+			if entry.holderID != candidateID {
+				if entry.holderEndpoint == relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+					otherServing = true
+				}
 				continue
 			}
 			switch entry.holderEndpoint {
@@ -133,12 +139,41 @@ func (t *leaseGateTracker) openFor(policyID, candidateID string, now time.Time) 
 				return true
 			case relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY:
 				notReady = true
+			case relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_RESTARTING:
+				restarting = true
 			default:
 				unknown = true
 			}
 		}
 	}
+	if restarting {
+		// The holder's daemon restarts gracefully (B-13): its socket stays
+		// open and its connections are held until it serves again, unless
+		// another member of the policy serves meanwhile. A relay that does
+		// not know restarts only lost the registration: RESTARTING wins over
+		// its NOT_READY.
+		return !otherServing
+	}
 	return unknown && !notReady
+}
+
+// otherMemberServes reports whether some relay's unexpired view says a member
+// of policyID other than candidateID holds an open slot and serves.
+func (t *leaseGateTracker) otherMemberServes(policyID, candidateID string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for key, byRelay := range t.entries {
+		if key.policyID != policyID {
+			continue
+		}
+		for _, entry := range byRelay {
+			if now.Before(entry.expiresAt) && entry.leaseMode && entry.open && entry.holderID != candidateID &&
+				entry.holderEndpoint == relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reported reports whether some relay's unexpired view covers policyID at all.
