@@ -1513,6 +1513,25 @@ server {
 }
 EOF
 
+    # HTTPS catch-all: without an explicit 443 default_server, a TLS request
+    # whose SNI or Host matches no route falls through to the first 443
+    # server block nginx loaded, serving another route's content. The
+    # nginx-daemon keeps this file in sync on every start (see
+    # nginx.EnsureDefaultServer); it is written here too so the protection is
+    # already in place before the daemon's first start.
+    cat > "${NGINX_SITES_DIR}/00-gateway-default-server.conf" << 'EOF'
+# Gateway managed default server (auto-injected)
+# Rejects any TLS request whose SNI or Host does not match a configured
+# route, so a deleted route's hostname (or any other hostname pointed at
+# this node) cannot fall through to another route's server block.
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+EOF
+
     STUB_STATUS_URL="http://127.0.0.1/nginx_status"
 }
 

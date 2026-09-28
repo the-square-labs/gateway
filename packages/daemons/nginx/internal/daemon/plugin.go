@@ -193,6 +193,17 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	nginx.CleanTmpFiles(p.cfg.Nginx.CertsDir)
 
 	globalConfigModified := false
+	configDirModified := false
+
+	// Ensure the managed HTTPS catch-all default server is present, so an
+	// unmatched SNI/Host cannot fall through to an arbitrary route (this
+	// covers nodes provisioned before the installer wrote it).
+	if modified, err := nginx.EnsureDefaultServer(p.cfg.Nginx.ConfigDir); err != nil {
+		logger.Warn("failed to write managed default HTTPS server", "error", err)
+	} else if modified {
+		logger.Info("wrote managed default HTTPS server (TLS catch-all)")
+		configDirModified = true
+	}
 
 	// Ensure gateway log format is present in nginx.conf.
 	if modified, err := nginx.EnsureLogFormat(p.cfg.Nginx.GlobalConfig); err != nil {
@@ -211,7 +222,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		globalConfigModified = true
 	}
 
-	if globalConfigModified {
+	if globalConfigModified || configDirModified {
 		mgr.Reload()
 	}
 	if valid, output := mgr.TestConfig(); !valid {
