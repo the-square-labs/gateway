@@ -18,6 +18,7 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	sharedstate "github.com/wiolett-industries/gateway/daemon-shared/state"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
@@ -55,6 +56,8 @@ type NginxPlugin struct {
 	// registryListenersRelease releases kept registry sockets no sync claimed.
 	registryListenersRelease *time.Timer
 	registryListenersOnce    sync.Once
+	// secureLinkOutcomes logs Secure Link connection failures and holds per link and state change (L-1).
+	secureLinkOutcomes logepisode.Tracker
 
 	// Session-scoped resources
 	sessionCancel              context.CancelFunc
