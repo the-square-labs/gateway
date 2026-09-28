@@ -191,7 +191,8 @@ func (c *Client) MirrorImage(ctx context.Context, sourceRef, targetRef, sourceRe
 		return MirroredImage{}, fmt.Errorf("push mirrored image: %w", err)
 	}
 	defer push.Close()
-	if err := push.Wait(ctx); err != nil {
+	pushedDigest, err := waitForImagePush(ctx, push)
+	if err != nil {
 		return MirroredImage{}, fmt.Errorf("wait for mirrored image push: %w", err)
 	}
 	inspected, err := c.cli.ImageInspect(ctx, targetRef)
@@ -199,11 +200,17 @@ func (c *Client) MirrorImage(ctx context.Context, sourceRef, targetRef, sourceRe
 		return MirroredImage{}, fmt.Errorf("inspect mirrored target image: %w", err)
 	}
 	repository := imageRepository(targetRef)
-	digest := ""
-	for _, reference := range inspected.RepoDigests {
-		if strings.HasPrefix(reference, repository+"@sha256:") {
-			digest = strings.TrimPrefix(reference, repository+"@")
-			break
+	// The digest reported by the push is what the registry received. With the
+	// containerd image store a multi-platform image pulled for one platform is
+	// pushed as that single platform manifest, while RepoDigests still name the
+	// multi-platform index the registry never got.
+	digest := pushedDigest
+	if digest == "" {
+		for _, reference := range inspected.RepoDigests {
+			if strings.HasPrefix(reference, repository+"@sha256:") {
+				digest = strings.TrimPrefix(reference, repository+"@")
+				break
+			}
 		}
 	}
 	if digest == "" {
@@ -218,6 +225,50 @@ func (c *Client) MirrorImage(ctx context.Context, sourceRef, targetRef, sourceRe
 		SizeBytes:     inspected.Size,
 		SourceImageID: source.ID,
 	}, nil
+}
+
+// imagePushAux covers the out-of-band push messages that carry a digest: the
+// final push result ({"Tag","Digest","Size"}) and the containerd image store
+// note that a platform manifest was pushed instead of the multi-platform index.
+type imagePushAux struct {
+	Digest                       string `json:"Digest"`
+	ManifestPushedInsteadOfIndex bool   `json:"manifestPushedInsteadOfIndex"`
+	SelectedManifest             struct {
+		Digest string `json:"digest"`
+	} `json:"selectedManifest"`
+}
+
+// waitForImagePush drains the push progress stream, fails on an error the
+// daemon reports inside the stream, and returns the manifest digest the
+// registry received (empty when the daemon did not report one).
+func waitForImagePush(ctx context.Context, push client.ImagePushResponse) (string, error) {
+	pushedDigest := ""
+	selectedManifest := ""
+	for message, err := range push.JSONMessages(ctx) {
+		if err != nil {
+			return "", err
+		}
+		if message.Error != nil {
+			return "", errors.New(message.Error.Message)
+		}
+		if message.Aux == nil {
+			continue
+		}
+		var aux imagePushAux
+		if json.Unmarshal(*message.Aux, &aux) != nil {
+			continue
+		}
+		if aux.ManifestPushedInsteadOfIndex && strings.HasPrefix(aux.SelectedManifest.Digest, "sha256:") {
+			selectedManifest = aux.SelectedManifest.Digest
+		}
+		if strings.HasPrefix(aux.Digest, "sha256:") {
+			pushedDigest = aux.Digest
+		}
+	}
+	if selectedManifest != "" {
+		return selectedManifest, nil
+	}
+	return pushedDigest, nil
 }
 
 func imageRepository(reference string) string {

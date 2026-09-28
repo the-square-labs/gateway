@@ -77,6 +77,91 @@ func TestMirrorImageSendsAnonymousRegistryAuthHeader(t *testing.T) {
 	}
 }
 
+// mirrorImageTestServer fakes the Engine for MirrorImage: the pushed target
+// inspects with indexDigest in RepoDigests and the push stream is pushBody.
+func mirrorImageTestServer(t *testing.T, sourceRef, targetRef, indexDigest, pushBody string) *client.Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/images/"+sourceRef+"/json"):
+			_, _ = w.Write([]byte(`{"Id":"` + indexDigest + `","Os":"linux","Architecture":"amd64","Size":123}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/tag"):
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/push"):
+			_, _ = w.Write([]byte(pushBody))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/images/"+targetRef+"/json"):
+			_, _ = w.Write([]byte(`{"Id":"` + indexDigest + `","RepoDigests":["` + imageRepository(targetRef) + `@` + indexDigest + `"],"Os":"linux","Architecture":"amd64","Size":123}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	dockerAPI, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create Docker client: %v", err)
+	}
+	t.Cleanup(func() { _ = dockerAPI.Close() })
+	return dockerAPI
+}
+
+func TestMirrorImageUsesThePlatformManifestDigestTheRegistryReceived(t *testing.T) {
+	const (
+		sourceRef      = "nginx:1.29-alpine"
+		targetRef      = "127.0.0.1:5443/gateway/availability/policy/1/1:image"
+		indexDigest    = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+		manifestDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	)
+	pushBody := `{"status":"The push refers to repository [127.0.0.1:5443/gateway/availability/policy/1/1]"}` + "\n" +
+		`{"aux":{"manifestPushedInsteadOfIndex":true,"originalIndex":{"digest":"` + indexDigest + `"},"selectedManifest":{"digest":"` + manifestDigest + `"}}}` + "\n" +
+		`{"status":"image: digest: ` + manifestDigest + ` size: 1234"}` + "\n" +
+		`{"aux":{"Tag":"image","Digest":"` + manifestDigest + `","Size":1234}}` + "\n"
+	dockerAPI := mirrorImageTestServer(t, sourceRef, targetRef, indexDigest, pushBody)
+
+	mirrored, err := (&Client{cli: dockerAPI, logger: slog.Default()}).MirrorImage(context.Background(), sourceRef, targetRef, "")
+	if err != nil {
+		t.Fatalf("mirror image: %v", err)
+	}
+	if mirrored.Digest != manifestDigest {
+		t.Fatalf("mirrored digest = %q, want the pushed platform manifest %q", mirrored.Digest, manifestDigest)
+	}
+	if mirrored.Reference != "127.0.0.1:5443/gateway/availability/policy/1/1@"+manifestDigest {
+		t.Fatalf("mirrored reference = %q", mirrored.Reference)
+	}
+}
+
+func TestMirrorImageFallsBackToRepoDigestWithoutPushDigest(t *testing.T) {
+	const (
+		sourceRef   = "nginx:1.29-alpine"
+		targetRef   = "127.0.0.1:5443/gateway/availability/policy/1/1:image"
+		indexDigest = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	)
+	dockerAPI := mirrorImageTestServer(t, sourceRef, targetRef, indexDigest, "{\"status\":\"pushed\"}\n")
+
+	mirrored, err := (&Client{cli: dockerAPI, logger: slog.Default()}).MirrorImage(context.Background(), sourceRef, targetRef, "")
+	if err != nil {
+		t.Fatalf("mirror image: %v", err)
+	}
+	if mirrored.Digest != indexDigest {
+		t.Fatalf("mirrored digest = %q, want repo digest %q", mirrored.Digest, indexDigest)
+	}
+}
+
+func TestMirrorImageFailsWhenThePushStreamReportsAnError(t *testing.T) {
+	const (
+		sourceRef   = "nginx:1.29-alpine"
+		targetRef   = "127.0.0.1:5443/gateway/availability/policy/1/1:image"
+		indexDigest = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	)
+	pushBody := `{"errorDetail":{"message":"denied: requested access to the resource is denied"},"error":"denied: requested access to the resource is denied"}` + "\n"
+	dockerAPI := mirrorImageTestServer(t, sourceRef, targetRef, indexDigest, pushBody)
+
+	_, err := (&Client{cli: dockerAPI, logger: slog.Default()}).MirrorImage(context.Background(), sourceRef, targetRef, "")
+	if err == nil || !strings.Contains(err.Error(), "requested access to the resource is denied") {
+		t.Fatalf("mirror image error = %v, want the push stream error", err)
+	}
+}
+
 func TestTagImageCreatesLocalAliasFromImmutableArtifact(t *testing.T) {
 	const (
 		sourceRef = "127.0.0.1:5443/gateway/availability/policy/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
