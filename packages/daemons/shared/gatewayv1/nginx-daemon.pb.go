@@ -8447,8 +8447,13 @@ type AvailabilityLeaseHeld struct {
 	ManifestVersion     uint64 `protobuf:"varint,6,opt,name=manifest_version,json=manifestVersion,proto3" json:"manifest_version,omitempty"`
 	PlacementId         string `protobuf:"bytes,7,opt,name=placement_id,json=placementId,proto3" json:"placement_id,omitempty"`
 	PlacementGeneration uint64 `protobuf:"varint,8,opt,name=placement_generation,json=placementGeneration,proto3" json:"placement_generation,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Docker daemons: when this node acquired the key for its current holding
+	// (its own acquired transition), Unix ms on its wall clock; 0 when unknown.
+	// Gateway audits it as the takeover time (N-5, B-14). gateway.v1 only:
+	// relays report no held keys.
+	HeldSinceUnixMs int64 `protobuf:"varint,9,opt,name=held_since_unix_ms,json=heldSinceUnixMs,proto3" json:"held_since_unix_ms,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AvailabilityLeaseHeld) Reset() {
@@ -8533,6 +8538,13 @@ func (x *AvailabilityLeaseHeld) GetPlacementId() string {
 func (x *AvailabilityLeaseHeld) GetPlacementGeneration() uint64 {
 	if x != nil {
 		return x.PlacementGeneration
+	}
+	return 0
+}
+
+func (x *AvailabilityLeaseHeld) GetHeldSinceUnixMs() int64 {
+	if x != nil {
+		return x.HeldSinceUnixMs
 	}
 	return 0
 }
@@ -12721,7 +12733,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\vvoter_epoch\x18\x14 \x01(\x04R\n" +
 	"voterEpoch\x12\x14\n" +
 	"\x05voter\x18\x15 \x01(\bR\x05voter\x12\x16\n" +
-	"\x06member\x18\x16 \x01(\bR\x06member\"\xb0\x02\n" +
+	"\x06member\x18\x16 \x01(\bR\x06member\"\xdd\x02\n" +
 	"\x15AvailabilityLeaseHeld\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x12\n" +
@@ -12730,7 +12742,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x05epoch\x18\x05 \x01(\x04R\x05epoch\x12)\n" +
 	"\x10manifest_version\x18\x06 \x01(\x04R\x0fmanifestVersion\x12!\n" +
 	"\fplacement_id\x18\a \x01(\tR\vplacementId\x121\n" +
-	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\"\xa0\x04\n" +
+	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\x12+\n" +
+	"\x12held_since_unix_ms\x18\t \x01(\x03R\x0fheldSinceUnixMs\"\xa0\x04\n" +
 	"\x18AvailabilityLeaseKeyView\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x14\n" +

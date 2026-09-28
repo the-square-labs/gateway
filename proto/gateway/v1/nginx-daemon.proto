@@ -1070,6 +1070,11 @@ message AvailabilityLeaseHeld {
   uint64 manifest_version = 6;
   string placement_id = 7;
   uint64 placement_generation = 8;
+  // Docker daemons: when this node acquired the key for its current holding
+  // (its own acquired transition), Unix ms on its wall clock; 0 when unknown.
+  // Gateway audits it as the takeover time (N-5, B-14). gateway.v1 only:
+  // relays report no held keys.
+  int64 held_since_unix_ms = 9;
 }
 
 message AvailabilityLeaseKeyView {
