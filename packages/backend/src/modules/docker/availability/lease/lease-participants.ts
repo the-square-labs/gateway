@@ -2,7 +2,7 @@ import { eq, inArray, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
-import { AVAILABILITY_LEASE_CAPABILITY } from './lease-constants.js';
+import { AVAILABILITY_LEASE_CAPABILITY, AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY } from './lease-constants.js';
 import type { LeaseMemberRow } from './lease-store.js';
 import type { LeaseVoterCandidateNode, LeaseWitnessCandidate } from './lease-voters.js';
 
@@ -22,6 +22,8 @@ export interface LeaseParticipant {
   faultDomain: string | null;
   /** Advertises availability_lease_v1, reported an identity key and (docker) a fresh watchdog. */
   capable: boolean;
+  /** Docker daemon without a lease watchdog that cannot install one itself: re-run the node installer. */
+  watchdogMissing?: boolean;
   publicKey: string | null;
 }
 
@@ -123,9 +125,11 @@ export async function loadLeaseParticipants(
   const daemons: LeaseParticipant[] = daemonRows.map((node) => {
     const member = members.get(node.id);
     const connected = registry.getNode(node.id);
-    const advertised = connected
-      ? connected.capabilities.has(AVAILABILITY_LEASE_CAPABILITY)
-      : persistedCapabilities(node.capabilities).includes(AVAILABILITY_LEASE_CAPABILITY);
+    const hasCapability = (capability: string) =>
+      connected
+        ? connected.capabilities.has(capability)
+        : persistedCapabilities(node.capabilities).includes(capability);
+    const advertised = hasCapability(AVAILABILITY_LEASE_CAPABILITY);
     const kind = node.type === 'nginx' ? ('nginx' as const) : ('docker' as const);
     latencies.set(node.id, relayLatencies(connected?.lastHealthReport ?? node.lastHealthReport));
     return {
@@ -136,6 +140,7 @@ export async function loadLeaseParticipants(
       hostKey: node.hostIdentityId ?? node.id,
       faultDomain: null,
       capable: leaseMemberCapable(kind, advertised, member),
+      watchdogMissing: kind === 'docker' && hasCapability(AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY),
       publicKey: member?.identityPublicKey ?? null,
     };
   });

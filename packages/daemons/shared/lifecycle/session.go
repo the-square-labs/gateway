@@ -157,11 +157,18 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	// Notify plugin of session start
 	sessionCtx, sessionCancel := context.WithCancel(ctx)
 	defer sessionCancel()
+	var registrationChanged <-chan struct{}
+	if refresher, ok := d.plugin.(RegistrationRefreshPlugin); ok {
+		registrationChanged = refresher.RegistrationChanged()
+	}
 	go func() {
 		select {
 		case <-sessionCtx.Done():
 		case <-d.controlReconnect:
 			d.logger.Info("reconnecting control session to present the renewed certificate")
+			_ = conn.Close()
+		case <-registrationChanged:
+			d.logger.Info("reconnecting control session to refresh the node capabilities")
 			_ = conn.Close()
 		}
 	}()

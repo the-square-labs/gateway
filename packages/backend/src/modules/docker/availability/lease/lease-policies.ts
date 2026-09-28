@@ -221,6 +221,7 @@ export class AvailabilityLeasePolicies {
       candidates: candidateNodes.map((nodeId) => ({
         nodeId,
         capable: context.participants.byId.get(nodeId)?.capable ?? false,
+        watchdogMissing: context.participants.byId.get(nodeId)?.watchdogMissing ?? false,
       })),
       ingress: [...new Set(ingressNodes)].map((nodeId) => ({
         nodeId,

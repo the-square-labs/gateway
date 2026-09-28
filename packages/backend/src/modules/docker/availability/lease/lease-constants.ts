@@ -6,6 +6,12 @@
 /** Capability advertised by docker daemons, nginx daemons and relays that run the lease protocol (D10). */
 export const AVAILABILITY_LEASE_CAPABILITY = 'availability_lease_v1';
 
+/**
+ * A docker daemon that has no lease watchdog and cannot install one itself (it runs without root, or the host has no
+ * service manager) advertises this marker; the node installer must be re-run on it.
+ */
+export const AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY = 'availability_lease_watchdog_missing_v1';
+
 /** Acceptor lease T. Manifests restate it; it is not configurable. */
 export const LEASE_TERM_MS = 30_000;
 

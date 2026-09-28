@@ -9,7 +9,7 @@ export interface LeaseGatingInput {
   /** A policy key can sign lease manifests. */
   signingReady: boolean;
   /** Candidate docker node ids and whether each is capable (capability, identity key, fresh watchdog). */
-  candidates: Array<{ nodeId: string; capable: boolean }>;
+  candidates: Array<{ nodeId: string; capable: boolean; watchdogMissing?: boolean }>;
   /** Ingress nginx node ids of the policy's routes and whether each is capable. */
   ingress: Array<{ nodeId: string; capable: boolean }>;
   /**
@@ -50,6 +50,20 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
     return {
       eligible: false,
       reason: { code: 'no_candidates', message: 'The policy has no candidate placements yet' },
+    };
+  }
+  const watchdogMissing = input.candidates
+    .filter((candidate) => !candidate.capable && candidate.watchdogMissing)
+    .map(({ nodeId }) => nodeId);
+  if (watchdogMissing.length > 0) {
+    return {
+      eligible: false,
+      reason: {
+        code: 'watchdog_missing',
+        message:
+          'The lease watchdog is missing on some Docker nodes of this workload and their daemon cannot install it: re-run the node installer on them',
+        nodeIds: watchdogMissing.sort(),
+      },
     };
   }
   if (incapableCandidates.length > 0) {

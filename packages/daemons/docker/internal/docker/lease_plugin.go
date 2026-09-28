@@ -30,6 +30,9 @@ type leaseIntegration struct {
 	fence   lease.DirFence
 	cancel  context.CancelFunc
 
+	// watchdog bootstraps a missing lease watchdog (nodes installed before it).
+	watchdog *watchdogBootstrap
+
 	// identity returns the PKIX DER public key that signs lease frames,
 	// for AvailabilityLeaseReport.identity_public_key.
 	identity func() []byte
@@ -81,6 +84,10 @@ func (p *DockerPlugin) initAvailabilityLease() {
 	integration.cancel = cancel
 	go runtime.Run(ctx)
 	p.lease = integration
+	integration.watchdog = newWatchdogBootstrap(p.logger, integration.watchdogReady, p.cfg.Docker.LeaseWatchdogReleasesURL, p.cfg.Docker.LeaseWatchdogArtifactBaseURL)
+	integration.watchdog.onPresent = p.signalRegistrationChanged
+	integration.watchdog.Unavailable()
+	go integration.watchdog.Run(ctx)
 	p.logger.Info("availability lease runtime started", "node_id", stored.NodeID, "watchdog_ready", integration.watchdogReady())
 }
 
@@ -93,6 +100,34 @@ func (l *leaseIntegration) attachRelay(ctx context.Context, conn grpc.ClientConn
 	go l.runtime.Transport().Run(ctx, relayInstanceID, func(streamCtx context.Context) (lease.FrameStream, error) {
 		return lease.OpenCoordinateStream(streamCtx, conn)
 	})
+}
+
+// leaseCapabilities advertises availability_lease_v1 only with a live
+// watchdog (A12.4), and the missing-watchdog marker when this daemon cannot
+// install one, so the policy mode reason asks to re-run the node installer.
+func (p *DockerPlugin) leaseCapabilities() []string {
+	if p.lease == nil {
+		return nil
+	}
+	if p.lease.watchdogReady() {
+		return []string{availabilityLeaseCapability}
+	}
+	if unavailable, _ := p.lease.watchdog.Unavailable(); unavailable {
+		return []string{watchdogMissingCapability}
+	}
+	return nil
+}
+
+// RegistrationChanged implements lifecycle.RegistrationRefreshPlugin.
+func (p *DockerPlugin) RegistrationChanged() <-chan struct{} {
+	return p.registrationChanged
+}
+
+func (p *DockerPlugin) signalRegistrationChanged() {
+	select {
+	case p.registrationChanged <- struct{}{}:
+	default:
+	}
 }
 
 func (l *leaseIntegration) watchdogReady() bool {
