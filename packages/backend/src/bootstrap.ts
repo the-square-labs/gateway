@@ -237,7 +237,10 @@ import { UIBootstrapService } from '@/modules/ui-bootstrap/ui-bootstrap.service.
 import { CacheService, createRedisClient } from '@/services/cache.service.js';
 import { ConfigValidatorService } from '@/services/config-validator.service.js';
 import { CryptoService } from '@/services/crypto.service.js';
+import { scheduleQueuedDaemonUpdateResume } from '@/services/daemon-node-update.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { loadLeaseUpdateView } from '@/services/daemon-update-lease-gate.js';
+import { DaemonUpdateRollout } from '@/services/daemon-update-rollout.service.js';
 import { DatabaseCAService } from '@/services/database-ca.service.js';
 import { DockerService } from '@/services/docker.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
@@ -2031,6 +2034,15 @@ export async function initializeContainer(): Promise<void> {
   daemonUpdateService.setEventBus(eventBus);
   daemonUpdateService.setNodeRegistry(nodeRegistry);
   container.registerInstance(DaemonUpdateService, daemonUpdateService);
+  // Restarts of lease voters and candidates (daemon and relay updates) go one policy member at a time.
+  const daemonUpdateRollout = new DaemonUpdateRollout({ loadView: () => loadLeaseUpdateView(db, nodeRegistry) });
+  container.registerInstance(DaemonUpdateRollout, daemonUpdateRollout);
+  scheduleQueuedDaemonUpdateResume({
+    db,
+    daemonUpdateService,
+    dispatch: nodeDispatch,
+    rollout: daemonUpdateRollout,
+  });
   nodeDispatch.setDaemonUpdateService(daemonUpdateService);
   nodesService.setDaemonUpdateService(daemonUpdateService);
   if (relayPoolService) {
@@ -2048,6 +2060,13 @@ export async function initializeContainer(): Promise<void> {
           artifact.signedManifest
         );
         if (!result.success) throw new Error(result.error || result.detail || 'Relay worker update failed');
+      },
+      awaitLeasePeers: async (relayInstanceId, signal) => {
+        if (!(await daemonUpdateRollout.isLeaseMember(relayInstanceId))) return;
+        await daemonUpdateRollout.enqueue({ memberId: relayInstanceId, run: async () => {}, signal });
+      },
+      awaitLeaseSettled: async (relayInstanceId, since, signal) => {
+        await daemonUpdateRollout.awaitSettled(relayInstanceId, since, signal);
       },
       prepareSupervisorUpdate: (version, arch) =>
         daemonUpdateService.prepareTrustedDaemonUpdate('relay', `${version}-relay`, version, arch),

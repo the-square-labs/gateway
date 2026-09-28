@@ -12,6 +12,7 @@ import { AuditExportSchema } from '@/modules/audit/audit.docs.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { dispatchNodeDaemonUpdate } from '@/services/daemon-node-update.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { DaemonUpdateRollout } from '@/services/daemon-update-rollout.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
@@ -183,6 +184,7 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
               db: container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
               daemonUpdateService: container.resolve(DaemonUpdateService),
               dispatch: container.resolve(NodeDispatchService),
+              rollout: container.resolve(DaemonUpdateRollout),
             });
           }
           default:

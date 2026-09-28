@@ -1400,6 +1400,28 @@ describe('UpdateService interrupted updates', () => {
     return { service, runtime, verify, updates };
   }
 
+  it('waits for the relay lease peers before draining it and for its acceptor before resuming it', async () => {
+    const { service, runtime, verify } = rolloutHarness();
+    const events: string[] = [];
+    const awaitLeasePeers = vi.fn(async () => void events.push('lease peers settled'));
+    const awaitLeaseSettled = vi.fn(async () => void events.push('relay votes again'));
+    Object.assign(runtime, { awaitLeasePeers, awaitLeaseSettled });
+    runtime.drainInstance.mockImplementation(
+      async (_id: string, _user: string, enabled: boolean) => void events.push(enabled ? 'drain' : 'resume')
+    );
+    runtime.dispatchWorkerUpdate.mockImplementation(async () => void events.push('worker update'));
+    verify.mockResolvedValue(undefined);
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    vi.spyOn(internals, 'promoteRelayConnectorImages').mockResolvedValue(undefined);
+
+    await service.performRelayUpdate('v2.4.3', {} as never, 'admin-1');
+
+    expect(events).toEqual(['lease peers settled', 'drain', 'worker update', 'relay votes again', 'resume']);
+    expect(awaitLeasePeers).toHaveBeenCalledWith('remote-1', expect.any(AbortSignal));
+    expect(awaitLeaseSettled).toHaveBeenCalledWith('remote-1', expect.any(Number), expect.any(AbortSignal));
+  });
+
   // Regression: a run that failed without a Gateway restart left the relay drained.
   it('resumes the relay it drained when verification times out', async () => {
     const { service, runtime, verify, updates } = rolloutHarness();
