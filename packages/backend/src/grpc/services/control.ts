@@ -806,7 +806,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               setImmediate(async () => {
                 try {
                   if (!isClaimedStreamCurrent(claimedNodeId)) return;
-                  await deps.relayPolicy!.syncRemoteInstancePolicy(claimedNodeId);
+                  // Forced: the relay may have restarted without its state and hold no policy, while
+                  // Gateway's records still say it holds the current one (N-7).
+                  await deps.relayPolicy!.syncRemoteInstancePolicy(claimedNodeId, undefined, { force: true });
                 } catch (error) {
                   logger.warn('Failed to synchronize remote relay policy after reconnect', {
                     nodeId: claimedNodeId,
@@ -955,6 +957,11 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               if (runtimeStateChanged) {
                 deps.registry.publishRelayRuntimeChanged(activeNodeId, instance.id);
               }
+              deps.relayPolicy?.noteRemoteAppliedRevision?.(
+                activeNodeId,
+                appliedPolicyRevision,
+                Number(instance.appliedPolicyRevision || 0)
+              );
               // A gap this long means the relay ran unreachable on whatever policy it last
               // held; the audit trail records what it served through, not just that it reconnected.
               if (

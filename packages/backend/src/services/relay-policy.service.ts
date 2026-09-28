@@ -162,6 +162,9 @@ const LOCAL_POLICY_TRUST_RECOVERED_VISIBLE_MS = 24 * 60 * 60 * 1000;
 /** Pushes on the policy-change path must not hold local publication behind a slow remote relay. */
 const REMOTE_POLICY_PUSH_TIMEOUT_MS = 10_000;
 const REMOTE_POLICY_PUSH_RETRY_MS = 60_000;
+/** A relay that lost its policy gets it at most this often from its reports (N-7). */
+const REMOTE_POLICY_LOSS_SYNC_INTERVAL_MS = 5_000;
+const LOCAL_POLICY_LOSS_SYNC_INTERVAL_MS = 2_000;
 /** How long a grant dispatch waits for remote relays to take the policy it depends on. */
 const REMOTE_POLICY_PUSH_GRACE_MS = 3_000;
 const REVISION_RAISE_INTERVAL_MS = 5 * 60 * 1000;
@@ -239,6 +242,8 @@ export class RelayPolicyService {
   /** Per daemon: consecutive grant bundle refusals that named no revision. */
   private readonly staleGrantRefusals = new Map<string, number>();
   private lastLocalPolicyTrustResetAt = 0;
+  private lastLocalPolicyLossSyncAt = 0;
+  private readonly remotePolicyLossSyncAt = new Map<string, number>();
   /** Availability lease blocks and key chain for PolicyEnvelopePayload fields 40 and 41. */
   private availabilityLeaseSource?: () => Promise<{ leaseBlocks: unknown[]; leaseKeyRotations: unknown[] }>;
   /** Endpoints and routes the relay admits only through its lease gate (EndpointPolicy 10, RoutePolicy 12). */
@@ -301,6 +306,12 @@ export class RelayPolicyService {
 
   setEventBus(events: EventBusService): void {
     this.events = events;
+    events.subscribe('system.relay.health.changed', (payload) => {
+      // The local relay answers but holds no policy (it restarted with a fresh relay.db): deliver it now instead of
+      // at the next periodic sync, so endpoint registrations are not refused for up to a minute (N-7).
+      if ((payload as { reason?: unknown } | null)?.reason !== 'policy_snapshot_required') return;
+      this.syncLocalPolicyAfterLoss();
+    });
     events.subscribe('system.config.changed', (payload) => {
       if ((payload as { relayChanged?: unknown } | null)?.relayChanged !== true) return;
       this.relaySettingsSync = this.relaySettingsSync
@@ -349,6 +360,45 @@ export class RelayPolicyService {
     });
   }
 
+  /** Throttled: a relay stuck without policy reports it on every probe transition. */
+  private syncLocalPolicyAfterLoss(now = Date.now()): void {
+    if (now - this.lastLocalPolicyLossSyncAt < LOCAL_POLICY_LOSS_SYNC_INTERVAL_MS) return;
+    this.lastLocalPolicyLossSyncAt = now;
+    void this.syncSnapshot().catch((error) => {
+      logger.warn('Local relay policy delivery after a lost snapshot deferred to the next sync', {
+        error: errorMessage(error),
+      });
+    });
+  }
+
+  /**
+   * A remote relay reported the policy revision it holds. A relay that holds none, or an older one than it held
+   * before, lost its state or restarted from an old copy: send its snapshot now, without waiting for the next policy
+   * change or lease refresh (N-7). Throttled per relay.
+   */
+  noteRemoteAppliedRevision(
+    nodeId: string,
+    reportedRevision: number,
+    previousRevision: number,
+    now = Date.now()
+  ): void {
+    if (!this.dispatch) return;
+    if (reportedRevision > 0 && reportedRevision >= previousRevision) return;
+    if (now - (this.remotePolicyLossSyncAt.get(nodeId) ?? 0) < REMOTE_POLICY_LOSS_SYNC_INTERVAL_MS) return;
+    this.remotePolicyLossSyncAt.set(nodeId, now);
+    logger.info('Remote relay holds no current policy; delivering its snapshot', {
+      nodeId,
+      reportedRevision,
+      previousRevision,
+    });
+    void this.syncRemoteInstancePolicy(nodeId, REMOTE_POLICY_PUSH_TIMEOUT_MS, { force: true }).catch((error) => {
+      logger.warn('Remote relay policy delivery after a lost snapshot deferred to the next refresh', {
+        nodeId,
+        error: errorMessage(error),
+      });
+    });
+  }
+
   async ensureInitialized(): Promise<void> {
     await backfillRelayNodeFingerprints(this.db);
     await this.grantKeys.ensureInitialized();
@@ -367,11 +417,18 @@ export class RelayPolicyService {
     return this.policyKeys.getEnrollmentTrust();
   }
 
-  syncRemoteInstancePolicy(nodeId: string, timeoutMs?: number): Promise<number> {
+  /**
+   * Delivers the relay's policy snapshot. `force` sends it even when Gateway's records say the relay holds it: a
+   * relay that (re)connects may have lost its state (relay.db renamed or restored) and would refuse every
+   * registration with "policy snapshot is required" until the next policy change or lease refresh (N-7).
+   */
+  syncRemoteInstancePolicy(nodeId: string, timeoutMs?: number, options: { force?: boolean } = {}): Promise<number> {
     // Build and deliver in order per relay: two concurrent pushes could otherwise arrive
     // newest first, and the relay would refuse the older one as a stale revision.
     const previous = this.remotePolicySyncs.get(nodeId) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => this.syncRemoteInstancePolicyOnce(nodeId, timeoutMs));
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.syncRemoteInstancePolicyOnce(nodeId, timeoutMs, options.force === true));
     this.remotePolicySyncs.set(nodeId, current);
     const settle = () => {
       if (this.remotePolicySyncs.get(nodeId) === current) this.remotePolicySyncs.delete(nodeId);
@@ -380,7 +437,7 @@ export class RelayPolicyService {
     return current;
   }
 
-  private async syncRemoteInstancePolicyOnce(nodeId: string, timeoutMs?: number): Promise<number> {
+  private async syncRemoteInstancePolicyOnce(nodeId: string, timeoutMs?: number, force = false): Promise<number> {
     if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
     const [instance] = await this.db
       .select({ id: relayInstances.id })
@@ -388,7 +445,7 @@ export class RelayPolicyService {
       .where(and(eq(relayInstances.nodeId, nodeId), eq(relayInstances.kind, 'remote')))
       .limit(1);
     if (!instance) throw new Error('Remote relay instance is unavailable');
-    const snapshot = await this.buildInstanceSnapshot(instance.id);
+    const snapshot = await this.buildInstanceSnapshot(instance.id, undefined, 0, { force });
     // A relay that reports the unchanged snapshot needs nothing sent.
     if (snapshot.encodedRequest) {
       const args = [
@@ -512,7 +569,11 @@ export class RelayPolicyService {
       // The relay refuses a revision below the one it applied. After Gateway's database was
       // restored from a backup its sequence is behind; continue above the relay's instead.
       const revisionFloor = Number(health.appliedRevision || 0);
-      let signed = await this.buildInstanceSnapshot(local.id, trustedKeyIds, revisionFloor);
+      // The live report says what the relay holds now; the stored one may predate a relay that lost its state
+      // (relay.db renamed), which then waited for the next policy change (N-7).
+      let signed = await this.buildInstanceSnapshot(local.id, trustedKeyIds, revisionFloor, {
+        liveAppliedRevision: revisionFloor,
+      });
       let response: { appliedRevision: string; unchanged: boolean };
       try {
         response = await this.applyLocalSnapshot(signed);
@@ -520,7 +581,9 @@ export class RelayPolicyService {
         if (!isLocalPolicyLockout(error)) throw error;
         const trust = await this.policyKeys.getEnrollmentTrust();
         await this.recoverLocalPolicyTrust(trust, health, error);
-        signed = await this.buildInstanceSnapshot(local.id, [trust.keyId], revisionFloor);
+        signed = await this.buildInstanceSnapshot(local.id, [trust.keyId], revisionFloor, {
+          liveAppliedRevision: revisionFloor,
+        });
         try {
           response = await this.applyLocalSnapshot(signed);
         } catch (retryError) {
@@ -1955,7 +2018,12 @@ export class RelayPolicyService {
   private async buildInstanceSnapshot(
     instanceId: string,
     reportedPolicyKeyIds?: string[],
-    appliedRevisionFloor = 0
+    appliedRevisionFloor = 0,
+    /**
+     * force: build and send even an unchanged snapshot. liveAppliedRevision: the revision the relay reported just
+     * now; an unchanged snapshot is skipped only when the relay holds exactly it.
+     */
+    delivery: { force?: boolean; liveAppliedRevision?: number } = {}
   ): Promise<{
     /** Null when the relay already holds this content at `revision`: nothing to send. */
     encodedRequest: Buffer | null;
@@ -2066,7 +2134,8 @@ export class RelayPolicyService {
       const previous = await loadInstancePolicyState(tx, instance.id);
       // Syncs run on every policy touch; unchanged content must not spend a revision, or the relay
       // re-applies the same policy every few seconds. A lease past half its life is renewed.
-      if (holdsCurrentSnapshot(previous, key, reported, issuedAtUnix, leaseSeconds)) {
+      const held = delivery.liveAppliedRevision ?? reported;
+      if (!delivery.force && holdsCurrentSnapshot(previous, key, held, issuedAtUnix, leaseSeconds)) {
         return {
           unchanged: true as const,
           state,
