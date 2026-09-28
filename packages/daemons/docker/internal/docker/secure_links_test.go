@@ -315,7 +315,7 @@ func TestDormantMemberWithStoppedStandbyDoesNotFailTheSync(t *testing.T) {
 		}
 		return "10.0.0.2", binding.TargetNetwork, nil
 	}
-	resolved, networks, err := resolveSecureLinkTargets(bindings, resolve)
+	resolved, networks, err := resolveSecureLinkTargets(bindings, resolve, false)
 	if err != nil || len(resolved) != 1 || len(networks) != 1 {
 		t.Fatalf("dormant standby must be skipped, resolved=%d networks=%v err=%v", len(resolved), networks, err)
 	}
@@ -323,8 +323,62 @@ func TestDormantMemberWithStoppedStandbyDoesNotFailTheSync(t *testing.T) {
 	if len(normalized.Bindings) != 2 || normalized.Bindings[1].TargetNetwork != "net-b" {
 		t.Fatalf("the dormant member must stay in the committed state with its network: %+v", normalized.Bindings)
 	}
+	bindings[1].AvailabilityPolicyId = ""
 	bindings[1].Dormant = false
-	if _, _, err := resolveSecureLinkTargets(bindings, resolve); err == nil {
-		t.Fatal("a serving member with a stopped target must still fail the sync")
+	if _, _, err := resolveSecureLinkTargets(bindings, resolve, false); err == nil {
+		t.Fatal("a link outside lease mode with a stopped target must still fail a Gateway sync")
+	}
+}
+
+// Stand run ha18/b: after a failback the Gateway marked the new holder's member live while its container was still
+// starting. The daemon rejected the whole set, Gateway resent it without the member, and the new holder could not
+// dial its own member for 11 minutes. A lease-mode member's container runs only while its node holds the lease, so a
+// stopped one is expected whatever Gateway believes about dormancy.
+func TestLeaseModeMemberWithStoppedContainerStaysCommitted(t *testing.T) {
+	bindings := []*pb.ProxySecureLinkBinding{
+		{LinkId: "11111111-1111-4111-8111-111111111111", TargetContainer: "other", TargetNetwork: "net-a"},
+		{LinkId: "22222222-2222-4222-8222-222222222222", TargetContainer: "successor", TargetNetwork: "net-b", AvailabilityPolicyId: "policy-1"},
+	}
+	resolve := func(binding *pb.ProxySecureLinkBinding) (string, string, error) {
+		if binding.TargetContainer == "successor" {
+			return "", "", errSecureLinkTargetUnavailable
+		}
+		return "10.0.0.2", binding.TargetNetwork, nil
+	}
+	resolved, _, err := resolveSecureLinkTargets(bindings, resolve, false)
+	if err != nil || len(resolved) != 1 || resolved[0].binding.LinkId != bindings[0].LinkId {
+		t.Fatalf("a live lease-mode member with a stopped container must not fail the sync: resolved=%d err=%v", len(resolved), err)
+	}
+	normalized := normalizeResolvedTargetBindings(&pb.SyncProxySecureLinksCommand{Bindings: bindings}, resolved)
+	if len(normalized.Bindings) != 2 || normalized.Bindings[1].LinkId != bindings[1].LinkId {
+		t.Fatalf("the member must stay committed so the holder's restore binds it: %+v", normalized.Bindings)
+	}
+}
+
+// Stand run ha18/b: app-node-2 restarted with one committed link whose container was gone. The restore failed as a
+// whole, so every Secure Link of the node stayed down until Gateway resent the bindings.
+func TestRestoreSkipsStoppedTargetsAndKeepsTheirNetworks(t *testing.T) {
+	bindings := []*pb.ProxySecureLinkBinding{
+		{LinkId: "11111111-1111-4111-8111-111111111111", TargetContainer: "gone", TargetNetwork: "net-a"},
+		{LinkId: "22222222-2222-4222-8222-222222222222", TargetContainer: "running", TargetNetwork: "net-b"},
+	}
+	resolve := func(binding *pb.ProxySecureLinkBinding) (string, string, error) {
+		if binding.TargetContainer == "gone" {
+			return "", "", errSecureLinkTargetUnavailable
+		}
+		return "10.0.0.3", binding.TargetNetwork, nil
+	}
+	if _, _, err := resolveSecureLinkTargets(bindings, resolve, false); err == nil {
+		t.Fatal("a Gateway sync must still report the stopped target")
+	}
+	resolved, networks, err := resolveSecureLinkTargets(bindings, resolve, true)
+	if err != nil || len(resolved) != 1 || len(networks) != 1 {
+		t.Fatalf("a restore must bind the running target: resolved=%d err=%v", len(resolved), err)
+	}
+	committed := normalizeTargetBindings(&pb.SyncProxySecureLinksCommand{Bindings: bindings}, []dockerSecureLinkStatus{{
+		LinkID: bindings[1].LinkId, Generation: 1, Port: 4000, TargetNetwork: "net-b",
+	}})
+	if committed.Bindings[0].TargetNetwork != "net-a" || committed.Bindings[1].TargetNetwork != "net-b" {
+		t.Fatalf("the skipped link must keep its network: %+v", committed.Bindings)
 	}
 }

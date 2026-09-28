@@ -94,14 +94,29 @@ func newDockerSecureLinkManager(plugin *DockerPlugin) (*dockerSecureLinkManager,
 	}, nil
 }
 
-func (m *dockerSecureLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]dockerSecureLinkStatus, error) {
-	return m.syncWithPersistence(command, nil, nil)
+// restore rebinds the committed bindings after a daemon or connector restart,
+// and before a lease holder serves. A link whose target container is not
+// running is left out of the connector and stays committed, so one stopped
+// workload never takes the other links of the node down with it: its binding
+// is added by the next restore once the container runs (the next dial of the
+// link, or the lease holder's start).
+func (m *dockerSecureLinkManager) restore(command *pb.SyncProxySecureLinksCommand) ([]dockerSecureLinkStatus, error) {
+	return m.apply(command, nil, nil, true)
 }
 
 func (m *dockerSecureLinkManager) syncWithPersistence(
 	command *pb.SyncProxySecureLinksCommand,
 	stage func(*pb.SyncProxySecureLinksCommand) error,
 	commit func(*pb.SyncProxySecureLinksCommand) error,
+) ([]dockerSecureLinkStatus, error) {
+	return m.apply(command, stage, commit, false)
+}
+
+func (m *dockerSecureLinkManager) apply(
+	command *pb.SyncProxySecureLinksCommand,
+	stage func(*pb.SyncProxySecureLinksCommand) error,
+	commit func(*pb.SyncProxySecureLinksCommand) error,
+	restoring bool,
 ) ([]dockerSecureLinkStatus, error) {
 	if command == nil {
 		return nil, errors.New("proxy secure-link bindings are required")
@@ -152,7 +167,7 @@ func (m *dockerSecureLinkManager) syncWithPersistence(
 	defer cancel()
 	resolved, desiredNetworks, err := resolveSecureLinkTargets(bindings, func(binding *pb.ProxySecureLinkBinding) (string, string, error) {
 		return m.resolveTarget(ctx, binding.TargetContainer, binding.TargetNetwork, binding.TargetHost, binding.AllowNetworkReselection)
-	})
+	}, restoring)
 	if err != nil {
 		return nil, err
 	}
@@ -237,20 +252,24 @@ func (m *dockerSecureLinkManager) syncWithPersistence(
 	return statuses, nil
 }
 
-// resolveSecureLinkTargets resolves every target binding. A dormant
-// availability member targets a created, stopped standby (D7): it is left
-// out of the connector, stays in the committed state, and is bound by the
-// restore that runs once this node serves the lease.
+// resolveSecureLinkTargets resolves every target binding. An availability
+// member whose container is stopped is left out of the connector, stays in the
+// committed state, and is bound by the restore that runs once this node serves
+// the lease: a dormant member targets a created, stopped standby (D7), and a
+// lease-gated member serves only while its node holds the lease (D8), which
+// Gateway learns after the fact. While restoring, every link whose container
+// is stopped is skipped the same way.
 func resolveSecureLinkTargets(
 	bindings []*pb.ProxySecureLinkBinding,
 	resolve func(*pb.ProxySecureLinkBinding) (string, string, error),
+	restoring bool,
 ) ([]resolvedSecureLinkTarget, map[string]struct{}, error) {
 	networks := map[string]struct{}{}
 	resolved := make([]resolvedSecureLinkTarget, 0, len(bindings))
 	for _, binding := range bindings {
 		host, network, err := resolve(binding)
 		if err != nil {
-			if binding.GetDormant() && errors.Is(err, errSecureLinkTargetUnavailable) {
+			if errors.Is(err, errSecureLinkTargetUnavailable) && (restoring || leaseBoundTarget(binding)) {
 				continue
 			}
 			return nil, nil, fmt.Errorf("resolve secure-link %s: %w", binding.LinkId, err)
@@ -259,6 +278,13 @@ func resolveSecureLinkTargets(
 		resolved = append(resolved, resolvedSecureLinkTarget{binding: binding, host: host, network: network})
 	}
 	return resolved, networks, nil
+}
+
+// leaseBoundTarget reports whether a stopped target is expected: the member of
+// a standby placement, or of a lease-mode policy, whose container runs only
+// while its node holds the data-plane lease.
+func leaseBoundTarget(binding *pb.ProxySecureLinkBinding) bool {
+	return binding.GetDormant() || binding.GetAvailabilityPolicyId() != ""
 }
 
 func allowedSecureLinkConnectorImage(image string) bool {
@@ -555,7 +581,7 @@ func (m *dockerSecureLinkManager) restoreBindings() error {
 	if len(restored.Bindings) == 0 {
 		return errors.New("proxy secure-link desired state is empty")
 	}
-	if _, err := m.sync(restored); err != nil {
+	if _, err := m.restore(restored); err != nil {
 		return fmt.Errorf("restore proxy secure-link bindings after connector restart: %w", err)
 	}
 	return nil
@@ -668,6 +694,8 @@ func normalizeResolvedTargetBindings(
 	return normalized
 }
 
+// normalizeTargetBindings records the networks a restore bound. A link the
+// restore left out (its container is stopped) keeps its committed network.
 func normalizeTargetBindings(command *pb.SyncProxySecureLinksCommand, statuses []dockerSecureLinkStatus) *pb.SyncProxySecureLinksCommand {
 	normalized := proto.Clone(command).(*pb.SyncProxySecureLinksCommand)
 	networks := make(map[string]string, len(statuses))
@@ -675,7 +703,9 @@ func normalizeTargetBindings(command *pb.SyncProxySecureLinksCommand, statuses [
 		networks[status.LinkID] = status.TargetNetwork
 	}
 	for _, binding := range normalized.Bindings {
-		binding.TargetNetwork = networks[binding.LinkId]
+		if network, ok := networks[binding.LinkId]; ok {
+			binding.TargetNetwork = network
+		}
 		binding.TargetHost = ""
 	}
 	return normalized

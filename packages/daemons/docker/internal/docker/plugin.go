@@ -286,7 +286,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 				return fmt.Errorf("commit pending proxy secure-link cleanup: %w", commitErr)
 			}
 		} else if len(restored.Bindings) > 0 {
-			statuses, restoreErr := p.secureLinks.sync(restored)
+			statuses, restoreErr := p.secureLinks.restore(restored)
 			if restoreErr != nil {
 				p.logger.Warn("proxy secure-link restore deferred", "error", restoreErr)
 			} else if saveErr := p.secureLinkState.Commit(normalizeTargetBindings(restored, statuses)); saveErr != nil {
