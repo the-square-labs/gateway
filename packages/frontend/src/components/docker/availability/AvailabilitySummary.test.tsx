@@ -139,10 +139,10 @@ describe("AvailabilitySummary", () => {
         voterMargin: { epoch: 2, joint: false, voters: 5, reachable: 3, required: 3, margin: 0 },
         witness: {
           memberId: "node-b",
-          kind: "node",
+          kind: "docker",
           auto: true,
           minRttMs: 1,
-          warning: "same_site",
+          warning: "witness_near_candidate",
         },
       },
     } as DockerAvailabilityPolicy;
@@ -163,5 +163,54 @@ describe("AvailabilitySummary", () => {
     expect(
       screen.getByText(/witness is likely on the same site as a candidate/)
     ).toBeInTheDocument();
+  });
+
+  it("lists excluded nodes, says when lease mode ends, and shows no witness row when none is needed", async () => {
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [
+        { id: "node-a", displayName: "Node A", type: "docker", status: "online" },
+        { id: "node-b", displayName: "Node B", type: "docker", status: "online" },
+      ],
+    } as never);
+    const leasePolicy = {
+      ...(policy("failed") as DockerAvailabilityPolicy),
+      lease: {
+        mode: "lease",
+        reason: {
+          code: "ingress_not_capable",
+          message: "Some Nginx nodes that route to this workload run an outdated daemon",
+          since: "2026-09-28T10:00:00.000Z",
+        },
+        manifestVersion: 9,
+        epoch: 4,
+        publishedPartitionMode: "strict",
+        holders: [],
+        bootstrap: [],
+        strictPending: false,
+        copiesStoppedAt: null,
+        excludedNodes: [
+          { nodeId: "node-a", reason: "watchdog_missing" },
+          { nodeId: "node-b", reason: "daemon_outdated" },
+        ],
+        voterMargin: { epoch: 4, joint: false, voters: 3, reachable: 3, required: 2, margin: 1 },
+        witness: { memberId: null, kind: null, auto: true, minRttMs: null, warning: null },
+      },
+    } as DockerAvailabilityPolicy;
+
+    render(
+      <AvailabilitySummary
+        resource={{ type: "deployment", deploymentId: "deployment-1" }}
+        policy={leasePolicy}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByText("Excluded nodes")).toBeInTheDocument();
+    expect(await screen.findByText("Node A")).toBeInTheDocument();
+    expect(screen.getByText("lease watchdog not running")).toBeInTheDocument();
+    expect(screen.getByText("daemon outdated")).toBeInTheDocument();
+    expect(screen.getByText(/goes back to backend failover at/)).toBeInTheDocument();
+    expect(screen.queryByText("Witness")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Voter reachability margin is insufficient/)).not.toBeInTheDocument();
   });
 });

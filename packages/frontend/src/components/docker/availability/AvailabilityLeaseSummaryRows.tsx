@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { api } from "@/services/api";
 import type {
   DashboardRelayInstance,
+  DockerAvailabilityLeaseExclusionReason,
   DockerAvailabilityLeaseMode,
   DockerAvailabilityLeaseWitness,
   DockerAvailabilityPolicy,
@@ -18,25 +19,38 @@ function nodeLabel(nodeId: string, nodes: Node[]) {
 }
 
 function witnessLabel(
-  witness: DockerAvailabilityLeaseWitness,
+  memberId: string,
+  kind: DockerAvailabilityLeaseWitness["kind"],
   nodes: Node[],
   relayInstances: DashboardRelayInstance[]
 ) {
-  if (witness.kind === "relay") {
-    const instance = relayInstances.find((candidate) => candidate.id === witness.memberId);
-    return instance?.displayName || witness.memberId.slice(0, 12);
+  if (kind === "relay") {
+    const instance = relayInstances.find((candidate) => candidate.id === memberId);
+    return instance?.displayName || memberId.slice(0, 12);
   }
-  return nodeLabel(witness.memberId, nodes);
+  return nodeLabel(memberId, nodes);
 }
 
 const witnessWarningMessage: Record<
   NonNullable<DockerAvailabilityLeaseWitness["warning"]>,
   string
 > = {
-  same_site:
+  witness_near_candidate:
     "witness is likely on the same site as a candidate (<2 ms); a site outage can take two votes",
-  none_eligible: "no eligible witness; autonomous failover needs a majority of candidates",
+  no_eligible_witness: "no eligible witness; autonomous failover needs a majority of candidates",
+  configured_witness_unavailable:
+    "the configured witness cannot vote right now; an automatic witness is used instead",
 };
+
+const exclusionLabel: Record<DockerAvailabilityLeaseExclusionReason, string> = {
+  offline: "offline",
+  watchdog_missing: "lease watchdog not running",
+  daemon_outdated: "daemon outdated",
+  identity_pending: "no lease identity yet",
+};
+
+/** Lease mode leaves this long after it became impossible (the backend's 2-minute hysteresis). */
+const LEASE_EXIT_AFTER_MS = 2 * 60_000;
 
 function modeLabel(mode: DockerAvailabilityLeaseMode) {
   if (mode === "lease") return "Lease";
@@ -52,8 +66,9 @@ function modeVariant(mode: DockerAvailabilityLeaseMode) {
 
 /**
  * Availability summary rows for the data-plane lease: the mode (lease, legacy, bootstrapping or
- * closing) with its reason, the holder of each slot, a warning when the voter reachability margin
- * is insufficient, and the resolved witness with its own siting warning.
+ * closing) with its reason, the holder of each slot, when lease mode is about to end, the nodes
+ * left out of holding and standbys, a warning when the voter reachability margin is insufficient,
+ * and the resolved witness with its own siting warning.
  */
 export function AvailabilityLeaseSummaryRows({ policy }: { policy: DockerAvailabilityPolicy }) {
   const lease = policy.lease;
@@ -87,6 +102,12 @@ export function AvailabilityLeaseSummaryRows({ policy }: { policy: DockerAvailab
   if (!lease) return null;
   const holders = [...lease.holders].sort((a, b) => a.slot - b.slot);
   const insufficientMargin = lease.voterMargin !== null && lease.voterMargin.margin <= 0;
+  const excludedNodes = lease.excludedNodes ?? [];
+  const witnessMemberId = lease.witness?.memberId ?? null;
+  const leaving =
+    (lease.mode === "lease" || lease.mode === "bootstrapping") && lease.reason?.since
+      ? new Date(Date.parse(lease.reason.since) + LEASE_EXIT_AFTER_MS)
+      : null;
 
   return (
     <>
@@ -133,6 +154,29 @@ export function AvailabilityLeaseSummaryRows({ policy }: { policy: DockerAvailab
           }
         />
       ))}
+      {leaving && lease.reason ? (
+        <p className="border-b border-border px-4 py-3 text-sm text-warning-text">
+          Data-plane failover is impossible right now: {lease.reason.message}. The policy goes back
+          to backend failover at {leaving.toLocaleTimeString()} unless this is fixed before.
+        </p>
+      ) : null}
+      {excludedNodes.length > 0 ? (
+        <DetailRow
+          label="Excluded nodes"
+          value={
+            <span className="inline-flex min-w-0 flex-col items-end gap-1">
+              {excludedNodes.map((entry) => (
+                <span key={entry.nodeId} className="inline-flex min-w-0 items-center gap-2">
+                  <span className="truncate">{nodeLabel(entry.nodeId, nodes)}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {exclusionLabel[entry.reason] ?? entry.reason}
+                  </span>
+                </span>
+              ))}
+            </span>
+          }
+        />
+      ) : null}
       {insufficientMargin && lease.voterMargin ? (
         <p className="border-b border-border px-4 py-3 text-sm text-warning-text">
           Voter reachability margin is insufficient: {lease.voterMargin.reachable} of{" "}
@@ -140,12 +184,14 @@ export function AvailabilityLeaseSummaryRows({ policy }: { policy: DockerAvailab
           break quorum.
         </p>
       ) : null}
-      {lease.witness ? (
+      {lease.witness && witnessMemberId ? (
         <DetailRow
           label="Witness"
           value={
             <span className="inline-flex min-w-0 flex-wrap items-center justify-end gap-2">
-              <span className="truncate">{witnessLabel(lease.witness, nodes, relayInstances)}</span>
+              <span className="truncate">
+                {witnessLabel(witnessMemberId, lease.witness.kind, nodes, relayInstances)}
+              </span>
               <span className="text-xs text-muted-foreground">
                 {lease.witness.auto ? "auto" : "manual"}
                 {lease.witness.minRttMs !== null ? ` · ${lease.witness.minRttMs} ms` : ""}
@@ -154,7 +200,7 @@ export function AvailabilityLeaseSummaryRows({ policy }: { policy: DockerAvailab
           }
         />
       ) : null}
-      {lease.witness?.warning ? (
+      {lease.witness?.warning && witnessWarningMessage[lease.witness.warning] ? (
         <p className="border-b border-border px-4 py-3 text-sm text-warning-text">
           {witnessWarningMessage[lease.witness.warning]}
         </p>
