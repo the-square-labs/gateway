@@ -16,6 +16,8 @@ type acceptedRelayTunnel struct {
 	endpointID      string
 	route           *relayv1.IncomingTunnelRoute
 	cancel          context.CancelFunc
+	// done closes once the tunnel ended and left the accepted set.
+	done chan struct{}
 }
 
 // assignmentRelayInstanceID names the relay behind a projected endpoint
@@ -37,6 +39,7 @@ func (r *relayTunnelRouter) admitIncoming(assignment *pb.RelayGrantAssignment, i
 		endpointID:      assignment.GetEndpointId(),
 		route:           incoming.GetRoute(),
 		cancel:          cancel,
+		done:            make(chan struct{}),
 	}
 	r.mu.Lock()
 	if r.accepted == nil {
@@ -48,6 +51,7 @@ func (r *relayTunnelRouter) admitIncoming(assignment *pb.RelayGrantAssignment, i
 		r.mu.Lock()
 		delete(r.accepted, tunnel)
 		r.mu.Unlock()
+		close(tunnel.done)
 	}
 	if refusal = relaybridge.RevocationRefusal(r.plugin.relayGrants.get(), tunnel.relayInstanceID, tunnel.endpointID, tunnel.route); refusal != "" {
 		release()

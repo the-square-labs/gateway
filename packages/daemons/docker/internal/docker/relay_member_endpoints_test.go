@@ -1,0 +1,379 @@
+package docker
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
+	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
+	"google.golang.org/grpc"
+)
+
+const (
+	memberLeaseLink  = "11111111-1111-4111-8111-111111111111"
+	memberLegacyLink = "22222222-2222-4222-8222-222222222222"
+	memberPlainLink  = "33333333-3333-4333-8333-333333333333"
+)
+
+// memberPluginForTest is a lease plugin whose Secure Link targets are a
+// lease-mode member (policy-1), a member of a policy outside lease mode and a
+// plain link.
+func memberPluginForTest(t *testing.T) *DockerPlugin {
+	t.Helper()
+	plugin := leasePluginForTest(t)
+	plugin.memberReadiness = newMemberReadiness()
+	store, err := securelink.NewStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Commit(&pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{
+		{LinkId: memberLeaseLink, Role: "target", TargetContainer: "gwav-1", AvailabilityPolicyId: "policy-1", AvailabilityCandidateId: "node-1", Dormant: true},
+		{LinkId: memberLegacyLink, Role: "target", TargetContainer: "app", AvailabilityPolicyId: "legacy-policy"},
+		{LinkId: memberPlainLink, Role: "target", TargetContainer: "plain"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	plugin.secureLinkState = store
+	return plugin
+}
+
+func setServing(plugin *DockerPlugin, policyID string, serving bool) {
+	plugin.lease.mu.Lock()
+	plugin.lease.serving[policyID] = serving
+	plugin.lease.mu.Unlock()
+}
+
+func TestMemberEndpointStateFollowsServingAndReadiness(t *testing.T) {
+	plugin := memberPluginForTest(t)
+	const (
+		unspecified = relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED
+		dormant     = relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+		serving     = relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
+	)
+	if got := plugin.memberEndpointState(memberPlainLink); got != unspecified {
+		t.Fatalf("plain link state = %v", got)
+	}
+	// D7: a standby registers, dormant.
+	if got := plugin.memberEndpointState(memberLeaseLink); got != dormant {
+		t.Fatalf("standby state = %v", got)
+	}
+	// D6: the holder stays dormant until its workload is ready.
+	setServing(plugin, "policy-1", true)
+	if got := plugin.memberEndpointState(memberLeaseLink); got != dormant {
+		t.Fatalf("holder state before its workload is ready = %v", got)
+	}
+	plugin.memberReadiness.set("policy-1", true, "c1", time.Now())
+	if got := plugin.memberEndpointState(memberLeaseLink); got != serving {
+		t.Fatalf("ready holder state = %v", got)
+	}
+	// Outside lease mode the member serves once ready.
+	if got := plugin.memberEndpointState(memberLegacyLink); got != dormant {
+		t.Fatalf("legacy member before ready = %v", got)
+	}
+	plugin.memberReadiness.set("legacy-policy", true, "c2", time.Now())
+	if got := plugin.memberEndpointState(memberLegacyLink); got != serving {
+		t.Fatalf("ready legacy member = %v", got)
+	}
+	// Released or fenced: dormant at once, whatever the last probe said.
+	setServing(plugin, "policy-1", false)
+	if got := plugin.memberEndpointState(memberLeaseLink); got != dormant {
+		t.Fatalf("released holder state = %v", got)
+	}
+}
+
+type scriptedMemberProbe struct {
+	mu      sync.Mutex
+	results map[string]memberProbeResult
+	calls   []string
+}
+
+func (s *scriptedMemberProbe) probe(_ context.Context, links []string, cheap bool) memberProbeResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kind := "full"
+	if cheap {
+		kind = "cheap"
+	}
+	s.calls = append(s.calls, links[0]+":"+kind)
+	if result, ok := s.results[links[0]+":"+kind]; ok {
+		return result
+	}
+	return s.results[links[0]]
+}
+
+func (s *scriptedMemberProbe) take() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	calls := s.calls
+	s.calls = nil
+	return calls
+}
+
+func TestMemberReadinessProbesOnlyServingMembersAndKeepsItWithoutEvidence(t *testing.T) {
+	plugin := memberPluginForTest(t)
+	probe := &scriptedMemberProbe{results: map[string]memberProbeResult{
+		memberLegacyLink: {ready: false, fingerprint: "app@1", known: true},
+		memberLeaseLink:  {ready: true, fingerprint: "gwav@1", known: true},
+	}}
+	plugin.memberProbe = probe.probe
+	now := time.Now()
+
+	// The standby is not probed; the legacy member is, and is not ready yet.
+	if plugin.refreshMemberReadiness(context.Background(), now) {
+		t.Fatal("nothing became ready")
+	}
+	if calls := probe.take(); len(calls) != 1 || calls[0] != memberLegacyLink+":full" {
+		t.Fatalf("probes = %v", calls)
+	}
+	// The holder serves: probed at once, ready.
+	setServing(plugin, "policy-1", true)
+	if !plugin.refreshMemberReadiness(context.Background(), now) || !plugin.memberReadiness.ready("policy-1") {
+		t.Fatal("the serving holder did not become ready")
+	}
+	probe.take()
+	// dockerd does not answer: no evidence, the legacy member stays not ready
+	// and the ready holder is not re-checked inside the re-check period.
+	probe.results[memberLegacyLink] = memberProbeResult{}
+	if plugin.refreshMemberReadiness(context.Background(), now.Add(time.Second)) {
+		t.Fatal("a probe without evidence changed readiness")
+	}
+	if calls := probe.take(); len(calls) != 1 || calls[0] != memberLegacyLink+":full" {
+		t.Fatalf("probes without evidence = %v", calls)
+	}
+	// Past the re-check period a ready member is re-checked cheaply; its
+	// container restarted (new fingerprint), so it is probed in full, and it
+	// is not ready yet.
+	probe.results[memberLeaseLink+":cheap"] = memberProbeResult{ready: true, fingerprint: "gwav@2", known: true}
+	probe.results[memberLeaseLink+":full"] = memberProbeResult{ready: false, fingerprint: "gwav@2", known: true}
+	if !plugin.refreshMemberReadiness(context.Background(), now.Add(memberReadinessRecheck+time.Second)) || plugin.memberReadiness.ready("policy-1") {
+		t.Fatal("a restarted holder container must be probed again before it serves")
+	}
+	var leaseCalls []string
+	for _, call := range probe.take() {
+		if call != memberLegacyLink+":full" {
+			leaseCalls = append(leaseCalls, call)
+		}
+	}
+	if len(leaseCalls) != 2 || leaseCalls[0] != memberLeaseLink+":cheap" || leaseCalls[1] != memberLeaseLink+":full" {
+		t.Fatalf("re-check probes = %v", leaseCalls)
+	}
+	// Stops serving: readiness is forgotten, so the next serve probes afresh.
+	plugin.memberReadiness.set("policy-1", true, "gwav@2", now)
+	setServing(plugin, "policy-1", false)
+	if !plugin.refreshMemberReadiness(context.Background(), now.Add(2*memberReadinessRecheck)) {
+		t.Fatal("a member that stopped serving must report the change")
+	}
+	if _, known := plugin.memberReadiness.entry("policy-1"); known {
+		t.Fatal("readiness of a member that stopped serving was kept")
+	}
+}
+
+type stateRecordingBrokerClient struct {
+	relayv1.TunnelBrokerClient
+	messages chan *relayv1.EndpointControl
+}
+
+func (c *stateRecordingBrokerClient) RegisterEndpoint(ctx context.Context, _ ...grpc.CallOption) (grpc.BidiStreamingClient[relayv1.EndpointControl, relayv1.EndpointControl], error) {
+	return &stateRecordingStream{ctx: ctx, messages: c.messages}, nil
+}
+
+type stateRecordingStream struct {
+	grpc.ClientStream
+	ctx      context.Context
+	messages chan *relayv1.EndpointControl
+}
+
+func (s *stateRecordingStream) Send(message *relayv1.EndpointControl) error {
+	s.messages <- message
+	return nil
+}
+
+func (s *stateRecordingStream) Recv() (*relayv1.EndpointControl, error) {
+	<-s.ctx.Done()
+	return nil, errors.New("closed")
+}
+
+func nextEndpointControl(t *testing.T, messages chan *relayv1.EndpointControl) *relayv1.EndpointControl {
+	t.Helper()
+	select {
+	case message := <-messages:
+		return message
+	case <-time.After(5 * time.Second):
+		t.Fatal("no endpoint control message")
+		return nil
+	}
+}
+
+// D7: every member link registers, dormant until it serves and is ready; the
+// state changes ride renewals of the same registration.
+func TestMemberEndpointsRegisterDormantAndRenewWhenTheyServe(t *testing.T) {
+	plugin := memberPluginForTest(t)
+	store, err := newRelayGrantStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.sync(&pb.SyncRelayGrantsCommand{PolicyRevision: 1, Grants: []*pb.RelayGrantAssignment{
+		{Role: "endpoint", OwnerKind: proxySecureLinkOwnerKind, OwnerId: memberLeaseLink, EndpointId: "endpoint-lease", Grant: &pb.RelaySignedGrant{KeyId: "k-lease"}},
+		{Role: "endpoint", OwnerKind: proxySecureLinkOwnerKind, OwnerId: memberPlainLink, EndpointId: "endpoint-plain", Grant: &pb.RelaySignedGrant{KeyId: "k-plain"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	plugin.relayGrants = store
+	client := &stateRecordingBrokerClient{messages: make(chan *relayv1.EndpointControl, 16)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	router := &relayTunnelRouter{plugin: plugin, ctx: ctx, client: client, targetID: relaybridge.LegacyTargetID, registrations: map[string]*relayEndpointRegistration{}}
+	plugin.relayTunnels = map[string]*relayTunnelRouter{relaybridge.LegacyTargetID: router}
+
+	router.reconcileRegistrations()
+	states := map[string]relayv1.EndpointServingState{}
+	for range 2 {
+		message := nextEndpointControl(t, client.messages)
+		register := message.GetRegister()
+		if register == nil {
+			t.Fatalf("first message = %v", message)
+		}
+		states[register.GetGrant().GetKeyId()] = register.GetState()
+	}
+	if states["k-lease"] != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT ||
+		states["k-plain"] != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED || len(states) != 2 {
+		t.Fatalf("registration states = %v, want the standby dormant and the plain link unspecified", states)
+	}
+
+	setServing(plugin, "policy-1", true)
+	plugin.memberReadiness.set("policy-1", true, "c", time.Now())
+	router.reconcileRegistrations()
+	renew := nextEndpointControl(t, client.messages).GetRenew()
+	if renew == nil || renew.GetState() != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING {
+		t.Fatalf("serving renewal = %v", renew)
+	}
+	// An unchanged state is not renewed again.
+	router.reconcileRegistrations()
+	select {
+	case message := <-client.messages:
+		t.Fatalf("unchanged registration renewed: %v", message)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Released: dormant again, on the same registration.
+	plugin.lease.SetServing("policy-1", false)
+	renew = nextEndpointControl(t, client.messages).GetRenew()
+	if renew == nil || renew.GetState() != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+		t.Fatalf("released renewal = %v", renew)
+	}
+	if len(router.registrations) != 2 {
+		t.Fatalf("registrations after release = %d, want both kept", len(router.registrations))
+	}
+}
+
+func TestStoppingToServeClosesTheMembersAcceptedTunnels(t *testing.T) {
+	plugin := memberPluginForTest(t)
+	router := &relayTunnelRouter{plugin: plugin, accepted: map[*acceptedRelayTunnel]struct{}{}}
+	plugin.relayTunnels = map[string]*relayTunnelRouter{"relay-1": router}
+	cancelled := map[string]bool{}
+	for _, endpointID := range []string{"endpoint-lease", "endpoint-other"} {
+		tunnel := &acceptedRelayTunnel{endpointID: endpointID, done: make(chan struct{})}
+		tunnel.cancel = func() { cancelled[tunnel.endpointID] = true; close(tunnel.done) }
+		router.accepted[tunnel] = struct{}{}
+	}
+	closing := plugin.closeMemberTunnels(map[string]bool{"endpoint-lease": true})
+	if len(closing) != 1 || !cancelled["endpoint-lease"] || cancelled["endpoint-other"] {
+		t.Fatalf("closed %v (%d waits)", cancelled, len(closing))
+	}
+	<-closing[0]
+}
+
+func TestRelayRegistrationRetryBacksOffWithJitter(t *testing.T) {
+	for attempt, want := range map[int][2]time.Duration{
+		1: {500 * time.Millisecond, time.Second},
+		2: {time.Second, 2 * time.Second},
+		3: {2 * time.Second, 4 * time.Second},
+		5: {7500 * time.Millisecond, 15 * time.Second},
+		9: {7500 * time.Millisecond, 15 * time.Second},
+	} {
+		low := relayRegistrationRetryDelay(attempt, func() float64 { return 0 })
+		high := relayRegistrationRetryDelay(attempt, func() float64 { return 0.999999 })
+		if low != want[0] || high < want[1]-time.Millisecond || high > want[1] {
+			t.Fatalf("attempt %d delays [%s, %s], want [%s, %s)", attempt, low, high, want[0], want[1])
+		}
+	}
+}
+
+func TestDeploymentRouterProbeTellsTheAppFromTheRouter(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		marked bool
+		ready  bool
+	}{
+		"app answers":          {status: http.StatusOK, ready: true},
+		"app answers 404":      {status: http.StatusNotFound, ready: true},
+		"router marks its 502": {status: http.StatusBadGateway, marked: true},
+		"router marks its 504": {status: http.StatusGatewayTimeout, marked: true},
+		"unmarked 502":         {status: http.StatusBadGateway},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.marked {
+					w.Header().Set(deploymentRouterUnavailableHeader, "upstream-unavailable")
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer server.Close()
+			if got := probeDeploymentRouter(context.Background(), server.Listener.Addr().String()); got != tc.ready {
+				t.Fatalf("ready = %v, want %v", got, tc.ready)
+			}
+		})
+	}
+}
+
+func TestTCPProbeThroughConnectorNeedsTheTargetToAccept(t *testing.T) {
+	accepting, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer accepting.Close()
+	go func() {
+		for {
+			connection, err := accepting.Accept()
+			if err != nil {
+				return
+			}
+			defer connection.Close()
+		}
+	}()
+	if !probeTCPThroughConnector(context.Background(), accepting.Addr().String()) {
+		t.Fatal("an accepting target is not ready")
+	}
+	// The connector accepts, then closes at once when the target refuses.
+	refusing, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer refusing.Close()
+	go func() {
+		for {
+			connection, err := refusing.Accept()
+			if err != nil {
+				return
+			}
+			connection.Close()
+		}
+	}()
+	if probeTCPThroughConnector(context.Background(), refusing.Addr().String()) {
+		t.Fatal("a refusing target is ready")
+	}
+	closed, _ := net.Listen("tcp", "127.0.0.1:0")
+	address := closed.Addr().String()
+	closed.Close()
+	if probeTCPThroughConnector(context.Background(), address) {
+		t.Fatal("no connector is ready")
+	}
+}

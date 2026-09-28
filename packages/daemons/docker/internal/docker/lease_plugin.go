@@ -141,6 +141,9 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	l.mu.Lock()
 	l.serving[policyID] = serving
 	l.mu.Unlock()
+	// Serving anew is probed from scratch; a member that stops serving
+	// registers dormant at once (D6, D7).
+	l.plugin.memberReadiness.reset(policyID)
 	if serving {
 		// The deployment router is not lease-governed (ServeSet), so nothing
 		// starts it with the workload: one that did not come back after a
@@ -154,10 +157,16 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 			l.plugin.logger.Warn("secure-link restore before serving failed", "policy_id", policyID, "error", err)
 		}
 	}
+	// Dormant registrations stay on every relay (D7): stopping to serve renews
+	// them dormant and ends the tunnels this node accepted for the policy.
 	closed := l.plugin.reconcileRelayRegistrations()
 	if serving {
+		// The endpoints serve once the readiness probe finds the workload
+		// ready; probe right away.
+		l.plugin.memberReadiness.signal()
 		return
 	}
+	closed = append(closed, l.plugin.closeMemberTunnels(l.plugin.memberEndpointIDs(policyID))...)
 	timeout := time.NewTimer(endpointCloseWait)
 	defer timeout.Stop()
 	for _, done := range closed {
@@ -170,11 +179,12 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	}
 }
 
-// endpointAllowed is the registration gate (D8, A8): the Secure Link
-// endpoint of an availability member (T3's binding availability_policy_id,
-// set for serving and dormant members alike, deployment routers included)
-// registers only while this node serves the policy's lease. Links of
-// policies outside lease mode keep today's behavior.
+// endpointAllowed is the serving gate (D8, A8): the Secure Link endpoint of
+// an availability member (T3's binding availability_policy_id, set for
+// serving and dormant members alike, deployment routers included) serves only
+// while this node serves the policy's lease; otherwise it stays registered
+// dormant (D7). Links of policies outside lease mode serve as before, once
+// their workload is ready (D6).
 func (l *leaseIntegration) endpointAllowed(linkID string) bool {
 	if l == nil || l.runtime == nil {
 		return true
@@ -194,15 +204,7 @@ func (l *leaseIntegration) endpointAllowed(linkID string) bool {
 }
 
 func (l *leaseIntegration) linkPolicy(linkID string) string {
-	if l.plugin.secureLinkState == nil {
-		return ""
-	}
-	for _, binding := range l.plugin.secureLinkState.Get().GetBindings() {
-		if binding.GetLinkId() == linkID && binding.GetRole() == "target" {
-			return binding.GetAvailabilityPolicyId()
-		}
-	}
-	return ""
+	return l.plugin.availabilityLinkPolicy(linkID)
 }
 
 // Local implements lease.Placements from the persisted availability state.

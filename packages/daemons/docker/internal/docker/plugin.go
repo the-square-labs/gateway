@@ -64,6 +64,10 @@ type DockerPlugin struct {
 	availability             *availabilityManager
 	lease                    *leaseIntegration
 	registrationChanged      chan struct{}
+	// memberReadiness gates availability member endpoints on their workload
+	// (D6); memberProbe replaces its probe in tests.
+	memberReadiness *memberReadiness
+	memberProbe     func(ctx context.Context, links []string, cheap bool) memberProbeResult
 
 	// Log stream follow support
 	writer           *stream.Writer
@@ -94,7 +98,7 @@ func dockerTimeoutProvided(configJSON string) bool {
 
 // NewDockerPlugin creates a new DockerPlugin with the given configuration.
 func NewDockerPlugin(cfg *config.Config) *DockerPlugin {
-	return &DockerPlugin{cfg: cfg, registrationChanged: make(chan struct{}, 1)}
+	return &DockerPlugin{cfg: cfg, registrationChanged: make(chan struct{}, 1), memberReadiness: newMemberReadiness()}
 }
 
 // backupCommandHandler is deliberately narrow: backup runtime files can
@@ -303,6 +307,11 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 				return fmt.Errorf("clear proxy secure-link pending state: %w", discardErr)
 			}
 		}
+		if p.memberReadiness == nil {
+			p.memberReadiness = newMemberReadiness()
+		}
+		// Runs for the life of the process, like the lease runtime.
+		go p.runMemberReadiness(context.Background())
 	}
 
 	// Initialize registry credentials map

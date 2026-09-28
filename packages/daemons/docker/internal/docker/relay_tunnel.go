@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"os"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -34,17 +36,28 @@ type relayTunnelRouter struct {
 	accepted      map[*acceptedRelayTunnel]struct{}
 	listener      net.Listener
 	active        atomic.Int64
+	// transportReady closes (and is replaced) whenever the relay transport
+	// connects again, so registrations waiting out their backoff retry at once.
+	transportReady chan struct{}
 }
 
 type relayEndpointRegistration struct {
 	cancel context.CancelFunc
-	renew  chan *pb.RelayGrantAssignment
+	renew  chan relayRegistrationUpdate
 	ready  atomic.Bool
 	// done closes when the registration stream and its tunnels have ended.
 	done chan struct{}
-	// The assignment last handed to the registration. An identical one is not renewed again:
-	// Gateway resends unchanged bundles, and each renewal is a relay round trip.
+	// The assignment and serving state last handed to the registration. An identical pair is not
+	// renewed again: Gateway resends unchanged bundles, and each renewal is a relay round trip.
 	latest *pb.RelayGrantAssignment
+	state  relayv1.EndpointServingState
+}
+
+// relayRegistrationUpdate is what one registration sends the relay: its grant and whether the
+// endpoint takes traffic (D6, D7).
+type relayRegistrationUpdate struct {
+	assignment *pb.RelayGrantAssignment
+	state      relayv1.EndpointServingState
 }
 
 // BackupRelayRoute is a daemon-local TCP entrypoint for one signed, per-run
@@ -76,7 +89,8 @@ func (p *DockerPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientCon
 }
 
 func (p *DockerPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.ClientConn, _ string, relayInstanceID string) {
-	router := &relayTunnelRouter{plugin: p, ctx: ctx, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID, registrations: map[string]*relayEndpointRegistration{}}
+	router := &relayTunnelRouter{plugin: p, ctx: ctx, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID, registrations: map[string]*relayEndpointRegistration{}, transportReady: make(chan struct{})}
+	go router.watchTransport(ctx, conn)
 	p.relayTunnelMu.Lock()
 	if p.relayTunnels == nil {
 		p.relayTunnels = map[string]*relayTunnelRouter{}
@@ -142,21 +156,23 @@ func (r *relayTunnelRouter) reconcileRegistrations() []chan struct{} {
 		// registration exists yet: wait for Gateway's bundle (relayGrantRestoreHold).
 		return nil
 	}
-	desired := map[string]*pb.RelayGrantAssignment{}
+	desired := map[string]relayRegistrationUpdate{}
 	if r.plugin.cfg.Docker.IsStorageProfile() {
 		for _, assignment := range bundle.Grants {
 			if assignment.Role == "endpoint" && (isManagedStorageRelayOwnerKind(assignment.OwnerKind) || isManagedDatabaseRelayOwnerKind(assignment.OwnerKind)) && assignment.EndpointId != "" {
 				for _, projected := range assignmentsForRelayTarget(assignment, r.targetID) {
-					desired[relayRegistrationKey(projected)] = projected
+					desired[relayRegistrationKey(projected)] = relayRegistrationUpdate{assignment: projected}
 				}
 			}
 		}
 	} else {
 		for _, assignment := range bundle.Grants {
-			if assignment.Role == "endpoint" && assignment.OwnerKind == proxySecureLinkOwnerKind && assignment.EndpointId != "" &&
-				r.plugin.lease.endpointAllowed(assignment.OwnerId) {
+			if assignment.Role == "endpoint" && assignment.OwnerKind == proxySecureLinkOwnerKind && assignment.EndpointId != "" {
+				// Availability members register on every assigned relay, dormant
+				// until they serve and their workload is ready (D6, D7).
+				state := r.plugin.memberEndpointState(assignment.OwnerId)
 				for _, projected := range assignmentsForRelayTarget(assignment, r.targetID) {
-					desired[relayRegistrationKey(projected)] = projected
+					desired[relayRegistrationKey(projected)] = relayRegistrationUpdate{assignment: projected, state: state}
 				}
 			}
 		}
@@ -165,28 +181,28 @@ func (r *relayTunnelRouter) reconcileRegistrations() []chan struct{} {
 	r.mu.Lock()
 	removed, renewed := 0, 0
 	for id, registration := range r.registrations {
-		assignment := desired[id]
-		if assignment == nil {
+		update, ok := desired[id]
+		if !ok {
 			registration.cancel()
 			cancelled = append(cancelled, registration.done)
 			delete(r.registrations, id)
 			removed++
 			continue
 		}
-		if !proto.Equal(registration.latest, assignment) {
-			registration.latest = assignment
-			queueLatestRelayGrant(registration.renew, assignment)
+		if !proto.Equal(registration.latest, update.assignment) || registration.state != update.state {
+			registration.latest, registration.state = update.assignment, update.state
+			queueLatestRelayGrant(registration.renew, update)
 			renewed++
 		}
 		delete(desired, id)
 	}
-	for id, assignment := range desired {
+	for id, update := range desired {
 		ctx, cancel := context.WithCancel(r.ctx)
-		registration := &relayEndpointRegistration{cancel: cancel, renew: make(chan *pb.RelayGrantAssignment, 1), done: make(chan struct{}), latest: assignment}
+		registration := &relayEndpointRegistration{cancel: cancel, renew: make(chan relayRegistrationUpdate, 1), done: make(chan struct{}), latest: update.assignment, state: update.state}
 		r.registrations[id] = registration
 		go func() {
 			defer close(registration.done)
-			r.runRegistration(ctx, assignment, registration.renew)
+			r.runRegistration(ctx, update, registration.renew)
 		}()
 	}
 	log := r.plugin.logger.Debug
@@ -245,9 +261,9 @@ func relayRegistrationKey(assignment *pb.RelayGrantAssignment) string {
 	return fmt.Sprintf("%s:%d", assignment.GetEndpointId(), generation)
 }
 
-func queueLatestRelayGrant(target chan *pb.RelayGrantAssignment, assignment *pb.RelayGrantAssignment) {
+func queueLatestRelayGrant(target chan relayRegistrationUpdate, update relayRegistrationUpdate) {
 	select {
-	case target <- assignment:
+	case target <- update:
 		return
 	default:
 	}
@@ -256,19 +272,69 @@ func queueLatestRelayGrant(target chan *pb.RelayGrantAssignment, assignment *pb.
 	default:
 	}
 	select {
-	case target <- assignment:
+	case target <- update:
 	default:
 	}
 }
 
-func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.RelayGrantAssignment, renew <-chan *pb.RelayGrantAssignment) {
-	current := assignment
+// watchTransport wakes registrations that wait out a retry backoff whenever the
+// relay transport becomes ready again: a relay coming back is registered with
+// at once, while a relay that stays down or keeps refusing is retried slowly.
+func (r *relayTunnelRouter) watchTransport(ctx context.Context, conn *grpc.ClientConn) {
+	if conn == nil {
+		return
+	}
+	state := conn.GetState()
+	for conn.WaitForStateChange(ctx, state) {
+		state = conn.GetState()
+		if state != connectivity.Ready {
+			continue
+		}
+		r.mu.Lock()
+		close(r.transportReady)
+		r.transportReady = make(chan struct{})
+		r.mu.Unlock()
+	}
+}
+
+func (r *relayTunnelRouter) transportReadySignal() <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.transportReady == nil {
+		r.transportReady = make(chan struct{})
+	}
+	return r.transportReady
+}
+
+// Endpoint registration retries back off exponentially with jitter (N-7): a
+// refusing or unreachable relay is otherwise asked once a second per endpoint.
+// Lease lanes (lease.Transport) keep their own short retry.
+const (
+	relayRegistrationRetryInitial = time.Second
+	relayRegistrationRetryMax     = 15 * time.Second
+)
+
+// relayRegistrationRetryDelay is the wait before retry number attempt (from 1):
+// doubling from one second up to the cap, each drawn uniformly from the upper
+// half of the step so endpoints and daemons do not retry in lockstep.
+func relayRegistrationRetryDelay(attempt int, random func() float64) time.Duration {
+	step := relayRegistrationRetryInitial
+	for i := 1; i < attempt && step < relayRegistrationRetryMax; i++ {
+		step *= 2
+	}
+	step = min(step, relayRegistrationRetryMax)
+	return step/2 + time.Duration(random()*float64(step/2))
+}
+
+func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayRegistrationUpdate, renew <-chan relayRegistrationUpdate) {
+	current, state := update.assignment, update.state
+	failures := 0
 	for ctx.Err() == nil {
 		registered := false
 		attemptCtx, cancelAttempt := context.WithCancel(ctx)
 		stream, err := r.client.RegisterEndpoint(attemptCtx)
 		if err == nil {
-			err = stream.Send(&relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Register{Register: &relayv1.RegisterEndpoint{Grant: relayGrant(current.Grant)}}})
+			err = stream.Send(&relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Register{Register: &relayv1.RegisterEndpoint{Grant: relayGrant(current.Grant), State: state}}})
 		}
 		if err == nil {
 			received := make(chan *relayv1.EndpointControl)
@@ -292,8 +358,8 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.
 				case <-ctx.Done():
 					err = ctx.Err()
 				case next := <-renew:
-					current = next
-					err = stream.Send(&relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Renew{Renew: &relayv1.RenewEndpoint{Grant: relayGrant(current.Grant)}}})
+					current, state = next.assignment, next.state
+					err = stream.Send(&relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Renew{Renew: &relayv1.RenewEndpoint{Grant: relayGrant(current.Grant), State: state}}})
 				case message := <-received:
 					if message.GetRegistered() != nil {
 						// The relay confirms every renewal the same way; only the first is news.
@@ -301,8 +367,8 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.
 						if !registered {
 							log = r.plugin.logger.Info
 						}
-						registered = true
-						log("relay endpoint registered", "relay_instance_id", r.targetID, "endpoint_id", current.EndpointId)
+						registered, failures = true, 0
+						log("relay endpoint registered", "relay_instance_id", r.targetID, "endpoint_id", current.EndpointId, "state", state.String())
 						r.mu.Lock()
 						if registration := r.registrations[relayRegistrationKey(current)]; registration != nil {
 							registration.ready.Store(true)
@@ -324,17 +390,26 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.
 		if ctx.Err() != nil {
 			return
 		}
-		r.plugin.logger.Warn("relay endpoint registration disconnected", "endpoint_id", current.EndpointId, "error", err)
-		retry := time.NewTimer(time.Second)
+		failures++
+		delay := relayRegistrationRetryDelay(failures, rand.Float64)
+		log := r.plugin.logger.Warn
+		if failures > 1 {
+			// The first failure is news; the retries of a relay that stays
+			// down or keeps refusing are not (838 lines in 2 min, stand run c).
+			log = r.plugin.logger.Debug
+		}
+		log("relay endpoint registration disconnected", "relay_instance_id", r.targetID, "endpoint_id", current.EndpointId, "error", err, "retry_in", delay.Round(time.Millisecond).String(), "failures", failures)
+		wake := r.transportReadySignal()
+		retry := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			retry.Stop()
 			return
 		case next := <-renew:
-			if !retry.Stop() {
-				<-retry.C
-			}
-			current = next
+			retry.Stop()
+			current, state = next.assignment, next.state
+		case <-wake:
+			retry.Stop()
 		case <-retry.C:
 		}
 	}
@@ -382,6 +457,14 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 	case proxySecureLinkOwnerKind:
 		if r.plugin.secureLinks == nil {
 			return
+		}
+		if r.plugin.memberEndpointState(assignment.OwnerId) == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+			// A dormant member (standby, released or fenced holder, or a holder
+			// whose workload is not ready) takes no traffic even if a relay
+			// admitted a tunnel before it heard so (D6, D7). The error reaches
+			// the opener at once instead of an accept timeout.
+			err = errMemberEndpointDormant
+			break
 		}
 		connection, err = r.plugin.secureLinks.dial(ctx, assignment.OwnerId)
 	case "managed_storage", "managed_storage_binding", "managed_storage_gateway":
