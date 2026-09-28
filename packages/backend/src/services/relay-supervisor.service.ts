@@ -13,6 +13,7 @@ import {
   type RelayRecoveryAction,
   RelayRecoverySafetyError,
 } from './relay-docker-recovery.service.js';
+import { freshRelayStartWaitMs } from './relay-recovery-decision.js';
 
 const logger = createChildLogger('RelaySupervisor');
 const CONTROL_STATE_KEY = 'relay:control-state';
@@ -469,17 +470,16 @@ export class RelaySupervisorService {
         const current = await this.checkRelay();
         if (this.inMaintenance()) return;
         if (current.healthy) {
-          this.failureCount = 0;
-          await this.transition({
-            state: 'healthy',
-            reason: null,
-            recoveryBlocked: null,
-            attempt: 0,
-            attemptHistory: [],
-          });
+          await this.markRecovered();
           return;
         }
       }
+      if (await this.awaitRelayStartedElsewhere()) {
+        if (this.inMaintenance()) return;
+        await this.markRecovered();
+        return;
+      }
+      if (this.stopping || this.inMaintenance()) return;
       const startedAt = new Date().toISOString();
       await this.allocateAttempt(attempt, startedAt);
       let action: RelayRecoveryAction;
@@ -489,6 +489,21 @@ export class RelaySupervisorService {
         await this.persistAndPublish();
       } catch (error) {
         this.updateAttempt(attempt, { result: 'failed' });
+        logger.warn('Gateway relay recovery action failed', {
+          attempt,
+          error: error instanceof Error ? error.message : String(error),
+          cause: error instanceof Error && error.cause instanceof Error ? error.cause.message : undefined,
+        });
+        // Docker may carry an action out although its call failed (a restart that outlived the
+        // request). Judge the relay, not the call: a relay that came back is healthy, not critical.
+        if (
+          error instanceof RelayRecoverySafetyError &&
+          error.reason === 'docker_unavailable' &&
+          (await this.waitForReadiness())
+        ) {
+          await this.markRecovered();
+          return;
+        }
         if (error instanceof RelayRecoverySafetyError) {
           await this.transition({
             state: error.reason === 'ownership_unverified' ? 'degraded' : 'critical',
@@ -555,8 +570,30 @@ export class RelaySupervisorService {
     );
   }
 
-  private async waitForReadiness(): Promise<boolean> {
-    const deadline = Date.now() + this.readinessWaitMs;
+  private async markRecovered(): Promise<void> {
+    this.failureCount = 0;
+    await this.transition({ state: 'healthy', reason: null, recoveryBlocked: null, attempt: 0, attemptHistory: [] });
+  }
+
+  /**
+   * A relay container started after the relay was last seen healthy is a run someone else began;
+   * restarting it would only double the outage. Wait out its readiness window instead. Returns
+   * true when it became healthy; false sends recovery on to its restart attempt.
+   */
+  private async awaitRelayStartedElsewhere(): Promise<boolean> {
+    if (!this.recovery) return false;
+    const observed = await this.recovery.inspectRelay().catch(() => null);
+    const waitMs = freshRelayStartWaitMs(observed, this.state.lastHealthyAt, this.readinessWaitMs);
+    if (waitMs <= 0) return false;
+    logger.info('Gateway relay was started outside the supervisor; waiting for it instead of restarting it', {
+      startedAt: observed?.startedAt,
+      waitMs,
+    });
+    return this.waitForReadiness(waitMs);
+  }
+
+  private async waitForReadiness(waitMs = this.readinessWaitMs): Promise<boolean> {
+    const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
       const result = await this.checkRelay();
       if (result.healthy) return true;

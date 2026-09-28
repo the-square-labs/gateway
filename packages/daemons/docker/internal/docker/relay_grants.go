@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
@@ -19,11 +20,22 @@ import (
 
 const relayGrantFile = "relay-grants.json"
 
+// relayGrantRestoreHold bounds how long a restarted daemon keeps its endpoint
+// registrations back for the first grant bundle from Gateway. Policy may have
+// changed while the daemon was down (a link deleted or re-issued), and the relay
+// refuses a registration whose grant its current policy no longer lists. Gateway
+// sends the bundle right after the node registers, well within this bound; when
+// Gateway is unreachable the restored bundle is used once the hold runs out.
+const relayGrantRestoreHold = 10 * time.Second
+
 type relayGrantStore struct {
 	path    string
 	mu      sync.RWMutex
 	current *pb.SyncRelayGrantsCommand
 	changed chan struct{}
+	// restoredUntil is set while current came from disk and this process has not
+	// accepted a bundle from Gateway yet.
+	restoredUntil time.Time
 }
 
 func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
@@ -40,7 +52,22 @@ func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
 		return nil, fmt.Errorf("decode relay grants: %w", err)
 	}
 	store.current = command
+	store.restoredUntil = time.Now().Add(relayGrantRestoreHold)
 	return store, nil
+}
+
+// registrationHold is how long endpoint registrations should still wait for
+// Gateway's first bundle; zero means they may register now.
+func (s *relayGrantStore) registrationHold(now time.Time) time.Duration {
+	if s == nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.restoredUntil.IsZero() {
+		return 0
+	}
+	return max(s.restoredUntil.Sub(now), 0)
 }
 
 func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
@@ -56,6 +83,7 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 		return fmt.Errorf("relay grant refresh %d is older than %d", command.GeneratedAtUnixMs, s.current.GeneratedAtUnixMs)
 	}
 	if command.PolicyRevision == s.current.PolicyRevision && proto.Equal(command, s.current) {
+		s.restoredUntil = time.Time{}
 		return nil
 	}
 	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(command)
@@ -101,6 +129,7 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 	runtimeChanged := s.current.GetDataLanes() != command.GetDataLanes() ||
 		!reflect.DeepEqual(relaybridge.RequiredTargets(s.current), relaybridge.RequiredTargets(command))
 	s.current = proto.Clone(command).(*pb.SyncRelayGrantsCommand)
+	s.restoredUntil = time.Time{}
 	if runtimeChanged {
 		select {
 		case s.changed <- struct{}{}:
@@ -141,6 +170,26 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 		ListenerStatuses:  listenerStatuses,
 	})
 	return string(detail), err
+}
+
+// reconcileAfterRestoreHold registers the restored bundle's endpoints once the
+// hold runs out without a bundle from Gateway. A bundle that arrives first
+// reconciles every router itself, and this later pass then only renews.
+func (r *relayTunnelRouter) reconcileAfterRestoreHold(ctx context.Context) {
+	hold := r.plugin.relayGrants.registrationHold(time.Now())
+	if hold == 0 {
+		return
+	}
+	r.plugin.logger.Info("relay endpoint registrations wait for the current grant bundle", "relay_instance_id", r.targetID, "max_wait", hold)
+	go func() {
+		timer := time.NewTimer(hold)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+			r.reconcileRegistrations()
+		}
+	}()
 }
 
 var _ lifecycle.RelayLatencyTargetPlugin = (*DockerPlugin)(nil)

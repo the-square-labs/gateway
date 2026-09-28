@@ -100,6 +100,7 @@ func (p *DockerPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Cli
 		}
 	}
 	router.reconcileRegistrations()
+	router.reconcileAfterRestoreHold(ctx)
 	p.lease.attachRelay(ctx, conn, relayInstanceID)
 	<-ctx.Done()
 }
@@ -133,6 +134,11 @@ func (p *DockerPlugin) RelayTunnelRuntimeChanged() <-chan struct{} {
 func (r *relayTunnelRouter) reconcileRegistrations() []chan struct{} {
 	bundle := r.plugin.relayGrants.get()
 	r.enforceRevocationFences(bundle)
+	if r.plugin.relayGrants.registrationHold(time.Now()) > 0 {
+		// Grants restored from disk may predate the relay's policy and no
+		// registration exists yet: wait for Gateway's bundle (relayGrantRestoreHold).
+		return nil
+	}
 	desired := map[string]*pb.RelayGrantAssignment{}
 	if r.plugin.cfg.Docker.IsStorageProfile() {
 		for _, assignment := range bundle.Grants {

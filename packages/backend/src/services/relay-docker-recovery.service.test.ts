@@ -73,6 +73,24 @@ describe('RelayDockerRecoveryService', () => {
     expect(mock.restartContainer).toHaveBeenCalledWith('relay-id', 10);
   });
 
+  it('reads the owned relay run without acting on it', async () => {
+    const { service: recovery, mock } = service();
+    mock.listContainersByLabel.mockResolvedValue([{ Id: 'relay-id' }]);
+    mock.inspectContainer.mockResolvedValue({
+      Id: 'relay-id',
+      State: { Running: true, StartedAt: '2026-09-28T00:38:30.123456789Z' },
+      Config: { Image: IMAGE, Labels: labels('relay') },
+    });
+    await expect(recovery.inspectRelay()).resolves.toEqual({
+      id: 'relay-id',
+      running: true,
+      startedAt: '2026-09-28T00:38:30.123456789Z',
+    });
+    expect(mock.startContainer).not.toHaveBeenCalled();
+    expect(mock.restartContainer).not.toHaveBeenCalled();
+    expect(mock.runOneShot).not.toHaveBeenCalled();
+  });
+
   it('uses the already-present pinned Compose helper only when the relay is missing', async () => {
     const { service: recovery, mock } = service();
     await expect(recovery.recover()).resolves.toBe('compose_up');
