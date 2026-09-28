@@ -16,6 +16,7 @@ import (
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
+	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
@@ -474,16 +475,19 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 	defer release()
 	stream, err := r.client.AcceptTunnel(tunnelCtx)
 	if err != nil {
-		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "accept", "error", err)
+		r.tunnelFailed(assignment, "accept", err)
 		return
 	}
 	if err = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Accept{Accept: &relayv1.AcceptTunnel{AcceptToken: incoming.AcceptToken}}}); err != nil {
-		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "authorize", "error", err)
+		r.tunnelFailed(assignment, "authorize", err)
 		return
 	}
 	first, err := stream.Recv()
 	if err != nil || first.GetReady() == nil {
-		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "ready", "error", err)
+		if err == nil {
+			err = errors.New("relay sent no ready frame")
+		}
+		r.tunnelFailed(assignment, "ready", err)
 		return
 	}
 	var connection net.Conn
@@ -538,11 +542,12 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		return
 	}
 	if err != nil {
-		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "dial", "error", err)
+		r.tunnelFailed(assignment, "dial", err)
 		_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Error{Error: &relayv1.RelayError{Code: "endpoint_unavailable", Message: "Endpoint is unavailable"}}})
 		return
 	}
 	defer connection.Close()
+	r.plugin.relayTunnelOutcomes.Succeeded(r.plugin.logger, relayTunnelOutcome(assignment))
 	if assignment.OwnerKind == proxySecureLinkOwnerKind {
 		readChunk := int(r.plugin.relayGrants.get().GetReadChunkBytes())
 		if readChunk == 0 {
@@ -552,6 +557,20 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		return
 	}
 	_ = bridgeRelayConnection(connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
+}
+
+// relayTunnelOutcome keys the outcome log of incoming tunnels by endpoint owner (L-1): while a workload is down,
+// or its relay path breaks, every request through it fails here, one WARN line each.
+func relayTunnelOutcome(assignment *pb.RelayGrantAssignment) logepisode.Subject {
+	return logepisode.Subject{Name: "relay endpoint tunnels", IDAttr: "owner_id", ID: assignment.OwnerId}
+}
+
+// tunnelFailed logs a failed incoming tunnel at debug and reports it per owner and state change.
+func (r *relayTunnelRouter) tunnelFailed(assignment *pb.RelayGrantAssignment, stage string, err error) {
+	r.plugin.logger.Debug("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId,
+		"relay_instance_id", r.targetID, "stage", stage, "error", err)
+	r.plugin.relayTunnelOutcomes.Failed(r.plugin.logger, relayTunnelOutcome(assignment), "owner_kind", assignment.OwnerKind,
+		"relay_instance_id", r.targetID, "stage", stage, "error", err.Error())
 }
 
 func isManagedStorageRelayOwnerKind(ownerKind string) bool {
