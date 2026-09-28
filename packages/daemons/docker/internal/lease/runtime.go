@@ -204,9 +204,13 @@ func (r *Runtime) Step() {
 	r.node.Tick()
 	now := r.opts.Clock.Now()
 	if now >= r.beaconAt {
-		// Relays learn of their own freezes from daemons' clocks (D4).
+		// Relays learn of their own freezes from daemons' clocks (D4); the
+		// watchdog learns that a lease-aware daemon keeps its records.
 		r.beaconAt = now + availabilitylease.BeaconInterval
 		r.node.BeaconRelays()
+		if err := r.opts.Fence.DaemonAlive(now); err != nil {
+			r.logger.Debug("could not write the lease daemon heartbeat", "error", err)
+		}
 	}
 	for _, freeze := range r.node.DrainFreezes() {
 		keys := make([]string, 0, len(freeze.Fenced))

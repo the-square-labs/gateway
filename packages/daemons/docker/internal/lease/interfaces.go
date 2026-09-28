@@ -69,6 +69,9 @@ type Fence interface {
 	Records() (map[string]leasefence.Record, error)
 	WriteRecord(record leasefence.Record) error
 	DeleteRecord(containerID string) error
+	// DaemonAlive tells the watchdog a lease-aware daemon runs, so it keeps
+	// the records (leasefence.DaemonGoneAfter).
+	DaemonAlive(now time.Duration) error
 }
 
 // Endpoints controls the relay Secure Link endpoint registrations of a

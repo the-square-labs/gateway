@@ -6,6 +6,8 @@
 // Layout under Dir.Root (tmpfs, default /run/gateway-lease-watchdog):
 //
 //	heartbeat           written by the watchdog every HeartbeatInterval
+//	daemon-heartbeat    written by the lease-aware docker daemon every
+//	                    second (since availability_lease_v2)
 //	records/<id>.json   one deadline record per lease-mode container,
 //	                    written by the daemon
 //
@@ -45,9 +47,18 @@ const (
 	// slow (CPU-starved) stays below it; the lease timing bound is in the
 	// docker daemon's lease runtime.
 	HeartbeatLostAge = 10 * time.Second
+	// DaemonGoneAfter is how long the watchdog keeps enforcing records
+	// without any sign of a lease-aware docker daemon: neither its
+	// daemon-heartbeat nor a record written since. After that the records
+	// are orphans (the node was rolled back to a daemon without the
+	// availability lease, which never renews or removes them) and the
+	// watchdog removes them, or it would kill those containers on every
+	// start until the host reboots. Every deadline is long past by then.
+	DaemonGoneAfter = 10 * time.Minute
 
-	recordsDirName = "records"
-	heartbeatName  = "heartbeat"
+	recordsDirName      = "records"
+	heartbeatName       = "heartbeat"
+	daemonHeartbeatName = "daemon-heartbeat"
 )
 
 var containerIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -204,6 +215,36 @@ func (d Dir) WriteHeartbeat(h Heartbeat) error {
 		return err
 	}
 	return writeAtomic(d.root(), d.HeartbeatPath(), data, 0o644)
+}
+
+// DaemonHeartbeatPath is the lease-aware docker daemon's liveness file.
+func (d Dir) DaemonHeartbeatPath() string { return filepath.Join(d.root(), daemonHeartbeatName) }
+
+// WriteDaemonHeartbeat atomically replaces the docker daemon's heartbeat.
+func (d Dir) WriteDaemonHeartbeat(h Heartbeat) error {
+	h.Version = FormatVersion
+	data, err := json.Marshal(h)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(d.root(), 0o755); err != nil {
+		return err
+	}
+	return writeAtomic(d.root(), d.DaemonHeartbeatPath(), data, 0o644)
+}
+
+// ReadDaemonHeartbeat returns the docker daemon's last heartbeat; a missing
+// file (no lease-aware daemon since boot) is an error.
+func (d Dir) ReadDaemonHeartbeat() (Heartbeat, error) {
+	data, err := os.ReadFile(d.DaemonHeartbeatPath())
+	if err != nil {
+		return Heartbeat{}, err
+	}
+	var heartbeat Heartbeat
+	if err := json.Unmarshal(data, &heartbeat); err != nil {
+		return Heartbeat{}, fmt.Errorf("decode docker daemon heartbeat: %w", err)
+	}
+	return heartbeat, nil
 }
 
 // ReadHeartbeat returns the last heartbeat; a missing file is an error.

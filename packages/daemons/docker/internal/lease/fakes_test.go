@@ -159,6 +159,8 @@ func (f *fakeFence) DeleteRecord(id string) error {
 	return nil
 }
 
+func (f *fakeFence) DaemonAlive(time.Duration) error { return nil }
+
 type fakeEndpoints struct {
 	w       *world
 	host    string

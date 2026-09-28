@@ -1,6 +1,7 @@
 package lease
 
 import (
+	"os"
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
@@ -36,6 +37,10 @@ func (f DirFence) Records() (map[string]leasefence.Record, error) {
 func (f DirFence) WriteRecord(record leasefence.Record) error { return f.Dir.WriteRecord(record) }
 
 func (f DirFence) DeleteRecord(containerID string) error { return f.Dir.DeleteRecord(containerID) }
+
+func (f DirFence) DaemonAlive(now time.Duration) error {
+	return f.Dir.WriteDaemonHeartbeat(leasefence.Heartbeat{NowNs: int64(now), PID: os.Getpid()})
+}
 
 // HeartbeatFresh reports a heartbeat within leasefence.HeartbeatMaxAge: the
 // watchdog runs promptly enough to acquire, start or open the backend gate.

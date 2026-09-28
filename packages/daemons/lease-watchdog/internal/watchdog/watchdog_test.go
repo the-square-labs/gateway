@@ -206,3 +206,48 @@ func TestHeartbeatProvesTheKillLoopRuns(t *testing.T) {
 		t.Fatal("heartbeat must not advance while enforcement is broken")
 	}
 }
+
+// B-10 follow-up: a node rolled back to a docker daemon without the
+// availability lease never renews or removes its deadline records. With no
+// sign of a lease-aware daemon for leasefence.DaemonGoneAfter the watchdog
+// removes them instead of killing every start of those containers until the
+// next reboot; while one is around it never removes a record.
+func TestOrphanedRecordsAreRemovedOnlyWithoutALeaseAwareDaemon(t *testing.T) {
+	h := newHarness(t)
+	h.now = time.Hour
+	h.scope(11)
+	write := func(written time.Duration) {
+		h.t.Helper()
+		if err := h.dir.WriteRecord(leasefence.Record{ContainerID: containerID, PolicyID: "p1", WrittenNs: int64(written)}); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	// A daemon before availability_lease_v2 wrote the standby record a
+	// minute ago: it is around, the record is enforced.
+	write(h.now - time.Minute)
+	if result := h.dog.Pass(); result.Orphans != 0 || result.Killed != 1 {
+		t.Fatalf("record of a live daemon: %+v", result)
+	}
+	h.takeKilled()
+	// The daemon heartbeat keeps an old record enforced.
+	write(h.now - 2*leasefence.DaemonGoneAfter)
+	if err := h.dir.WriteDaemonHeartbeat(leasefence.Heartbeat{NowNs: int64(h.now - time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	if result := h.dog.Pass(); result.Orphans != 0 || result.Killed != 1 {
+		t.Fatalf("record with a fresh daemon heartbeat: %+v", result)
+	}
+	h.takeKilled()
+	// Rolled back: no heartbeat, no record written for DaemonGoneAfter.
+	h.now += leasefence.DaemonGoneAfter
+	result := h.dog.Pass()
+	if result.Orphans != 1 || result.Killed != 0 {
+		t.Fatalf("orphaned record after a rollback: %+v", result)
+	}
+	if records, _, _ := h.dir.ReadRecords(); len(records) != 0 {
+		t.Fatalf("orphaned record kept: %v", records)
+	}
+	if got := h.takeKilled(); len(got) != 0 {
+		t.Fatalf("killed %v after the rollback", got)
+	}
+}
