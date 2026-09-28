@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { relayEndpointAssignments, relayPolicyState } from '@/db/schema/index.js';
+import { logger } from '@/lib/logger.js';
 import { RelayPoolService, relayPoolInternals } from './relay-pool.service.js';
 
 afterEach(() => {
@@ -195,6 +196,34 @@ describe('RelayPoolService automatic reconciliation', () => {
     );
     expect(activate).not.toHaveBeenCalled();
     expect(stage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a failure', new Error('relay refused the grant'), 'warn'],
+    ['a transient condition', new Error('daemon is busy handling long-running commands; retry shortly'), 'debug'],
+  ])('logs %s once per pass however many timer ticks it outlasts', async (_name, failure, level) => {
+    const { pool } = reconciliationHarness();
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    const debug = vi.spyOn(logger, 'debug').mockImplementation(() => logger);
+    let reject!: (error: Error) => void;
+    vi.mocked(pool.retireDrainedGenerations).mockReturnValue(
+      new Promise((_, rejectPass) => {
+        reject = rejectPass;
+      })
+    );
+    pool.startReconciliation();
+    try {
+      await vi.advanceTimersByTimeAsync(5_000 * 22);
+      reject(failure);
+      await vi.advanceTimersByTimeAsync(1);
+      const calls = (level === 'warn' ? warn : debug).mock.calls.filter(([message]) =>
+        String(message).startsWith('Relay pool reconciliation')
+      );
+      expect(calls).toHaveLength(1);
+      if (level === 'debug') expect(warn).not.toHaveBeenCalled();
+    } finally {
+      pool.stopReconciliation();
+    }
   });
 
   it('does not reclaim a manual rebalance that is still running', async () => {
@@ -560,6 +589,34 @@ describe('RelayPoolService activation safety and outcomes', () => {
       });
       expect(policy.reconcileAndSync).toHaveBeenCalledOnce();
     } else expect(writes).toEqual([]);
+  });
+
+  it('reports only the outcomes of generations that still exist when an owner was revoked meanwhile', async () => {
+    const { db } = queuedDb([
+      [
+        { id: 'endpoint', ownerKind: 'test' },
+        { id: 'revoked', ownerKind: 'test' },
+      ],
+      [{ id: 'kept', state: 'active', error: null }],
+    ]);
+    const staged = [
+      { id: 'kept', endpointId: 'endpoint', generation: 2, instanceIds: ['relay'], state: 'staging' },
+      { id: 'vanished', endpointId: 'revoked', generation: 5, instanceIds: ['relay'], state: 'staging' },
+    ];
+    db.transaction.mockResolvedValue(staged);
+    const { pool, audit } = service(db);
+    vi.spyOn(pool as any, 'prepareGenerations').mockResolvedValue(undefined);
+    expect(await pool.stageRebalance(undefined, { automatic: true, allowNoop: true })).toEqual([
+      { ...staged[0], state: 'active', error: null },
+    ]);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          generations: [{ id: 'kept', state: 'active', error: null }],
+          withdrawnEndpointIds: ['revoked'],
+        }),
+      })
+    );
   });
 
   it('persists policy sync failures without attempting target preparation', async () => {

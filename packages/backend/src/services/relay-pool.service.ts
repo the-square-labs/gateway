@@ -26,6 +26,7 @@ import type { EventBusService } from './event-bus.service.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
 import type { RelayPolicyService, RelayPolicyTrustStatus } from './relay-policy.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
+import { isTransientRelayPoolError, relayPoolErrorMessage } from './relay-pool-errors.js';
 import { describeRelayRevocation } from './relay-revocation-fence.js';
 import { loadRelayRouteHistories, RelayRevocationFenceService } from './relay-revocation-fence.service.js';
 import {
@@ -184,11 +185,16 @@ export class RelayPoolService {
   startReconciliation(): void {
     if (this.reconciliationTimer) return;
     this.reconciliationTimer = setInterval(() => {
-      void this.reconcile().catch((error) =>
-        logger.warn('Relay pool reconciliation failed', {
-          error: error instanceof Error ? error.message : String(error),
-        })
-      );
+      // A pass still running reports its own outcome. Joining it would log one failure once per tick
+      // it outlasted: a two-minute rebalance repeated the same warning 22 times (rc.20 B-17).
+      if (this.reconciliationFlight) return;
+      void this.reconcile().catch((error) => {
+        const message = relayPoolErrorMessage(error);
+        // The next pass retries it; the condition itself (a restarting relay, an unreachable node) is reported
+        // where it lives.
+        if (isTransientRelayPoolError(error)) logger.debug('Relay pool reconciliation deferred', { error: message });
+        else logger.warn('Relay pool reconciliation failed', { error: message });
+      });
     }, 5_000);
     this.reconciliationTimer.unref();
   }
@@ -1366,6 +1372,17 @@ export class RelayPoolService {
     // below through daemon control; apply the local snapshot explicitly first.
     await this.prepareGenerations(staged.filter(({ state }) => state === 'staging'));
     const outcomes = await this.generationOutcomes(staged.map(({ id }) => id));
+    const outcomeById = new Map(outcomes.map((outcome) => [outcome.id, outcome]));
+    // Revoking an owner deletes its endpoint and, by cascade, every generation of it: a Secure Link the lifecycle
+    // re-provisions after a failover, a deleted host or database. A workload removed while its move was prepared has
+    // nothing left to place, so it leaves the batch instead of failing it (rc.20 B-17: one such link failed every
+    // other workload's outcome and repeated as a reconciliation failure).
+    const withdrawn = staged.filter(({ id }) => !outcomeById.has(id));
+    if (withdrawn.length) {
+      logger.info('Relay rebalance skipped workloads removed while their move was prepared', {
+        endpointIds: withdrawn.map(({ endpointId }) => endpointId),
+      });
+    }
     await this.audit.log({
       userId: userId ?? null,
       action: 'relay.pool.rebalance.stage',
@@ -1373,15 +1390,15 @@ export class RelayPoolService {
       resourceId: 'system',
       details: {
         generations: outcomes,
+        ...(withdrawn.length ? { withdrawnEndpointIds: withdrawn.map(({ endpointId }) => endpointId) } : {}),
         endpointIds: options.endpointIds ?? null,
         automatic: options.automatic === true,
       },
     });
     this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_finished' });
-    return staged.map((generation) => {
-      const outcome = outcomes.find(({ id }) => id === generation.id);
-      if (!outcome) throw new Error(`Relay assignment generation ${generation.id} disappeared during rebalance`);
-      return { ...generation, ...outcome };
+    return staged.flatMap((generation) => {
+      const outcome = outcomeById.get(generation.id);
+      return outcome ? [{ ...generation, ...outcome }] : [];
     });
   }
 
@@ -1812,7 +1829,8 @@ export class RelayPoolService {
         .from(relayAssignmentSourceProbes)
         .where(eq(relayAssignmentSourceProbes.assignmentGenerationId, generation.id)),
     ]);
-    if (!endpoint) throw new Error(`Relay endpoint ${generation.endpointId} disappeared during rebalance`);
+    // The owner was revoked meanwhile: the endpoint and, by cascade, this generation are gone.
+    if (!endpoint) return;
     const daemonNodeIds = [
       endpoint.subjectId,
       ...routes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ sourceId }) => sourceId),
