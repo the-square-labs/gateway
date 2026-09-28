@@ -15,6 +15,7 @@ import type { HostingConnectorsService } from './hosting-connectors.service.js';
 import { compareHostingDecimal } from './hosting-decimal.js';
 import { lockHostingDeletion } from './hosting-deletion-guard.js';
 import { HostingProviderError } from './hosting-http.js';
+import { withKnownLocation } from './hosting-location.js';
 import { type HostingOperationsService, publicHostingOperation } from './hosting-operations.service.js';
 import { assertHostingResourceAction } from './hosting-permissions.js';
 import type { HostingAction, HostingProviderAdapter, HostingResourceSnapshot } from './hosting-provider.types.js';
@@ -418,7 +419,11 @@ export class HostingManagementService {
           if (proxmoxResizeFinished(live, input)) {
             await this.db
               .update(hostingResources)
-              .set({ snapshot: live, observedAt: new Date(live.observedAt), updatedAt: new Date() })
+              .set({
+                snapshot: withKnownLocation(live, resource.snapshot.location),
+                observedAt: new Date(live.observedAt),
+                updatedAt: new Date(),
+              })
               .where(eq(hostingResources.id, resource.id));
             await this.operations.finish(row, 'ready', { resourceId: resource.id });
             continue;
@@ -544,7 +549,11 @@ export class HostingManagementService {
         ) {
           await this.db
             .update(hostingResources)
-            .set({ snapshot: live, observedAt: new Date(live.observedAt), updatedAt: new Date() })
+            .set({
+              snapshot: withKnownLocation(live, resource.snapshot.location),
+              observedAt: new Date(live.observedAt),
+              updatedAt: new Date(),
+            })
             .where(eq(hostingResources.id, resource.id));
           await this.operations.finish(row, 'ready', { resourceId: resource.id });
         } else if (!row.providerOperation?.id && !taskSucceeded) {

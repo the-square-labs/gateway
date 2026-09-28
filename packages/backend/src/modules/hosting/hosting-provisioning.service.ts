@@ -29,6 +29,7 @@ import { compareHostingDecimal } from './hosting-decimal.js';
 import { HostingProviderError } from './hosting-http.js';
 import { applyHostingImagePolicy, hostingImageRoles } from './hosting-image-policy.js';
 import { type CachedHostingCatalog, HOSTING_CATALOG_SNAPSHOT } from './hosting-inventory.service.js';
+import { withKnownLocation } from './hosting-location.js';
 import {
   type HostingOperationRow,
   type HostingOperationsService,
@@ -593,12 +594,16 @@ export class HostingProvisioningService {
           'HOSTING_RESOURCE_IDENTITY_CONFLICT',
           'Created resource identity conflicts with an existing managed host'
         );
+      // Providers that never report a location keep the one this VM was ordered in.
+      const requested =
+        row.action === 'create' && typeof row.request?.location === 'string' ? row.request.location : '';
+      const located = withKnownLocation(snapshot, existing?.snapshot.location || requested);
       if (existing) {
         const [updated] = await tx
           .update(hostingResources)
           .set({
             origin: row.action === 'create' ? 'created' : 'discovered',
-            snapshot,
+            snapshot: located,
             incarnation: snapshot.incarnation,
             observedAt: new Date(snapshot.observedAt),
             connectorId: connector.id,
@@ -616,7 +621,7 @@ export class HostingProvisioningService {
           remoteId: snapshot.remoteId,
           kind: snapshot.kind,
           origin: 'created',
-          snapshot,
+          snapshot: located,
           incarnation: snapshot.incarnation,
           observedAt: new Date(snapshot.observedAt),
         })
@@ -1009,7 +1014,10 @@ export class HostingProvisioningService {
       if (stored && resource)
         await this.db
           .update(hostingResources)
-          .set({ snapshot: resource, observedAt: new Date(resource.observedAt) })
+          .set({
+            snapshot: withKnownLocation(resource, stored.snapshot.location),
+            observedAt: new Date(resource.observedAt),
+          })
           .where(eq(hostingResources.id, stored.id));
     } else if (row.providerOperation?.resourceId) {
       try {

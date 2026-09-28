@@ -7,3 +7,11 @@ export function hostingLocationLabel(code: string, city?: string, countryCode?: 
   const parts = [...new Set([city?.trim(), country].filter((part): part is string => Boolean(part)))];
   return parts.length ? `${parts.join(', ')} (${code})` : code;
 }
+
+/**
+ * Some providers (CloudBlast) never report where a VM runs. An empty observed location then keeps
+ * the location Gateway requested at creation or observed earlier instead of erasing it on every sync.
+ */
+export function withKnownLocation<T extends { location: string }>(snapshot: T, known: string | null | undefined): T {
+  return snapshot.location || !known ? snapshot : { ...snapshot, location: known };
+}

@@ -521,7 +521,7 @@ describe('hosting management semantics', () => {
       service as unknown as { resource: (...args: unknown[]) => Promise<unknown> },
       'resource'
     ).mockResolvedValue({
-      resource: { id: 'resource', remoteId: '101', incarnation: vm.incarnation },
+      resource: { id: 'resource', remoteId: '101', incarnation: vm.incarnation, snapshot: vm },
       bound,
       connector: {},
     });

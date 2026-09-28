@@ -243,6 +243,21 @@ it("shows destroying in both the VM and node columns while deletion is pending",
   );
   expect(screen.getAllByText(/destroying/i)).toHaveLength(2);
 });
+it("shows provider location IDs by their catalog name and keeps unknown codes as they are", () => {
+  renderWithRouter(
+    <HostingResourcesTab
+      connector={connector}
+      catalog={{ locations: [{ id: "5", name: "Birmingham, UK (uk)" }], sizes: [], images: [] }}
+      resources={[
+        { ...resource, location: "5" },
+        { ...resource, id: "vm-other", remoteId: "251", location: "lab-2" },
+      ]}
+      operations={[]}
+    />
+  );
+  expect(screen.getByText("Birmingham, UK (uk)")).toBeInTheDocument();
+  expect(screen.getByText("lab-2")).toBeInTheDocument();
+});
 it("places the node status above its muted caption and keeps VM preparation pending", () => {
   renderWithRouter(
     <HostingResourcesTab
