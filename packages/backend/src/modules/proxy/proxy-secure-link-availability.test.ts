@@ -54,6 +54,17 @@ describe('Availability member secure-link sync (D7, D8)', () => {
     expect(syncableAvailabilityMember(link(), old)).toBe(true);
   });
 
+  it('sends every lease-mode member dormant, so a stopped holder container never fails the target sync', async () => {
+    // Stand run ha18/b: the failback marked the successor's member live before its container started; the target
+    // daemon rejected the set and the member was dropped from the node for 11 minutes.
+    const capable = await availabilityMemberSyncContext(db(['availability_lease_v1']), 'docker', [link()]);
+    expect(availabilityMemberBindingFields(link({ dormant: false }), capable)).toEqual({
+      dormant: true,
+      availabilityPolicyId: POLICY_ID,
+      availabilityCandidateId: DOCKER_NODE_ID,
+    });
+  });
+
   it('gates members by the lease only while their policy is in lease mode (B2)', async () => {
     const legacy = await availabilityMemberSyncContext(db(['availability_lease_v1'], []), 'nginx', [link()]);
     expect(availabilityMemberBindingFields(link(), legacy)).toEqual({ dormant: false });
