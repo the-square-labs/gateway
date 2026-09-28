@@ -1402,7 +1402,9 @@ ${rendered}`;
       secureLinkSocketPaths,
       secureLinkUsesLoadBalancing: secureLinkSocketPaths.length > 1,
       registryAuthRealm,
-      registryAuthVariableName: `gateway_registry_challenge_${host.id.replace(/-/g, '_')}`,
+      // Nginx variable names must stay short enough for the stock
+      // variables_hash_bucket_size 64 (see gw_up_ for dynamic upstreams).
+      registryAuthVariableName: `gw_rc_${createHash('sha256').update(host.id).digest('hex').slice(0, 16)}`,
       sslCertPath: host.sslCertPath,
       sslKeyPath: host.sslKeyPath,
       sslChainPath: host.sslChainPath,
