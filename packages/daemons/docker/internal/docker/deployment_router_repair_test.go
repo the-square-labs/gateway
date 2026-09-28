@@ -2,9 +2,14 @@ package docker
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -139,6 +144,7 @@ func TestRepairStartsACurrentRouterAndRestoresItsRestartPolicy(t *testing.T) {
 	addDeploymentSlots(engine, nil, "green")
 	router := engine.addContainer(currentRouter(t, container.RestartPolicyDisabled, false))
 	configs[router.ID] = renderDeploymentNginx(testDeploymentRoutes, "green")
+	router.Files = map[string]string{deploymentRouterConfigPath: configs[router.ID]}
 
 	repairs, err := client.repairServingDeploymentRouters(context.Background(), deploymentRouterRepairScope{}, nil)
 	if err != nil {
@@ -348,5 +354,136 @@ func TestDeploymentRouterConfigRoutes(t *testing.T) {
 	mixed := renderDeploymentNginx(routes[:1], "blue") + renderDeploymentNginx(routes[1:], "green")
 	if _, _, err := deploymentRouterConfigRoutes(mixed, bindings); err == nil {
 		t.Fatal("a config naming two slots must be refused")
+	}
+}
+
+// TestRepairBringsBackARouterCreatedByGateway2101 reproduces M-1 on the second
+// stand instance: a blue/green deployment created by 2.10.1, switched to green
+// (blue exited), router with restart policy "no" and the 2.10.1 start command
+// that bakes blue in. After a node restart the router stayed exited while
+// green ran, and the route answered 502 until an operator acted.
+func TestRepairBringsBackARouterCreatedByGateway2101(t *testing.T) {
+	const config2101 = "map $http_upgrade $connection_upgrade {\n  default upgrade;\n  '' close;\n}\n" +
+		"server {\n  listen 18080;\n  location / {\n    proxy_pass http://%s:3000;\n    proxy_http_version 1.1;\n" +
+		"    proxy_set_header Host $host;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection $connection_upgrade;\n  }\n}\n"
+	for name, onDisk := range map[string]string{
+		// The switch to green rewrote the file on disk.
+		"config on disk names the running slot": "green",
+		// The router was started once more after the switch, and its start
+		// command put the creation-time slot back.
+		"config on disk names the stopped slot": "blue",
+	} {
+		t.Run(name, func(t *testing.T) {
+			engine, client := newFakeDockerEngine(t)
+			configs, _ := simulateNginxRouter(engine)
+			addDeploymentSlots(engine, nil, "green")
+			legacy := engine.addContainer(&fakeContainer{
+				Name:  "gwdep-dep-1-router",
+				Image: "nginx:alpine",
+				Cmd: []string{"sh", "-c", "cat > /etc/nginx/conf.d/default.conf <<'EOF'\n" +
+					fmt.Sprintf(config2101, "blue") + "\nEOF\nnginx -g 'daemon off;'"},
+				Labels:        deploymentLabels("router", ""),
+				RestartPolicy: container.RestartPolicyDisabled,
+				PortBindings:  testRouterPortBindings(t),
+				NetworkMode:   "gwdep-dep-1-net",
+				Files:         map[string]string{deploymentRouterConfigPath: fmt.Sprintf(config2101, onDisk)},
+			})
+
+			plugin := &DockerPlugin{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			if err := plugin.runDeploymentRouterRepair("", deploymentRouterRepairStartupTimeout); err != nil {
+				t.Fatalf("repair: %v", err)
+			}
+			router := engine.byName("gwdep-dep-1-router")
+			if router == nil || router.ID == legacy.ID || !router.Running {
+				t.Fatalf("router after repair = %+v, want a running replacement", router)
+			}
+			if router.RestartPolicy != container.RestartPolicyUnlessStopped || router.NetworkMode != "gwdep-dep-1-net" {
+				t.Fatalf("replacement restart policy %q network %q", router.RestartPolicy, router.NetworkMode)
+			}
+			if !strings.Contains(configs[router.ID], "set $deployment_upstream green:3000;") {
+				t.Fatalf("replacement serves %q, want the running green slot", configs[router.ID])
+			}
+			assertNoRouterSetAside(t, engine)
+		})
+	}
+}
+
+// TestRepairPointsARestartedRouterAtTheRunningSlot: a current-shape router
+// whose config on disk still names the slot a later switch stopped is started
+// and pointed at the slot that runs, in place.
+func TestRepairPointsARestartedRouterAtTheRunningSlot(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	configs, writes := simulateNginxRouter(engine)
+	addDeploymentSlots(engine, nil, "green")
+	router := engine.addContainer(currentRouter(t, container.RestartPolicyDisabled, false))
+	configs[router.ID] = renderDeploymentNginx(testDeploymentRoutes, "blue")
+	router.Files = map[string]string{deploymentRouterConfigPath: configs[router.ID]}
+
+	repairs, err := client.repairServingDeploymentRouters(context.Background(), deploymentRouterRepairScope{}, nil)
+	if err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	if len(repairs) != 1 || repairs[0].Action != "restart policy, started, serves green" {
+		t.Fatalf("repairs = %+v", repairs)
+	}
+	current := engine.byName("gwdep-dep-1-router")
+	if current.ID != router.ID || !current.Running || engine.countCalls("POST /containers/create") != 0 {
+		t.Fatalf("router after repair = %+v; it must be kept, not recreated", current)
+	}
+	if len(*writes) != 1 || !strings.Contains(configs[router.ID], "set $deployment_upstream green:3000;") {
+		t.Fatalf("router serves %q after writes %v", configs[router.ID], *writes)
+	}
+}
+
+// TestRepairKeepsTheRouterSlotWhileBothSlotsRun: during a deploy both slots
+// run and only the router's own config knows which one is active.
+func TestRepairKeepsTheRouterSlotWhileBothSlotsRun(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	configs, writes := simulateNginxRouter(engine)
+	addDeploymentSlots(engine, nil, "blue", "green")
+	router := engine.addContainer(currentRouter(t, container.RestartPolicyDisabled, false))
+	configs[router.ID] = renderDeploymentNginx(testDeploymentRoutes, "blue")
+	router.Files = map[string]string{deploymentRouterConfigPath: configs[router.ID]}
+
+	repairs, err := client.repairServingDeploymentRouters(context.Background(), deploymentRouterRepairScope{}, nil)
+	if err != nil || len(repairs) != 1 || repairs[0].Action != "restart policy, started" {
+		t.Fatalf("repairs = %+v, err = %v", repairs, err)
+	}
+	if len(*writes) != 0 || !strings.Contains(configs[router.ID], "blue:3000") {
+		t.Fatalf("router config changed to %q", configs[router.ID])
+	}
+}
+
+// TestRouterRepairLoopRetriesAFailedRepair: a repair that failed at startup is
+// retried without an operator.
+func TestRouterRepairLoopRetriesAFailedRepair(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	simulateNginxRouter(engine)
+	addDeploymentSlots(engine, nil, "green")
+	engine.addContainer(legacyRouter(t, "green", false))
+	var failing atomic.Bool
+	failing.Store(true)
+	engine.failCall = func(method, path string) bool {
+		return failing.Load() && method == "POST" && path == "/containers/create"
+	}
+	plugin := &DockerPlugin{client: client, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := plugin.runDeploymentRouterRepair("", deploymentRouterRepairStartupTimeout); err == nil {
+		t.Fatal("the first repair must fail")
+	}
+	failing.Store(false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go plugin.deploymentRouterRepairLoop(ctx, 10*time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		router := engine.byName("gwdep-dep-1-router")
+		if router != nil && router.Running && router.RestartPolicy == container.RestartPolicyUnlessStopped {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the repair loop did not bring the router back: %+v", router)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

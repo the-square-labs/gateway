@@ -265,6 +265,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		}
 		// Before the secure-link restore, which binds links to the routers.
 		p.repairDeploymentRouters("", deploymentRouterRepairStartupTimeout)
+		go p.deploymentRouterRepairLoop(context.Background(), deploymentRouterRepairInterval)
 		p.secureLinks, err = newDockerSecureLinkManager(p)
 		if err != nil {
 			return fmt.Errorf("initialize proxy secure links: %w", err)
