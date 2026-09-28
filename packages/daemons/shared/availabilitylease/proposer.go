@@ -19,6 +19,9 @@ type proposerKey struct {
 	key   Key
 	role  Role
 	round *round
+	// settled is the last round that reached its quorum; members whose
+	// promise arrives before its deadline still get the propose.
+	settled *round
 
 	ballot        Ballot // last committed ballot of this node
 	ownMajority   bool

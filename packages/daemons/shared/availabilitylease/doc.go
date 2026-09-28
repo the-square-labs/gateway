@@ -151,10 +151,14 @@
 //     every other registration or tunnel for the key immediately.
 //   - Closed with a reason: admit nobody for the key.
 //
-// The gate opens only for the holder of the highest valid commit whose
-// ballot this relay itself accepted (or shadow-accepted) with an echo of its
-// own promise, while nothing supersedes it, and for at most GateWindow of
-// local time after that promise. Re-evaluate on every registration and
+// The gate opens only for the holder of the highest valid commit when this
+// relay itself accepted (or shadow-accepted) that ballot, or an earlier one
+// of the same holder, with an echo of its own promise, while nothing
+// supersedes it, and for at most GateWindow of local time after the latest
+// such promise. A renewal this relay missed therefore neither closes the gate
+// nor extends it. Proposers send a propose to every member whose promise
+// arrives before the round deadline, even after the round reached its
+// quorum. Re-evaluate on every registration and
 // tunnel and at least every second; Until says when it closes. AcceptorView
 // feeds GetHealth. A relay votes for a policy only when it is that policy's
 // witness; to keep shadow accepts for its gate it must be listed as a member
