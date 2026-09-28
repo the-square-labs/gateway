@@ -28,6 +28,27 @@ func applyLeaseMetadata(binding *sourceLinkBinding, desired *pb.ProxySecureLinkB
 	}
 }
 
+// refreshLeaseMetadata applies a resync's lease fields to a binding that
+// already exists. A policy enters lease mode after its members were created
+// (legacy, then bootstrapping, then lease) and leaves it when the lease
+// closes, so these fields change under live bindings. A binding that stops
+// being lease-gated listens again at once; one that becomes gated keeps its
+// socket until the reconciliation that follows every sync closes it, unless a
+// relay gate view admits its candidate (D8, A8, B2).
+func (m *sourceLinkManager) refreshLeaseMetadata(id string, binding *sourceLinkBinding, desired *pb.ProxySecureLinkBinding) error {
+	binding.leaseMu.Lock()
+	binding.availabilityPolicyID = desired.GetAvailabilityPolicyId()
+	binding.availabilityCandidateID = desired.GetAvailabilityCandidateId()
+	binding.dormant = desired.GetDormant()
+	binding.leaseGated = binding.availabilityPolicyID != ""
+	reopen := !binding.leaseGated && binding.unix == nil
+	binding.leaseMu.Unlock()
+	if !reopen {
+		return nil
+	}
+	return binding.openUnixForLease(m, id)
+}
+
 // closeUnixForLease stops accepting on this binding's Unix socket and removes
 // the socket file, so a connect attempt fails immediately instead of nginx
 // waiting on a request timeout (D8, A8). Connections already established are

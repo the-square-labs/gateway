@@ -94,6 +94,56 @@ func TestAvailabilityLeaseCoordinatorOpensAndClosesSocketOnGateViewChanges(t *te
 	_ = connection.Close()
 }
 
+// Stand run ha18/a: members are created while their policy is still legacy or
+// bootstrapping, so without lease fields, and resent with them once the policy
+// reaches lease mode. The resync used to leave the existing binding ungated:
+// every member's socket stayed open, nginx kept sending requests to the
+// standbys, and one transient holder error took the route down for the whole
+// fail_timeout.
+func TestResyncWithLeaseFieldsGatesAnExistingMemberAndLegacyReopensIt(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	coordinator := newAvailabilityLeaseCoordinator(t.TempDir(), manager, nil)
+	defer coordinator.close()
+	bootstrapping := availabilityMemberCommand("", "")
+	statuses, err := manager.sync(bootstrapping)
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("sync: statuses=%#v err=%v", statuses, err)
+	}
+	socketPath := statuses[0].SocketPath
+	connection, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		t.Fatalf("a member outside lease mode listens like any link: %v", err)
+	}
+	_ = connection.Close()
+
+	// The policy reached lease mode and another candidate holds the lease.
+	coordinator.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-b", RemainingMs: 30000,
+	}}}, time.Now())
+	leased := availabilityMemberCommand("policy-1", "node-a")
+	leased.Bindings[0].Generation = 2
+	if _, err := manager.sync(leased); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.reconcileSockets()
+	if _, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond); err == nil {
+		t.Fatal("the standby member's socket stayed open after its policy entered lease mode")
+	}
+
+	// The lease closed: the member is legacy again and must listen without any gate view.
+	closed := availabilityMemberCommand("", "")
+	closed.Bindings[0].Generation = 3
+	if _, err := manager.sync(closed); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.reconcileSockets()
+	connection, err = net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		t.Fatalf("a member that left lease mode must listen again: %v", err)
+	}
+	_ = connection.Close()
+}
+
 // TestAvailabilityLeaseCoordinatorClosesSocketOnStaleView covers D8/A8's
 // "close instead of waiting for a broadcast" rule: once a view's own TTL
 // elapses, the next reconciliation closes the socket even though no new

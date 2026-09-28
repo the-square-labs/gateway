@@ -356,6 +356,7 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 		current.close()
 		delete(m.bindings, id)
 	}
+	var leaseErr error
 	for id, binding := range desired {
 		current := m.bindings[id]
 		if current != nil && binding.RotateListener {
@@ -375,10 +376,17 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 			// even if the control plane still has the pre-restart port; the
 			// returned status will reconcile that stale value without churn.
 			current.generation = binding.Generation
+			if err := m.refreshLeaseMetadata(id, current, binding); err != nil && leaseErr == nil {
+				leaseErr = fmt.Errorf("reopen proxy secure-link socket %s: %w", id, err)
+			}
 			continue
 		}
 		m.bindings[id] = staged[id]
 		m.start(id, staged[id])
+	}
+	if leaseErr != nil {
+		// The bindings are applied; the next sync reopens the socket.
+		return nil, leaseErr
 	}
 	statuses := make([]sourceLinkStatus, 0, len(m.bindings))
 	for id, binding := range m.bindings {
