@@ -83,8 +83,23 @@ func NewManager() *Manager {
 	}
 }
 
+// Preflight reports the runsc runtime state; an installed and registered runsc
+// is verified with the Docker smoke test.
 func (m *Manager) Preflight(ctx context.Context) Status {
-	status := Status{
+	status, verify := m.PreflightWithoutSmokeTest(ctx)
+	if !verify {
+		return status
+	}
+	return m.VerifyRuntime(ctx, status)
+}
+
+// PreflightWithoutSmokeTest runs every check except the Docker smoke test,
+// which starts runtimeSmokeRuns gVisor containers one after another (about
+// 8 s). With verify, runsc is installed and registered and the smoke test is
+// still to run: status says so (unknown, verification_pending) and
+// VerifyRuntime completes it.
+func (m *Manager) PreflightWithoutSmokeTest(ctx context.Context) (status Status, verify bool) {
+	status = Status{
 		State:               StateUnknown,
 		TargetVersion:       RunscVersion,
 		CheckedAt:           time.Now().UTC(),
@@ -95,38 +110,38 @@ func (m *Manager) Preflight(ctx context.Context) Status {
 		status.State = StateUnsupported
 		status.ReasonCode = "unsupported_platform"
 		status.Message = "Secure Runtime requires Linux on x86_64 or arm64"
-		return status
+		return status, false
 	}
 	if !isLocalDockerHost(m.DockerHost) {
 		status.State = StateUnsupported
 		status.ReasonCode = "remote_docker_host"
 		status.Message = "Secure Runtime setup requires a daemon connected to the local Docker host"
-		return status
+		return status, false
 	}
 	if _, ok := runscSHA512[arch]; !ok {
 		status.State = StateUnsupported
 		status.ReasonCode = "release_unavailable"
 		status.Message = "No verified gVisor bundle is available for this architecture"
-		return status
+		return status, false
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		status.State = StateUnsupported
 		status.ReasonCode = "docker_cli_missing"
 		status.Message = "Docker CLI is required for runtime verification"
-		return status
+		return status, false
 	}
 	if _, err := m.runDocker(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
 		status.State = StateUnknown
 		status.ReasonCode = "docker_unreachable"
 		status.Message = "Docker is not reachable from the daemon environment"
-		return status
+		return status, false
 	}
 	service, err := detectDockerService(ctx)
 	if err != nil {
 		status.State = StateUnsupported
 		status.ReasonCode = "docker_reload_unavailable"
 		status.Message = err.Error()
-		return status
+		return status, false
 	}
 	_ = service
 
@@ -142,36 +157,47 @@ func (m *Manager) Preflight(ctx context.Context) Status {
 		status.State = StateFailed
 		status.ReasonCode = "docker_config_invalid"
 		status.Message = configErr.Error()
-		return status
+		return status, false
 	}
 	if runscFound && registered && !currentConfig {
 		status.State = StateFailed
 		status.ReasonCode = "configuration_outdated"
 		status.Message = "runsc Docker configuration requires migration"
-		return status
+		return status, false
 	}
 	if runscFound && registered {
-		if smokeErr := m.verifyDockerRuntime(ctx); smokeErr == nil {
-			status.State = StateHealthy
-			status.ReasonCode = "smoke_test_passed"
-			status.Message = fmt.Sprintf("runsc completed %d consecutive Docker smoke tests", runtimeSmokeRuns)
-			return status
-		} else {
-			status.State = StateFailed
-			status.ReasonCode = "smoke_test_failed"
-			status.Message = fmt.Sprintf("runsc is configured but the Docker smoke test failed: %v", smokeErr)
-			return status
-		}
+		status.State = StateUnknown
+		status.ReasonCode = "verification_pending"
+		status.Message = "runsc is configured; its Docker smoke test is running"
+		return status, true
 	}
 
 	status.State = StateInstallable
 	if !status.RemoteInstallable {
 		status.ReasonCode = "host_privileges_required"
 		status.Message = "Run the local sudo command on this node to install Secure Runtime"
-		return status
+		return status, false
 	}
 	status.ReasonCode = "installation_available"
 	status.Message = "This node can install and verify Secure Runtime"
+	return status, false
+}
+
+// VerifyRuntime runs the Docker smoke test for a status PreflightWithoutSmokeTest
+// left pending and returns the verified status.
+func (m *Manager) VerifyRuntime(ctx context.Context, pending Status) Status {
+	status := pending
+	smokeErr := m.verifyDockerRuntime(ctx)
+	status.CheckedAt = time.Now().UTC()
+	if smokeErr != nil {
+		status.State = StateFailed
+		status.ReasonCode = "smoke_test_failed"
+		status.Message = fmt.Sprintf("runsc is configured but the Docker smoke test failed: %v", smokeErr)
+		return status
+	}
+	status.State = StateHealthy
+	status.ReasonCode = "smoke_test_passed"
+	status.Message = fmt.Sprintf("runsc completed %d consecutive Docker smoke tests", runtimeSmokeRuns)
 	return status
 }
 
