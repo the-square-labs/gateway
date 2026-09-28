@@ -4,13 +4,13 @@ import type { DrizzleClient } from '@/db/client.js';
 import { relayGrantSigningKeys, relayInstances, relayPolicyState } from '@/db/schema/index.js';
 import type { RelayInstanceCapabilities } from '@/db/schema/relay.js';
 import { createChildLogger } from '@/lib/logger.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import {
   effectiveRelayGrantTtlHours,
   LEGACY_RELAY_POLICY_LEASE_SECONDS,
   LONG_POLICY_LEASE_CAPABILITY,
   RELAY_LEASE_EXPIRY_CLOCK_SKEW_MS,
 } from '@/modules/settings/general-settings.service.js';
-import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
 
@@ -223,7 +223,12 @@ export class RelayGrantKeyService {
     });
   }
 
-  private async insertKey(tx: any, status: 'pending' | 'active', activatedAt: Date | null, publishedAtRevision: number | null) {
+  private async insertKey(
+    tx: any,
+    status: 'pending' | 'active',
+    activatedAt: Date | null,
+    publishedAtRevision: number | null
+  ) {
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');
     const jwk = publicKey.export({ format: 'jwk' });
     if (!jwk.x) throw new Error('Generated Ed25519 public key is missing x coordinate');

@@ -12,12 +12,12 @@ import {
   relayRoutes,
 } from '@/db/schema/index.js';
 import type { SignedRelayGrant } from '@/grpc/relay-control.client.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import {
   effectiveRelayGrantTtlHours,
   LEGACY_RELAY_GRANT_TTL_MAX_HOURS,
   LONG_POLICY_LEASE_CAPABILITY,
 } from '@/modules/settings/general-settings.service.js';
-import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
 import type { RelayRevokedRouteFence } from './relay-revocation-fence.js';
 import { loadRevocationFenceState } from './relay-revocation-fence.service.js';

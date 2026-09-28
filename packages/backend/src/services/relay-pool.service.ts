@@ -25,6 +25,8 @@ import type { EventBusService } from './event-bus.service.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
 import type { RelayPolicyService, RelayPolicyTrustStatus } from './relay-policy.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
+import { describeRelayRevocation } from './relay-revocation-fence.js';
+import { loadRelayRouteHistories, RelayRevocationFenceService } from './relay-revocation-fence.service.js';
 import {
   chooseByRendezvous,
   chooseRelayAssignments,
@@ -33,8 +35,6 @@ import {
   samePlannedAssignments,
 } from './relay-topology.js';
 import type { RelayTopologyService } from './relay-topology.service.js';
-import { describeRelayRevocation } from './relay-revocation-fence.js';
-import { loadRelayRouteHistories, RelayRevocationFenceService } from './relay-revocation-fence.service.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
 const AUTO_REBALANCE_SETTLE_MS = 30_000;

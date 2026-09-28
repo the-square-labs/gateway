@@ -957,7 +957,10 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               }
               // A gap this long means the relay ran unreachable on whatever policy it last
               // held; the audit trail records what it served through, not just that it reconnected.
-              if (instance.lastSeenAt && reportedAt.getTime() - instance.lastSeenAt.getTime() > RELAY_STALE_POLICY_GAP_MS) {
+              if (
+                instance.lastSeenAt &&
+                reportedAt.getTime() - instance.lastSeenAt.getTime() > RELAY_STALE_POLICY_GAP_MS
+              ) {
                 await deps.auditService.log({
                   userId: null,
                   action: 'relay.instance.policy.stale_period',
