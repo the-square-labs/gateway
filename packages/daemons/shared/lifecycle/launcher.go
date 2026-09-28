@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 )
 
 const (
@@ -39,6 +41,7 @@ var (
 	launcherRestartBackoff    = time.Second
 	launcherRestartMax        = 5 * time.Second
 	launcherStateRetry        = 5 * time.Second
+	launcherKeeperSettle      = 500 * time.Millisecond
 )
 
 type LauncherSpec struct {
@@ -110,6 +113,9 @@ func BootstrapLauncher(spec LauncherSpec) error {
 		if fd, err := strconv.Atoi(os.Getenv(LauncherOwnerFDEnv)); err == nil && fd >= 3 {
 			syscall.CloseOnExec(fd)
 		}
+		// Likewise the listeners the launcher kept for this process, before
+		// anything starts a helper process.
+		listenerkeep.Init()
 		return nil
 	}
 	if strings.TrimSpace(spec.DaemonType) == "" || strings.TrimSpace(spec.StateDir) == "" {
@@ -216,6 +222,17 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 	}
 	defer os.Remove(filepath.Join(launcherDir, "owner.json"))
 
+	// Listeners a daemon process keeps outlive it here, and in systemd's file
+	// descriptor store when the unit has one, so the next process takes them
+	// over and a restart or update refuses no connection.
+	keeper, err := listenerkeep.OpenStore(logger)
+	if err != nil {
+		logger.Warn("listener keeper is unavailable; daemon restarts drop listeners", "error", err)
+		keeper = nil
+	} else {
+		defer keeper.Close()
+	}
+
 	// A staged launcher on trial replaces the installed copy once a child was
 	// stable under it, and hands over to the installed copy if children keep
 	// failing before that.
@@ -255,7 +272,11 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 		if err != nil {
 			return err
 		}
-		child, events, done, err := startLauncherChild(spec, lock)
+		if keeper != nil {
+			// Apply what the previous process kept or dropped last.
+			keeper.Settle(launcherKeeperSettle)
+		}
+		child, events, done, err := startLauncherChild(spec, lock, keeper)
 		if err != nil {
 			if state != nil {
 				if rollbackErr := rollbackLauncherUpdate(spec.StateDir, state, "candidate exec failed"); rollbackErr != nil {
@@ -305,6 +326,11 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 			if trialErr := trialChildFailed(); trialErr != nil {
 				return trialErr
 			}
+		} else {
+			// The daemon exited to hand over to its staged update: start the
+			// candidate at once, every connection waits for it meanwhile.
+			backoff = launcherRestartBackoff
+			continue
 		}
 		select {
 		case <-signalCtx.Done():
@@ -350,7 +376,7 @@ func prepareLauncherCandidate(spec LauncherSpec) (*launcherUpdateState, error) {
 	return state, nil
 }
 
-func startLauncherChild(spec LauncherSpec, ownerLock *os.File) (*exec.Cmd, <-chan launcherReadinessEvent, <-chan error, error) {
+func startLauncherChild(spec LauncherSpec, ownerLock *os.File, keeper *listenerkeep.Store) (*exec.Cmd, <-chan launcherReadinessEvent, <-chan error, error) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return nil, nil, nil, err
@@ -369,12 +395,21 @@ func startLauncherChild(spec LauncherSpec, ownerLock *os.File) (*exec.Cmd, <-cha
 		LauncherOwnerFDEnv+"=4",
 		LauncherStateDirEnv+"="+spec.StateDir,
 	)
+	releaseKept := func() {}
+	if keeper != nil {
+		files, environment, release := keeper.ChildFiles(3 + len(cmd.ExtraFiles))
+		cmd.ExtraFiles = append(cmd.ExtraFiles, files...)
+		cmd.Env = append(cmd.Env, environment...)
+		releaseKept = release
+	}
 	cmd.SysProcAttr = launcherChildSysProcAttr()
 	if err := cmd.Start(); err != nil {
+		releaseKept()
 		reader.Close()
 		writer.Close()
 		return nil, nil, nil, err
 	}
+	releaseKept()
 	writer.Close()
 	events := make(chan launcherReadinessEvent, 4)
 	go func() {
