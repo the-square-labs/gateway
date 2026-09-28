@@ -13,6 +13,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
@@ -124,12 +125,47 @@ func TestSecureLinkFailsAtOnceOnFinalRefusals(t *testing.T) {
 }
 
 // TestAvailabilityMemberLinkNeverWaits: nginx retries the next member of the availability upstream at once.
-func TestAvailabilityMemberLinkNeverWaits(t *testing.T) {
+// M-6: a member the relay answered about (here: not registered) fails over at once while another member of the
+// upstream serves through a working relay: nginx sends the request there.
+func TestAvailabilityMemberLinkFailsOverAtOnceToAServingMember(t *testing.T) {
 	broker := &scriptedBroker{errors: []error{notRegistered(), nil}}
 	plugin := relayOpenPlugin(t, broker, true)
+	withServingAlternative(t, plugin)
+	started := time.Now()
 	openThroughRelay(plugin)
 	if got := broker.attempts.Load(); got != 1 {
 		t.Fatalf("attempts = %d, an availability member link must fail over at once", got)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("failing over took %s", elapsed)
+	}
+}
+
+// withServingAlternative makes link-1 a lease-gated member of policy-1 on node-a whose policy has another member,
+// node-b, serving (holder endpoint READY on a relay).
+func withServingAlternative(t *testing.T, plugin *NginxPlugin) {
+	t.Helper()
+	binding := plugin.secureLinks.bindings["link-1"]
+	binding.leaseGated, binding.availabilityCandidateID = true, "node-a"
+	plugin.availabilityLease = newAvailabilityLeaseCoordinator(t.TempDir(), plugin.secureLinks, nil)
+	t.Cleanup(plugin.availabilityLease.close)
+	plugin.availabilityLease.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 1, LeaseMode: true, Open: true, HolderId: "node-b", RemainingMs: 20000,
+		HolderEndpoint: relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY,
+	}}}, time.Now())
+}
+
+// M-6: a member the relay answered about, with no other member serving, waits like a plain link: there is nowhere
+// else for the request to go.
+func TestAvailabilityMemberLinkWithoutAServingAlternativeHolds(t *testing.T) {
+	previous := secureLinkTransientRetry
+	secureLinkTransientRetry = 20 * time.Millisecond
+	t.Cleanup(func() { secureLinkTransientRetry = previous })
+	broker := &scriptedBroker{errors: []error{notRegistered(), notRegistered(), nil}}
+	plugin := relayOpenPlugin(t, broker, true)
+	openThroughRelay(plugin)
+	if got := broker.attempts.Load(); got != 3 {
+		t.Fatalf("attempts = %d, want the member held until its target registered", got)
 	}
 }
 
@@ -353,5 +389,119 @@ func TestPlainLinkHoldsForARestartingTargetBeyondTheTransientWait(t *testing.T) 
 
 	if got := broker.attempts.Load(); got != 13 {
 		t.Fatalf("attempts = %d, want the tunnel opened after the restart", got)
+	}
+}
+
+// restartingRelay serves broker on address from the moment start closes, like a relay that is being recreated: until
+// then every dial of the lane is refused.
+func restartingRelay(t *testing.T, address string, broker *scriptedBroker, start <-chan struct{}) {
+	t.Helper()
+	server := grpc.NewServer()
+	relayv1.RegisterTunnelBrokerServer(server, broker)
+	t.Cleanup(server.Stop)
+	go func() {
+		<-start
+		listener, err := net.Listen("tcp", address)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = server.Serve(listener)
+	}()
+}
+
+func unusedAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	return address
+}
+
+func laneTo(t *testing.T, address, targetID string) *nginxRelayTunnel {
+	t.Helper()
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(grpc.ConnectParams{Backoff: backoff.Config{BaseDelay: 50 * time.Millisecond, Multiplier: 1.2, MaxDelay: 200 * time.Millisecond}, MinConnectTimeout: time.Second}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return &nginxRelayTunnel{ctx: context.Background(), client: relayv1.NewTunnelBrokerClient(conn), targetID: targetID}
+}
+
+// M-6, second instance: its only relay is recreated. Every member goes through that relay, so failing a member fast
+// only made nginx answer 502 for the whole restart: the link holds like a plain link, even while another member is
+// known to serve, and is served once the relay listens again.
+func TestAvailabilityMemberLinkHoldsThroughASingleRelayRestart(t *testing.T) {
+	broker := &scriptedBroker{}
+	address := unusedAddress(t)
+	start := make(chan struct{})
+	restartingRelay(t, address, broker, start)
+	plugin := relayOpenPlugin(t, &scriptedBroker{}, true)
+	withServingAlternative(t, plugin)
+	plugin.relayTunnels = []*nginxRelayTunnel{laneTo(t, address, relaybridge.LegacyTargetID)}
+	time.AfterFunc(600*time.Millisecond, func() { close(start) })
+
+	elapsed := openThroughRelay(plugin)
+
+	if got := broker.attempts.Load(); got != 1 {
+		t.Fatalf("the restarted relay saw %d tunnels, want the held connection served", got)
+	}
+	if elapsed < 500*time.Millisecond || elapsed >= secureLinkTransientWait {
+		t.Fatalf("held for %s", elapsed)
+	}
+}
+
+// M-6: a pool whose every relay is down at once (both lanes refused) is the same: the member holds until one comes
+// back, bounded by the transient wait.
+func TestAvailabilityMemberLinkHoldsWhileEveryRelayIsDown(t *testing.T) {
+	broker := &scriptedBroker{}
+	first, second := unusedAddress(t), unusedAddress(t)
+	start := make(chan struct{})
+	restartingRelay(t, second, broker, start)
+	plugin, _ := blackHoledMemberPlugin(t, true)
+	withServingAlternative(t, plugin)
+	plugin.relayTunnels = []*nginxRelayTunnel{laneTo(t, first, "relay-130"), laneTo(t, second, "relay-136")}
+	time.AfterFunc(600*time.Millisecond, func() { close(start) })
+
+	elapsed := openThroughRelay(plugin)
+
+	if got := broker.attempts.Load(); got != 1 {
+		t.Fatalf("the relay that came back saw %d tunnels", got)
+	}
+	if elapsed < 500*time.Millisecond || elapsed >= secureLinkTransientWait {
+		t.Fatalf("held for %s", elapsed)
+	}
+
+	// Nothing comes back within the wait: the link gives up after it, not at once and not later.
+	previous := secureLinkTransientWait
+	secureLinkTransientWait = 400 * time.Millisecond
+	t.Cleanup(func() { secureLinkTransientWait = previous })
+	dead, _ := blackHoledMemberPlugin(t, true)
+	dead.relayTunnels = []*nginxRelayTunnel{laneTo(t, unusedAddress(t), "relay-130"), laneTo(t, unusedAddress(t), "relay-136")}
+	elapsed = openThroughRelay(dead)
+	if elapsed < 300*time.Millisecond || elapsed > 2*time.Second {
+		t.Fatalf("with every relay down the link gave up after %s", elapsed)
+	}
+}
+
+func TestRelayTransportErrorsAreToldFromAnswersAboutTheMember(t *testing.T) {
+	for message, transport := range map[string]bool{
+		`connection error: desc = "transport: Error while dialing: dial tcp 10.0.0.1:9443: connect: connection refused"`: true,
+		"error reading from server: EOF":    true,
+		"relay is draining":                 true,
+		"target endpoint is not registered": false,
+		"target endpoint is dormant":        false,
+		"target endpoint is restarting":     false,
+	} {
+		if got := relayTransportError(status.Error(codes.Unavailable, message)); got != transport {
+			t.Errorf("%q: transport = %v", message, got)
+		}
+	}
+	if relayTransportError(status.Error(codes.DeadlineExceeded, "context deadline exceeded")) {
+		t.Error("a setup timeout (a relay waiting for a dead member) counted as the relay's transport")
 	}
 }

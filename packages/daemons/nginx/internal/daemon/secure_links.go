@@ -985,8 +985,9 @@ var (
 	// secureLinkTransientWait is how long a new connection waits for a relay lane or its target's registration to
 	// come back before it fails. A relay restart (the local relay's update on a single-relay installation) or a
 	// docker-daemon restart leaves every candidate without a ready lane, or without the target's registration, for
-	// well under a second to a couple of seconds: waiting turns those 502s into a short delay. Links of availability
-	// members never wait; the upstream moves on to the next member at once.
+	// well under a second to a couple of seconds: waiting turns those 502s into a short delay. A link of an
+	// availability member waits too unless a relay answered about the member and another member serves: then the
+	// upstream moves on to that member at once (M-6).
 	secureLinkTransientWait  = 3 * time.Second
 	secureLinkTransientRetry = 150 * time.Millisecond
 	// secureLinkRestartHold is how long a new connection waits for a target
@@ -1021,6 +1022,30 @@ func retryableRelayOpenError(err error) bool {
 // secureLinkAttemptFailure describes a failed relay attempt of one connection.
 type secureLinkAttemptFailure struct {
 	relay, stage, err string
+	// transport marks a relay that could not be reached or is shutting down
+	// (M-6): it said nothing about the member, and every member behind the
+	// same relays fails alike.
+	transport bool
+}
+
+// relayTransportError reports a failure of the relay itself, not an answer
+// about the target: the lane's connection is down or being re-dialed, the
+// stream broke, or the relay is draining for a restart. A refusal the relay
+// sends about the target (not registered, dormant, restarting, lease gate)
+// and a setup that timed out (a relay that took the tunnel but got no answer
+// from the member, N-12) are answers about the member.
+func relayTransportError(err error) bool {
+	current, ok := status.FromError(err)
+	if !ok || current.Code() != codes.Unavailable {
+		return false
+	}
+	message := current.Message()
+	for _, marker := range []string{"connection error", "transport", "error reading from server", "connection is closing", "relay is draining"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *secureLinkAttemptFailure) attrs() []any {
@@ -1045,10 +1070,12 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
 	}
-	// A member's link fails at once when a relay refused it, so its upstream
-	// moves on to the next member. While this daemon has no lane to any of
-	// its relays (just started, or every relay restarting) every member fails
-	// alike, so it waits for a lane like any other link (B-13).
+	// A member's link fails at once when a relay answered that the member
+	// cannot take it and another member of the upstream serves, so nginx
+	// moves on to that one. Otherwise it waits like any other link (M-6):
+	// when no relay could be reached at all (no lane, the relay restarting or
+	// unreachable: with one relay, or every relay down, each member fails
+	// alike, there is no next member), and when no other member serves.
 	member := ownerKind == proxySecureLinkOwnerKind && p.secureLinks.availabilityMember(linkID)
 	deadline := time.Now().Add(secureLinkTransientWait)
 	// A member's tunnel setup shares one budget across its relays (N-12):
@@ -1075,7 +1102,9 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	}
 	for {
 		retryable := false
-		reachedRelay := false
+		// memberAnswered: some relay answered about the member itself, as
+		// opposed to failing at the transport level or having no lane.
+		memberAnswered := false
 		memberSetupDeadline = time.Time{}
 		ordered := p.orderRelayCandidates(candidates)
 		for index, candidate := range ordered {
@@ -1088,7 +1117,6 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 				}
 				continue
 			}
-			reachedRelay = true
 			grant := relaybridge.GrantForCandidate(candidate)
 			if grant == nil {
 				tunnel.active.Add(-1)
@@ -1110,6 +1138,9 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 			}
 			failedAttempts++
 			lastFailure = failure
+			if failure == nil || !failure.transport {
+				memberAnswered = true
+			}
 			switch result {
 			case secureLinkRetryable:
 				retryable = true
@@ -1126,10 +1157,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 				time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
 			}
 		}
-		// A member moves on at once when a relay refused it, unless its daemon
-		// restarts and no other member of the policy serves: then the held
-		// connection is its only way to succeed.
-		if !retryable || (member && reachedRelay && !(restarting && !p.memberHasServingAlternative(linkID))) ||
+		if !retryable || (member && memberAnswered && p.memberHasServingAlternative(linkID)) ||
 			!time.Now().Add(secureLinkTransientRetry).Before(deadline) {
 			break
 		}
@@ -1201,16 +1229,21 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.
 		p.logger.Debug("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", stage, "error", message)
 		return &secureLinkAttemptFailure{relay: tunnel.targetID, stage: stage, err: message}
 	}
+	failedWith := func(stage string, err error) *secureLinkAttemptFailure {
+		failure := failed(stage, err.Error())
+		failure.transport = relayTransportError(err)
+		return failure
+	}
 	stream, err := tunnel.client.OpenTunnel(ctx)
 	if err != nil {
-		return openFailure(err), failed("open", err.Error())
+		return openFailure(err), failedWith("open", err)
 	}
 	if err := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}}); err != nil {
-		return openFailure(err), failed("send", err.Error())
+		return openFailure(err), failedWith("send", err)
 	}
 	first, err := stream.Recv()
 	if err != nil {
-		return openFailure(err), failed("ready", err.Error())
+		return openFailure(err), failedWith("ready", err)
 	}
 	if first.GetReady() == nil {
 		code := "unexpected_frame"
