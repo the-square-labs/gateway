@@ -221,11 +221,15 @@ export class AvailabilityLeaseService {
 
   private async recordHolderChange(notice: LeaseHolderChangeNotice): Promise<void> {
     if (notice.kind) {
+      const takeoverAt = notice.holderSince ?? new Date();
       await this.audit.log({
         userId: null,
         action: `docker.availability.lease_${notice.kind}`,
         resourceType: 'docker_availability_policy',
         resourceId: notice.policyId,
+        // N-5: the transition happened when the voters saw the new holder take over, which after an autonomous
+        // failover while Gateway was down is well before Gateway learns about it.
+        occurredAt: takeoverAt,
         details: {
           slot: notice.slot,
           fromNodeId: notice.from,
@@ -234,6 +238,8 @@ export class AvailabilityLeaseService {
           ballot: notice.ballot,
           observedBy: notice.sourceId,
           source: notice.source,
+          takeoverAt: takeoverAt.toISOString(),
+          noticedAt: new Date().toISOString(),
         },
       });
       this.events.publish('docker.availability.changed', { policyId: notice.policyId, action: `lease_${notice.kind}` });

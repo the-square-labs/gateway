@@ -28,6 +28,9 @@ type acceptorKey struct {
 	acceptNext     int
 	relinquished   map[string]Ballot
 	release        releaseWindow
+	// commitSince is the local time the current commit holder's first commit
+	// was stored; zero when unknown (restored after a restart). N-5.
+	commitSince time.Duration
 }
 
 type acceptedLease struct {
@@ -294,6 +297,9 @@ func (n *Node) storeCommit(commit *pb.LeaseCommit, now time.Duration) {
 		return
 	}
 	persist := ak.commitBallot.Proposer != ballot.Proposer
+	if persist {
+		ak.commitSince = now
+	}
 	ak.commit, ak.commitBallot = commit, ballot
 	if bootstrapSatisfiedBy(manifest, key, commit) && ak.rec.BootstrapSatisfied != manifest.BootstrapID {
 		ak.rec.BootstrapSatisfied = manifest.BootstrapID

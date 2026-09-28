@@ -144,6 +144,7 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 			})
 		}
 	}
+	now, wall := c.clock.Now(), c.wall()
 	for _, view := range c.node.AcceptorView() {
 		gate := c.gateView(view.Key)
 		var gateBallot *relayv1.AvailabilityLeaseBallot
@@ -163,6 +164,10 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 		}
 		if !view.CommitBallot.IsZero() {
 			entry.Committed = leaseBallot(view.CommitBallot)
+			if view.CommitSince > 0 && view.CommitSince <= now {
+				// The takeover time of the committed holder, as this relay saw it (N-5).
+				entry.HolderSinceUnixMs = wall.Add(-(now - view.CommitSince)).UnixMilli()
+			}
 		}
 		report.Acceptor = append(report.Acceptor, entry)
 	}

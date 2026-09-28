@@ -187,4 +187,9 @@ type KeyView struct {
 	Promised     Ballot
 	CommitBallot Ballot
 	Abstaining   bool
+	// CommitSince is when this acceptor first stored a commit of the current
+	// commit holder (CommitBallot.Proposer), on its lease clock; zero when
+	// unknown (a commit restored after a restart). Reports turn it into the
+	// takeover time the Gateway records (N-5).
+	CommitSince time.Duration
 }

@@ -8555,10 +8555,14 @@ type AvailabilityLeaseKeyView struct {
 	// Relays only, as in relay.v1: the holder and committed ballot the gate
 	// admits. An open gate names a fresh holder even where the relay does not
 	// vote, so the Gateway records it as a holder observation.
-	GateHolderId  string                   `protobuf:"bytes,20,opt,name=gate_holder_id,json=gateHolderId,proto3" json:"gate_holder_id,omitempty"`
-	GateBallot    *AvailabilityLeaseBallot `protobuf:"bytes,21,opt,name=gate_ballot,json=gateBallot,proto3" json:"gate_ballot,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	GateHolderId string                   `protobuf:"bytes,20,opt,name=gate_holder_id,json=gateHolderId,proto3" json:"gate_holder_id,omitempty"`
+	GateBallot   *AvailabilityLeaseBallot `protobuf:"bytes,21,opt,name=gate_ballot,json=gateBallot,proto3" json:"gate_ballot,omitempty"`
+	// As in relay.v1 (same field number): when this member first stored a
+	// commit of the committed ballot's proposer, Unix ms of its wall clock;
+	// zero when unknown.
+	HolderSinceUnixMs int64 `protobuf:"varint,25,opt,name=holder_since_unix_ms,json=holderSinceUnixMs,proto3" json:"holder_since_unix_ms,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AvailabilityLeaseKeyView) Reset() {
@@ -8673,6 +8677,13 @@ func (x *AvailabilityLeaseKeyView) GetGateBallot() *AvailabilityLeaseBallot {
 		return x.GateBallot
 	}
 	return nil
+}
+
+func (x *AvailabilityLeaseKeyView) GetHolderSinceUnixMs() int64 {
+	if x != nil {
+		return x.HolderSinceUnixMs
+	}
+	return 0
 }
 
 type AvailabilityLeaseEvent struct {
@@ -12719,7 +12730,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x05epoch\x18\x05 \x01(\x04R\x05epoch\x12)\n" +
 	"\x10manifest_version\x18\x06 \x01(\x04R\x0fmanifestVersion\x12!\n" +
 	"\fplacement_id\x18\a \x01(\tR\vplacementId\x121\n" +
-	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\"\xef\x03\n" +
+	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\"\xa0\x04\n" +
 	"\x18AvailabilityLeaseKeyView\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x14\n" +
@@ -12734,7 +12745,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	" \x01(\bR\bgateOpen\x12$\n" +
 	"\x0egate_holder_id\x18\x14 \x01(\tR\fgateHolderId\x12D\n" +
 	"\vgate_ballot\x18\x15 \x01(\v2#.gateway.v1.AvailabilityLeaseBallotR\n" +
-	"gateBallot\"\xf3\x01\n" +
+	"gateBallot\x12/\n" +
+	"\x14holder_since_unix_ms\x18\x19 \x01(\x03R\x11holderSinceUnixMs\"\xf3\x01\n" +
 	"\x16AvailabilityLeaseEvent\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x1b\n" +
 	"\tpolicy_id\x18\x02 \x01(\tR\bpolicyId\x12\x12\n" +

@@ -365,7 +365,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
   it('learns the holder and the reachable voters from the local relay before any node reconnects', async () => {
     // Stand run ha18/b: after a takeover while Gateway was down, the nodes reconnected only after their backoff and
     // the non-voting local relay's report was ignored, so Gateway showed the dead holder and no reachable voter.
-    const relayReport = (holder: string, round: number) =>
+    const relayReport = (holder: string, round: number, holderSinceUnixMs = '0') =>
       decodeRelayV1Message(
         'AvailabilityLeaseReport',
         encodeRelayV1Message('AvailabilityLeaseReport', {
@@ -385,7 +385,9 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
               gateOpen: true,
               gateHolderId: holder,
               gateBallot: { round: String(round), incarnation: '1', proposerId: holder },
+              committed: { round: String(round), incarnation: '1', proposerId: holder },
               abstaining: true,
+              holderSinceUnixMs,
             },
           ],
         })
@@ -394,9 +396,18 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     try {
       expect((await service.getPolicyLease(policyId)).voterMargin).toMatchObject({ reachable: 0 });
       audit.log.mockClear();
-      await service.ingestRelayReport(relayId, relayReport(nodeIds[1]!, 11));
+      // N-5: the relay saw the takeover 30 s before Gateway hears of it; that is the recorded time.
+      const takeoverAt = new Date(Date.now() - 30_000);
+      await service.ingestRelayReport(relayId, relayReport(nodeIds[1]!, 11, String(takeoverAt.getTime())));
       const view = await service.getPolicyLease(policyId);
-      expect(view.holders[0]).toMatchObject({ holderNodeId: nodeIds[1], source: 'relay' });
+      expect(view.holders[0]).toMatchObject({ holderNodeId: nodeIds[1], source: 'relay', holderSince: takeoverAt });
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'docker.availability.lease_failover',
+          occurredAt: takeoverAt,
+          details: expect.objectContaining({ takeoverAt: takeoverAt.toISOString() }),
+        })
+      );
       expect(view.voterMargin).toMatchObject({ voters: 3, reachable: 2, required: 2, margin: 0 });
       expect(audit.log).toHaveBeenCalledWith(
         expect.objectContaining({

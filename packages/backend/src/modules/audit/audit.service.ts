@@ -45,6 +45,11 @@ export interface AuditEntry {
   details?: Record<string, unknown>;
   ipAddress?: string;
   userAgent?: string;
+  /**
+   * When the audited event happened, for events Gateway learns about afterwards (an autonomous lease failover while
+   * it was down). Defaults to now; a future time is ignored.
+   */
+  occurredAt?: Date;
 }
 
 interface AuditLogOptions {
@@ -99,7 +104,13 @@ export class AuditService {
       const impersonation = requestContext?.impersonation;
       const actorUserId = impersonation?.actorUserId ?? entry.userId;
       const id = randomUUID();
-      const createdAt = new Date();
+      const now = new Date();
+      const createdAt =
+        entry.occurredAt instanceof Date &&
+        Number.isFinite(entry.occurredAt.getTime()) &&
+        entry.occurredAt.getTime() <= now.getTime()
+          ? entry.occurredAt
+          : now;
       const ipAddress = entry.ipAddress ?? requestContext?.ipAddress ?? null;
       const mcpDetails = requestContext?.mcp
         ? {

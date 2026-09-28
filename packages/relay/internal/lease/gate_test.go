@@ -177,3 +177,28 @@ func TestRelayVotesOnlyWhereItIsThePolicyWitness(t *testing.T) {
 		t.Fatalf("per-policy report = %v", acks)
 	}
 }
+
+// N-5: the relay reports when it first saw the committed holder, on its wall
+// clock, so Gateway records the takeover time of a failover it learns about
+// later (stand run rc20: the audit carried the time Gateway came back).
+func TestReportCarriesWhenTheRelaySawTheHolderTakeOver(t *testing.T) {
+	h := newHarness(t, true)
+	h.ready("d1", "d2")
+	started := h.wall().UnixMilli()
+	acquire(t, h, "d1")
+	first := h.relay.Report().GetAcceptor()[0]
+	if first.GetCommitted().GetProposerId() != "d1" || first.GetHolderSinceUnixMs() < started || first.GetHolderSinceUnixMs() > h.wall().UnixMilli() {
+		t.Fatalf("holder since %d outside [%d, %d] for %v", first.GetHolderSinceUnixMs(), started, h.wall().UnixMilli(), first)
+	}
+	h.step(12 * time.Second)
+	if renewed := h.relay.Report().GetAcceptor()[0]; renewed.GetHolderSinceUnixMs() != first.GetHolderSinceUnixMs() {
+		t.Fatalf("renewals moved holder since from %d to %d", first.GetHolderSinceUnixMs(), renewed.GetHolderSinceUnixMs())
+	}
+	h.down["d1"] = true
+	downAt := h.wall().UnixMilli()
+	acquire(t, h, "d2")
+	takeover := h.relay.Report().GetAcceptor()[0]
+	if takeover.GetCommitted().GetProposerId() != "d2" || takeover.GetHolderSinceUnixMs() <= downAt || takeover.GetHolderSinceUnixMs() > h.wall().UnixMilli() {
+		t.Fatalf("takeover since %d outside (%d, %d] for %v", takeover.GetHolderSinceUnixMs(), downAt, h.wall().UnixMilli(), takeover)
+	}
+}

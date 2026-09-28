@@ -34,6 +34,31 @@ describe('AuditService MCP context', () => {
     expect(eventBus.publish).toHaveBeenCalledWith('audit.changed', {});
   });
 
+  it('records an event Gateway learned about afterwards at the time it happened, never in the future', async () => {
+    const values = vi.fn().mockResolvedValue(undefined);
+    const service = new AuditService({ insert: vi.fn(() => ({ values })) } as any);
+    const happened = new Date(Date.now() - 70_000);
+
+    await service.log({
+      userId: null,
+      action: 'docker.availability.lease_failover',
+      resourceType: 'x',
+      occurredAt: happened,
+    });
+    expect(values.mock.calls[0]![0]).toMatchObject({ createdAt: happened });
+    expect(values.mock.calls[0]![0]).not.toHaveProperty('occurredAt');
+
+    const before = Date.now();
+    await service.log({
+      userId: null,
+      action: 'docker.availability.lease_failover',
+      resourceType: 'x',
+      occurredAt: new Date(Date.now() + 3_600_000),
+    });
+    expect((values.mock.calls[1]![0].createdAt as Date).getTime()).toBeGreaterThanOrEqual(before);
+    expect((values.mock.calls[1]![0].createdAt as Date).getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
   it('enriches domain audit entries with the MCP tool and redacted arguments', async () => {
     const values = vi.fn().mockResolvedValue(undefined);
     const db = { insert: vi.fn(() => ({ values })) } as any;

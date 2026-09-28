@@ -202,3 +202,13 @@ type simEvent2 struct {
 	event Event
 	at    time.Duration
 }
+
+// acceptorViewOn returns the acceptor view of key on node id.
+func (w *simWorld) acceptorViewOn(id string, key Key) (KeyView, bool) {
+	for _, view := range w.nodes[id].node.AcceptorView() {
+		if view.Key == key {
+			return view, true
+		}
+	}
+	return KeyView{}, false
+}

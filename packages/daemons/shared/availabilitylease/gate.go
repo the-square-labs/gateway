@@ -160,7 +160,7 @@ func (n *Node) AcceptorView() []KeyView {
 		state, holder, reserved := n.keyState(ak, n.manifests[key.PolicyID], key, now)
 		views = append(views, KeyView{
 			Key: key, State: state, Holder: holder, ReservedFor: reserved, Promised: ak.promised(),
-			CommitBallot: ak.commitBallot, Abstaining: !n.voting(key.PolicyID, now),
+			CommitBallot: ak.commitBallot, Abstaining: !n.voting(key.PolicyID, now), CommitSince: ak.commitSince,
 		})
 	}
 	return views
