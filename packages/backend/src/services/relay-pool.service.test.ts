@@ -782,6 +782,124 @@ describe('RelayPoolService activation safety and outcomes', () => {
   });
 });
 
+describe('RelayPoolService candidate probes', () => {
+  const BUSY = 'daemon is busy handling long-running commands; retry shortly';
+
+  function probeHarness(probe: (nodeId: string, input: { role: string }) => Promise<void>, endpointGone = false) {
+    const { db } = queuedDb([
+      endpointGone ? [] : [{ id: 'endpoint', subjectId: 'target-node' }],
+      [{ id: 'route', sourceKind: 'daemon', sourceId: 'source-node' }],
+      [{ id: 'assignment', relayInstanceId: 'relay' }],
+      [{ id: 'probe', sourceKind: 'daemon', sourceId: 'source-node', relayInstanceId: 'relay' }],
+    ]);
+    const { pool, policy } = service(db);
+    const candidate = { relayInstanceId: 'relay', assignmentGeneration: '2' };
+    Object.assign(policy, {
+      syncNodeGrants: vi.fn().mockResolvedValue(undefined),
+      getNodeGrantBundle: vi.fn().mockResolvedValue({
+        grants: [
+          { role: 'endpoint', endpointId: 'endpoint', candidates: [candidate] },
+          { role: 'connect', routeId: 'route', candidates: [candidate] },
+        ],
+      }),
+      probeRelayCandidate: vi.fn(probe),
+    });
+    (pool as any).probeRetryDelaysMs = [0, 0];
+    const target = vi.spyOn(pool, 'acknowledgeTarget').mockResolvedValue(false);
+    const source = vi.spyOn(pool, 'acknowledgeProbe').mockResolvedValue(false);
+    const prepare = () => (pool as any).prepareStagedGeneration({ id: 'new', endpointId: 'endpoint', generation: 2 });
+    return { pool, policy: policy as any, target, source, prepare };
+  }
+
+  it.each([
+    'rpc error: code = FailedPrecondition desc = availability lease gate closed: node-2 holds no committed slot',
+    'rpc error: code = Unavailable desc = target endpoint is dormant',
+  ])('counts a source probe the lease gate refused as verified: %s', async (refusal) => {
+    const { target, source, prepare } = probeHarness(async (_node, { role }) => {
+      if (role === 'source') throw new Error(refusal);
+    });
+    await prepare();
+    expect(target).toHaveBeenCalledExactlyOnceWith('new', 'relay', true, undefined);
+    expect(source).toHaveBeenCalledExactlyOnceWith('probe', true, undefined);
+  });
+
+  it.each([
+    'rpc error: code = FailedPrecondition desc = availability lease gate closed: lease coordination is not running',
+    'rpc error: code = PermissionDenied desc = grant signature is invalid',
+  ])('fails a source probe the relay genuinely refused: %s', async (refusal) => {
+    const { source, prepare } = probeHarness(async (_node, { role }) => {
+      if (role === 'source') throw new Error(refusal);
+    });
+    await prepare();
+    expect(source).toHaveBeenCalledExactlyOnceWith('probe', false, refusal);
+  });
+
+  it('asks a busy daemon again within the same preparation', async () => {
+    let busy = 1;
+    const { policy, target, source, prepare } = probeHarness(async (_node, { role }) => {
+      if (role === 'target' && busy-- > 0) throw new Error(BUSY);
+    });
+    await prepare();
+    expect(policy.probeRelayCandidate).toHaveBeenCalledTimes(3);
+    expect(target).toHaveBeenCalledExactlyOnceWith('new', 'relay', true, undefined);
+    expect(source).toHaveBeenCalledExactlyOnceWith('probe', true, undefined);
+  });
+
+  it('defers the generation when the daemon stays busy, recording no failure', async () => {
+    const { policy, target, source, prepare } = probeHarness(async () => {
+      throw new Error(BUSY);
+    });
+    await expect(prepare()).rejects.toThrow(BUSY);
+    // One attempt and two retries, then the preparation stops without probing the source.
+    expect(policy.probeRelayCandidate).toHaveBeenCalledTimes(3);
+    expect(target).not.toHaveBeenCalled();
+    expect(source).not.toHaveBeenCalled();
+  });
+
+  it('keeps a genuine failure when a later probe meets a transient condition', async () => {
+    const { target, source, prepare } = probeHarness(async (_node, { role }) => {
+      throw new Error(
+        role === 'target' ? 'relay endpoint registration is not ready' : 'Node source-node is not connected'
+      );
+    });
+    await expect(prepare()).resolves.toBeUndefined();
+    expect(target).toHaveBeenCalledExactlyOnceWith('new', 'relay', false, 'relay endpoint registration is not ready');
+    expect(source).not.toHaveBeenCalled();
+  });
+
+  it('has nothing to verify once the owner revoked the endpoint', async () => {
+    const { policy, prepare } = probeHarness(async () => undefined, true);
+    await expect(prepare()).resolves.toBeUndefined();
+    expect(policy.syncNodeGrants).not.toHaveBeenCalled();
+    expect(policy.probeRelayCandidate).not.toHaveBeenCalled();
+  });
+
+  it('keeps at most two probes in flight per daemon, in arrival order', async () => {
+    const { pool } = service();
+    let inFlight = 0;
+    let peak = 0;
+    const order: number[] = [];
+    const releases: Array<() => void> = [];
+    const probe = (index: number) => async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      order.push(index);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      inFlight -= 1;
+    };
+    const runs = [0, 1, 2, 3, 4].map((index) => (pool as any).withProbeSlot('node', probe(index)));
+    const other = (pool as any).withProbeSlot('other-node', probe(9));
+    for (let round = 0; round < 6; round += 1) {
+      await vi.waitFor(() => expect(releases.length).toBeGreaterThan(0));
+      releases.shift()!();
+    }
+    await Promise.all([...runs, other]);
+    expect(peak).toBe(3); // Two on one daemon, one on another.
+    expect(order.filter((index) => index !== 9)).toEqual([0, 1, 2, 3, 4]);
+    expect((pool as any).probeSlots.size).toBe(0);
+  });
+});
+
 describe('RelayPoolService status', () => {
   it('builds a bounded newest-first history query with readable JSONB domain names', () => {
     const { pool } = service(drizzle({ query: vi.fn() } as any));

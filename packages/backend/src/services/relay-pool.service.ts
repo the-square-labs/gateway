@@ -26,7 +26,12 @@ import type { EventBusService } from './event-bus.service.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
 import type { RelayPolicyService, RelayPolicyTrustStatus } from './relay-policy.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
-import { isTransientRelayPoolError, relayPoolErrorMessage } from './relay-pool-errors.js';
+import {
+  isGatedProbeRefusal,
+  isRetryableDispatchError,
+  isTransientRelayPoolError,
+  relayPoolErrorMessage,
+} from './relay-pool-errors.js';
 import { describeRelayRevocation } from './relay-revocation-fence.js';
 import { loadRelayRouteHistories, RelayRevocationFenceService } from './relay-revocation-fence.service.js';
 import {
@@ -59,7 +64,17 @@ const AUTO_REBALANCE_RETRY_MS = 5 * 60_000;
  */
 const TRANSIENT_RETRY_MS = 30_000;
 const STAGING_RECOVERY_MS = 2 * 60_000;
+/**
+ * Candidate probes in flight per daemon. A daemon runs four asynchronous commands at a time and refuses every
+ * further one as busy; a batch that probed dozens of workloads at once took all of them (rc.20 B-17), failing its
+ * own probes and every other command sent to that daemon meanwhile.
+ */
+const PROBES_PER_NODE = 2;
+/** Pauses before probing again when the daemon did not run the probe (busy, or not connected). */
+const PROBE_RETRY_DELAYS_MS: readonly number[] = [2_000, 5_000];
 const DEFERRED_NOTE = 'Deferred by a transient condition and retried automatically';
+/** The outcome of one candidate probe; see RelayPoolService.runProbe. */
+type ProbeResult = { ready: true } | { ready: false; error: string; transient: boolean };
 /**
  * A generation rolled back before it was ever active (see deferStaging). Every generation that was active has an
  * activation time, and only a drained active generation retires otherwise.
@@ -176,6 +191,9 @@ export class RelayPoolService {
   private readonly startedAt = Date.now();
   /** Workloads a transient condition deferred, and when to try them again; see deferStaging. */
   private readonly deferrals = new Map<string, { count: number; retryAt: number }>();
+  /** Probe commands in flight per daemon, and the probes waiting for a slot; see withProbeSlot. */
+  private readonly probeSlots = new Map<string, { active: number; waiting: Array<() => void> }>();
+  private probeRetryDelaysMs = PROBE_RETRY_DELAYS_MS;
   private readonly revocations: Pick<RelayRevocationFenceService, 'evaluate'>;
   private nextUpdateDrainReleaseAt = 0;
   private certificateRenewal?: Pick<
@@ -1900,6 +1918,50 @@ export class RelayPoolService {
     return activated;
   }
 
+  /**
+   * Runs one candidate probe. A daemon that did not run it (busy, not connected) is asked again after a short
+   * pause; a gated refusal of a source probe counts as verified (see relay-pool-errors). A failure that survives
+   * that is transient when its cause passes by itself, and then defers the generation instead of failing it.
+   */
+  private async runProbe(
+    nodeId: string | null,
+    role: 'target' | 'source',
+    probe: () => Promise<void>
+  ): Promise<ProbeResult> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await (nodeId ? this.withProbeSlot(nodeId, probe) : probe());
+        return { ready: true };
+      } catch (error) {
+        if (role === 'source' && isGatedProbeRefusal(error)) return { ready: true };
+        const pause = this.probeRetryDelaysMs[attempt];
+        if (pause === undefined || !isRetryableDispatchError(error)) {
+          return { ready: false, error: relayPoolErrorMessage(error), transient: isTransientRelayPoolError(error) };
+        }
+        await new Promise((resolve) => setTimeout(resolve, pause));
+      }
+    }
+  }
+
+  /** Holds one of the daemon's probe slots (PROBES_PER_NODE) while probe runs. */
+  private async withProbeSlot<T>(nodeId: string, probe: () => Promise<T>): Promise<T> {
+    const slots = this.probeSlots.get(nodeId) ?? { active: 0, waiting: [] };
+    this.probeSlots.set(nodeId, slots);
+    if (slots.active >= PROBES_PER_NODE) await new Promise<void>((resolve) => slots.waiting.push(resolve));
+    else slots.active += 1;
+    try {
+      return await probe();
+    } finally {
+      // Hand the slot straight to the next waiting probe, so a late arrival cannot overtake it.
+      const next = slots.waiting.shift();
+      if (next) next();
+      else {
+        slots.active -= 1;
+        if (!slots.active) this.probeSlots.delete(nodeId);
+      }
+    }
+  }
+
   private async prepareStagedGeneration(generation: {
     id: string;
     endpointId: string;
@@ -1938,67 +2000,72 @@ export class RelayPoolService {
       }
       return bundle;
     };
+    // The first transient probe failure ends the preparation: the generation is deferred and probed afresh by the
+    // next attempt. A genuine failure recorded before it still fails the generation.
+    const outcome: { transient?: string; failed: boolean } = { failed: false };
+    const settle = async (result: ProbeResult, acknowledge: (ready: boolean, error?: string) => Promise<unknown>) => {
+      if (result.ready) await acknowledge(true);
+      else if (result.transient) outcome.transient = result.error;
+      else {
+        outcome.failed = true;
+        await acknowledge(false, result.error);
+      }
+    };
     const targetBundle = await getBundle(endpoint.subjectId);
     const targetGrant = targetBundle.grants.find(
       ({ role, endpointId }) => role === 'endpoint' && endpointId === generation.endpointId
     );
     for (const assignment of assignments) {
+      if (outcome.transient) break;
+      const acknowledge = (ready: boolean, error?: string) =>
+        this.acknowledgeTarget(generation.id, assignment.relayInstanceId, ready, error);
       const candidate = targetGrant?.candidates?.find(
         ({ relayInstanceId, assignmentGeneration }) =>
           relayInstanceId === assignment.relayInstanceId && assignmentGeneration === String(generation.generation)
       );
       if (!candidate) {
-        await this.acknowledgeTarget(
-          generation.id,
-          assignment.relayInstanceId,
-          false,
-          'Pool candidate grant is unavailable'
-        );
+        outcome.failed = true;
+        await acknowledge(false, 'Pool candidate grant is unavailable');
         continue;
       }
-      try {
-        await this.policy.probeRelayCandidate(endpoint.subjectId, {
+      const result = await this.runProbe(endpoint.subjectId, 'target', () =>
+        this.policy.probeRelayCandidate(endpoint.subjectId, {
           probeId: assignment.id,
           role: 'target',
           endpointId: generation.endpointId,
           assignmentGeneration: String(generation.generation),
           candidate,
-        });
-        await this.acknowledgeTarget(generation.id, assignment.relayInstanceId, true);
-      } catch (error) {
-        await this.acknowledgeTarget(
-          generation.id,
-          assignment.relayInstanceId,
-          false,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
+        })
+      );
+      await settle(result, acknowledge);
     }
 
     for (const probe of probes) {
+      if (outcome.transient) break;
+      const acknowledge = (ready: boolean, error?: string) => this.acknowledgeProbe(probe.id, ready, error);
       const route = routes.find(
         ({ sourceKind, sourceId }) => sourceKind === probe.sourceKind && sourceId === probe.sourceId
       );
       if (!route) {
-        await this.acknowledgeProbe(probe.id, false, 'Relay source route is unavailable');
+        outcome.failed = true;
+        await acknowledge(false, 'Relay source route is unavailable');
         continue;
       }
       if (route.sourceKind === 'gateway') {
-        try {
-          await this.policy.probeGatewayRelayCandidate(
+        const result = await this.runProbe(null, 'source', () =>
+          this.policy.probeGatewayRelayCandidate(
             route.id,
             probe.certificateFingerprint,
             probe.relayInstanceId,
             String(generation.generation)
-          );
-          await this.acknowledgeProbe(probe.id, true);
-        } catch (error) {
-          await this.acknowledgeProbe(probe.id, false, error instanceof Error ? error.message : String(error));
-        }
+          )
+        );
+        await settle(result, acknowledge);
         continue;
       }
       if (route.sourceKind !== 'daemon') {
-        await this.acknowledgeProbe(probe.id, false, `Unsupported relay source kind ${route.sourceKind}`);
+        outcome.failed = true;
+        await acknowledge(false, `Unsupported relay source kind ${route.sourceKind}`);
         continue;
       }
       const sourceBundle = await getBundle(route.sourceId);
@@ -2008,23 +2075,23 @@ export class RelayPoolService {
           relayInstanceId === probe.relayInstanceId && assignmentGeneration === String(generation.generation)
       );
       if (!candidate) {
-        await this.acknowledgeProbe(probe.id, false, 'Pool candidate grant is unavailable');
+        outcome.failed = true;
+        await acknowledge(false, 'Pool candidate grant is unavailable');
         continue;
       }
-      try {
-        await this.policy.probeRelayCandidate(route.sourceId, {
+      const result = await this.runProbe(route.sourceId, 'source', () =>
+        this.policy.probeRelayCandidate(route.sourceId, {
           probeId: probe.id,
           role: 'source',
           endpointId: generation.endpointId,
           routeId: route.id,
           assignmentGeneration: String(generation.generation),
           candidate,
-        });
-        await this.acknowledgeProbe(probe.id, true);
-      } catch (error) {
-        await this.acknowledgeProbe(probe.id, false, error instanceof Error ? error.message : String(error));
-      }
+        })
+      );
+      await settle(result, acknowledge);
     }
+    if (outcome.transient && !outcome.failed) throw new Error(outcome.transient);
   }
 }
 
