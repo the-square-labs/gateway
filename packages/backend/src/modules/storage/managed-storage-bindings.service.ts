@@ -28,7 +28,7 @@ export class ManagedStorageBindingsService {
     _storageCA?: import('@/services/storage-ca.service.js').StorageCAService | undefined,
     _objectStorage?: Pick<
       import('@/modules/object-storage/object-storage.service.js').ObjectStorageService,
-      'listBuckets'
+      'listBuckets' | 'createBucket'
     >
   ) {}
   setEventBus(_bus: EventBusService): void {}

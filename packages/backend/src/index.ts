@@ -245,6 +245,14 @@ async function main() {
     let userDrainPromises: Promise<unknown>[] = [];
     let loggingClosePromise: Promise<void> | null = null;
     let forceUserPromise: Promise<void> | null = null;
+    const pendingShutdownWork = new Set<string>();
+    // Names unsettled shutdown work, so a drain that times out says what it waited for.
+    const shutdownWork = <T>(name: string, task: Promise<T>): Promise<T> => {
+      pendingShutdownWork.add(name);
+      const settle = () => pendingShutdownWork.delete(name);
+      task.then(settle, settle);
+      return task;
+    };
     const settleShutdownTask = async (name: string, task: Promise<unknown>): Promise<void> => {
       try {
         await task;
@@ -256,37 +264,46 @@ async function main() {
       lifecycle,
       getSettings: () => container.resolve(GeneralSettingsService).getCachedShutdownSettings(),
       hooks: {
-        freezeStatusPage: () => statusPageService.freezePublicSnapshot(),
+        freezeStatusPage: () => shutdownWork('status_page_freeze', statusPageService.freezePublicSnapshot()),
         quiesce: async () => {
           userDrainPromises = [
-            commercialEdition.quiesce(),
-            container.resolve(AISandboxService).stopPolicyReconciliation(),
-            scheduler.stop(),
-            container.resolve(RelaySupervisorService).stop(),
-            container.resolve(NotificationEvaluatorService).stop(),
-            container.resolve(InferenceProviderService).stop(),
-            container.resolve(InferenceReservationReconciler).stop(),
-            container.resolve(DockerSnapshotReconciler).stop(),
-            container.resolve(DockerMigrationService).stop(),
-            container.resolve(ReadModelCoordinator).stop(),
+            shutdownWork('commercial_quiesce', commercialEdition.quiesce()),
+            shutdownWork(
+              'ai_sandbox_policy_reconciliation',
+              container.resolve(AISandboxService).stopPolicyReconciliation()
+            ),
+            shutdownWork('scheduler', scheduler.stop()),
+            shutdownWork('relay_supervisor', container.resolve(RelaySupervisorService).stop()),
+            shutdownWork('notification_evaluator', container.resolve(NotificationEvaluatorService).stop()),
+            shutdownWork('inference_providers', container.resolve(InferenceProviderService).stop()),
+            shutdownWork('inference_reservations', container.resolve(InferenceReservationReconciler).stop()),
+            shutdownWork('docker_snapshots', container.resolve(DockerSnapshotReconciler).stop()),
+            shutdownWork('docker_migrations', container.resolve(DockerMigrationService).stop()),
+            shutdownWork('read_models', container.resolve(ReadModelCoordinator).stop()),
           ];
         },
         drainUserWork: async (deadline) => {
           await Promise.allSettled([
             ...userDrainPromises,
-            commercialEdition.drain(deadline),
-            container.resolve(AIRunService).waitForIdle(deadline),
+            shutdownWork('commercial_drain', commercialEdition.drain(deadline)),
+            shutdownWork('ai_runs', container.resolve(AIRunService).waitForIdle(deadline)),
           ]);
         },
         drainOrchestration: async (deadline) => {
-          const result = await waitForOrchestrationIdle(commercialEdition, { scope: 'running', deadline });
+          const result = await shutdownWork(
+            'orchestration',
+            waitForOrchestrationIdle(commercialEdition, { scope: 'running', deadline })
+          );
           return result.operations.reduce((total, operation) => total + operation.count, 0);
         },
+        pendingWork: () => [...pendingShutdownWork],
         forceCloseUserWork: async () => {
-          forceUserPromise ??= Promise.all([
-            commercialEdition.forceClose(),
-            container.resolve(AIRunService).stopAllForShutdown(),
-          ]).then(() => undefined);
+          forceUserPromise ??= shutdownWork(
+            'force_close_user_work',
+            Promise.all([commercialEdition.forceClose(), container.resolve(AIRunService).stopAllForShutdown()]).then(
+              () => undefined
+            )
+          );
           await forceUserPromise;
         },
         closeLogging: async () => {
@@ -331,7 +348,9 @@ async function main() {
             deadline
           );
           if (!drainsSettled) {
-            throw new Error('Active shutdown work did not release its dependencies before the hard deadline');
+            throw new Error(
+              `Active shutdown work did not release its dependencies before the hard deadline: ${[...pendingShutdownWork].join(', ')}`
+            );
           }
 
           await Promise.all([

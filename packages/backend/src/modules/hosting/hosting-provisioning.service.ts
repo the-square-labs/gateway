@@ -15,6 +15,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthService } from '@/modules/auth/auth.service.js';
 import type { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
+import { isSshOperationCancelled } from '@/modules/integrations/external-ssh-transport.js';
 import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from '@/modules/nodes/node-enrollment-token.js';
 import { CreateNodeSchema } from '@/modules/nodes/nodes.schemas.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
@@ -736,7 +737,8 @@ export class HostingProvisioningService {
     row: HostingOperationRow,
     connector: HostingConnectorRow,
     adapter: HostingProviderAdapter,
-    actor: User
+    actor: User,
+    signal?: AbortSignal
   ) {
     // One-time SSH install keys: finish deferred outcomes and retry pending key cleanups first.
     const resumed = await this.sshInstall.resume(row, adapter, () =>
@@ -1258,7 +1260,14 @@ export class HostingProvisioningService {
       if (!payload.ssh)
         throw new AppError(409, 'HOSTING_INSTALL_TRANSPORT_REQUIRED', 'The one-time SSH install key is unavailable');
       await this.authorizeBootstrap(row, connector, actor);
-      await this.sshInstall.install(row, resource, payload.ssh, () => this.sshInstallScript(row, connector), adapter);
+      await this.sshInstall.install(
+        row,
+        resource,
+        payload.ssh,
+        () => this.sshInstallScript(row, connector),
+        adapter,
+        signal
+      );
       return;
     }
     const input = acceptedProvisionInput(row.request);
@@ -1304,12 +1313,21 @@ export class HostingProvisioningService {
       if (!input.sshConnectorId)
         throw new AppError(409, 'HOSTING_INSTALL_TRANSPORT_REQUIRED', 'A trusted installation transport is required');
       // Existing SSH service pins the host key; never return its command/secret echo to the browser.
-      const result = await this.ssh.executeForHosting(
-        actor,
-        input.sshConnectorId,
-        payload.script,
-        resource.addresses.filter((address) => address.direct).map((address) => address.ip)
-      );
+      let result: { exitCode: number | null; stdout: string; stderr: string };
+      try {
+        result = await this.ssh.executeForHosting(
+          actor,
+          input.sshConnectorId,
+          payload.script,
+          resource.addresses.filter((address) => address.direct).map((address) => address.ip),
+          signal
+        );
+      } catch (error) {
+        // Gateway shutdown ended the session: the dispatched installer's outcome is unknown, as
+        // after a crash, so the operation waits for enrollment or its bootstrap deadline.
+        if (isSshOperationCancelled(error)) return;
+        throw error;
+      }
       if (result.exitCode !== 0) {
         await this.sshInstall.finish(adapter, row, 'failed', undefined, installFailure(result));
         return;
@@ -1341,8 +1359,10 @@ export class HostingProvisioningService {
     });
   }
 
-  async reconcileDue() {
+  /** The signal aborts on Gateway shutdown: no further operation is claimed and an SSH installer session ends. */
+  async reconcileDue(signal?: AbortSignal) {
     for (const due of await this.operations.due()) {
+      if (signal?.aborted) return;
       if (due.action !== 'create' && due.action !== 'install') continue;
       const row = await this.operations.claim(due.id);
       if (!row) continue;
@@ -1359,7 +1379,8 @@ export class HostingProvisioningService {
               : connector,
             () => this.operations.renew(row)
           ),
-          actor
+          actor,
+          signal
         );
       } catch (error) {
         if (

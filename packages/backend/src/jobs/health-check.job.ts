@@ -29,6 +29,18 @@ const SECURE_LINK_PROBE_CONCURRENCY_PER_NODE = 3;
 const DAEMON_BUSY_ERROR = SECURE_LINK_PROBE_BUSY_ERROR;
 const SLOW_BASELINE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours of history for baseline avg
 const SLOW_RESPONSE_FLOOR_MS = 250;
+/**
+ * Daemons re-register a few seconds after the Gateway starts, and the first health run can come
+ * first. Within this window a probe that failed only because its node has not reconnected yet is
+ * retried on the next run instead of being recorded or reported.
+ */
+export const NODE_RECONNECT_GRACE_MS = 60_000;
+
+/** The probe never reached the daemon: every attempt failed with the registry's not-connected error. */
+function failedOnlyBecauseNodeIsNotConnected(nodeId: string, errors: string[]): boolean {
+  const notConnected = `Node ${nodeId} is not connected`;
+  return errors.length > 0 && errors.every((error) => error === notConnected);
+}
 
 type HealthStatus = 'online' | 'offline' | 'degraded' | 'unknown';
 
@@ -77,6 +89,7 @@ export class HealthCheckJob {
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
   private relayUnavailable = false;
+  private readonly startedAt = Date.now();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -128,6 +141,10 @@ export class HealthCheckJob {
 
       if (relayBacked && this.relayUnavailable) {
         await this.recordRelayUnavailable(host);
+        return { hostId: host.id, status: 'skipped' as const };
+      }
+      if (checkStatus === 'deferred') {
+        // Nothing is recorded, so the next run probes again once the node is back.
         return { hostId: host.id, status: 'skipped' as const };
       }
       if (checkStatus === 'skipped') {
@@ -360,10 +377,15 @@ export class HealthCheckJob {
     }
   }
 
+  /** Within the startup grace, whether a probe failed only because its node has not reconnected yet. */
+  private awaitingNodeReconnect(nodeId: string, errors: string[]): boolean {
+    return Date.now() - this.startedAt < NODE_RECONNECT_GRACE_MS && failedOnlyBecauseNodeIsNotConnected(nodeId, errors);
+  }
+
   private async checkHost(
     host: typeof proxyHosts.$inferSelect,
     memberLinkIds?: string[]
-  ): Promise<{ status: 'online' | 'offline' | 'skipped' | 'unknown'; responseMs?: number }> {
+  ): Promise<{ status: 'online' | 'offline' | 'skipped' | 'deferred' | 'unknown'; responseMs?: number }> {
     if (host.upstreamKind === 'pages') {
       const domain = resolvePagesRouteProbeDomain(host);
       if (!host.nodeId || !this.nodeDispatch || !domain) return { status: 'unknown' };
@@ -407,6 +429,14 @@ export class HealthCheckJob {
         }
         return { status: daemonProbeOutcome(result), responseMs: result.responseMs };
       } catch (error) {
+        if (this.awaitingNodeReconnect(host.nodeId, [error instanceof Error ? error.message : String(error)])) {
+          logger.debug('Pages Route health probe waits for its node to reconnect', {
+            hostId: host.id,
+            nodeId: host.nodeId,
+            domain,
+          });
+          return { status: 'deferred' };
+        }
         logger.warn('Pages Route health probe command failed', {
           hostId: host.id,
           nodeId: host.nodeId,
@@ -431,6 +461,20 @@ export class HealthCheckJob {
           domain: host.domainNames?.[0],
         });
         return { status: 'skipped' };
+      }
+      if (
+        !result.ok &&
+        this.awaitingNodeReconnect(
+          host.nodeId,
+          result.failures.map((failure) => failure.error)
+        )
+      ) {
+        logger.debug('Secure Link health probe waits for its node to reconnect', {
+          hostId: host.id,
+          nodeId: host.nodeId,
+          domain: host.domainNames?.[0],
+        });
+        return { status: 'deferred' };
       }
       if (!result.ok) {
         logger.warn('Secure Link health probe failed', {

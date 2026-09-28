@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GatewayLifecycleService } from './gateway-lifecycle.service.js';
 import { ShutdownCoordinator, type ShutdownHooks, waitForShutdownTasks } from './shutdown-coordinator.service.js';
 
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
+vi.mock('@/lib/logger.js', () => ({ createChildLogger: () => log }));
+
 function hooks(overrides: Partial<ShutdownHooks> = {}): ShutdownHooks {
   return {
     freezeStatusPage: vi.fn().mockResolvedValue(undefined),
@@ -116,6 +119,31 @@ describe('ShutdownCoordinator', () => {
 
     expect(lifecycleHooks.finalize).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenLastCalledWith(0);
+  });
+
+  it('names the shutdown work still running when the user drain deadline is reached', async () => {
+    vi.useFakeTimers();
+    log.warn.mockClear();
+    const blocked = new Promise<void>(() => undefined);
+    const coordinator = new ShutdownCoordinator({
+      lifecycle: new GatewayLifecycleService(),
+      getSettings: () => ({
+        userRequestDrainSeconds: 1,
+        structuredLogDrainSeconds: 0,
+        finalizationTimeoutSeconds: 5,
+      }),
+      hooks: hooks({ drainUserWork: vi.fn(() => blocked), pendingWork: () => ['scheduler'] }),
+      exit: vi.fn(),
+    });
+
+    const stopping = coordinator.request('SIGTERM');
+    await vi.advanceTimersByTimeAsync(1_000);
+    await stopping;
+
+    expect(log.warn).toHaveBeenCalledWith(
+      'User drain deadline reached with shutdown work still running',
+      expect.objectContaining({ pendingWork: ['scheduler'] })
+    );
   });
 
   it('waits for running orchestration work within the user drain deadline', async () => {

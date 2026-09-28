@@ -15,6 +15,8 @@ export interface ShutdownHooks {
    * operations still run at the deadline. Durable recovery resumes those.
    */
   drainOrchestration: (deadline: number) => Promise<number>;
+  /** Names of shutdown work that has not settled yet; logged when a drain phase times out. */
+  pendingWork?: () => string[];
   forceCloseUserWork: () => Promise<void> | void;
   closeLogging: (deadline: number) => Promise<void>;
   closeHttp: (deadline: number) => Promise<void>;
@@ -79,6 +81,12 @@ export class ShutdownCoordinator {
         userDeadline,
         () => this.now()
       );
+      if (!userPhaseCompleted) {
+        logger.warn('User drain deadline reached with shutdown work still running', {
+          shutdownId,
+          pendingWork: this.options.hooks.pendingWork?.() ?? [],
+        });
+      }
       if (orchestration.remaining !== 0) {
         logger.warn('Orchestration operations still run at the user drain deadline; recovery resumes them', {
           shutdownId,

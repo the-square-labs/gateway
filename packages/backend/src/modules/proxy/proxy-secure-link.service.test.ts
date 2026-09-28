@@ -534,6 +534,7 @@ describe('ProxySecureLinkService migration rollback', () => {
     } as any;
     const pending = { ...binding, status: 'cleanup_pending' };
     const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
       update: vi.fn(() => ({
         set: vi.fn(() => ({
           where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([pending]) })),
@@ -609,6 +610,89 @@ describe('ProxySecureLinkService migration rollback', () => {
       statusCode: 409,
       code: 'SECURE_LINK_IN_USE',
     });
+  });
+
+  it.each([
+    [
+      'underscores as rendered',
+      'proxy_pass http://gateway_additional_secure_link_22222222_2222_4222_8222_222222222222/;',
+    ],
+    ['dashes', 'proxy_pass http://gateway_additional_secure_link_22222222-2222-4222-8222-222222222222/;'],
+  ])('rejects deleting a binding whose raw upstream name (%s) the Advanced config uses', async (_label, config) => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      advancedConfig: `location /apislink/ { ${config} }`,
+      domainNames: ['api.example.test'],
+    } as any;
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      name: 'apislink',
+      status: 'active',
+    } as any;
+    const service = new ProxySecureLinkService({} as any, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'requireAdditional').mockResolvedValue(binding);
+
+    await expect(service.deleteAdditional(host, binding.id)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'SECURE_LINK_IN_USE',
+      message: expect.stringContaining('gateway_additional_secure_link_22222222'),
+    });
+  });
+
+  it('rejects deleting a binding whose upstream an additional route or the enabled raw config uses', async () => {
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: '11111111-1111-4111-8111-111111111111',
+      name: 'apislink',
+      status: 'active',
+    } as any;
+    const routes: Array<{ path: string; advancedConfig: string | null }> = [];
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(async () => routes) })) })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'requireAdditional').mockResolvedValue(binding);
+    const upstream = 'proxy_pass http://gateway_additional_secure_link_22222222_2222_4222_8222_222222222222;';
+
+    routes.push({ path: '/plugin/', advancedConfig: upstream });
+    const host = { id: binding.proxyHostId, advancedConfig: null, domainNames: ['api.example.test'] } as any;
+    await expect(service.deleteAdditional(host, binding.id)).rejects.toThrow(
+      /additional route \/plugin\/ Advanced config/
+    );
+
+    routes.length = 0;
+    const raw = { ...host, rawConfigEnabled: true, rawConfig: `server { location / { ${upstream} } }` };
+    await expect(service.deleteAdditional(raw, binding.id)).rejects.toThrow(/raw config/);
+  });
+
+  it('does not treat another binding whose id shares a prefix as a reference', async () => {
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: '11111111-1111-4111-8111-111111111111',
+      name: 'apislink',
+      status: 'active',
+    } as any;
+    const host = {
+      id: binding.proxyHostId,
+      // A longer upstream name that only starts with this binding's rendered name.
+      advancedConfig: 'proxy_pass http://gateway_additional_secure_link_22222222_2222_4222_8222_2222222222223;',
+      rawConfigEnabled: false,
+      rawConfig: 'proxy_pass http://gateway_additional_secure_link_22222222_2222_4222_8222_222222222222;',
+      domainNames: ['api.example.test'],
+    } as any;
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([binding]) })) })),
+      })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'requireAdditional').mockResolvedValue(binding);
+    vi.spyOn(service as any, 'finishAdditionalDeletion').mockReturnValue(new Promise(() => undefined));
+
+    // The disabled raw config is not rendered, so it does not block the deletion either.
+    await expect(service.deleteAdditional(host, binding.id)).resolves.toBeUndefined();
   });
 
   it('does not keep cleanup pending when an offline node cannot receive the updated link set', async () => {

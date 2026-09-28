@@ -384,3 +384,52 @@ describe('HealthCheckJob storm protection', () => {
     expect(writes[0]?.healthStatus).toBe('offline');
   });
 });
+
+describe('HealthCheckJob right after a Gateway start', () => {
+  const notConnected = () => Promise.reject(new Error('Node nginx-node is not connected'));
+  const secureHost = () =>
+    host({
+      upstreamKind: 'docker_container',
+      secureLinkMigratedAt: new Date(),
+      nodeId: 'nginx-node',
+      healthHistory: [{ ts: new Date(Date.now() - 30_000).toISOString(), status: 'offline' }],
+    });
+
+  it('records nothing for a route whose ingress node has not reconnected yet and probes it again next run', async () => {
+    const { db, writes } = database([secureHost()]);
+    const probeProxySecureLink = vi.fn(notConnected);
+    const observeStatefulEvent = vi.fn();
+    const job = new HealthCheckJob(db, { probeProxySecureLink } as any);
+    job.setEvaluator({ observeStatefulEvent } as any);
+
+    await job.run();
+
+    expect(probeProxySecureLink).toHaveBeenCalledOnce();
+    expect(writes).toHaveLength(0);
+    expect(observeStatefulEvent).not.toHaveBeenCalled();
+  });
+
+  it('marks the route offline as before once the startup grace has passed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { db, writes } = database([secureHost()]);
+      const job = new HealthCheckJob(db, { probeProxySecureLink: vi.fn(notConnected) } as any);
+      vi.setSystemTime(Date.now() + 61_000);
+
+      await job.run();
+
+      expect(writes[0]?.healthStatus).toBe('offline');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still reports a probe that reached the daemon and failed during the grace', async () => {
+    const { db, writes } = database([secureHost()]);
+    const probeProxySecureLink = vi.fn().mockResolvedValue({ ok: false, httpStatus: 502, error: 'upstream 502' });
+
+    await new HealthCheckJob(db, { probeProxySecureLink } as any).run();
+
+    expect(writes[0]?.healthStatus).toBe('offline');
+  });
+});
