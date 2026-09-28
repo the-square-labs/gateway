@@ -56,7 +56,7 @@ A planned move of a slot (failback, drain, manual move, `nodePriority` change) i
 - `mode`: `legacy`, `bootstrapping`, `lease` or `closing`;
 - `reason`: why a policy is still legacy, for example Nodes without the capability. With `watchdog_missing`, the daemon on the listed Nodes could not install the lease watchdog itself (it runs without root); re-run the node installer there;
 - `holders` per slot, with Node, placement and holder time;
-- `voterMargin` with `voters`, `reachable`, `required` and `margin`.
+- `voterMargin` with `voters`, `reachable`, `required` and `margin`. It counts the voters that can vote without Gateway: Gateway's local relay does not count, and a Node counts only while it keeps a lease connection to another relay. Every Node of a lease-mode policy connects to every relay for that.
 
 When `margin` is 0 or less, losing one more voter disables autonomous failover.
 

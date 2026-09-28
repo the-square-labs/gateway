@@ -8,11 +8,7 @@ import {
   dockerAvailabilityLeaseState,
   dockerAvailabilityPlacements,
 } from '@/db/schema/index.js';
-import type {
-  AvailabilityLeaseBallot,
-  AvailabilityLeaseKeyView,
-  AvailabilityLeaseReport,
-} from '@/grpc/generated/types.js';
+import type { AvailabilityLeaseReport } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { normalizeLeaseBallot } from './lease-codec.js';
 import { HOLDING_LEASE_ROLES } from './lease-constants.js';
@@ -43,20 +39,6 @@ export interface LeaseReportSender {
   nodeId: string | null;
   relayInstanceId: string | null;
 }
-
-/**
- * A relay's lease report as the local relay's health decodes it (relay.v1): the gateway.v1 shape plus the relay-only
- * gate fields and the members with a live Coordinate stream. Reports forwarded over a control session lack them.
- */
-export type RelayAvailabilityLeaseReport = Omit<AvailabilityLeaseReport, 'acceptor'> & {
-  acceptor?: Array<
-    AvailabilityLeaseKeyView & {
-      gateHolderId?: string;
-      gateBallot?: AvailabilityLeaseBallot | null;
-    }
-  >;
-  connectedMemberIds?: string[];
-};
 
 function toNumber(value: string | number | undefined | null): number {
   const parsed = Number(value ?? 0);
@@ -120,7 +102,7 @@ export class AvailabilityLeaseReports {
         });
       }
     }
-    for (const view of (report as RelayAvailabilityLeaseReport).acceptor ?? []) {
+    for (const view of report.acceptor ?? []) {
       if (!view.policyId) continue;
       const ballot = normalizeLeaseBallot(view.committed);
       if (view.state === 'held' && view.holderId && ballot) {

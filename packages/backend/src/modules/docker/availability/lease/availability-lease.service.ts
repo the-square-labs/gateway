@@ -6,6 +6,7 @@ import {
   dockerAvailabilityLeaseObservations,
   dockerAvailabilityLeaseState,
   dockerAvailabilityPolicies,
+  relayInstances,
 } from '@/db/schema/index.js';
 import type { AvailabilityLeaseReport, CommandResult } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -27,21 +28,15 @@ import { availabilityStandbyCount } from './lease-gating.js';
 import { loadLeaseParticipants } from './lease-participants.js';
 import { AvailabilityLeasePolicies, type LeaseModeChange } from './lease-policies.js';
 import { type RelayLeaseOwner, type RelayLeasePolicyIds, relayLeasePolicyIds } from './lease-relay-gate.js';
-import {
-  AvailabilityLeaseReports,
-  type LeaseHolderChangeNotice,
-  type LeaseReportSender,
-  type RelayAvailabilityLeaseReport,
-} from './lease-reports.js';
+import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseReportSender } from './lease-reports.js';
 import {
   bumpLeaseRevision,
   ensureLeaseState,
   type LeaseStateRow,
+  leaseReachableMemberIds,
   loadLeaseCluster,
   loadLeaseMembers,
   type RelayConnectedMembers,
-  reachableMemberIds,
-  relayConnectedMemberIds,
 } from './lease-store.js';
 import type {
   DockerAvailabilityLeaseController,
@@ -198,9 +193,10 @@ export class AvailabilityLeaseService {
 
   /** A relay's acceptor and gate view, from its runtime status or local health. */
   async ingestRelayReport(relayInstanceId: string, report: AvailabilityLeaseReport): Promise<void> {
-    const connected = (report as RelayAvailabilityLeaseReport).connectedMemberIds;
+    const connected = report.connectedMemberIds;
     if (Array.isArray(connected)) {
       this.relayConnections.set(relayInstanceId, {
+        relayId: relayInstanceId,
         memberIds: connected.filter((id) => typeof id === 'string' && id.length > 0),
         reportedAt: Date.now(),
       });
@@ -264,7 +260,7 @@ export class AvailabilityLeaseService {
   }
 
   async getPolicyLease(policyId: string, now = new Date()): Promise<DockerAvailabilityLeaseView> {
-    const [[state], observations, members] = await Promise.all([
+    const [[state], observations, members, localRelays] = await Promise.all([
       this.db
         .select()
         .from(dockerAvailabilityLeaseState)
@@ -275,16 +271,16 @@ export class AvailabilityLeaseService {
         .from(dockerAvailabilityLeaseObservations)
         .where(eq(dockerAvailabilityLeaseObservations.policyId, policyId)),
       loadLeaseMembers(this.db),
+      this.db.select({ id: relayInstances.id }).from(relayInstances).where(eq(relayInstances.kind, 'local')),
     ]);
-    const reachable = reachableMemberIds(members, now.getTime(), MEMBER_REPORT_FRESH_MS);
-    for (const id of relayConnectedMemberIds(
+    const reachable = leaseReachableMemberIds({
       members,
-      this.relayConnections.values(),
-      now.getTime(),
-      RELAY_CONNECTIONS_FRESH_MS
-    )) {
-      reachable.add(id);
-    }
+      connections: this.relayConnections.values(),
+      localRelayIds: new Set(localRelays.map(({ id }) => id)),
+      now: now.getTime(),
+      memberFreshMs: MEMBER_REPORT_FRESH_MS,
+      connectionFreshMs: RELAY_CONNECTIONS_FRESH_MS,
+    });
     return {
       mode: state?.mode ?? 'legacy',
       reason: state?.reason ?? null,

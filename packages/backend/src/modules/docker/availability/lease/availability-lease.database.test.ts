@@ -9,6 +9,7 @@ import type { AvailabilityLeaseReport, GatewayCommand } from '@/grpc/generated/t
 import { decodeRelayV1Message, encodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { AvailabilityLeaseService } from './availability-lease.service.js';
 import { decodeLeaseSignedBlock, leaseBlockMessage } from './lease-codec.js';
+import { leaseLaneNodeIds, leaseLaneRelays } from './lease-relay-lanes.js';
 import type { DockerAvailabilityLeaseHolderChange, DockerAvailabilityLeaseModeChange } from './lease-types.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
@@ -383,6 +384,61 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
       expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({ holderNodeId: nodeIds[2] });
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('counts only votes that reach a relay other than the local one, and gives every voter lanes to all relays', async () => {
+    // Stand run c1: secure-node-1 had lanes only to the local relay, so with Gateway down its vote was lost while the
+    // margin still counted it.
+    const remoteRelay = randomUUID();
+    await q(
+      `insert into relay_instances (id, pool_id, kind, fault_domain_id, display_name, state, capabilities,
+         advertised_addresses, service_port, certificate_identity, certificate_fingerprint)
+       values ($1, 'system', 'remote', gen_random_uuid(), 'remote', 'ready', $2, $3, 9443, 'relay.test', 'sha256:relay')`,
+      [
+        remoteRelay,
+        JSON.stringify({ protocolMajor: 1, features: ['relay_pool_v1', 'availability_lease_v1'] }),
+        ['10.0.0.9'],
+      ]
+    );
+    try {
+      expect(await leaseLaneNodeIds(db)).toEqual([...nodeIds].sort());
+      const lanes = await leaseLaneRelays(db, nodeIds[1]!);
+      expect(lanes.map(({ id }) => id)).toEqual([relayId, remoteRelay].sort());
+      expect(lanes.find(({ id }) => id === remoteRelay)).toMatchObject({
+        kind: 'remote',
+        addresses: ['10.0.0.9'],
+        port: 9443,
+        certificateIdentity: 'relay.test',
+        certificateFingerprint: 'sha256:relay',
+      });
+      expect(await leaseLaneRelays(db, nginxId)).toEqual([]);
+
+      identities.set(remoteRelay, identityKey());
+      const isolated = new AvailabilityLeaseService(
+        db,
+        { getNode: () => undefined, getAllNodes: () => [] } as never,
+        audit,
+        events as never,
+        { signPayload: async () => Promise.reject(new Error('not signing in this test')) } as never
+      );
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 240_000 });
+      try {
+        const streams = (id: string, connected: string[]) => ({ ...report(id), connectedMemberIds: connected });
+        await isolated.ingestRelayReport(relayId, streams(relayId, [...nodeIds]));
+        expect((await isolated.getPolicyLease(policyId)).voterMargin).toMatchObject({ reachable: 3 });
+        await isolated.ingestRelayReport(remoteRelay, streams(remoteRelay, [nodeIds[0]!, nodeIds[2]!]));
+        expect((await isolated.getPolicyLease(policyId)).voterMargin).toMatchObject({
+          voters: 3,
+          reachable: 2,
+          margin: 0,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    } finally {
+      await q('delete from availability_lease_members where member_id = $1', [remoteRelay]);
+      await q('delete from relay_instances where id = $1', [remoteRelay]);
     }
   });
 
