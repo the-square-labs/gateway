@@ -8,7 +8,11 @@ import {
   dockerAvailabilityLeaseState,
   dockerAvailabilityPlacements,
 } from '@/db/schema/index.js';
-import type { AvailabilityLeaseReport } from '@/grpc/generated/types.js';
+import type {
+  AvailabilityLeaseBallot,
+  AvailabilityLeaseKeyView,
+  AvailabilityLeaseReport,
+} from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { normalizeLeaseBallot } from './lease-codec.js';
 import { HOLDING_LEASE_ROLES } from './lease-constants.js';
@@ -39,6 +43,20 @@ export interface LeaseReportSender {
   nodeId: string | null;
   relayInstanceId: string | null;
 }
+
+/**
+ * A relay's lease report as the local relay's health decodes it (relay.v1): the gateway.v1 shape plus the relay-only
+ * gate fields and the members with a live Coordinate stream. Reports forwarded over a control session lack them.
+ */
+export type RelayAvailabilityLeaseReport = Omit<AvailabilityLeaseReport, 'acceptor'> & {
+  acceptor?: Array<
+    AvailabilityLeaseKeyView & {
+      gateHolderId?: string;
+      gateBallot?: AvailabilityLeaseBallot | null;
+    }
+  >;
+  connectedMemberIds?: string[];
+};
 
 function toNumber(value: string | number | undefined | null): number {
   const parsed = Number(value ?? 0);
@@ -102,17 +120,34 @@ export class AvailabilityLeaseReports {
         });
       }
     }
-    for (const view of report.acceptor ?? []) {
+    for (const view of (report as RelayAvailabilityLeaseReport).acceptor ?? []) {
+      if (!view.policyId) continue;
       const ballot = normalizeLeaseBallot(view.committed);
-      if (!view.policyId || view.state !== 'held' || !view.holderId || !ballot) continue;
-      addCandidate(view.policyId, view.slot, {
-        holderId: view.holderId,
-        ballot,
-        epoch: toNumber(view.epoch),
-        manifestVersion: toNumber(view.manifestVersion),
-        source: source === 'relay' ? 'relay' : 'acceptor',
-        sourceId: sender.memberId,
-      });
+      if (view.state === 'held' && view.holderId && ballot) {
+        addCandidate(view.policyId, view.slot, {
+          holderId: view.holderId,
+          ballot,
+          epoch: toNumber(view.epoch),
+          manifestVersion: toNumber(view.manifestVersion),
+          source: source === 'relay' ? 'relay' : 'acceptor',
+          sourceId: sender.memberId,
+        });
+        continue;
+      }
+      // An open relay gate names the holder of a verified commit that renewed within the last gate window (A11, A15),
+      // also where the relay does not vote: the local relay only shadow-accepts. Its health report is the first lease
+      // view Gateway gets after a restart, long before the nodes' control sessions reconnect (stand run ha18/b).
+      const gateBallot = normalizeLeaseBallot(view.gateBallot);
+      if (sender.kind === 'relay' && view.gateOpen && view.gateHolderId && gateBallot) {
+        addCandidate(view.policyId, view.slot, {
+          holderId: view.gateHolderId,
+          ballot: gateBallot,
+          epoch: toNumber(view.epoch),
+          manifestVersion: toNumber(view.manifestVersion),
+          source: 'relay',
+          sourceId: sender.memberId,
+        });
+      }
     }
     const handoffSuccessors = new Map<string, Set<string>>();
     for (const event of report.events ?? []) {

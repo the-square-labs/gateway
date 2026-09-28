@@ -67,6 +67,34 @@ export async function ensureLeaseState(db: Executor, policyId: string): Promise<
   return row;
 }
 
+/** The members a relay last reported a live Coordinate stream from, and when. */
+export interface RelayConnectedMembers {
+  memberIds: readonly string[];
+  reportedAt: number;
+}
+
+/**
+ * Members a relay recently reported a live Coordinate stream from: reachable through the data plane before their own
+ * report arrives. After a Gateway restart the local relay reports within seconds, while the nodes' control sessions
+ * reconnect only after their backoff (stand run ha18/b). Members known to abstain are left out.
+ */
+export function relayConnectedMemberIds(
+  members: LeaseMemberRow[],
+  connections: Iterable<RelayConnectedMembers>,
+  now: number,
+  freshMs: number
+): Set<string> {
+  const abstaining = new Set(members.filter((member) => member.abstaining).map((member) => member.memberId));
+  const reachable = new Set<string>();
+  for (const connection of connections) {
+    if (now - connection.reportedAt > freshMs) continue;
+    for (const id of connection.memberIds) {
+      if (!abstaining.has(id)) reachable.add(id);
+    }
+  }
+  return reachable;
+}
+
 /** Members whose report is recent and who do not abstain: the reachable voters (D2 margin). */
 export function reachableMemberIds(members: LeaseMemberRow[], now: number, freshMs: number): Set<string> {
   return new Set(

@@ -16,20 +16,32 @@ import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { RelayPolicySigningKeyService } from '@/services/relay-policy-signing-key.service.js';
 import { AvailabilityLeaseCluster } from './lease-cluster.js';
 import type { LeaseSigner } from './lease-codec.js';
-import { AVAILABILITY_LEASE_CAPABILITY, MEMBER_REPORT_FRESH_MS, PLANNED_HANDOFF_TTL_MS } from './lease-constants.js';
+import {
+  AVAILABILITY_LEASE_CAPABILITY,
+  MEMBER_REPORT_FRESH_MS,
+  PLANNED_HANDOFF_TTL_MS,
+  RELAY_CONNECTIONS_FRESH_MS,
+} from './lease-constants.js';
 import { AvailabilityLeaseDistribution, type RelayLeasePolicyFields } from './lease-distribution.js';
 import { availabilityStandbyCount } from './lease-gating.js';
 import { loadLeaseParticipants } from './lease-participants.js';
 import { AvailabilityLeasePolicies, type LeaseModeChange } from './lease-policies.js';
 import { type RelayLeaseOwner, type RelayLeasePolicyIds, relayLeasePolicyIds } from './lease-relay-gate.js';
-import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseReportSender } from './lease-reports.js';
+import {
+  AvailabilityLeaseReports,
+  type LeaseHolderChangeNotice,
+  type LeaseReportSender,
+  type RelayAvailabilityLeaseReport,
+} from './lease-reports.js';
 import {
   bumpLeaseRevision,
   ensureLeaseState,
   type LeaseStateRow,
   loadLeaseCluster,
   loadLeaseMembers,
+  type RelayConnectedMembers,
   reachableMemberIds,
+  relayConnectedMemberIds,
 } from './lease-store.js';
 import type {
   DockerAvailabilityLeaseController,
@@ -68,6 +80,8 @@ export class AvailabilityLeaseService {
   private readonly distribution: AvailabilityLeaseDistribution;
   private reconciling: Promise<void> | null = null;
   private rerun: Promise<void> | null = null;
+  /** Members each relay last reported a live Coordinate stream from (voter reachability). */
+  private readonly relayConnections = new Map<string, RelayConnectedMembers>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -184,6 +198,13 @@ export class AvailabilityLeaseService {
 
   /** A relay's acceptor and gate view, from its runtime status or local health. */
   async ingestRelayReport(relayInstanceId: string, report: AvailabilityLeaseReport): Promise<void> {
+    const connected = (report as RelayAvailabilityLeaseReport).connectedMemberIds;
+    if (Array.isArray(connected)) {
+      this.relayConnections.set(relayInstanceId, {
+        memberIds: connected.filter((id) => typeof id === 'string' && id.length > 0),
+        reportedAt: Date.now(),
+      });
+    }
     await this.ingest({ memberId: relayInstanceId, kind: 'relay', nodeId: null, relayInstanceId }, report);
   }
 
@@ -256,6 +277,14 @@ export class AvailabilityLeaseService {
       loadLeaseMembers(this.db),
     ]);
     const reachable = reachableMemberIds(members, now.getTime(), MEMBER_REPORT_FRESH_MS);
+    for (const id of relayConnectedMemberIds(
+      members,
+      this.relayConnections.values(),
+      now.getTime(),
+      RELAY_CONNECTIONS_FRESH_MS
+    )) {
+      reachable.add(id);
+    }
     return {
       mode: state?.mode ?? 'legacy',
       reason: state?.reason ?? null,

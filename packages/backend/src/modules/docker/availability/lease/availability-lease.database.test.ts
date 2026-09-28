@@ -6,7 +6,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { disposableDatabase, migrateDatabase } from '@/db/migration-database.test-helpers.js';
 import * as schema from '@/db/schema/index.js';
 import type { AvailabilityLeaseReport, GatewayCommand } from '@/grpc/generated/types.js';
-import { decodeRelayV1Message } from '@/grpc/relay-proto.js';
+import { decodeRelayV1Message, encodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { AvailabilityLeaseService } from './availability-lease.service.js';
 import { decodeLeaseSignedBlock, leaseBlockMessage } from './lease-codec.js';
 import type { DockerAvailabilityLeaseHolderChange, DockerAvailabilityLeaseModeChange } from './lease-types.js';
@@ -334,6 +334,56 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     expect(audit.log).toHaveBeenLastCalledWith(
       expect.objectContaining({ action: 'docker.availability.lease_handoff' })
     );
+  });
+
+  it('learns the holder and the reachable voters from the local relay before any node reconnects', async () => {
+    // Stand run ha18/b: after a takeover while Gateway was down, the nodes reconnected only after their backoff and
+    // the non-voting local relay's report was ignored, so Gateway showed the dead holder and no reachable voter.
+    const relayReport = (holder: string, round: number) =>
+      decodeRelayV1Message(
+        'AvailabilityLeaseReport',
+        encodeRelayV1Message('AvailabilityLeaseReport', {
+          memberId: relayId,
+          identityPublicKey: identities.get(relayId)!,
+          incarnation: '1',
+          trustedPolicyKeyIds: [keyId],
+          connectedMemberIds: [nodeIds[0], nodeIds[1]],
+          acceptor: [
+            {
+              policyId,
+              slot: 0,
+              state: 'abstaining',
+              holderId: holder,
+              epoch: '1',
+              manifestVersion: '1',
+              gateOpen: true,
+              gateHolderId: holder,
+              gateBallot: { round: String(round), incarnation: '1', proposerId: holder },
+              abstaining: true,
+            },
+          ],
+        })
+      ) as AvailabilityLeaseReport;
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 120_000 });
+    try {
+      expect((await service.getPolicyLease(policyId)).voterMargin).toMatchObject({ reachable: 0 });
+      audit.log.mockClear();
+      await service.ingestRelayReport(relayId, relayReport(nodeIds[1]!, 11));
+      const view = await service.getPolicyLease(policyId);
+      expect(view.holders[0]).toMatchObject({ holderNodeId: nodeIds[1], source: 'relay' });
+      expect(view.voterMargin).toMatchObject({ voters: 3, reachable: 2, required: 2, margin: 0 });
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'docker.availability.lease_failover',
+          details: expect.objectContaining({ fromNodeId: nodeIds[2], toNodeId: nodeIds[1], observedBy: relayId }),
+        })
+      );
+      // The holder moves back for the tests below.
+      await service.ingestRelayReport(relayId, relayReport(nodeIds[2]!, 12));
+      expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({ holderNodeId: nodeIds[2] });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('signs with a rotated policy key once a voter majority trusts it, re-signing the same payloads (A14, A16)', async () => {
