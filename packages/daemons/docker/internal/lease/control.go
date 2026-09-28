@@ -201,10 +201,13 @@ func (r *Runtime) CheckServe(policyID string) error {
 // lease mode before legacy starts its containers, so the watchdog does not
 // kill them. A record goes only once this node no longer holds the key and
 // the container's cgroup is confirmed empty (A12.3); otherwise the start is
-// refused and the backend retries.
+// refused and the backend retries. A retained holder is not a release under
+// way: the graceful close handed its running copy to legacy, its watchdog
+// deadline is disarmed, and the backend's commands for it (a disable adopting
+// it as the standalone workload, a stop, a restart) pass (B-20).
 func (r *Runtime) clearLegacyRecords(policyID string) error {
 	for _, status := range r.node.Holders() {
-		if status.Key.PolicyID == policyID && rolePriority(status.Role) >= 3 {
+		if status.Key.PolicyID == policyID && status.Role != availabilitylease.RoleRetained && rolePriority(status.Role) >= 3 {
 			return fmt.Errorf("%w: the closed lease is still being released", ErrLeaseNotHeld)
 		}
 	}

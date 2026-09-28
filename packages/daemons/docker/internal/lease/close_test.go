@@ -73,6 +73,21 @@ func TestGracefulCloseKeepsTheCopyAndDisarmsItsWatchdog(t *testing.T) {
 	if d1.runtime.LeaseMode(testPolicy) || !d1.endpoints.serving[testPolicy] {
 		t.Fatal("the retained copy's endpoints would be refused after the close")
 	}
+	// B-20: legacy owns the retained copy now. Its commands for it (the disable
+	// adopting it as the standalone workload, a stop or restart) pass the gate
+	// instead of waiting for a release that never comes.
+	if err := d1.runtime.CheckServe(testPolicy); err != nil {
+		t.Fatalf("a legacy command for the retained copy is refused: %v", err)
+	}
+	for id, c := range d1.engine.containers {
+		if !c.Running {
+			continue
+		}
+		if err := d1.runtime.BeforeStart(id, testPolicy, ""); err != nil {
+			t.Fatalf("a legacy start of the retained copy is refused: %v", err)
+		}
+	}
+	check()
 }
 
 // A holder the closed manifest does not name fences at once.
