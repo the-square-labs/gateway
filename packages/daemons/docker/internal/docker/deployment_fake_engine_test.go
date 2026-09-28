@@ -46,6 +46,8 @@ type fakeDockerEngine struct {
 	// onStats runs, without the engine lock held, before a one-off stats
 	// sample is answered; Docker itself waits for a second CPU reading.
 	onStats func(*fakeContainer)
+	// failCall fails a request with a server error when it returns true.
+	failCall func(method, path string) bool
 }
 
 type fakeContainer struct {
@@ -57,6 +59,7 @@ type fakeContainer struct {
 	Running       bool
 	RestartPolicy container.RestartPolicyMode
 	PortBindings  network.PortMap
+	NetworkMode   string
 	// Files holds file contents by absolute path, served by the archive API.
 	Files map[string]string
 	// Networks holds the container's address on each attached network.
@@ -164,6 +167,18 @@ func (e *fakeDockerEngine) lookupLocked(ref string) *fakeContainer {
 	return nil
 }
 
+// names lists the container names, sorted.
+func (e *fakeDockerEngine) names() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	names := make([]string, 0, len(e.containers))
+	for _, ctr := range e.containers {
+		names = append(names, ctr.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (e *fakeDockerEngine) callLog() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -187,7 +202,13 @@ func (e *fakeDockerEngine) serve(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	e.mu.Lock()
 	e.calls = append(e.calls, r.Method+" "+path)
+	failCall := e.failCall
 	e.mu.Unlock()
+	if failCall != nil && failCall(r.Method, path) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		writeFakeJSON(w, http.StatusInternalServerError, map[string]string{"message": "injected failure"})
+		return
+	}
 
 	switch {
 	case r.Method == http.MethodGet && path == "/containers/json":
@@ -204,6 +225,10 @@ func (e *fakeDockerEngine) serve(w http.ResponseWriter, r *http.Request) {
 		e.stopContainer(w, parts[1])
 	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "containers" && parts[2] == "kill":
 		e.stopContainer(w, parts[1])
+	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "containers" && parts[2] == "update":
+		e.updateContainer(w, r, parts[1])
+	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "containers" && parts[2] == "rename":
+		e.renameContainer(w, parts[1], r.URL.Query().Get("name"))
 	case r.Method == http.MethodDelete && len(parts) == 2 && parts[0] == "containers":
 		e.removeContainer(w, parts[1])
 	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "containers" && parts[2] == "archive":
@@ -274,6 +299,7 @@ func (e *fakeDockerEngine) createContainer(w http.ResponseWriter, r *http.Reques
 	if request.HostConfig != nil {
 		ctr.RestartPolicy = request.HostConfig.RestartPolicy.Name
 		ctr.PortBindings = request.HostConfig.PortBindings
+		ctr.NetworkMode = string(request.HostConfig.NetworkMode)
 	}
 	e.addContainer(ctr)
 	writeFakeJSON(w, http.StatusCreated, map[string]any{"Id": ctr.ID, "Warnings": []string{}})
@@ -300,6 +326,7 @@ func (e *fakeDockerEngine) inspectContainer(w http.ResponseWriter, ref string) {
 		HostConfig: &container.HostConfig{
 			RestartPolicy: container.RestartPolicy{Name: ctr.RestartPolicy},
 			PortBindings:  ctr.PortBindings,
+			NetworkMode:   container.NetworkMode(ctr.NetworkMode),
 		},
 		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}},
 	}
@@ -357,6 +384,44 @@ func (e *fakeDockerEngine) stopContainer(w http.ResponseWriter, ref string) {
 	e.mu.Lock()
 	ctr.Running = false
 	e.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// updateContainer applies the restart policy of a docker update; resources
+// are not modelled.
+func (e *fakeDockerEngine) updateContainer(w http.ResponseWriter, r *http.Request, ref string) {
+	var request container.UpdateConfig
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeFakeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ctr := e.lookupLocked(ref)
+	if ctr == nil {
+		writeNoSuchContainer(w, ref)
+		return
+	}
+	if request.RestartPolicy.Name != "" {
+		ctr.RestartPolicy = request.RestartPolicy.Name
+	}
+	writeFakeJSON(w, http.StatusOK, container.UpdateResponse{Warnings: []string{}})
+}
+
+func (e *fakeDockerEngine) renameContainer(w http.ResponseWriter, ref, name string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ctr := e.lookupLocked(ref)
+	if ctr == nil {
+		writeNoSuchContainer(w, ref)
+		return
+	}
+	name = strings.TrimPrefix(name, "/")
+	if existing := e.lookupLocked(name); existing != nil && existing != ctr {
+		writeFakeJSON(w, http.StatusConflict, map[string]string{"message": fmt.Sprintf("Conflict. The container name %q is already in use by container %q.", "/"+name, existing.ID)})
+		return
+	}
+	ctr.Name = name
 	w.WriteHeader(http.StatusNoContent)
 }
 
