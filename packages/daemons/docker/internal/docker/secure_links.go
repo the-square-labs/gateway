@@ -800,6 +800,8 @@ func (p *DockerPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksComm
 	if err != nil {
 		return "", err
 	}
+	// New or changed availability members: probe their readiness now (D6).
+	p.memberReadiness.signal()
 	if p.lease != nil {
 		// Lease-gated links may have appeared or changed policy.
 		p.reconcileRelayRegistrations()

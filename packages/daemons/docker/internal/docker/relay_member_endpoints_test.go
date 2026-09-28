@@ -377,3 +377,50 @@ func TestTCPProbeThroughConnectorNeedsTheTargetToAccept(t *testing.T) {
 		t.Fatal("no connector is ready")
 	}
 }
+
+type bootstrapLeaseView struct {
+	pending, holds bool
+}
+
+func (v *bootstrapLeaseView) LeaseMode(string) bool        { return true }
+func (v *bootstrapLeaseView) BootstrapPending(string) bool { return v.pending }
+func (v *bootstrapLeaseView) Holds(string) bool            { return v.holds }
+
+// Agent A's note on enable: when the named bootstrap holder acquires, its
+// legacy copy keeps serving until the runtime's SetServing takes over, with
+// no dormant gap in between; a lost bootstrap race ends it.
+func TestBootstrapHolderServesWithoutAGapUntilTheRuntimeTakesOver(t *testing.T) {
+	plugin := memberPluginForTest(t)
+	view := &bootstrapLeaseView{pending: true}
+	plugin.lease.view = view
+	plugin.memberReadiness.set("policy-1", true, "c", time.Now())
+	serving := relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
+	if got := plugin.memberEndpointState(memberLeaseLink); got != serving {
+		t.Fatalf("bootstrap holder before its commit = %v", got)
+	}
+	// Committed: BootstrapPending ends, SetServing has not run yet.
+	view.pending, view.holds = false, true
+	if got := plugin.memberEndpointState(memberLeaseLink); got != serving {
+		t.Fatalf("bootstrap holder between its commit and SetServing = %v", got)
+	}
+	// The runtime opens the endpoints: readiness is kept, no re-probe gap.
+	plugin.lease.SetServing("policy-1", true)
+	if got := plugin.memberEndpointState(memberLeaseLink); got != serving {
+		t.Fatalf("bootstrap holder after SetServing = %v", got)
+	}
+
+	// Another node won the bootstrap race: the copy stops serving at once.
+	other := memberPluginForTest(t)
+	otherView := &bootstrapLeaseView{pending: true}
+	other.lease.view = otherView
+	other.memberReadiness.set("policy-1", true, "c", time.Now())
+	other.memberEndpointState(memberLeaseLink)
+	otherView.pending, otherView.holds = false, false
+	if got := other.memberEndpointState(memberLeaseLink); got != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+		t.Fatalf("lost bootstrap = %v", got)
+	}
+	otherView.holds = true
+	if got := other.memberEndpointState(memberLeaseLink); got != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+		t.Fatalf("the bridge came back after it ended: %v", got)
+	}
+}
