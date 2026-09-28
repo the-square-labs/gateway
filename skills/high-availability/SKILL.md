@@ -39,7 +39,7 @@ Either mode can prefer Nodes in a fixed order: `priorityMode: true` with `nodePr
 
 ## Data-plane failover (lease mode)
 
-When every candidate Node, every ingress nginx Node of the workload's routes, and a majority of voters advertise `availability_lease_v1`, a policy runs in lease mode. In lease mode failover no longer depends on Gateway being reachable.
+Lease mode is a preview and off by default: the Gateway operator turns it on with `GATEWAY_AVAILABILITY_LEASE_MODE=enabled` in the Gateway's `.env`; until then `lease.reason` is `lease_mode_disabled` and failover stays backend-driven. When it is on, and every candidate Node, every ingress nginx Node of the workload's routes, and a majority of voters advertise `availability_lease_v1`, a policy runs in lease mode. In lease mode failover no longer depends on Gateway being reachable.
 - **Who decides.** The Nodes and relays hold a lease per serving slot. A serving Node renews it every few seconds and stops its own copy if it cannot, so a dead or cut-off Node is replaced by the next candidate within about 45 seconds even while Gateway is down.
 - **Standbys.** They are created ahead of time: the image is pulled and the container is created but not started.
 - **Traffic.** It reaches only the current lease holder.

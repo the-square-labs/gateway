@@ -123,6 +123,8 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     });
 
   beforeAll(async () => {
+    // Data-plane failover is a preview that the operator turns on (GATEWAY_AVAILABILITY_LEASE_MODE).
+    process.env.GATEWAY_AVAILABILITY_LEASE_MODE = 'enabled';
     database = await disposableDatabase(url!, 'lease');
     pool = database.pool;
     await migrateDatabase(pool);

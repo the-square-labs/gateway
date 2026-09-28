@@ -103,6 +103,8 @@ const envSchema = z.object({
   GATEWAY_RELAY_SERVICE_NAME: nonEmptyStringWithDefault('relay'),
   GATEWAY_RELAY_BUILD_VERSION: optionalNonEmptyString,
   GATEWAY_RELAY_PROTOCOL_MAJOR: z.coerce.number().int().positive().default(1),
+  /** Docker Availability data-plane failover (lease mode) is a preview: policies stay on backend failover unless enabled. */
+  GATEWAY_AVAILABILITY_LEASE_MODE: z.enum(['enabled', 'disabled']).default('disabled'),
 
   BACKUP_RUNNER_IMAGE: optionalNonEmptyString,
 
