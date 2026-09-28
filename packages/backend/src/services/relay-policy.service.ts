@@ -1166,6 +1166,23 @@ export class RelayPolicyService {
     return routeId;
   }
 
+  /** Whether relay policy already carries this Secure Link to the given target node (it may be serving now). */
+  async hasProxySecureLinkEndpoint(linkId: string, targetNodeId: string): Promise<boolean> {
+    const [endpoint] = await this.db
+      .select({ id: relayEndpoints.id })
+      .from(relayEndpoints)
+      .where(
+        and(
+          eq(relayEndpoints.ownerKind, 'proxy_host_secure_link'),
+          eq(relayEndpoints.ownerId, linkId),
+          eq(relayEndpoints.subjectId, targetNodeId),
+          eq(relayEndpoints.status, 'active')
+        )
+      )
+      .limit(1);
+    return Boolean(endpoint);
+  }
+
   async ensureProxySecureLink(linkId: string, sourceNodeId: string, targetNodeId: string): Promise<string> {
     const target = await this.grantIssuer.requireNodeIdentity(targetNodeId);
     const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);

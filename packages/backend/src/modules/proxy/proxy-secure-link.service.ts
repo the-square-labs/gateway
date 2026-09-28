@@ -293,7 +293,7 @@ export class ProxySecureLinkService {
         .returning();
       if (reprovisioning) {
         const ready = await this.createAdditionalFromExisting(host, existing.id);
-        if (ready.status !== 'active') {
+        if (ready.status !== 'active' || ready.lastError) {
           throw new AppError(
             409,
             'AVAILABILITY_INGRESS_MEMBER_NOT_READY',
@@ -333,7 +333,7 @@ export class ProxySecureLinkService {
       .returning();
     if (!created) throw new AppError(500, 'SECURE_LINK_CREATE_FAILED', 'Availability member was not created');
     const ready = await this.createAdditionalFromExisting(host, created.id);
-    if (ready.status !== 'active') {
+    if (ready.status !== 'active' || ready.lastError) {
       throw new AppError(
         409,
         'AVAILABILITY_INGRESS_MEMBER_NOT_READY',
@@ -1341,6 +1341,13 @@ export class ProxySecureLinkService {
     return this.withLinkOperation(bindingId, async () => {
       let binding = await this.requireAdditional(host.id, bindingId);
       if (binding.status !== 'provisioning') return binding;
+      // Relay state that already carries this link to the same node may be serving right now: an Availability
+      // member whose holder took over while Gateway was away and is re-provisioned when Gateway returns (B-18), or
+      // a member re-provisioned in place. A failed attempt must never tear that path down (make-before-break): it
+      // keeps the link active with its error for the next attempt, and revokes only relay state it created itself.
+      const retained =
+        !isManagedStorageUpstream(binding.upstreamKind) &&
+        (await this.relayPolicy.hasProxySecureLinkEndpoint?.(binding.id, binding.dockerNodeId)) === true;
       try {
         if (isManagedStorageUpstream(binding.upstreamKind)) {
           if (!binding.managedStorageId) throw new Error('Managed storage Secure Link is missing its storage identity');
@@ -1388,11 +1395,12 @@ export class ProxySecureLinkService {
       } catch (error) {
         const current = await this.requireAdditional(host.id, binding.id);
         if (current.generation !== binding.generation || current.status !== 'provisioning') return current;
-        await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id).catch(() => undefined);
+        if (!retained) await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id).catch(() => undefined);
         const [failed] = await this.db
           .update(proxyAdditionalSecureLinks)
           .set({
-            status: 'failed',
+            // Active keeps the link in every node's bindings, so the path that serves stays up.
+            status: retained ? 'active' : 'failed',
             lastError: error instanceof Error ? error.message : String(error),
             updatedAt: new Date(),
           })
@@ -1409,7 +1417,7 @@ export class ProxySecureLinkService {
           ...(isManagedStorageUpstream(binding.upstreamKind) ? [] : [this.syncTargetNode(binding.dockerNodeId)]),
         ]);
         if (failed) {
-          this.emitAdditionalState(host, failed, 'failed');
+          this.emitAdditionalState(host, failed, retained ? 'active' : 'failed');
           return failed;
         }
         return this.requireAdditional(host.id, binding.id);
