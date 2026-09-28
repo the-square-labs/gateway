@@ -38,6 +38,11 @@ const (
 	registrySecureLinkSocketDir = "/run/gateway-registry-links"
 )
 
+// availabilityMemberSetupBudget bounds the tunnel setup of a member's link
+// across all its relays: the cost of a member whose host became unreachable
+// before the relays noticed (N-12).
+var availabilityMemberSetupBudget = proxySecureLinkSetupTimeout
+
 var secureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
 type nginxRelayTunnel struct {
@@ -982,6 +987,11 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	// alike, so it waits for a lane like any other link (B-13).
 	member := ownerKind == proxySecureLinkOwnerKind && p.secureLinks.availabilityMember(linkID)
 	deadline := time.Now().Add(secureLinkTransientWait)
+	// A member's tunnel setup shares one budget across its relays (N-12):
+	// when the member's host is unreachable every relay still holds its
+	// registration until it notices, and each would take the whole setup
+	// timeout (three relays: 6 s). nginx retries the next member instead.
+	var memberSetupDeadline time.Time
 	for {
 		retryable := false
 		reachedRelay := false
@@ -999,7 +1009,17 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 				tunnel.active.Add(-1)
 				continue
 			}
-			switch p.openProxySecureLinkOnTunnel(linkID, connection, tunnel, grant) {
+			setup := proxySecureLinkSetupTimeout
+			if member {
+				if memberSetupDeadline.IsZero() {
+					memberSetupDeadline = time.Now().Add(availabilityMemberSetupBudget)
+				}
+				if setup = time.Until(memberSetupDeadline); setup <= 0 {
+					tunnel.active.Add(-1)
+					break
+				}
+			}
+			switch p.openProxySecureLinkOnTunnel(linkID, connection, tunnel, grant, setup) {
 			case secureLinkOpened:
 				return
 			case secureLinkRetryable:
@@ -1067,9 +1087,9 @@ func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
 	return selected
 }
 
-func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant) secureLinkOpenResult {
+func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, setupTimeout time.Duration) secureLinkOpenResult {
 	defer tunnel.active.Add(-1)
-	ctx, cancel, finishSetup := proxySecureLinkSetupContext(tunnel.ctx, proxySecureLinkSetupTimeout)
+	ctx, cancel, finishSetup := proxySecureLinkSetupContext(tunnel.ctx, setupTimeout)
 	defer cancel()
 	stream, err := tunnel.client.OpenTunnel(ctx)
 	if err != nil {

@@ -181,3 +181,91 @@ func TestAvailabilityMemberLinkWaitsForALaneAfterARestart(t *testing.T) {
 		t.Fatalf("took %s", elapsed)
 	}
 }
+
+// hangingBroker receives the Open frame and never answers: the relay still holds the registration of a member whose
+// host stopped answering.
+type hangingBroker struct {
+	relayv1.UnimplementedTunnelBrokerServer
+	attempts atomic.Int32
+}
+
+func (b *hangingBroker) OpenTunnel(stream grpc.BidiStreamingServer[relayv1.TunnelFrame, relayv1.TunnelFrame]) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	b.attempts.Add(1)
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
+
+func blackHoledMemberPlugin(t *testing.T, member bool) (*NginxPlugin, *hangingBroker) {
+	t.Helper()
+	broker := &hangingBroker{}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	relayv1.RegisterTunnelBrokerServer(server, broker)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	grants, err := newRelayGrantStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	relays := []string{"relay-130", "relay-136", "relay-137"}
+	candidates := make([]*pb.RelayDataCandidate, 0, len(relays))
+	tunnels := make([]*nginxRelayTunnel, 0, len(relays))
+	for _, relay := range relays {
+		candidates = append(candidates, &pb.RelayDataCandidate{
+			RelayInstanceId: relay, AssignmentGeneration: 1, AssignmentState: "active",
+			Capabilities: []string{relaybridge.PoolCapability}, Grant: &pb.RelaySignedGrant{KeyId: "k", Payload: []byte(relay)},
+		})
+		tunnels = append(tunnels, &nginxRelayTunnel{ctx: context.Background(), client: relayv1.NewTunnelBrokerClient(conn), targetID: relay})
+	}
+	if err := grants.sync(&pb.SyncRelayGrantsCommand{PolicyRevision: 1, GeneratedAtUnixMs: 1, Grants: []*pb.RelayGrantAssignment{{
+		Role: "connect", OwnerKind: proxySecureLinkOwnerKind, OwnerId: "link-1", SchemaVersion: 2, Candidates: candidates,
+		Grant: &pb.RelaySignedGrant{KeyId: "k", Payload: []byte("legacy")},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	links := &sourceLinkManager{bindings: map[string]*sourceLinkBinding{}}
+	if member {
+		links.bindings["link-1"] = &sourceLinkBinding{availabilityPolicyID: "policy-1"}
+	}
+	return &NginxPlugin{
+		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		relayGrants:  grants,
+		secureLinks:  links,
+		relayTunnels: tunnels,
+	}, broker
+}
+
+// TestMemberOnAnUnreachableHostCostsOneSetupBudget is N-12: app-node-2 dropped off the network, every relay still
+// held its registration and none answered the tunnel. A member's link gives up after one setup budget across all its
+// relays, so nginx retries the next member, instead of waiting out the setup timeout on each relay in turn.
+func TestMemberOnAnUnreachableHostCostsOneSetupBudget(t *testing.T) {
+	previous := availabilityMemberSetupBudget
+	availabilityMemberSetupBudget = 300 * time.Millisecond
+	t.Cleanup(func() { availabilityMemberSetupBudget = previous })
+	plugin, broker := blackHoledMemberPlugin(t, true)
+
+	elapsed := openThroughRelay(plugin)
+
+	if elapsed < 250*time.Millisecond || elapsed > time.Second {
+		t.Fatalf("a member link on an unreachable host took %s, want about the setup budget", elapsed)
+	}
+	if got := broker.attempts.Load(); got != 1 {
+		t.Fatalf("attempts = %d, the budget was spent on the first relay", got)
+	}
+	for _, tunnel := range plugin.relayTunnels {
+		if active := tunnel.active.Load(); active != 0 {
+			t.Fatalf("lane %s active count = %d", tunnel.targetID, active)
+		}
+	}
+}
