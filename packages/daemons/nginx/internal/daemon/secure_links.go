@@ -24,6 +24,8 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -798,6 +800,37 @@ func (p *NginxPlugin) openRegistrySecureLink(linkID string, connection net.Conn)
 	p.openSecureLink(registrySecureLinkOwnerKind, "registry ingress", linkID, connection)
 }
 
+var (
+	// secureLinkTransientWait is how long a new connection waits for a relay lane or its target's registration to
+	// come back before it fails. A relay restart (the local relay's update on a single-relay installation) or a
+	// docker-daemon restart leaves every candidate without a ready lane, or without the target's registration, for
+	// well under a second to a couple of seconds: waiting turns those 502s into a short delay. Links of availability
+	// members never wait; the upstream moves on to the next member at once.
+	secureLinkTransientWait  = 3 * time.Second
+	secureLinkTransientRetry = 150 * time.Millisecond
+)
+
+type secureLinkOpenResult int
+
+const (
+	secureLinkOpened secureLinkOpenResult = iota
+	// The lane's transport is not ready or the target is not registered yet: worth another try shortly.
+	secureLinkRetryable
+	secureLinkFailed
+)
+
+// retryableRelayOpenError reports a relay that is restarting (lane transport not ready, stream broken) or a target
+// that has not registered yet (its daemon is restarting). A closed lease gate, a dormant availability member, a
+// session limit or a grant the relay rejects are final.
+func retryableRelayOpenError(err error) bool {
+	current, ok := status.FromError(err)
+	if !ok || current.Code() != codes.Unavailable {
+		return false
+	}
+	message := current.Message()
+	return !strings.Contains(message, "dormant") && !strings.Contains(message, "built-in local service")
+}
+
 func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connection net.Conn) {
 	defer connection.Close()
 	assignment := findRelayAssignment(p.relayGrants.get(), "connect", ownerKind, linkID)
@@ -809,24 +842,58 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
 	}
-	candidates = p.orderRelayCandidates(candidates)
-	for index, candidate := range candidates {
-		tunnel := p.selectRelayTunnel(candidate.GetRelayInstanceId())
-		if tunnel == nil {
-			continue
+	wait := secureLinkTransientWait
+	if ownerKind == proxySecureLinkOwnerKind && p.secureLinks.availabilityMember(linkID) {
+		wait = 0
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		retryable := false
+		ordered := p.orderRelayCandidates(candidates)
+		for index, candidate := range ordered {
+			tunnel := p.selectRelayTunnel(candidate.GetRelayInstanceId())
+			if tunnel == nil {
+				// No lane to this relay yet: a lane that comes up counts.
+				retryable = true
+				continue
+			}
+			grant := relaybridge.GrantForCandidate(candidate)
+			if grant == nil {
+				tunnel.active.Add(-1)
+				continue
+			}
+			switch p.openProxySecureLinkOnTunnel(linkID, connection, tunnel, grant) {
+			case secureLinkOpened:
+				return
+			case secureLinkRetryable:
+				retryable = true
+			}
+			if index+1 < len(ordered) {
+				time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
+			}
 		}
-		grant := relaybridge.GrantForCandidate(candidate)
-		if grant == nil {
-			continue
+		if !retryable || !time.Now().Add(secureLinkTransientRetry).Before(deadline) {
+			break
 		}
-		if p.openProxySecureLinkOnTunnel(linkID, connection, tunnel, grant) {
-			return
-		}
-		if index+1 < len(candidates) {
-			time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
-		}
+		time.Sleep(secureLinkTransientRetry)
 	}
 	p.logger.Warn(logName+" connection failed on all relay candidates", "link_id", linkID)
+}
+
+// availabilityMember reports a binding of an availability policy member.
+func (m *sourceLinkManager) availabilityMember(id string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	binding := m.bindings[id]
+	m.mu.Unlock()
+	if binding == nil {
+		return false
+	}
+	binding.leaseMu.Lock()
+	defer binding.leaseMu.Unlock()
+	return binding.availabilityPolicyID != ""
 }
 
 func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
@@ -863,23 +930,23 @@ func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
 	return selected
 }
 
-func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant) bool {
+func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant) secureLinkOpenResult {
 	defer tunnel.active.Add(-1)
 	ctx, cancel, finishSetup := proxySecureLinkSetupContext(tunnel.ctx, proxySecureLinkSetupTimeout)
 	defer cancel()
 	stream, err := tunnel.client.OpenTunnel(ctx)
 	if err != nil {
 		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "open", "error", err)
-		return false
+		return openFailure(err)
 	}
 	if err := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}}); err != nil {
 		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "send", "error", err)
-		return false
+		return openFailure(err)
 	}
 	first, err := stream.Recv()
 	if err != nil {
 		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "ready", "error", err)
-		return false
+		return openFailure(err)
 	}
 	if first.GetReady() == nil {
 		code := "unexpected_frame"
@@ -887,18 +954,25 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.
 			code = relayError.GetCode()
 		}
 		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "ready", "error", code)
-		return false
+		return secureLinkFailed
 	}
 	if !finishSetup() {
 		p.logger.Warn("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", "deadline", "error", "setup timeout")
-		return false
+		return secureLinkFailed
 	}
 	readChunk := int(p.relayGrants.get().GetReadChunkBytes())
 	if readChunk == 0 {
 		readChunk = relaybridge.DefaultChunkBytes
 	}
 	_ = relaybridge.BridgeWithChunk(ctx, connection, stream, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
-	return true
+	return secureLinkOpened
+}
+
+func openFailure(err error) secureLinkOpenResult {
+	if retryableRelayOpenError(err) {
+		return secureLinkRetryable
+	}
+	return secureLinkFailed
 }
 
 func (p *NginxPlugin) ProbeRelayCandidate(command *pb.ProbeRelayCandidateCommand) (string, error) {
