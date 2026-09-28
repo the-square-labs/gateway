@@ -13,6 +13,9 @@ import type { DockerAvailabilityLeaseModeChange } from './lease-types.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 
+// Each test runs several reconciles against PostgreSQL; a loaded runner must not turn that into a timeout.
+vi.setConfig({ testTimeout: 60_000 });
+
 function identityKey(): Buffer {
   return generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
 }
@@ -122,6 +125,8 @@ describe.skipIf(!url)('availability lease modes on disposable PostgreSQL', () =>
     }
   };
 
+  // Migrating a fresh database can take far longer than the default 10 s hook timeout on a loaded runner, and a
+  // timed-out hook let the tests run against a half-prepared database (the gates suite failed that way under load).
   beforeAll(async () => {
     database = await disposableDatabase(url!, 'lease_modes');
     pool = database.pool;
@@ -208,12 +213,12 @@ describe.skipIf(!url)('availability lease modes on disposable PostgreSQL', () =>
     });
     // Lease mode starts once every participant was ready for 2 minutes without a restart.
     await at(121_000, () => service.reconcile());
-  });
+  }, 180_000);
 
   afterAll(async () => {
     vi.useRealTimers();
     await database?.drop();
-  });
+  }, 60_000);
 
   it('moves the automatic witness off the local relay once another relay can vote, raising the margin (N-2)', async () => {
     const before = await service.getPolicyLease(pairPolicy);

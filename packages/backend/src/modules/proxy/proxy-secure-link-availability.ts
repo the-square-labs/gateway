@@ -6,14 +6,11 @@ import {
   nodes,
   type proxyAdditionalSecureLinks,
 } from '@/db/schema/index.js';
+// Daemons that gate Availability member sockets and connectors by the data-plane lease (D8): any lease protocol
+// version (availability_lease_v2 since rc.20, availability_lease_v1 before) understands dormant members.
+import { AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES } from '@/modules/docker/availability/lease/lease-constants.js';
 
 type LinkRow = typeof proxyAdditionalSecureLinks.$inferSelect;
-
-/**
- * Capabilities of daemons that gate Availability member sockets and connectors by the data-plane lease (D8): any lease
- * protocol version (availability_lease_v2 since rc.20, availability_lease_v1 before) understands dormant members.
- */
-const AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES = ['availability_lease_v2', 'availability_lease_v1'];
 
 export interface AvailabilityMemberSyncContext {
   /** The daemon receiving the bindings understands dormant members. */

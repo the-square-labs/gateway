@@ -11,6 +11,9 @@ import type { DockerAvailabilityLeaseModeChange } from './lease-types.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 
+// Each test runs several reconciles against PostgreSQL; a loaded runner must not turn that into a timeout.
+vi.setConfig({ testTimeout: 60_000 });
+
 function identityKey(): Buffer {
   return generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
 }
@@ -122,7 +125,9 @@ describe.skipIf(!url)('availability lease across a rolling upgrade on disposable
       } as never,
       { log: vi.fn(async () => true) },
       { publish: vi.fn() } as never,
-      { signPayload: async (payload: Buffer) => ({ signingKeyId: keyId, signature: sign(null, payload, privateKey) }) }
+      {
+        signPayload: async (payload: Buffer) => ({ signingKeyId: keyId, signature: sign(null, payload, privateKey) }),
+      }
     );
     created.attachController({
       leaseModeSupported: () => true,
@@ -134,6 +139,8 @@ describe.skipIf(!url)('availability lease across a rolling upgrade on disposable
     return created;
   };
 
+  // Migrating a fresh database can take far longer than the default 10 s hook timeout on a loaded runner, and a
+  // timed-out hook let the tests run against a half-prepared database (the gates suite failed that way under load).
   beforeAll(async () => {
     database = await disposableDatabase(url!, 'lease_upgrade');
     pool = database.pool;
@@ -203,12 +210,12 @@ describe.skipIf(!url)('availability lease across a rolling upgrade on disposable
       [randomUUID(), hostId, placement.id, `proxy-host:${hostId}`, nginxId, dockerIds[0]]
     );
     service = newService();
-  });
+  }, 180_000);
 
   afterAll(async () => {
     vi.useRealTimers();
     await database?.drop();
-  });
+  }, 60_000);
 
   it('enters lease mode only after the whole fleet ran v2 for 2 minutes, restarts included (Gateway first)', async () => {
     const step = async (ms: number, change?: () => void) =>
@@ -223,7 +230,9 @@ describe.skipIf(!url)('availability lease across a rolling upgrade on disposable
     // The nodes are updated one by one; none of the intermediate states may start the lease.
     expect((await step(30_000, () => updateNode(dockerIds[0]!))).mode).toBe('legacy');
     expect((await step(30_000, () => updateNode(dockerIds[1]!))).mode).toBe('legacy');
-    expect((await step(30_000, () => updateNode(dockerIds[2]!))).reason).toMatchObject({ code: 'ingress_not_capable' });
+    expect((await step(30_000, () => updateNode(dockerIds[2]!))).reason).toMatchObject({
+      code: 'ingress_not_capable',
+    });
     const settling = await step(10_000, () => updateNode(nginxId));
     expect(settling).toMatchObject({ mode: 'legacy', reason: { code: 'participants_settling' } });
     expect(settling.reason?.nodeIds).toEqual([...dockerIds, nginxId].sort());

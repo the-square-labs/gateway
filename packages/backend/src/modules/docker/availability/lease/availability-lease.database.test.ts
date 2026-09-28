@@ -14,6 +14,9 @@ import type { DockerAvailabilityLeaseHolderChange, DockerAvailabilityLeaseModeCh
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 
+// Each test runs several reconciles against PostgreSQL; a loaded runner must not turn that into a timeout.
+vi.setConfig({ testTimeout: 60_000 });
+
 function edKey(): { privateKey: KeyObject; publicKeyObject: KeyObject; publicKey: Buffer } {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const { x } = publicKey.export({ format: 'jwk' }) as { x: string };
@@ -123,6 +126,8 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
       ],
     });
 
+  // Migrating a fresh database can take far longer than the default 10 s hook timeout on a loaded runner, and a
+  // timed-out hook let the tests run against a half-prepared database (the gates suite failed that way under load).
   beforeAll(async () => {
     database = await disposableDatabase(url!, 'lease');
     pool = database.pool;
@@ -244,11 +249,11 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
         holderChanges.push(change);
       },
     });
-  });
+  }, 180_000);
 
   afterAll(async () => {
     await database?.drop();
-  });
+  }, 60_000);
 
   it('keeps legacy admission while the candidates have not reported lease identities', async () => {
     await service.reconcile();

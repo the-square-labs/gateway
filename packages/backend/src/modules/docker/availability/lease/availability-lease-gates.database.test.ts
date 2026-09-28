@@ -12,6 +12,9 @@ import { decodeLeaseSignedBlock } from './lease-codec.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 
+// Each test runs several reconciles against PostgreSQL; a loaded runner must not turn that into a timeout.
+vi.setConfig({ testTimeout: 60_000 });
+
 function identityKey(): Buffer {
   return generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
 }
@@ -58,6 +61,8 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
     return { ...value, version: Number(state.manifest_version) };
   };
 
+  // Migrating a fresh database can take far longer than the default 10 s hook timeout on a loaded runner, and a
+  // timed-out hook let the tests run against a half-prepared database (the gates suite failed that way under load).
   beforeAll(async () => {
     database = await disposableDatabase(url!, 'lease_gates');
     pool = database.pool;
@@ -121,7 +126,9 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
       } as never,
       { log: vi.fn(async () => true) },
       { publish: vi.fn() } as never,
-      { signPayload: async (payload: Buffer) => ({ signingKeyId: keyId, signature: sign(null, payload, privateKey) }) }
+      {
+        signPayload: async (payload: Buffer) => ({ signingKeyId: keyId, signature: sign(null, payload, privateKey) }),
+      }
     );
     service.attachController({
       leaseModeSupported: () => true,
@@ -138,11 +145,11 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
     } finally {
       vi.useRealTimers();
     }
-  });
+  }, 180_000);
 
   afterAll(async () => {
     await database?.drop();
-  });
+  }, 60_000);
 
   it('republishes every manifest with a renewed identity key right away (H3)', async () => {
     const before = await manifest();
