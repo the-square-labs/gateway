@@ -35,6 +35,8 @@ type leaseIntegration struct {
 	runtime *lease.Runtime
 	fence   lease.DirFence
 	cancel  context.CancelFunc
+	// lanes counts the Coordinate lanes attachRelay started (stop waits for them).
+	lanes sync.WaitGroup
 
 	// watchdog bootstraps a missing lease watchdog (nodes installed before it).
 	watchdog *watchdogBootstrap
@@ -120,9 +122,24 @@ func (l *leaseIntegration) attachRelay(ctx context.Context, conn grpc.ClientConn
 	if l == nil || l.runtime == nil {
 		return
 	}
-	go l.runtime.Transport().Run(ctx, relayInstanceID, func(streamCtx context.Context) (lease.FrameStream, error) {
-		return lease.OpenCoordinateStream(streamCtx, conn)
-	})
+	l.lanes.Add(1)
+	go func() {
+		defer l.lanes.Done()
+		l.runtime.Transport().Run(ctx, relayInstanceID, func(streamCtx context.Context) (lease.FrameStream, error) {
+			return lease.OpenCoordinateStream(streamCtx, conn)
+		})
+	}()
+}
+
+// stop waits, once the contexts the relay lanes were attached with ended, until no lane delivers frames any more,
+// then stops the runtime's background operations. Nothing of the lease integration writes to the state directory
+// afterwards.
+func (l *leaseIntegration) stop() {
+	if l == nil || l.runtime == nil {
+		return
+	}
+	l.lanes.Wait()
+	l.runtime.Stop()
 }
 
 // leaseCapabilities advertises availability_lease_v2 whenever the lease

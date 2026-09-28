@@ -173,6 +173,16 @@ func (t *RelayTransport) serve(ctx context.Context, target string, stream FrameS
 		t.mu.Unlock()
 		_ = stream.CloseSend()
 	}()
+	// The receiver below may still wait in Recv after serve returned (until the stream's context ends). It delivers
+	// only while delivering is open, and closing it waits for a frame in delivery: once serve returned, no frame of
+	// this stream reaches the node, whose store writes to the state directory.
+	var delivering sync.Mutex
+	closed := false
+	defer func() {
+		delivering.Lock()
+		closed = true
+		delivering.Unlock()
+	}()
 	receiveErr := make(chan error, 1)
 	go func() {
 		for {
@@ -187,7 +197,14 @@ func (t *RelayTransport) serve(ctx context.Context, target string, stream FrameS
 			if receive == nil {
 				continue
 			}
-			if err := receive(frame); err != nil && !errors.Is(err, availabilitylease.ErrUnknownSender) {
+			delivering.Lock()
+			if closed {
+				delivering.Unlock()
+				return
+			}
+			err = receive(frame)
+			delivering.Unlock()
+			if err != nil && !errors.Is(err, availabilitylease.ErrUnknownSender) {
 				t.logger.Debug("availability lease frame rejected", "relay_target", target, "sender_id", frame.GetSenderId(), "error", err)
 			}
 		}
