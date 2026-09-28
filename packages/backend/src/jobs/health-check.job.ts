@@ -377,9 +377,14 @@ export class HealthCheckJob {
     }
   }
 
-  /** Within the startup grace, whether a probe failed only because its node has not reconnected yet. */
-  private awaitingNodeReconnect(nodeId: string, errors: string[]): boolean {
-    return Date.now() - this.startedAt < NODE_RECONNECT_GRACE_MS && failedOnlyBecauseNodeIsNotConnected(nodeId, errors);
+  /**
+   * Whether a probe failed only because its node is expected to be away: within the startup grace (nodes reconnect
+   * after a Gateway restart) or while the node's daemon is being updated (it restarts on its own).
+   */
+  private async awaitingNodeReconnect(nodeId: string, errors: string[]): Promise<boolean> {
+    if (!failedOnlyBecauseNodeIsNotConnected(nodeId, errors)) return false;
+    if (Date.now() - this.startedAt < NODE_RECONNECT_GRACE_MS) return true;
+    return (await this.nodeDispatch?.isNodeUpdateInProgress?.(nodeId)?.catch(() => false)) === true;
   }
 
   private async checkHost(
@@ -429,7 +434,7 @@ export class HealthCheckJob {
         }
         return { status: daemonProbeOutcome(result), responseMs: result.responseMs };
       } catch (error) {
-        if (this.awaitingNodeReconnect(host.nodeId, [error instanceof Error ? error.message : String(error)])) {
+        if (await this.awaitingNodeReconnect(host.nodeId, [error instanceof Error ? error.message : String(error)])) {
           logger.debug('Pages Route health probe waits for its node to reconnect', {
             hostId: host.id,
             nodeId: host.nodeId,
@@ -464,10 +469,10 @@ export class HealthCheckJob {
       }
       if (
         !result.ok &&
-        this.awaitingNodeReconnect(
+        (await this.awaitingNodeReconnect(
           host.nodeId,
           result.failures.map((failure) => failure.error)
-        )
+        ))
       ) {
         logger.debug('Secure Link health probe waits for its node to reconnect', {
           hostId: host.id,

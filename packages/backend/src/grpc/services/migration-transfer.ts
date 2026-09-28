@@ -453,6 +453,8 @@ class MigrationTransferRelay {
 
 export const migrationTransferRelay = new MigrationTransferRelay();
 
+const DOCKER_NODE_NOT_CONNECTED = 'Docker node is not connected';
+
 export function createMigrationTransferHandlers(deps: GrpcServerDeps) {
   return {
     Transfer(stream: MigrationStream) {
@@ -500,7 +502,7 @@ export function createMigrationTransferHandlers(deps: GrpcServerDeps) {
         const identity = extractDaemonCertificateIdentity(stream as never);
         if (!identity) throw new Error('missing authorized daemon certificate');
         const connected = deps.registry.getNode(identity.nodeId);
-        if (!connected || connected.type !== 'docker') throw new Error('Docker node is not connected');
+        if (!connected || connected.type !== 'docker') throw new Error(DOCKER_NODE_NOT_CONNECTED);
         const [node] = await deps.db
           .select({
             certificateSerial: nodes.certificateSerial,
@@ -526,10 +528,14 @@ export function createMigrationTransferHandlers(deps: GrpcServerDeps) {
         authenticated = true;
         stream.resume();
       })().catch((error) => {
-        logger.warn('Docker migration transfer stream rejected', {
-          nodeId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        // Opened right after Register, the stream can arrive before the registration finished (every Gateway or
+        // daemon restart); the daemon opens it again. Only a real rejection is worth a warning.
+        if (message === DOCKER_NODE_NOT_CONNECTED) {
+          logger.debug('Docker migration transfer stream rejected', { nodeId, error: message });
+        } else {
+          logger.warn('Docker migration transfer stream rejected', { nodeId, error: message });
+        }
         close();
         stream.end();
       });
