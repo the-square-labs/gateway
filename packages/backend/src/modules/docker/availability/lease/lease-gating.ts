@@ -3,8 +3,6 @@ import type { DockerAvailabilityLeaseReason } from '@/db/schema/index.js';
 export interface LeaseGatingInput {
   /** The paid controller runs the lease-mode branch (edition contract). */
   controllerSupportsLease: boolean;
-  /** The operator turned data-plane failover on for this Gateway (GATEWAY_AVAILABILITY_LEASE_MODE=enabled). */
-  leaseModeEnabled?: boolean;
   /** The controller holds this policy on the legacy path. */
   legacyRequested?: boolean;
   policyMode: 'single' | 'replicated' | 'failover';
@@ -35,16 +33,6 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
       reason: {
         code: 'controller_unsupported',
         message: 'This Gateway edition runs Availability failover from the backend only',
-      },
-    };
-  }
-  if (input.leaseModeEnabled === false) {
-    return {
-      eligible: false,
-      reason: {
-        code: 'lease_mode_disabled',
-        message:
-          'Data-plane failover is a preview and off on this Gateway; set GATEWAY_AVAILABILITY_LEASE_MODE=enabled to use it',
       },
     };
   }

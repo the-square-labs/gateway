@@ -59,11 +59,6 @@ function leaseWitnessView(state: LeaseStateRow | null): DockerAvailabilityLeaseW
  * manifests with the relay policy key, delivers them, gates policies by capability, ingests lease reports and
  * audits autonomous transitions. The paid controller decides placements; it attaches here as the lease controller.
  */
-/** GATEWAY_AVAILABILITY_LEASE_MODE (config/env.ts): data-plane failover is a preview and off unless enabled. */
-function leaseModeEnabled(): boolean {
-  return process.env.GATEWAY_AVAILABILITY_LEASE_MODE === 'enabled';
-}
-
 export class AvailabilityLeaseService {
   private controller: DockerAvailabilityLeaseController | null = null;
   private relayPublisher: { publishAvailabilityLeaseChange(): Promise<void> } | null = null;
@@ -138,7 +133,6 @@ export class AvailabilityLeaseService {
       members,
       cluster: cluster.cluster,
       controllerSupportsLease,
-      leaseModeEnabled: leaseModeEnabled(),
       now,
     });
     if (cluster.changed || outcome.changed) await bumpLeaseRevision(this.db);

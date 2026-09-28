@@ -221,11 +221,6 @@ describe('availability lease capability gating (D10)', () => {
 
   it('runs lease mode only when candidates and ingress are capable and a key can sign', () => {
     expect(evaluateLeaseGating(eligible)).toEqual({ eligible: true });
-    // Data-plane failover is a preview: off on a Gateway that did not enable it, before any capability check.
-    expect(evaluateLeaseGating({ ...eligible, leaseModeEnabled: false })).toMatchObject({
-      eligible: false,
-      reason: { code: 'lease_mode_disabled', message: expect.stringContaining('GATEWAY_AVAILABILITY_LEASE_MODE') },
-    });
     expect(
       evaluateLeaseGating({
         ...eligible,

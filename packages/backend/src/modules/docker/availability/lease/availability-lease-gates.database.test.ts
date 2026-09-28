@@ -58,8 +58,6 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
   };
 
   beforeAll(async () => {
-    // Data-plane failover is a preview that the operator turns on (GATEWAY_AVAILABILITY_LEASE_MODE).
-    process.env.GATEWAY_AVAILABILITY_LEASE_MODE = 'enabled';
     database = await disposableDatabase(url!, 'lease_gates');
     pool = database.pool;
     await migrateDatabase(pool);

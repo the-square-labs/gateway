@@ -83,7 +83,6 @@ export interface LeasePoliciesContext {
   members: Map<string, LeaseMemberRow>;
   cluster: LeaseClusterRow;
   controllerSupportsLease: boolean;
-  leaseModeEnabled?: boolean;
   now: Date;
 }
 
@@ -216,7 +215,6 @@ export class AvailabilityLeasePolicies {
     const candidateNodes = [...new Set(leaseCandidatePlacements(placements).map((placement) => placement.nodeId))];
     const gating = evaluateLeaseGating({
       controllerSupportsLease: context.controllerSupportsLease,
-      leaseModeEnabled: context.leaseModeEnabled,
       legacyRequested: state.legacyRequested,
       policyMode: policy.mode,
       signingReady: Boolean(context.cluster.signingKeyId),
