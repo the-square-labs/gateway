@@ -994,6 +994,8 @@ describe('RelayPoolService placement during updates and mixed versions', () => {
       [],
       [],
       [],
+      // Relay policy bookkeeping (revocation state per relay).
+      [],
     ]).flat();
     const { pool, policy } = service(queuedDb(rows).db);
     (policy as any).poolIncapableEndpointIds = vi.fn().mockResolvedValue(new Set());
