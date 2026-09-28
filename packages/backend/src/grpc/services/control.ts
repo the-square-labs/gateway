@@ -13,6 +13,7 @@ import { daemonLogRelay } from '@/modules/monitoring/log-relay.service.js';
 import { validateRegisteredDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
+import { backgroundWrites } from '@/services/background-writes.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { reportedPolicySigningKeyIds } from '@/services/relay-policy-signing-key.service.js';
 import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
@@ -358,6 +359,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
       let nodeId: string | null = null;
       let closed = false;
       let registering = false;
+      // Shutdown waits for this stream's close handling (deregistration, relay instance state,
+      // the node.disconnected audit row) before it closes the database pool.
+      const releaseShutdownSource = backgroundWrites.openSource();
       // A daemon starts streaming (logs, build events, results) right after
       // Register. Those messages are held until the async registration
       // validation finishes and replayed in order; ending the stream instead
@@ -1334,43 +1338,52 @@ export function createControlHandlers(deps: GrpcServerDeps) {
         }
       };
 
+      // Not tracked for shutdown: a message may await a long build rollout, which the orchestration
+      // drain already bounds and durable recovery resumes; its periodic state is re-sent on reconnect.
       stream.on('data', (msg: DaemonMessage) => {
         void handleMessage(msg);
       });
 
-      stream.on('end', async () => {
+      const handleDisconnect = async (details: Record<string, unknown>) => {
+        if (!nodeId) return;
+        lastRecordedTs.delete(nodeId);
+        await deps.registry.deregister(nodeId, stream as any);
+        await markRelayInstanceOffline(deps, nodeId);
+        await deps.auditService.log({
+          userId: null,
+          action: 'node.disconnected',
+          resourceType: 'node',
+          resourceId: nodeId,
+          details,
+        });
+      };
+      const trackDisconnect = (details: Record<string, unknown>) =>
+        backgroundWrites
+          .track(handleDisconnect(details))
+          .catch((error) =>
+            logger.warn('Failed to record a node stream disconnect', {
+              nodeId,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          )
+          .finally(releaseShutdownSource);
+
+      stream.on('end', () => {
         closed = true;
-        if (nodeId) {
-          logger.info('Node stream ended', { nodeId });
-          lastRecordedTs.delete(nodeId);
-          await deps.registry.deregister(nodeId, stream as any);
-          await markRelayInstanceOffline(deps, nodeId);
-          await deps.auditService.log({
-            userId: null,
-            action: 'node.disconnected',
-            resourceType: 'node',
-            resourceId: nodeId,
-            details: { reason: 'stream_ended' },
-          });
-        }
+        if (nodeId) logger.info('Node stream ended', { nodeId });
+        void trackDisconnect({ reason: 'stream_ended' });
       });
 
-      stream.on('error', async (err) => {
+      stream.on('error', (err) => {
         closed = true;
-        if (nodeId) {
-          logger.warn('Node stream error', { nodeId, error: err.message });
-          lastRecordedTs.delete(nodeId);
-          await deps.registry.deregister(nodeId, stream as any);
-          await markRelayInstanceOffline(deps, nodeId);
-          await deps.auditService.log({
-            userId: null,
-            action: 'node.disconnected',
-            resourceType: 'node',
-            resourceId: nodeId,
-            details: { reason: 'error', error: err.message },
-          });
-        }
+        if (nodeId) logger.warn('Node stream error', { nodeId, error: err.message });
+        void trackDisconnect({ reason: 'error', error: err.message });
       });
+
+      // A cancelled or destroyed stream emits neither of the above; 'end' and 'error' come before
+      // 'close', so their tracked work is registered by the time the source is released.
+      stream.on('cancelled', () => setImmediate(releaseShutdownSource));
+      stream.on('close', () => setImmediate(releaseShutdownSource));
     },
   };
 }

@@ -12,6 +12,7 @@ import { GeneralSettingsService } from '@/modules/settings/general-settings.serv
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { DaemonUpdateRollout } from '@/services/daemon-update-rollout.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -403,6 +404,10 @@ describe('AIService maintenance tools', () => {
     container.registerInstance(UpdateService, updateService as unknown as UpdateService);
     container.registerInstance(DaemonUpdateService, daemonUpdateService as unknown as DaemonUpdateService);
     container.registerInstance(NodeDispatchService, nodeDispatchService as unknown as NodeDispatchService);
+    container.registerInstance(DaemonUpdateRollout, {
+      isLeaseMember: vi.fn().mockResolvedValue(false),
+      enqueue: vi.fn(),
+    } as unknown as DaemonUpdateRollout);
     container.registerInstance(TOKENS.DrizzleClient, db);
     const service = createService();
     const user = { ...BASE_USER, scopes: [...BASE_USER.scopes, 'admin:update'] };

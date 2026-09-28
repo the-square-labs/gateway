@@ -788,6 +788,48 @@ export class DockerService {
     return this.stripDockerStreamHeaders(res.bodyRaw);
   }
 
+  /**
+   * Lifecycle events Docker recorded for one container between two instants (milliseconds since
+   * the epoch). Docker keeps only a bounded in-memory history, so a long-past window can come back
+   * incomplete: callers must treat a missing event as unknown, never as proof that nothing happened.
+   */
+  async listContainerEvents(
+    id: string,
+    sinceMs: number,
+    untilMs: number,
+    actions: readonly string[] = ['kill', 'die', 'stop', 'start', 'restart']
+  ): Promise<DockerContainerEvent[]> {
+    const filters = encodeURIComponent(JSON.stringify({ type: ['container'], container: [id], event: actions }));
+    const since = (Math.max(0, sinceMs) / 1000).toFixed(3);
+    // A bounded window: with `until` Docker answers from its history and closes the stream.
+    const until = (Math.max(untilMs, sinceMs + 1) / 1000).toFixed(3);
+    const res = await this.request(
+      'GET',
+      `${API_VERSION}/events?since=${since}&until=${until}&filters=${filters}`,
+      undefined,
+      10_000
+    );
+    if (res.statusCode !== 200) {
+      throw new Error(`Docker events failed (${res.statusCode}): ${res.body}`);
+    }
+    const events: DockerContainerEvent[] = [];
+    for (const line of res.body.split('\n')) {
+      if (!line.trim()) continue;
+      const raw = JSON.parse(line) as {
+        Action?: string;
+        status?: string;
+        time?: number;
+        timeNano?: number;
+        Actor?: { Attributes?: Record<string, string> };
+      };
+      const action = raw.Action ?? raw.status;
+      const timeMs = raw.timeNano ? Math.floor(raw.timeNano / 1e6) : (raw.time ?? 0) * 1000;
+      if (!action || !timeMs) continue;
+      events.push({ action, timeMs, attributes: raw.Actor?.Attributes ?? {} });
+    }
+    return events.sort((a, b) => a.timeMs - b.timeMs);
+  }
+
   async listContainersByLabel(label: string): Promise<DockerContainerListItem[]> {
     const filters = encodeURIComponent(JSON.stringify({ label: [label] }));
     const res = await this.request('GET', `${API_VERSION}/containers/json?all=true&filters=${filters}`);
@@ -1001,10 +1043,24 @@ export interface DockerContainerInspect {
     Status: string;
     Running: boolean;
     StartedAt: string;
+    /** Docker's restart policy is bringing the container back (between a crash and the next start). */
+    Restarting?: boolean;
+    FinishedAt?: string;
   };
   Config: {
     Image: string;
+    /** Seconds a stop waits after the stop signal before it kills; Docker's default is 10. */
+    StopTimeout?: number;
   };
+}
+
+/** One container lifecycle event from Docker's event history. */
+export interface DockerContainerEvent {
+  /** Docker's action name: `kill`, `die`, `stop`, `start`, `restart`, … */
+  action: string;
+  /** When Docker recorded it, in milliseconds since the epoch. */
+  timeMs: number;
+  attributes: Record<string, string>;
 }
 
 export interface DockerContainerFullInspect extends DockerContainerInspect {
@@ -1014,6 +1070,7 @@ export interface DockerContainerFullInspect extends DockerContainerInspect {
     Image: string;
     Labels: Record<string, string>;
     Env: string[];
+    StopTimeout?: number;
   };
   HostConfig?: {
     NetworkMode?: string;

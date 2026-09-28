@@ -14,6 +14,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/auth"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
@@ -25,6 +26,17 @@ const (
 	ConnectAttemptTimeout = 10 * time.Second
 	MaxMessageBytes       = 512 * 1024 * 1024
 )
+
+// ReconnectParams pace grpc's own reconnects of a connection whose transport dropped. Relay lanes and the control
+// session keep their ClientConn across a relay restart (an update recreates the local relay), so how fast they come
+// back is grpc's reconnect backoff: with its default 1 s base growing by 1.6 the lanes were up again 1-3 s after the
+// relay listened again, every Secure Link route answering 502 meanwhile (single-relay install). Starting at 100 ms and
+// capping at 5 s brings them back within a few hundred ms, and a relay that stays down is still only retried every
+// few seconds. The connect timeout keeps grpc's 20 s: a handshake is never cut by the short backoff.
+var ReconnectParams = grpc.ConnectParams{
+	Backoff:           backoff.Config{BaseDelay: 100 * time.Millisecond, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 5 * time.Second},
+	MinConnectTimeout: 20 * time.Second,
+}
 
 type Connector struct {
 	Address string
@@ -68,6 +80,7 @@ func (c *Connector) connectTarget(ctx context.Context, address, serverName, cert
 	}
 	return grpc.NewClient(address,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithConnectParams(ReconnectParams),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time: 30 * time.Second, Timeout: 10 * time.Second, PermitWithoutStream: true,
 		}),
@@ -84,6 +97,7 @@ func (c *Connector) connect(ctx context.Context, address, serverName string) (*g
 	tlsCfg.ServerName = serverName
 	conn, err := grpc.NewClient(address,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithConnectParams(ReconnectParams),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,

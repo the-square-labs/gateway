@@ -42,6 +42,13 @@ const (
 	deploymentRouterRepairLockWait     = 10 * time.Second
 	deploymentRouterRollbackTimeout    = 30 * time.Second
 	deploymentRouterStopTimeoutSeconds = 10
+	// deploymentRouterRepairInterval is how often the daemon looks at its
+	// deployment routers again after startup: a repair that failed (an image
+	// pull, a busy Docker) is retried and a router that went down while its
+	// deployment serves comes back, without an operator.
+	deploymentRouterRepairInterval = time.Minute
+	// A repair that keeps failing the same way is logged again after this.
+	deploymentRouterRepairRepeatLog = 15 * time.Minute
 )
 
 // deploymentRouterRepair is one router the repair changed.
@@ -106,6 +113,24 @@ func (m *deploymentMembers) serving() bool {
 	return false
 }
 
+// soleRunningSlot returns the slot of the one app slot that runs, or "" when
+// none or both run (a deploy in progress: the router's own config decides).
+// Between deployment operations only the active slot runs, since every switch
+// stops the slot it left.
+func (m *deploymentMembers) soleRunningSlot() string {
+	slot := ""
+	for _, app := range m.apps {
+		if app.State != "running" {
+			continue
+		}
+		if slot != "" {
+			return ""
+		}
+		slot = app.Labels[deploymentSlotLabel]
+	}
+	return slot
+}
+
 func (m *deploymentMembers) repairable(include func(apps []ContainerInfo) bool) bool {
 	return m != nil && len(m.routers) > 0 && m.serving() && (include == nil || include(m.apps))
 }
@@ -164,6 +189,7 @@ func (c *Client) repairDeploymentRouter(ctx context.Context, deploymentID string
 	}
 	router := members.routers[0]
 	repair.Router = router.Name
+	runningSlot := members.soleRunningSlot()
 	inspect, err := c.cli.ContainerInspect(ctx, router.ID, mobyclient.ContainerInspectOptions{})
 	if err != nil {
 		if isNotFoundErr(err) {
@@ -188,7 +214,7 @@ func (c *Client) repairDeploymentRouter(ctx context.Context, deploymentID string
 		// An older daemon's router rewrites its creation-time config on every
 		// start, which names the slot that was active back then: it is
 		// recreated from the config it serves now.
-		if err := c.replaceLegacyDeploymentRouter(ctx, current, deploymentID, running); err != nil {
+		if err := c.replaceLegacyDeploymentRouter(ctx, current, deploymentID, running, runningSlot); err != nil {
 			return repair, err
 		}
 		repair.Action = "recreated"
@@ -208,6 +234,14 @@ func (c *Client) repairDeploymentRouter(ctx context.Context, deploymentID string
 			return repair, fmt.Errorf("start deployment router %s: %w", router.Name, err)
 		}
 		actions = append(actions, "started")
+		switched, err := c.alignStartedRouterSlot(ctx, current, runningSlot)
+		if err != nil {
+			repair.Action = strings.Join(actions, ", ")
+			return repair, err
+		}
+		if switched {
+			actions = append(actions, "serves "+runningSlot)
+		}
 	}
 	upgraded, err := c.upgradeDeploymentRouterConfig(ctx, current)
 	if upgraded {
@@ -252,6 +286,38 @@ func (c *Client) upgradeDeploymentRouterConfig(ctx context.Context, current cont
 	}
 	if err := c.writeRouterConfig(ctx, name, renderDeploymentNginxAt(routes, slot, address)); err != nil {
 		return false, fmt.Errorf("upgrade the config of deployment router %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// alignStartedRouterSlot points a router that was just brought back at the
+// slot that runs, when the config it kept names the other, stopped slot (a
+// config written before the last switch, or an older daemon's start command
+// that rewrote it): serving a stopped slot answers 502 on every request.
+func (c *Client) alignStartedRouterSlot(ctx context.Context, current container.InspectResponse, runningSlot string) (bool, error) {
+	if runningSlot == "" {
+		return false, nil
+	}
+	name := trimContainerName(current.Name)
+	config, err := c.deploymentRouterServedConfig(ctx, current)
+	if err != nil {
+		return false, fmt.Errorf("router %s: %w", name, err)
+	}
+	slot, routes, err := deploymentRouterConfigRoutes(config, current.HostConfig.PortBindings)
+	if err != nil {
+		return false, fmt.Errorf("router %s serves a config that cannot be carried over: %w", name, err)
+	}
+	if slot == runningSlot {
+		return false, nil
+	}
+	// Rendered with the running slot's address, as every router config is
+	// (B-8): the address pass that follows then has nothing left to rewrite.
+	address := ""
+	if labels := current.Config.Labels; labels[deploymentIDLabel] != "" {
+		address = c.deploymentSlotAddress(ctx, labels[deploymentIDLabel], runningSlot, string(current.HostConfig.NetworkMode))
+	}
+	if err := c.writeRouterConfig(ctx, current.ID, renderDeploymentNginxAt(routes, runningSlot, address)); err != nil {
+		return false, fmt.Errorf("point router %s at the running slot %s: %w", name, runningSlot, err)
 	}
 	return true, nil
 }
@@ -348,10 +414,11 @@ func (p *DockerPlugin) reconcileDeploymentRouterAddresses(ctx context.Context) {
 }
 
 // replaceLegacyDeploymentRouter recreates a router of an older daemon with
-// the current shape, serving the slot and routes of the config it serves now.
-// The old router is set aside, not removed, until its replacement runs, so a
-// failed replacement puts it back as it was.
-func (c *Client) replaceLegacyDeploymentRouter(ctx context.Context, current container.InspectResponse, deploymentID string, running bool) error {
+// the current shape, serving the routes of the config it serves now and the
+// slot that runs (runningSlot, when exactly one does), else the slot of that
+// config. The old router is set aside, not removed, until its replacement
+// runs, so a failed replacement puts it back as it was.
+func (c *Client) replaceLegacyDeploymentRouter(ctx context.Context, current container.InspectResponse, deploymentID string, running bool, runningSlot string) error {
 	name := trimContainerName(current.Name)
 	config, err := c.deploymentRouterServedConfig(ctx, current)
 	if err != nil {
@@ -360,6 +427,9 @@ func (c *Client) replaceLegacyDeploymentRouter(ctx context.Context, current cont
 	slot, routes, err := deploymentRouterConfigRoutes(config, current.HostConfig.PortBindings)
 	if err != nil {
 		return fmt.Errorf("router %s was created by an older daemon and its config cannot be carried over: %w", name, err)
+	}
+	if runningSlot != "" {
+		slot = runningSlot
 	}
 	networkName := string(current.HostConfig.NetworkMode)
 	if networkName == "" || current.Config.Image == "" {
@@ -506,12 +576,12 @@ func deploymentRouterConfigRoutes(config string, bindings network.PortMap) (stri
 	return slot, routes, nil
 }
 
-// repairDeploymentRouters runs the startup router repair for every deployment
-// (policyID ""), or the serving repair for the deployments of the availability
-// policy this node now serves, and logs what it did.
-func (p *DockerPlugin) repairDeploymentRouters(policyID string, timeout time.Duration) {
+// runDeploymentRouterRepair runs the startup router repair for every
+// deployment (policyID ""), or the serving repair for the deployments of the
+// availability policy this node now serves, and logs what it changed.
+func (p *DockerPlugin) runDeploymentRouterRepair(policyID string, timeout time.Duration) error {
 	if p.client == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -543,7 +613,43 @@ func (p *DockerPlugin) repairDeploymentRouters(policyID string, timeout time.Dur
 	for _, repair := range repairs {
 		p.logger.Info("deployment router brought back", "deployment_id", repair.DeploymentID, "router", repair.Router, "action", repair.Action, "policy_id", policyID)
 	}
-	if err != nil {
-		p.logger.Warn("deployment router repair incomplete; the next start, restart or switch of the deployment recreates its router", "policy_id", policyID, "error", err)
+	return err
+}
+
+// repairDeploymentRouters runs a repair and logs a failure; the periodic
+// repair retries it.
+func (p *DockerPlugin) repairDeploymentRouters(policyID string, timeout time.Duration) {
+	if err := p.runDeploymentRouterRepair(policyID, timeout); err != nil {
+		p.logger.Warn("deployment router repair incomplete; retried every minute", "policy_id", policyID, "error", err)
+	}
+}
+
+// deploymentRouterRepairLoop repeats the startup repair for the life of the
+// daemon. A failure that repeats unchanged is logged once per
+// deploymentRouterRepairRepeatLog.
+func (p *DockerPlugin) deploymentRouterRepairLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var lastErr string
+	var lastLogged time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		err := p.runDeploymentRouterRepair("", deploymentRouterRepairStartupTimeout)
+		if err == nil {
+			if lastErr != "" {
+				p.logger.Info("deployment router repair recovered")
+			}
+			lastErr = ""
+			continue
+		}
+		if err.Error() != lastErr || time.Since(lastLogged) >= deploymentRouterRepairRepeatLog {
+			p.logger.Warn("deployment router repair incomplete; retried every minute", "error", err)
+			lastLogged = time.Now()
+		}
+		lastErr = err.Error()
 	}
 }

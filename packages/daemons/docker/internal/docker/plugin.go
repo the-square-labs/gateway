@@ -61,6 +61,7 @@ type DockerPlugin struct {
 	runtimeManager           *runtimemanager.Manager
 	runtimeStatusMu          sync.RWMutex
 	runtimeStatus            runtimemanager.Status
+	runtimeStatusGen         uint64
 	availability             *availabilityManager
 	lease                    *leaseIntegration
 	registrationChanged      chan struct{}
@@ -269,6 +270,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		}
 		// Before the secure-link restore, which binds links to the routers.
 		p.repairDeploymentRouters("", deploymentRouterRepairStartupTimeout)
+		go p.deploymentRouterRepairLoop(context.Background(), deploymentRouterRepairInterval)
 		p.secureLinks, err = newDockerSecureLinkManager(p)
 		if err != nil {
 			return fmt.Errorf("initialize proxy secure links: %w", err)
@@ -319,14 +321,14 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	p.registryCreds = make(map[string]string)
 	p.runtimeManager = runtimemanager.NewManager()
 	p.runtimeManager.DockerHost = p.cfg.Docker.Socket
-	p.runtimeManager.ProgressReporter = p.setRuntimeStatus
+	p.runtimeManager.ProgressReporter = func(status runtimemanager.Status) { p.setRuntimeStatus(status) }
 	preflightCtx, cancelPreflight := context.WithTimeout(ctx, 90*time.Second)
 	if migrated, migrateErr := p.runtimeManager.ReconcileInstalledConfig(preflightCtx); migrateErr != nil {
 		p.logger.Warn("runsc Docker configuration migration failed", "error", migrateErr)
 	} else if migrated {
 		p.logger.Info("runsc Docker configuration migrated")
 	}
-	p.setRuntimeStatus(p.runtimeManager.Preflight(preflightCtx))
+	p.startRuntimeVerification(preflightCtx, p.runtimeManager)
 	cancelPreflight()
 	p.availability = availability
 	if availability != nil && p.lease == nil {
@@ -336,13 +338,42 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	return nil
 }
 
-func (p *DockerPlugin) setRuntimeStatus(status runtimemanager.Status) {
+// setRuntimeStatus records and reports the Secure Runtime status and returns
+// its generation.
+func (p *DockerPlugin) setRuntimeStatus(status runtimemanager.Status) uint64 {
 	p.runtimeStatusMu.Lock()
-	p.runtimeStatus = status
+	gen := p.storeRuntimeStatusLocked(status)
 	p.runtimeStatusMu.Unlock()
+	p.sendRuntimeStatus(status)
+	return gen
+}
+
+// replaceRuntimeStatus records status only while gen is still the current
+// status: a background verification never overwrites what an install or a
+// preflight command reported meanwhile.
+func (p *DockerPlugin) replaceRuntimeStatus(gen uint64, status runtimemanager.Status) bool {
+	p.runtimeStatusMu.Lock()
+	if p.runtimeStatusGen != gen {
+		p.runtimeStatusMu.Unlock()
+		return false
+	}
+	p.storeRuntimeStatusLocked(status)
+	p.runtimeStatusMu.Unlock()
+	p.sendRuntimeStatus(status)
+	return true
+}
+
+func (p *DockerPlugin) storeRuntimeStatusLocked(status runtimemanager.Status) uint64 {
+	p.runtimeStatusGen++
+	p.runtimeStatus = status
 	if p.client != nil {
 		p.client.SetRunscHealthy(status.State == runtimemanager.StateHealthy)
 	}
+	p.persistVerifiedRuntimeStatus(status)
+	return p.runtimeStatusGen
+}
+
+func (p *DockerPlugin) sendRuntimeStatus(status runtimemanager.Status) {
 	if p.writer != nil {
 		if err := p.writer.Send(&pb.DaemonMessage{
 			Payload: &pb.DaemonMessage_DockerRuntimeStatus{

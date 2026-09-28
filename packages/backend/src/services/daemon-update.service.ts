@@ -22,6 +22,20 @@ import type { NodeRegistryService } from '@/services/node-registry.service.js';
 const logger = createChildLogger('DaemonUpdateService');
 const NODE_UPDATE_RECONNECT_TIMEOUT_MS = 2 * 60 * 1000;
 const NODE_UPDATE_EXECUTION_TIMEOUT_MS = 6 * 60 * 1000;
+/** A queued update of a lease member waits at most this long for its lease peers (rollout timeout + margin). */
+const NODE_UPDATE_QUEUE_TIMEOUT_MS = 31 * 60 * 1000;
+/** Update phase of a lease member whose update waits for other members of its availability policies. */
+export const NODE_UPDATE_WAITING_PHASE = 'waiting_for_lease_peers';
+const NODE_UPDATE_METADATA_KEYS = [
+  'updateInProgress',
+  'updateTargetVersion',
+  'updateStartedAt',
+  'updateOperationId',
+  'updatePhase',
+  'updateDeadlineAt',
+  'updateReconnectStartedAt',
+  'updateWaitingFor',
+] as const;
 
 export type DaemonType = 'nginx' | 'docker' | 'monitoring' | 'relay' | 'relay-worker';
 
@@ -246,7 +260,11 @@ export class DaemonUpdateService {
     return metadata.updateInProgress === true;
   }
 
-  async markNodeUpdateInProgress(nodeId: string, targetVersion: string): Promise<string> {
+  async markNodeUpdateInProgress(
+    nodeId: string,
+    targetVersion: string,
+    options: { waitForLeasePeers?: boolean } = {}
+  ): Promise<string> {
     let [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) throw new AppError(404, 'NOT_FOUND', 'Node not found');
 
@@ -262,12 +280,16 @@ export class DaemonUpdateService {
 
     const now = Date.now();
     const operationId = randomUUID();
+    const deadlineMs = options.waitForLeasePeers ? NODE_UPDATE_QUEUE_TIMEOUT_MS : NODE_UPDATE_EXECUTION_TIMEOUT_MS;
+    delete metadata.updateLastError;
+    delete metadata.updateLastErrorAt;
+    delete metadata.updateWaitingFor;
     metadata.updateInProgress = true;
     metadata.updateTargetVersion = targetVersion;
     metadata.updateStartedAt = new Date(now).toISOString();
     metadata.updateOperationId = operationId;
-    metadata.updatePhase = 'executing';
-    metadata.updateDeadlineAt = new Date(now + NODE_UPDATE_EXECUTION_TIMEOUT_MS).toISOString();
+    metadata.updatePhase = options.waitForLeasePeers ? NODE_UPDATE_WAITING_PHASE : 'executing';
+    metadata.updateDeadlineAt = new Date(now + deadlineMs).toISOString();
 
     const updated = await this.db
       .update(nodes)
@@ -278,10 +300,101 @@ export class DaemonUpdateService {
       throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is already in progress');
     }
 
+    // A queued update has not restarted anything yet; the node counts as updating once it is sent.
+    if (!options.waitForLeasePeers) this.nodeRegistry?.setNodeUpdateInProgress(nodeId, true);
+    this.emitNodeUpdated(nodeId);
+    this.scheduleNodeUpdateExpiry(nodeId, operationId, deadlineMs);
+    return operationId;
+  }
+
+  /**
+   * Moves a queued update to execution once its lease peers settled. False when it is no longer the queued update of
+   * the node (expired, cleared, or replaced).
+   */
+  async beginQueuedNodeUpdate(nodeId: string, operationId: string): Promise<boolean> {
+    const metadata = await this.readQueuedUpdate(nodeId, operationId);
+    if (!metadata) return false;
+    const now = Date.now();
+    delete metadata.updateWaitingFor;
+    metadata.updatePhase = 'executing';
+    metadata.updateDeadlineAt = new Date(now + NODE_UPDATE_EXECUTION_TIMEOUT_MS).toISOString();
+    if (!(await this.writeUpdateMetadata(nodeId, operationId, metadata))) return false;
     this.nodeRegistry?.setNodeUpdateInProgress(nodeId, true);
     this.emitNodeUpdated(nodeId);
     this.scheduleNodeUpdateExpiry(nodeId, operationId, NODE_UPDATE_EXECUTION_TIMEOUT_MS);
-    return operationId;
+    return true;
+  }
+
+  /** Shows which lease peers a queued update waits for. */
+  async recordNodeUpdateWait(
+    nodeId: string,
+    operationId: string,
+    waitingFor: Array<{ memberId: string; policyId: string; reason: string }>
+  ): Promise<void> {
+    const metadata = await this.readQueuedUpdate(nodeId, operationId);
+    if (!metadata) return;
+    metadata.updateWaitingFor = waitingFor;
+    if (await this.writeUpdateMetadata(nodeId, operationId, metadata)) this.emitNodeUpdated(nodeId);
+  }
+
+  /** Ends a queued or running update that could not complete and keeps the reason on the node. */
+  async failNodeUpdate(nodeId: string, operationId: string, error: string): Promise<boolean> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return false;
+    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    if (metadata.updateInProgress !== true || metadata.updateOperationId !== operationId) return false;
+    for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
+    metadata.updateLastError = error;
+    metadata.updateLastErrorAt = new Date().toISOString();
+    const updated = await this.db
+      .update(nodes)
+      .set({ metadata, updatedAt: new Date() })
+      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->>'updateOperationId' = ${operationId}`))
+      .returning({ id: nodes.id });
+    if (updated.length === 0) return false;
+    this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
+    this.emitNodeUpdated(nodeId);
+    return true;
+  }
+
+  /** Queued updates of lease members, for a Gateway restart to take up again. */
+  async listQueuedNodeUpdates(): Promise<Array<{ nodeId: string; operationId: string }>> {
+    const rows = await this.db.select({ id: nodes.id, metadata: nodes.metadata }).from(nodes);
+    return rows.flatMap((row) => {
+      const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      return metadata.updateInProgress === true &&
+        metadata.updatePhase === NODE_UPDATE_WAITING_PHASE &&
+        typeof metadata.updateOperationId === 'string'
+        ? [{ nodeId: row.id, operationId: metadata.updateOperationId }]
+        : [];
+    });
+  }
+
+  private async readQueuedUpdate(nodeId: string, operationId: string): Promise<Record<string, unknown> | null> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return null;
+    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    if (
+      metadata.updateInProgress !== true ||
+      metadata.updateOperationId !== operationId ||
+      metadata.updatePhase !== NODE_UPDATE_WAITING_PHASE
+    ) {
+      return null;
+    }
+    return metadata;
+  }
+
+  private async writeUpdateMetadata(
+    nodeId: string,
+    operationId: string,
+    metadata: Record<string, unknown>
+  ): Promise<boolean> {
+    const updated = await this.db
+      .update(nodes)
+      .set({ metadata, updatedAt: new Date() })
+      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->>'updateOperationId' = ${operationId}`))
+      .returning({ id: nodes.id });
+    return updated.length > 0;
   }
 
   private scheduleNodeUpdateExpiry(nodeId: string, operationId: string, delayMs: number): void {
@@ -320,6 +433,7 @@ export class DaemonUpdateService {
     delete metadata.updatePhase;
     delete metadata.updateDeadlineAt;
     delete metadata.updateReconnectStartedAt;
+    delete metadata.updateWaitingFor;
     const update =
       this.nodeRegistry && !this.nodeRegistry.getNode(nodeId)
         ? { metadata, updatedAt: new Date(), status: 'offline' as const }
@@ -352,6 +466,7 @@ export class DaemonUpdateService {
     delete metadata.updatePhase;
     delete metadata.updateDeadlineAt;
     delete metadata.updateReconnectStartedAt;
+    delete metadata.updateWaitingFor;
 
     const updated = await this.db
       .update(nodes)
@@ -465,6 +580,7 @@ export class DaemonUpdateService {
     delete metadata.updatePhase;
     delete metadata.updateDeadlineAt;
     delete metadata.updateReconnectStartedAt;
+    delete metadata.updateWaitingFor;
 
     const updated = await this.db
       .update(nodes)

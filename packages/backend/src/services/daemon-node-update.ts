@@ -1,14 +1,31 @@
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes as nodesTable } from '@/db/schema/nodes.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { type DaemonUpdateService, daemonTypeForNodeType } from './daemon-update.service.js';
+import type { DaemonUpdateRollout } from './daemon-update-rollout.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
+
+const logger = createChildLogger('DaemonNodeUpdate');
 
 export interface NodeDaemonUpdateDeps {
   db: Pick<DrizzleClient, 'select'>;
   daemonUpdateService: DaemonUpdateService;
   dispatch: Pick<NodeDispatchService, 'sendUpdateDaemonCommand'>;
+  /** Sequences restarts of lease members; without it every update is sent at once. */
+  rollout?: Pick<DaemonUpdateRollout, 'isLeaseMember' | 'enqueue'>;
+}
+
+export interface NodeDaemonUpdateResult {
+  scheduled: true;
+  targetVersion: string;
+  /**
+   * The node votes in or is a candidate of an availability policy in lease mode: the update is sent once the other
+   * members of those policies have settled (after a 2 s window that orders requests arriving together, standbys
+   * first). Until then the node shows `updatePhase: waiting_for_lease_peers` and `updateWaitingFor`.
+   */
+  leaseSequenced?: true;
 }
 
 /**
@@ -18,7 +35,7 @@ export interface NodeDaemonUpdateDeps {
 export async function dispatchNodeDaemonUpdate(
   nodeId: string,
   deps: NodeDaemonUpdateDeps
-): Promise<{ scheduled: true; targetVersion: string }> {
+): Promise<NodeDaemonUpdateResult> {
   const { db, daemonUpdateService, dispatch } = deps;
   const [node] = await db.select().from(nodesTable).where(eq(nodesTable.id, nodeId)).limit(1);
   if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
@@ -36,8 +53,7 @@ export async function dispatchNodeDaemonUpdate(
     arch
   );
 
-  const operationId = await daemonUpdateService.markNodeUpdateInProgress(nodeId, release.version);
-  try {
+  const send = async (operationId: string) => {
     const command = await dispatch.sendUpdateDaemonCommand(
       nodeId,
       artifact.downloadUrl,
@@ -47,10 +63,82 @@ export async function dispatchNodeDaemonUpdate(
     );
     daemonUpdateService.trackNodeUpdateCompletion(nodeId, operationId, command.result);
     await command.accepted;
-  } catch (error) {
-    await daemonUpdateService.clearNodeUpdateInProgress(nodeId, operationId);
-    throw error;
+  };
+
+  if (!deps.rollout || !(await deps.rollout.isLeaseMember(nodeId))) {
+    const operationId = await daemonUpdateService.markNodeUpdateInProgress(nodeId, release.version);
+    try {
+      await send(operationId);
+    } catch (error) {
+      await daemonUpdateService.clearNodeUpdateInProgress(nodeId, operationId);
+      throw error;
+    }
+    return { scheduled: true, targetVersion: release.version };
   }
 
-  return { scheduled: true, targetVersion: release.version };
+  const operationId = await daemonUpdateService.markNodeUpdateInProgress(nodeId, release.version, {
+    waitForLeasePeers: true,
+  });
+  void deps.rollout
+    .enqueue({
+      memberId: nodeId,
+      onWait: (blockers) => daemonUpdateService.recordNodeUpdateWait(nodeId, operationId, blockers),
+      run: async () => {
+        if (!(await daemonUpdateService.beginQueuedNodeUpdate(nodeId, operationId))) return;
+        try {
+          await send(operationId);
+        } catch (error) {
+          await daemonUpdateService.failNodeUpdate(
+            nodeId,
+            operationId,
+            error instanceof Error ? error.message : String(error)
+          );
+          throw error;
+        }
+      },
+    })
+    .catch(async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Daemon update of a lease member did not start', { nodeId, error: message });
+      await daemonUpdateService.failNodeUpdate(nodeId, operationId, message).catch(() => undefined);
+    });
+  return { scheduled: true, targetVersion: release.version, leaseSequenced: true };
+}
+
+/** Nodes reconnect after a Gateway restart within seconds; queued updates are taken up again after that. */
+const QUEUED_UPDATE_RESUME_DELAY_MS = 60_000;
+
+/**
+ * Queued updates of lease members live in memory; a Gateway restart (for example the Gateway update itself) takes them
+ * up again from the node metadata, so they neither need an operator nor hang until their deadline.
+ */
+export function scheduleQueuedDaemonUpdateResume(
+  deps: NodeDaemonUpdateDeps,
+  delayMs = QUEUED_UPDATE_RESUME_DELAY_MS
+): void {
+  const timer = setTimeout(() => {
+    void resumeQueuedDaemonUpdates(deps).catch((error) =>
+      logger.error('Queued daemon updates could not be resumed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
+  }, delayMs);
+  timer.unref?.();
+}
+
+export async function resumeQueuedDaemonUpdates(deps: NodeDaemonUpdateDeps): Promise<number> {
+  const queued = await deps.daemonUpdateService.listQueuedNodeUpdates();
+  for (const { nodeId, operationId } of queued) {
+    if (!(await deps.daemonUpdateService.clearNodeUpdateInProgress(nodeId, operationId))) continue;
+    try {
+      await dispatchNodeDaemonUpdate(nodeId, deps);
+      logger.info('Queued daemon update taken up again after a Gateway restart', { nodeId });
+    } catch (error) {
+      logger.error('Queued daemon update could not be taken up again', {
+        nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return queued.length;
 }

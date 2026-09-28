@@ -33,6 +33,10 @@ const mocks = vi.hoisted(() => ({
     sendNodeExecCommand: vi.fn(),
     sendUpdateDaemonCommand: vi.fn(),
   },
+  rollout: {
+    isLeaseMember: vi.fn().mockResolvedValue(false),
+    enqueue: vi.fn(),
+  },
   db: { select: vi.fn() },
   eventBus: { publish: vi.fn() },
 }));
@@ -46,6 +50,7 @@ vi.mock('@/container.js', () => ({
       if (token?.name === 'EventBusService') return mocks.eventBus;
       if (token?.name === 'DaemonUpdateService') return mocks.daemonUpdateService;
       if (token?.name === 'NodeDispatchService') return mocks.dispatch;
+      if (token?.name === 'DaemonUpdateRollout') return mocks.rollout;
       return mocks.updateService;
     }),
   },

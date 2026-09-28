@@ -12,6 +12,7 @@ import { NodesService } from '@/modules/nodes/nodes.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { dispatchNodeDaemonUpdate } from '@/services/daemon-node-update.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { DaemonUpdateRollout } from '@/services/daemon-update-rollout.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
@@ -369,6 +370,7 @@ systemRoutes.openapi(updateDaemonRoute, async (c) => {
     db: container.resolve(TOKENS.DrizzleClient),
     daemonUpdateService: container.resolve(DaemonUpdateService),
     dispatch: container.resolve(NodeDispatchService),
+    rollout: container.resolve(DaemonUpdateRollout),
   });
   return c.json({ data });
 });

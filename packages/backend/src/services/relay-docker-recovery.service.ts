@@ -1,5 +1,5 @@
 import type { Env } from '@/config/env.js';
-import type { DockerContainerFullInspect, DockerService } from './docker.service.js';
+import type { DockerContainerEvent, DockerContainerFullInspect, DockerService } from './docker.service.js';
 import { DOCKER_COMPOSE_CLI_IMAGE_REF } from './update.service.js';
 
 export type RelayRecoverySafetyReason = 'unexpected_image' | 'docker_unavailable' | 'ownership_unverified';
@@ -16,14 +16,26 @@ export class RelayRecoverySafetyError extends Error {
 }
 
 export type RelayRecoveryAction = 'start' | 'restart' | 'compose_up';
+/**
+ * `superseded`: the relay container changed between the observation recovery decided on and the
+ * moment it would have acted (someone else started or stopped it), so nothing was done.
+ */
+export type RelayRecoveryOutcome = RelayRecoveryAction | 'superseded';
 export type RelayStartupAction = 'already_running' | 'start' | 'compose_up' | 'recreate';
 
 /** What Docker reports for the owned relay container; read-only. */
 export interface RelayContainerObservation {
   id: string;
   running: boolean;
+  /** Docker's restart policy is between a crash and the next start. */
+  restarting?: boolean;
   /** Docker's State.StartedAt of the current run, or null when unknown. */
   startedAt: string | null;
+  /** Docker's State.FinishedAt of the last run, or null when unknown. */
+  finishedAt?: string | null;
+  stopTimeoutSeconds?: number | null;
+  /** Lifecycle events Docker recorded for the container in the window asked for, oldest first. */
+  events?: DockerContainerEvent[];
 }
 
 interface RelayOwnership {
@@ -50,6 +62,7 @@ export class RelayDockerRecoveryService {
       | 'startContainer'
       | 'restartContainer'
       | 'runOneShot'
+      | 'listContainerEvents'
     >,
     private readonly env: Pick<
       Env,
@@ -61,7 +74,13 @@ export class RelayDockerRecoveryService {
     this.env.GATEWAY_RELAY_IMAGE_REF = imageRef;
   }
 
-  async recover(): Promise<RelayRecoveryAction> {
+  /**
+   * Starts, restarts or recreates the owned relay. With `decidedOn`, the observation recovery based
+   * its decision on, it first checks that the container is still in that state: one another actor
+   * started, stopped or replaced meanwhile is left alone (`superseded`), since acting on it would
+   * start the relay a second time.
+   */
+  async recover(decidedOn?: RelayContainerObservation | null): Promise<RelayRecoveryOutcome> {
     const expectedImage = this.expectedImage();
     let ownership: RelayOwnership;
     try {
@@ -72,6 +91,8 @@ export class RelayDockerRecoveryService {
         cause: error instanceof Error ? error : undefined,
       });
     }
+
+    if (decidedOn !== undefined && changedSince(decidedOn, ownership.container)) return 'superseded';
 
     if (ownership.container) {
       this.assertExpectedImage(ownership.container, expectedImage);
@@ -91,13 +112,24 @@ export class RelayDockerRecoveryService {
    * Reads the owned relay container without acting on it, so recovery can tell a relay someone
    * else just started (an operator, Docker's restart policy) from one that is really gone.
    */
-  async inspectRelay(): Promise<RelayContainerObservation | null> {
+  async inspectRelay(eventsSinceMs?: number): Promise<RelayContainerObservation | null> {
     const { container } = await this.runDockerAction(() => this.inspectOwnership());
     if (!container) return null;
+    let events: DockerContainerEvent[] | undefined;
+    if (eventsSinceMs !== undefined) {
+      // Only a hint: without it recovery still sees the container's own state.
+      events = await this.runDockerAction(() =>
+        this.docker.listContainerEvents(container.Id, eventsSinceMs, Date.now())
+      ).catch(() => undefined);
+    }
     return {
       id: container.Id,
       running: container.State?.Running === true,
+      restarting: container.State?.Restarting === true,
       startedAt: container.State?.StartedAt || null,
+      finishedAt: container.State?.FinishedAt || null,
+      stopTimeoutSeconds: typeof container.Config?.StopTimeout === 'number' ? container.Config.StopTimeout : null,
+      ...(events ? { events } : {}),
     };
   }
 
@@ -272,4 +304,18 @@ export class RelayDockerRecoveryService {
       if (timer) clearTimeout(timer);
     }
   }
+}
+
+/** Whether the relay container is no longer the run recovery observed when it decided to act. */
+function changedSince(
+  decidedOn: RelayContainerObservation | null,
+  current: DockerContainerFullInspect | null
+): boolean {
+  if (!decidedOn || !current) return (decidedOn === null) !== (current === null);
+  return (
+    decidedOn.id !== current.Id ||
+    decidedOn.running !== (current.State?.Running === true) ||
+    (decidedOn.restarting ?? false) !== (current.State?.Restarting === true) ||
+    (decidedOn.startedAt ?? null) !== (current.State?.StartedAt || null)
+  );
 }

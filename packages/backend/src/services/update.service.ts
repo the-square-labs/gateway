@@ -165,10 +165,38 @@ export interface RelayUpdateRuntime {
 
 export interface RelayPoolUpdateRuntime {
   drainInstance(instanceId: string, userId: string | null, enabled: boolean): Promise<void>;
+  /**
+   * Resolves once no other voter or candidate of the relay's availability lease policies is updating or still
+   * settling after a restart (daemon updates included), so two members of one policy never restart together.
+   */
+  awaitLeasePeers?(relayInstanceId: string, signal: AbortSignal): Promise<void>;
+  /** After the relay restarted at `since`: waits (bounded) until it reports a lease acceptor that votes again. */
+  awaitLeaseSettled?(relayInstanceId: string, since: number, signal: AbortSignal): Promise<void>;
   prepareWorkerUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
   dispatchWorkerUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
   prepareSupervisorUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
   dispatchSupervisorUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
+}
+
+/** First relay release whose shutdown drains for at most 5 s while it keeps serving its tunnels. */
+const RELAY_BOUNDED_DRAIN_VERSION = 'v2.11.0-rc.7';
+/** Docker's stop timeout, which relays with a bounded drain stay well inside. */
+const RELAY_DEFAULT_STOP_TIMEOUT_SECONDS = 10;
+/** Enough for an older relay to close its tunnels; it serves no new request once it got SIGTERM. */
+const RELAY_UNBOUNDED_DRAIN_STOP_TIMEOUT_SECONDS = 2;
+
+/**
+ * Stop timeout for recreating the local relay. A relay older than v2.11.0-rc.7 answers SIGTERM with an unbounded
+ * graceful gRPC stop: it refuses every new stream at once but never exits on its own while daemons keep their
+ * endpoint registrations open, so Docker killed it only after its 10 s stop timeout and every Secure Link route was
+ * down for that long before the new relay could even start (2.10.1 upgrade: 11-14 s). Such a relay is stopped after
+ * 2 s. Newer relays keep serving their tunnels through a drain of at most 5 s and exit themselves.
+ */
+export function relayRecreateStopTimeoutSeconds(runningRelayVersion: string | undefined | null): number {
+  if (!runningRelayVersion || !parseSemver(runningRelayVersion)) return RELAY_DEFAULT_STOP_TIMEOUT_SECONDS;
+  return compareSemver(runningRelayVersion, RELAY_BOUNDED_DRAIN_VERSION) < 0
+    ? RELAY_UNBOUNDED_DRAIN_STOP_TIMEOUT_SECONDS
+    : RELAY_DEFAULT_STOP_TIMEOUT_SECONDS;
 }
 
 export function isGatewayReleaseTag(tag: string): boolean {
@@ -1312,8 +1340,12 @@ chmod 700 "$backup"
         if (instance.kind === 'local') {
           // A retried run finds the local relay already on the target image.
           if (!artifact.imageRef || this.env.GATEWAY_RELAY_IMAGE_REF !== artifact.imageRef) {
+            await runtime.awaitLeasePeers?.(instance.id, signal);
+            throwIfAbandoned();
             await this.updatePoolStep(step.id, 'updating');
+            const restartedAt = Date.now();
             await this.performLocalRelayUpdate(targetVersion, artifact, false);
+            await runtime.awaitLeaseSettled?.(instance.id, restartedAt, signal);
           }
           await this.updatePoolStep(step.id, 'ready', true);
           currentStepId = null;
@@ -1327,6 +1359,9 @@ chmod 700 "$backup"
           currentStepId = null;
           continue;
         }
+        // A voter or candidate of the relay's lease policies that is restarting or settling goes first.
+        await runtime.awaitLeasePeers?.(instance.id, signal);
+        throwIfAbandoned();
         await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + 30 * 60 * 1000));
         drainedInstanceId = instance.id;
         await runtime.drainInstance(instance.id, userId, true);
@@ -1343,6 +1378,7 @@ chmod 700 "$backup"
         const architecture = this.relayInstanceArchitecture(instance);
         const normalizedVersion = normalizeVersionTag(targetVersion);
         const workerArtifact = await runtime.prepareWorkerUpdate(normalizedVersion, architecture);
+        const restartedAt = Date.now();
         await runtime.dispatchWorkerUpdate(instance.nodeId, workerArtifact);
         const supervisorArtifact = await runtime.prepareSupervisorUpdate(normalizedVersion, architecture);
         await runtime.dispatchSupervisorUpdate(instance.nodeId, supervisorArtifact);
@@ -1351,6 +1387,8 @@ chmod 700 "$backup"
           this.waitForRelayInstanceVersion(instance.id, normalizedVersion, signal),
           this.waitForRelaySupervisorVersion(instance.nodeId, normalizedVersion, signal),
         ]);
+        // The step stays active (so daemon updates of the relay's lease peers wait) until the relay votes again.
+        await runtime.awaitLeaseSettled?.(instance.id, restartedAt, signal);
         await runtime.drainInstance(instance.id, userId, false);
         drainedInstanceId = null;
         await this.updatePoolStep(step.id, 'ready', true);
@@ -1463,6 +1501,7 @@ chmod 700 "$backup"
       throw new Error(`Refusing to use unexpected relay foundation backup path: ${migrationOutput.backupDir}`);
     }
     const backupDir = migrationOutput.backupDir?.replace(/^\/host(?=\/)/, composeDir) ?? '';
+    const stopTimeoutSeconds = relayRecreateStopTimeoutSeconds(this.env.GATEWAY_RELAY_BUILD_VERSION);
     await this.relayRuntime?.setMaintenance(true);
     try {
       const result = await this.dockerService.runOneShot({
@@ -1484,7 +1523,7 @@ rollback() {
 }
 on_exit() { code=$?; trap - EXIT; if [ "$code" -ne 0 ]; then rollback; fi; exit "$code"; }
 trap on_exit EXIT
-compose up -d --no-deps --force-recreate relay
+compose up -d --no-deps --force-recreate --timeout ${stopTimeoutSeconds} relay
 attempt=0
 while [ "$attempt" -lt 90 ]; do
   relay_id="$(compose ps -q relay)"

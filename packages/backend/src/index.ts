@@ -46,6 +46,7 @@ import { NotificationEvaluatorService } from '@/modules/notifications/notificati
 import { CAService } from '@/modules/pki/ca.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
+import { closeDataStoresAfterWrites } from '@/services/background-writes.js';
 import type { RedisClient } from '@/services/cache.service.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import { GatewayLifecycleService } from '@/services/gateway-lifecycle.service.js';
@@ -362,12 +363,23 @@ async function main() {
               sandboxRunner.stop(Math.min(5_000, Math.max(0, deadline - Date.now() - 250)))
             ),
           ]);
-          const redis = container.resolve<RedisClient>(TOKENS.RedisClient);
-          await settleShutdownTask('redis', redis.quit());
-          logger.info('Redis close completed');
-          const database = container.resolve(TOKENS.DrizzleClient) as any;
-          await settleShutdownTask('postgres', Promise.resolve(database.$client?.end?.()));
-          logger.info('Database pool close completed');
+          // Node streams closed by the gRPC stop and the modules that just closed still write their
+          // last rows (node.disconnected audit, relay instance state): the stores close after them.
+          await closeDataStoresAfterWrites({
+            deadline,
+            onUnsettled: (pendingWrites) =>
+              logger.warn('Background writes still running when the data stores close', { pendingWrites }),
+            closeRedis: async () => {
+              const redis = container.resolve<RedisClient>(TOKENS.RedisClient);
+              await settleShutdownTask('redis', redis.quit());
+              logger.info('Redis close completed');
+            },
+            closeDatabase: async () => {
+              const database = container.resolve(TOKENS.DrizzleClient) as any;
+              await settleShutdownTask('postgres', Promise.resolve(database.$client?.end?.()));
+              logger.info('Database pool close completed');
+            },
+          });
         },
         closeApplicationLogger: (deadline) => closeApplicationLogger(Math.max(0, deadline - Date.now())),
       },

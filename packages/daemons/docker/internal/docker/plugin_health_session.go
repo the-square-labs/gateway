@@ -76,6 +76,11 @@ func (p *DockerPlugin) OnSessionStart(ctx context.Context, writer *stream.Writer
 
 	// Create exec manager with stream writer for async output
 	p.execMgr = NewExecManager(p.client, writer, p.logger)
+	// A Secure Runtime verification that finished after the registration
+	// message was built and before this writer existed was never sent.
+	if p.runtimeManager != nil {
+		p.sendRuntimeStatus(p.getRuntimeStatus())
+	}
 
 	return nil
 }

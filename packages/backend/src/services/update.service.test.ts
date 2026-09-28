@@ -12,10 +12,30 @@ import {
   isGatewayReleaseTag,
   isRelayReleaseTag,
   isRelayTooOldForGatewayUpdate,
+  relayRecreateStopTimeoutSeconds,
   selectLatestGatewayRelease,
   selectLatestRelayRelease,
   UpdateService,
 } from './update.service.js';
+
+describe('relayRecreateStopTimeoutSeconds', () => {
+  it('stops a relay without a bounded drain after 2 s instead of waiting for Docker to kill it', () => {
+    expect(relayRecreateStopTimeoutSeconds('v2.10.1')).toBe(2);
+    expect(relayRecreateStopTimeoutSeconds('v2.10.2-rc.9')).toBe(2);
+    expect(relayRecreateStopTimeoutSeconds('v2.11.0-rc.4')).toBe(2);
+  });
+
+  it('lets a relay with a bounded drain finish it on its own', () => {
+    expect(relayRecreateStopTimeoutSeconds('v2.11.0-rc.7')).toBe(10);
+    expect(relayRecreateStopTimeoutSeconds('v2.11.0-rc.19')).toBe(10);
+    expect(relayRecreateStopTimeoutSeconds('v2.11.0')).toBe(10);
+  });
+
+  it('keeps Docker default when the running relay version is unknown', () => {
+    expect(relayRecreateStopTimeoutSeconds(undefined)).toBe(10);
+    expect(relayRecreateStopTimeoutSeconds('dev')).toBe(10);
+  });
+});
 
 describe('UpdateService release selection', () => {
   it('passes the persisted Preview channel to Gateway and Relay resolution', async () => {
@@ -513,7 +533,8 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(1, relay.imageRef);
     expect(dockerService.pullImageRef).toHaveBeenNthCalledWith(2, DOCKER_COMPOSE_CLI_IMAGE_REF);
     const updateCommand = dockerService.runOneShot.mock.calls[2]?.[0]?.Cmd?.[2];
-    expect(updateCommand).toContain('compose up -d --no-deps --force-recreate relay');
+    // v2.4.2 predates the relay's bounded drain: it would hang until Docker's 10 s kill (C-3).
+    expect(updateCommand).toContain('compose up -d --no-deps --force-recreate --timeout 2 relay');
     expect(updateCommand).not.toContain('force-recreate app');
     expect(dockerService.runDetached).not.toHaveBeenCalled();
     expect(relayRuntime.setMaintenance).toHaveBeenNthCalledWith(1, true);
@@ -1399,6 +1420,28 @@ describe('UpdateService interrupted updates', () => {
     const verify = vi.spyOn(internals, 'waitForRelayInstanceVersion');
     return { service, runtime, verify, updates };
   }
+
+  it('waits for the relay lease peers before draining it and for its acceptor before resuming it', async () => {
+    const { service, runtime, verify } = rolloutHarness();
+    const events: string[] = [];
+    const awaitLeasePeers = vi.fn(async () => void events.push('lease peers settled'));
+    const awaitLeaseSettled = vi.fn(async () => void events.push('relay votes again'));
+    Object.assign(runtime, { awaitLeasePeers, awaitLeaseSettled });
+    runtime.drainInstance.mockImplementation(
+      async (_id: string, _user: string, enabled: boolean) => void events.push(enabled ? 'drain' : 'resume')
+    );
+    runtime.dispatchWorkerUpdate.mockImplementation(async () => void events.push('worker update'));
+    verify.mockResolvedValue(undefined);
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    vi.spyOn(internals, 'promoteRelayConnectorImages').mockResolvedValue(undefined);
+
+    await service.performRelayUpdate('v2.4.3', {} as never, 'admin-1');
+
+    expect(events).toEqual(['lease peers settled', 'drain', 'worker update', 'relay votes again', 'resume']);
+    expect(awaitLeasePeers).toHaveBeenCalledWith('remote-1', expect.any(AbortSignal));
+    expect(awaitLeaseSettled).toHaveBeenCalledWith('remote-1', expect.any(Number), expect.any(AbortSignal));
+  });
 
   // Regression: a run that failed without a Gateway restart left the relay drained.
   it('resumes the relay it drained when verification times out', async () => {

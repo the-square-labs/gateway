@@ -30,6 +30,7 @@ import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { INTERNAL_DOCKER_REGISTRY_ID } from '@/modules/docker/docker-registry-internal.service.js';
+import { backgroundWrites } from '@/services/background-writes.js';
 import type { PaginatedResponse } from '@/types.js';
 import { getAuditRequestContext, markAuditEmitted } from './audit-request-context.js';
 import type { SiemAuditOutboxService } from './siem-outbox.service.js';
@@ -98,7 +99,15 @@ export class AuditService {
     this.eventBus = eventBus;
   }
 
-  async log(entry: AuditEntry, options: AuditLogOptions = {}): Promise<boolean> {
+  /**
+   * Writes one audit row. Every write is tracked for shutdown, which waits for it before closing
+   * the database pool: rows events produce while Gateway stops (node.disconnected) are not lost.
+   */
+  log(entry: AuditEntry, options: AuditLogOptions = {}): Promise<boolean> {
+    return backgroundWrites.track(this.writeEntry(entry, options));
+  }
+
+  private async writeEntry(entry: AuditEntry, options: AuditLogOptions): Promise<boolean> {
     try {
       const requestContext = getAuditRequestContext();
       const impersonation = requestContext?.impersonation;
