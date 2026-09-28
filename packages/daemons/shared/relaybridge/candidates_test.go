@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"google.golang.org/protobuf/proto"
 )
 
 func relayCandidate(id, state string, generation uint64) *pb.RelayDataCandidate {
@@ -50,6 +51,29 @@ func TestRequiredTargetsDeduplicatesPerRelayInstance(t *testing.T) {
 	targets := RequiredTargets(bundle)
 	if len(targets) != 1 || targets[0].ID != "remote" || targets[0].CertificateFingerprint == "" {
 		t.Fatalf("targets = %#v", targets)
+	}
+}
+
+// Stand run c1: Gateway sends lease lanes as an assignment with role "lease"
+// whose candidates carry an empty grant. Its transports must still be
+// required after the bundle crossed the wire.
+func TestLeaseLaneAssignmentKeepsTransportsToEveryMemberRelay(t *testing.T) {
+	lane := relayCandidate("witness", "active", 1)
+	lane.Grant = &pb.RelaySignedGrant{}
+	encoded, err := proto.Marshal(&pb.SyncRelayGrantsCommand{Grants: []*pb.RelayGrantAssignment{{
+		Role: "lease", OwnerKind: "availability_lease", OwnerId: "node-1", SchemaVersion: 2,
+		Grant: &pb.RelaySignedGrant{}, Candidates: []*pb.RelayDataCandidate{lane},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle pb.SyncRelayGrantsCommand
+	if err := proto.Unmarshal(encoded, &bundle); err != nil {
+		t.Fatal(err)
+	}
+	targets := RequiredTargets(&bundle)
+	if len(targets) != 1 || targets[0].ID != "witness" || targets[0].CertificateIdentity != "relay-witness" {
+		t.Fatalf("lease lane targets = %#v", targets)
 	}
 }
 

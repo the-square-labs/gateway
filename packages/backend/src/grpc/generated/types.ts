@@ -850,6 +850,8 @@ export interface AvailabilityLeaseReport {
   watchdogReady: boolean;
   events: AvailabilityLeaseEvent[];
   leaseRevision: string;
+  /** Relays only: members with a live Coordinate stream to the relay. */
+  connectedMemberIds?: string[];
 }
 
 export interface AvailabilityLeaseManifestAck {
@@ -884,6 +886,9 @@ export interface AvailabilityLeaseKeyView {
   epoch: string;
   manifestVersion: string;
   gateOpen: boolean;
+  /** Relays only: the holder and committed ballot the open gate admits. */
+  gateHolderId?: string;
+  gateBallot?: AvailabilityLeaseBallot | null;
 }
 
 export interface AvailabilityLeaseEvent {

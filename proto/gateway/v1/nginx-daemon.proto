@@ -1036,6 +1036,10 @@ message AvailabilityLeaseReport {
   repeated AvailabilityLeaseEvent events = 11;
   // Last SyncAvailabilityLeaseCommand revision applied.
   uint64 lease_revision = 12;
+  // Relays only, as in relay.v1 (the relay supervisor forwards the relay's
+  // report as is): members with a live Coordinate stream to this relay. The
+  // Gateway derives voter reachability from them.
+  repeated string connected_member_ids = 21;
 }
 
 message AvailabilityLeaseManifestAck {
@@ -1082,6 +1086,11 @@ message AvailabilityLeaseKeyView {
   uint64 manifest_version = 9;
   // Relays only: the data-path gate for the holder is open (A11).
   bool gate_open = 10;
+  // Relays only, as in relay.v1: the holder and committed ballot the gate
+  // admits. An open gate names a fresh holder even where the relay does not
+  // vote, so the Gateway records it as a holder observation.
+  string gate_holder_id = 20;
+  AvailabilityLeaseBallot gate_ballot = 21;
 }
 
 message AvailabilityLeaseEvent {

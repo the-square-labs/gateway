@@ -8214,8 +8214,12 @@ type AvailabilityLeaseReport struct {
 	Events []*AvailabilityLeaseEvent `protobuf:"bytes,11,rep,name=events,proto3" json:"events,omitempty"`
 	// Last SyncAvailabilityLeaseCommand revision applied.
 	LeaseRevision uint64 `protobuf:"varint,12,opt,name=lease_revision,json=leaseRevision,proto3" json:"lease_revision,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Relays only, as in relay.v1 (the relay supervisor forwards the relay's
+	// report as is): members with a live Coordinate stream to this relay. The
+	// Gateway derives voter reachability from them.
+	ConnectedMemberIds []string `protobuf:"bytes,21,rep,name=connected_member_ids,json=connectedMemberIds,proto3" json:"connected_member_ids,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *AvailabilityLeaseReport) Reset() {
@@ -8330,6 +8334,13 @@ func (x *AvailabilityLeaseReport) GetLeaseRevision() uint64 {
 		return x.LeaseRevision
 	}
 	return 0
+}
+
+func (x *AvailabilityLeaseReport) GetConnectedMemberIds() []string {
+	if x != nil {
+		return x.ConnectedMemberIds
+	}
+	return nil
 }
 
 type AvailabilityLeaseManifestAck struct {
@@ -8540,7 +8551,12 @@ type AvailabilityLeaseKeyView struct {
 	Epoch           uint64                   `protobuf:"varint,8,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	ManifestVersion uint64                   `protobuf:"varint,9,opt,name=manifest_version,json=manifestVersion,proto3" json:"manifest_version,omitempty"`
 	// Relays only: the data-path gate for the holder is open (A11).
-	GateOpen      bool `protobuf:"varint,10,opt,name=gate_open,json=gateOpen,proto3" json:"gate_open,omitempty"`
+	GateOpen bool `protobuf:"varint,10,opt,name=gate_open,json=gateOpen,proto3" json:"gate_open,omitempty"`
+	// Relays only, as in relay.v1: the holder and committed ballot the gate
+	// admits. An open gate names a fresh holder even where the relay does not
+	// vote, so the Gateway records it as a holder observation.
+	GateHolderId  string                   `protobuf:"bytes,20,opt,name=gate_holder_id,json=gateHolderId,proto3" json:"gate_holder_id,omitempty"`
+	GateBallot    *AvailabilityLeaseBallot `protobuf:"bytes,21,opt,name=gate_ballot,json=gateBallot,proto3" json:"gate_ballot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8643,6 +8659,20 @@ func (x *AvailabilityLeaseKeyView) GetGateOpen() bool {
 		return x.GateOpen
 	}
 	return false
+}
+
+func (x *AvailabilityLeaseKeyView) GetGateHolderId() string {
+	if x != nil {
+		return x.GateHolderId
+	}
+	return ""
+}
+
+func (x *AvailabilityLeaseKeyView) GetGateBallot() *AvailabilityLeaseBallot {
+	if x != nil {
+		return x.GateBallot
+	}
+	return nil
 }
 
 type AvailabilityLeaseEvent struct {
@@ -12657,7 +12687,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x05round\x18\x01 \x01(\x04R\x05round\x12 \n" +
 	"\vincarnation\x18\x02 \x01(\x04R\vincarnation\x12\x1f\n" +
 	"\vproposer_id\x18\x03 \x01(\tR\n" +
-	"proposerId\"\xcf\x04\n" +
+	"proposerId\"\x81\x05\n" +
 	"\x17AvailabilityLeaseReport\x12\x1b\n" +
 	"\tmember_id\x18\x01 \x01(\tR\bmemberId\x12.\n" +
 	"\x13identity_public_key\x18\x02 \x01(\fR\x11identityPublicKey\x12 \n" +
@@ -12671,7 +12701,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x0ewatchdog_ready\x18\n" +
 	" \x01(\bR\rwatchdogReady\x12:\n" +
 	"\x06events\x18\v \x03(\v2\".gateway.v1.AvailabilityLeaseEventR\x06events\x12%\n" +
-	"\x0elease_revision\x18\f \x01(\x04R\rleaseRevision\"\xcd\x01\n" +
+	"\x0elease_revision\x18\f \x01(\x04R\rleaseRevision\x120\n" +
+	"\x14connected_member_ids\x18\x15 \x03(\tR\x12connectedMemberIds\"\xcd\x01\n" +
 	"\x1cAvailabilityLeaseManifestAck\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12)\n" +
 	"\x10manifest_version\x18\x02 \x01(\x04R\x0fmanifestVersion\x12\x16\n" +
@@ -12688,7 +12719,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x05epoch\x18\x05 \x01(\x04R\x05epoch\x12)\n" +
 	"\x10manifest_version\x18\x06 \x01(\x04R\x0fmanifestVersion\x12!\n" +
 	"\fplacement_id\x18\a \x01(\tR\vplacementId\x121\n" +
-	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\"\x83\x03\n" +
+	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\"\xef\x03\n" +
 	"\x18AvailabilityLeaseKeyView\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x14\n" +
@@ -12700,7 +12731,10 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x05epoch\x18\b \x01(\x04R\x05epoch\x12)\n" +
 	"\x10manifest_version\x18\t \x01(\x04R\x0fmanifestVersion\x12\x1b\n" +
 	"\tgate_open\x18\n" +
-	" \x01(\bR\bgateOpen\"\xf3\x01\n" +
+	" \x01(\bR\bgateOpen\x12$\n" +
+	"\x0egate_holder_id\x18\x14 \x01(\tR\fgateHolderId\x12D\n" +
+	"\vgate_ballot\x18\x15 \x01(\v2#.gateway.v1.AvailabilityLeaseBallotR\n" +
+	"gateBallot\"\xf3\x01\n" +
 	"\x16AvailabilityLeaseEvent\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x1b\n" +
 	"\tpolicy_id\x18\x02 \x01(\tR\bpolicyId\x12\x12\n" +
@@ -13314,42 +13348,43 @@ var file_gateway_v1_nginx_daemon_proto_depIdxs = []int32{
 	90,  // 117: gateway.v1.AvailabilityLeaseHeld.ballot:type_name -> gateway.v1.AvailabilityLeaseBallot
 	90,  // 118: gateway.v1.AvailabilityLeaseKeyView.promised:type_name -> gateway.v1.AvailabilityLeaseBallot
 	90,  // 119: gateway.v1.AvailabilityLeaseKeyView.committed:type_name -> gateway.v1.AvailabilityLeaseBallot
-	90,  // 120: gateway.v1.AvailabilityLeaseEvent.ballot:type_name -> gateway.v1.AvailabilityLeaseBallot
-	137, // 121: gateway.v1.DockerBuildCommand.build_args:type_name -> gateway.v1.DockerBuildCommand.BuildArgsEntry
-	138, // 122: gateway.v1.DockerBuildCommand.build_secrets:type_name -> gateway.v1.DockerBuildCommand.BuildSecretsEntry
-	103, // 123: gateway.v1.SyncDockerRegistryBindingsCommand.bindings:type_name -> gateway.v1.DockerRegistryBinding
-	107, // 124: gateway.v1.DockerConfigPushCommand.registries:type_name -> gateway.v1.RegistryConfig
-	114, // 125: gateway.v1.LogStreamMessage.subscribe_ack:type_name -> gateway.v1.LogSubscribeAck
-	115, // 126: gateway.v1.LogStreamMessage.entry:type_name -> gateway.v1.LogEntry
-	117, // 127: gateway.v1.LogStreamControl.subscribe:type_name -> gateway.v1.LogSubscribe
-	118, // 128: gateway.v1.LogStreamControl.unsubscribe:type_name -> gateway.v1.LogUnsubscribe
-	126, // 129: gateway.v1.MigrationTransferMessage.hello:type_name -> gateway.v1.MigrationTransferHello
-	129, // 130: gateway.v1.MigrationTransferMessage.chunk:type_name -> gateway.v1.MigrationArtifactChunk
-	130, // 131: gateway.v1.MigrationTransferMessage.ack:type_name -> gateway.v1.MigrationArtifactAck
-	131, // 132: gateway.v1.MigrationTransferMessage.error:type_name -> gateway.v1.MigrationArtifactError
-	127, // 133: gateway.v1.MigrationTransferControl.read:type_name -> gateway.v1.MigrationArtifactRead
-	128, // 134: gateway.v1.MigrationTransferControl.write:type_name -> gateway.v1.MigrationArtifactWrite
-	129, // 135: gateway.v1.MigrationTransferControl.chunk:type_name -> gateway.v1.MigrationArtifactChunk
-	130, // 136: gateway.v1.MigrationTransferControl.ack:type_name -> gateway.v1.MigrationArtifactAck
-	131, // 137: gateway.v1.MigrationTransferControl.error:type_name -> gateway.v1.MigrationArtifactError
-	132, // 138: gateway.v1.MigrationTransferControl.heartbeat:type_name -> gateway.v1.MigrationHeartbeat
-	1,   // 139: gateway.v1.NodeEnrollment.Enroll:input_type -> gateway.v1.EnrollRequest
-	3,   // 140: gateway.v1.NodeEnrollment.RenewCertificate:input_type -> gateway.v1.RenewCertRequest
-	7,   // 141: gateway.v1.NodeControl.CommandStream:input_type -> gateway.v1.DaemonMessage
-	5,   // 142: gateway.v1.MaintenanceAccess.Redeem:input_type -> gateway.v1.MaintenanceAccessRedeemRequest
-	124, // 143: gateway.v1.MigrationTransfer.Transfer:input_type -> gateway.v1.MigrationTransferMessage
-	113, // 144: gateway.v1.LogStream.StreamLogs:input_type -> gateway.v1.LogStreamMessage
-	2,   // 145: gateway.v1.NodeEnrollment.Enroll:output_type -> gateway.v1.EnrollResponse
-	4,   // 146: gateway.v1.NodeEnrollment.RenewCertificate:output_type -> gateway.v1.RenewCertResponse
-	16,  // 147: gateway.v1.NodeControl.CommandStream:output_type -> gateway.v1.GatewayCommand
-	6,   // 148: gateway.v1.MaintenanceAccess.Redeem:output_type -> gateway.v1.MaintenanceAccessReply
-	125, // 149: gateway.v1.MigrationTransfer.Transfer:output_type -> gateway.v1.MigrationTransferControl
-	116, // 150: gateway.v1.LogStream.StreamLogs:output_type -> gateway.v1.LogStreamControl
-	145, // [145:151] is the sub-list for method output_type
-	139, // [139:145] is the sub-list for method input_type
-	139, // [139:139] is the sub-list for extension type_name
-	139, // [139:139] is the sub-list for extension extendee
-	0,   // [0:139] is the sub-list for field type_name
+	90,  // 120: gateway.v1.AvailabilityLeaseKeyView.gate_ballot:type_name -> gateway.v1.AvailabilityLeaseBallot
+	90,  // 121: gateway.v1.AvailabilityLeaseEvent.ballot:type_name -> gateway.v1.AvailabilityLeaseBallot
+	137, // 122: gateway.v1.DockerBuildCommand.build_args:type_name -> gateway.v1.DockerBuildCommand.BuildArgsEntry
+	138, // 123: gateway.v1.DockerBuildCommand.build_secrets:type_name -> gateway.v1.DockerBuildCommand.BuildSecretsEntry
+	103, // 124: gateway.v1.SyncDockerRegistryBindingsCommand.bindings:type_name -> gateway.v1.DockerRegistryBinding
+	107, // 125: gateway.v1.DockerConfigPushCommand.registries:type_name -> gateway.v1.RegistryConfig
+	114, // 126: gateway.v1.LogStreamMessage.subscribe_ack:type_name -> gateway.v1.LogSubscribeAck
+	115, // 127: gateway.v1.LogStreamMessage.entry:type_name -> gateway.v1.LogEntry
+	117, // 128: gateway.v1.LogStreamControl.subscribe:type_name -> gateway.v1.LogSubscribe
+	118, // 129: gateway.v1.LogStreamControl.unsubscribe:type_name -> gateway.v1.LogUnsubscribe
+	126, // 130: gateway.v1.MigrationTransferMessage.hello:type_name -> gateway.v1.MigrationTransferHello
+	129, // 131: gateway.v1.MigrationTransferMessage.chunk:type_name -> gateway.v1.MigrationArtifactChunk
+	130, // 132: gateway.v1.MigrationTransferMessage.ack:type_name -> gateway.v1.MigrationArtifactAck
+	131, // 133: gateway.v1.MigrationTransferMessage.error:type_name -> gateway.v1.MigrationArtifactError
+	127, // 134: gateway.v1.MigrationTransferControl.read:type_name -> gateway.v1.MigrationArtifactRead
+	128, // 135: gateway.v1.MigrationTransferControl.write:type_name -> gateway.v1.MigrationArtifactWrite
+	129, // 136: gateway.v1.MigrationTransferControl.chunk:type_name -> gateway.v1.MigrationArtifactChunk
+	130, // 137: gateway.v1.MigrationTransferControl.ack:type_name -> gateway.v1.MigrationArtifactAck
+	131, // 138: gateway.v1.MigrationTransferControl.error:type_name -> gateway.v1.MigrationArtifactError
+	132, // 139: gateway.v1.MigrationTransferControl.heartbeat:type_name -> gateway.v1.MigrationHeartbeat
+	1,   // 140: gateway.v1.NodeEnrollment.Enroll:input_type -> gateway.v1.EnrollRequest
+	3,   // 141: gateway.v1.NodeEnrollment.RenewCertificate:input_type -> gateway.v1.RenewCertRequest
+	7,   // 142: gateway.v1.NodeControl.CommandStream:input_type -> gateway.v1.DaemonMessage
+	5,   // 143: gateway.v1.MaintenanceAccess.Redeem:input_type -> gateway.v1.MaintenanceAccessRedeemRequest
+	124, // 144: gateway.v1.MigrationTransfer.Transfer:input_type -> gateway.v1.MigrationTransferMessage
+	113, // 145: gateway.v1.LogStream.StreamLogs:input_type -> gateway.v1.LogStreamMessage
+	2,   // 146: gateway.v1.NodeEnrollment.Enroll:output_type -> gateway.v1.EnrollResponse
+	4,   // 147: gateway.v1.NodeEnrollment.RenewCertificate:output_type -> gateway.v1.RenewCertResponse
+	16,  // 148: gateway.v1.NodeControl.CommandStream:output_type -> gateway.v1.GatewayCommand
+	6,   // 149: gateway.v1.MaintenanceAccess.Redeem:output_type -> gateway.v1.MaintenanceAccessReply
+	125, // 150: gateway.v1.MigrationTransfer.Transfer:output_type -> gateway.v1.MigrationTransferControl
+	116, // 151: gateway.v1.LogStream.StreamLogs:output_type -> gateway.v1.LogStreamControl
+	146, // [146:152] is the sub-list for method output_type
+	140, // [140:146] is the sub-list for method input_type
+	140, // [140:140] is the sub-list for extension type_name
+	140, // [140:140] is the sub-list for extension extendee
+	0,   // [0:140] is the sub-list for field type_name
 }
 
 func init() { file_gateway_v1_nginx_daemon_proto_init() }

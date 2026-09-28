@@ -23,6 +23,7 @@ import {
 import { encodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { leaseLaneNodeIds } from '@/modules/docker/availability/lease/lease-relay-lanes.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import {
   LEGACY_RELAY_POLICY_LEASE_SECONDS,
@@ -293,6 +294,9 @@ export class RelayPolicyService {
   async publishAvailabilityLeaseChange(): Promise<void> {
     await this.db.transaction((tx) => bumpRelayPolicyRevision(tx));
     await this.syncSnapshot();
+    // Lease lanes follow the policies' voters and candidates (stand run c1).
+    const nodeIds = await leaseLaneNodeIds(this.db).catch(() => []);
+    await Promise.allSettled(nodeIds.map((nodeId) => this.syncNodeGrants(nodeId, { skipUnchanged: true })));
   }
 
   setEventBus(events: EventBusService): void {
