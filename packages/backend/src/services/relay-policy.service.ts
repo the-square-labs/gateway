@@ -29,6 +29,7 @@ import {
   LEGACY_RELAY_POLICY_LEASE_SECONDS,
   LONG_POLICY_LEASE_CAPABILITY,
 } from '@/modules/settings/general-settings.service.js';
+import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import type { CryptoService } from './crypto.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
@@ -477,6 +478,8 @@ export class RelayPolicyService {
       nodeId,
       Math.max(this.remotePolicyRevisions.get(nodeId) ?? 0, snapshot.globalRevision)
     );
+    // The relay answers again: pushes of later changes must not wait out an earlier failure's cooldown.
+    this.remotePolicyPushFailedAt.delete(nodeId);
     return snapshot.revision;
   }
 
@@ -879,6 +882,13 @@ export class RelayPolicyService {
       const nodeId = stale[index]!;
       if (result.status === 'fulfilled') {
         this.remotePolicyPushFailedAt.delete(nodeId);
+        return;
+      }
+      if (isNodeNotConnectedError(result.reason)) {
+        // A relay that is not connected gets its snapshot when it reconnects (forced push on connect). No cooldown:
+        // it would also hold back the pushes of the changes made right after it reconnected, and daemons would
+        // present grants the relay does not know yet ("grant does not match policy", B-18).
+        logger.debug('Remote relay policy push waits for the relay to reconnect', { nodeId });
         return;
       }
       // An unresponsive relay must not slow every local sync; the lease refresh keeps trying.

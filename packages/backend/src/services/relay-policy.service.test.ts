@@ -1615,6 +1615,57 @@ describe('RelayPolicyService relay recovery surfaces', () => {
   });
 });
 
+describe('RelayPolicyService remote pushes after the control plane returns (B-18)', () => {
+  function relayDb(rows: unknown[]) {
+    return {
+      select: () => {
+        const q: any = Promise.resolve(rows);
+        q.from = () => q;
+        q.where = () => q;
+        q.limit = () => Promise.resolve(rows);
+        return q;
+      },
+    } as any;
+  }
+
+  it('keeps pushing policy changes to a relay that was only disconnected', async () => {
+    const pushing = createService(relayDb([{ nodeId: 'relay-137' }]), { applySnapshot: vi.fn() });
+    pushing.setNodeDispatch({} as never);
+    const push = vi
+      .spyOn(pushing, 'syncRemoteInstancePolicy')
+      .mockRejectedValueOnce(new Error('Node relay-137 is not connected'))
+      .mockResolvedValue(1);
+
+    // Gateway returns before the relay node reconnected.
+    await (pushing as any).pushChangedRemotePolicies(20);
+    // A member endpoint changes right after the relay reconnected: its policy must reach the relay before the
+    // daemons present grants for it, not a minute later.
+    await (pushing as any).pushChangedRemotePolicies(21);
+
+    expect(push).toHaveBeenCalledTimes(2);
+    expect(push).toHaveBeenLastCalledWith('relay-137', 10_000);
+  });
+
+  it('lifts the push cooldown of a relay that took a snapshot again', async () => {
+    const service = createService(relayDb([{ id: 'instance-137', nodeId: 'relay-137' }]), { applySnapshot: vi.fn() });
+    const sendRelayPolicy = vi.fn().mockResolvedValue({ success: true });
+    service.setNodeDispatch({ sendRelayPolicy } as never);
+    vi.spyOn(service as any, 'buildInstanceSnapshot').mockResolvedValue({
+      encodedRequest: Buffer.from('snapshot'),
+      revision: 7,
+      expiresAtUnix: 1,
+      globalRevision: 30,
+    });
+    (service as any).remotePolicyPushFailedAt.set('relay-137', Date.now());
+
+    // The forced push on reconnect.
+    await service.syncRemoteInstancePolicy('relay-137', undefined, { force: true });
+
+    expect(sendRelayPolicy).toHaveBeenCalledOnce();
+    expect((service as any).remotePolicyPushFailedAt.has('relay-137')).toBe(false);
+  });
+});
+
 describe('RelayPolicyService grant issuance around the local relay', () => {
   it('issues grants without the local relay acknowledgement only while that relay is unreachable', async () => {
     const service = createService({}, { applySnapshot: vi.fn() });
