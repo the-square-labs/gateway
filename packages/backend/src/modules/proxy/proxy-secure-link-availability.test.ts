@@ -49,6 +49,10 @@ describe('Availability member secure-link sync (D7, D8)', () => {
     });
     expect(syncableAvailabilityMember(link({ dormant: true }), capable)).toBe(true);
 
+    // rc.20 daemons advertise availability_lease_v2 (D3); both versions understand dormant members.
+    const current = await availabilityMemberSyncContext(db(['availability_lease_v2']), 'nginx', [link()]);
+    expect(syncableAvailabilityMember(link({ dormant: true }), current)).toBe(true);
+
     const old = await availabilityMemberSyncContext(db(['proxy_secure_links_v1']), 'nginx', [link()]);
     expect(syncableAvailabilityMember(link({ dormant: true }), old)).toBe(false);
     expect(syncableAvailabilityMember(link(), old)).toBe(true);

@@ -1,4 +1,5 @@
 import type { DockerAvailabilityLeaseReason } from '@/db/schema/index.js';
+import type { DockerAvailabilityLeaseExclusionReason } from './lease-types.js';
 
 export interface LeaseGatingInput {
   /** The paid controller runs the lease-mode branch (edition contract). */
@@ -8,28 +9,87 @@ export interface LeaseGatingInput {
   policyMode: 'single' | 'replicated' | 'failover';
   /** A policy key can sign lease manifests. */
   signingReady: boolean;
-  /** Candidate docker node ids and whether each is capable (capability, identity key, fresh watchdog). */
-  candidates: Array<{ nodeId: string; capable: boolean; watchdogMissing?: boolean }>;
-  /** Ingress nginx node ids of the policy's routes and whether each is capable. */
+  /** The policy is on the legacy path and would bootstrap lease mode now (stricter than staying in it). */
+  entering?: boolean;
+  /**
+   * Candidate docker nodes: why each is excluded (D3; null when it takes part) and whether it serves right now. A
+   * bootstrap reserves the serving nodes, so they must be able to hold before lease mode starts.
+   */
+  candidates: Array<{ nodeId: string; exclusion: DockerAvailabilityLeaseExclusionReason | null; serving?: boolean }>;
+  /** Slots with an observed holder right now. */
+  heldSlots?: number;
+  /** Ingress nginx node ids of the policy's routes and whether each advertises availability_lease_v2. */
   ingress: Array<{ nodeId: string; capable: boolean }>;
   /**
    * Relay instances carrying the policy's member endpoints and managed-database routes, and whether each is capable.
    * An old relay ignores lease_policy_id and would admit a stale holder (A2.4, A11).
    */
   relays?: Array<{ relayId: string; capable: boolean }>;
+  /**
+   * The voter selection from members that may vote (D3). viable: at least a quorum of its target size exists.
+   * Omitted: treated as viable (callers that only check the other conditions).
+   */
+  voters?: { viable: boolean; nonVotingCandidateIds: string[] };
+  /**
+   * Entering only: participants the policy needs (candidates, ingress nginx nodes, carrying relays, witnesses) that
+   * have not been fully capable for LEASE_ENTRY_STABLE_MS without a restart (a fleet in the middle of an update).
+   */
+  unsettled?: { nodeIds: string[]; relayIds: string[] };
 }
 
-export type LeaseGatingResult = { eligible: true } | { eligible: false; reason: DockerAvailabilityLeaseReason };
+export type LeaseGatingResult =
+  | { eligible: true }
+  | {
+      eligible: false;
+      reason: DockerAvailabilityLeaseReason;
+      /**
+       * An explicit request (a lifecycle hold, a disable) closes lease mode at once. Every other reason is a
+       * condition that may pass: a lease-mode policy leaves only after it lasted 2 minutes without a break (D3).
+       */
+      immediate: boolean;
+    };
+
+/** Exclusions that keep a candidate from holding for a reason of its own (not merely offline to Gateway). */
+const CANNOT_HOLD: ReadonlySet<DockerAvailabilityLeaseExclusionReason> = new Set([
+  'watchdog_missing',
+  'daemon_outdated',
+  'identity_pending',
+]);
+
+function candidatesReason(
+  nodes: Array<{ nodeId: string; exclusion: DockerAvailabilityLeaseExclusionReason | null }>
+): DockerAvailabilityLeaseReason {
+  const nodeIds = [...new Set(nodes.map(({ nodeId }) => nodeId))].sort();
+  if (nodes.every(({ exclusion }) => exclusion === 'watchdog_missing')) {
+    return {
+      code: 'watchdog_missing',
+      message:
+        'The lease watchdog is not running on the Docker nodes that would hold this workload, so they cannot hold the lease; start it or re-run the node installer on them',
+      nodeIds,
+    };
+  }
+  return {
+    code: 'candidates_not_capable',
+    message:
+      'The Docker nodes that would hold this workload run a daemon without availability_lease_v2, have not reported a lease identity yet, or have no running lease watchdog; update them',
+    nodeIds,
+  };
+}
 
 /**
- * D10: a policy runs in lease mode only when all its candidates and all ingress nginx nodes of its routes are capable.
- * Its voters (A18) are the candidates' hosts plus witnesses chosen among capable members, so every voter is capable.
- * Anything else keeps today's backend-driven failover, with the reason exposed.
+ * D10 as amended by D3 (rc.20). Per-node conditions never decide the mode: a candidate that is offline, has no
+ * watchdog or runs an outdated daemon is only excluded (the lease view lists it). Lease mode is impossible when:
+ * the controller does not run it (edition, license), the policy is disabled or held on legacy, it has no candidates,
+ * no candidate can hold and no slot is held, an ingress nginx node or a carrying relay lacks availability_lease_v2,
+ * fewer members that may vote exist than a quorum needs, or no key signs manifests. Entering lease mode additionally
+ * needs every serving node to be able to hold, because the bootstrap reserves them, and every participant to have
+ * been fully capable for 2 minutes without a restart, so a fleet in the middle of an update never enters it.
  */
 export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult {
   if (!input.controllerSupportsLease) {
     return {
       eligible: false,
+      immediate: false,
       reason: {
         code: 'controller_unsupported',
         message: 'This Gateway edition runs Availability failover from the backend only',
@@ -39,51 +99,43 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
   if (input.legacyRequested) {
     return {
       eligible: false,
+      immediate: true,
       reason: { code: 'legacy_requested', message: 'The Availability controller runs this policy on the backend path' },
     };
   }
   if (input.policyMode === 'single') {
-    return { eligible: false, reason: { code: 'availability_disabled', message: 'Availability is not enabled' } };
+    return {
+      eligible: false,
+      immediate: true,
+      reason: { code: 'availability_disabled', message: 'Availability is not enabled' },
+    };
   }
-  const incapableCandidates = input.candidates.filter((candidate) => !candidate.capable).map(({ nodeId }) => nodeId);
   if (input.candidates.length === 0) {
     return {
       eligible: false,
+      immediate: false,
       reason: { code: 'no_candidates', message: 'The policy has no candidate placements yet' },
     };
   }
-  const watchdogMissing = input.candidates
-    .filter((candidate) => !candidate.capable && candidate.watchdogMissing)
-    .map(({ nodeId }) => nodeId);
-  if (watchdogMissing.length > 0) {
-    return {
-      eligible: false,
-      reason: {
-        code: 'watchdog_missing',
-        message:
-          'The lease watchdog is missing on some Docker nodes of this workload and their daemon cannot install it: re-run the node installer on them',
-        nodeIds: watchdogMissing.sort(),
-      },
-    };
+  if (input.entering) {
+    const blocked = input.candidates.filter(
+      (candidate) => candidate.serving && candidate.exclusion && CANNOT_HOLD.has(candidate.exclusion)
+    );
+    if (blocked.length > 0) return { eligible: false, immediate: false, reason: candidatesReason(blocked) };
   }
-  if (incapableCandidates.length > 0) {
-    return {
-      eligible: false,
-      reason: {
-        code: 'candidates_not_capable',
-        message:
-          'Some Docker nodes of this workload run a daemon without data-plane failover or without a running lease watchdog; update them',
-        nodeIds: incapableCandidates.sort(),
-      },
-    };
+  const unable = input.candidates.filter((candidate) => candidate.exclusion && CANNOT_HOLD.has(candidate.exclusion));
+  if (unable.length === input.candidates.length && (input.heldSlots ?? 0) === 0) {
+    return { eligible: false, immediate: false, reason: candidatesReason(unable) };
   }
   const incapableIngress = input.ingress.filter((node) => !node.capable).map(({ nodeId }) => nodeId);
   if (incapableIngress.length > 0) {
     return {
       eligible: false,
+      immediate: false,
       reason: {
         code: 'ingress_not_capable',
-        message: 'Some Nginx nodes that route to this workload run a daemon without data-plane failover; update them',
+        message:
+          'Some Nginx nodes that route to this workload run a daemon without availability_lease_v2 (data-plane failover); update them',
         nodeIds: [...new Set(incapableIngress)].sort(),
       },
     };
@@ -92,20 +144,48 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
   if (incapableRelays.length > 0) {
     return {
       eligible: false,
+      immediate: false,
       reason: {
         code: 'relays_not_capable',
         message:
-          'Some relays that carry this workload run a version without the lease data-path gate; update them before data-plane failover can run',
+          'Some relays that carry this workload run a version without availability_lease_v2 (the lease data-path gate); update them before data-plane failover can run',
         relayIds: [...new Set(incapableRelays)].sort(),
+      },
+    };
+  }
+  if (input.voters && !input.voters.viable) {
+    return {
+      eligible: false,
+      immediate: false,
+      reason: {
+        code: 'insufficient_voters',
+        message:
+          'Fewer members that can vote (Docker nodes and relays with availability_lease_v2 and a lease identity) exist than a quorum needs; update the candidate nodes or add a relay as witness',
+        nodeIds: [...new Set(input.voters.nonVotingCandidateIds)].sort(),
       },
     };
   }
   if (!input.signingReady) {
     return {
       eligible: false,
+      immediate: false,
       reason: {
         code: 'signing_key_pending',
         message: 'No relay policy signing key can sign lease manifests yet',
+      },
+    };
+  }
+  const unsettled = input.unsettled;
+  if (input.entering && unsettled && unsettled.nodeIds.length + unsettled.relayIds.length > 0) {
+    return {
+      eligible: false,
+      immediate: false,
+      reason: {
+        code: 'participants_settling',
+        message:
+          'Data-plane failover starts once every node and relay of this workload has run availability_lease_v2 (with its lease watchdog and identity) for 2 minutes without a restart',
+        ...(unsettled.nodeIds.length > 0 ? { nodeIds: [...new Set(unsettled.nodeIds)].sort() } : {}),
+        ...(unsettled.relayIds.length > 0 ? { relayIds: [...new Set(unsettled.relayIds)].sort() } : {}),
       },
     };
   }

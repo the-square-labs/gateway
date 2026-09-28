@@ -5,6 +5,7 @@ import {
   type DockerAvailabilityPartitionMode,
   dockerAvailabilityLeaseObservations,
   dockerAvailabilityLeaseState,
+  dockerAvailabilityPlacements,
   dockerAvailabilityPolicies,
   relayInstances,
 } from '@/db/schema/index.js';
@@ -18,14 +19,15 @@ import type { RelayPolicySigningKeyService } from '@/services/relay-policy-signi
 import { AvailabilityLeaseCluster } from './lease-cluster.js';
 import type { LeaseSigner } from './lease-codec.js';
 import {
-  AVAILABILITY_LEASE_CAPABILITY,
+  AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES,
   MEMBER_REPORT_FRESH_MS,
   PLANNED_HANDOFF_TTL_MS,
   RELAY_CONNECTIONS_FRESH_MS,
 } from './lease-constants.js';
 import { AvailabilityLeaseDistribution, type RelayLeasePolicyFields } from './lease-distribution.js';
 import { availabilityStandbyCount } from './lease-gating.js';
-import { loadLeaseParticipants } from './lease-participants.js';
+import { LeaseCapabilityTracker, type LeaseParticipants, loadLeaseParticipants } from './lease-participants.js';
+import { leaseCandidatePlacements } from './lease-planning.js';
 import { AvailabilityLeasePolicies, type LeaseModeChange } from './lease-policies.js';
 import { type RelayLeaseOwner, type RelayLeasePolicyIds, relayLeasePolicyIds } from './lease-relay-gate.js';
 import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseReportSender } from './lease-reports.js';
@@ -40,6 +42,7 @@ import {
 } from './lease-store.js';
 import type {
   DockerAvailabilityLeaseController,
+  DockerAvailabilityLeaseExcludedNode,
   DockerAvailabilityLeaseHandoffInput,
   DockerAvailabilityLeaseView,
   DockerAvailabilityLeaseWitnessView,
@@ -48,6 +51,19 @@ import { type LeaseWitnessWarning, leaseVoterMargin } from './lease-voters.js';
 import { validateLeaseWitness } from './lease-witness.js';
 
 const logger = createChildLogger('AvailabilityLeaseService');
+
+/** D3: the policy's candidate nodes that cannot hold or receive a standby now, with the reason. */
+export function leaseExcludedNodes(
+  participants: Pick<LeaseParticipants, 'byId'>,
+  candidateNodeIds: Iterable<string>
+): DockerAvailabilityLeaseExcludedNode[] {
+  return [...new Set(candidateNodeIds)].sort().flatMap((nodeId) => {
+    const participant = participants.byId.get(nodeId);
+    // A candidate without a docker node row cannot be reached at all.
+    const reason = participant ? participant.exclusion : 'offline';
+    return reason ? [{ nodeId, reason }] : [];
+  });
+}
 
 function leaseWitnessView(state: LeaseStateRow | null): DockerAvailabilityLeaseWitnessView | null {
   if (!state) return null;
@@ -77,6 +93,8 @@ export class AvailabilityLeaseService {
   private rerun: Promise<void> | null = null;
   /** Members each relay last reported a live Coordinate stream from (voter reachability). */
   private readonly relayConnections = new Map<string, RelayConnectedMembers>();
+  /** D3: since when each member lacks the current capability, for the 2-minute grace of voters and candidates. */
+  private readonly capabilities = new LeaseCapabilityTracker();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -134,7 +152,8 @@ export class AvailabilityLeaseService {
   private async reconcileOnce(): Promise<void> {
     const now = new Date();
     const members = new Map((await loadLeaseMembers(this.db)).map((member) => [member.memberId, member]));
-    const participants = await loadLeaseParticipants(this.db, this.registry, members);
+    const participants = await loadLeaseParticipants(this.db, this.registry, members, now.getTime());
+    this.capabilities.observe(participants, now.getTime());
     const controllerSupportsLease = this.controller?.leaseModeSupported() === true;
     const cluster = await this.cluster.reconcile({ members });
     const outcome = await this.policies.reconcile({
@@ -260,7 +279,7 @@ export class AvailabilityLeaseService {
   }
 
   async getPolicyLease(policyId: string, now = new Date()): Promise<DockerAvailabilityLeaseView> {
-    const [[state], observations, members, localRelays] = await Promise.all([
+    const [[state], observations, members, localRelays, placements] = await Promise.all([
       this.db
         .select()
         .from(dockerAvailabilityLeaseState)
@@ -272,7 +291,30 @@ export class AvailabilityLeaseService {
         .where(eq(dockerAvailabilityLeaseObservations.policyId, policyId)),
       loadLeaseMembers(this.db),
       this.db.select({ id: relayInstances.id }).from(relayInstances).where(eq(relayInstances.kind, 'local')),
+      this.db
+        .select({
+          id: dockerAvailabilityPlacements.id,
+          nodeId: dockerAvailabilityPlacements.nodeId,
+          desiredState: dockerAvailabilityPlacements.desiredState,
+          serving: dockerAvailabilityPlacements.serving,
+          createdAt: dockerAvailabilityPlacements.createdAt,
+        })
+        .from(dockerAvailabilityPlacements)
+        .where(eq(dockerAvailabilityPlacements.policyId, policyId)),
     ]);
+    const candidateNodeIds = leaseCandidatePlacements(placements).map((placement) => placement.nodeId);
+    const excludedNodes =
+      state && state.mode !== 'legacy' && candidateNodeIds.length > 0
+        ? leaseExcludedNodes(
+            await loadLeaseParticipants(
+              this.db,
+              this.registry,
+              new Map(members.map((member) => [member.memberId, member])),
+              now.getTime()
+            ),
+            candidateNodeIds
+          )
+        : [];
     const reachable = leaseReachableMemberIds({
       members,
       connections: this.relayConnections.values(),
@@ -302,6 +344,7 @@ export class AvailabilityLeaseService {
       strictPending: state?.mode === 'bootstrapping' && state.strictRequestedAt !== null,
       surgeSlots: state?.surgeSlots ?? 0,
       copiesStoppedAt: state?.copiesStoppedAt ?? null,
+      excludedNodes,
       voterMargin: state ? leaseVoterMargin(state.voterEpoch, state.quorumSets, reachable) : null,
       voters: state?.quorumSets.at(-1) ?? [],
       witness: leaseWitnessView(state ?? null),
@@ -467,7 +510,10 @@ export class AvailabilityLeaseService {
     }
     const holder = view.holders.find((entry) => entry.slot === input.slot)?.holderNodeId ?? null;
     if (!holder) throw new AppError(409, 'AVAILABILITY_LEASE_NO_HOLDER', 'The lease has no current holder to hand off');
-    if (!this.registry.hasCapability(holder, AVAILABILITY_LEASE_CAPABILITY)) {
+    // An outdated holder still hands over (it speaks the same wire protocol): moving off it is the point.
+    if (
+      !AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES.some((capability) => this.registry.hasCapability(holder, capability))
+    ) {
       throw new AppError(503, 'AVAILABILITY_NODE_DISCONNECTED', 'Waiting for the lease holder to reconnect', {
         retryable: true,
       });

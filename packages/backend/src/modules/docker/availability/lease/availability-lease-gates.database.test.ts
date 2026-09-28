@@ -12,13 +12,17 @@ import { decodeLeaseSignedBlock } from './lease-codec.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 
+// Each test runs several reconciles against PostgreSQL; a loaded runner must not turn that into a timeout.
+vi.setConfig({ testTimeout: 60_000 });
+
 function identityKey(): Buffer {
   return generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
 }
 
 /**
  * Opt-in (GATEWAY_MIGRATION_TEST_DATABASE_URL): identity renewals republish manifests at once (H3), and a relay
- * without the lease gate that carries the policy's traffic keeps the policy on the legacy path (H4).
+ * without the lease gate that carries the policy's traffic moves the policy back to the legacy path (H4) once that
+ * lasted 2 minutes (D3).
  */
 describe.skipIf(!url)('availability lease identity renewal and relay gating on disposable PostgreSQL', () => {
   let database: Awaited<ReturnType<typeof disposableDatabase>>;
@@ -57,6 +61,8 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
     return { ...value, version: Number(state.manifest_version) };
   };
 
+  // Migrating a fresh database can take far longer than the default 10 s hook timeout on a loaded runner, and a
+  // timed-out hook let the tests run against a half-prepared database (the gates suite failed that way under load).
   beforeAll(async () => {
     database = await disposableDatabase(url!, 'lease_gates');
     pool = database.pool;
@@ -69,7 +75,7 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
     );
     await q(`insert into relay_pools (id) values ('system') on conflict do nothing`);
     for (const [id, features] of [
-      [relayId, ['relay_pool_v1', 'availability_lease_v1']],
+      [relayId, ['relay_pool_v1', 'availability_lease_v2']],
       [oldRelayId, ['relay_pool_v1']],
     ] as const) {
       await q(
@@ -82,7 +88,7 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
       await q(
         `insert into nodes (id, type, hostname, slug, status, host_identity_id, capabilities)
          values ($1, 'docker', $2, $2, 'online', gen_random_uuid(), $3)`,
-        [id, `gate-node-${index}`, JSON.stringify({ capabilities: ['availability_lease_v1'] })]
+        [id, `gate-node-${index}`, JSON.stringify({ capabilities: ['availability_lease_v2'] })]
       );
     }
     for (const id of [relayId, ...nodeIds]) identities.set(id, identityKey());
@@ -102,7 +108,7 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
       nodeId: id,
       connectionId: `c-${id}`,
       type: 'docker',
-      capabilities: new Set(['availability_lease_v1']),
+      capabilities: new Set(['availability_lease_v2']),
     }));
     service = new AvailabilityLeaseService(
       db,
@@ -120,7 +126,9 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
       } as never,
       { log: vi.fn(async () => true) },
       { publish: vi.fn() } as never,
-      { signPayload: async (payload: Buffer) => ({ signingKeyId: keyId, signature: sign(null, payload, privateKey) }) }
+      {
+        signPayload: async (payload: Buffer) => ({ signingKeyId: keyId, signature: sign(null, payload, privateKey) }),
+      }
     );
     service.attachController({
       leaseModeSupported: () => true,
@@ -130,11 +138,18 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
     for (const id of nodeIds) await service.ingestDaemonReport(id, 'docker', report(id));
     await service.ingestRelayReport(relayId, report(relayId));
     await service.reconcile();
-  });
+    // Lease mode starts once every participant was ready for 2 minutes without a restart.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 121_000 });
+    try {
+      await service.reconcile();
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 180_000);
 
   afterAll(async () => {
     await database?.drop();
-  });
+  }, 60_000);
 
   it('republishes every manifest with a renewed identity key right away (H3)', async () => {
     const before = await manifest();
@@ -205,6 +220,20 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
       );
     }
     await service.reconcile();
+    // D3: lease mode ends only after it stayed impossible for 2 minutes; until then the reason says since when.
+    const pending = await service.getPolicyLease(policyId);
+    expect(pending.mode).toBe('bootstrapping');
+    expect(pending.reason).toMatchObject({
+      code: 'relays_not_capable',
+      relayIds: [oldRelayId],
+      since: expect.any(String),
+    });
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 121_000 });
+    try {
+      await service.reconcile();
+    } finally {
+      vi.useRealTimers();
+    }
     const view = await service.getPolicyLease(policyId);
     expect(view.mode).toBe('closing');
     expect(view.reason).toMatchObject({ code: 'relays_not_capable', relayIds: [oldRelayId] });

@@ -3,8 +3,33 @@
  * (timing.go, D5 amended by A1/A3); the values here only mirror what the Gateway needs to wait for.
  */
 
-/** Capability advertised by docker daemons, nginx daemons and relays that run the lease protocol (D10). */
-export const AVAILABILITY_LEASE_CAPABILITY = 'availability_lease_v1';
+/**
+ * Capability every lease participant (docker daemon, nginx daemon, relay) of this release advertises, and the one the
+ * Gateway requires (D3 of the rc.20 fixes): peer-time freeze detection, release after a confirmed fence and the other
+ * lease timing fixes only exist from v2 on. A participant that advertises only availability_lease_v1 is outdated.
+ */
+export const AVAILABILITY_LEASE_CAPABILITY = 'availability_lease_v2';
+
+/** The first lease protocol capability (rc.18/rc.19). Same wire protocol; counted as outdated. */
+export const AVAILABILITY_LEASE_V1_CAPABILITY = 'availability_lease_v1';
+
+/**
+ * Every capability that means "speaks the lease wire protocol". Outdated participants keep receiving manifests, lease
+ * lanes, dormant members and handoff requests: a holder that runs an old daemon must still see a closed manifest and
+ * hand its slot over.
+ */
+export const AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES: readonly string[] = [
+  AVAILABILITY_LEASE_CAPABILITY,
+  AVAILABILITY_LEASE_V1_CAPABILITY,
+];
+
+/** Whether a capability list or set names any lease protocol version. */
+export function advertisesLeaseProtocol(capabilities: Iterable<string>): boolean {
+  for (const capability of capabilities) {
+    if (AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES.includes(capability)) return true;
+  }
+  return false;
+}
 
 /**
  * A docker daemon that has no lease watchdog and cannot install one itself (it runs without root, or the host has no
@@ -52,8 +77,22 @@ export const MEMBER_REPORT_FRESH_MS = 90_000;
 /** A relay's list of connected members counts this long; the local relay's health is probed every 5 s. */
 export const RELAY_CONNECTIONS_FRESH_MS = 15_000;
 
-/** A daemon voter offline this long is replaced by the next spread choice. */
+/** A candidate whose daemon has been offline this long stops being a voter; the next choice replaces it. */
 export const VOTER_OFFLINE_REPLACE_MS = 10 * 60_000;
+
+/**
+ * D3: a policy leaves lease mode only after lease mode stayed impossible this long without a break, and a per-node
+ * condition (an outdated daemon, a missing identity) changes a policy's voters or manifest candidates only after it
+ * lasted this long. Short conditions (a daemon or watchdog restart, a rolling update) never flip anything.
+ */
+export const LEASE_IMPOSSIBLE_HYSTERESIS_MS = 2 * 60_000;
+
+/**
+ * A legacy policy enters lease mode only after every participant it needs (candidate docker nodes, ingress nginx
+ * nodes, carrying relays, witnesses) has been fully capable this long without a break and without a restart, so a
+ * fleet in the middle of a rolling update (Gateway first, then the nodes one by one) never enters lease mode.
+ */
+export const LEASE_ENTRY_STABLE_MS = 2 * 60_000;
 
 /** A planned handoff classifies the next holder change as a handoff for this long (D9). */
 export const PLANNED_HANDOFF_TTL_MS = 5 * 60_000;

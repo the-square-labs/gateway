@@ -14,6 +14,9 @@ import type { DockerAvailabilityLeaseHolderChange, DockerAvailabilityLeaseModeCh
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 
+// Each test runs several reconciles against PostgreSQL; a loaded runner must not turn that into a timeout.
+vi.setConfig({ testTimeout: 60_000 });
+
 function edKey(): { privateKey: KeyObject; publicKeyObject: KeyObject; publicKey: Buffer } {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const { x } = publicKey.export({ format: 'jwk' }) as { x: string };
@@ -53,7 +56,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
   const modeChanges: DockerAvailabilityLeaseModeChange[] = [];
   const holderChanges: DockerAvailabilityLeaseHolderChange[] = [];
   const connected = [...nodeIds.map((id) => ({ id, type: 'docker' })), { id: nginxId, type: 'nginx' }].map(
-    ({ id, type }) => ({ nodeId: id, connectionId: `c-${id}`, type, capabilities: new Set(['availability_lease_v1']) })
+    ({ id, type }) => ({ nodeId: id, connectionId: `c-${id}`, type, capabilities: new Set(['availability_lease_v2']) })
   );
   const q = (text: string, values: unknown[] = []) => pool.query(text, values);
   const memberLinkId = randomUUID();
@@ -123,6 +126,8 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
       ],
     });
 
+  // Migrating a fresh database can take far longer than the default 10 s hook timeout on a loaded runner, and a
+  // timed-out hook let the tests run against a half-prepared database (the gates suite failed that way under load).
   beforeAll(async () => {
     database = await disposableDatabase(url!, 'lease');
     pool = database.pool;
@@ -141,7 +146,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     await q(
       `insert into relay_instances (id, pool_id, kind, fault_domain_id, display_name, state, capabilities)
        values ($1, 'system', 'local', gen_random_uuid(), 'local', 'ready', $2)`,
-      [relayId, JSON.stringify({ protocolMajor: 1, features: ['relay_pool_v1', 'availability_lease_v1'] })]
+      [relayId, JSON.stringify({ protocolMajor: 1, features: ['relay_pool_v1', 'availability_lease_v2'] })]
     );
     for (const [index, id] of [...nodeIds, nginxId].entries()) {
       await q(
@@ -151,7 +156,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
           id,
           id === nginxId ? 'nginx' : 'docker',
           `node-${index}`,
-          JSON.stringify({ capabilities: ['availability_lease_v1'] }),
+          JSON.stringify({ capabilities: ['availability_lease_v2'] }),
         ]
       );
     }
@@ -244,11 +249,11 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
         holderChanges.push(change);
       },
     });
-  });
+  }, 180_000);
 
   afterAll(async () => {
     await database?.drop();
-  });
+  }, 60_000);
 
   it('keeps legacy admission while the candidates have not reported lease identities', async () => {
     await service.reconcile();
@@ -259,6 +264,17 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
   it('bootstraps with per-policy voters and every relay as a non-voting member (A5, A18)', async () => {
     await ackAll(0);
     await service.reconcile();
+    // Every participant must have been ready for 2 minutes without a restart before lease mode starts.
+    expect(await service.getPolicyLease(policyId)).toMatchObject({
+      mode: 'legacy',
+      reason: { code: 'participants_settling' },
+    });
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 121_000 });
+    try {
+      await service.reconcile();
+    } finally {
+      vi.useRealTimers();
+    }
     const view = await service.getPolicyLease(policyId);
     expect(view.mode).toBe('bootstrapping');
     expect(view.bootstrap).toEqual([{ slot: 0, holderNodeId: nodeIds[0] }]);
@@ -397,7 +413,7 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
        values ($1, 'system', 'remote', gen_random_uuid(), 'remote', 'ready', $2, $3, 9443, 'relay.test', 'sha256:relay')`,
       [
         remoteRelay,
-        JSON.stringify({ protocolMajor: 1, features: ['relay_pool_v1', 'availability_lease_v1'] }),
+        JSON.stringify({ protocolMajor: 1, features: ['relay_pool_v1', 'availability_lease_v2'] }),
         ['10.0.0.9'],
       ]
     );
@@ -530,27 +546,100 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     await expect(service.setWitness(policyId, 'not-a-uuid')).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it('closes lease mode when a candidate loses the capability and hands back to legacy (A5)', async () => {
+  it('keeps lease mode when a candidate loses its watchdog and only lists the node as excluded (D3, stand l)', async () => {
+    const changesBefore = modeChanges.length;
     await service.ingestDaemonReport(nodeIds[1]!, 'docker', report(nodeIds[1]!, { epoch: '1', watchdogReady: false }));
     await service.reconcile();
-    const closing = await service.getPolicyLease(policyId);
-    expect(closing.mode).toBe('closing');
-    expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
-    expect(closing.reason).toMatchObject({ code: 'candidates_not_capable', nodeIds: [nodeIds[1]] });
-    expect(await service.isReactive(policyId)).toBe(false);
-    await service.ingestDaemonReport(
-      nodeIds[2]!,
-      'docker',
-      report(nodeIds[2]!, {
-        epoch: '1',
-        manifests: [{ policyId, manifestVersion: String(closing.manifestVersion), closed: true }],
-      })
-    );
-    await service.reconcile();
-    expect((await service.getPolicyLease(policyId)).mode).toBe('legacy');
-    expect(await service.isReactive(policyId)).toBe(true);
-    expect(modeChanges.at(-1)).toMatchObject({ to: 'legacy', lastHolders: [{ slot: 0, holderId: nodeIds[2] }] });
-    expect((await service.relayPolicyFields()).leaseBlocks).toHaveLength(0);
+    const view = await service.getPolicyLease(policyId);
+    expect(view.mode).toBe('lease');
+    expect(view.reason).toBeNull();
+    expect(view.excludedNodes).toEqual([{ nodeId: nodeIds[1], reason: 'watchdog_missing' }]);
+    expect(modeChanges).toHaveLength(changesBefore);
+    // The node stays a manifest candidate and a voter: its daemon refuses to hold by itself, and taking it out would
+    // only churn the voters of a policy whose watchdog restarts for a few seconds.
+    const [state] = (await q('select manifest_block from docker_availability_lease_state')).rows;
+    const manifest = decodeRelayV1Message(
+      'LeaseManifest',
+      decodeLeaseSignedBlock(Buffer.from(state.manifest_block, 'base64')).payload
+    ) as { candidates: Array<{ id: string }>; closed: boolean };
+    expect(manifest.candidates.map(({ id }) => id)).toContain(nodeIds[1]);
+    expect(manifest.closed).toBe(false);
+    expect(view.voters).toContain(nodeIds[1]);
+    await service.ingestDaemonReport(nodeIds[1]!, 'docker', report(nodeIds[1]!, { epoch: '1' }));
+    expect((await service.getPolicyLease(policyId)).excludedNodes).toEqual([]);
+  });
+
+  it('leaves lease mode only after it stayed impossible for 2 minutes, and gives the workload to legacy only once no copy can run (D3, A5)', async () => {
+    const nginx = connected.find(({ nodeId }) => nodeId === nginxId)!;
+    const changesBefore = modeChanges.length;
+    let now = Date.now();
+    const at = async (ms: number, run: () => Promise<void>) => {
+      now += ms;
+      vi.useFakeTimers({ toFake: ['Date'], now });
+      try {
+        await run();
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    // An ingress nginx node on an outdated daemon makes lease mode impossible: the lease keeps running meanwhile.
+    nginx.capabilities = new Set(['availability_lease_v1']);
+    try {
+      await at(0, () => service.reconcile());
+      const pending = await service.getPolicyLease(policyId);
+      expect(pending.mode).toBe('lease');
+      expect(pending.reason).toMatchObject({
+        code: 'ingress_not_capable',
+        nodeIds: [nginxId],
+        since: expect.any(String),
+      });
+      const since = pending.reason!.since;
+      await at(60_000, () => service.reconcile());
+      expect(await service.getPolicyLease(policyId)).toMatchObject({ mode: 'lease', reason: { since } });
+      // A short recovery resets the clock: the condition must last 2 minutes without a break.
+      nginx.capabilities = new Set(['availability_lease_v2']);
+      await at(1_000, () => service.reconcile());
+      expect((await service.getPolicyLease(policyId)).reason).toBeNull();
+      nginx.capabilities = new Set(['availability_lease_v1']);
+      await at(1_000, () => service.reconcile());
+      await at(110_000, () => service.reconcile());
+      expect((await service.getPolicyLease(policyId)).mode).toBe('lease');
+      expect(modeChanges).toHaveLength(changesBefore);
+      await at(11_000, () => service.reconcile());
+      const closing = await service.getPolicyLease(policyId);
+      expect(closing.mode).toBe('closing');
+      expect(modeChanges.at(-1)).toMatchObject({ from: 'lease', to: 'closing' });
+      expect(await gateIds()).toEqual({ endpoints: {}, routes: {} });
+      expect(await service.isReactive(policyId)).toBe(false);
+
+      const closed = [{ policyId, manifestVersion: String(closing.manifestVersion), closed: true }];
+      // The holder acked the close but still stops its copy: nothing starts in legacy yet.
+      const fencing = holding(nodeIds[2]!, 12);
+      fencing.held[0]!.role = 'fencing';
+      await at(1_000, async () => {
+        await service.ingestDaemonReport(nodeIds[2]!, 'docker', { ...fencing, manifests: closed });
+        await service.reconcile();
+      });
+      expect((await service.getPolicyLease(policyId)).mode).toBe('closing');
+      // Its copy stopped, but another candidate has not seen the close: it might still acquire.
+      await at(1_000, async () => {
+        await service.ingestDaemonReport(nodeIds[2]!, 'docker', report(nodeIds[2]!, { epoch: '1', manifests: closed }));
+        await service.reconcile();
+      });
+      expect((await service.getPolicyLease(policyId)).mode).toBe('closing');
+      // Every node that could hold persisted the close and none runs a copy: legacy takes over.
+      await at(1_000, async () => {
+        for (const id of [nodeIds[0]!, nodeIds[1]!])
+          await service.ingestDaemonReport(id, 'docker', report(id, { epoch: '1', manifests: closed }));
+        await service.reconcile();
+      });
+      expect((await service.getPolicyLease(policyId)).mode).toBe('legacy');
+      expect(await service.isReactive(policyId)).toBe(true);
+      expect(modeChanges.at(-1)).toMatchObject({ to: 'legacy', lastHolders: [{ slot: 0, holderId: nodeIds[2] }] });
+      expect((await service.relayPolicyFields()).leaseBlocks).toHaveLength(0);
+    } finally {
+      nginx.capabilities = new Set(['availability_lease_v2']);
+    }
   });
 
   it('publishes temporary surge slots for a replicated rollout and rejects surge in failover (D9)', async () => {

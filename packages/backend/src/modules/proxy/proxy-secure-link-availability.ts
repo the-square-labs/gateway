@@ -6,11 +6,11 @@ import {
   nodes,
   type proxyAdditionalSecureLinks,
 } from '@/db/schema/index.js';
+// Daemons that gate Availability member sockets and connectors by the data-plane lease (D8): any lease protocol
+// version (availability_lease_v2 since rc.20, availability_lease_v1 before) understands dormant members.
+import { AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES } from '@/modules/docker/availability/lease/lease-constants.js';
 
 type LinkRow = typeof proxyAdditionalSecureLinks.$inferSelect;
-
-/** Capability of daemons that gate Availability member sockets and connectors by the data-plane lease (D8). */
-const AVAILABILITY_LEASE_CAPABILITY = 'availability_lease_v1';
 
 export interface AvailabilityMemberSyncContext {
   /** The daemon receiving the bindings understands dormant members. */
@@ -53,14 +53,16 @@ export async function availabilityMemberSyncContext(
   ]);
   const reported = (node?.capabilities as Record<string, unknown> | null | undefined)?.capabilities;
   return {
-    leaseCapable: Array.isArray(reported) && reported.includes(AVAILABILITY_LEASE_CAPABILITY),
+    leaseCapable:
+      Array.isArray(reported) &&
+      AVAILABILITY_LEASE_PROTOCOL_CAPABILITIES.some((capability) => reported.includes(capability)),
     policyByPlacement: new Map(placements.map((placement) => [placement.id, placement.policyId])),
     leasePolicies: new Set(leaseStates.map(({ policyId }) => policyId)),
   };
 }
 
 /**
- * A daemon without availability_lease_v1 would serve a dormant member like any other; it never receives one, so a
+ * A daemon without any lease protocol would serve a dormant member like any other; it never receives one, so a
  * standby is reachable only through daemons that open its socket only while it holds the lease.
  */
 export function syncableAvailabilityMember(binding: LinkRow, context: AvailabilityMemberSyncContext): boolean {

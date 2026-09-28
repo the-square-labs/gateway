@@ -32,6 +32,11 @@ export interface DockerAvailabilityLeaseReason {
   nodeIds?: string[];
   /** Relay instances named by the reason (relays_not_capable). */
   relayIds?: string[];
+  /**
+   * ISO time since which lease mode has been impossible without a break. A lease-mode policy starts closing only once
+   * this is 2 minutes old (D3); an explicit request (disable, lifecycle hold) closes at once and carries no time.
+   */
+  since?: string;
 }
 
 /** A lease ballot as reported by the data plane; uint64 parts stay decimal strings. */

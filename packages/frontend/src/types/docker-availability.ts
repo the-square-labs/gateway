@@ -31,14 +31,18 @@ export interface DockerAvailabilityPolicyInput {
 
 export type DockerAvailabilityLeaseMode = "legacy" | "bootstrapping" | "lease" | "closing";
 
-export type DockerAvailabilityLeaseWitnessKind = "relay" | "node";
-export type DockerAvailabilityLeaseWitnessWarning = "same_site" | "none_eligible";
+export type DockerAvailabilityLeaseWitnessKind = "relay" | "docker";
+export type DockerAvailabilityLeaseWitnessWarning =
+  | "witness_near_candidate"
+  | "no_eligible_witness"
+  | "configured_witness_unavailable";
 
-/** Read-only resolved witness of a policy's lease: the chosen member, whether it was picked
- * automatically, its minimum RTT to the candidates, and any siting warning. */
+/** Read-only resolved witness of a policy's lease: the chosen member (null when the candidates
+ * alone are an odd voter set), whether it was picked automatically, its minimum RTT to the
+ * candidates, and any siting warning. */
 export interface DockerAvailabilityLeaseWitness {
-  memberId: string;
-  kind: DockerAvailabilityLeaseWitnessKind;
+  memberId: string | null;
+  kind: DockerAvailabilityLeaseWitnessKind | null;
   auto: boolean;
   minRttMs: number | null;
   warning: DockerAvailabilityLeaseWitnessWarning | null;
@@ -48,6 +52,22 @@ export interface DockerAvailabilityLeaseReason {
   code: string;
   message: string;
   nodeIds?: string[];
+  relayIds?: string[];
+  /** Since when lease mode has been impossible; a lease-mode policy returns to the backend path
+   * once this is 2 minutes old. Absent for an explicit request (disable, lifecycle operation). */
+  since?: string;
+}
+
+/** Why a candidate node is left out of holding the lease and of standby provisioning. */
+export type DockerAvailabilityLeaseExclusionReason =
+  | "offline"
+  | "watchdog_missing"
+  | "daemon_outdated"
+  | "identity_pending";
+
+export interface DockerAvailabilityLeaseExcludedNode {
+  nodeId: string;
+  reason: DockerAvailabilityLeaseExclusionReason;
 }
 
 export interface DockerAvailabilityLeaseBallot {
@@ -86,6 +106,8 @@ export interface DockerAvailabilityLease {
   bootstrap: Array<{ slot: number; holderNodeId: string }>;
   strictPending: boolean;
   copiesStoppedAt: string | null;
+  /** Candidate nodes left out of holding and standbys right now; never a reason to leave lease mode. */
+  excludedNodes?: DockerAvailabilityLeaseExcludedNode[];
   voterMargin: DockerAvailabilityLeaseVoterMargin | null;
   witness: DockerAvailabilityLeaseWitness | null;
 }

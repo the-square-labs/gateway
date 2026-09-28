@@ -2,9 +2,20 @@ import { eq, inArray, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
-import { AVAILABILITY_LEASE_CAPABILITY, AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY } from './lease-constants.js';
+import {
+  AVAILABILITY_LEASE_CAPABILITY,
+  AVAILABILITY_LEASE_V1_CAPABILITY,
+  AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY,
+  LEASE_ENTRY_STABLE_MS,
+  LEASE_IMPOSSIBLE_HYSTERESIS_MS,
+  MEMBER_REPORT_FRESH_MS,
+  VOTER_OFFLINE_REPLACE_MS,
+} from './lease-constants.js';
 import type { LeaseMemberRow } from './lease-store.js';
+import type { DockerAvailabilityLeaseExclusionReason } from './lease-types.js';
 import type { LeaseVoterCandidateNode, LeaseWitnessCandidate } from './lease-voters.js';
+
+export type LeaseProtocolVersion = 'v2' | 'v1' | null;
 
 export interface LeaseParticipant {
   id: string;
@@ -20,10 +31,50 @@ export interface LeaseParticipant {
   hostKey: string;
   /** Relay fault domain; null for daemons. */
   faultDomain: string | null;
-  /** Advertises availability_lease_v1, reported an identity key and (docker) a fresh watchdog. */
+  /** Newest lease protocol the participant advertises; only v2 counts as current (D3). */
+  protocol: LeaseProtocolVersion;
+  /**
+   * May vote (A18, D3): advertises availability_lease_v2 and reported an identity key; a docker daemon also must not
+   * have been offline for VOTER_OFFLINE_REPLACE_MS. The watchdog does not matter for a vote.
+   */
+  voterCapable: boolean;
+  /** Relays: voterCapable. Docker daemons: voterCapable and a running watchdog (may hold). Nginx daemons: v2. */
   capable: boolean;
-  /** Docker daemon without a lease watchdog that cannot install one itself: re-run the node installer. */
-  watchdogMissing?: boolean;
+  /**
+   * Docker daemons only: why the node cannot hold or receive a standby right now (D3); null when it takes part.
+   * Relays and nginx daemons: always null.
+   */
+  exclusion: DockerAvailabilityLeaseExclusionReason | null;
+  /**
+   * Not voter-capable for less than LEASE_IMPOSSIBLE_HYSTERESIS_MS (a daemon restarting into an update, a node
+   * rolled back for a moment): a current voter or manifest candidate keeps its place meanwhile. Set by the
+   * service's capability tracker; false until it ran.
+   */
+  withinGrace: boolean;
+  /** Docker and nginx daemons: control connection to Gateway now. Relays: not offline or in error. */
+  online: boolean;
+  /** Relays: Gateway's local relay, which stops with Gateway. */
+  local: boolean;
+  /** Relays: state ready. */
+  ready: boolean;
+  /** Docker daemons: offline for VOTER_OFFLINE_REPLACE_MS or more (never a voter then). */
+  offlineLong: boolean;
+  /**
+   * Fully capable for a policy to enter lease mode right now: docker: v2, identity, watchdog, connected; nginx: v2,
+   * connected; relay: v2, identity, ready.
+   */
+  entryReady: boolean;
+  /**
+   * Restart markers: the daemon's control connection (ms) and the lease incarnation it reports (bumped on every
+   * start, A3). A change restarts the entry stability clock.
+   */
+  connectedAt: number | null;
+  incarnation: number | null;
+  /**
+   * entryReady without a break or a restart for LEASE_ENTRY_STABLE_MS. Set by the service's capability tracker;
+   * false until it ran.
+   */
+  entryStable: boolean;
   publicKey: string | null;
 }
 
@@ -62,9 +113,16 @@ function relayLatencies(report: unknown): Map<string, number> {
   return result;
 }
 
+/** The newest lease protocol a capability list advertises. */
+export function leaseProtocolOf(has: (capability: string) => boolean): LeaseProtocolVersion {
+  if (has(AVAILABILITY_LEASE_CAPABILITY)) return 'v2';
+  if (has(AVAILABILITY_LEASE_V1_CAPABILITY)) return 'v1';
+  return null;
+}
+
 /**
- * A member can take part in the lease only with the capability, a reported identity key and, for docker daemons, a
- * fresh watchdog heartbeat (A12.4). Nginx daemons observe only and need just the capability.
+ * A member can take part in the lease only with the current capability (v2), a reported identity key and, for
+ * docker daemons, a fresh watchdog heartbeat (A12.4). Nginx daemons observe only and need just the capability.
  */
 export function leaseMemberCapable(
   kind: 'docker' | 'nginx' | 'relay',
@@ -79,17 +137,50 @@ export function leaseMemberCapable(
   return kind !== 'docker' || member.watchdogReady;
 }
 
+/**
+ * D3: why a docker candidate cannot hold or get a standby. An offline node is only known as offline. A connected
+ * daemon without v2 is outdated, unless it tells (or its lease reports show) that only its watchdog is missing: a
+ * daemon may stop advertising the lease capability while its watchdog is down, and that is a watchdog problem.
+ */
+export function classifyDockerLeaseNode(input: {
+  connected: boolean;
+  has(capability: string): boolean;
+  member: LeaseMemberRow | undefined;
+  now: number;
+}): DockerAvailabilityLeaseExclusionReason | null {
+  if (!input.connected) return 'offline';
+  const { member } = input;
+  const markerMissing = input.has(AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY);
+  const protocol = leaseProtocolOf(input.has);
+  if (protocol === 'v2') {
+    if (!member?.identityPublicKey) return 'identity_pending';
+    if (markerMissing || !member.watchdogReady) return 'watchdog_missing';
+    return null;
+  }
+  if (markerMissing) return 'watchdog_missing';
+  if (protocol === 'v1') return 'daemon_outdated';
+  const reportsLease =
+    member?.reportedAt !== null &&
+    member?.reportedAt !== undefined &&
+    input.now - member.reportedAt.getTime() <= MEMBER_REPORT_FRESH_MS;
+  if (reportsLease && member.identityPublicKey && !member.watchdogReady) return 'watchdog_missing';
+  return 'daemon_outdated';
+}
+
 /** Relays, docker and nginx daemons with what the lease needs to know about each. */
 export async function loadLeaseParticipants(
   db: DrizzleClient,
   registry: Pick<NodeRegistryService, 'getNode'>,
-  members: Map<string, LeaseMemberRow>
+  members: Map<string, LeaseMemberRow>,
+  now = Date.now()
 ): Promise<LeaseParticipants> {
   const [relayRows, daemonRows] = await Promise.all([
     db
       .select({
         id: relayInstances.id,
         poolId: relayInstances.poolId,
+        kind: relayInstances.kind,
+        state: relayInstances.state,
         nodeId: relayInstances.nodeId,
         faultDomainId: relayInstances.faultDomainId,
         capabilities: relayInstances.capabilities,
@@ -105,6 +196,7 @@ export async function loadLeaseParticipants(
         hostIdentityId: nodes.hostIdentityId,
         capabilities: nodes.capabilities,
         lastHealthReport: nodes.lastHealthReport,
+        lastSeenAt: nodes.lastSeenAt,
       })
       .from(nodes)
       .where(inArray(nodes.type, ['docker', 'nginx'])),
@@ -113,7 +205,10 @@ export async function loadLeaseParticipants(
     .filter((relay) => isOperatorOwnedRelayPool(relay.poolId))
     .map((relay) => {
       const member = members.get(relay.id);
-      const advertised = (relay.capabilities?.features ?? []).includes(AVAILABILITY_LEASE_CAPABILITY);
+      const features = relay.capabilities?.features ?? [];
+      const protocol = leaseProtocolOf((capability) => features.includes(capability));
+      const voterCapable = leaseMemberCapable('relay', protocol === 'v2', member);
+      const ready = relay.state === 'ready';
       return {
         id: relay.id,
         role: 'relay' as const,
@@ -121,7 +216,19 @@ export async function loadLeaseParticipants(
         nodeId: relay.nodeId,
         hostKey: relay.hostIdentityId ?? relay.nodeId ?? `relay-fault-domain:${relay.faultDomainId}`,
         faultDomain: relay.faultDomainId,
-        capable: leaseMemberCapable('relay', advertised, member),
+        protocol,
+        voterCapable,
+        capable: voterCapable,
+        exclusion: null,
+        withinGrace: false,
+        online: relay.state !== 'offline' && relay.state !== 'error',
+        local: relay.kind === 'local',
+        ready,
+        offlineLong: false,
+        entryReady: voterCapable && ready,
+        connectedAt: null,
+        incarnation: member?.incarnation ?? null,
+        entryStable: false,
         publicKey: member?.identityPublicKey ?? null,
       };
     });
@@ -129,13 +236,18 @@ export async function loadLeaseParticipants(
   const daemons: LeaseParticipant[] = daemonRows.map((node) => {
     const member = members.get(node.id);
     const connected = registry.getNode(node.id);
-    const hasCapability = (capability: string) =>
+    const has = (capability: string) =>
       connected
         ? connected.capabilities.has(capability)
         : persistedCapabilities(node.capabilities).includes(capability);
-    const advertised = hasCapability(AVAILABILITY_LEASE_CAPABILITY);
+    const protocol = leaseProtocolOf(has);
     const kind = node.type === 'nginx' ? ('nginx' as const) : ('docker' as const);
     latencies.set(node.id, relayLatencies(connected?.lastHealthReport ?? node.lastHealthReport));
+    const offlineLong =
+      !connected && (node.lastSeenAt === null || now - node.lastSeenAt.getTime() >= VOTER_OFFLINE_REPLACE_MS);
+    const voterCapable = kind === 'docker' && protocol === 'v2' && Boolean(member?.identityPublicKey) && !offlineLong;
+    const exclusion =
+      kind === 'docker' ? classifyDockerLeaseNode({ connected: Boolean(connected), has, member, now }) : null;
     return {
       id: node.id,
       role: 'daemon' as const,
@@ -143,8 +255,19 @@ export async function loadLeaseParticipants(
       nodeId: node.id,
       hostKey: node.hostIdentityId ?? node.id,
       faultDomain: null,
-      capable: leaseMemberCapable(kind, advertised, member),
-      watchdogMissing: kind === 'docker' && hasCapability(AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY),
+      protocol,
+      voterCapable,
+      capable: leaseMemberCapable(kind, protocol === 'v2', member),
+      exclusion,
+      withinGrace: false,
+      online: Boolean(connected),
+      local: false,
+      ready: Boolean(connected),
+      offlineLong,
+      entryReady: kind === 'docker' ? exclusion === null : protocol === 'v2' && Boolean(connected),
+      connectedAt: connected?.connectedAt ? connected.connectedAt.getTime() : null,
+      incarnation: kind === 'docker' ? (member?.incarnation ?? null) : null,
+      entryStable: false,
       publicKey: member?.identityPublicKey ?? null,
     };
   });
@@ -164,37 +287,137 @@ export async function loadLeaseParticipants(
   };
 }
 
+/**
+ * Remembers since when each member has not been voter-capable for a reason other than being offline (an outdated
+ * daemon or relay, a missing identity key). A current voter or manifest candidate keeps its place until that lasted
+ * LEASE_IMPOSSIBLE_HYSTERESIS_MS (D3), so a daemon restarting through an update causes no voter or manifest change.
+ * In memory: after a Gateway restart the grace starts again, which only delays a change.
+ */
+export class LeaseCapabilityTracker {
+  private readonly incapableSince = new Map<string, number>();
+  /** Since when each member has been entryReady, with the restart markers seen then. */
+  private readonly readySince = new Map<
+    string,
+    { since: number; connectedAt: number | null; incarnation: number | null }
+  >();
+
+  observe(participants: LeaseParticipants, now: number): void {
+    const seen = new Set<string>();
+    for (const participant of participants.byId.values()) {
+      seen.add(participant.id);
+      this.observeEntry(participant, now);
+      // An offline daemon's capabilities are the persisted ones from its last registration: not new evidence.
+      if (participant.role === 'daemon' && !participant.online) {
+        const since = this.incapableSince.get(participant.id);
+        participant.withinGrace = since === undefined || now - since < LEASE_IMPOSSIBLE_HYSTERESIS_MS;
+        continue;
+      }
+      const incapable = participant.protocol !== 'v2' || !participant.publicKey;
+      if (!incapable) {
+        this.incapableSince.delete(participant.id);
+        participant.withinGrace = true;
+        continue;
+      }
+      const since = this.incapableSince.get(participant.id) ?? now;
+      this.incapableSince.set(participant.id, since);
+      participant.withinGrace = now - since < LEASE_IMPOSSIBLE_HYSTERESIS_MS;
+    }
+    for (const id of this.incapableSince.keys()) if (!seen.has(id)) this.incapableSince.delete(id);
+    for (const id of this.readySince.keys()) if (!seen.has(id)) this.readySince.delete(id);
+  }
+
+  /** Entry stability: a loss of readiness, a reconnect or a new incarnation (a restart) starts the clock again. */
+  private observeEntry(participant: LeaseParticipant, now: number): void {
+    if (!participant.entryReady) {
+      this.readySince.delete(participant.id);
+      participant.entryStable = false;
+      return;
+    }
+    const previous = this.readySince.get(participant.id);
+    const entry =
+      previous &&
+      previous.connectedAt === participant.connectedAt &&
+      (previous.incarnation === null ||
+        participant.incarnation === null ||
+        previous.incarnation === participant.incarnation)
+        ? { ...previous, incarnation: previous.incarnation ?? participant.incarnation }
+        : { since: now, connectedAt: participant.connectedAt, incarnation: participant.incarnation };
+    this.readySince.set(participant.id, entry);
+    participant.entryStable = now - entry.since >= LEASE_ENTRY_STABLE_MS;
+  }
+}
+
+/**
+ * A member that may keep a voter place it already has (D3): voter-capable, or inside the grace of a short
+ * incapability while it still has an identity key. Never a daemon offline for VOTER_OFFLINE_REPLACE_MS.
+ */
+export function keepsLeaseVoterPlace(participant: LeaseParticipant | undefined): boolean {
+  if (!participant) return false;
+  if (participant.voterCapable) return true;
+  return (
+    !participant.offlineLong &&
+    participant.withinGrace &&
+    Boolean(participant.publicKey) &&
+    participant.protocol !== null
+  );
+}
+
+/**
+ * D3: whether a candidate node goes into the manifest (may acquire). Not a node whose daemon is outdated or has not
+ * reported an identity, unless it holds or runs a copy now (removing it would fence it) or it is listed already and
+ * the condition is younger than the grace. Offline and watchdog-less nodes stay listed: the data plane keeps them
+ * from holding by itself.
+ */
+export function manifestCandidateAllowed(
+  participant: LeaseParticipant | undefined,
+  context: { active: boolean; listed: boolean }
+): boolean {
+  if (!participant?.publicKey) return false;
+  if (context.active) return true;
+  if (participant.exclusion !== 'daemon_outdated' && participant.exclusion !== 'identity_pending') return true;
+  return context.listed && participant.withinGrace;
+}
+
 /** Candidate nodes of a policy, in rank order, as voter candidates (A18). */
 export function leaseVoterCandidates(
   participants: LeaseParticipants,
-  rankedNodeIds: string[]
+  rankedNodeIds: string[],
+  currentVoters: ReadonlySet<string> = new Set()
 ): LeaseVoterCandidateNode[] {
   return rankedNodeIds.flatMap((id) => {
     const participant = participants.byId.get(id);
     if (!participant) return [];
+    const votes = participant.voterCapable || (currentVoters.has(id) && keepsLeaseVoterPlace(participant));
     return [
       {
         id,
         hostKey: participant.hostKey,
         faultDomains: participants.hostFaultDomains.get(participant.hostKey) ?? [],
         publicKey: participant.publicKey,
+        voterCapable: votes,
       },
     ];
   });
 }
 
 /**
- * Members that may be a witness (A19): relays and docker daemons. nginx daemons are observers only. Round trips are
- * known only from a candidate node to a relay (relay topology data); docker witnesses rank without one.
+ * Members that may be a witness (A19): relays and docker daemons that may vote (D3: v2 only; a current witness keeps
+ * its place through a short incapability). nginx daemons are observers only. Round trips are known only from a
+ * candidate node to a relay (relay topology data); docker witnesses rank without one.
  */
-export function leaseWitnessPool(participants: LeaseParticipants): LeaseWitnessCandidate[] {
+export function leaseWitnessPool(
+  participants: LeaseParticipants,
+  currentWitnesses: ReadonlySet<string> = new Set()
+): LeaseWitnessCandidate[] {
   return [...participants.relays, ...participants.daemons.filter((daemon) => daemon.kind === 'docker')].map(
     (participant) => ({
       id: participant.id,
       kind: participant.kind === 'relay' ? ('relay' as const) : ('docker' as const),
       hostKey: participant.hostKey,
       faultDomain: participant.faultDomain,
-      capable: participant.capable,
+      capable: participant.voterCapable || (currentWitnesses.has(participant.id) && keepsLeaseVoterPlace(participant)),
+      local: participant.local,
+      ready: participant.kind === 'relay' ? participant.ready && participant.voterCapable : participant.voterCapable,
       publicKey: participant.publicKey,
       rttFrom: (candidateId: string) =>
         participant.kind === 'relay' ? participants.relayRtt(candidateId, participant.id) : undefined,

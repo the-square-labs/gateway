@@ -6,7 +6,7 @@ import {
   nodes,
   relayInstances,
 } from '@/db/schema/index.js';
-import { AVAILABILITY_LEASE_CAPABILITY } from './lease-constants.js';
+import { advertisesLeaseProtocol } from './lease-constants.js';
 import { isOperatorOwnedRelayPool } from './lease-participants.js';
 
 /** Relay transport of a lease lane, in the shape of a relay grant candidate's transport fields. */
@@ -87,7 +87,7 @@ export async function leaseLaneRelays(db: DrizzleClient, nodeId: string): Promis
       const advertised = features(row.capabilities);
       return (
         isOperatorOwnedRelayPool(row.poolId) &&
-        advertised.includes(AVAILABILITY_LEASE_CAPABILITY) &&
+        advertisesLeaseProtocol(advertised) &&
         advertised.includes('relay_pool_v1') &&
         (row.kind === 'local' || Boolean(row.certificateIdentity && row.certificateFingerprint))
       );

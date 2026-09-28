@@ -22,6 +22,8 @@ export interface LeaseVoterCandidateNode {
   /** Fault domains of relays running on the same host, for the witness fallback. */
   faultDomains: readonly string[];
   publicKey: string | null;
+  /** May vote (D3: availability_lease_v2 and an identity key, or a current voter within its grace). Default true. */
+  voterCapable?: boolean;
 }
 
 /** A relay or docker node that may be a witness (A19). nginx daemons are observers only and never listed. */
@@ -31,6 +33,10 @@ export interface LeaseWitnessCandidate {
   hostKey: string;
   faultDomain: string | null;
   capable: boolean;
+  /** Gateway's local relay: it stops with Gateway, so it is no witness while a remote relay can be one (N-2). */
+  local?: boolean;
+  /** Ready to vote now (a relay in state ready); only matters for a new choice. Default true. */
+  ready?: boolean;
   publicKey: string | null;
   /** Round trip in ms from a candidate node to this member, when that node measured it. */
   rttFrom(candidateId: string): number | undefined;
@@ -41,6 +47,13 @@ export interface PolicyVoterSelection {
   voterIds: string[];
   witnesses: AvailabilityLeaseWitness[];
   warning: LeaseWitnessWarning | null;
+  /**
+   * D3: the selection holds at least a quorum of its target size (odd, at least 3). When it does not, lease mode is
+   * impossible and the published voters stay as they are.
+   */
+  viable: boolean;
+  /** Candidates that cannot vote (not availability_lease_v2 or no identity key). */
+  nonVotingCandidateIds: string[];
 }
 
 /** The smallest round trip to all candidates, or null unless every candidate measured this member. */
@@ -55,7 +68,8 @@ export function witnessMinRtt(
     if (rtt === undefined || !Number.isFinite(rtt)) return null;
     min = Math.min(min, rtt);
   }
-  return min;
+  // Tenths of a millisecond: finer jitter must not rewrite the stored witness on every reconcile.
+  return Math.round(min * 10) / 10;
 }
 
 function smallestOddAtLeast(value: number): number {
@@ -63,10 +77,13 @@ function smallestOddAtLeast(value: number): number {
 }
 
 /**
- * The voters of one policy (A18, A19, A20): the distinct hosts among its candidates in rank order, then witnesses so
- * the count is odd and at least 3, at most 7 in total. A configured witness comes first when eligible; automatic ones
- * keep the current witnesses while they stay eligible, then prefer the largest minimum round trip to the candidates,
- * then a relay in a fault domain no candidate host shares, then any relay, then docker nodes.
+ * The voters of one policy (A18, A19, A20, D3): the distinct hosts among its voter-capable candidates in rank order,
+ * then witnesses so the count is odd and at least 3, at most 7 in total. A configured witness comes first when
+ * eligible. Automatic ones never use Gateway's local relay while another ready relay can witness (it stops with
+ * Gateway and does not count for the margin), keep the current witnesses while they stay eligible (no churn), then
+ * prefer a member that is ready, the largest minimum round trip to the candidates in whole milliseconds (so jitter
+ * between similar relays never changes the choice), a relay in a fault domain no candidate host shares, any relay,
+ * then docker nodes, and finally the member id.
  */
 export function selectPolicyVoters(input: {
   candidates: readonly LeaseVoterCandidateNode[];
@@ -74,7 +91,10 @@ export function selectPolicyVoters(input: {
   configuredWitness: string | null;
   currentAutoWitnesses?: readonly string[];
 }): PolicyVoterSelection {
-  const candidates = input.candidates.filter((candidate) => candidate.publicKey);
+  const candidates = input.candidates.filter((candidate) => candidate.publicKey && candidate.voterCapable !== false);
+  const nonVotingCandidateIds = input.candidates
+    .filter((candidate) => !candidate.publicKey || candidate.voterCapable === false)
+    .map((candidate) => candidate.id);
   const candidateIds = new Set(input.candidates.map((candidate) => candidate.id));
   const usedHosts = new Set<string>();
   const candidateVoters: string[] = [];
@@ -105,14 +125,21 @@ export function selectPolicyVoters(input: {
     hosts.add(configured.hostKey);
   }
   const current = new Set(input.currentAutoWitnesses ?? []);
+  // D3 / N-2: Gateway's local relay stops with Gateway and does not count for the margin, so it is never the
+  // automatic witness while another ready relay can witness, even when it is the current witness.
+  const remoteRelayReady = input.pool.some(
+    (member) => member.kind === 'relay' && !member.local && member.ready !== false && eligible(member)
+  );
   const rank = (member: LeaseWitnessCandidate): number[] => {
     const rtt = witnessMinRtt(member, candidates);
     const separateDomain =
       member.kind === 'relay' && member.faultDomain !== null && !candidateDomains.has(member.faultDomain);
     return [
+      member.local && remoteRelayReady ? 1 : 0,
       current.has(member.id) ? 0 : 1,
+      member.ready === false ? 1 : 0,
       rtt !== null ? 0 : 1,
-      rtt !== null ? -rtt : 0,
+      rtt !== null ? -Math.round(rtt) : 0,
       separateDomain ? 0 : 1,
       member.kind === 'relay' ? 0 : 1,
     ];
@@ -144,11 +171,18 @@ export function selectPolicyVoters(input: {
   if (!warning && witnesses.some((witness) => witness.minRttMs !== null && witness.minRttMs < WITNESS_NEAR_RTT_MS)) {
     warning = 'witness_near_candidate';
   }
-  return { voterIds: [...cappedCandidates, ...witnesses.map((witness) => witness.memberId)], witnesses, warning };
+  const voterIds = [...cappedCandidates, ...witnesses.map((witness) => witness.memberId)];
+  return {
+    voterIds,
+    witnesses,
+    warning,
+    viable: voterIds.length >= quorumSize({ length: target }),
+    nonVotingCandidateIds,
+  };
 }
 
 /** Majority of one quorum set. */
-export function quorumSize(set: readonly string[]): number {
+export function quorumSize(set: { readonly length: number }): number {
   return Math.floor(set.length / 2) + 1;
 }
 

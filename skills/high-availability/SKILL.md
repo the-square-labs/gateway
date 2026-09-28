@@ -39,11 +39,15 @@ Either mode can prefer Nodes in a fixed order: `priorityMode: true` with `nodePr
 
 ## Data-plane failover (lease mode)
 
-When every candidate Node, every ingress nginx Node of the workload's routes, and a majority of voters advertise `availability_lease_v1`, a policy runs in lease mode. In lease mode failover no longer depends on Gateway being reachable.
+A policy runs in lease mode when every ingress nginx Node of the workload's routes and every relay that carries it advertise `availability_lease_v2`, and enough members that can vote exist for a quorum. A policy on the backend path enters lease mode only once every candidate Node, ingress nginx Node, carrying relay and witness has run `availability_lease_v2` (with its lease watchdog and identity) for 2 minutes without a restart; until then `reason` is `participants_settling` with the Nodes or relays still settling, so a fleet in the middle of an update (Gateway first, then the Nodes one by one) never switches. In lease mode failover no longer depends on Gateway being reachable.
 - **Who decides.** The Nodes and relays hold a lease per serving slot. A serving Node renews it every few seconds and stops its own copy if it cannot, so a dead or cut-off Node is replaced by the next candidate within about 45 seconds even while Gateway is down.
 - **Standbys.** They are created ahead of time: the image is pulled and the container is created but not started.
 - **Traffic.** It reaches only the current lease holder.
-- **Voters.** All relays plus up to 12 Docker and nginx Nodes. One live relay is enough as long as a majority of voters is reachable through it.
+- **Voters.** Each policy has its own voters: its candidate Nodes, one per physical host, in takeover order, plus witnesses so the count is odd and at least 3 (at most 7). Only Nodes and relays that advertise `availability_lease_v2` and reported a lease identity vote. A witness is a relay or Docker Node on another host than every candidate: the one set in `witness`, else one picked automatically, which is never Gateway's local relay while another relay or Node can witness (the local relay stops with Gateway). An automatic witness stays until it can no longer vote, so round-trip jitter never changes the voters. A three-candidate policy needs no witness. One live relay is enough as long as a majority of the voters is reachable through it.
+
+**Excluded Nodes.** A condition of one Node never changes the policy's mode. A candidate that is `offline`, whose lease watchdog is not running (`watchdog_missing`), whose daemon does not advertise `availability_lease_v2` (`daemon_outdated`), or that has not reported a lease identity yet (`identity_pending`) is listed in `lease.excludedNodes` with that reason. It gets no new standby, no failback or other handoff moves to it, and its daemon does not take a slot; the next candidate does. A Node holding a slot is never cut off by Gateway for this: a Node without a watchdog stops its own copy, and an outdated holder keeps its slot until it is updated or hands over. An outdated or unidentified Node leaves the voters and the candidate list only after the condition lasted 2 minutes, so a daemon restart or a rolling update changes nothing. Fix the Node (start the watchdog or re-run the node installer, update the daemon) and it takes part again.
+
+**Leaving lease mode.** Only when lease mode is impossible: fewer members that can vote than a quorum (`insufficient_voters`), an ingress nginx Node or a carrying relay without `availability_lease_v2` (`ingress_not_capable`, `relays_not_capable`), no candidate that can hold while no slot is held, the license or edition, or an explicit disable or lifecycle operation. Apart from the explicit requests, the condition must last 2 minutes without a break; until then the policy stays in lease mode and `lease.reason.since` tells since when it has been impossible. The policy then passes through `closing`: Gateway publishes a closed lease, and starts nothing on the backend path until every slot's lease was released (no copy runs and every candidate saw the close) or expired (about 47 seconds after a voter majority saw the close). The last holders become the serving placements again, recorded as stopped; the backend starts them.
 
 What Gateway still does in lease mode:
 - plans moves: failback, drain, manual moves, rollouts;
@@ -54,11 +58,13 @@ A planned move of a slot (failback, drain, manual move, `nodePriority` change) i
 
 `get` returns a `lease` object:
 - `mode`: `legacy`, `bootstrapping`, `lease` or `closing`;
-- `reason`: why a policy is still legacy, for example Nodes without the capability. With `watchdog_missing`, the daemon on the listed Nodes could not install the lease watchdog itself (it runs without root); re-run the node installer there;
+- `reason`: why a policy is legacy (for example `participants_settling` while the fleet settles after an update), or why lease mode is impossible right now, with `since` while a lease-mode policy waits out the 2 minutes. `nodeIds` or `relayIds` name what to fix. With `watchdog_missing`, the listed Nodes have no running lease watchdog; when their daemon cannot install it (it runs without root), re-run the node installer there;
+- `excludedNodes`: `[{ nodeId, reason }]` as above;
 - `holders` per slot, with Node, placement and holder time;
+- `voters` and `witness` (with `warning`: `witness_near_candidate`, `no_eligible_witness` or `configured_witness_unavailable`);
 - `voterMargin` with `voters`, `reachable`, `required` and `margin`. It counts the voters that can vote without Gateway: Gateway's local relay does not count, and a Node counts only while it keeps a lease connection to another relay. Every Node of a lease-mode policy connects to every relay for that.
 
-When `margin` is 0 or less, losing one more voter disables autonomous failover.
+When `margin` is 0 or less, losing one more voter disables autonomous failover. A two-candidate policy with a remote relay has margin 1.
 
 `partitionMode` controls a network split:
 - `strict`, the default: never runs two copies.
