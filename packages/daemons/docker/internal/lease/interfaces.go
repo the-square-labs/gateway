@@ -61,7 +61,9 @@ type Engine interface {
 
 // Fence is the watchdog directory (records and heartbeat, A12).
 type Fence interface {
-	HeartbeatFresh(now time.Duration) bool
+	// HeartbeatAge is the age of the watchdog heartbeat at now; false when
+	// there is none (never written, unreadable or invalid).
+	HeartbeatAge(now time.Duration) (time.Duration, bool)
 	Records() (map[string]leasefence.Record, error)
 	WriteRecord(record leasefence.Record) error
 	DeleteRecord(containerID string) error

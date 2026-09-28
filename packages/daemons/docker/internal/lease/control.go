@@ -85,7 +85,7 @@ func (r *Runtime) BeforeStart(containerID, policyID, cgroupPath string) error {
 		return fmt.Errorf("%w: container id %q cannot carry a deadline record", ErrLeaseNotHeld, containerID)
 	}
 	now := r.opts.Clock.Now()
-	if !r.opts.Fence.HeartbeatFresh(now) {
+	if !HeartbeatFresh(r.opts.Fence, now) {
 		return fmt.Errorf("%w: the lease watchdog is not running", ErrLeaseNotHeld)
 	}
 	var status availabilitylease.HolderStatus
@@ -145,7 +145,7 @@ func (r *Runtime) CheckServe(policyID string) error {
 		return r.clearLegacyRecords(policyID)
 	}
 	now := r.opts.Clock.Now()
-	if !r.opts.Fence.HeartbeatFresh(now) {
+	if !HeartbeatFresh(r.opts.Fence, now) {
 		return fmt.Errorf("%w: the lease watchdog is not running", ErrLeaseNotHeld)
 	}
 	r.mu.Lock()

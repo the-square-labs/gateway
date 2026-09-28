@@ -118,12 +118,28 @@ func (e *fakeEngine) CgroupEmpty(_ context.Context, c Container) (bool, error) {
 }
 
 type fakeFence struct {
-	w         *world
-	records   map[string]leasefence.Record
+	w       *world
+	records map[string]leasefence.Record
+	// heartbeat: the watchdog runs and keeps writing its heartbeat, lag
+	// behind now (a slow watchdog). When it stops, the last heartbeat ages;
+	// lastBeat 0 means there is no heartbeat file at all.
 	heartbeat bool
+	lag       time.Duration
+	lastBeat  time.Duration
 }
 
-func (f *fakeFence) HeartbeatFresh(time.Duration) bool { return f.heartbeat }
+func (f *fakeFence) HeartbeatAge(now time.Duration) (time.Duration, bool) {
+	if f.heartbeat {
+		f.lastBeat = now - f.lag
+	}
+	if f.lastBeat == 0 {
+		return 0, false
+	}
+	return max(now-f.lastBeat, 0), true
+}
+
+// removeWatchdog models a node without a watchdog: no heartbeat file.
+func (f *fakeFence) removeWatchdog() { f.heartbeat, f.lastBeat = false, 0 }
 
 func (f *fakeFence) Records() (map[string]leasefence.Record, error) {
 	out := make(map[string]leasefence.Record, len(f.records))

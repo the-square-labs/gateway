@@ -47,8 +47,21 @@ func TestHeartbeatFreshness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !heartbeat.Fresh(10*time.Second+HeartbeatMaxAge) || heartbeat.Fresh(10*time.Second+HeartbeatMaxAge+1) || heartbeat.Fresh(9*time.Second) {
+	if !heartbeat.Fresh(10*time.Second+HeartbeatMaxAge) || heartbeat.Fresh(10*time.Second+HeartbeatMaxAge+1) {
 		t.Fatal("heartbeat freshness window is wrong")
+	}
+	// Written between the reader's clock read and its file read: fresh.
+	if age, ok := heartbeat.Age(9 * time.Second); !ok || age != 0 || !heartbeat.Fresh(9*time.Second) {
+		t.Fatalf("a heartbeat written just after the reader's clock read must be fresh: age %s ok %v", age, ok)
+	}
+	if heartbeat.Fresh(10*time.Second - HeartbeatMaxAge - 1) {
+		t.Fatal("a heartbeat far in the future cannot come from this clock")
+	}
+	if !heartbeat.Alive(10*time.Second+HeartbeatLostAge) || heartbeat.Alive(10*time.Second+HeartbeatLostAge+1) {
+		t.Fatal("heartbeat loss window is wrong")
+	}
+	if (Heartbeat{}).Alive(time.Second) {
+		t.Fatal("a heartbeat never written is not alive")
 	}
 }
 

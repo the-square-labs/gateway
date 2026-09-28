@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
+	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
 )
 
 func twoCandidateWorld(t *testing.T) *world {
@@ -94,12 +95,23 @@ func TestTakeoverFollowsManifestRank(t *testing.T) {
 	}
 }
 
-func TestStaleWatchdogHeartbeatStopsRenewingAndKills(t *testing.T) {
+// A12 scenario l: the watchdog dies while its node holds. The daemon stops
+// renewing and kills the container once the heartbeat is lost, well before
+// the successor may start.
+func TestDeadWatchdogStopsRenewingAndKills(t *testing.T) {
 	w := twoCandidateWorld(t)
 	w.waitServing("d1", 45*time.Second)
 	d1 := w.daemon("d1")
-	d1.fence.heartbeat = false
-	w.run(2 * time.Second)
+	d1.fence.heartbeat = false // the watchdog process dies; its file stays
+	w.logf("d1 watchdog died")
+	w.run(leasefence.HeartbeatMaxAge + time.Second)
+	if err := d1.runtime.CheckServe(testPolicy); err == nil {
+		t.Fatal("backend start must be refused once the heartbeat is not fresh")
+	}
+	if !d1.engine.running() {
+		t.Fatalf("a late heartbeat alone must not fence\n%s", w.dump())
+	}
+	w.run(leasefence.HeartbeatLostAge - leasefence.HeartbeatMaxAge + watchdogLostConfirm)
 	status := d1.runtime.Node().HolderStatus(availabilitylease.Key{PolicyID: testPolicy})
 	if d1.engine.running() {
 		t.Fatalf("daemon kept its container without a watchdog (A12.4)\n%s", w.dump())
@@ -107,14 +119,37 @@ func TestStaleWatchdogHeartbeatStopsRenewingAndKills(t *testing.T) {
 	if status.Role == availabilitylease.RoleHolding {
 		t.Fatalf("daemon still renews without a watchdog, role %s", status.Role)
 	}
-	if err := d1.runtime.CheckServe(testPolicy); err == nil {
-		t.Fatal("backend start must be refused without a watchdog")
-	}
 	w.waitServing("d2", 45*time.Second)
 	w.run(30 * time.Second)
 	w.requireClean()
+	if kill, start := w.lastIndexOf("d1 docker stop"), w.indexOf("d2 docker start"); kill < w.indexOf("d1 watchdog died") || kill > start {
+		t.Fatalf("the holder must kill its container before the successor starts\n%s", w.dump())
+	}
 	if d1.engine.running() {
 		t.Fatal("daemon without a watchdog re-acquired")
+	}
+}
+
+// N1: a CPU-starved watchdog writes its heartbeat late. That blocks new
+// starts but must never fence the running workload.
+func TestSlowWatchdogNeverFences(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1 := w.daemon("d1")
+	for _, lag := range []time.Duration{4 * time.Second, 8 * time.Second, leasefence.HeartbeatLostAge - worldTick} {
+		d1.fence.lag = lag
+		w.run(20 * time.Second)
+		d1.fence.lag = 0
+		w.run(2 * time.Second)
+	}
+	// Stale observations that do not last: a single step past the loss age.
+	d1.fence.lag = leasefence.HeartbeatLostAge + time.Second
+	w.run(worldTick)
+	d1.fence.lag = 0
+	w.run(5 * time.Second)
+	w.requireClean()
+	if w.indexOf("d1 docker stop") >= 0 || !d1.engine.running() || w.holderOf() != "d1" {
+		t.Fatalf("a slow watchdog fenced the holder\n%s", w.dump())
 	}
 }
 

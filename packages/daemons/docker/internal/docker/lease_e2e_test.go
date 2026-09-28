@@ -145,7 +145,7 @@ type e2eFence struct {
 	records map[string]leasefence.Record
 }
 
-func (f *e2eFence) HeartbeatFresh(time.Duration) bool { return true }
+func (f *e2eFence) HeartbeatAge(time.Duration) (time.Duration, bool) { return 0, true }
 func (f *e2eFence) Records() (map[string]leasefence.Record, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

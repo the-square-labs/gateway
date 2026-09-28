@@ -66,7 +66,7 @@ type ReportEvent struct {
 func (r *Runtime) Report() Report {
 	report := Report{
 		MemberID: r.opts.NodeID, Incarnation: r.node.Incarnation(),
-		WatchdogReady: r.opts.Fence.HeartbeatFresh(r.opts.Clock.Now()),
+		WatchdogReady: HeartbeatAlive(r.opts.Fence, r.opts.Clock.Now()),
 	}
 	voting := map[string]availabilitylease.ManifestInfo{}
 	for _, manifest := range r.node.Manifests() {

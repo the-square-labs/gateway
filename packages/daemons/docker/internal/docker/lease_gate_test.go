@@ -26,7 +26,7 @@ import (
 
 type gateTestFence struct{}
 
-func (gateTestFence) HeartbeatFresh(time.Duration) bool { return true }
+func (gateTestFence) HeartbeatAge(time.Duration) (time.Duration, bool) { return 0, true }
 func (gateTestFence) Records() (map[string]leasefence.Record, error) {
 	return map[string]leasefence.Record{}, nil
 }
