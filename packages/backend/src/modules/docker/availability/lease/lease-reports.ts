@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   type AvailabilityLeaseMemberKind,
@@ -141,14 +141,21 @@ export class AvailabilityLeaseReports {
     }
     const keys = new Set([...candidates.keys(), ...reporterRoles.keys()]);
     if (sender.kind !== 'relay') {
-      // A key this daemon held before but no longer reports was released or fenced.
+      // A key this daemon held, or ran a copy for (a claimant: fencing, abandoned, releasing...), but no longer
+      // reports was released or its copy stopped. Without the claimant case a fenced holder stayed listed forever,
+      // which kept a bootstrap from settling and a closing lease from seeing that no copy runs (D3).
       const claimed = await this.db
         .select({
           policyId: dockerAvailabilityLeaseObservations.policyId,
           slot: dockerAvailabilityLeaseObservations.slot,
         })
         .from(dockerAvailabilityLeaseObservations)
-        .where(eq(dockerAvailabilityLeaseObservations.holderId, sender.memberId));
+        .where(
+          or(
+            eq(dockerAvailabilityLeaseObservations.holderId, sender.memberId),
+            sql`jsonb_exists(${dockerAvailabilityLeaseObservations.claimants}, ${sender.memberId})`
+          )
+        );
       for (const { policyId, slot } of claimed) keys.add(keyOf(policyId, slot));
     }
     const notices: LeaseHolderChangeNotice[] = [];
