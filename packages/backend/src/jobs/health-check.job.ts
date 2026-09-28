@@ -11,6 +11,11 @@ import {
   probeDirectProxyUpstream,
   resolvePagesRouteProbeDomain,
 } from '@/modules/proxy/proxy-health-check.js';
+import {
+  loadAvailabilityRouteProbeLinks,
+  probeSecureLinkRoute,
+  SECURE_LINK_PROBE_BUSY_ERROR,
+} from '@/modules/proxy/proxy-secure-link-health-probe.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
@@ -21,7 +26,7 @@ const HEALTH_CHECK_CONCURRENCY = 8;
 // A daemon accepts at most four asynchronous commands at once. Reserve one slot
 // for interactive/synchronization work while scheduled probes are in flight.
 const SECURE_LINK_PROBE_CONCURRENCY_PER_NODE = 3;
-const DAEMON_BUSY_ERROR = 'daemon is busy handling long-running commands; retry shortly';
+const DAEMON_BUSY_ERROR = SECURE_LINK_PROBE_BUSY_ERROR;
 const SLOW_BASELINE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours of history for baseline avg
 const SLOW_RESPONSE_FLOOR_MS = 250;
 
@@ -38,6 +43,13 @@ function healthCheckDue(host: typeof proxyHosts.$inferSelect, now: number): bool
   if (!host.lastHealthCheckAt) return true;
   const intervalMs = Math.max(5, host.healthCheckInterval ?? 30) * 1000;
   return now - new Date(host.lastHealthCheckAt).getTime() >= intervalMs;
+}
+
+function isRelayBacked(host: typeof proxyHosts.$inferSelect): boolean {
+  return (
+    (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
+    host.secureLinkMigratedAt != null
+  );
 }
 
 async function allSettledBounded<T, R>(
@@ -100,17 +112,19 @@ export class HealthCheckJob {
     }
 
     logger.info(`Running health checks for ${hosts.length} host(s)`);
+    const availabilityMembers = await loadAvailabilityRouteProbeLinks(
+      this.db,
+      hosts.filter(isRelayBacked).map((host) => host.id)
+    );
 
     const check = async (host: typeof proxyHosts.$inferSelect) => {
-      const relayBacked =
-        (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
-        host.secureLinkMigratedAt != null;
+      const relayBacked = isRelayBacked(host);
       if (relayBacked && this.relayUnavailable) {
         await this.recordRelayUnavailable(host);
         return { hostId: host.id, status: 'skipped' as const };
       }
       const previousStatus = host.healthStatus as HealthStatus;
-      const { status: checkStatus, responseMs } = await this.checkHost(host);
+      const { status: checkStatus, responseMs } = await this.checkHost(host, availabilityMembers.get(host.id));
 
       if (relayBacked && this.relayUnavailable) {
         await this.recordRelayUnavailable(host);
@@ -225,9 +239,7 @@ export class HealthCheckJob {
     const directHosts: typeof hosts = [];
     const daemonHostsByNode = new Map<string, typeof hosts>();
     for (const host of hosts) {
-      const relayBacked =
-        (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
-        host.secureLinkMigratedAt != null;
+      const relayBacked = isRelayBacked(host);
       if (!relayBacked && host.upstreamKind !== 'pages') {
         directHosts.push(host);
         continue;
@@ -349,7 +361,8 @@ export class HealthCheckJob {
   }
 
   private async checkHost(
-    host: typeof proxyHosts.$inferSelect
+    host: typeof proxyHosts.$inferSelect,
+    memberLinkIds?: string[]
   ): Promise<{ status: 'online' | 'offline' | 'skipped' | 'unknown'; responseMs?: number }> {
     if (host.upstreamKind === 'pages') {
       const domain = resolvePagesRouteProbeDomain(host);
@@ -403,48 +416,33 @@ export class HealthCheckJob {
         return { status: 'offline' };
       }
     }
-    if (
-      (host.upstreamKind === 'docker_container' || host.upstreamKind === 'docker_deployment') &&
-      host.secureLinkMigratedAt != null
-    ) {
+    if (isRelayBacked(host)) {
       if (!host.nodeId || !this.nodeDispatch) return { status: 'offline' };
-      try {
-        const result = await this.nodeDispatch.probeProxySecureLink(host.nodeId, {
-          linkId: host.id,
-          scheme: host.forwardScheme ?? 'http',
-          path: host.healthCheckUrl || '/',
-          expectedStatus: host.healthCheckExpectedStatus,
-          expectedBody: host.healthCheckExpectedBody,
-          bodyMatchMode: host.healthCheckBodyMatchMode,
-          timeoutSeconds: Math.ceil(HEALTH_CHECK_TIMEOUT_MS / 1000),
-        });
-        if (!result.ok && result.error === DAEMON_BUSY_ERROR) {
-          logger.debug('Secure Link health probe deferred because daemon is busy', {
-            hostId: host.id,
-            nodeId: host.nodeId,
-            domain: host.domainNames?.[0],
-          });
-          return { status: 'skipped' };
-        }
-        if (!result.ok) {
-          logger.warn('Secure Link health probe failed', {
-            hostId: host.id,
-            nodeId: host.nodeId,
-            domain: host.domainNames?.[0],
-            httpStatus: result.httpStatus,
-            error: result.error,
-          });
-        }
-        return { status: daemonProbeOutcome(result), responseMs: result.responseMs };
-      } catch (error) {
-        logger.warn('Secure Link health probe command failed', {
+      const result = await probeSecureLinkRoute(
+        this.nodeDispatch,
+        { ...host, nodeId: host.nodeId },
+        memberLinkIds,
+        Math.ceil(HEALTH_CHECK_TIMEOUT_MS / 1000)
+      );
+      if (result.busy) {
+        logger.debug('Secure Link health probe deferred because daemon is busy', {
           hostId: host.id,
           nodeId: host.nodeId,
           domain: host.domainNames?.[0],
-          error,
         });
-        return { status: 'offline' };
+        return { status: 'skipped' };
       }
+      if (!result.ok) {
+        logger.warn('Secure Link health probe failed', {
+          hostId: host.id,
+          nodeId: host.nodeId,
+          domain: host.domainNames?.[0],
+          httpStatus: result.httpStatus,
+          error: result.failures.map((failure) => failure.error).join('; '),
+          ...(memberLinkIds ? { availabilityMembers: result.failures } : {}),
+        });
+      }
+      return { status: daemonProbeOutcome(result), responseMs: result.responseMs };
     }
     const probe = await probeDirectProxyUpstream(host, this.probeDeps);
     if (probe.status === 'blocked') {
