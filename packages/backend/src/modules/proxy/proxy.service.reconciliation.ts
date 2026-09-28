@@ -12,6 +12,7 @@ import {
 
 export { __testOnly } from './proxy.service-helpers.js';
 
+import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import { isDockerUpstream, logger, type ProxyHostRow } from './proxy.service.core.js';
 import { ProxyServiceListing } from './proxy.service.listing.js';
 
@@ -43,7 +44,13 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
       where: and(eq(proxyHosts.enabled, true), or(eq(proxyHosts.type, '404'), eq(proxyHosts.maintenanceEnabled, true))),
     });
     for (const host of hosts) {
-      await this.reapplyHostConfig(host.id);
+      // A node without a control session renders the current branding in its reconnect sync.
+      if (host.nodeId && !this.nodeDispatch.isNodeConnected(host.nodeId)) continue;
+      try {
+        await this.reapplyHostConfig(host.id);
+      } catch (error) {
+        if (!isNodeNotConnectedError(error)) throw error;
+      }
     }
   }
 

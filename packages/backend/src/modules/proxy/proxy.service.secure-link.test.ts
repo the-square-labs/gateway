@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ProxyService } from './proxy.service.js';
 
+const logs = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }));
+vi.mock('@/lib/logger.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/logger.js')>()),
+  createChildLogger: () => logs,
+}));
+
 vi.mock('@/db/schema/access-lists.js', () => ({ accessLists: { id: 'access_lists.id' } }));
 vi.mock('@/db/schema/certificates.js', () => ({ certificates: { id: 'certificates.id' } }));
 vi.mock('@/db/schema/ssl-certificates.js', () => ({ sslCertificates: { id: 'ssl_certificates.id' } }));
@@ -92,17 +98,84 @@ describe('ProxyService Nginx template reconciliation', () => {
         },
       },
     } as any;
-    const service = new ProxyService(db, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const nodeDispatch = { isNodeConnected: vi.fn(() => true) };
+    const service = new ProxyService(db, {} as any, {} as any, {} as any, nodeDispatch as any, {} as any);
     const reconcile = vi
       .spyOn(service, 'reconcileAdditionalRouteHost')
       .mockResolvedValueOnce()
-      .mockRejectedValueOnce(new Error('node offline'));
+      .mockRejectedValueOnce(new Error('nginx -t failed'));
 
     const result = await service.reconcileTemplateHosts('template-1');
 
     expect(reconcile).toHaveBeenNthCalledWith(1, 'host-1');
     expect(reconcile).toHaveBeenNthCalledWith(2, 'host-2');
-    expect(result).toEqual({ total: 2, succeeded: 1, failed: 1 });
+    expect(result).toEqual({ total: 2, succeeded: 1, failed: 1, deferred: 0 });
+    expect(logs.error).toHaveBeenCalledWith(
+      'Failed to regenerate route after Nginx template update',
+      expect.objectContaining({ hostId: 'host-2' })
+    );
+  });
+
+  it('leaves routes of nodes that have not reconnected yet to their reconnect sync without errors (M-4)', async () => {
+    logs.error.mockClear();
+    const db = {
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: 'host-offline', nodeId: 'ingress-reconnecting' },
+            { id: 'host-dropped', nodeId: 'ingress-1' },
+            { id: 'host-tls-dropped', nodeId: 'ingress-1' },
+            { id: 'host-ok', nodeId: 'ingress-1' },
+          ]),
+        },
+      },
+    } as any;
+    // At Gateway start the built-in templates are updated before the ingress nodes reconnect.
+    const nodeDispatch = { isNodeConnected: vi.fn((nodeId: string) => nodeId === 'ingress-1') };
+    const service = new ProxyService(db, {} as any, {} as any, {} as any, nodeDispatch as any, {} as any);
+    const reconcile = vi
+      .spyOn(service, 'reconcileAdditionalRouteHost')
+      .mockRejectedValueOnce(new Error('Node ingress-1 is not connected'))
+      .mockRejectedValueOnce(
+        new Error('Failed to safely activate the TLS proxy configuration: Node ingress-1 is not connected')
+      )
+      .mockResolvedValueOnce();
+
+    const result = await service.reconcileTemplateHosts('template-1');
+
+    expect(reconcile).not.toHaveBeenCalledWith('host-offline');
+    expect(result).toEqual({ total: 4, succeeded: 1, failed: 0, deferred: 3 });
+    expect(logs.error).not.toHaveBeenCalled();
+    expect(logs.info).toHaveBeenCalledWith(
+      'Reconciled routes after Nginx template update',
+      expect.objectContaining({ deferredToNodeReconnect: 3 })
+    );
+  });
+
+  it('refreshes public branding only on connected nodes and leaves the rest to their reconnect sync', async () => {
+    const db = {
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: 'host-offline', nodeId: 'ingress-reconnecting' },
+            { id: 'host-dropped', nodeId: 'ingress-1' },
+            { id: 'host-ok', nodeId: 'ingress-1' },
+          ]),
+        },
+      },
+    } as any;
+    const nodeDispatch = { isNodeConnected: vi.fn((nodeId: string) => nodeId === 'ingress-1') };
+    const service = new ProxyService(db, {} as any, {} as any, {} as any, nodeDispatch as any, {} as any);
+    const reapply = vi
+      .spyOn(service, 'reapplyHostConfig')
+      .mockRejectedValueOnce(new Error('Node ingress-1 is not connected'))
+      .mockResolvedValueOnce(null);
+
+    await expect((service as any).refreshExternalBranding()).resolves.toBeUndefined();
+
+    expect(reapply.mock.calls.map(([id]) => id)).toEqual(['host-dropped', 'host-ok']);
+    reapply.mockRejectedValueOnce(new Error('nginx -t failed'));
+    await expect((service as any).refreshExternalBranding()).rejects.toThrow('nginx -t failed');
   });
 
   it('starts route reconciliation when template rendering changes', async () => {
@@ -120,6 +193,7 @@ describe('ProxyService Nginx template reconciliation', () => {
       total: 1,
       succeeded: 1,
       failed: 0,
+      deferred: 0,
     });
 
     service.setEventBus(bus);

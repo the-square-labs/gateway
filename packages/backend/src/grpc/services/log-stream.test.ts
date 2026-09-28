@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { logRelay, NGINX_LOG_SUBSCRIBE_ACK_EVENT } from '@/modules/monitoring/log-relay.service.js';
 import { createLogStreamHandlers } from './log-stream.js';
 
+const logs = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }));
+vi.mock('@/lib/logger.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/logger.js')>()),
+  createChildLogger: () => logs,
+}));
+
 const nodeId = '11111111-1111-4111-8111-111111111111';
 const ownedHostId = '22222222-2222-4222-8222-222222222222';
 const otherHostId = '33333333-3333-4333-8333-333333333333';
@@ -115,6 +121,18 @@ function makeDeps(
 }
 
 describe('StreamLogs daemon certificate identity', () => {
+  it('turns away a stream that arrives before its node registered without a warning (M-4)', async () => {
+    logs.warn.mockClear();
+    const deps = makeDeps(makeDbNode({ certificateSerial: 'aa01' }), null);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createLogStreamHandlers(deps).StreamLogs(stream);
+
+    await vi.waitFor(() => expect(stream.end).toHaveBeenCalled());
+    expect(logs.debug).toHaveBeenCalledWith('Log stream rejected: node is not connected yet', { nodeId });
+    expect(logs.warn).not.toHaveBeenCalled();
+  });
+
   it('installs cleanup handlers before async authentication completes', () => {
     const deps = makeDeps(makeDbNode({ certificateSerial: 'aa01' }));
     const stream = makeStream({ serialNumber: 'aa01' });

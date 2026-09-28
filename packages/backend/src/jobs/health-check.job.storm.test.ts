@@ -424,6 +424,23 @@ describe('HealthCheckJob right after a Gateway start', () => {
     }
   });
 
+  it('records nothing after the grace for a route whose ingress node is being updated (M-4)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { db, writes } = database([secureHost()]);
+      const isNodeUpdateInProgress = vi.fn().mockResolvedValue(true);
+      const job = new HealthCheckJob(db, { probeProxySecureLink: vi.fn(notConnected), isNodeUpdateInProgress } as any);
+      vi.setSystemTime(Date.now() + 61_000);
+
+      await job.run();
+
+      expect(isNodeUpdateInProgress).toHaveBeenCalledWith('nginx-node');
+      expect(writes).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('still reports a probe that reached the daemon and failed during the grace', async () => {
     const { db, writes } = database([secureHost()]);
     const probeProxySecureLink = vi.fn().mockResolvedValue({ ok: false, httpStatus: 502, error: 'upstream 502' });

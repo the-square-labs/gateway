@@ -15,6 +15,7 @@ import type {
   PreparedTlsCertificate,
 } from '@/services/nginx-certificate-distribution.service.js';
 import type { NginxConfigGenerator, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
+import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPoolService } from '@/services/relay-pool.service.js';
 import type { AdditionalRouteService } from './additional-route.service.js';
@@ -273,7 +274,7 @@ export abstract class ProxyServiceCore {
   async reconcileTemplateHosts(
     templateId: string,
     options: { type?: string; isBuiltin?: boolean } = {}
-  ): Promise<{ total: number; succeeded: number; failed: number }> {
+  ): Promise<{ total: number; succeeded: number; failed: number; deferred: number }> {
     const templateMatch =
       options.isBuiltin && options.type
         ? and(
@@ -286,12 +287,25 @@ export abstract class ProxyServiceCore {
     });
     let succeeded = 0;
     let failed = 0;
+    // Routes of nodes without a control session (at Gateway start the built-in templates are updated before the
+    // nodes reconnect) are rendered from the current templates by the node's reconnect sync; pushing them now can
+    // only fail.
+    let deferred = 0;
 
     for (const host of hosts) {
+      if (host.nodeId && !this.nodeDispatch.isNodeConnected(host.nodeId)) {
+        deferred += 1;
+        continue;
+      }
       try {
         await this.reconcileAdditionalRouteHost(host.id);
         succeeded += 1;
       } catch (error) {
+        if (isNodeNotConnectedError(error)) {
+          // The node went away meanwhile: same as above.
+          deferred += 1;
+          continue;
+        }
         failed += 1;
         logger.error('Failed to regenerate route after Nginx template update', {
           templateId,
@@ -307,8 +321,9 @@ export abstract class ProxyServiceCore {
       total: hosts.length,
       succeeded,
       failed,
+      ...(deferred > 0 ? { deferredToNodeReconnect: deferred } : {}),
     });
-    return { total: hosts.length, succeeded, failed };
+    return { total: hosts.length, succeeded, failed, deferred };
   }
   protected reconcileMaintenanceAlerts(hostId?: string) {
     void this.notificationEvaluator?.reconcileProxyMaintenance(hostId).catch((error) => {
