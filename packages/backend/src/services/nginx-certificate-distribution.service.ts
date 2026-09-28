@@ -13,6 +13,7 @@ import {
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { loadCertificateIssuerChainPem, loadIssuerChainPem } from '@/modules/pki/issuer-chain.js';
 // proxy-host-lock has no imports of its own, so this adds no import cycle.
 import { withProxyHostLock } from '@/modules/proxy/proxy-host-lock.js';
 import type { CryptoService } from '@/services/crypto.service.js';
@@ -1177,7 +1178,14 @@ export class NginxCertificateDistributionService {
           })
         : cert.privateKeyPem;
       this.validateCertificatePair(cert.certificatePem, keyPem);
-      return { certificatePem: cert.certificatePem, keyPem, chainPem: cert.chainPem };
+      // A certificate linked from the internal PKI before its issuer chain was
+      // stored still has to be served with its intermediate CAs.
+      const chainPem =
+        cert.chainPem ||
+        (cert.type === 'internal' && cert.internalCertId
+          ? await loadCertificateIssuerChainPem(this.db, cert.internalCertId)
+          : null);
+      return { certificatePem: cert.certificatePem, keyPem, chainPem };
     }
 
     const cert = await this.db.query.certificates.findFirst({ where: eq(certificates.id, reference.id) });
@@ -1208,7 +1216,24 @@ export class NginxCertificateDistributionService {
       dekIv: cert.dekIv || '',
     });
     this.validateCertificatePair(cert.certificatePem, keyPem);
-    return { certificatePem: cert.certificatePem, keyPem, chainPem: null };
+    return { certificatePem: cert.certificatePem, keyPem, chainPem: await loadIssuerChainPem(this.db, cert.caId) };
+  }
+
+  /**
+   * Refresh the canonical material of an internal PKI certificate that was
+   * stored without its issuer chain (before chains were served). Returns true
+   * when the asset changed, so the caller re-applies the hosts that use it.
+   */
+  async refreshMissingIssuerChain(reference: CertificateReference): Promise<boolean> {
+    const asset = await this.findAsset(reference);
+    if (!asset || asset.format !== 'v2' || asset.state !== 'ready' || !asset.encryptedMaterial || !asset.version) {
+      return false;
+    }
+    if (this.decryptAsset(asset).chainPem) return false;
+    const source = await this.loadGatewayMaterial(reference);
+    if (!source.chainPem) return false;
+    await this.upsertGatewayAsset(reference);
+    return true;
   }
 
   private decryptAsset(asset: AssetRow): {

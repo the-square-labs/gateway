@@ -24,6 +24,7 @@ import { x509 } from '@/lib/x509.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
+import { loadCertificateIssuerChainPem, loadIssuerChainPem } from '@/modules/pki/issuer-chain.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -1026,6 +1027,8 @@ export class SSLService {
 
     // Auto-generate name from cert CN if not provided
     const name = input.name || pkiCert.commonName;
+    // Clients that trust only the root need the intermediate CAs in the chain.
+    const chainPem = await loadIssuerChainPem(this.db, pkiCert.caId);
 
     // Extract domains from the PKI cert
     let domains: string[] = [];
@@ -1063,6 +1066,7 @@ export class SSLService {
         type: 'internal',
         domainNames: domains,
         certificatePem: pkiCert.certificatePem,
+        chainPem,
         privateKeyPem: encryptedData?.encryptedPrivateKey || null,
         encryptedDek: encryptedData?.encryptedDek || null,
         dekIv: encryptedData?.dekIv || null,
@@ -1945,11 +1949,13 @@ export class SSLService {
       // Keep the linked domain list.
     }
     const encrypted = this.cryptoService.encryptPrivateKey(material.privateKeyPem);
+    const chainPem = await loadCertificateIssuerChainPem(this.db, material.internalCertId);
     const now = new Date();
     await this.db
       .update(sslCertificates)
       .set({
         certificatePem: material.certificatePem,
+        chainPem,
         privateKeyPem: encrypted.encryptedPrivateKey,
         encryptedDek: encrypted.encryptedDek,
         dekIv: encrypted.dekIv,
@@ -1997,6 +2003,30 @@ export class SSLService {
     logger.info('Linked internal certificate reissued', { certId, internalCertId: material.internalCertId, trigger });
     this.emitCert(certId, 'renewed', cert.name);
     return { failures };
+  }
+
+  /**
+   * A certificate linked from the internal PKI before the issuer chain was
+   * stored went out without its intermediate CAs. Store the chain and deliver
+   * the certificate again. Returns true when the certificate was repaired.
+   */
+  async repairInternalIssuerChain(certId: string): Promise<boolean> {
+    const cert = await this.db.query.sslCertificates.findFirst({ where: eq(sslCertificates.id, certId) });
+    if (!cert || cert.type !== 'internal' || !cert.internalCertId || cert.chainPem) return false;
+    const chainPem = await loadCertificateIssuerChainPem(this.db, cert.internalCertId);
+    if (!chainPem) return false;
+    await this.db
+      .update(sslCertificates)
+      .set({ chainPem, updatedAt: new Date() })
+      .where(and(eq(sslCertificates.id, certId), isNull(sslCertificates.chainPem)));
+    // Without its key the certificate was never delivered to Nginx.
+    if (cert.privateKeyPem) {
+      const delivery = await this.refreshGatewayAssetAndSyncProxyHosts(certId, GATEWAY_SYSTEM_USER_ID);
+      await this.recordDistributionOutcome(certId, delivery.failures);
+    }
+    logger.info('Issuer chain added to a linked internal certificate', { certId });
+    this.emitCert(certId, 'updated', cert.name);
+    return true;
   }
 
   async getCert(certId: string) {

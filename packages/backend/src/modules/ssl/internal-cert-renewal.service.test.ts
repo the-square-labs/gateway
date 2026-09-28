@@ -331,4 +331,28 @@ describe('InternalCertificateRenewalService', () => {
 
     expect(reissue).toHaveBeenCalledWith('pki-old', 'user-1', 'manual', { sslCertificateId: 'ssl-1' });
   });
+
+  it('delivers internal certificates served without their issuer chain again', async () => {
+    const { db } = queuedDb([
+      [{ id: 'ssl-1' }, { id: 'ssl-2' }], // linked certificates without a stored chain
+      [
+        { id: 'host-1', internalCertId: 'pki-direct' },
+        { id: 'host-2', internalCertId: 'pki-direct' },
+        { id: 'host-3', internalCertId: 'pki-complete' },
+      ],
+    ]);
+    const { service, sslService, distribution, proxy } = services(db);
+    Object.assign(sslService, {
+      repairInternalIssuerChain: vi.fn(async (id: string) => id === 'ssl-1'),
+    });
+    Object.assign(distribution, {
+      refreshMissingIssuerChain: vi.fn(async (reference: { id: string }) => reference.id === 'pki-direct'),
+    });
+
+    await expect(service.repairMissingIssuerChains()).resolves.toBe(2);
+
+    expect(proxy.resyncTlsHost).toHaveBeenCalledTimes(2);
+    expect(proxy.resyncTlsHost).toHaveBeenCalledWith('host-1', '00000000-0000-0000-0000-000000000000');
+    expect(proxy.resyncTlsHost).toHaveBeenCalledWith('host-2', '00000000-0000-0000-0000-000000000000');
+  });
 });
