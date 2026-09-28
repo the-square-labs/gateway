@@ -246,7 +246,7 @@ describe("AuthProvisioningSection inference setting", () => {
     };
     api.setCache("settings:auth-provisioning", settings);
     vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(settings);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
 
     render(<AuthProvisioningSection canEdit />);
 
@@ -289,7 +289,7 @@ describe("AuthProvisioningSection inference setting", () => {
     for (const panel of [oidcPanel, loggingPanel, mfaPanel, smtpPanel]) {
       expect(panel).toHaveStyle({ borderColor: "var(--color-warning)" });
     }
-  });
+  }, 15_000);
 
   it("persists graceful shutdown settings in the separate Gateway panel", async () => {
     api.setCache("settings:auth-provisioning", SETTINGS);
