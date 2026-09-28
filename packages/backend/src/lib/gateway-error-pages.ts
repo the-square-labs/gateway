@@ -18,6 +18,23 @@ export function gatewayNotFoundHtml(hideExternalBranding = false): string {
   return GATEWAY_NOT_FOUND_HTML.replace(`<div class="footer">${EXTERNAL_BRANDING_HTML}</div>`, '');
 }
 
+/**
+ * Served by the ingress node for a status page route while Gateway cannot answer and no earlier copy of the page is
+ * cached yet (a cached copy is served instead whenever there is one). It reloads itself, so a visitor sees the page as
+ * soon as Gateway is back.
+ */
+export const GATEWAY_STATUS_PAGE_UNAVAILABLE_HTML = pageShell(
+  'Status temporarily unavailable',
+  'Back in a moment',
+  'The status page is being updated. This page reloads by itself.',
+  'Temporarily unavailable'
+).replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta http-equiv="refresh" content="15">');
+
+export function gatewayStatusPageUnavailableHtml(hideExternalBranding = false): string {
+  if (!hideExternalBranding) return GATEWAY_STATUS_PAGE_UNAVAILABLE_HTML;
+  return GATEWAY_STATUS_PAGE_UNAVAILABLE_HTML.replace(`<div class="footer">${EXTERNAL_BRANDING_HTML}</div>`, '');
+}
+
 export function gatewayMaintenanceHtml(hideExternalBranding = false): string {
   if (!hideExternalBranding) return GATEWAY_MAINTENANCE_HTML;
   return GATEWAY_MAINTENANCE_HTML.replace(`<span aria-hidden="true"> · </span>${EXTERNAL_BRANDING_HTML}`, '');

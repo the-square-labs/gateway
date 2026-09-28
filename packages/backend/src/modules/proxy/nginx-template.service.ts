@@ -28,6 +28,7 @@ import {
 import { managedSecureLinkUpstreamBody, withAvailabilityNextUpstream } from './nginx-availability-upstream.js';
 import type { CreateNginxTemplateInput, UpdateNginxTemplateInput } from './nginx-template.schemas.js';
 import { withoutReservedTemplateVariables } from './proxy-template-variables.js';
+import { withStatusPageStaleCache } from './status-page-stale-cache.js';
 
 const logger = createChildLogger('NginxTemplateService');
 
@@ -1074,7 +1075,13 @@ export class NginxTemplateService {
     const withUpstreams = supportsAdditionalRoutes
       ? this.ensureManagedAdditionalRouteUpstreams(withSecureLinkUpstreams, host)
       : withSecureLinkUpstreams;
-    return withAvailabilityNextUpstream(withUpstreams, availabilityUpstreamNames(host, supportsAdditionalRoutes));
+    const result = withAvailabilityNextUpstream(
+      withUpstreams,
+      availabilityUpstreamNames(host, supportsAdditionalRoutes)
+    );
+    return host.statusPageStaleCache && host.type === 'proxy'
+      ? withStatusPageStaleCache(result, host.id, hideExternalBranding)
+      : result;
   }
 
   private applyUpstreamIpFamily(rendered: string, host: ProxyHostConfig): string {
