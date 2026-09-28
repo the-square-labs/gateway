@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -208,8 +209,41 @@ func (c *Client) repairDeploymentRouter(ctx context.Context, deploymentID string
 		}
 		actions = append(actions, "started")
 	}
+	upgraded, err := c.upgradeDeploymentRouterConfig(ctx, current)
+	if upgraded {
+		actions = append(actions, "config upgraded")
+	}
 	repair.Action = strings.Join(actions, ", ")
+	if err != nil {
+		return repair, err
+	}
 	return repair, nil
+}
+
+// upgradeDeploymentRouterConfig rewrites the config of a running router that
+// still serves an older daemon's config (per-request slot resolution through
+// dockerd's DNS, B-8) with the current one for the same slot and routes.
+func (c *Client) upgradeDeploymentRouterConfig(ctx context.Context, current container.InspectResponse) (bool, error) {
+	name := trimContainerName(current.Name)
+	content, err := c.readContainerFile(ctx, current.ID, deploymentRouterConfigPath, deploymentRouterOutputLimit)
+	if err != nil {
+		if isNotFoundErr(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read the config of deployment router %s: %w", name, err)
+	}
+	config := string(content)
+	if deploymentRouterConfigCurrent(config) {
+		return false, nil
+	}
+	slot, routes, err := deploymentRouterConfigRoutes(config, current.HostConfig.PortBindings)
+	if err != nil {
+		return false, fmt.Errorf("deployment router %s serves an older config that cannot be carried over: %w", name, err)
+	}
+	if err := c.writeRouterConfig(ctx, name, renderDeploymentNginx(routes, slot)); err != nil {
+		return false, fmt.Errorf("upgrade the config of deployment router %s: %w", name, err)
+	}
+	return true, nil
 }
 
 // replaceLegacyDeploymentRouter recreates a router of an older daemon with
@@ -287,6 +321,9 @@ func (c *Client) restoreSetAsideRouter(ctx context.Context, oldID, name string, 
 	return cause
 }
 
+// heredocRouterConfig is the first config a router start command writes.
+var heredocRouterConfig = regexp.MustCompile(`<<'EOF'[^\n]*\n([\s\S]*?)\nEOF\n`)
+
 // deploymentRouterServedConfig returns the config a router serves: the file
 // on disk, which every config write replaces, else, for a router that never
 // started, the config its start command writes.
@@ -298,7 +335,12 @@ func (c *Client) deploymentRouterServedConfig(ctx context.Context, current conta
 	if err == nil && deploymentRouterConfigSlot(string(content)) != "" {
 		return string(content), nil
 	}
-	if script := strings.Join(current.Config.Cmd, " "); deploymentRouterConfigSlot(script) != "" {
+	script := strings.Join(current.Config.Cmd, " ")
+	if match := heredocRouterConfig.FindStringSubmatch(script); match != nil && deploymentRouterConfigSlot(match[1]) != "" {
+		// The config the start command writes, not the whole script.
+		return match[1], nil
+	}
+	if deploymentRouterConfigSlot(script) != "" {
 		return script, nil
 	}
 	return "", errors.New("router config does not name one deployment slot")

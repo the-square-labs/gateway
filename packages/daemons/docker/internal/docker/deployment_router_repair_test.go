@@ -350,3 +350,47 @@ func TestDeploymentRouterConfigRoutes(t *testing.T) {
 		t.Fatal("a config naming two slots must be refused")
 	}
 }
+
+// perRequestDeploymentRouterConfig is the config rc.20 and earlier daemons
+// rendered: the slot resolved per request through Docker's embedded DNS.
+func perRequestDeploymentRouterConfig(slot string) string {
+	return "map $http_upgrade $connection_upgrade {\n  default upgrade;\n  '' close;\n}\n" +
+		"server {\n  listen 18080;\n  resolver 127.0.0.11 valid=10s ipv6=off;\n  client_max_body_size 0;\n  location / {\n" +
+		"    set $deployment_upstream " + slot + ":3000;\n    proxy_pass http://$deployment_upstream;\n" +
+		"    proxy_redirect http://$deployment_upstream/ /;\n    proxy_connect_timeout 5s;\n  }\n}\n"
+}
+
+// B-8: routers of earlier daemons resolve their slot per request through
+// dockerd's DNS; a daemon start (and a lease holder before it serves) rewrites
+// their config in place for the same slot and routes, without a recreate.
+func TestRepairUpgradesAPerRequestRouterConfig(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	configs, writes := simulateNginxRouter(engine)
+	addDeploymentSlots(engine, nil, "green")
+	router := currentRouter(t, container.RestartPolicyUnlessStopped, true)
+	router.Files = map[string]string{deploymentRouterConfigPath: perRequestDeploymentRouterConfig("green")}
+	added := engine.addContainer(router)
+
+	repairs, err := client.repairServingDeploymentRouters(context.Background(), deploymentRouterRepairScope{}, nil)
+	if err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	if len(repairs) != 1 || repairs[0].Action != "config upgraded" {
+		t.Fatalf("repairs = %+v", repairs)
+	}
+	if engine.countCalls("POST /containers/create") != 0 {
+		t.Fatal("a config upgrade must not recreate the router")
+	}
+	written := configs[added.ID]
+	if len(*writes) != 1 || !deploymentRouterConfigCurrent(written) || !strings.Contains(written, "  server green:3000 resolve;") ||
+		!strings.Contains(written, "listen 18080;") {
+		t.Fatalf("upgraded config = %q", written)
+	}
+
+	// A router that serves the current config is left alone.
+	added.Files[deploymentRouterConfigPath] = written
+	repairs, err = client.repairServingDeploymentRouters(context.Background(), deploymentRouterRepairScope{}, nil)
+	if err != nil || len(repairs) != 0 || len(*writes) != 1 {
+		t.Fatalf("second repair = %+v, %v, writes %d", repairs, err, len(*writes))
+	}
+}
