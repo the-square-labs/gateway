@@ -1,11 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleClient } from '@/db/client.js';
+import { disposableDatabase, migrateDatabase } from '@/db/migration-database.test-helpers.js';
 import * as schema from '@/db/schema/index.js';
 import type { User } from '@/types.js';
 import { HostingFirewallService } from './hosting-firewall.service.js';
@@ -15,8 +13,13 @@ import { HostingOperationsService } from './hosting-operations.service.js';
 import { hostingCapabilities } from './hosting-provider.types.js';
 
 const url = process.env.HOSTING_TEST_DATABASE_URL;
+
+/**
+ * Opt-in: HOSTING_TEST_DATABASE_URL names a local, dedicated hosting_test_* database (the CI Database job sets it).
+ * Reconciliation walks every firewall row, so this suite works in its own `<name>_firewall` database next to it.
+ */
 describe.skipIf(!url)('firewall PostgreSQL fences', () => {
-  let pool: pg.Pool;
+  let database: Awaited<ReturnType<typeof disposableDatabase>>;
   let db: DrizzleClient;
   let service: HostingFirewallService;
   const actorId = randomUUID(),
@@ -55,12 +58,9 @@ describe.skipIf(!url)('firewall PostgreSQL fences', () => {
   const firewall = { read: vi.fn(async () => ({ ...observation })), apply: vi.fn(async () => {}) };
   let cached: unknown = null;
   beforeAll(async () => {
-    const target = new URL(url!);
-    if (target.hostname !== '127.0.0.1' || !/^\/hosting_test_firewall_[a-z0-9_]+$/.test(target.pathname))
-      throw new Error('Disposable firewall test DB required');
-    pool = new pg.Pool({ connectionString: url, max: 6, connectionTimeoutMillis: 5000 });
-    db = drizzle(pool, { schema });
-    await migrate(db, { migrationsFolder: fileURLToPath(new URL('../../db/migrations', import.meta.url)) });
+    database = await disposableDatabase(url!, 'firewall', { prefix: 'hosting_test_', max: 6 });
+    db = drizzle(database.pool, { schema });
+    await migrateDatabase(database.pool);
     await db.insert(schema.permissionGroups).values({ id: groupId, name: `firewall-${groupId}`, scopes: user.scopes });
     await db
       .insert(schema.users)
@@ -130,7 +130,7 @@ describe.skipIf(!url)('firewall PostgreSQL fences', () => {
     await service.reconcileDue();
   }, 120000);
   afterAll(async () => {
-    await pool?.end();
+    await database?.drop();
   });
 
   const current = async () =>

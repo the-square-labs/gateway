@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { DrizzleClient } from '@/db/client.js';
+import { disposableDatabase, migrateDatabase } from '@/db/migration-database.test-helpers.js';
 import * as schema from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import type { User } from '@/types.js';
 import { HostingSettingsSchema } from './hosting.schemas.js';
@@ -28,11 +27,17 @@ import { HostingProvisioningService } from './hosting-provisioning.service.js';
 import { snapshotFolderService, snapshotLayoutId, snapshotPlacements } from './hosting-snapshot-folders.js';
 import { allocateProxmoxPool } from './proxmox-allocation.js';
 
+// Creator grants resolve AuthService from the app container, which this suite does not build.
+vi.mock('@/lib/created-resource-permissions.js', () => ({ grantCreatedResourcePermissions: vi.fn() }));
+
 const url = process.env.HOSTING_TEST_DATABASE_URL;
 
-/** Opt-in only. The runner provisions a disposable DB on the explicitly authorized E2E stand. */
+/**
+ * Opt-in: HOSTING_TEST_DATABASE_URL names a local, dedicated hosting_test_* database (the CI Database job sets it).
+ * This suite works in its own `<name>_invariants` database next to it.
+ */
 describe.skipIf(!url)('hosting PostgreSQL transaction invariants', () => {
-  let pool: pg.Pool;
+  let database: Awaited<ReturnType<typeof disposableDatabase>>;
   let db: DrizzleClient;
   let first: HostingOperationsService;
   let second: HostingOperationsService;
@@ -67,12 +72,9 @@ describe.skipIf(!url)('hosting PostgreSQL transaction invariants', () => {
   });
 
   beforeAll(async () => {
-    const target = new URL(url!);
-    if (!['127.0.0.1', 'localhost'].includes(target.hostname) || !/^\/hosting_test_[a-z0-9_]+$/.test(target.pathname))
-      throw new Error('Hosting DB tests require a dedicated hosting_test_ database through a local tunnel');
-    pool = new pg.Pool({ connectionString: url, max: 4, connectionTimeoutMillis: 5000 });
-    db = drizzle(pool, { schema });
-    await migrate(db, { migrationsFolder: fileURLToPath(new URL('../../db/migrations', import.meta.url)) });
+    database = await disposableDatabase(url!, 'invariants', { prefix: 'hosting_test_' });
+    db = drizzle(database.pool, { schema });
+    await migrateDatabase(database.pool);
     await db.insert(schema.permissionGroups).values({ id: groupId, name: `hosting-test-${groupId}`, scopes: [] });
     await db
       .insert(schema.users)
@@ -124,7 +126,7 @@ describe.skipIf(!url)('hosting PostgreSQL transaction invariants', () => {
     second = new HostingOperationsService(db, events as never);
   }, 120000);
   afterAll(async () => {
-    await pool?.end();
+    await database?.drop();
   });
 
   it('reserves one intent and runs quota/node initialization once under concurrent clicks', async () => {
@@ -688,7 +690,12 @@ describe.skipIf(!url)('hosting PostgreSQL transaction invariants', () => {
       enabled: true,
       settings: HostingSettingsSchema.parse({ adoptionEnabled: false }),
     };
-    await service.create(input, owner);
+    const created = await service.create(input, owner);
+    expect(grantCreatedResourcePermissions).toHaveBeenCalledWith(
+      actorId,
+      'integrations:hosting',
+      `account/${created.id}`
+    );
     await expect(service.create(input, owner)).rejects.toMatchObject({ code: 'HOSTING_ACCOUNT_ALREADY_CONNECTED' });
     await expect(
       service.create({ ...input, name: `${input.name}-other`, token: 'another-project-token' }, owner)

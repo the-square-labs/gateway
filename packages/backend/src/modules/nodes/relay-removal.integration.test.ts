@@ -2,16 +2,27 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { migrateDatabase } from '@/db/migration-database.test-helpers.js';
 import * as schema from '@/db/schema/index.js';
 import { NodesService } from './nodes.service.js';
 
-// Opt-in, disposable local PostgreSQL only. Apply repository migrations first.
+// Opt-in, disposable local PostgreSQL only (the CI Database job sets the URL). The suite applies the repository
+// migrations itself and rolls its fixture back.
 const databaseUrl = process.env.RELAY_REMOVAL_TEST_DATABASE_URL;
 describe.skipIf(!databaseUrl)('relay removal with PostgreSQL foreign keys and locks', () => {
-  it('removes an expired offline member with 12 covered assignments and completed update history', async () => {
+  beforeAll(async () => {
     const url = new URL(databaseUrl!);
     if (!['127.0.0.1', 'localhost'].includes(url.hostname)) throw new Error('Local disposable test database required');
+    const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+    try {
+      await migrateDatabase(pool);
+    } finally {
+      await pool.end();
+    }
+  }, 120_000);
+
+  it('removes an expired offline member with 12 covered assignments and completed update history', async () => {
     const client = new pg.Pool({ connectionString: databaseUrl });
     const db = drizzle(client, { schema });
     const rollback = new Error('rollback test fixture');
