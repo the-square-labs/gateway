@@ -1347,6 +1347,7 @@ export async function initializeContainer(): Promise<void> {
     relayPoolService
   );
   proxyService.setEventBus(eventBus);
+  proxyService.setWebTransportSettings(webTransportSettingsService);
   container.registerInstance(ProxyService, proxyService);
   const dockerWorkloadResolver = new DockerWorkloadResolverService(db);
   container.registerInstance(DockerWorkloadResolverService, dockerWorkloadResolver);

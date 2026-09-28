@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { getEnv } from '@/config/env.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { PreparedTlsCertificate } from '@/services/nginx-certificate-distribution.service.js';
@@ -198,9 +199,51 @@ export function getStatusPageUpstream(upstreamUrl: string | null | undefined): {
   return { host: url.hostname, port, scheme };
 }
 
+export type StatusPageDefaultUpstreamContext = {
+  /** Addresses the status page ingress node reports for itself. */
+  nodeAddresses: readonly string[];
+  /** Interface addresses of the Gateway host (GATEWAY_LOCAL_HOSTS). */
+  gatewayHostAddresses: readonly string[];
+  /** Gateway host address local nodes enroll with, optionally with the gRPC port. */
+  gatewayLocalTarget: string | null | undefined;
+  /** Gateway host public nodes enroll with, optionally with the gRPC port. */
+  gatewayPublicTarget: string | null | undefined;
+  /** Gateway serves its web port with native HTTPS. */
+  tlsEnabled: boolean;
+  port: number;
+};
+
+function enrollmentTargetHost(target: string | null | undefined): string | null {
+  const value = target?.trim();
+  if (!value) return null;
+  const bracketed = value.match(/^\[([^\]]+)](?::\d+)?$/);
+  if (bracketed) return bracketed[1]!;
+  if (isIP(value) === 6) return value;
+  return value.replace(/:\d+$/, '') || null;
+}
+
+/**
+ * The Gateway URL a status page ingress node proxies to when no upstream URL
+ * is configured: loopback on the Gateway host itself; from any other node, the
+ * Gateway host address nodes enroll with (local first, then public). The
+ * scheme follows Gateway's own web listener.
+ */
+export function defaultStatusPageUpstreamUrl(context: StatusPageDefaultUpstreamContext): string {
+  const normalize = (address: string) => address.trim().toLowerCase();
+  const gatewayHost = new Set(context.gatewayHostAddresses.map(normalize).filter(Boolean));
+  const onGatewayHost = context.nodeAddresses.some((address) => gatewayHost.has(normalize(address)));
+  const host = onGatewayHost
+    ? '127.0.0.1'
+    : (enrollmentTargetHost(context.gatewayLocalTarget) ??
+      enrollmentTargetHost(context.gatewayPublicTarget) ??
+      '127.0.0.1');
+  return `${context.tlsEnabled ? 'https' : 'http'}://${isIP(host) === 6 ? `[${host}]` : host}:${context.port}`;
+}
+
 export const __testOnly = {
   assertSslPrerequisitesForUpdate,
   buildStatusPageSystemHostRollbackData,
+  defaultStatusPageUpstreamUrl,
   getStatusPageUpstream,
   matchesExpectedBody,
   normalizeProxyValidationOptions,
