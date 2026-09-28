@@ -11,6 +11,7 @@ import {
   relayRoutes,
 } from '@/db/schema/index.js';
 import { decodeRelayV1Message } from '@/grpc/relay-proto.js';
+import { logger } from '@/lib/logger.js';
 import { RelayPolicyNotAcknowledgedError } from './relay-grant-issuer.service.js';
 import {
   LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE,
@@ -978,6 +979,33 @@ describe('RelayPolicyService snapshots', () => {
     expect(db.transaction).toHaveBeenCalledOnce();
     expect(tx.delete).toHaveBeenCalledTimes(2);
     expect(updateWhere).toHaveBeenCalledOnce();
+  });
+});
+
+describe('RelayPolicyService pending grant refresh reports', () => {
+  it('reports the same pending refresh once per interval and a different one at once', () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    const debug = vi.spyOn(logger, 'debug').mockImplementation(() => logger);
+    try {
+      const report = (message: string, at: number) =>
+        (service as any).reportPendingGrantRefresh(new Error(message), at);
+      const pending = (count: number) => `Failed to refresh relay grants for ${count} daemon(s)`;
+      // rc.20 B-17: every rebalance activation reconciled while one daemon was away, one warning every 2 s.
+      for (let at = 0; at < 60_000; at += 2_000) report(pending(1), at);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(debug).toHaveBeenCalledTimes(29);
+      report(pending(2), 61_000);
+      expect(warn).toHaveBeenCalledTimes(2);
+      report(pending(2), 61_000 + 5 * 60_000);
+      expect(warn).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenLastCalledWith('Relay policy reconciled but some daemon grant bundles remain pending', {
+        error: pending(2),
+      });
+    } finally {
+      warn.mockRestore();
+      debug.mockRestore();
+    }
   });
 });
 
