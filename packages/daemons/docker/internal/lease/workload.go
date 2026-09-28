@@ -51,6 +51,9 @@ type workload struct {
 	// retainChecked: the copy was found running (or released) once after
 	// the lease closed and this node was confirmed retained.
 	retainChecked bool
+	// bootstrapWait is why this node, the named bootstrap holder, is not
+	// ready to acquire; logged when it changes (B-23: it was silent).
+	bootstrapWait string
 }
 
 func (r *Runtime) workloadLocked(policyID string) *workload {
@@ -197,6 +200,41 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 		r.armStandbyRecordsLocked(manifest.PolicyID, containers)
 	}
 	r.updateReadyLocked(manifest, wl, serve, containers, now)
+	r.noteBootstrapWaitLocked(manifest, wl, bootstrap, serve, containers, now)
+}
+
+// noteBootstrapWaitLocked logs why the named bootstrap holder does not try to
+// acquire its reserved key, once per reason: without its copy it waits
+// forever, and Gateway sees only a bootstrap that never completes.
+func (r *Runtime) noteBootstrapWaitLocked(manifest availabilitylease.ManifestInfo, wl *workload, pending bool, serve, containers []Container, now time.Duration) {
+	reason := ""
+	if pending && !r.ready[manifest.PolicyID] {
+		reason = "not ready"
+		switch {
+		case len(serve) == 0:
+			reason = "no copy of the workload was found on this node"
+		case !r.watchdog.fresh:
+			reason = "the lease watchdog is not running"
+		case !r.snapshotFreshLocked(now):
+			reason = "the container view is outdated"
+		default:
+			for _, c := range containers {
+				if c.RestartPolicy != "no" {
+					reason = "the copy still has restart policy " + c.RestartPolicy
+					break
+				}
+			}
+		}
+	}
+	if reason == wl.bootstrapWait {
+		return
+	}
+	wl.bootstrapWait = reason
+	if reason == "" {
+		return
+	}
+	r.logger.Warn("availability lease bootstrap holder is not ready to acquire its reserved slot",
+		"policy_id", manifest.PolicyID, "reason", reason, "containers", len(containers))
 }
 
 func anyRunning(containers []Container) bool {
