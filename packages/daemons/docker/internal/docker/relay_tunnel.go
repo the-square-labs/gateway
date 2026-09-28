@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,7 +19,9 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -319,6 +322,13 @@ func (r *relayTunnelRouter) transportReadySignal() <-chan struct{} {
 const (
 	relayRegistrationRetryInitial = time.Second
 	relayRegistrationRetryMax     = 15 * time.Second
+	// A registration refused because its grant and the relay's policy do not
+	// match yet is retried every relayPolicyCatchUpRetry (jittered) for
+	// relayPolicyCatchUpWindow: Gateway pushes the policy to the relays and
+	// the grants to the daemons at once, and the slower of the two follows
+	// within seconds. Longer than that, the regular backoff applies.
+	relayPolicyCatchUpRetry  = 400 * time.Millisecond
+	relayPolicyCatchUpWindow = 10 * time.Second
 )
 
 // relayRegistrationRetryDelay is the wait before retry number attempt (from 1):
@@ -333,9 +343,27 @@ func relayRegistrationRetryDelay(attempt int, random func() float64) time.Durati
 	return step/2 + time.Duration(random()*float64(step/2))
 }
 
+// relayPolicyCatchingUp reports a registration the relay refused because the
+// grant and its policy do not match yet.
+func relayPolicyCatchingUp(err error) bool {
+	current, ok := status.FromError(err)
+	return ok && current.Code() == codes.PermissionDenied && strings.Contains(current.Message(), "does not match policy")
+}
+
+// nextRegistrationRetry is the delay before the next registration attempt.
+// mismatchFor is how long consecutive attempts have been refused for a
+// policy mismatch.
+func nextRegistrationRetry(err error, failures int, mismatchFor time.Duration, random func() float64) time.Duration {
+	if relayPolicyCatchingUp(err) && mismatchFor < relayPolicyCatchUpWindow {
+		return relayPolicyCatchUpRetry/2 + time.Duration(random()*float64(relayPolicyCatchUpRetry/2))
+	}
+	return relayRegistrationRetryDelay(failures, random)
+}
+
 func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayRegistrationUpdate, renew <-chan relayRegistrationUpdate) {
 	current, state := update.assignment, update.state
 	failures := 0
+	var mismatchSince time.Time
 	for ctx.Err() == nil {
 		registered := false
 		attemptCtx, cancelAttempt := context.WithCancel(ctx)
@@ -374,7 +402,7 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayReg
 						if !registered {
 							log = r.plugin.logger.Info
 						}
-						registered, failures = true, 0
+						registered, failures, mismatchSince = true, 0, time.Time{}
 						log("relay endpoint registered", "relay_instance_id", r.targetID, "endpoint_id", current.EndpointId, "state", state.String())
 						r.mu.Lock()
 						if registration := r.registrations[relayRegistrationKey(current)]; registration != nil {
@@ -402,7 +430,16 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayReg
 			return
 		}
 		failures++
-		delay := relayRegistrationRetryDelay(failures, rand.Float64)
+		mismatchFor := time.Duration(0)
+		if relayPolicyCatchingUp(err) {
+			if mismatchSince.IsZero() {
+				mismatchSince = time.Now()
+			}
+			mismatchFor = time.Since(mismatchSince)
+		} else {
+			mismatchSince = time.Time{}
+		}
+		delay := nextRegistrationRetry(err, failures, mismatchFor, rand.Float64)
 		log := r.plugin.logger.Warn
 		if failures > 1 {
 			// The first failure is news; the retries of a relay that stays
