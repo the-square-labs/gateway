@@ -6,6 +6,7 @@ import {
   dockerAvailabilityLeaseObservations,
   dockerAvailabilityLeaseState,
   dockerAvailabilityPolicies,
+  relayInstances,
 } from '@/db/schema/index.js';
 import type { AvailabilityLeaseReport, CommandResult } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -16,7 +17,12 @@ import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { RelayPolicySigningKeyService } from '@/services/relay-policy-signing-key.service.js';
 import { AvailabilityLeaseCluster } from './lease-cluster.js';
 import type { LeaseSigner } from './lease-codec.js';
-import { AVAILABILITY_LEASE_CAPABILITY, MEMBER_REPORT_FRESH_MS, PLANNED_HANDOFF_TTL_MS } from './lease-constants.js';
+import {
+  AVAILABILITY_LEASE_CAPABILITY,
+  MEMBER_REPORT_FRESH_MS,
+  PLANNED_HANDOFF_TTL_MS,
+  RELAY_CONNECTIONS_FRESH_MS,
+} from './lease-constants.js';
 import { AvailabilityLeaseDistribution, type RelayLeasePolicyFields } from './lease-distribution.js';
 import { availabilityStandbyCount } from './lease-gating.js';
 import { loadLeaseParticipants } from './lease-participants.js';
@@ -27,9 +33,10 @@ import {
   bumpLeaseRevision,
   ensureLeaseState,
   type LeaseStateRow,
+  leaseReachableMemberIds,
   loadLeaseCluster,
   loadLeaseMembers,
-  reachableMemberIds,
+  type RelayConnectedMembers,
 } from './lease-store.js';
 import type {
   DockerAvailabilityLeaseController,
@@ -68,6 +75,8 @@ export class AvailabilityLeaseService {
   private readonly distribution: AvailabilityLeaseDistribution;
   private reconciling: Promise<void> | null = null;
   private rerun: Promise<void> | null = null;
+  /** Members each relay last reported a live Coordinate stream from (voter reachability). */
+  private readonly relayConnections = new Map<string, RelayConnectedMembers>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -184,6 +193,14 @@ export class AvailabilityLeaseService {
 
   /** A relay's acceptor and gate view, from its runtime status or local health. */
   async ingestRelayReport(relayInstanceId: string, report: AvailabilityLeaseReport): Promise<void> {
+    const connected = report.connectedMemberIds;
+    if (Array.isArray(connected)) {
+      this.relayConnections.set(relayInstanceId, {
+        relayId: relayInstanceId,
+        memberIds: connected.filter((id) => typeof id === 'string' && id.length > 0),
+        reportedAt: Date.now(),
+      });
+    }
     await this.ingest({ memberId: relayInstanceId, kind: 'relay', nodeId: null, relayInstanceId }, report);
   }
 
@@ -243,7 +260,7 @@ export class AvailabilityLeaseService {
   }
 
   async getPolicyLease(policyId: string, now = new Date()): Promise<DockerAvailabilityLeaseView> {
-    const [[state], observations, members] = await Promise.all([
+    const [[state], observations, members, localRelays] = await Promise.all([
       this.db
         .select()
         .from(dockerAvailabilityLeaseState)
@@ -254,8 +271,16 @@ export class AvailabilityLeaseService {
         .from(dockerAvailabilityLeaseObservations)
         .where(eq(dockerAvailabilityLeaseObservations.policyId, policyId)),
       loadLeaseMembers(this.db),
+      this.db.select({ id: relayInstances.id }).from(relayInstances).where(eq(relayInstances.kind, 'local')),
     ]);
-    const reachable = reachableMemberIds(members, now.getTime(), MEMBER_REPORT_FRESH_MS);
+    const reachable = leaseReachableMemberIds({
+      members,
+      connections: this.relayConnections.values(),
+      localRelayIds: new Set(localRelays.map(({ id }) => id)),
+      now: now.getTime(),
+      memberFreshMs: MEMBER_REPORT_FRESH_MS,
+      connectionFreshMs: RELAY_CONNECTIONS_FRESH_MS,
+    });
     return {
       mode: state?.mode ?? 'legacy',
       reason: state?.reason ?? null,

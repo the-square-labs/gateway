@@ -76,5 +76,10 @@ export function availabilityMemberBindingFields(
   // B2: only a lease-mode policy's members are gated by the lease; bootstrapping, closing and legacy members keep
   // today's always-open sockets. The field is cleared as soon as the policy leaves lease mode (the sync is complete).
   if (!policyId || !context.leasePolicies.has(policyId)) return { dormant: binding.dormant };
-  return { dormant: binding.dormant, availabilityPolicyId: policyId, availabilityCandidateId: binding.dockerNodeId };
+  // In lease mode the lease, not the member's dormant flag, decides where the workload runs (D8), and Gateway learns
+  // it after the fact: a successor's container starts after Gateway already marked its member live, and a takeover
+  // happens while Gateway still marks the member dormant. Every lease-mode member is sent dormant, so a target daemon
+  // keeps it committed while its container is stopped and binds it once the holder starts, instead of rejecting the
+  // whole set; a rejected member used to be dropped from the node's committed bindings.
+  return { dormant: true, availabilityPolicyId: policyId, availabilityCandidateId: binding.dockerNodeId };
 }

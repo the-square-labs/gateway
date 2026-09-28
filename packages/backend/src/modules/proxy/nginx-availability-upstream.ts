@@ -1,9 +1,11 @@
 /**
  * Availability upstreams (D8): one Secure Link socket per member, where only the lease holder's socket listens. A
  * closed socket refuses the connection before any byte of the request is sent, so nginx may retry the next member
- * even for a POST; one failure takes a member out for five seconds.
+ * even for a POST; one failure takes a member out for one second. Retrying a closed socket costs one failed local
+ * connect, while a longer timeout keeps a successor whose socket just opened, or a holder after a single transient
+ * error, out of rotation with every other member closed: that is a 502 for the whole timeout (stand runs ha18/a, mv1).
  */
-export const AVAILABILITY_UPSTREAM_SERVER_PARAMS = 'max_fails=1 fail_timeout=5s';
+export const AVAILABILITY_UPSTREAM_SERVER_PARAMS = 'max_fails=1 fail_timeout=1s';
 export const AVAILABILITY_NEXT_UPSTREAM_DIRECTIVE = 'proxy_next_upstream error timeout;';
 
 /** Body of a managed Secure Link upstream block. */

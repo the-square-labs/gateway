@@ -37,8 +37,8 @@ describe('NginxConfigGenerator Availability upstreams', () => {
       sslChainPath: null,
     });
     expect(config).toContain('least_conn;');
-    expect(config).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=5s;');
-    expect(config).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=5s;');
+    expect(config).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=1s;');
+    expect(config).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=1s;');
     expect(config).not.toContain('primary.sock');
     // D8: a refused member socket moves the request to the next member, explicitly.
     expect(config).toMatch(

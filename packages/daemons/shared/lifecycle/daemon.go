@@ -153,7 +153,12 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 }
 
 const (
-	controlSessionMaxReconnectDelay = 60 * time.Second
+	// A Gateway that comes back (restart, update, outage) hears from every
+	// node within this long. Availability lease reconciliation after a
+	// takeover waits for the voters' reports (stand run ha18/b: 33 s with a
+	// 60 s cap), and an attempt against a relay whose Gateway upstream is down
+	// fails at the relay without reaching the Gateway.
+	controlSessionMaxReconnectDelay = 15 * time.Second
 	// A session shorter than this that never received a command counts as a
 	// failed attempt for backoff purposes.
 	controlSessionQuickFailure      = 10 * time.Second

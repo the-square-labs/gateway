@@ -206,3 +206,35 @@ func TestLeaseServeSetSelectsCurrentPlacementAndActiveSlot(t *testing.T) {
 		t.Fatalf("local placement %+v ok=%v", placement, ok)
 	}
 }
+
+// Stand run c2: a deployment placement recorded by the legacy path names no
+// active slot, and after a host reboot the holder started both blue and green.
+func TestLeaseServeSetStartsOneSlotWithoutARecordedActiveSlot(t *testing.T) {
+	plugin := leasePluginForTest(t)
+	if _, err := plugin.availability.apply(&pb.DockerAvailabilityCommand{
+		Action: availabilityActionPrepare, PolicyId: "policy-1", PlacementId: "placement-1", Generation: 1,
+		IdempotencyKey: "prepare", ResourceKind: "deployment", ResourceId: "dep-1",
+		ConfigJson: `{"runtimeIdentity":{"deploymentId":"dep-1"}}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := func(id, slot string, started time.Time) lease.Container {
+		return lease.Container{ID: id, PlacementID: "placement-1", StartedAt: started,
+			Labels: map[string]string{deploymentRoleLabel: "app", deploymentSlotLabel: slot}}
+	}
+	switched := time.Date(2026, 9, 28, 7, 0, 0, 0, time.UTC)
+	serve := plugin.lease.ServeSet("policy-1", []lease.Container{
+		app("blue", "blue", switched.Add(-time.Hour)), app("green", "green", switched),
+	})
+	if len(serve) != 1 || serve[0].ID != "green" {
+		t.Fatalf("serve set %+v, want only the slot started last", serve)
+	}
+	serve = plugin.lease.ServeSet("policy-1", []lease.Container{app("blue", "blue", time.Time{}), app("green", "green", time.Time{})})
+	if len(serve) != 1 || serve[0].ID != "blue" {
+		t.Fatalf("serve set %+v, want the default blue slot for a standby that never ran", serve)
+	}
+	single := []lease.Container{{ID: "app", PlacementID: "placement-1", Labels: map[string]string{}}}
+	if serve := plugin.lease.ServeSet("policy-1", single); len(serve) != 1 {
+		t.Fatalf("a container placement keeps its container: %+v", serve)
+	}
+}

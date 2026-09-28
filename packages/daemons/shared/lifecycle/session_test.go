@@ -199,7 +199,7 @@ func TestControlSessionBackoffGrowsOnlyForQuickUnacceptedSessions(t *testing.T) 
 	for i := 0; i < 8; i++ {
 		delays = append(delays, backoff.next(false, 100*time.Millisecond))
 	}
-	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 60 * time.Second, 60 * time.Second}
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second, 15 * time.Second, 15 * time.Second, 15 * time.Second}
 	for i := range want {
 		if delays[i] != want[i] {
 			t.Fatalf("delays = %v, want %v", delays, want)

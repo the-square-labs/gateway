@@ -12,6 +12,7 @@ import {
   relayRoutes,
 } from '@/db/schema/index.js';
 import type { SignedRelayGrant } from '@/grpc/relay-control.client.js';
+import { leaseLaneNodeIds, leaseLaneRelays } from '@/modules/docker/availability/lease/lease-relay-lanes.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import {
   effectiveRelayGrantTtlHours,
@@ -26,6 +27,9 @@ import { candidateTopology } from './relay-topology.js';
 import { type RelayLatencyTarget, RelayTopologyService } from './relay-topology.service.js';
 
 const POLICY_ID = 'current';
+
+/** Placeholder grant of a lease lane candidate: daemons require one per candidate, relays never see it. */
+const EMPTY_LEASE_LANE_GRANT: SignedRelayGrant = { keyId: '', payload: Buffer.alloc(0), signature: Buffer.alloc(0) };
 
 type GrantKind = 'endpoint' | 'connect';
 
@@ -53,7 +57,8 @@ export interface RelayGrantClaims {
 }
 
 export interface RelayGrantAssignment {
-  role: GrantKind;
+  /** `lease` carries transport targets only (lease lanes, see leaseLaneAssignment); it grants nothing. */
+  role: GrantKind | 'lease';
   ownerKind: string;
   ownerId: string;
   endpointId?: string;
@@ -161,6 +166,8 @@ export class RelayGrantIssuerService {
       ...new Set([
         ...endpoints.map(({ nodeId }) => nodeId),
         ...routes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ nodeId }) => nodeId),
+        // A voter without any endpoint still needs its lease lanes refreshed.
+        ...(await leaseLaneNodeIds(this.db).catch(() => [])),
       ]),
     ];
   }
@@ -251,6 +258,9 @@ export class RelayGrantIssuerService {
           : undefined,
       });
     }
+    // Lease lanes only add transports; they must never hold grants back.
+    const leaseLanes = await this.leaseLaneAssignment(nodeId).catch(() => null);
+    if (leaseLanes) grants.push(leaseLanes);
     // Latency only orders relays; it must never hold grants back.
     const relayLatencyTargets = await this.topology.completeGrantBundle(grants, targetEndpoints).catch(() => []);
     const revocationFences = await revocations.fencesForEndpoints(activeOwnEndpoints.map(({ id }) => id));
@@ -479,6 +489,37 @@ export class RelayGrantIssuerService {
       if (nodeIdsOnPath.some((nodeId) => !capable.has(nodeId))) result.add(endpointId);
     }
     return result;
+  }
+
+  /**
+   * Lease lanes (stand run c1): a node that takes part in a lease-mode Availability policy keeps a transport to every
+   * member relay, whether or not one of its endpoints is assigned there, so its lease frames never depend on Gateway's
+   * local relay. The assignment only names transport targets: daemons derive their relay transports from every
+   * assignment's candidates and ignore roles they do not handle. Its grants are empty and authorize nothing; relays
+   * admit the lease stream by manifest membership.
+   */
+  private async leaseLaneAssignment(nodeId: string): Promise<RelayGrantAssignment | null> {
+    const relays = await leaseLaneRelays(this.db, nodeId);
+    if (relays.length === 0) return null;
+    return {
+      role: 'lease',
+      ownerKind: 'availability_lease',
+      ownerId: nodeId,
+      grant: EMPTY_LEASE_LANE_GRANT,
+      schemaVersion: 2,
+      candidates: relays.map((relay) => ({
+        poolId: relay.poolId,
+        relayInstanceId: relay.id,
+        assignmentGeneration: '1',
+        addresses: relay.addresses,
+        port: relay.port,
+        certificateIdentity: relay.certificateIdentity,
+        certificateFingerprint: relay.certificateFingerprint,
+        capabilities: relay.capabilities,
+        grant: EMPTY_LEASE_LANE_GRANT,
+        assignmentState: 'active',
+      })),
+    };
   }
 
   private instanceCapabilities(instance: { kind: 'local' | 'remote'; capabilities: unknown }): string[] {

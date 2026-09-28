@@ -67,6 +67,48 @@ export async function ensureLeaseState(db: Executor, policyId: string): Promise<
   return row;
 }
 
+/** The members a relay last reported a live Coordinate stream from, and when. */
+export interface RelayConnectedMembers {
+  relayId: string;
+  memberIds: readonly string[];
+  reportedAt: number;
+}
+
+/**
+ * Voters that can take part in a lease round without Gateway (D2 margin, stand runs ha18/b and c1):
+ * - alive: its own report is fresh, or a relay reported its live Coordinate stream (after a Gateway restart the local
+ *   relay reports within seconds, before the nodes' control sessions reconnect); never while it abstains;
+ * - a relay counts unless it is Gateway's local relay, which stops with Gateway;
+ * - a daemon counts only with a stream to a relay other than the local one, once any such relay reported its
+ *   streams: a vote that reaches the others only through Gateway does not help a failover without it.
+ */
+export function leaseReachableMemberIds(input: {
+  members: LeaseMemberRow[];
+  connections: Iterable<RelayConnectedMembers>;
+  localRelayIds: ReadonlySet<string>;
+  now: number;
+  memberFreshMs: number;
+  connectionFreshMs: number;
+}): Set<string> {
+  const { members, localRelayIds, now } = input;
+  const fresh = [...input.connections].filter((connection) => now - connection.reportedAt <= input.connectionFreshMs);
+  const connected = new Set(fresh.flatMap((connection) => connection.memberIds));
+  const remote = fresh.filter((connection) => !localRelayIds.has(connection.relayId));
+  const connectedRemote = new Set(remote.flatMap((connection) => connection.memberIds));
+  const reachable = new Set<string>();
+  for (const member of members) {
+    if (member.abstaining) continue;
+    const reported = member.reportedAt !== null && now - member.reportedAt.getTime() <= input.memberFreshMs;
+    if (!reported && !connected.has(member.memberId)) continue;
+    if (member.kind === 'relay') {
+      if (!localRelayIds.has(member.memberId)) reachable.add(member.memberId);
+      continue;
+    }
+    if (remote.length === 0 || connectedRemote.has(member.memberId)) reachable.add(member.memberId);
+  }
+  return reachable;
+}
+
 /** Members whose report is recent and who do not abstain: the reachable voters (D2 margin). */
 export function reachableMemberIds(members: LeaseMemberRow[], now: number, freshMs: number): Set<string> {
   return new Set(

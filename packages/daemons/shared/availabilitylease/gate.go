@@ -61,8 +61,9 @@ func (n *Node) commitQuorum(commit *pb.LeaseCommit, manifest *Manifest) (bool, e
 //   - no ballot this node accepted from another proposer, and no relinquish
 //     or release by the holder, supersedes the commit;
 //   - this node itself accepted (or, while abstaining or not voting,
-//     shadow-accepted) the committed ballot with an echo of its own promise;
-//   - less than GateWindow of local time passed since that promise.
+//     shadow-accepted) the committed ballot, or an earlier ballot of the same
+//     holder, with an echo of its own promise;
+//   - less than GateWindow of local time passed since the latest such promise.
 //
 // Anchoring on the promise that the proposer echoed bounds the gate by the
 // proposer's send time rather than by message delay, so the gate closes
@@ -105,7 +106,16 @@ func (n *Node) gateLocked(key Key, now time.Duration) GateDecision {
 			decision.Reason = "superseded"
 			return decision
 		}
-		if record.ballot == ballot {
+		// The window runs from this node's latest anchored accept of the
+		// committed holder at or below the committed ballot. That is normally
+		// the committed ballot itself. A renewal whose propose never reached
+		// this node (its promise came after the round had its quorum, or the
+		// frame was lost) leaves an earlier ballot of the same holder, promised
+		// earlier, so the window closes sooner than the committed ballot's
+		// would, and the gate does not close and reopen with every missed
+		// renewal (A11, A15).
+		if record.anchored && record.ballot.Proposer == holder && !ballot.Less(record.ballot) &&
+			(own == nil || own.ballot.Less(record.ballot)) {
 			own = record
 		}
 	}
@@ -113,7 +123,7 @@ func (n *Node) gateLocked(key Key, now time.Duration) GateDecision {
 		decision.Reason = "superseded"
 		return decision
 	}
-	if own == nil || !own.anchored {
+	if own == nil {
 		decision.Reason = "no own accept"
 		return decision
 	}

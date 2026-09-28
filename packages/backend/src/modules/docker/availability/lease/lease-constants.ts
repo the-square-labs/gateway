@@ -49,6 +49,9 @@ export const MAX_DAEMON_VOTERS = 12;
 /** A member whose last lease report is older than this does not count as reachable. */
 export const MEMBER_REPORT_FRESH_MS = 90_000;
 
+/** A relay's list of connected members counts this long; the local relay's health is probed every 5 s. */
+export const RELAY_CONNECTIONS_FRESH_MS = 15_000;
+
 /** A daemon voter offline this long is replaced by the next spread choice. */
 export const VOTER_OFFLINE_REPLACE_MS = 10 * 60_000;
 

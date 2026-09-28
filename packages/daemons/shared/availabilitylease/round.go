@@ -39,6 +39,7 @@ func (n *Node) startRound(pk *proposerKey, manifest *Manifest, purpose Role, now
 	ballot := Ballot{Round: next + 1, Incarnation: n.incarnation, Proposer: n.id}
 	pk.lastIssued, pk.maxRound = ballot, ballot.Round
 	pk.retry = false
+	pk.settled = nil
 	pk.round = &round{
 		ballot: ballot, anchor: now, deadline: now + roundTimeout, config: config, manifest: manifest, purpose: purpose,
 		echoes: map[string]uint64{}, promised: map[string]bool{}, proposedTo: map[string]bool{},
@@ -69,6 +70,7 @@ func (n *Node) onPromise(from string, msg *pb.LeasePromise, now time.Duration) {
 	}
 	pk, r := n.currentRound(key, msg.GetBallot())
 	if r == nil {
+		n.latePromise(pk, from, msg, now)
 		return
 	}
 	if msg.GetEcho() != 0 {
@@ -84,6 +86,24 @@ func (n *Node) onPromise(from string, msg *pb.LeasePromise, now time.Duration) {
 	if r.config.quorum(r.promised) {
 		n.beginPropose(pk, r, now)
 	}
+}
+
+// latePromise answers a promise for a round that already reached its quorum of
+// accepts. The member still gets the propose, within the window a promise
+// inside the round would have had (the round deadline), so a relay whose
+// promise is a little slower than the quorum keeps an own accept of every
+// renewal and its data-path gate does not close and reopen (A11, A15). The
+// accept that comes back is ignored: the round is decided.
+func (n *Node) latePromise(pk *proposerKey, from string, msg *pb.LeasePromise, now time.Duration) {
+	if pk == nil || pk.settled == nil || !pk.holdsLease() {
+		return
+	}
+	r := pk.settled
+	if r.ballot != ballotFromProto(msg.GetBallot()) || now >= r.deadline || msg.GetEcho() == 0 {
+		return
+	}
+	r.echoes[from] = msg.GetEcho()
+	n.sendPropose(pk, r, from, now)
 }
 
 func (n *Node) beginPropose(pk *proposerKey, r *round, now time.Duration) {
@@ -167,7 +187,7 @@ func (n *Node) relayAccepted(r *round) bool {
 }
 
 func (n *Node) roundSucceeded(pk *proposerKey, r *round, majority bool, now time.Duration) {
-	pk.round = nil
+	pk.round, pk.settled = nil, r
 	ids := make([]string, 0, len(r.accepts))
 	for id := range r.accepts {
 		ids = append(ids, id)

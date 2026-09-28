@@ -39,6 +39,8 @@ type Container struct {
 	StopTimeout time.Duration
 	// CgroupPath is the actual cgroup when running, else the predicted one.
 	CgroupPath string
+	// StartedAt is when Docker last started the container; zero if never.
+	StartedAt time.Time
 }
 
 // Engine is the Docker surface the runtime needs. Every call may block while

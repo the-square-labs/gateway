@@ -103,16 +103,33 @@ export class AvailabilityLeaseReports {
       }
     }
     for (const view of report.acceptor ?? []) {
+      if (!view.policyId) continue;
       const ballot = normalizeLeaseBallot(view.committed);
-      if (!view.policyId || view.state !== 'held' || !view.holderId || !ballot) continue;
-      addCandidate(view.policyId, view.slot, {
-        holderId: view.holderId,
-        ballot,
-        epoch: toNumber(view.epoch),
-        manifestVersion: toNumber(view.manifestVersion),
-        source: source === 'relay' ? 'relay' : 'acceptor',
-        sourceId: sender.memberId,
-      });
+      if (view.state === 'held' && view.holderId && ballot) {
+        addCandidate(view.policyId, view.slot, {
+          holderId: view.holderId,
+          ballot,
+          epoch: toNumber(view.epoch),
+          manifestVersion: toNumber(view.manifestVersion),
+          source: source === 'relay' ? 'relay' : 'acceptor',
+          sourceId: sender.memberId,
+        });
+        continue;
+      }
+      // An open relay gate names the holder of a verified commit that renewed within the last gate window (A11, A15),
+      // also where the relay does not vote: the local relay only shadow-accepts. Its health report is the first lease
+      // view Gateway gets after a restart, long before the nodes' control sessions reconnect (stand run ha18/b).
+      const gateBallot = normalizeLeaseBallot(view.gateBallot);
+      if (sender.kind === 'relay' && view.gateOpen && view.gateHolderId && gateBallot) {
+        addCandidate(view.policyId, view.slot, {
+          holderId: view.gateHolderId,
+          ballot: gateBallot,
+          epoch: toNumber(view.epoch),
+          manifestVersion: toNumber(view.manifestVersion),
+          source: 'relay',
+          sourceId: sender.memberId,
+        });
+      }
     }
     const handoffSuccessors = new Map<string, Set<string>>();
     for (const event of report.events ?? []) {

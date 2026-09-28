@@ -179,7 +179,8 @@ func (m *dockerSecureLinkManager) apply(
 	unbound := make(map[string]struct{}, len(skipped))
 	for _, skip := range skipped {
 		unbound[skip.binding.LinkId] = struct{}{}
-		if !skip.binding.GetDormant() && m.plugin != nil && m.plugin.logger != nil {
+		// A lease-bound member's container runs only while this node holds the lease.
+		if !leaseBoundTarget(skip.binding) && m.plugin != nil && m.plugin.logger != nil {
 			m.plugin.logger.Warn("proxy secure-link left unbound until its target runs", "link_id", skip.binding.LinkId, "target_container", skip.binding.TargetContainer, "error", skip.err)
 		}
 	}
@@ -271,12 +272,14 @@ type skippedSecureLinkTarget struct {
 	err     error
 }
 
-// resolveSecureLinkTargets resolves every target binding. A dormant
-// availability member targets a created, stopped standby (D7): it is left
-// out of the connector, stays in the committed state, and is bound by the
-// restore that runs once this node serves the lease. perBinding (restore)
-// leaves out every binding whose target does not resolve, so one missing
-// target cannot take the other links of the node down with it.
+// resolveSecureLinkTargets resolves every target binding. An availability
+// member whose container is stopped is left out of the connector, stays in the
+// committed state, and is bound by the restore that runs once this node serves
+// the lease: a dormant member targets a created, stopped standby (D7), and a
+// lease-gated member serves only while its node holds the lease (D8), which
+// Gateway learns after the fact. perBinding (restore) leaves out every binding
+// whose target does not resolve, so one missing target cannot take the other
+// links of the node down with it.
 func resolveSecureLinkTargets(
 	bindings []*pb.ProxySecureLinkBinding,
 	resolve func(*pb.ProxySecureLinkBinding) (string, string, error),
@@ -288,7 +291,7 @@ func resolveSecureLinkTargets(
 	for _, binding := range bindings {
 		host, network, err := resolve(binding)
 		if err != nil {
-			if perBinding || (binding.GetDormant() && errors.Is(err, errSecureLinkTargetUnavailable)) {
+			if perBinding || (errors.Is(err, errSecureLinkTargetUnavailable) && leaseBoundTarget(binding)) {
 				skipped = append(skipped, skippedSecureLinkTarget{binding: binding, err: err})
 				continue
 			}
@@ -298,6 +301,13 @@ func resolveSecureLinkTargets(
 		resolved = append(resolved, resolvedSecureLinkTarget{binding: binding, host: host, network: network})
 	}
 	return resolved, networks, skipped, nil
+}
+
+// leaseBoundTarget reports whether a stopped target is expected: the member of
+// a standby placement, or of a lease-mode policy, whose container runs only
+// while its node holds the data-plane lease.
+func leaseBoundTarget(binding *pb.ProxySecureLinkBinding) bool {
+	return binding.GetDormant() || binding.GetAvailabilityPolicyId() != ""
 }
 
 func allowedSecureLinkConnectorImage(image string) bool {
