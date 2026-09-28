@@ -292,6 +292,41 @@ describe("InferenceModelDialog", () => {
     expect(screen.queryByRole("button", { name: "GPT-5.6 Sol" })).not.toBeInTheDocument();
   });
 
+  it("clears generated fields when a new model provider is selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <InferenceModelDialog
+        open
+        editing={null}
+        connections={[connection("kimi-a"), connection("openai-key", "openai-apikey")]}
+        catalog={[
+          provider("kimi", "Kimi subscription", true),
+          provider("openai-apikey", "OpenAI API", false),
+        ]}
+        groups={[]}
+        users={[]}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Provider" }));
+    await user.click(screen.getByRole("button", { name: "Kimi subscription" }));
+    await user.click(screen.getByRole("combobox", { name: "Upstream model" }));
+    await user.click(screen.getByRole("button", { name: "K3" }));
+    expect(screen.getByLabelText("Public model ID")).toHaveValue("k3");
+    expect(screen.getByLabelText("Display name")).toHaveValue("K3");
+
+    await user.click(screen.getByRole("combobox", { name: "Provider" }));
+    await user.click(screen.getByRole("button", { name: "openai-key" }));
+
+    expect(screen.getByLabelText("Public model ID")).toHaveValue("");
+    expect(screen.getByLabelText("Display name")).toHaveValue("");
+    await waitFor(() => {
+      expect(screen.queryByRole("spinbutton", { name: "Context window" })).not.toBeInTheDocument();
+    });
+  });
+
   it("creates account bindings only for one selected provider model", async () => {
     const save = vi
       .spyOn(api, "saveInferenceModelConfiguration")
@@ -445,6 +480,7 @@ describe("InferenceModelDialog", () => {
         modalities: ["text", "image"],
         capabilities: { reasoning: true, tools: true, vision: true },
         reasoningEfforts: ["low", "medium", "high"],
+        metadataSources: { contextWindow: "provider", maxOutputTokens: "fallback" },
         pricing: {
           version: "openai-api-2026-07-27",
           inputMicrodollarsPerMillion: 250_000,
@@ -479,6 +515,8 @@ describe("InferenceModelDialog", () => {
     expect(screen.getByRole("spinbutton", { name: "Maximum input tokens" })).toHaveValue(272_000);
     expect(screen.getByRole("spinbutton", { name: "Maximum output tokens" })).toHaveValue(128_000);
     expect(screen.getByRole("spinbutton", { name: "Auto-compaction limit" })).toHaveValue(244_800);
+    expect(screen.getByText("Reported by the provider API; may be overridden")).toBeInTheDocument();
+    expect(screen.getByText("Not reported by the provider; built-in catalog value")).toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: "Context window" })).not.toHaveAttribute(
       "readonly"
     );
@@ -520,7 +558,7 @@ describe("InferenceModelDialog", () => {
     });
   });
 
-  it("requires manual technical metadata and hides reasoning for a non-reasoning model", async () => {
+  it("hides models without required limits and hides reasoning for a non-reasoning model", async () => {
     const openAi = connection("openai-key", "openai-apikey");
     openAi.discoveredModels = [
       {
@@ -528,6 +566,20 @@ describe("InferenceModelDialog", () => {
         connectionId: "openai-key",
         remoteModelId: "gpt-4",
         displayName: "GPT-4",
+        contextWindow: 8192,
+        maxInputTokens: 6144,
+        maxOutputTokens: null,
+        autoCompactTokenLimit: 5500,
+        modalities: ["text"],
+        capabilities: { reasoning: false, tools: true, vision: false },
+        reasoningEfforts: [],
+        available: true,
+      },
+      {
+        id: "openai-key-gpt-legacy",
+        connectionId: "openai-key",
+        remoteModelId: "gpt-legacy",
+        displayName: "GPT Legacy",
         contextWindow: null,
         maxInputTokens: null,
         maxOutputTokens: null,
@@ -535,6 +587,21 @@ describe("InferenceModelDialog", () => {
         modalities: ["text"],
         capabilities: { reasoning: false, tools: true, vision: false },
         reasoningEfforts: [],
+        available: true,
+      },
+      {
+        id: "openai-key-gpt-catalog-reasoning",
+        connectionId: "openai-key",
+        remoteModelId: "gpt-catalog-reasoning",
+        displayName: "GPT Catalog Reasoning",
+        contextWindow: 200_000,
+        maxInputTokens: 200_000,
+        maxOutputTokens: 64_000,
+        autoCompactTokenLimit: 180_000,
+        modalities: ["text"],
+        capabilities: { reasoning: true, tools: true, vision: false },
+        reasoningEfforts: ["low", "medium", "high"],
+        metadataSources: { reasoningEfforts: "fallback" },
         available: true,
       },
     ];
@@ -556,24 +623,14 @@ describe("InferenceModelDialog", () => {
     await user.click(screen.getByRole("combobox", { name: "Provider" }));
     await user.click(screen.getByRole("button", { name: "openai-key" }));
     await user.click(screen.getByRole("combobox", { name: "Upstream model" }));
+    expect(screen.queryByRole("button", { name: "GPT Legacy" })).not.toBeInTheDocument();
+    // An API-key roster publishes ids only, so catalog effort levels stay valid there.
+    expect(screen.getByRole("button", { name: "GPT Catalog Reasoning" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "GPT-4" }));
 
     expect(screen.queryByRole("tab", { name: "Reasoning" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Pricing" })).toBeInTheDocument();
     const addModel = screen.getByRole("button", { name: "Add model" });
-    expect(addModel).toBeDisabled();
-
-    const requiredValues: Array<[string, string]> = [
-      ["Context window", "8192"],
-      ["Maximum input tokens", "6144"],
-      ["Auto-compaction limit", "5500"],
-    ];
-    for (const [name, value] of requiredValues) {
-      const input = screen.getByRole("spinbutton", { name });
-      expect(input).not.toHaveAttribute("readonly");
-      expect(input).toHaveAttribute("placeholder", "Not reported");
-      await user.type(input, value);
-    }
 
     const optionalOutput = screen.getByRole("spinbutton", { name: "Maximum output tokens" });
     expect(optionalOutput).not.toHaveAttribute("readonly");
@@ -587,7 +644,137 @@ describe("InferenceModelDialog", () => {
     expect(inputPrice).toHaveValue(null);
     expect(addModel).toBeDisabled();
   });
+
+  it("hides catalog-only reasoning on a subscription, labels calculated limits, and keeps the edited model", async () => {
+    const claude = claudeSubscription();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <InferenceModelDialog
+        open
+        editing={null}
+        connections={[claude]}
+        catalog={[provider("anthropic", "Claude subscription", true)]}
+        groups={[]}
+        users={[]}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Provider" }));
+    await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+    await user.click(screen.getByRole("combobox", { name: "Upstream model" }));
+    expect(screen.queryByRole("button", { name: "Claude Sonnet 4.5" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Claude Sonnet 5.5" }));
+    expect(screen.getAllByText("Calculated from limits reported by the provider; may be overridden")).toHaveLength(2);
+    expect(screen.getByText("Reported by the provider API; may be overridden")).toBeInTheDocument();
+
+    const editing = {
+      id: "model-sonnet-4-5",
+      publicId: "claude-sonnet-4-5",
+      displayName: "Claude Sonnet 4.5",
+      sortOrder: 0,
+      enabled: true,
+      contextWindow: 200_000,
+      maxInputTokens: 200_000,
+      maxOutputTokens: 64_000,
+      autoCompactTokenLimit: 180_000,
+      modalities: ["text", "image"],
+      capabilities: { reasoning: true, tools: true, vision: true },
+      configuredCapabilities: { reasoning: true, tools: true, vision: true },
+      capabilityLimitations: {},
+      reasoningEfforts: [],
+      defaultReasoningEffort: null,
+      defaultAccessAllowed: true,
+      accessMode: "everyone",
+      accessSubjects: [],
+      subscriptionMultiplier: 1,
+      sources: [
+        {
+          id: "source-sonnet-4-5",
+          connectionId: claude.id,
+          discoveredModelId: `${claude.id}-sonnet-4-5`,
+          providerId: "anthropic",
+          connectionName: claude.name,
+          upstreamModelId: "claude-sonnet-4-5",
+          sourceType: "subscription",
+          enabled: true,
+          priority: 0,
+          subscriptionMultiplierOverride: null,
+          reasoningEffortMap: {},
+          reasoningEfforts: [],
+          capabilities: { reasoning: true, tools: true, vision: true },
+          contextWindow: 200_000,
+          maxInputTokens: 200_000,
+          maxOutputTokens: 64_000,
+          autoCompactTokenLimit: 180_000,
+          modalities: ["text", "image"],
+          capabilitiesOverride: null,
+          metadata: {},
+          pricing: null,
+        },
+      ],
+      accessRules: [],
+    } as unknown as InferenceModel;
+    rerender(
+      <InferenceModelDialog
+        open
+        editing={editing}
+        connections={[claude]}
+        catalog={[provider("anthropic", "Claude subscription", true)]}
+        groups={[]}
+        users={[]}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    // Switching away from the edited model must not remove it from the picker.
+    await user.click(screen.getByRole("combobox", { name: "Upstream model" }));
+    await user.click(screen.getByRole("button", { name: "Claude Sonnet 5.5" }));
+    await user.click(screen.getByRole("combobox", { name: "Upstream model" }));
+    expect(screen.getByRole("button", { name: "Claude Sonnet 4.5" })).toBeInTheDocument();
+  });
 });
+
+function claudeSubscription(): InferenceProviderConnection {
+  const claude = connection("claude-sub", "anthropic");
+  claude.authType = "oauth";
+  const limits = { maxOutputTokens: 64_000, modalities: ["text", "image"], available: true };
+  claude.discoveredModels = [
+    {
+      ...limits,
+      id: "claude-sub-sonnet-4-5",
+      connectionId: claude.id,
+      remoteModelId: "claude-sonnet-4-5",
+      displayName: "Claude Sonnet 4.5",
+      contextWindow: 200_000,
+      maxInputTokens: 200_000,
+      autoCompactTokenLimit: 180_000,
+      capabilities: { reasoning: true, tools: true, vision: true },
+      reasoningEfforts: ["low", "medium", "high"],
+      metadataSources: { contextWindow: "provider", reasoningEfforts: "fallback" },
+    },
+    {
+      ...limits,
+      id: "claude-sub-sonnet-5-5",
+      connectionId: claude.id,
+      remoteModelId: "claude-sonnet-5-5",
+      displayName: "Claude Sonnet 5.5",
+      contextWindow: 1_000_000,
+      maxInputTokens: 1_000_000,
+      autoCompactTokenLimit: 900_000,
+      capabilities: { reasoning: true, tools: true, vision: true },
+      reasoningEfforts: ["low", "medium", "high", "max"],
+      metadataSources: {
+        contextWindow: "provider",
+        maxInputTokens: "derived",
+        autoCompactTokenLimit: "derived",
+        reasoningEfforts: "provider",
+      },
+    },
+  ];
+  return claude;
+}
 
 function provider(id: string, label: string, subscription: boolean): InferenceProviderCatalogItem {
   return {

@@ -107,9 +107,22 @@ export interface InferenceDiscoveredModel {
   modalities: string[];
   capabilities: Record<string, boolean>;
   reasoningEfforts: string[];
+  metadataSources?: Partial<Record<InferenceModelMetadataField, InferenceModelMetadataSource>>;
   pricing?: InferenceProviderModelPricing | null;
   available: boolean;
 }
+
+/** provider: live provider API; fallback: built-in catalog; derived: calculated by Gateway from provider limits. */
+export type InferenceModelMetadataSource = "provider" | "fallback" | "derived";
+export type InferenceModelMetadataField =
+  | "displayName"
+  | "contextWindow"
+  | "maxInputTokens"
+  | "maxOutputTokens"
+  | "autoCompactTokenLimit"
+  | "reasoningEfforts"
+  | "modalities"
+  | "capabilities";
 
 export interface InferenceProviderModelPricing {
   version: string;

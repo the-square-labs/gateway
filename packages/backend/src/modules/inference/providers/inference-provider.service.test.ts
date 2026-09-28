@@ -102,7 +102,8 @@ describe('InferenceProviderService policy helpers', () => {
     );
 
     expect(serialized.maxInputTokens).toBe(272_000);
-    expect(serialized.autoCompactTokenLimit).toBe(272_000);
+    // A catalog threshold above the input limit is recomputed from the limit it must fit in.
+    expect(serialized.autoCompactTokenLimit).toBe(244_800);
   });
 
   it('reclaims abandoned running synchronizations without duplicating live ones', async () => {

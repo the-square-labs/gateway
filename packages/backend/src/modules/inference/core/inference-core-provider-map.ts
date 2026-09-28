@@ -111,10 +111,13 @@ export interface CoreModelRow {
   provider: string;
   id: string;
   namespaced: string;
+  displayName?: string;
   disabled?: boolean;
   contextWindow?: number;
   maxInputTokens?: number;
   maxOutputTokens?: number;
+  /** Core's compaction threshold for native rows; it already honors operator overrides. */
+  autoCompactTokenLimit?: number;
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
   inputModalities?: string[];
@@ -123,7 +126,21 @@ export interface CoreModelRow {
   supportsReasoningSummaries?: boolean;
   supportsServiceTier?: boolean;
   supportsVerbosity?: boolean;
+  metadataSources?: CoreModelMetadataSources;
   pricing?: CoreModelPricing;
+}
+
+export type CoreModelMetadataSource = 'provider' | 'fallback';
+export type CoreModelMetadataSources = Partial<Record<string, CoreModelMetadataSource>>;
+
+function parseCoreModelMetadataSources(value: unknown): CoreModelMetadataSources | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const sources = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, CoreModelMetadataSource] => entry[1] === 'provider' || entry[1] === 'fallback'
+    )
+  );
+  return Object.keys(sources).length ? sources : undefined;
 }
 
 export interface CoreModelPricing {
@@ -207,13 +224,18 @@ export function parseCoreModelRows(body: unknown): CoreModelRow[] {
     const row = entry as Record<string, unknown>;
     if (typeof row.provider !== 'string' || typeof row.id !== 'string') continue;
     const pricing = parseCoreModelPricing(row.pricing);
+    const metadataSources = parseCoreModelMetadataSources(row.metadataSources);
     rows.push({
       provider: row.provider,
       id: row.id,
       namespaced: typeof row.namespaced === 'string' && row.namespaced ? row.namespaced : row.id,
+      ...(typeof row.displayName === 'string' && row.displayName.trim() ? { displayName: row.displayName.trim() } : {}),
       ...(row.disabled === true ? { disabled: true } : {}),
       ...(typeof row.contextWindow === 'number' ? { contextWindow: row.contextWindow } : {}),
       ...(typeof row.maxInputTokens === 'number' ? { maxInputTokens: row.maxInputTokens } : {}),
+      ...(typeof row.autoCompactTokenLimit === 'number' && Number.isSafeInteger(row.autoCompactTokenLimit) && row.autoCompactTokenLimit > 0
+        ? { autoCompactTokenLimit: row.autoCompactTokenLimit }
+        : {}),
       ...(typeof row.maxOutputTokens === 'number' ? { maxOutputTokens: row.maxOutputTokens } : {}),
       ...(Array.isArray(row.reasoningEfforts)
         ? { reasoningEfforts: row.reasoningEfforts.filter((effort): effort is string => typeof effort === 'string') }
@@ -235,6 +257,7 @@ export function parseCoreModelRows(body: unknown): CoreModelRow[] {
         : {}),
       ...(typeof row.supportsServiceTier === 'boolean' ? { supportsServiceTier: row.supportsServiceTier } : {}),
       ...(typeof row.supportsVerbosity === 'boolean' ? { supportsVerbosity: row.supportsVerbosity } : {}),
+      ...(metadataSources ? { metadataSources } : {}),
       ...(pricing ? { pricing } : {}),
     });
   }

@@ -3,19 +3,21 @@
   "id": "gz01c8d5",
   "file_name": "gz01c8d5_inference_core_docker",
   "tags": [
-    "dev-environment",
-    "docker",
-    "frontend",
-    "inference"
+    "docker-compose",
+    "inference-core",
+    "local-development",
+    "model-discovery",
+    "troubleshooting"
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.9,
   "created_at": 1790155283819,
-  "updated_at": 1790155283819
+  "updated_at": 1790634432082
 }
 ---
-Verified on a local dev run of the Gateway backend outside Docker.
+Verified local setup lesson: the managed inference core must be installed from a Compose-managed Gateway container. A bare `tsx` backend can show a stale seeded `ready` row with no container or sealed credentials; provider authorization then fails with `CORE_CREDENTIALS_MISSING`. For local manual testing, run Gateway in a Compose container with the Docker socket, stable Compose labels, and an internal service-network alias; it can reuse the dev Postgres and Redis services. After installation, the UI exposes live discovered provider models and auto-fills metadata such as display name, context window, input/output limits, auto-compaction, modalities, and capabilities. This was verified on September 28, 2026 with core `2.60.0-thesqlabs.3`.
 
-- The Providers and Models panels, and therefore the "Add inference model" dialog, stay hidden until isInferenceCoreReady() passes in packages/frontend/src/pages/settings/inference/InferenceCoreLifecyclePanel.tsx: inference_core_state.state must be 'ready' or 'update_available' and compatibility must be 'compatible'. Compatibility needs core_protocol_major = INFERENCE_CORE_PROTOCOL_MAJOR and core_state_schema_version = INFERENCE_CORE_STATE_SCHEMA_VERSION, both 1 as of 2026-09.
-- Installing the inference core requires Gateway itself to run as a Compose-managed container. InferenceCoreRuntimeService.discoverLayout() calls DockerService.inspectSelf(), which reads process.env.HOSTNAME as the short container id, then demands the com.docker.compose.project and com.docker.compose.service labels plus a network alias equal to the service name. A bare tsx dev process fails with "HOSTNAME env var not available - cannot self-inspect", and setting HOSTNAME by hand does not help because the labels and alias are still missing.
-- To exercise the dialog without a real provider account, insert an inference_provider_connections row (provider_id 'anthropic', auth_type 'oauth', status 'healthy') plus inference_discovered_models rows, and force inference_core_state into the ready/compatible shape above. Publishing additionally validates the published modalities and capabilities against the stored discovered row, so that row must carry what the catalog merge in persistModels would have written.
+To test local core changes: the local stack runs as Compose project `gateway-local` from `/tmp/gateway-local-app.compose.yml` plus `/tmp/gateway-local-app.localcore.compose.yml`, which pins `INFERENCE_CORE_DISTRIBUTION_IMAGE=inference-core:local-dev`. Build the core with `docker build --build-arg VERSION=local-dev -t inference-core:local-dev .`; the default `VERSION=dev` fails readiness with `core readiness version mismatch: expected local-dev, received dev`. Gateway recreates a missing core only through the Repair operation (startup reconciliation just marks it degraded), and Repair merely restarts a still-running container, so remove `gateway-local-inference-core` first (its state and secrets volumes survive), then press Repair in Settings > Inference. Verified September 29, 2026.

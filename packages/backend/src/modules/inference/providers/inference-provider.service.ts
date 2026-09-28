@@ -39,7 +39,10 @@ import {
   assertApiMonthlyLimitAllowed,
   assertMinimumRemainingAllowed,
   classifyStatus,
+  consistentTokenLimits,
   connectionDisableBlockers,
+  derivedSource,
+  type InferenceModelMetadataSource,
   latestQuota,
   latestValidQuota,
   nextRoutingOrder,
@@ -473,7 +476,9 @@ export class InferenceProviderService {
       // null is reserved for providers where live discovery is explicitly not
       // applicable. Transport/protocol failures throw from the client so this
       // sync cannot silently promote a stale catalog to success.
-      const liveModelIds = await client.coreProviderLiveModelIds(providerRef);
+      const liveModels = await client.coreProviderLiveModels(providerRef);
+      const liveModelIds = liveModels?.map((model) => model.id) ?? null;
+      const liveById = new Map((liveModels ?? []).map((model) => [model.id, model] as const));
       const [providers, modelsBody, quotasBody] = await Promise.all([
         client.listCoreProviders(),
         client.listCoreModels(),
@@ -487,16 +492,117 @@ export class InferenceProviderService {
           'The inference core lost this provider configuration'
         );
       }
-      const models = parseCoreModelRows(modelsBody).filter(
-        (row) =>
-          row.provider === providerRef &&
-          row.disabled !== true &&
-          (liveModelIds === null || liveModelIds.includes(row.id))
+      const rowsById = new Map(
+        parseCoreModelRows(modelsBody)
+          .filter((row) => row.provider === providerRef)
+          .map((row) => [row.id, row] as const)
+      );
+      for (const live of liveModels ?? []) {
+        const existing = rowsById.get(live.id);
+        // A model that only the live roster reports is published for subscriptions alone.
+        // API-key providers keep core's exposure filters, so there live metadata only
+        // describes rows core already returned.
+        if (!existing && connection.authType !== 'oauth') continue;
+        // Core rows already carry the live answer plus operator overrides and context caps, so
+        // their values win; the live roster fills only what core did not return.
+        rowsById.set(live.id, {
+          ...(live.displayName ? { displayName: live.displayName } : {}),
+          ...(live.contextWindow !== undefined ? { contextWindow: live.contextWindow } : {}),
+          ...(live.maxInputTokens !== undefined ? { maxInputTokens: live.maxInputTokens } : {}),
+          ...(live.maxOutputTokens !== undefined ? { maxOutputTokens: live.maxOutputTokens } : {}),
+          ...(live.reasoningEfforts !== undefined ? { reasoningEfforts: live.reasoningEfforts } : {}),
+          ...(live.inputModalities !== undefined ? { inputModalities: live.inputModalities } : {}),
+          ...(live.capabilities !== undefined ? { capabilities: live.capabilities } : {}),
+          ...definedFields(existing),
+          provider: providerRef,
+          id: live.id,
+          // Core routes a subscription model through its provider namespace, like its own rows.
+          namespaced: existing?.namespaced ?? `${providerRef}/${live.id}`,
+          // Core may label a model with its id; the provider's own name is better.
+          ...(live.displayName && idLikeName(existing?.displayName, live.id) && !idLikeName(live.displayName, live.id)
+            ? { displayName: live.displayName }
+            : {}),
+        });
+      }
+      const models = [...rowsById.values()].filter(
+        (row) => row.disabled !== true && (liveModelIds === null || liveModelIds.includes(row.id))
       );
       await this.persistModels(
         connectionId,
         models.map((row) => {
           const known = knownProviderModel(connection.providerId, row.id);
+          const live = liveById.get(row.id);
+          // Record where every technical value came from so the admin UI can tell a live
+          // provider answer apart from a built-in fallback value or a Gateway calculation.
+          const coreSource = (field: string) => row.metadataSources?.[field] ?? (liveModels ? 'fallback' : undefined);
+          // A value equal to the live answer is provider-reported. A core value that differs from
+          // it was changed by operator configuration, so it is left unlabeled.
+          const sourceOf = (
+            field: string,
+            liveValue: unknown,
+            rowValue: unknown,
+            knownValue: unknown
+          ): InferenceModelMetadataSource | undefined =>
+            rowValue !== undefined
+              ? liveValue !== undefined
+                ? sameMetadataValue(liveValue, rowValue)
+                  ? 'provider'
+                  : undefined
+                : coreSource(field)
+              : knownValue !== undefined
+                ? 'fallback'
+                : undefined;
+          const coreAutoCompact =
+            row.autoCompactTokenLimit ??
+            (row.maxInputTokens !== undefined ? Math.floor(row.maxInputTokens * 0.9) : undefined);
+          const limits = consistentTokenLimits({
+            contextWindow: row.contextWindow ?? known?.contextWindow,
+            maxInputTokens: row.maxInputTokens ?? known?.maxInputTokens,
+            autoCompactTokenLimit: coreAutoCompact ?? known?.autoCompactTokenLimit,
+          });
+          const contextWindowSource = sourceOf(
+            'contextWindow',
+            live?.contextWindow,
+            row.contextWindow,
+            known?.contextWindow
+          );
+          const maxInputSource = limits.maxInputFromContextWindow
+            ? derivedSource(contextWindowSource)
+            : sourceOf('maxInputTokens', live?.maxInputTokens, row.maxInputTokens, known?.maxInputTokens);
+          const isIdLike = (name: string | undefined) =>
+            name !== undefined && (name === row.id || name.endsWith(`/${row.id}`));
+          const fieldSources = Object.fromEntries(
+            Object.entries({
+              // An id-like provider name is replaced by the catalog name, so the shown value is the catalog's.
+              displayName:
+                isIdLike(row.displayName) && known
+                  ? 'fallback'
+                  : sourceOf('displayName', live?.displayName, row.displayName, known?.displayName),
+              contextWindow: contextWindowSource,
+              maxInputTokens: maxInputSource,
+              maxOutputTokens: sourceOf(
+                'maxOutputTokens',
+                live?.maxOutputTokens,
+                row.maxOutputTokens,
+                known?.maxOutputTokens
+              ),
+              autoCompactTokenLimit:
+                limits.autoCompactFromMaxInput || coreAutoCompact !== undefined
+                  ? derivedSource(maxInputSource)
+                  : known
+                    ? 'fallback'
+                    : undefined,
+              reasoningEfforts: sourceOf(
+                'reasoningEfforts',
+                live?.reasoningEfforts,
+                row.reasoningEfforts,
+                known?.reasoningEfforts
+              ),
+              modalities: sourceOf('inputModalities', live?.inputModalities, row.inputModalities, known?.modalities),
+              capabilities: sourceOf('capabilities', live?.capabilities, row.capabilities, known?.capabilities),
+            }).filter((entry): entry is [string, InferenceModelMetadataSource] => entry[1] !== undefined)
+          );
+          const displayName = isIdLike(row.displayName) ? known?.displayName ?? row.id : row.displayName ?? known?.displayName;
           const modalities = row.inputModalities ?? known?.modalities ?? ['text'];
           const reportedCapabilities = coreModelCapabilities(row);
           const capabilities = {
@@ -514,10 +620,11 @@ export class InferenceProviderService {
             // connections pool together and no core provider name leaks into
             // the admin UI or public model ids.
             id: row.id,
-            ...(known ? { displayName: known.displayName } : {}),
-            ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-            ...(row.maxInputTokens !== undefined ? { maxInputTokens: row.maxInputTokens } : {}),
+            ...(displayName ? { displayName } : {}),
+            ...(limits.contextWindow !== null ? { contextWindow: limits.contextWindow } : {}),
+            ...(limits.maxInputTokens !== null ? { maxInputTokens: limits.maxInputTokens } : {}),
             ...(row.maxOutputTokens !== undefined ? { maxOutputTokens: row.maxOutputTokens } : {}),
+            ...(limits.autoCompactTokenLimit !== null ? { autoCompactTokenLimit: limits.autoCompactTokenLimit } : {}),
             modalities,
             capabilities,
             reasoningEfforts: row.reasoningEfforts ?? known?.reasoningEfforts ?? [],
@@ -532,6 +639,7 @@ export class InferenceProviderService {
               ...(row.supportsReasoningSummaries !== undefined
                 ? { supports_reasoning_summaries: row.supportsReasoningSummaries }
                 : {}),
+              ...(Object.keys(fieldSources).length ? { field_sources: fieldSources } : {}),
             },
           };
         })
@@ -938,6 +1046,24 @@ export class InferenceProviderService {
 }
 
 export { __testOnly } from './inference-provider.service.helpers.js';
+
+/** Copy only the fields a core row actually set, so absent fields do not erase live values. */
+function definedFields<T extends object>(row: T | undefined): Partial<T> {
+  if (!row) return {};
+  return Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined)) as Partial<T>;
+}
+
+function idLikeName(name: string | undefined, id: string): boolean {
+  return name !== undefined && (name === id || name.endsWith(`/${id}`));
+}
+
+/** Compare a live metadata value with core's; lists compare as sets. */
+function sameMetadataValue(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value) => right.includes(value));
+  }
+  return left === right;
+}
 
 function isStrongSyncBlockStatus(status: InferenceConnectionStatus): boolean {
   return ['disabled', 'reauth_required', 'cooldown'].includes(status);

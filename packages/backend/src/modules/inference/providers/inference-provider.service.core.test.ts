@@ -5,6 +5,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import { InferenceCoreClientError } from '../core/inference-core.client.js';
 import { InferenceProviderRegistry } from './inference-provider.registry.js';
 import { InferenceProviderService } from './inference-provider.service.js';
+import { knownProviderModel } from './inference-provider-model-catalog.js';
 
 /** Awaitable drizzle query chain: every combinator returns the same chain. */
 function selectChain(rows: unknown[]) {
@@ -88,7 +89,7 @@ function createService(options: {
       { provider: 'core-conn-1', id: 'static-only', namespaced: 'core-conn-1/static-only' },
       { provider: 'other', id: 'ignored', namespaced: 'other/ignored' },
     ]),
-    coreProviderLiveModelIds: vi.fn().mockResolvedValue(['gpt-5.5']),
+    coreProviderLiveModels: vi.fn().mockResolvedValue([{ id: 'gpt-5.5' }]),
     coreProviderQuotas: vi.fn().mockResolvedValue({
       reports: [{ provider: 'core-conn-1', quota: { weeklyPercent: 40, weeklyResetAt: 1_800_000_000_000 } }],
     }),
@@ -221,7 +222,7 @@ describe('inference provider service — core-managed delegation', () => {
 
   it('uses the core catalog without live filtering only when discovery is not applicable', async () => {
     const { service, db } = createService({
-      client: { coreProviderLiveModelIds: vi.fn().mockResolvedValue(null) },
+      client: { coreProviderLiveModels: vi.fn().mockResolvedValue(null) },
     });
     db.update.mockReturnValue(updateChain());
     const persistModels = vi.fn().mockResolvedValue(undefined);
@@ -242,7 +243,7 @@ describe('inference provider service — core-managed delegation', () => {
   it('records a sync error when live discovery throws instead of saving stale catalog success', async () => {
     const { service, db } = createService({
       client: {
-        coreProviderLiveModelIds: vi.fn().mockRejectedValue(new InferenceCoreClientError('live discovery timed out')),
+        coreProviderLiveModels: vi.fn().mockRejectedValue(new InferenceCoreClientError('live discovery timed out')),
       },
     });
     const chain = updateChain();
@@ -270,10 +271,10 @@ describe('inference provider service — core-managed delegation', () => {
     };
     const { service, db } = createService({
       client: {
-        coreProviderLiveModelIds: vi.fn(async () => {
+        coreProviderLiveModels: vi.fn(async () => {
           await Promise.resolve();
           refreshed = true;
-          return ['gpt-6-astra'];
+          return [{ id: 'gpt-6-astra' }];
         }),
         listCoreModels: vi.fn(async () => (refreshed ? [row] : [])),
       },
@@ -291,6 +292,50 @@ describe('inference provider service — core-managed delegation', () => {
         contextWindow: 272_000,
         reasoningEfforts: row.reasoningEfforts,
         modalities: ['text', 'image'],
+      }),
+    ]);
+  });
+
+  it('keeps a catalog input ceiling inside the live context window', async () => {
+    // The regression needs a catalog input ceiling above the live window.
+    expect(knownProviderModel('openai', 'gpt-5.5')?.maxInputTokens).toBeGreaterThan(272_000);
+    const connection = { ...CORE_CONNECTION, providerId: 'openai', authType: 'oauth', baseUrl: 'https://chatgpt.com' };
+    const row = {
+      provider: 'openai',
+      id: 'gpt-5.5',
+      namespaced: 'gpt-5.5',
+      contextWindow: 272_000,
+      metadataSources: { contextWindow: 'provider', maxInputTokens: 'fallback' },
+    };
+    const { service, db } = createService({
+      client: {
+        listCoreProviders: vi.fn().mockResolvedValue([{ name: 'openai', hasApiKey: false }]),
+        coreProviderLiveModels: vi.fn().mockResolvedValue(null),
+        listCoreModels: vi.fn().mockResolvedValue([row]),
+      },
+    });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    db.update.mockReturnValue(updateChain());
+    const persistModels = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, { persistModels, persistQuota: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(persistModels).toHaveBeenCalledWith('conn-1', [
+      expect.objectContaining({
+        id: 'gpt-5.5',
+        contextWindow: 272_000,
+        maxInputTokens: 272_000,
+        autoCompactTokenLimit: 244_800,
+        metadata: expect.objectContaining({
+          field_sources: expect.objectContaining({
+            contextWindow: 'provider',
+            // Both values are calculated by Gateway from the provider's live window.
+            maxInputTokens: 'derived',
+            autoCompactTokenLimit: 'derived',
+          }),
+        }),
       }),
     ]);
   });
@@ -314,7 +359,7 @@ describe('inference provider service — core-managed delegation', () => {
             supportsServiceTier: false,
           },
         ]),
-        coreProviderLiveModelIds: vi.fn().mockResolvedValue(['claude-sonnet-4-6']),
+        coreProviderLiveModels: vi.fn().mockResolvedValue([{ id: 'claude-sonnet-4-6' }]),
       },
     });
     db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
@@ -343,8 +388,167 @@ describe('inference provider service — core-managed delegation', () => {
         metadata: {
           source: 'opencodex',
           coreModelId: 'anthropic/claude-sonnet-4-6',
+          field_sources: expect.objectContaining({
+            contextWindow: 'fallback',
+            reasoningEfforts: 'fallback',
+            capabilities: 'fallback',
+          }),
         },
       }),
+    ]);
+  });
+
+  it('marks values from the live provider roster as provider-reported', async () => {
+    const connection = {
+      ...CORE_CONNECTION,
+      providerId: 'anthropic',
+      authType: 'oauth',
+      baseUrl: 'https://api.anthropic.com',
+    };
+    const { service, db } = createService({
+      client: {
+        listCoreProviders: vi.fn().mockResolvedValue([{ name: 'anthropic', hasApiKey: false }]),
+        listCoreModels: vi.fn().mockResolvedValue([
+          { provider: 'anthropic', id: 'claude-sonnet-5-5', namespaced: 'anthropic/claude-sonnet-5-5' },
+        ]),
+        coreProviderLiveModels: vi.fn().mockResolvedValue([
+          {
+            id: 'claude-sonnet-5-5',
+            displayName: 'Claude Sonnet 5.5',
+            contextWindow: 1_000_000,
+            maxInputTokens: 1_000_000,
+            maxOutputTokens: 128_000,
+            reasoningEfforts: ['low', 'medium', 'high', 'max'],
+            inputModalities: ['text', 'image'],
+            capabilities: ['reasoning', 'tools', 'vision'],
+          },
+        ]),
+      },
+    });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    db.update.mockReturnValue(updateChain());
+    const persistModels = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, { persistModels, persistQuota: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(persistModels).toHaveBeenCalledWith('conn-1', [
+      expect.objectContaining({
+        id: 'claude-sonnet-5-5',
+        maxOutputTokens: 128_000,
+        capabilities: expect.objectContaining({ reasoning: true, tools: true, vision: true }),
+        metadata: expect.objectContaining({
+          field_sources: {
+            displayName: 'provider',
+            contextWindow: 'provider',
+            maxInputTokens: 'provider',
+            maxOutputTokens: 'provider',
+            autoCompactTokenLimit: 'derived',
+            reasoningEfforts: 'provider',
+            modalities: 'provider',
+            capabilities: 'provider',
+          },
+        }),
+      }),
+    ]);
+  });
+
+  it('keeps core limits over live values and namespaces live-only subscription models', async () => {
+    const connection = { ...CORE_CONNECTION, providerId: 'anthropic', authType: 'oauth', baseUrl: 'https://api.anthropic.com' };
+    const { service, db } = createService({
+      client: {
+        listCoreProviders: vi.fn().mockResolvedValue([{ name: 'anthropic', hasApiKey: false }]),
+        // An operator context cap narrowed core's window below the provider's answer.
+        listCoreModels: vi.fn().mockResolvedValue([
+          { provider: 'anthropic', id: 'claude-sonnet-5-5', namespaced: 'anthropic/claude-sonnet-5-5', contextWindow: 400_000 },
+        ]),
+        coreProviderLiveModels: vi.fn().mockResolvedValue([
+          { id: 'claude-sonnet-5-5', contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+          { id: 'claude-next', displayName: 'Claude Next', contextWindow: 500_000, maxInputTokens: 500_000 },
+        ]),
+      },
+    });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    db.update.mockReturnValue(updateChain());
+    const persistModels = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, { persistModels, persistQuota: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    const persisted = persistModels.mock.calls[0]?.[1] as Array<{
+      id: string;
+      contextWindow?: number;
+      maxOutputTokens?: number;
+      metadata: { coreModelId?: string; field_sources?: Record<string, string> };
+    }>;
+    const sonnet = persisted.find((model) => model.id === 'claude-sonnet-5-5');
+    expect(sonnet).toMatchObject({ contextWindow: 400_000, maxOutputTokens: 128_000 });
+    expect(sonnet?.metadata.field_sources).not.toHaveProperty('contextWindow');
+    expect(sonnet?.metadata.field_sources?.maxOutputTokens).toBe('provider');
+    expect(persisted.find((model) => model.id === 'claude-next')?.metadata.coreModelId).toBe('anthropic/claude-next');
+  });
+
+  it('does not publish live-only models on an API-key connection', async () => {
+    const { service, db } = createService({
+      client: {
+        listCoreModels: vi.fn().mockResolvedValue([
+          { provider: 'core-conn-1', id: 'gpt-5.5', namespaced: 'core-conn-1/gpt-5.5', contextWindow: 272_000 },
+        ]),
+        coreProviderLiveModels: vi.fn().mockResolvedValue([
+          { id: 'gpt-5.5', maxOutputTokens: 128_000 },
+          { id: 'text-embedding-3-large' },
+        ]),
+      },
+    });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(CORE_CONNECTION);
+    db.update.mockReturnValue(updateChain());
+    const persistModels = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, { persistModels, persistQuota: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    const persisted = persistModels.mock.calls[0]?.[1] as Array<{ id: string; maxOutputTokens?: number; metadata: Record<string, unknown> }>;
+    expect(persisted.map((model) => model.id)).toEqual(['gpt-5.5']);
+    expect(persisted[0]).toMatchObject({ maxOutputTokens: 128_000, metadata: { coreModelId: 'core-conn-1/gpt-5.5' } });
+  });
+
+  it('removes a core provider namespace from a discovered display name', async () => {
+    const connection = {
+      ...CORE_CONNECTION,
+      providerId: 'anthropic',
+      authType: 'oauth',
+      baseUrl: 'https://api.anthropic.com',
+    };
+    const { service, db } = createService({
+      client: {
+        listCoreProviders: vi.fn().mockResolvedValue([{ name: 'anthropic', hasApiKey: false }]),
+        listCoreModels: vi.fn().mockResolvedValue([
+          {
+            provider: 'anthropic',
+            id: 'claude-sonnet-5-5',
+            displayName: 'anthropic/claude-sonnet-5-5',
+            namespaced: 'anthropic/claude-sonnet-5-5',
+          },
+        ]),
+        coreProviderLiveModels: vi.fn().mockResolvedValue([{ id: 'claude-sonnet-5-5' }]),
+      },
+    });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    db.update.mockReturnValue(updateChain());
+    const persistModels = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, {
+      persistModels,
+      persistQuota: vi.fn().mockResolvedValue(undefined),
+    });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(persistModels).toHaveBeenCalledWith('conn-1', [
+      expect.objectContaining({ id: 'claude-sonnet-5-5', displayName: 'claude-sonnet-5-5' }),
     ]);
   });
 
@@ -364,7 +568,7 @@ describe('inference provider service — core-managed delegation', () => {
       client: {
         listCoreProviders: vi.fn().mockResolvedValue([{ name: 'anthropic', hasApiKey: false }]),
         listCoreModels: vi.fn().mockResolvedValue([]),
-        coreProviderLiveModelIds: vi.fn().mockResolvedValue([]),
+        coreProviderLiveModels: vi.fn().mockResolvedValue([]),
         // The provider report follows the core's active account: the freshly added subscription.
         coreProviderQuotas: vi.fn().mockResolvedValue({
           reports: [{ provider: 'anthropic', quota: { fiveHourPercent: 0, weeklyPercent: 0 } }],
