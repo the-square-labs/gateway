@@ -363,4 +363,51 @@ describe.skipIf(!url)('availability lease graceful close on disposable PostgreSQ
       lastHolders: [{ slot: 0, holderId: dockerIds[0] }],
     });
   });
+
+  it('names the reserved holder when it closes from bootstrapping and keeps its legacy copy running', async () => {
+    const changes = modeChanges.length;
+    await at(1_000, () => service.setLegacyRequested(policyId, false));
+    // Back to bootstrapping only: the reserved holder tries to acquire and has not committed yet.
+    const trying = (id: string) =>
+      id === dockerIds[0]
+        ? {
+            held: [
+              {
+                policyId,
+                slot: 0,
+                role: 'bootstrapping',
+                ballot: null,
+                epoch: '0',
+                manifestVersion: '0',
+                placementId: '',
+                placementGeneration: '1',
+              },
+            ],
+          }
+        : {};
+    for (let attempt = 0; attempt < 6 && (await view()).mode === 'legacy'; attempt++) {
+      await at(61_000, async () => {
+        await heartbeat(trying);
+        await service.reconcile();
+      });
+    }
+    await at(1_000, async () => {
+      await heartbeat(trying);
+      await service.reconcile();
+    });
+    expect(await view()).toMatchObject({ mode: 'bootstrapping', bootstrap: [{ slot: 0, holderNodeId: dockerIds[0] }] });
+    await at(1_000, () => service.setLegacyRequested(policyId, true));
+    // Named with an empty ballot: a bootstrap commit racing the close is confirmed and retained instead of fenced.
+    const published = await closure();
+    expect(published).toMatchObject({ closed: true, retained: [{ slot: 0, holderId: dockerIds[0], ballot: null }] });
+    expect((await view()).retainedHolders).toEqual([{ slot: 0, holderNodeId: dockerIds[0], confirmed: false }]);
+    // It never committed: on the closed manifest it drops its round (no lease role) and its legacy copy runs on.
+    await at(1_000, async () => {
+      await heartbeat(() => closedAck(published.version));
+      await service.reconcile();
+    });
+    expect((await view()).mode).toBe('legacy');
+    expect(modeChanges.slice(changes).map(({ to }) => to)).toEqual(['bootstrapping', 'closing', 'legacy']);
+    expect(modeChanges.at(-1)).toMatchObject({ retainedHolders: [{ slot: 0, holderId: dockerIds[0] }] });
+  });
 });

@@ -28,7 +28,7 @@ import { AvailabilityLeaseDistribution, type RelayLeasePolicyFields } from './le
 import { availabilityStandbyCount } from './lease-gating.js';
 import { LeaseCapabilityTracker, type LeaseParticipants, loadLeaseParticipants } from './lease-participants.js';
 import { leaseCandidatePlacements } from './lease-planning.js';
-import { AvailabilityLeasePolicies, type LeaseModeChange, reportsRetained } from './lease-policies.js';
+import { AvailabilityLeasePolicies, keepsRunningThroughClose, type LeaseModeChange } from './lease-policies.js';
 import { type RelayLeaseOwner, type RelayLeasePolicyIds, relayLeasePolicyIds } from './lease-relay-gate.js';
 import { AvailabilityLeaseReports, type LeaseHolderChangeNotice, type LeaseReportSender } from './lease-reports.js';
 import {
@@ -356,9 +356,17 @@ export class AvailabilityLeaseService {
           ? (leaseManifestClosure(state.manifestBlock)?.retained ?? []).map((entry) => ({
               slot: entry.slot,
               holderNodeId: entry.holderId,
-              confirmed: reportsRetained(
+              confirmed: keepsRunningThroughClose(
+                entry,
                 observations.find((observation) => observation.slot === entry.slot),
-                entry.holderId
+                new Set(
+                  members
+                    .filter((member) => {
+                      const ack = member.manifestAcks[policyId];
+                      return ack?.closed === true && ack.version >= state.manifestVersion;
+                    })
+                    .map((member) => member.memberId)
+                )
               ),
             }))
           : [],

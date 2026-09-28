@@ -128,7 +128,11 @@ export interface LeaseManifestContent {
 export interface LeaseRetainedSlot {
   slot: number;
   holderId: string;
-  ballot: DockerAvailabilityLeaseBallot;
+  /**
+   * The committed ballot Gateway saw; null for a reserved bootstrap holder Gateway saw no commit of (the close may have
+   * raced its bootstrap commit: acceptors then confirm it on the commit they hold).
+   */
+  ballot: DockerAvailabilityLeaseBallot | null;
 }
 
 /** Serialized relay.v1.LeaseManifest; schema version 1 and the fixed 30 s term. */
@@ -158,11 +162,15 @@ export function encodeLeaseManifest(content: LeaseManifestContent, manifestVersi
       ? (content.retained ?? []).map((entry) => ({
           slot: entry.slot,
           holderId: entry.holderId,
-          ballot: {
-            round: entry.ballot.round,
-            incarnation: entry.ballot.incarnation,
-            proposerId: entry.ballot.proposerId,
-          },
+          ...(entry.ballot
+            ? {
+                ballot: {
+                  round: entry.ballot.round,
+                  incarnation: entry.ballot.incarnation,
+                  proposerId: entry.ballot.proposerId,
+                },
+              }
+            : {}),
         }))
       : [],
   });
@@ -182,10 +190,11 @@ export function leaseManifestClosure(
       closed?: boolean;
       retained?: Array<{ slot?: number; holderId?: string; ballot?: Partial<DockerAvailabilityLeaseBallot> | null }>;
     };
-    const retained = (manifest.retained ?? []).flatMap((entry) => {
-      const ballot = normalizeLeaseBallot(entry.ballot ?? undefined);
-      return entry.holderId && ballot ? [{ slot: entry.slot ?? 0, holderId: entry.holderId, ballot }] : [];
-    });
+    const retained = (manifest.retained ?? []).flatMap((entry) =>
+      entry.holderId
+        ? [{ slot: entry.slot ?? 0, holderId: entry.holderId, ballot: normalizeLeaseBallot(entry.ballot ?? undefined) }]
+        : []
+    );
     return { closed: manifest.closed === true, retained: manifest.closed === true ? retained : [] };
   } catch {
     return null;

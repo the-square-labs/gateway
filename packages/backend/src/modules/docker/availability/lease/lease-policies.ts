@@ -140,9 +140,25 @@ function activeLeaseNodeIds(observations: ObservationRow[], state: LeaseStateRow
 
 /**
  * Graceful close: the retained holders a new closed manifest names, one per slot: the committed holder Gateway sees
- * for the slot now (its ballot is the one it proposed with). An unheld slot has none; its holder, if any, fences.
+ * for the slot now (its ballot is the one it proposed with). Closing from bootstrapping also names each slot's
+ * reserved holder Gateway saw no commit of, with an empty ballot: if its bootstrap commit raced the close the acceptors
+ * confirm it on the commit they hold and its copy is retained instead of fenced; if it never committed nothing changes
+ * (its legacy copy was never lease-bound). Any other unheld slot has none; its holder, if any, fences.
  */
-function retainedFromObservations(observations: ObservationRow[], slots: number): LeaseRetainedSlot[] {
+function retainedFromObservations(
+  observations: ObservationRow[],
+  slots: number,
+  bootstrap: Array<{ slot: number; holderId: string }> = []
+): LeaseRetainedSlot[] {
+  const committed = committedHolders(observations, slots);
+  const named = new Set(committed.map((entry) => entry.slot));
+  const reserved = bootstrap
+    .filter((entry) => entry.slot < slots && !named.has(entry.slot))
+    .map((entry) => ({ slot: entry.slot, holderId: entry.holderId, ballot: null }));
+  return [...committed, ...reserved].sort((left, right) => left.slot - right.slot);
+}
+
+function committedHolders(observations: ObservationRow[], slots: number): LeaseRetainedSlot[] {
   return observations
     .filter(
       (observation) =>
@@ -162,6 +178,25 @@ function retainedFromObservations(observations: ObservationRow[], slots: number)
         proposerId: observation.ballot!.proposerId,
       },
     }));
+}
+
+/**
+ * A named holder's copy keeps running through the close: it reported itself retained (a majority of every quorum set
+ * confirmed the close to it), or it is a reserved bootstrap holder named without a ballot that persisted the close,
+ * does not hold the key and runs no lease role for it. A not-yet-acquired bootstrap holder drops its round on the
+ * closed manifest and can no longer commit, and the close never touches its legacy copy; a bootstrap commit that raced
+ * the close shows as a lease role (holding, then retained or fencing) in its reports first.
+ */
+export function keepsRunningThroughClose(
+  entry: LeaseRetainedSlot,
+  observation: Pick<ObservationRow, 'claimants' | 'holderId'> | undefined,
+  closedAckers: ReadonlySet<string>
+): boolean {
+  if (reportsRetained(observation, entry.holderId)) return true;
+  if (entry.ballot !== null) return false;
+  const holds = observation?.holderId === entry.holderId;
+  const leaseRole = Boolean(observation?.claimants?.[entry.holderId]);
+  return !holds && !leaseRole && closedAckers.has(entry.holderId);
 }
 
 /** The named holder reported itself retained: a majority of every quorum set confirmed the close to it. */
@@ -477,7 +512,7 @@ export class AvailabilityLeasePolicies {
       // the fence stop margin passed; a named holder that never reported retained (partitioned) fenced by then.
       const retainedBySlot = new Map(closure.retained.map((entry) => [entry.slot, entry.holderId]));
       retainedNow = closure.retained.filter((entry) =>
-        reportsRetained(observationBySlot.get(entry.slot), entry.holderId)
+        keepsRunningThroughClose(entry, observationBySlot.get(entry.slot), closedAckers)
       );
       const released =
         retainedNow.length === closure.retained.length &&
@@ -528,7 +563,7 @@ export class AvailabilityLeasePolicies {
         next === 'closing'
           ? closedManifest?.closed
             ? closure.retained
-            : retainedFromObservations(observations, slots)
+            : retainedFromObservations(observations, slots, state.mode === 'bootstrapping' ? state.bootstrap : [])
           : undefined
       );
       Object.assign(updates, published.updates);

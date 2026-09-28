@@ -85,10 +85,11 @@ describe.skipIf(!url)('availability lease modes on disposable PostgreSQL', () =>
     const value = decodeRelayV1Message(
       'LeaseManifest',
       decodeLeaseSignedBlock(Buffer.from(state.manifest_block, 'base64')).payload
-    ) as { candidates: Array<{ id: string }>; closed: boolean };
+    ) as { candidates: Array<{ id: string }>; closed: boolean; retained?: unknown[] };
     return {
       candidates: value.candidates.map(({ id }) => id),
       closed: value.closed,
+      retained: value.retained ?? [],
       version: Number(state.manifest_version),
     };
   };
@@ -331,10 +332,17 @@ describe.skipIf(!url)('availability lease modes on disposable PostgreSQL', () =>
     });
     expect((await manifestOf(triplePolicy)).closed).toBe(true);
     const closed = [{ policyId: triplePolicy, manifestVersion: String(closing.manifestVersion), closed: true }];
-    // A voter majority of every quorum set persisted the close; the third candidate is gone and never acks.
+    // Closing from bootstrapping names the reserved holder with an empty ballot (graceful close).
+    expect((await manifestOf(triplePolicy)).retained).toEqual([{ slot: 0, holderId: nodeIds[0], ballot: null }]);
+    // Its bootstrap commit raced the close and it cannot get the close confirmed: it holds, never retained. A voter
+    // majority of every quorum set persisted the close; the third candidate is gone and never acks.
     await at(1_000, async () => {
-      for (const id of nodeIds.slice(0, 2))
-        await service.ingestDaemonReport(id, 'docker', report(id, { manifests: closed }));
+      await service.ingestDaemonReport(
+        nodeIds[0]!,
+        'docker',
+        report(nodeIds[0]!, { manifests: closed, ...held(triplePolicy, nodeIds[0]!, 'holding', 20) })
+      );
+      await service.ingestDaemonReport(nodeIds[1]!, 'docker', report(nodeIds[1]!, { manifests: closed }));
       await service.ingestRelayReport(remoteRelay, report(remoteRelay, { manifests: closed }));
       await service.reconcile();
     });
@@ -344,6 +352,11 @@ describe.skipIf(!url)('availability lease modes on disposable PostgreSQL', () =>
     // T x 1.1 / 0.9 plus the fence stop margin after the majority ack: every lease has expired.
     await at(7_000, () => service.reconcile());
     expect((await service.getPolicyLease(triplePolicy)).mode).toBe('legacy');
-    expect(modeChanges.at(-1)).toMatchObject({ policyId: triplePolicy, to: 'legacy' });
+    expect(modeChanges.at(-1)).toMatchObject({
+      policyId: triplePolicy,
+      to: 'legacy',
+      retainedHolders: [],
+      lastHolders: [{ slot: 0, holderId: nodeIds[0] }],
+    });
   });
 });
