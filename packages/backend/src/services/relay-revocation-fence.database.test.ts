@@ -218,5 +218,5 @@ describe.skipIf(!url)('relay revocation fence on disposable PostgreSQL', () => {
     } finally {
       await upgrade.drop();
     }
-  });
+  }, 120_000);
 });
