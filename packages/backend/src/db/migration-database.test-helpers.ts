@@ -43,29 +43,38 @@ export async function migrateDatabase(pool: pg.Pool, lastTag?: string): Promise<
 
 /**
  * pool.end() resolves before its clients' sockets close, so a later `drop database ... with (force)` can terminate
- * a connection pg is still closing. That FATAL 57P01 is expected; any other client error still surfaces.
+ * a connection pg is still closing. That FATAL 57P01 is expected; any other client error still surfaces. pg-pool
+ * re-emits an idle client's error on the pool, where an unheard error event is an uncaught exception.
  */
 export function tolerateDatabaseDrop(pool: pg.Pool): pg.Pool {
+  const tolerate = (error: Error & { code?: string }) => {
+    if (error.code !== '57P01') throw error;
+  };
+  pool.on('error', tolerate);
   pool.on('connect', (client) => {
-    client.on('error', (error: Error & { code?: string }) => {
-      if (error.code !== '57P01') throw error;
-    });
+    client.on('error', tolerate);
   });
   return pool;
 }
 
 /**
  * A fresh database next to the one `url` names (`<name>_<suffix>`), so each opt-in suite has its own. The URL must
- * point at a local, dedicated `gateway_migration_test_*` database: these suites drop and create databases.
+ * point at a local, dedicated `<prefix>*` database (`gateway_migration_test_*` by default): these suites drop and
+ * create databases.
  */
-export async function disposableDatabase(url: string, suffix: string) {
+export async function disposableDatabase(
+  url: string,
+  suffix: string,
+  { prefix = 'gateway_migration_test_', max = 4 }: { prefix?: string; max?: number } = {}
+) {
   const target = new URL(url);
   if (
     !['127.0.0.1', 'localhost'].includes(target.hostname) ||
-    !/^\/gateway_migration_test_[a-z0-9_]+$/.test(target.pathname) ||
+    !/^[a-z0-9_]+_test_$/.test(prefix) ||
+    !new RegExp(`^/${prefix}[a-z0-9_]+$`).test(target.pathname) ||
     !/^[a-z0-9_]+$/.test(suffix)
   ) {
-    throw new Error('Migration DB tests require a local, dedicated gateway_migration_test_* database');
+    throw new Error(`Opt-in DB tests require a local, dedicated ${prefix}* database`);
   }
   const name = `${target.pathname.slice(1)}_${suffix}`;
   const admin = new pg.Pool({ connectionString: url, max: 1 });
@@ -73,7 +82,7 @@ export async function disposableDatabase(url: string, suffix: string) {
   await admin.query(`create database "${name}"`);
   const own = new URL(url);
   own.pathname = `/${name}`;
-  const pool = tolerateDatabaseDrop(new pg.Pool({ connectionString: own.toString(), max: 4 }));
+  const pool = tolerateDatabaseDrop(new pg.Pool({ connectionString: own.toString(), max }));
   return {
     pool,
     async drop() {

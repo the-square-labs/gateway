@@ -172,8 +172,9 @@ jobs:
     if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.application == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # The migrations and the triggers behind every deployment, storage, database and proxy write, on the PostgreSQL
-    # installs run (docker-compose.yml). Each suite creates its own database next to this one.
+    # Every opt-in PostgreSQL/Redis suite, on the versions the installs run (docker-compose.yml): the migrations and
+    # the triggers behind every deployment, storage, database and proxy write, leases, relay revocation and removal,
+    # hosting, and inference budgets. Each PostgreSQL suite works in its own database.
     services:
       postgres:
         image: postgres:16-alpine
@@ -188,8 +189,22 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    # A suite reading any other URL is not run here: add the URL to this list and to the grep below.
     env:
       GATEWAY_MIGRATION_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway_migration_test_ci
+      HOSTING_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/hosting_test_ci
+      RELAY_REMOVAL_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/relay_removal_test_ci
+      INFERENCE_POOL_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/inference_pool_test_ci
+      INFERENCE_REDIS_INTEGRATION_URL: redis://localhost:6379
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -210,17 +225,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Migrations, triggers, uniqueness, the rc.10 upgrade, leases, relay revocation and availability leases
+      - name: Create the suite databases
+        run: |
+          for database in hosting_test_ci relay_removal_test_ci inference_pool_test_ci; do
+            docker exec "${{ job.services.postgres.id }}" createdb -U gateway "$database"
+          done
+
+      # Every test file reading one of the URLs above, so a new or renamed suite runs without editing this step.
+      - name: Opt-in PostgreSQL and Redis suites
         working-directory: packages/backend
         run: |
-          pnpm exec vitest run \
-            src/db/migrations.uniqueness.database.test.ts \
-            src/db/migrations.reservation-holds.database.test.ts \
-            src/db/migrations.upgrade.database.test.ts \
-            src/db/operation-lease.database.test.ts \
-            src/services/relay-revocation-fence.database.test.ts \
-            src/modules/docker/availability/lease/availability-lease.database.test.ts \
-            src/modules/docker/availability/lease/availability-lease-gates.database.test.ts \
+          mapfile -t suites < <(grep -rlE --include='*.test.ts' \
+            'process\.env\.(GATEWAY_MIGRATION_TEST_DATABASE_URL|HOSTING_TEST_DATABASE_URL|RELAY_REMOVAL_TEST_DATABASE_URL|INFERENCE_POOL_TEST_DATABASE_URL|INFERENCE_REDIS_INTEGRATION_URL)\b' \
+            src tests | sort)
+          [ "${#suites[@]}" -gt 0 ] || { echo 'No opt-in database suites found' >&2; exit 1; }
+          printf '%s\n' "${suites[@]}"
+          pnpm exec vitest run "${suites[@]}" \
             --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/database-tests.json"
 
       # The suites are opt-in; a missing or renamed URL would skip them and still pass.
