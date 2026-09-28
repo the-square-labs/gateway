@@ -1075,6 +1075,11 @@ message AvailabilityLeaseHeld {
   // confirmed it (ballot = its last committed ballot). Its watchdog deadline
   // is disarmed and the copy is no longer lease-bound: adopt it as running.
   bool retained = 9;
+  // Docker daemons: when this node acquired the key for its current holding
+  // (its own acquired transition), Unix ms on its wall clock; 0 when unknown.
+  // Gateway audits it as the takeover time (N-5, B-14). gateway.v1 only:
+  // relays report no held keys.
+  int64 held_since_unix_ms = 10;
 }
 
 message AvailabilityLeaseKeyView {

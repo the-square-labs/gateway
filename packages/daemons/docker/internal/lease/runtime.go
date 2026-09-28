@@ -93,6 +93,10 @@ type Runtime struct {
 	events      []ReportEvent
 	revision    uint64
 	beaconAt    time.Duration
+
+	// heldSince is when each key held now was acquired (lease clock), kept
+	// from the transitions even when their report events are dropped.
+	heldSince map[availabilitylease.Key]time.Duration
 }
 
 type snapshot struct {

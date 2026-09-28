@@ -88,6 +88,7 @@ func leaseReportProto(report lease.Report, identity []byte) *pb.AvailabilityLeas
 			PolicyId: held.Key.PolicyID, Slot: held.Key.Slot, Role: held.Role, Ballot: leaseBallotProto(held.Ballot),
 			Epoch: held.Epoch, ManifestVersion: held.ManifestVersion,
 			PlacementId: held.PlacementID, PlacementGeneration: held.PlacementGeneration, Retained: held.Retained,
+			HeldSinceUnixMs: held.SinceUnixMs,
 		})
 	}
 	for _, view := range report.Acceptor {

@@ -55,6 +55,11 @@ type Held struct {
 	ManifestVersion     uint64
 	PlacementID         string
 	PlacementGeneration uint64
+	// SinceUnixMs is when this node acquired the key for its current holding,
+	// on its wall clock; zero when unknown (a key recovered after a restart).
+	// It is exact and survives reports lost while Gateway was away, unlike the
+	// drained acquired event: the takeover time Gateway audits (N-5, B-14).
+	SinceUnixMs int64
 }
 
 type ReportEvent struct {
@@ -80,15 +85,24 @@ func (r *Runtime) Report() Report {
 			voting[manifest.PolicyID] = manifest
 		}
 	}
+	now, wall := r.opts.Clock.Now(), r.opts.Wall()
+	r.mu.Lock()
+	heldSince := make(map[availabilitylease.Key]time.Duration, len(r.heldSince))
+	for key, at := range r.heldSince {
+		heldSince[key] = at
+	}
+	r.mu.Unlock()
 	for _, status := range r.node.Holders() {
 		held := Held{Key: status.Key, Role: status.Role.String(), Ballot: status.Ballot, Retained: status.Retained}
 		held.Epoch, held.ManifestVersion, _ = r.node.HeldCommit(status.Key)
 		if placement, ok := r.opts.Placements.Local(status.Key.PolicyID); ok {
 			held.PlacementID, held.PlacementGeneration = placement.PlacementID, placement.Generation
 		}
+		if at, ok := heldSince[status.Key]; ok && at <= now {
+			held.SinceUnixMs = wall.Add(-(now - at)).UnixMilli()
+		}
 		report.Held = append(report.Held, held)
 	}
-	now, wall := r.opts.Clock.Now(), r.opts.Wall()
 	for _, view := range r.node.AcceptorView() {
 		manifest, votes := voting[view.Key.PolicyID]
 		if !votes {
@@ -118,7 +132,18 @@ func (r *Runtime) collectEventsLocked() {
 		return
 	}
 	now, wall := r.opts.Clock.Now(), r.opts.Wall()
+	if r.heldSince == nil {
+		r.heldSince = map[availabilitylease.Key]time.Duration{}
+	}
 	for _, event := range events {
+		// The current holding starts with its acquired transition and ends with
+		// a fence, release or handoff; renewals do not move it.
+		switch event.Kind {
+		case availabilitylease.EventAcquired:
+			r.heldSince[event.Key] = event.At
+		case availabilitylease.EventFence, availabilitylease.EventReleased, availabilitylease.EventHandoff:
+			delete(r.heldSince, event.Key)
+		}
 		at := wall.Add(-(now - event.At))
 		r.logger.Info("availability lease transition", "kind", event.Kind, "policy_id", event.Key.PolicyID, "slot", event.Key.Slot,
 			"ballot", event.Ballot.String(), "successor_id", event.Successor, "reason", event.Reason, "at", at.Format(time.RFC3339Nano))

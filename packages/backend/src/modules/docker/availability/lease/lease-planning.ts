@@ -91,37 +91,72 @@ export interface LeaseObservationCandidate {
   sourceId: string;
   /**
    * When the reporter saw this holder take the key: a voter's first commit of the holder, or the holder's own
-   * acquired event (N-5). Absent when the reporter does not know.
+   * acquisition time (N-5, B-14). Absent when the reporter does not know.
    */
   since?: Date | null;
+  /** `since` is the holder's own acquisition time (its daemon knows it exactly), not a voter's sighting (B-14). */
+  exact?: boolean;
 }
+
+/** Where a takeover time came from: the holder itself, the earliest voter sighting, or when Gateway noticed it. */
+export type LeaseTakeoverSource = 'holder' | 'voters' | 'noticed';
 
 export interface LeaseHolderChange {
   from: string | null;
   to: string;
   ballot: DockerAvailabilityLeaseBallot | null;
-  /** The takeover time: what the voters reported, or when Gateway noticed it when none did. */
+  /** The takeover time: the holder's own, the earliest voter sighting, or when Gateway noticed it. */
   holderSince?: Date;
+  takeoverSource?: LeaseTakeoverSource;
+  /** When the previous holder was last seen holding: no voter sighting of the takeover can be earlier. */
+  takeoverNotBefore?: Date | null;
 }
 
 /**
- * N-5: the takeover time of a new holder as the voters report it, not when Gateway noticed it (after an autonomous
- * failover while Gateway was down that can be minutes later). The earliest report for the new holder wins; it is
- * never before the previous holder was last seen holding, nor in the future.
+ * The holder's own acquisition time among the reports, if one carries it (B-14): exact, whichever voter reports
+ * first. Never in the future.
  */
+export function leaseExactHolderSince(
+  holderId: string,
+  candidates: LeaseObservationCandidate[],
+  now: Date
+): Date | null {
+  const exact = candidates
+    .filter((candidate) => candidate.holderId === holderId && candidate.exact && candidate.since instanceof Date)
+    .map((candidate) => candidate.since!.getTime())
+    .filter((time) => Number.isFinite(time) && time <= now.getTime());
+  return exact.length > 0 ? new Date(Math.min(...exact)) : null;
+}
+
+/**
+ * N-5 / B-14: the takeover time of a new holder, not when Gateway noticed it (after an autonomous failover while
+ * Gateway was down that can be minutes later). The holder's own acquisition time wins. Otherwise a voter sighting is an
+ * upper bound (a voter cannot see the commit before it happened, but may see it late), so the earliest one counts; it
+ * is never before the previous holder was last seen holding, nor in the future.
+ */
+export function leaseTakeover(
+  holderId: string,
+  candidates: LeaseObservationCandidate[],
+  bounds: { notBefore: Date | null; now: Date }
+): { at: Date; source: LeaseTakeoverSource } {
+  const exact = leaseExactHolderSince(holderId, candidates, bounds.now);
+  if (exact) return { at: exact, source: 'holder' };
+  const reported = candidates
+    .filter((candidate) => candidate.holderId === holderId && !candidate.exact && candidate.since instanceof Date)
+    .map((candidate) => candidate.since!.getTime())
+    .filter((time) => Number.isFinite(time) && time <= bounds.now.getTime());
+  if (reported.length === 0) return { at: bounds.now, source: 'noticed' };
+  const earliest = Math.min(...reported);
+  const floor = bounds.notBefore?.getTime() ?? Number.NEGATIVE_INFINITY;
+  return { at: new Date(Math.max(earliest, floor)), source: 'voters' };
+}
+
 export function leaseTakeoverTime(
   holderId: string,
   candidates: LeaseObservationCandidate[],
   bounds: { notBefore: Date | null; now: Date }
 ): Date {
-  const reported = candidates
-    .filter((candidate) => candidate.holderId === holderId && candidate.since instanceof Date)
-    .map((candidate) => candidate.since!.getTime())
-    .filter((time) => Number.isFinite(time) && time <= bounds.now.getTime());
-  if (reported.length === 0) return bounds.now;
-  const earliest = Math.min(...reported);
-  const floor = bounds.notBefore?.getTime() ?? Number.NEGATIVE_INFINITY;
-  return new Date(Math.max(earliest, floor));
+  return leaseTakeover(holderId, candidates, bounds).at;
 }
 
 /**
@@ -174,11 +209,14 @@ export function mergeLeaseObservation(
   );
   // The previous holder was last seen holding when it was last observed; a takeover cannot be earlier.
   const previousSeenAt = stored?.holderId ? stored.observedAt : null;
+  let takeoverSource: LeaseTakeoverSource | undefined;
   if (best) {
     const order = compareLeaseBallots(best.ballot, next.ballot);
     if (order > 0) {
       if (next.holderId !== best.holderId) {
-        next.holderSince = leaseTakeoverTime(best.holderId, input.candidates, { notBefore: previousSeenAt, now });
+        const takeover = leaseTakeover(best.holderId, input.candidates, { notBefore: previousSeenAt, now });
+        next.holderSince = takeover.at;
+        takeoverSource = takeover.source;
       }
       next.holderId = best.holderId;
       next.ballot = best.ballot;
@@ -194,11 +232,24 @@ export function mergeLeaseObservation(
     }
   }
   const previousHolder = stored?.holderId ?? null;
+  // B-14: the same holder's own acquisition time corrects a takeover time first taken from a voter that saw it late
+  // (one that restarted after the takeover) or from when Gateway noticed it.
+  if (next.holderId && next.holderId === previousHolder) {
+    const exact = leaseExactHolderSince(next.holderId, input.candidates, now);
+    if (exact && exact.getTime() !== next.holderSince?.getTime()) next.holderSince = exact;
+  }
   const lastKnown = previousHolder ?? stored?.lastHolderId ?? null;
   if (next.holderId) next.lastHolderId = next.holderId;
   const change =
     next.holderId && next.holderId !== previousHolder && next.holderId !== lastKnown
-      ? { from: lastKnown, to: next.holderId, ballot: next.ballot, holderSince: next.holderSince ?? now }
+      ? {
+          from: lastKnown,
+          to: next.holderId,
+          ballot: next.ballot,
+          holderSince: next.holderSince ?? now,
+          takeoverSource: takeoverSource ?? 'noticed',
+          takeoverNotBefore: previousSeenAt,
+        }
       : null;
   return { next, change };
 }

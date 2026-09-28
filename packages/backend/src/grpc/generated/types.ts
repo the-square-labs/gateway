@@ -878,6 +878,8 @@ export interface AvailabilityLeaseHeld {
    * of the closed manifest confirmed it (role "retained"). Adopt the copy as RUNNING.
    */
   retained?: boolean;
+  /** Docker daemons: when this node acquired the key for its current holding, Unix ms; '0' when unknown (B-14). */
+  heldSinceUnixMs?: string;
 }
 
 export interface AvailabilityLeaseKeyView {
