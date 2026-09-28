@@ -192,26 +192,57 @@ function primaryGroup(
 }
 
 /**
- * Makes a placement include a relay that is not co-located with Gateway (the local relay is) whenever such a relay
- * is ready, keeping its size: the local relay's slot goes to the best remote relay by rendezvous, in the same role.
- * A placement of the local relay alone does not survive the loss of the Gateway host (stand run c).
+ * Makes a placement include a relay that is not co-located with Gateway (the local relay is) whenever the endpoint's
+ * node can reach one, keeping its size: the local relay's slot goes to a remote relay in the same role. A placement of
+ * the local relay alone does not survive the loss of the Gateway host (stand run c).
+ *
+ * Reachability comes from the round trips the endpoint node (and every reporting source node) measured: the nearest
+ * measured remote relay is taken. When the node measured relays but none off the Gateway host, the placement stays as
+ * it is and `gatewayHostOnly` says so: moving it would only produce a generation that fails its probes. A node that
+ * reports no measurement keeps a remote relay it already uses and is otherwise left alone.
  */
 export function includeRemoteRelay(
   endpointId: string,
   planned: PlannedRelayAssignment[],
-  instances: RelayInstanceRow[]
-): PlannedRelayAssignment[] {
-  if (!planned.length || planned.some(({ instance }) => instance.kind !== 'local')) return planned;
+  instances: RelayInstanceRow[],
+  path?: EndpointLatencyPath,
+  reference: ReadonlyArray<{ relayInstanceId: string }> = []
+): { planned: PlannedRelayAssignment[]; gatewayHostOnly: boolean } {
+  const unchanged = { planned, gatewayHostOnly: false };
+  if (!planned.length || planned.some(({ instance }) => instance.kind !== 'local')) return unchanged;
   const taken = new Set(planned.map(({ instance }) => instance.id));
-  const [remote] = chooseByRendezvous(
-    endpointId,
-    instances.filter((instance) => instance.kind !== 'local' && !taken.has(instance.id)),
-    1
+  const remotes = instances.filter(
+    (instance) => instance.kind !== 'local' && instance.state === 'ready' && !taken.has(instance.id)
   );
-  if (!remote) return planned;
+  if (!remotes.length) return unchanged;
+  let remote: RelayInstanceRow | undefined;
+  if (path?.endpoint?.size) {
+    const costs = new Map(
+      remotes.flatMap((instance) => {
+        const cost = relayPathCost(path, instance.id);
+        return cost === undefined ? [] : [[instance.id, cost] as const];
+      })
+    );
+    if (!costs.size) return { planned, gatewayHostOnly: true };
+    const rendezvous = byRendezvous(endpointId);
+    [remote] = remotes
+      .filter(({ id }) => costs.has(id))
+      .sort((left, right) => costs.get(left.id)! - costs.get(right.id)! || rendezvous(left, right));
+  } else {
+    const used = new Set(reference.map(({ relayInstanceId }) => relayInstanceId));
+    [remote] = chooseByRendezvous(
+      endpointId,
+      remotes.filter(({ id }) => used.has(id)),
+      1
+    );
+  }
+  if (!remote) return unchanged;
   let index = planned.length - 1;
   while (index > 0 && planned[index]!.instance.kind !== 'local') index -= 1;
-  return planned.map((entry, position) => (position === index ? { instance: remote, role: entry.role } : entry));
+  return {
+    planned: planned.map((entry, position) => (position === index ? { instance: remote!, role: entry.role } : entry)),
+    gatewayHostOnly: false,
+  };
 }
 
 /** Whether a generation's assignments already are the planned relays in the planned roles. */

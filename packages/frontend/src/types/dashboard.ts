@@ -104,6 +104,15 @@ export interface DashboardRelaySnapshot {
     updatedAt: string;
   }>;
   blockers?: string[];
+  /** Advisory conditions of a healthy pool, e.g. links whose node reaches no relay off the Gateway host. */
+  warnings?: Array<{
+    code: string;
+    endpointId: string;
+    ownerKind: string;
+    ownerId: string;
+    nodeId: string | null;
+    message: string;
+  }>;
   automaticRebalancePaused?: boolean;
   automaticRebalanceRetryAt?: string | null;
   update?: { state: string; targetVersion: string; error: string | null } | null;

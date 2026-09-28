@@ -34,11 +34,22 @@ import {
   type EndpointLatencyPath,
   includeRemoteRelay,
   type PlannedRelayAssignment,
+  type RelayAssignmentRole,
   samePlannedAssignments,
 } from './relay-topology.js';
 import type { RelayTopologyService } from './relay-topology.service.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
+
+/** A pool condition that leaves the pool healthy but needs an operator's attention. */
+export interface RelayPoolWarning {
+  code: 'gateway_host_only';
+  endpointId: string;
+  ownerKind: string;
+  ownerId: string;
+  nodeId: string | null;
+  message: string;
+}
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
 const AUTO_REBALANCE_RETRY_MS = 5 * 60_000;
 const STAGING_RECOVERY_MS = 2 * 60_000;
@@ -97,7 +108,9 @@ export function planRelays(
   localOnly: boolean,
   path: EndpointLatencyPath | undefined,
   reference: ReadonlyArray<{ relayInstanceId: string; role: string }>,
-  availabilityMember = false
+  availabilityMember = false,
+  /** Set when the endpoint's node reaches no relay off the Gateway host (see includeRemoteRelay). */
+  notes?: { gatewayHostOnly?: boolean }
 ): PlannedRelayAssignment[] {
   if (localOnly) {
     return instances
@@ -113,11 +126,15 @@ export function planRelays(
       return chooseRelayAssignments(endpointId, leaseRelays, leaseRelays.length, path, reference);
     }
   }
-  return includeRemoteRelay(
+  const placed = includeRemoteRelay(
     endpointId,
     chooseRelayAssignments(endpointId, instances, desiredCount, path, reference),
-    instances
+    instances,
+    path,
+    reference
   );
+  if (notes) notes.gatewayHostOnly = placed.gatewayHostOnly;
+  return placed.planned;
 }
 
 export class RelayPoolService {
@@ -203,15 +220,53 @@ export class RelayPoolService {
     localOnly: boolean,
     path: EndpointLatencyPath | undefined,
     active: Array<{ relayInstanceId: string; role: string }>,
-    availabilityMember = false
+    availabilityMember = false,
+    notes?: { gatewayHostOnly?: boolean }
   ): PlannedRelayAssignment[] {
     const reference = this.plannedRoles.get(endpointId) ?? active;
-    const planned = planRelays(endpointId, instances, desiredCount, localOnly, path, reference, availabilityMember);
+    const planned = planRelays(
+      endpointId,
+      instances,
+      desiredCount,
+      localOnly,
+      path,
+      reference,
+      availabilityMember,
+      notes
+    );
     this.plannedRoles.set(
       endpointId,
       planned.map(({ instance, role }) => ({ relayInstanceId: instance.id, role }))
     );
     return planned;
+  }
+
+  /**
+   * The first assignment of a new endpoint when it need not start in the legacy shape (the local relay alone): an
+   * Availability member whose path runs Relay Pool daemons goes on every ready lease relay right away, exactly as the
+   * rebalance plan places it, so no staged move follows and no takeover in its first minute finds it on the local
+   * relay only (D7). Null keeps the legacy first assignment: other endpoints, paths with a daemon that lacks Relay
+   * Pool support (legacy grants only the local relay serves), and pools without a ready lease relay.
+   */
+  async planInitialAssignment(
+    endpointId: string
+  ): Promise<Array<{ relayInstanceId: string; role: RelayAssignmentRole }> | null> {
+    const [endpoint] = await this.db.select().from(relayEndpoints).where(eq(relayEndpoints.id, endpointId)).limit(1);
+    if (!endpoint || endpoint.ownerKind !== 'proxy_host_secure_link') return null;
+    if (!(await this.availabilityMemberEndpointIds([endpoint])).has(endpoint.id)) return null;
+    if ((await this.poolIncapableEndpoints([endpoint.id])).has(endpoint.id)) return null;
+    const instances = (await this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'))).filter(
+      isEnrolledRelayInstance
+    );
+    const leaseRelays = instances.filter(
+      (instance) =>
+        instance.state === 'ready' && instance.capabilities?.features?.includes(AVAILABILITY_LEASE_CAPABILITY)
+    );
+    if (!leaseRelays.length) return null;
+    const path = (await this.latencyPaths([endpoint])).get(endpoint.id);
+    const planned = this.planEndpoint(endpoint.id, instances, leaseRelays.length, false, path, [], true);
+    if (!planned.length) return null;
+    return planned.map(({ instance, role }) => ({ relayInstanceId: instance.id, role }));
   }
 
   /** The endpoints of Availability member Secure Links (serving and dormant alike), placed on every lease relay. */
@@ -235,6 +290,48 @@ export class RelayPoolService {
         )
       );
     return new Set(members.flatMap(({ id }) => (byLink.has(id) ? [byLink.get(id)!] : [])));
+  }
+
+  /**
+   * Links that stay on the Gateway host's relay because their node reaches no relay off it (includeRemoteRelay).
+   * Moving them would only fail the move's probes and keep the pool degraded; they keep working through the local
+   * relay, and the pool status names them so an operator can open the network path.
+   */
+  private async gatewayHostOnlyWarnings(
+    endpoints: Array<
+      Pick<typeof relayEndpoints.$inferSelect, 'id' | 'ownerKind' | 'ownerId' | 'subjectKind' | 'subjectId'>
+    >,
+    instances: RelayInstanceRow[],
+    paths: Map<string, EndpointLatencyPath>
+  ): Promise<RelayPoolWarning[]> {
+    if (!endpoints.length) return [];
+    const nodeIds = [
+      ...new Set(endpoints.filter(({ subjectKind }) => subjectKind === 'daemon').map((e) => e.subjectId)),
+    ];
+    const names = new Map(
+      nodeIds.length
+        ? (
+            await this.db
+              .select({ id: nodes.id, name: nodes.displayName, hostname: nodes.hostname })
+              .from(nodes)
+              .where(inArray(nodes.id, nodeIds))
+          ).map(({ id, name, hostname }) => [id, name || hostname || id])
+        : []
+    );
+    const remoteIds = instances.filter(({ kind, state }) => kind !== 'local' && state === 'ready').map(({ id }) => id);
+    return endpoints.map((endpoint) => {
+      const node = names.get(endpoint.subjectId) ?? endpoint.subjectId;
+      const targetReaches = remoteIds.some((id) => paths.get(endpoint.id)?.endpoint?.has(id));
+      const where = targetReaches ? `an ingress node of this link (target node ${node})` : node;
+      return {
+        code: 'gateway_host_only' as const,
+        endpointId: endpoint.id,
+        ownerKind: endpoint.ownerKind,
+        ownerId: endpoint.ownerId,
+        nodeId: endpoint.subjectKind === 'daemon' ? endpoint.subjectId : null,
+        message: `No relay off the Gateway host is reachable from ${where}: traffic of this link depends on the Gateway host.`,
+      };
+    });
   }
 
   /** Latency is advisory: a failure to read it places endpoints as if nothing was measured. */
@@ -781,6 +878,7 @@ export class RelayPoolService {
     for (const endpointId of this.plannedRoles.keys()) {
       if (!activeEndpointIds.has(endpointId)) this.plannedRoles.delete(endpointId);
     }
+    const gatewayHostOnly: Array<(typeof endpoints)[number]> = [];
     const rebalancePlan =
       readyFaultDomains.size === 0
         ? []
@@ -789,6 +887,7 @@ export class RelayPoolService {
             const spread = effectiveSpreads.get(endpoint.id) ?? generalSettings.relay.assignmentSpread;
             const active = activeByEndpoint.get(endpoint.id);
             const current = active ? (assignmentsByGeneration.get(active.id) ?? []) : [];
+            const notes: { gatewayHostOnly?: boolean } = {};
             const planned = this.planEndpoint(
               endpoint.id,
               instances,
@@ -796,8 +895,10 @@ export class RelayPoolService {
               localOnly.has(endpoint.id),
               latencyPaths.get(endpoint.id),
               current,
-              members.has(endpoint.id)
+              members.has(endpoint.id),
+              notes
             );
+            if (notes.gatewayHostOnly) gatewayHostOnly.push(endpoint);
             const selectedIds = planned.map(({ instance }) => instance.id);
             if (!selectedIds.length) return [];
             if (active && samePlannedAssignments(current, planned)) return [];
@@ -871,6 +972,7 @@ export class RelayPoolService {
       !unavailable &&
       (instances.some(({ state }) => ['offline', 'error'].includes(state)) ||
         [...revocations.values()].some((revocation) => revocation?.state === 'stale'));
+    const warnings = await this.gatewayHostOnlyWarnings(gatewayHostOnly, instances, latencyPaths).catch(() => []);
     return {
       poolId: 'system',
       state: unavailable
@@ -885,6 +987,8 @@ export class RelayPoolService {
               ? 'rebalance_available'
               : 'healthy',
       rebalanceAvailable,
+      /** Advisory: the pool stays healthy, but these links depend on the Gateway host. */
+      warnings,
       rebalanceEndpointIds: eligiblePlan.map(({ endpointId }) => endpointId),
       rebalancePlanKey,
       blockers,

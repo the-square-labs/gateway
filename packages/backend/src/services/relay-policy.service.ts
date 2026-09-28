@@ -1,5 +1,5 @@
 import { status as GrpcStatus } from '@grpc/grpc-js';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   managedDatabaseInstances,
@@ -55,6 +55,7 @@ import {
   recordBuiltSnapshot,
 } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
+import type { RelayAssignmentRole } from './relay-topology.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
 
@@ -243,6 +244,9 @@ export class RelayPolicyService {
   private readonly staleGrantRefusals = new Map<string, number>();
   private lastLocalPolicyTrustResetAt = 0;
   private lastLocalPolicyLossSyncAt = 0;
+  private initialAssignmentPlanner?: (
+    endpointId: string
+  ) => Promise<Array<{ relayInstanceId: string; role: RelayAssignmentRole }> | null>;
   private readonly remotePolicyLossSyncAt = new Map<string, number>();
   /** Availability lease blocks and key chain for PolicyEnvelopePayload fields 40 and 41. */
   private availabilityLeaseSource?: () => Promise<{ leaseBlocks: unknown[]; leaseKeyRotations: unknown[] }>;
@@ -270,6 +274,16 @@ export class RelayPolicyService {
     >
   ): void {
     this.dispatch = dispatch;
+  }
+
+  /**
+   * The pool's placement of a new endpoint's first assignment (RelayPoolService.planInitialAssignment), or null for
+   * the legacy local shape.
+   */
+  setInitialAssignmentPlanner(
+    planner: (endpointId: string) => Promise<Array<{ relayInstanceId: string; role: RelayAssignmentRole }> | null>
+  ): void {
+    this.initialAssignmentPlanner = planner;
   }
 
   setAuditService(audit: Pick<AuditService, 'log'>): void {
@@ -1190,7 +1204,8 @@ export class RelayPolicyService {
       }
       return current.id;
     });
-    await this.ensureLegacyCompatibleAssignment(endpointId);
+    // The route first: whether the first assignment may leave the legacy shape depends on every daemon on the
+    // path, its source included.
     const routeId = await this.ensureRoute(
       'proxy_host_secure_link',
       linkId,
@@ -1199,6 +1214,7 @@ export class RelayPolicyService {
       source.certificateFingerprint,
       endpointId
     );
+    await this.ensureLegacyCompatibleAssignment(endpointId);
     await this.syncSnapshot();
     await Promise.all([
       this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC),
@@ -1981,7 +1997,34 @@ export class RelayPolicyService {
     );
   }
 
+  /**
+   * Gives an endpoint without an active assignment its first one. That is the local relay alone, the shape legacy
+   * grants need, unless the pool planner places it right away: an Availability member whose path runs Relay Pool
+   * daemons goes on every ready lease relay from its first generation (D7), so a takeover in its first minute already
+   * reaches the successor through every relay. Other endpoints move off the local relay by a staged, probed
+   * rebalance.
+   */
   private async ensureLegacyCompatibleAssignment(endpointId: string): Promise<void> {
+    const [known] = await this.db
+      .select({ id: relayEndpointAssignmentGenerations.id })
+      .from(relayEndpointAssignmentGenerations)
+      .where(
+        and(
+          eq(relayEndpointAssignmentGenerations.endpointId, endpointId),
+          eq(relayEndpointAssignmentGenerations.state, 'active')
+        )
+      )
+      .limit(1);
+    if (known) return;
+    const planned = this.initialAssignmentPlanner
+      ? await this.initialAssignmentPlanner(endpointId).catch((error) => {
+          logger.warn('Relay placement of a new endpoint is unavailable; it starts on the local relay', {
+            endpointId,
+            error: errorMessage(error),
+          });
+          return null;
+        })
+      : null;
     await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`relay-endpoint-assignment:${endpointId}`}))`);
       const [existing] = await tx
@@ -1995,6 +2038,40 @@ export class RelayPolicyService {
         )
         .limit(1);
       if (existing) return;
+      if (planned?.length) {
+        const [latest] = await tx
+          .select({ generation: relayEndpointAssignmentGenerations.generation })
+          .from(relayEndpointAssignmentGenerations)
+          .where(eq(relayEndpointAssignmentGenerations.endpointId, endpointId))
+          .orderBy(desc(relayEndpointAssignmentGenerations.generation))
+          .limit(1);
+        const generation = (latest?.generation ?? 0) + 1;
+        const [placed] = await tx
+          .insert(relayEndpointAssignmentGenerations)
+          .values({
+            endpointId,
+            generation,
+            state: 'active',
+            desiredRedundancy: planned.length,
+            activatedAt: new Date(),
+          })
+          .returning({ id: relayEndpointAssignmentGenerations.id });
+        await tx.insert(relayEndpointAssignments).values(
+          planned.map(({ relayInstanceId, role }) => ({
+            assignmentGenerationId: placed.id,
+            relayInstanceId,
+            role,
+            targetRegistrationState: 'ready' as const,
+            targetRegisteredAt: new Date(),
+          }))
+        );
+        await tx
+          .update(relayEndpoints)
+          .set({ activeAssignmentGeneration: generation, updatedAt: new Date() })
+          .where(eq(relayEndpoints.id, endpointId));
+        await bumpRelayPolicyRevision(tx);
+        return;
+      }
       const [local] = await tx
         .select({ id: relayInstances.id })
         .from(relayInstances)
