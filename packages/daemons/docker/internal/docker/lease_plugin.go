@@ -105,20 +105,24 @@ func (l *leaseIntegration) attachRelay(ctx context.Context, conn grpc.ClientConn
 	})
 }
 
-// leaseCapabilities advertises availability_lease_v2 only with a live
-// watchdog (A12.4), and the missing-watchdog marker when this daemon cannot
-// install one, so the policy mode reason asks to re-run the node installer.
+// leaseCapabilities advertises availability_lease_v2 whenever the lease
+// runtime runs: it names the protocol this daemon speaks, not the node's
+// state. Watchdog readiness travels in every lease report (watchdog_ready)
+// and Gateway excludes a node without a live watchdog from holding (D3,
+// watchdog_missing), so a watchdog restart no longer changes the
+// registration. The missing-watchdog marker is added when this daemon cannot
+// install one, so the exclusion reason asks to re-run the node installer.
 func (p *DockerPlugin) leaseCapabilities() []string {
 	if p.lease == nil {
 		return nil
 	}
-	if p.lease.watchdogReady() {
-		return []string{availabilityLeaseCapability}
+	capabilities := []string{availabilityLeaseCapability}
+	if !p.lease.watchdogReady() {
+		if unavailable, _ := p.lease.watchdog.Unavailable(); unavailable {
+			capabilities = append(capabilities, watchdogMissingCapability)
+		}
 	}
-	if unavailable, _ := p.lease.watchdog.Unavailable(); unavailable {
-		return []string{watchdogMissingCapability}
-	}
-	return nil
+	return capabilities
 }
 
 // RegistrationChanged implements lifecycle.RegistrationRefreshPlugin.
