@@ -184,18 +184,53 @@ describe('RelayPoolService automatic reconciliation', () => {
     await first;
   });
 
-  it('fails interrupted staging instead of replaying old acknowledgements', async () => {
+  it('defers interrupted staging instead of failing it or replaying old acknowledgements', async () => {
     const { pool, snapshot, stage } = reconciliationHarness();
     snapshot.staging = [{ id: 'abandoned', updatedAt: new Date(Date.now() - 120_000) }];
-    const fail = vi.spyOn(pool as any, 'failStaging').mockResolvedValue(undefined);
+    const defer = vi.spyOn(pool as any, 'deferStaging').mockResolvedValue(undefined);
+    const fail = vi.spyOn(pool as any, 'failStaging');
     const activate = vi.spyOn(pool as any, 'tryActivate');
     await pool.reconcile();
-    expect(fail).toHaveBeenCalledWith(
+    expect(defer).toHaveBeenCalledWith(
       ['abandoned'],
       expect.objectContaining({ message: expect.stringContaining('interrupted') })
     );
+    expect(fail).not.toHaveBeenCalled();
     expect(activate).not.toHaveBeenCalled();
     expect(stage).not.toHaveBeenCalled();
+  });
+
+  it('retries soon after a transient failure before any generation is persisted', async () => {
+    const { pool, stage } = reconciliationHarness();
+    stage.mockRejectedValue(new Error('14 UNAVAILABLE: No connection established. Last error: connect ECONNREFUSED'));
+    await pool.reconcile();
+    vi.advanceTimersByTime(30_000);
+    await expect(pool.reconcile()).rejects.toThrow('14 UNAVAILABLE');
+    vi.advanceTimersByTime(29_999);
+    await pool.reconcile();
+    expect(stage).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1);
+    await expect(pool.reconcile()).rejects.toThrow('14 UNAVAILABLE');
+    expect(stage).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits out the backoff of a workload a transient condition deferred, and only that workload', async () => {
+    const { pool, snapshot, stage } = reconciliationHarness();
+    snapshot.rebalanceEndpointIds = ['endpoint', 'other'];
+    (pool as any).deferrals.set('endpoint', { count: 1, retryAt: Date.now() + 60_000 });
+    await pool.reconcile();
+    vi.advanceTimersByTime(30_000);
+    await pool.reconcile();
+    expect(stage).toHaveBeenLastCalledWith(undefined, { allowNoop: true, automatic: true, endpointIds: ['other'] });
+    vi.advanceTimersByTime(30_000);
+    await pool.reconcile();
+    vi.advanceTimersByTime(30_000);
+    await pool.reconcile();
+    expect(stage).toHaveBeenLastCalledWith(undefined, {
+      allowNoop: true,
+      automatic: true,
+      endpointIds: ['endpoint', 'other'],
+    });
   });
 
   it.each([
@@ -591,6 +626,70 @@ describe('RelayPoolService activation safety and outcomes', () => {
     } else expect(writes).toEqual([]);
   });
 
+  it('rolls a deferred generation back as never active, withdraws it and backs the workload off', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-11T00:00:00Z'));
+    const { db, writes } = queuedDb([[{ nodeId: 'selected' }], [{ nodeId: 'selected' }]]);
+    db.updateResult = [{ id: 'new', endpointId: 'endpoint' }];
+    const { pool, policy, events } = service(db);
+    await (pool as any).deferStaging(
+      ['new'],
+      new Error('daemon is busy handling long-running commands; retry shortly')
+    );
+    expect(writes[0].values).toMatchObject({
+      state: 'retired',
+      retiredAt: expect.any(Date),
+      activationError:
+        'Deferred by a transient condition and retried automatically: daemon is busy handling long-running commands; retry shortly',
+    });
+    expect(writes[0].values).not.toHaveProperty('activatedAt');
+    expect(writes[1].table).toBe(relayPolicyState);
+    expect(policy.reconcileAndSync).toHaveBeenCalledOnce();
+    expect(policy.syncRemoteInstancePolicy).toHaveBeenCalledExactlyOnceWith('selected');
+    expect(events.publish).toHaveBeenCalledWith(
+      'system.relay.health.changed',
+      expect.objectContaining({ action: 'rebalance_deferred' })
+    );
+    expect((pool as any).deferrals.get('endpoint')).toEqual({ count: 1, retryAt: Date.now() + 30_000 });
+    // The backoff doubles while the condition lasts.
+    await (pool as any).deferStaging(['new'], new Error('Node node-1 is not connected'));
+    expect((pool as any).deferrals.get('endpoint')).toEqual({ count: 2, retryAt: Date.now() + 60_000 });
+  });
+
+  it.each([
+    ['the local relay restarting', '14 UNAVAILABLE: No connection established'],
+    ['a relay node that is not connected', 'Node relay-2 is not connected'],
+  ])('defers rather than fails a preparation interrupted by %s', async (_name, message) => {
+    const { db } = queuedDb([[{ nodeId: 'remote' }]]);
+    const { pool, policy } = service(db);
+    policy.syncRemoteInstancePolicy.mockRejectedValue(new Error(message));
+    const defer = vi.spyOn(pool as any, 'deferStaging').mockResolvedValue(undefined);
+    const fail = vi.spyOn(pool as any, 'failStaging').mockResolvedValue(undefined);
+    await (pool as any).prepareGenerations([{ id: 'new', endpointId: 'endpoint', generation: 2 }]);
+    expect(defer).toHaveBeenCalledExactlyOnceWith(['new'], expect.objectContaining({ message }));
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  it('defers every staged generation when the local relay cannot take the policy yet', async () => {
+    const { pool, policy } = service();
+    policy.syncSnapshot.mockRejectedValue(new Error('14 UNAVAILABLE: No connection established'));
+    const defer = vi.spyOn(pool as any, 'deferStaging').mockResolvedValue(undefined);
+    const prepare = vi.spyOn(pool as any, 'prepareStagedGeneration');
+    await (pool as any).prepareGenerations([{ id: 'new', endpointId: 'endpoint', generation: 2 }]);
+    expect(defer).toHaveBeenCalledWith(['new'], expect.objectContaining({ message: expect.stringContaining('14') }));
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('leaves a committed activation to the next policy sync while the local relay restarts', async () => {
+    const { db } = queuedDb([[]]);
+    const { pool } = service(db);
+    vi.spyOn(pool as any, 'prepareStagedGeneration').mockResolvedValue(undefined);
+    vi.spyOn(pool as any, 'tryActivate').mockRejectedValue(new Error('14 UNAVAILABLE: No connection established'));
+    await expect(
+      (pool as any).prepareGenerations([{ id: 'new', endpointId: 'endpoint', generation: 2 }])
+    ).resolves.toBeUndefined();
+  });
+
   it('reports only the outcomes of generations that still exist when an owner was revoked meanwhile', async () => {
     const { db } = queuedDb([
       [
@@ -741,6 +840,16 @@ describe('RelayPoolService status', () => {
     ]);
     const { pool } = service(db);
     expect((await pool.getSnapshot()).failures).toEqual([]);
+  });
+
+  it('leaves attempts a transient condition deferred out of the failure accounting', async () => {
+    const { db, conditions } = snapshotDb([]);
+    const { pool } = service(db);
+    await pool.getSnapshot();
+    const filters = conditions.filter(Boolean).map((condition) => new PgDialect().sqlToQuery(condition).sql);
+    expect(filters).toContain(
+      `not ("relay_endpoint_assignment_generations"."state" = 'retired' and "relay_endpoint_assignment_generations"."activated_at" is null)`
+    );
   });
 
   it('does not advertise internal registry workloads as rebalance candidates', async () => {
