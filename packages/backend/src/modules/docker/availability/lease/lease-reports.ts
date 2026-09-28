@@ -62,7 +62,10 @@ export class AvailabilityLeaseReports {
     report: AvailabilityLeaseReport,
     now = new Date()
   ): Promise<{ notices: LeaseHolderChangeNotice[]; identityChanged: boolean }> {
-    if (!report.memberId || report.memberId !== sender.memberId) {
+    // Nginx daemons only observe leases and report just the applied revision, without a member id; the sender
+    // itself comes from the authenticated control stream.
+    const reportedMemberId = report.memberId || (sender.kind === 'nginx' ? sender.memberId : '');
+    if (!reportedMemberId || reportedMemberId !== sender.memberId) {
       logger.warn('Ignored an availability lease report for another member', {
         memberId: sender.memberId,
         reported: report.memberId,

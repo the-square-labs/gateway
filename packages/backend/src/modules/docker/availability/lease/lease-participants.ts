@@ -64,14 +64,18 @@ function relayLatencies(report: unknown): Map<string, number> {
 
 /**
  * A member can take part in the lease only with the capability, a reported identity key and, for docker daemons, a
- * fresh watchdog heartbeat (A12.4).
+ * fresh watchdog heartbeat (A12.4). Nginx daemons observe only and need just the capability.
  */
 export function leaseMemberCapable(
   kind: 'docker' | 'nginx' | 'relay',
   advertised: boolean,
   member: LeaseMemberRow | undefined
 ): boolean {
-  if (!advertised || !member?.identityPublicKey) return false;
+  if (!advertised) return false;
+  // Nginx daemons only observe leases: no identity, no vote. The capability is all they need; their applied
+  // revision only drives redelivery, so a restarted nginx daemon does not move policies out of lease mode.
+  if (kind === 'nginx') return true;
+  if (!member?.identityPublicKey) return false;
   return kind !== 'docker' || member.watchdogReady;
 }
 

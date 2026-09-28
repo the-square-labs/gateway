@@ -84,10 +84,25 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     leaseRevision: '0',
     ...extra,
   });
+  // What the nginx daemon sends (buildReport in the nginx daemon): an observer with no member id, identity or votes.
+  const nginxReport = (): AvailabilityLeaseReport => ({
+    memberId: '',
+    identityPublicKey: Buffer.alloc(0),
+    incarnation: '0',
+    epoch: '0',
+    trustedPolicyKeyIds: [],
+    manifests: [],
+    held: [],
+    acceptor: [],
+    acceptorAbstaining: false,
+    watchdogReady: false,
+    events: [],
+    leaseRevision: '1',
+  });
   const ackAll = async (epoch: number, manifests: AvailabilityLeaseReport['manifests'] = []) => {
     for (const id of nodeIds)
       await service.ingestDaemonReport(id, 'docker', report(id, { epoch: String(epoch), manifests }));
-    await service.ingestDaemonReport(nginxId, 'nginx', report(nginxId, { epoch: String(epoch), manifests }));
+    await service.ingestDaemonReport(nginxId, 'nginx', nginxReport());
     await service.ingestRelayReport(relayId, report(relayId, { epoch: String(epoch), manifests }));
   };
   const holding = (nodeId: string, round: number) =>
