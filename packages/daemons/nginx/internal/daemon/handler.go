@@ -227,8 +227,7 @@ func (h *Handler) handleRemoveConfig(cmd *pb.RemoveConfigCommand, result *pb.Com
 	}
 
 	// Clean up cache directory
-	cacheDir := fmt.Sprintf("/tmp/nginx-cache-%s", cmd.HostId)
-	nginx.RemoveDir(cacheDir)
+	removeHostCache(cmd.HostId)
 
 	valid, output := h.mgr.TestConfig()
 	result.Detail = output
