@@ -293,6 +293,10 @@ export class RelayControlClient {
       'grpc.keepalive_permit_without_calls': 1,
       'grpc.max_send_message_length': 16 * 1024 * 1024,
       'grpc.max_receive_message_length': 16 * 1024 * 1024,
+      // The local relay is one hop away: after its restart reconnect within seconds, not after
+      // grpc-js's default backoff of up to 120 s during which every admin call fails.
+      'grpc.initial_reconnect_backoff_ms': 500,
+      'grpc.max_reconnect_backoff_ms': 5_000,
     };
     return {
       admin: new relayV1.RelayAdmin(this.options.target, credentials, options),
