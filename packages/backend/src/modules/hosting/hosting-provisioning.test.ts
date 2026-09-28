@@ -411,6 +411,42 @@ describe('hosting paid provisioning state machine', () => {
     expect(test.row()).toMatchObject({ phase: 'installing', dispatchStartedAt: null });
     expect(test.row().result?.sshInstall).toMatchObject({ guestKey: 'removed', providerKey: 'deleted' });
   });
+  it('fails a CloudBlast SSH install whose session was lost once its enrollment token expired', async () => {
+    const lost = (minutesAgo: number) => {
+      const test = runner(
+        {
+          phase: 'installing',
+          resourceId: 'resource',
+          dispatchStartedAt: new Date(Date.now() - minutesAgo * 60 * 1000),
+          result: { sshInstall: { ...initialSshInstallState(), providerKey: 'deleted' } },
+        },
+        undefined,
+        {},
+        {},
+        { ssh: createSshInstallKey('gw-33333333-3333-4333-8333-333333333333') }
+      );
+      test.connectors.get.mockResolvedValue({ id: input.connectorId, provider: 'cloudblast' });
+      test.adapter.getResource.mockResolvedValue({
+        ...snapshot,
+        addresses: [{ ip: '203.0.113.20', network: 'public', direct: true }],
+      });
+      return test;
+    };
+    const running = lost(10);
+    await running.service.reconcileDue();
+    expect(running.operations.finish).not.toHaveBeenCalled();
+    expect(running.ssh.executeWithKeyForHosting).not.toHaveBeenCalled();
+
+    const expired = lost(36);
+    await expired.service.reconcileDue();
+    expect(expired.ssh.executeWithKeyForHosting).not.toHaveBeenCalled();
+    expect(expired.operations.finish).toHaveBeenCalledWith(
+      expect.anything(),
+      'failed',
+      undefined,
+      expect.objectContaining({ code: 'HOSTING_INSTALL_OUTCOME_UNKNOWN' })
+    );
+  });
   it('fails a queued create before dispatch when scope validation is denied', async () => {
     const test = runner();
     test.adapter.validateCreate.mockRejectedValue(new HostingProviderError(403, false, 'Missing tag:create'));

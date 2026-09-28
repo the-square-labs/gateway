@@ -99,6 +99,9 @@ export function assertHostingQuote(input: HostingProvisionInput, catalog: Hostin
     throw new AppError(409, 'HOSTING_PRICE_CHANGED', 'Review the current price before creating the VM');
 }
 
+// The one-time enrollment token expires 30 minutes after dispatch; past that plus a margin, nothing can finish.
+const SSH_INSTALL_OUTCOME_TIMEOUT_MS = SSH_INSTALL_TOKEN_TTL_MS + 5 * 60 * 1000;
+
 export class HostingProvisioningService {
   constructor(
     private readonly db: DrizzleClient,
@@ -1216,8 +1219,25 @@ export class HostingProvisioningService {
         return;
       }
       // Installer completion is not proof that the daemon has contacted Gateway.
-      if (!row.dispatchStartedAt && (await this.enrollmentObserved(row)))
+      if (!row.dispatchStartedAt && (await this.enrollmentObserved(row))) {
         await this.operations.update(row, { phase: 'enrolling' });
+        return;
+      }
+      // An SSH install whose session ended without a result (Gateway restarted mid-install) never reports one, and
+      // once its enrollment token expired the node cannot enroll either: fail it so it can be retried.
+      if (
+        row.dispatchStartedAt &&
+        connector.provider === 'cloudblast' &&
+        row.action === 'create' &&
+        Date.now() - row.dispatchStartedAt.getTime() > SSH_INSTALL_OUTCOME_TIMEOUT_MS &&
+        !(await this.enrollmentObserved(row))
+      ) {
+        await this.sshInstall.finish(adapter, row, 'failed', undefined, {
+          code: 'HOSTING_INSTALL_OUTCOME_UNKNOWN',
+          message:
+            'The installation session ended without a result (for example, Gateway restarted during it) and the node never enrolled. Retry installation on this VM.',
+        });
+      }
       return;
     }
     if (row.phase === 'enrolling') return;
