@@ -553,16 +553,35 @@ func TestRouterRepairLoopRetriesAFailedRepair(t *testing.T) {
 	failing.Store(false)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go plugin.deploymentRouterRepairLoop(ctx, 10*time.Millisecond)
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		plugin.deploymentRouterRepairLoop(ctx, 10*time.Millisecond)
+	}()
+	// The loop ends before the fake engine closes: a repair in flight must not outlive the test.
+	defer func() {
+		cancel()
+		<-loopDone
+	}()
+	// The loop's requests change the container through the engine, under its lock.
+	repaired := func() (bool, string) {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		router := engine.lookupLocked("gwdep-dep-1-router")
+		if router == nil {
+			return false, "no router"
+		}
+		return router.Running && router.RestartPolicy == container.RestartPolicyUnlessStopped,
+			fmt.Sprintf("running %v, restart policy %q", router.Running, router.RestartPolicy)
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		router := engine.byName("gwdep-dep-1-router")
-		if router != nil && router.Running && router.RestartPolicy == container.RestartPolicyUnlessStopped {
+		ok, state := repaired()
+		if ok {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the repair loop did not bring the router back: %+v", router)
+			t.Fatalf("the repair loop did not bring the router back: %s", state)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
