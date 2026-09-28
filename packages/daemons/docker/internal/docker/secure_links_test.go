@@ -593,3 +593,31 @@ func TestSecureLinkDialValidationDoesNotHangOnAFrozenDockerd(t *testing.T) {
 		t.Fatalf("stopped target = %v", err)
 	}
 }
+
+// B-8: apply holds the manager lock across dockerd calls (inspect, connector
+// sync); a dial reads the published binding state and never waits for it.
+func TestSecureLinkDialStateDoesNotWaitForAnApplyInProgress(t *testing.T) {
+	manager := &dockerSecureLinkManager{
+		bindings: map[string]dockerSecureLinkBinding{"link": {port: 20001, targetHost: "10.0.0.5"}},
+		unbound:  map[string]struct{}{"standby": {}}, managementIP: "172.30.0.2",
+	}
+	manager.publishViewLocked()
+	manager.mu.Lock() // an apply waiting on a frozen dockerd
+	defer manager.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		binding, bound, unbound, host := manager.dialState("link")
+		if !bound || unbound || binding.port != 20001 || host != "172.30.0.2" {
+			t.Errorf("dial state = %+v %v %v %q", binding, bound, unbound, host)
+		}
+		if _, bound, unbound, _ := manager.dialState("standby"); bound || !unbound {
+			t.Errorf("standby dial state bound=%v unbound=%v", bound, unbound)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a dial waited for the apply lock")
+	}
+}

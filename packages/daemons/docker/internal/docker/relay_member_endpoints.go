@@ -47,6 +47,9 @@ const (
 	// target accepted stays open this long without a byte from us.
 	memberProbeTCPSettle = 750 * time.Millisecond
 	memberProbeHTTPWait  = 3 * time.Second
+	// memberProbeRestoreEvery bounds the binding restores a probe starts for a
+	// serving member whose link is not bound yet.
+	memberProbeRestoreEvery = 5 * time.Second
 	// deploymentRouterUnavailableHeader marks a response the deployment router
 	// generated itself because it could not reach the active slot.
 	deploymentRouterUnavailableHeader = "X-Gateway-Deployment-Router"
@@ -269,14 +272,15 @@ func (p *DockerPlugin) probeMemberLinks(ctx context.Context, links []string, che
 
 // probeMemberTarget reports whether one member link's target takes traffic.
 func (m *dockerSecureLinkManager) probeMemberTarget(ctx context.Context, linkID string, cheap bool) memberProbeResult {
-	m.mu.Lock()
-	binding, bound := m.bindings[linkID]
-	host := m.managementIP
-	m.mu.Unlock()
+	binding, bound, _, host := m.dialState(linkID)
 	if !bound || host == "" || binding.port == 0 {
 		// A standby's link is left unbound until its container runs; bind it
-		// now that this node serves it (coalesced with other restores).
-		_ = m.restoreBindingsCoalesced(false)
+		// now that this node serves it (coalesced with other restores, and at
+		// most every memberProbeRestoreEvery from here).
+		now := time.Now().UnixNano()
+		if last := m.probeRestoreAt.Load(); now-last >= int64(memberProbeRestoreEvery) && m.probeRestoreAt.CompareAndSwap(last, now) {
+			_ = m.restoreBindingsCoalesced(false)
+		}
 		return memberProbeResult{known: true}
 	}
 	inspectCtx, cancel := context.WithTimeout(ctx, memberProbeDockerWait)

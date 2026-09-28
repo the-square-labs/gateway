@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -62,6 +63,45 @@ type dockerSecureLinkManager struct {
 	// then dials skip it (see validateDialTarget).
 	dockerQuietMu    sync.Mutex
 	dockerQuietUntil time.Time
+
+	// view is what dials read: a copy of bindings, unbound and managementIP
+	// published after every change. apply holds mu across dockerd calls, and a
+	// dial must not wait for them (B-8, D5).
+	viewMu sync.RWMutex
+	view   *dockerSecureLinkView
+
+	// probeRestoreAt is when a readiness probe last restored bindings (unix ns).
+	probeRestoreAt atomic.Int64
+}
+
+type dockerSecureLinkView struct {
+	bindings     map[string]dockerSecureLinkBinding
+	unbound      map[string]struct{}
+	managementIP string
+}
+
+// publishViewLocked publishes the binding state for dials. Callers hold mu.
+// The maps are replaced, never changed in place, so the view may share them.
+func (m *dockerSecureLinkManager) publishViewLocked() {
+	m.viewMu.Lock()
+	m.view = &dockerSecureLinkView{bindings: m.bindings, unbound: m.unbound, managementIP: m.managementIP}
+	m.viewMu.Unlock()
+}
+
+// dialState returns a link's binding for a dial without waiting for apply.
+func (m *dockerSecureLinkManager) dialState(linkID string) (binding dockerSecureLinkBinding, bound, unbound bool, host string) {
+	m.viewMu.RLock()
+	view := m.view
+	m.viewMu.RUnlock()
+	if view == nil {
+		// Built without newDockerSecureLinkManager (tests): read the fields.
+		m.mu.Lock()
+		view = &dockerSecureLinkView{bindings: m.bindings, unbound: m.unbound, managementIP: m.managementIP}
+		m.mu.Unlock()
+	}
+	binding, bound = view.bindings[linkID]
+	_, unbound = view.unbound[linkID]
+	return binding, bound, unbound, view.managementIP
 }
 
 const (
@@ -108,10 +148,12 @@ func newDockerSecureLinkManager(plugin *DockerPlugin) (*dockerSecureLinkManager,
 	if err := os.Chown(directory, 65532, 65532); err != nil {
 		return nil, fmt.Errorf("secure-link control directory ownership: %w", err)
 	}
-	return &dockerSecureLinkManager{
+	manager := &dockerSecureLinkManager{
 		plugin: plugin, socketPath: filepath.Join(directory, "secure-link.sock"),
 		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
-	}, nil
+	}
+	manager.publishViewLocked()
+	return manager, nil
 }
 
 // restore re-applies the committed bindings after a daemon or connector
@@ -259,6 +301,7 @@ func (m *dockerSecureLinkManager) apply(
 	}
 	m.bindings = next
 	m.unbound = unbound
+	m.publishViewLocked()
 	for networkName := range m.attached {
 		if _, keep := desiredNetworks[networkName]; keep {
 			continue
@@ -337,6 +380,7 @@ func allowedSecureLinkConnectorImage(image string) bool {
 func (m *dockerSecureLinkManager) failClosed(ctx context.Context) {
 	m.bindings = map[string]dockerSecureLinkBinding{}
 	m.unbound = nil
+	m.publishViewLocked()
 	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, _ = securelink.Sync(cleanupCtx, m.socketPath, nil)
@@ -423,6 +467,7 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 	}
 	m.connectorID = inspect.Container.ID
 	m.managementIP = endpoint.IPAddress.String()
+	m.publishViewLocked()
 	m.attached = map[string]struct{}{}
 	for name := range inspect.Container.NetworkSettings.Networks {
 		if name != secureLinkManagementNetwork {
@@ -644,11 +689,7 @@ func dialWithOneRestore(
 }
 
 func (m *dockerSecureLinkManager) dialCurrent(ctx context.Context, linkID string) (net.Conn, error) {
-	m.mu.Lock()
-	binding, ok := m.bindings[linkID]
-	_, unbound := m.unbound[linkID]
-	host := m.managementIP
-	m.mu.Unlock()
+	binding, ok, unbound, host := m.dialState(linkID)
 	if !ok && unbound && host != "" {
 		// Its target was unavailable at the last restore: a new restore
 		// right away would find the same, so the dial shares a recent one.
@@ -746,6 +787,7 @@ func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
 	m.managementIP = ""
 	m.bindings = map[string]dockerSecureLinkBinding{}
 	m.unbound = nil
+	m.publishViewLocked()
 	m.attached = map[string]struct{}{}
 	return nil
 }
