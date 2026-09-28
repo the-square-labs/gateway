@@ -73,7 +73,7 @@ func (e *fakeEngine) Start(_ context.Context, id string) error {
 		return errHung
 	}
 	record, ok := e.host.fence.records[id]
-	if !ok || record.Stale(e.w.clock.now) {
+	if !ok || record.Stale(e.w.hostNow(e.host)) {
 		e.w.violations = append(e.w.violations, fmt.Sprintf("%s started %s without a live deadline record", e.host.id, shortID(id)))
 	}
 	e.containers[id].Running = true

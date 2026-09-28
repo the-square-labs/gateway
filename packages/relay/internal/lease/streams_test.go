@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	grpcpeer "google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type coordinateStream struct {
@@ -87,13 +88,43 @@ func waitCode(t *testing.T, result chan error, want codes.Code) {
 
 func waitFrame(t *testing.T, stream *coordinateStream, want *relayv1.CoordinationFrame) {
 	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case frame := <-stream.sent:
+			if isBeacon(frame) && !isBeacon(want) {
+				continue
+			}
+			if frame.GetSenderId() != want.GetSenderId() || string(frame.GetPayload()) != string(want.GetPayload()) {
+				t.Fatalf("routed frame from %q differs", frame.GetSenderId())
+			}
+			return
+		case <-deadline:
+			t.Fatal("frame was not routed")
+		}
+	}
+}
+
+// isBeacon reports a relay clock beacon: an empty batch from the relay that
+// carries only its clock (D4).
+func isBeacon(frame *relayv1.CoordinationFrame) bool {
+	batch := &relayv1.LeaseBatch{}
+	return frame.GetSenderId() == relayID && proto.Unmarshal(frame.GetPayload(), batch) == nil &&
+		len(batch.GetItems()) == 0 && len(batch.GetBlocks()) == 0 && batch.GetSenderClockMs() > 0
+}
+
+// D4: a member that connects gets the relay's clock at once, so a holder
+// reconnecting after a freeze learns of it without waiting for any round.
+func TestCoordinateBeaconsAMemberOnConnect(t *testing.T) {
+	h := newHarness(t, true)
+	stream, _ := serve(h, clientContext("d1"))
 	select {
 	case frame := <-stream.sent:
-		if frame.GetSenderId() != want.GetSenderId() || string(frame.GetPayload()) != string(want.GetPayload()) {
-			t.Fatalf("routed frame from %q differs", frame.GetSenderId())
+		if !isBeacon(frame) || frame.GetDestinationId() != "d1" {
+			t.Fatalf("first frame on a new stream is not a clock beacon: %v", frame)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("frame was not routed")
+		t.Fatal("no beacon on connect")
 	}
 }
 

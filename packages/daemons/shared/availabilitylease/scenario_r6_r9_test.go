@@ -58,7 +58,10 @@ func TestR6HandoffReleasesOnlyAfterStopAndBindsBallot(t *testing.T) {
 				}
 			}
 		}
-		requireGap(t, *log, "d1", "d2", 3*time.Second)
+		// The watchdog killed the hung copy; once its cgroup is confirmed
+		// empty the abandoned key is released (B-9), so the successor may
+		// start right after, never before.
+		requireGap(t, *log, "d1", "d2", 0)
 	})
 	t.Run("release is bound to its ballot", func(t *testing.T) {
 		w := twoCandidateWorld(t, false)
@@ -77,7 +80,9 @@ func TestR6HandoffReleasesOnlyAfterStopAndBindsBallot(t *testing.T) {
 		w.nodes["d1"].beginDrain(keyP1, "")
 		w.waitFor(20*time.Second, func() bool { return w.nodes["d1"].node.HolderStatus(keyP1).Role == RoleNone })
 		r1 := w.nodes["r1"].node
-		if r1.acceptors[keyP1].lease.openAt(w.nodes["r1"].local()) {
+		// The open release reaches the candidates too, so d2 may hold by
+		// now; d1's lease at r1 must be over.
+		if lease := r1.acceptors[keyP1].lease; lease.holder == "d1" && lease.openAt(w.nodes["r1"].local()) {
 			t.Fatal("release did not end the lease at r1")
 		}
 		w.injectFrom("d1", "r1", &pb.LeaseItem{Body: &pb.LeaseItem_Propose{Propose: stale}})
@@ -219,7 +224,7 @@ func TestR9ReplayedFramesCannotChangeNewerBallots(t *testing.T) {
 	w.runUntil(w.now + 30*time.Second)
 	w.requireClean(t)
 	if w.holder(keyP1) != "d2" || len(w.eventsOf("d2", EventFence)) != 0 {
-		t.Fatal("replayed frames disturbed the new holder")
+		t.Fatalf("replayed frames disturbed the new holder: holder %q, d2 fences %+v\n%s", w.holder(keyP1), w.eventsOf("d2", EventFence), w.dumpTrace(60))
 	}
 	for id, before := range promised {
 		if after := w.nodes[id].node.acceptors[keyP1].promised(); after.Less(before) {

@@ -122,6 +122,15 @@ const (
 	FenceClosed      FenceReason = "lease_closed"
 	FenceRecovery    FenceReason = "recovery_failed"
 	FenceRemoved     FenceReason = "removed_from_manifest"
+	// FenceFrozen: a peer's clock showed this host was frozen while it held
+	// the key (D4).
+	FenceFrozen FenceReason = "host_frozen"
+	// FenceWatchdogLost: the watchdog heartbeat is lost; renewals stopped and
+	// the daemon kills the containers itself (A12.4).
+	FenceWatchdogLost FenceReason = "watchdog_lost"
+	// FenceAbandoned: renewals stopped without a fence reason, for a stop
+	// that could not be confirmed (A6).
+	FenceAbandoned FenceReason = "abandoned"
 )
 
 // HolderStatus is the proposer view of one key for the docker daemon.

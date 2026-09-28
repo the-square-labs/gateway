@@ -50,6 +50,12 @@ type proposerKey struct {
 	recoverUntil    time.Duration
 
 	release releaseState
+
+	// releasedBy is a holder whose final release of its committed ballot this
+	// node saw at releasedAt; it lifts the quiet period and does not count
+	// in the rank for a successor window (B-9).
+	releasedBy string
+	releasedAt time.Duration
 }
 
 func (n *Node) proposerFor(key Key) *proposerKey {
@@ -280,13 +286,17 @@ func (n *Node) expiredOnQuorum(pk *proposerKey, manifest *Manifest, now time.Dur
 }
 
 // rank is the manifest rank among candidates (D5), skipping holders of the
-// policy's other slots, which never compete for this one.
+// policy's other slots, which never compete for this one, and a holder that
+// just released this key (it stopped its copy and does not take it back).
 func (n *Node) rank(pk *proposerKey, manifest *Manifest) int {
 	skip := map[string]bool{}
 	for key, other := range n.proposers {
 		if key.PolicyID == pk.key.PolicyID && key.Slot != pk.key.Slot && other.commit != nil && other.hasFreshCommit {
 			skip[other.commitBallot.Proposer] = true
 		}
+	}
+	if pk.releasedBy != "" && n.clock.Now() < pk.releasedAt+SuccessorWindow {
+		skip[pk.releasedBy] = true
 	}
 	rank := 0
 	for _, id := range manifest.Candidates {
@@ -436,6 +446,19 @@ func (n *Node) onManifestChanged(previous, manifest *Manifest, now time.Duration
 			pk.deadline, pk.softAt = pk.anchor+FenceCompleteAfter, pk.anchor+SoftFenceAfter
 		}
 	}
+}
+
+// observeRelease is the candidate side of a final release: when the holder
+// of the commit this node knows lets go of it, the quiet period after that
+// commit ends and the key is queried at once (B-9).
+func (n *Node) observeRelease(key Key, from string, ballot Ballot, now time.Duration) {
+	pk := n.proposers[key]
+	if pk == nil || from == n.id || pk.commit == nil || pk.commitBallot.Proposer != from || ballot.Less(pk.commitBallot) {
+		return
+	}
+	pk.hasFreshCommit = false
+	pk.releasedBy, pk.releasedAt = from, now
+	pk.nextQueryAt = now
 }
 
 func (n *Node) onDesignated(key Key, now time.Duration) {

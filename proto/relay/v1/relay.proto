@@ -404,6 +404,23 @@ message LeaseBatch {
   repeated LeaseSignedBlock blocks = 6;
   // Policy key rotation chain for the forwarded blocks (A14).
   repeated LeasePolicyKeyRotation key_rotations = 7;
+  // Peer-time freeze detection (D4). The sender's lease clock
+  // (CLOCK_BOOTTIME on Linux) in milliseconds when it sealed the batch, and
+  // an id of that clock's origin (derived from the kernel boot id, so it
+  // changes whenever the clock may be discontinuous). Receivers track the
+  // offset between their own lease clock and each sender's; a drop beyond the
+  // skew budget means the receiver's host was frozen since the sender's
+  // previous frame. The echo fields return the destination's own clock from
+  // the newest batch the sender received from it, and how long the sender
+  // held it, so the destination bounds this batch's delay by the round trip
+  // (only such batches form the reference). A batch may carry no items at
+  // all: relays and daemons send such clock beacons every second. All zero
+  // from senders that predate availability_lease_v2.
+  uint64 sender_clock_ms = 8;
+  fixed64 sender_clock_origin = 9;
+  uint64 echo_clock_ms = 10;
+  fixed64 echo_clock_origin = 11;
+  uint64 echo_age_ms = 12;
 }
 
 message LeaseKey {

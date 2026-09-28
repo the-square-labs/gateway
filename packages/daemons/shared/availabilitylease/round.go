@@ -198,6 +198,10 @@ func (n *Node) roundSucceeded(pk *proposerKey, r *round, majority bool, now time
 		commit.Quorum = append(commit.Quorum, r.accepts[id])
 	}
 	acquired := pk.role != RoleHolding
+	if acquired {
+		// A fence reason belongs to the lease it ended.
+		pk.fenceReason = FenceNone
+	}
 	pk.role = RoleHolding
 	pk.ballot, pk.ownMajority, pk.anchor = r.ballot, majority, r.anchor
 	pk.deadline, pk.softAt = r.anchor+FenceCompleteAfter, r.anchor+SoftFenceAfter

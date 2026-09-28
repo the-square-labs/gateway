@@ -49,7 +49,29 @@ type daemonHost struct {
 	// daemonOff: the docker daemon process is gone (or a pre-lease
 	// version); the host, Docker and the watchdog keep running.
 	daemonOff bool
+	// frozen: the VM is paused (every process and clock of the host stands
+	// still); lag is the local time it lost to past freezes.
+	frozen bool
+	lag    time.Duration
+	// residualUntil exempts the host from the single-copy check right after
+	// a resume, until the first frame could reach it (A2.5 residual).
+	residualUntil time.Duration
+	// fences collects the reasons of the fence events fenceLog drained.
+	fences []string
 }
+
+// hostClock is a daemon host's BOOTTIME: the world clock minus the time the
+// host spent frozen.
+type hostClock struct {
+	w *world
+	h *daemonHost
+}
+
+func (c hostClock) Now() time.Duration { return c.w.hostNow(c.h) }
+
+func (c hostClock) Origin() uint64 { return uint64(len(c.h.id))<<40 | 0xb007 }
+
+func (w *world) hostNow(h *daemonHost) time.Duration { return w.clock.now - h.lag }
 
 // world is a lossless, deterministic cluster: relays and daemons run real
 // availabilitylease nodes; Docker, the watchdog and endpoints are fakes.
@@ -76,6 +98,8 @@ type world struct {
 	slots      uint32
 	watchdogOn bool
 	logger     *slog.Logger
+	// blocked cuts single links, in both directions.
+	blocked map[string]bool
 }
 
 type worldSpec struct {
@@ -95,7 +119,7 @@ func newWorld(t *testing.T, spec worldSpec) *world {
 	w := &world{
 		t: t, clock: &fakeClock{now: time.Hour}, policyID: testPolicy, policyPriv: priv, byID: map[string]any{},
 		candidates: spec.candidates, voters: spec.voters, bootstrap: spec.bootstrap, available: spec.available, slots: max(spec.slots, 1), watchdogOn: true,
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)), blocked: map[string]bool{},
 	}
 	if len(w.voters) == 0 {
 		w.voters = spec.relays
@@ -237,8 +261,9 @@ func (w *world) deliverBlocks(h *daemonHost) {
 // same Docker, same watchdog directory, fresh runtime.
 func (w *world) startDaemon(h *daemonHost) {
 	runtime, err := New(Options{
-		NodeID: h.id, Clock: w.clock, Wall: w.wall, Signer: availabilitylease.ECDSASigner{Key: h.key},
-		Engine: h.engine, Fence: h.fence, Endpoints: h.endpoints, Placements: fakePlacements{host: h.id, w: w},
+		NodeID: h.id, Clock: hostClock{w: w, h: h}, Wall: w.wall, Signer: availabilitylease.ECDSASigner{Key: h.key},
+		Suspends: availabilitylease.NewSuspendWatchFrom(func() (time.Duration, bool) { return 0, false }),
+		Engine:   h.engine, Fence: h.fence, Endpoints: h.endpoints, Placements: fakePlacements{host: h.id, w: w},
 		Logger: w.logger, Store: h.store, Transport: w,
 		Async: func(fn func()) { h.ops = append(h.ops, fn) },
 	})
@@ -260,16 +285,39 @@ func (w *world) reachable(id string) bool {
 	case *relayHost:
 		return !host.down
 	case *daemonHost:
-		return !host.down && !host.cut && !host.daemonOff
+		return !host.down && !host.cut && !host.daemonOff && !host.frozen
 	}
 	return false
+}
+
+func linkKey(a, b string) string {
+	if a > b {
+		a, b = b, a
+	}
+	return a + "|" + b
+}
+
+// block cuts (or restores) the link between two hosts.
+func (w *world) block(a, b string, cut bool) { w.blocked[linkKey(a, b)] = cut }
+
+// freeze pauses a daemon's VM for d: nothing on it runs, its clocks stand
+// still, frames to it are lost. On resume it lost d of local time.
+func (w *world) freeze(h *daemonHost, d time.Duration) {
+	h.frozen = true
+	w.logf("%s frozen", h.id)
+	w.run(d)
+	h.lag += d
+	h.frozen = false
+	h.residualUntil = w.clock.now + 1500*time.Millisecond
+	w.logf("%s resumed", h.id)
 }
 
 func (w *world) deliver() {
 	for guard := 0; len(w.queue) > 0 && guard < 100000; guard++ {
 		frame := w.queue[0]
 		w.queue = w.queue[1:]
-		if !w.reachable(frame.GetSenderId()) || !w.reachable(frame.GetDestinationId()) {
+		if !w.reachable(frame.GetSenderId()) || !w.reachable(frame.GetDestinationId()) ||
+			w.blocked[linkKey(frame.GetSenderId(), frame.GetDestinationId())] {
 			continue
 		}
 		switch host := w.byID[frame.GetDestinationId()].(type) {
@@ -291,13 +339,20 @@ func (w *world) run(d time.Duration) {
 	w.t.Helper()
 	for end := w.clock.now + d; w.clock.now < end; {
 		w.clock.now += worldTick
+		beacon := w.clock.now%availabilitylease.BeaconInterval == 0
 		for _, relay := range w.relays {
 			if !relay.down {
 				relay.node.Tick()
+				if beacon {
+					// The relay coordinator beacons its members (D4).
+					for _, h := range w.daemons {
+						relay.node.Beacon(h.id)
+					}
+				}
 			}
 		}
 		for _, h := range w.daemons {
-			if h.down || h.daemonOff {
+			if h.down || h.daemonOff || h.frozen {
 				continue
 			}
 			h.runtime.Step()
@@ -322,8 +377,11 @@ func (w *world) runWatchdogs() {
 		return
 	}
 	for _, h := range w.daemons {
+		if h.frozen {
+			continue
+		}
 		for id, record := range h.fence.records {
-			if c := h.engine.containers[id]; c != nil && c.Running && record.Stale(w.clock.now) && !h.down {
+			if c := h.engine.containers[id]; c != nil && c.Running && record.Stale(w.hostNow(h)) && !h.down {
 				c.Running = false
 				w.logf("%s watchdog killed %s", h.id, shortID(id))
 			}
@@ -339,7 +397,9 @@ func (w *world) checkSingleCopy() {
 	// second slot) are one copy bound to one lease.
 	var running []string
 	for _, h := range w.daemons {
-		if h.down {
+		// A frozen VM runs nothing; right after its resume the A2.5
+		// residual lasts until the first frame reaches it.
+		if h.down || h.frozen || w.clock.now < h.residualUntil {
 			continue
 		}
 		for _, c := range h.engine.containers {
@@ -392,7 +452,7 @@ func (w *world) runUntil(timeout time.Duration, cond func() bool) bool {
 
 func (w *world) holderOf() string {
 	for _, h := range w.daemons {
-		if h.down {
+		if h.down || h.frozen {
 			continue
 		}
 		status := h.runtime.Node().HolderStatus(availabilitylease.Key{PolicyID: w.policyID})
@@ -427,4 +487,16 @@ func (w *world) lastIndexOf(pattern string) int {
 		}
 	}
 	return -1
+}
+
+// fenceLog drains a daemon's reported events and returns the reasons of every
+// fence event seen so far.
+func (w *world) fenceLog(id string) []string {
+	h := w.daemon(id)
+	for _, event := range h.runtime.Report().Events {
+		if event.Kind == string(availabilitylease.EventFence) {
+			h.fences = append(h.fences, event.Reason)
+		}
+	}
+	return h.fences
 }

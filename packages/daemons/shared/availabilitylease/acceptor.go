@@ -311,6 +311,21 @@ func (n *Node) onRelease(from string, msg *pb.LeaseRelease, now time.Duration) {
 	if !ok || ballot.Proposer != from || n.manifests[key.PolicyID] == nil {
 		return
 	}
+	final := msg.GetPhase() == pb.LeaseReleasePhase_LEASE_RELEASE_PHASE_FINAL
+	if final {
+		n.observeRelease(key, from, ballot, now)
+	}
+	if config := n.policyConfig(key.PolicyID); config == nil || !config.isMember(n.id) {
+		// A candidate outside the policy's members keeps no acceptor state;
+		// it only learns that the holder let go (and whether it is the
+		// designated successor).
+		if final && msg.GetSuccessorId() == n.id {
+			n.onDesignated(key, now)
+		}
+		ack := &pb.LeaseReleaseAck{Key: key.proto(), Ballot: ballot.proto(), Phase: msg.GetPhase()}
+		n.queue(from, &pb.LeaseItem{Body: &pb.LeaseItem_ReleaseAck{ReleaseAck: ack}})
+		return
+	}
 	ak := n.acceptorFor(key)
 	if previous, ok := ak.relinquished[from]; !ok || previous.Less(ballot) {
 		ak.relinquished[from] = ballot

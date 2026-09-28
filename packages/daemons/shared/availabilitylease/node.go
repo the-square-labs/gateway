@@ -1,6 +1,8 @@
 package availabilitylease
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -34,6 +36,11 @@ type Config struct {
 	// milliseconds. Peers drop frames from an incarnation lower than one they
 	// saw (A9), and ballots must stay unique (A3).
 	IncarnationFloor uint64
+	// FreezeSkewBudget and FreezeDriftRate tune the peer-time freeze
+	// detector (freeze.go); zero means DefaultFreezeSkewBudget and
+	// DefaultFreezeDriftRate.
+	FreezeSkewBudget time.Duration
+	FreezeDriftRate  float64
 }
 
 // Node runs the acceptor and proposer roles of one process. Every method is
@@ -81,6 +88,19 @@ type Node struct {
 	echoSeq    uint64
 	events     []Event
 
+	// Peer-time freeze detection (D4, freeze.go).
+	clockOrigin      uint64
+	freezeBudget     time.Duration
+	freezeDrift      float64
+	peerClocks       map[string]*peerClock
+	peerClockSweepAt time.Duration
+	beacons          map[string]bool
+	freezes          []FreezeEvent
+	// freezeBoundary is the local time of the last detected freeze: the
+	// relay gate stays closed for accepts anchored at or before it.
+	freezeBoundary time.Duration
+	frozeOnce      bool
+
 	// rawSend bypasses sealing; the simulator uses it for speed.
 	rawSend func(to string, batch *pb.LeaseBatch)
 }
@@ -105,7 +125,22 @@ func NewNode(cfg Config) (*Node, error) {
 		history: map[string][]*VoterConfig{}, acceptors: map[Key]*acceptorKey{}, proposers: map[Key]*proposerKey{}, ready: map[string]bool{},
 		outbox: map[string][]*pb.LeaseItem{}, attach: map[string]map[string]bool{}, dirty: map[Key]bool{},
 		dirtyOther: map[string][]byte{}, seen: map[string]struct{}{}, peers: map[string]uint64{},
-		forwarded: map[string]forwardMark{},
+		forwarded: map[string]forwardMark{}, peerClocks: map[string]*peerClock{}, beacons: map[string]bool{},
+		freezeBudget: cfg.FreezeSkewBudget, freezeDrift: cfg.FreezeDriftRate,
+	}
+	if n.freezeBudget <= 0 {
+		n.freezeBudget = DefaultFreezeSkewBudget
+	}
+	if n.freezeDrift <= 0 {
+		n.freezeDrift = DefaultFreezeDriftRate
+	}
+	if origin, ok := cfg.Clock.(ClockOrigin); ok {
+		n.clockOrigin = origin.Origin()
+	}
+	for n.clockOrigin == 0 {
+		var buf [8]byte
+		_, _ = rand.Read(buf[:])
+		n.clockOrigin = binary.BigEndian.Uint64(buf[:])
 	}
 	if n.verifier == nil {
 		n.verifier = &ECDSAVerifier{}
@@ -251,6 +286,10 @@ func (n *Node) receiveLocked(batch *pb.LeaseBatch, now time.Duration) {
 			}
 		}
 	}
+	// D4: the sender's clock is checked before the items, so a key held
+	// across a freeze of this host fences before anything else it carries
+	// can extend or anchor it.
+	n.observePeerClock(from, batch, now)
 	for _, item := range batch.GetItems() {
 		n.handleItem(from, item, now)
 	}
@@ -317,11 +356,11 @@ func (n *Node) commitLocked(now time.Duration) []outgoing {
 		if err != nil {
 			n.logf("availability lease state write failed, abstaining: %v", err)
 			n.startedAt = now
-			n.outbox, n.attach = map[string][]*pb.LeaseItem{}, map[string]map[string]bool{}
+			n.outbox, n.attach, n.beacons = map[string][]*pb.LeaseItem{}, map[string]map[string]bool{}, map[string]bool{}
 			return nil
 		}
 	}
-	if len(n.outbox) == 0 && len(n.attach) == 0 {
+	if len(n.outbox) == 0 && len(n.attach) == 0 && len(n.beacons) == 0 {
 		return nil
 	}
 	dests := map[string]bool{}
@@ -331,13 +370,18 @@ func (n *Node) commitLocked(now time.Duration) []outgoing {
 	for dest := range n.attach {
 		dests[dest] = true
 	}
+	for dest := range n.beacons {
+		dests[dest] = true
+	}
 	out := make([]outgoing, 0, len(dests))
 	for _, dest := range sortedKeys(dests) {
 		n.messageSeq++
 		batch := &pb.LeaseBatch{
 			MessageId: fmt.Sprintf("%s/%d/%d", n.id, n.incarnation, n.messageSeq),
 			SenderId:  n.id, SenderIncarnation: n.incarnation, DestinationId: dest, Items: n.outbox[dest],
+			SenderClockMs: clockMillis(now), SenderClockOrigin: n.clockOrigin,
 		}
+		n.echoFor(batch, dest, now)
 		if policies := n.attach[dest]; len(policies) > 0 {
 			for _, policyID := range sortedKeys(policies) {
 				if manifest := n.manifests[policyID]; manifest != nil {
@@ -348,8 +392,17 @@ func (n *Node) commitLocked(now time.Duration) []outgoing {
 		}
 		out = append(out, outgoing{to: dest, batch: batch, signers: n.signers()})
 	}
-	n.outbox, n.attach = map[string][]*pb.LeaseItem{}, map[string]map[string]bool{}
+	n.outbox, n.attach, n.beacons = map[string][]*pb.LeaseItem{}, map[string]map[string]bool{}, map[string]bool{}
 	return out
+}
+
+// clockMillis is the lease clock carried in batches; 0 means "not sent", so a
+// clock reading in its first millisecond is sent as 1.
+func clockMillis(now time.Duration) uint64 {
+	if ms := now.Milliseconds(); ms > 0 {
+		return uint64(ms)
+	}
+	return 1
 }
 
 func (n *Node) send(out []outgoing) {

@@ -63,7 +63,9 @@ func (n *Node) commitQuorum(commit *pb.LeaseCommit, manifest *Manifest) (bool, e
 //   - this node itself accepted (or, while abstaining or not voting,
 //     shadow-accepted) the committed ballot, or an earlier ballot of the same
 //     holder, with an echo of its own promise;
-//   - less than GateWindow of local time passed since the latest such promise.
+//   - less than GateWindow of local time passed since the latest such promise,
+//     and that promise was made after the last freeze of this host detected
+//     from peer time (D4).
 //
 // Anchoring on the promise that the proposer echoed bounds the gate by the
 // proposer's send time rather than by message delay, so the gate closes
@@ -128,6 +130,12 @@ func (n *Node) gateLocked(key Key, now time.Duration) GateDecision {
 		return decision
 	}
 	decision.Until = own.anchor + GateWindow
+	if n.frozeOnce && own.anchor <= n.freezeBoundary {
+		// The promise was timed on a clock that later lost time to a freeze
+		// of this host (D4, A17): wait for a promise made after it.
+		decision.Reason = "host freeze: waiting for a fresh promise"
+		return decision
+	}
 	if now >= decision.Until {
 		decision.Reason = "expired"
 		return decision
