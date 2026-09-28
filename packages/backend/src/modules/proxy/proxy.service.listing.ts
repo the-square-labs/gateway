@@ -2,6 +2,7 @@ import { and, count, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { proxyHosts } from '@/db/schema/index.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { proxyHostsServedByNode } from '@/modules/ingress-groups/ingress-nodes.js';
 import type { PaginatedResponse } from '@/types.js';
 import type { ProxyHostListQuery } from './proxy.schemas.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
@@ -11,7 +12,7 @@ export { __testOnly } from './proxy.service-helpers.js';
 import { logger, type ProxyHostRow, type ProxyHostView } from './proxy.service.core.js';
 import { ProxyServiceSecureLinks } from './proxy.service.secure-links.js';
 import {
-  assertNoProxyDomainOverlap,
+  assertNoProxyDomainOverlapOnNodes,
   restoringProxyHostState,
   rethrowProxyHostDomainConflict,
 } from './proxy-domain-overlap.js';
@@ -52,7 +53,11 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
       conditions.push(ilike(sql`${proxyHosts.domainNames}::text`, `%${escapeLike(query.search)}%`));
     }
     if (query.nodeId) {
-      conditions.push(eq(proxyHosts.nodeId, query.nodeId));
+      // Routes the node serves, including the routes of its ingress groups.
+      conditions.push(proxyHostsServedByNode(this.db, query.nodeId));
+    }
+    if (query.ingressGroupId) {
+      conditions.push(eq(proxyHosts.ingressGroupId, query.ingressGroupId));
     }
 
     const where = buildWhere(conditions);
@@ -122,12 +127,12 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
     }
     if (existing.enabled === enabled) return (await attachDockerUpstreamDisplay(this.db, [existing]))[0]!;
 
-    // Enabling makes the host serve on its node again: fence reconnect cleanup
-    // and refuse a domain another enabled host on the node already serves.
-    const nodeId = existing.nodeId;
-    if (enabled && nodeId) {
-      return withProxyLocks([proxyNodeLockKey(nodeId)], async () => {
-        await assertNoProxyDomainOverlap(this.db, nodeId, existing.domainNames, existing.id);
+    // Enabling makes the host serve on its nodes again (every member of its ingress group): fence reconnect
+    // cleanup and refuse a domain another enabled host on one of them already serves.
+    const servingNodeIds = await this.ingressNodesOf(existing);
+    if (enabled && servingNodeIds.length > 0) {
+      return withProxyLocks(servingNodeIds.map(proxyNodeLockKey), async () => {
+        await assertNoProxyDomainOverlapOnNodes(this.db, servingNodeIds, existing.domainNames, existing.id);
         return this.applyToggle(existing, enabled, userId);
       });
     }
@@ -158,22 +163,11 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
 
     try {
       if (enabled) {
-        // Re-enable: generate config and apply
-        const certPaths = await this.resolveCertPaths(updated);
-        const accessList = await this.resolveAccessList(updated.accessListId);
-        const config = await this.buildNginxConfig(updated, certPaths, accessList);
-        await this.applyConfigToNode(
-          id,
-          config,
-          updated.nodeId,
-          certPaths.preparedTls,
-          this.configOwnershipForHost(updated),
-          updated.accessListId
-        );
+        // Re-enable: generate config and apply on every serving node
+        await this.deliverHost(updated);
       } else {
         // Disable: remove config and reload
-        await this.removeConfigFromNode(id, updated.nodeId);
-        await this.certificateDistribution.deactivateHost(id, updated.nodeId);
+        await this.withdrawHost(updated);
       }
     } catch (error) {
       // Rollback DB to previous enabled state
@@ -275,17 +269,7 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
 
     try {
       if (updated.enabled) {
-        const certPaths = await this.resolveCertPaths(updated, { preserveLegacyOnUnsupported: true });
-        const accessList = await this.resolveAccessList(updated.accessListId);
-        const config = await this.buildNginxConfig(updated, certPaths, accessList);
-        await this.applyConfigToNode(
-          id,
-          config,
-          updated.nodeId,
-          certPaths.preparedTls,
-          this.configOwnershipForHost(updated),
-          updated.accessListId
-        );
+        await this.deliverHost(updated, { certOptions: { preserveLegacyOnUnsupported: true } });
       }
     } catch (error) {
       logger.error('Failed to apply nginx config during maintenance transition, rolling back DB', {

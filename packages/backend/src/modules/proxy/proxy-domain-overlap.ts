@@ -2,6 +2,7 @@ import { and, eq, ne, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import { proxyHostDomains, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { proxyHostsServedByNode } from '@/modules/ingress-groups/ingress-nodes.js';
 
 /** Partial unique index on `proxy_host_domains`: one enabled host per name on a node. */
 export const PROXY_HOST_DOMAIN_UNIQUE_INDEX = 'proxy_host_domains_node_domain_unique';
@@ -26,7 +27,7 @@ export async function assertNoProxyDomainOverlap(
     .from(proxyHosts)
     .where(
       and(
-        eq(proxyHosts.nodeId, nodeId),
+        proxyHostsServedByNode(db, nodeId),
         eq(proxyHosts.enabled, true),
         excludeHostId ? ne(proxyHosts.id, excludeHostId) : undefined,
         sql`exists (select 1 from jsonb_array_elements_text(${proxyHosts.domainNames}) as served(name) where lower(served.name) in (${sql.join(
@@ -44,6 +45,16 @@ export async function assertNoProxyDomainOverlap(
     `Another enabled proxy host on this node already serves ${overlapping.join(', ') || 'these domains'}`,
     { proxyHostId: conflict.id, nodeId, domains: overlapping }
   );
+}
+
+/** {@link assertNoProxyDomainOverlap} on every node a route serves on (all members of its ingress group). */
+export async function assertNoProxyDomainOverlapOnNodes(
+  db: DrizzleClient,
+  nodeIds: readonly string[],
+  domainNames: string[],
+  excludeHostId?: string
+): Promise<void> {
+  for (const nodeId of new Set(nodeIds)) await assertNoProxyDomainOverlap(db, nodeId, domainNames, excludeHostId);
 }
 
 /** The node and name of a violation of the per-node domain index, or null for any other error. */

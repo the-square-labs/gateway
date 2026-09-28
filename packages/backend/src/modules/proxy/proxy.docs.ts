@@ -12,6 +12,7 @@ import {
   CreateProxyHostSchema,
   ProxyHostListQuerySchema,
   RouteIngressNodeListQuerySchema,
+  RouteIngressPlacementSchema,
   ToggleProxyHostSchema,
   ToggleProxyMaintenanceSchema,
   UpdateProxyHostSchema,
@@ -142,5 +143,16 @@ export const validateProxyConfigRoute = appRoute({
   tags: ['Routes'],
   summary: 'Validate advanced nginx config',
   request: jsonBody(ValidateAdvancedConfigSchema),
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const changeRouteIngressPlacementRoute = appRoute({
+  method: 'post',
+  path: '/{id}/ingress-placement',
+  tags: ['Routes'],
+  summary: 'Move a route onto an ingress group or back to one node',
+  description:
+    'A planned operation without downtime. Onto a group (ingressGroupId): the node that serves the route now must be a member and keeps serving while every other member gets the route (config, certificates, Secure Link sources, Pages artifacts). Back to one node (ingressGroupId null, nodeId a current member): the route leaves the other members after the node took it; point DNS of the route’s names at that node first. A route whose names are registered Gateway domains moves with its domain (use the domain’s ingress placement). Onto a group requires proxy:edit on the route, proxy:create for every member and the multi-node availability entitlement.',
+  request: { params: IdParamSchema, ...jsonBody(RouteIngressPlacementSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });

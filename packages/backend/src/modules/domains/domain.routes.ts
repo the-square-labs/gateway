@@ -18,6 +18,9 @@ import {
   resolveDomainCreationNginxNodeId,
 } from '@/modules/domains/domain-creation-access.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
+import { IngressGroupService } from '@/modules/ingress-groups/ingress-group.service.js';
+import { assertCanPlaceOnMembers } from '@/modules/ingress-groups/ingress-group-access.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -30,6 +33,7 @@ import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import type { AppEnv } from '@/types.js';
 import {
+  changeDomainIngressPlacementRoute,
   checkDomainDnsRoute,
   createDomainFolderRoute,
   createDomainRoute,
@@ -56,6 +60,7 @@ import {
   CreateDomainSchema,
   DeleteDomainSchema,
   DomainIngressMigrationSchema,
+  DomainIngressPlacementSchema,
   DomainListQuerySchema,
   IssueDomainCertificateSchema,
   PreviewDomainSchema,
@@ -65,6 +70,23 @@ import {
 import { DomainsService } from './domain.service.js';
 
 export const domainRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
+
+/**
+ * Moving a domain onto an ingress group places it (and its routes) on every member: domains:create must cover each
+ * member, and the multi-node availability entitlement is required. Moving it back to one member node only shrinks
+ * the runtime and needs neither.
+ */
+async function assertDomainPlacementAccess(
+  scopes: string[],
+  domainId: string,
+  input: { ingressGroupId?: string | null }
+): Promise<void> {
+  if (!input.ingressGroupId) return;
+  const domain = await container.resolve(DomainsService).getDomain(domainId);
+  const members = await container.resolve(IngressGroupService).memberNodeIds(input.ingressGroupId);
+  assertCanPlaceOnMembers(scopes, 'domains:create', domain.folderId ?? null, members);
+  await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
+}
 
 domainRoutes.use('*', authMiddleware);
 
@@ -237,8 +259,13 @@ domainRoutes.openapi(createDomainRoute, async (c) => {
   const nginxNodeId = await resolveDomainCreationNginxNodeId(scopes, request, () =>
     domainsService.getNginxNodeOptions()
   );
-  const input = nginxNodeId ? { ...request, nginxNodeId } : request;
-  if (!hasScopeForCreation(scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
+  const input = nginxNodeId && !request.ingressGroupId ? { ...request, nginxNodeId } : request;
+  if (input.ingressGroupId) {
+    // A domain on an ingress group is served by every member.
+    const members = await container.resolve(IngressGroupService).memberNodeIds(input.ingressGroupId);
+    assertCanPlaceOnMembers(scopes, 'domains:create', input.folderId, members);
+    await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
+  } else if (!hasScopeForCreation(scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
     throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');
   }
   await container.resolve(DomainFolderService).assertFolderExists(input.folderId);
@@ -263,6 +290,8 @@ domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScopeForResource
   const body = await c.req.json();
   const input = UpdateDomainSchema.parse(body);
   const domainsService = container.resolve(DomainsService);
+  if (input.ingressGroupId !== undefined)
+    await assertDomainPlacementAccess(c.get('effectiveScopes') || [], c.req.param('id')!, input);
   try {
     const domain = await domainsService.updateDomain(c.req.param('id')!, input, user.id);
     return c.json({ data: domain });
@@ -373,6 +402,17 @@ domainRoutes.openapi(
       }
       return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to migrate ingress' }, 400);
     }
+  }
+);
+
+domainRoutes.openapi(
+  { ...changeDomainIngressPlacementRoute, middleware: requireScopeForResource('domains:edit', 'id') },
+  async (c) => {
+    const id = c.req.param('id')!;
+    const input = DomainIngressPlacementSchema.parse(await c.req.json());
+    await assertDomainPlacementAccess(c.get('effectiveScopes') || [], id, input);
+    const data = await container.resolve(DomainsService).changeDomainIngressPlacement(id, input, c.get('user')!.id);
+    return c.json({ data });
   }
 );
 

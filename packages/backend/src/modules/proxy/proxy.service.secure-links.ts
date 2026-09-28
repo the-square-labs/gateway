@@ -3,6 +3,7 @@ import { nodes, proxyAdditionalSecureLinks, proxyHosts } from '@/db/schema/index
 import { AppError } from '@/middleware/error-handler.js';
 import { runOutsideProxyLocks } from './proxy-host-lock.js';
 import type { ProxyAdditionalSecureLinkRow } from './proxy-secure-link.service.js';
+import { mergeTrafficRuntimes } from './proxy-traffic-merge.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 
@@ -46,6 +47,7 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
         isSystem: true,
         upstreamKind: true,
         nodeId: true,
+        ingressGroupId: true,
         dockerNodeId: true,
         secureLinkGeneration: true,
         secureLinkStatus: true,
@@ -63,7 +65,8 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
       throw new AppError(409, 'SECURE_LINK_NOT_APPLICABLE', 'Proxy host does not use a Docker Secure Link');
     }
 
-    const nodeIds = [host.nodeId, host.dockerNodeId].filter((nodeId): nodeId is string => Boolean(nodeId));
+    const sourceNodeIds = await this.ingressNodesOf(host);
+    const nodeIds = [...sourceNodeIds, host.dockerNodeId].filter((nodeId): nodeId is string => Boolean(nodeId));
     const [linkNodes, cachedHistory, additionalBindings] = await Promise.all([
       nodeIds.length
         ? this.db
@@ -183,6 +186,12 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
       sourceNode: sourceNode
         ? { id: sourceNode.id, name: sourceNode.displayName || sourceNode.hostname, status: sourceNode.status }
         : null,
+      // Every source nginx node of the link: all members of the route's ingress group, else its node.
+      sourceNodes: sourceNodeIds.flatMap((nodeId) => {
+        const node = nodeById.get(nodeId);
+        return node ? [{ id: node.id, name: node.displayName || node.hostname, status: node.status }] : [];
+      }),
+      ingressGroupId: host.ingressGroupId,
       targetNode: targetNode
         ? { id: targetNode.id, name: targetNode.displayName || targetNode.hostname, status: targetNode.status }
         : null,
@@ -235,7 +244,7 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
           inArray(proxyHosts.upstreamKind, ['docker_container', 'docker_deployment']),
           eq(proxyHosts.secureLinkStatus, 'active')
         ),
-        columns: { id: true, nodeId: true },
+        columns: { id: true, nodeId: true, ingressGroupId: true },
       }),
       this.db.query.proxyAdditionalSecureLinks?.findMany
         ? this.db.query.proxyAdditionalSecureLinks.findMany({
@@ -282,7 +291,7 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
   }
 
   protected sampleSecureLinkRuntime(
-    host: { id: string; nodeId: string | null },
+    host: { id: string; nodeId: string | null; ingressGroupId?: string | null },
     trafficTailLines: number
   ): Promise<ProxySecureLinkRuntimeSample> {
     const active = this.secureLinkRuntimeSamplesInFlight.get(host.id);
@@ -346,7 +355,11 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
     return task;
   }
 
-  protected queueSecureLinkRuntimeSample(host: { id: string; nodeId: string | null }): void {
+  protected queueSecureLinkRuntimeSample(host: {
+    id: string;
+    nodeId: string | null;
+    ingressGroupId?: string | null;
+  }): void {
     if (!this.secureLinks || !host.nodeId) return;
     runOutsideProxyLocks(() => {
       void this.sampleSecureLinkRuntime(host, SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES).catch((error) => {
@@ -362,9 +375,11 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
     host: {
       id: string;
       nodeId: string | null;
+      ingressGroupId?: string | null;
     },
     trafficTailLines: number
   ): Promise<ProxySecureLinkRuntimeSnapshot> {
+    if (host.ingressGroupId) return this.collectGroupSecureLinkRuntimeSnapshot(host, trafficTailLines);
     const [runtime, trafficResult] = await Promise.all([
       this.secureLinks?.getRuntime(host.id).catch((error) => {
         logger.debug('Proxy Secure Link route telemetry is unavailable', {
@@ -401,6 +416,36 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
       }
     }
 
+    return { timestamp: new Date().toISOString(), runtime, traffic };
+  }
+
+  /** A group route: relay runtime summed over its member routes, HTTP telemetry merged over connected members. */
+  private async collectGroupSecureLinkRuntimeSnapshot(
+    host: { id: string; nodeId: string | null; ingressGroupId?: string | null },
+    trafficTailLines: number
+  ): Promise<ProxySecureLinkRuntimeSnapshot> {
+    const members = (
+      await this.ingressNodesOf({ nodeId: host.nodeId, ingressGroupId: host.ingressGroupId ?? null })
+    ).filter((nodeId) => this.nodeDispatch.isNodeConnected(nodeId));
+    const [runtime, reports] = await Promise.all([
+      this.secureLinks?.getRuntime(host.id).catch(() => null) ?? Promise.resolve(null),
+      Promise.all(
+        members.map((nodeId) =>
+          this.nodeDispatch
+            .requestTrafficStats(nodeId, trafficTailLines, {
+              hostId: host.id,
+              windowSeconds: SECURE_LINK_TRAFFIC_WINDOW_SECONDS,
+            })
+            .then((result) => {
+              if (!result?.success || !result.detail) return null;
+              const parsed = JSON.parse(result.detail) as ProxyHostTrafficRuntime;
+              return parsed.hostId === host.id ? parsed : null;
+            })
+            .catch(() => null)
+        )
+      ),
+    ]);
+    const traffic = mergeTrafficRuntimes(reports.filter((report): report is ProxyHostTrafficRuntime => !!report));
     return { timestamp: new Date().toISOString(), runtime, traffic };
   }
 

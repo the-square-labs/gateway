@@ -143,6 +143,8 @@ import { InferenceProviderRegistry } from '@/modules/inference/providers/inferen
 import { InferenceProviderService } from '@/modules/inference/providers/inference-provider.service.js';
 import { InferenceProviderCredentialService } from '@/modules/inference/providers/inference-provider-credential.service.js';
 import { InferenceRoutingService } from '@/modules/inference/providers/inference-routing.service.js';
+import { IngressGroupService } from '@/modules/ingress-groups/ingress-group.service.js';
+import { IngressGroupConvergence } from '@/modules/ingress-groups/ingress-group-convergence.js';
 import { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
 import { integrationCommercialRuntime } from '@/modules/integrations/integration-commercial-runtime.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
@@ -1539,7 +1541,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(StatusPageService, statusPageService);
 
   const acmeService = new ACMEService();
-  const http01ChallengeNodes = new Map<string, string>();
+  const http01ChallengeNodes = new Map<string, string[]>();
   acmeService.onHttp01Preflight = async (domains: string[]) => {
     await Promise.all(
       [...new Set(domains.map((domain) => domain.trim().toLowerCase()))].map((domain) =>
@@ -1548,21 +1550,39 @@ export async function initializeContainer(): Promise<void> {
     );
   };
   acmeService.onChallengeCreate = async (token: string, content: string, domain: string) => {
+    // A domain on an ingress group gets the token on every online member: DNS may send the validation to any of them.
     const ingress = await resolveHttp01Ingress(db, domain);
-    const deployed = await nodeDispatch.deployAcmeChallenge(ingress.nodeId, token, content);
-    if (!deployed.success) {
-      throw new AppError(
-        502,
-        'ACME_CHALLENGE_DEPLOY_FAILED',
-        `Could not publish the HTTP-01 challenge for ${domain} on its Nginx node: ${deployed.error || 'the daemon rejected the challenge'}`
-      );
+    const published: string[] = [];
+    try {
+      for (const nodeId of ingress.nodeIds) {
+        const deployed = await nodeDispatch.deployAcmeChallenge(nodeId, token, content);
+        if (!deployed.success) {
+          throw new AppError(
+            502,
+            'ACME_CHALLENGE_DEPLOY_FAILED',
+            `Could not publish the HTTP-01 challenge for ${domain} on its Nginx node${ingress.nodeIds.length > 1 ? ` ${nodeId}` : ''}: ${deployed.error || 'the daemon rejected the challenge'}`
+          );
+        }
+        published.push(nodeId);
+      }
+    } finally {
+      http01ChallengeNodes.set(token, published);
     }
-    http01ChallengeNodes.set(token, ingress.nodeId);
+    if (ingress.offlineNodeIds.length > 0) {
+      logger.warn('HTTP-01 challenge not published on offline ingress group members; validation may fail there', {
+        domain,
+        offlineNodeIds: ingress.offlineNodeIds,
+      });
+    }
   };
   acmeService.onChallengeRemove = async (token: string, domain: string) => {
-    const nodeId = http01ChallengeNodes.get(token) ?? (await resolveHttp01Ingress(db, domain)).nodeId;
+    const nodeIds = http01ChallengeNodes.get(token) ?? (await resolveHttp01Ingress(db, domain)).nodeIds;
     try {
-      await nodeDispatch.removeAcmeChallenge(nodeId, token);
+      const results = await Promise.allSettled(
+        nodeIds.map((nodeId) => nodeDispatch.removeAcmeChallenge(nodeId, token))
+      );
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw (failed as PromiseRejectedResult).reason;
     } finally {
       http01ChallengeNodes.delete(token);
     }
@@ -1693,6 +1713,20 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(DomainsService, domainsService);
   domainsService.startIngressTargetReconciliation();
   domainsService.startCloudflareMigration();
+
+  // Ingress groups: routes and domains served by several nginx nodes (normally one per site).
+  const ingressGroupService = new IngressGroupService(db, auditService, {
+    isNodeConnected: (nodeId) => nodeDispatch.isNodeConnected(nodeId),
+  });
+  ingressGroupService.setProxyService(proxyService);
+  ingressGroupService.setDomainsService(domainsService);
+  ingressGroupService.setEventBus(eventBus);
+  ingressGroupService.setNodeRegistry(nodeRegistry);
+  container.registerInstance(IngressGroupService, ingressGroupService);
+  const ingressGroupConvergence = new IngressGroupConvergence(db, ingressGroupService, (nodeId) =>
+    nodeDispatch.isNodeConnected(nodeId)
+  );
+  container.registerInstance(IngressGroupConvergence, ingressGroupConvergence);
   const domainFolderService = new DomainFolderService(db, auditService);
   domainFolderService.setEventBus(eventBus);
   container.registerInstance(DomainFolderService, domainFolderService);

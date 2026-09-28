@@ -70,7 +70,7 @@ export function normalizedHostname(value: string): string {
 // ---------------------------------------------------------------------------
 
 export type ProxyHostRow = typeof proxyHosts.$inferSelect;
-type CertPathOptions = { prepare?: boolean; legacy?: boolean; preserveLegacyOnUnsupported?: boolean };
+export type CertPathOptions = { prepare?: boolean; legacy?: boolean; preserveLegacyOnUnsupported?: boolean };
 export type ProxyHostView = WithDockerUpstreamDisplay<ProxyHostRow>;
 
 export interface ProxyHostTrafficRuntime {
@@ -103,7 +103,10 @@ export interface ProxySecureLinkRuntimeSample {
 
 export interface StatusPageSystemHostInput {
   domain: string;
+  /** The nginx node, or with `ingressGroupId` ignored (the group's first member is recorded). */
   nodeId: string;
+  /** Serve the status page from every member of this ingress group. */
+  ingressGroupId?: string | null;
   sslCertificateId?: string | null;
   nginxTemplateId?: string | null;
   upstreamUrl?: string | null;
@@ -252,23 +255,18 @@ export abstract class ProxyServiceCore {
     });
   }
 
+  /** Renders and applies a route on every node that serves it (see ProxyServiceDelivery.deliverHost). */
+  protected abstract deliverHost(
+    host: ProxyHostRow,
+    options?: { certOptions?: CertPathOptions; pagesRouteIncludePathOverride?: string; nodeIds?: string[] }
+  ): Promise<{ config: string; configOwnership: string; epoch: number; configs: Map<string, string> }>;
+
   protected async renderAndApplyHost(
     host: ProxyHostRow,
-    certOptions: CertPathOptions = {}
-  ): Promise<{ config: string; configOwnership: string; epoch: number }> {
-    const certPaths = await this.resolveCertPaths(host, certOptions);
-    const accessList = await this.resolveAccessList(host.accessListId);
-    const config = await this.buildNginxConfig(host, certPaths, accessList);
-    const configOwnership = this.configOwnershipForHost(host);
-    await this.applyConfigToNode(
-      host.id,
-      config,
-      host.nodeId,
-      certPaths.preparedTls,
-      configOwnership,
-      host.accessListId
-    );
-    return { config, configOwnership, epoch: this.hostConfigEpochs.get(host.id) ?? 0 };
+    certOptions: CertPathOptions = {},
+    nodeIds?: string[]
+  ): Promise<{ config: string; configOwnership: string; epoch: number; configs: Map<string, string> }> {
+    return this.deliverHost(host, { certOptions, nodeIds });
   }
 
   async reconcileTemplateHosts(

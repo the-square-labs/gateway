@@ -11,6 +11,8 @@ export const CreateDomainSchema = z.object({
   proxied: z.boolean().optional(),
   overwriteDns: z.boolean().optional(),
   nginxNodeId: z.string().uuid().optional(),
+  /** Serve the domain from every member of this ingress group; DNS gets the union of the members' addresses. */
+  ingressGroupId: z.string().uuid().optional(),
 });
 
 export const PreviewDomainSchema = CreateDomainSchema.pick({
@@ -19,12 +21,30 @@ export const PreviewDomainSchema = CreateDomainSchema.pick({
   ttl: true,
   proxied: true,
   nginxNodeId: true,
+  ingressGroupId: true,
 });
 
 export const UpdateDomainSchema = z.object({
   description: z.string().max(1000).optional().nullable(),
   proxied: z.boolean().optional(),
+  /**
+   * Move the domain and every route on it onto this ingress group (a planned operation: config and certificates on
+   * the new members first, then DNS), or with null back to `nginxNodeId`, a current member (DNS first).
+   */
+  ingressGroupId: z.string().uuid().nullable().optional(),
+  nginxNodeId: z.string().uuid().optional(),
 });
+
+/** Change where a domain and its routes are served: onto an ingress group, or back to one member node. */
+export const DomainIngressPlacementSchema = z
+  .object({
+    ingressGroupId: z.string().uuid().nullable(),
+    nginxNodeId: z.string().uuid().optional(),
+  })
+  .refine((value) => value.ingressGroupId !== null || !!value.nginxNodeId, {
+    message: 'Pass nginxNodeId (a current group member) to serve the domain from one node',
+    path: ['nginxNodeId'],
+  });
 
 export const DeleteDomainSchema = z.object({
   deleteDns: z.boolean().optional(),
@@ -58,5 +78,6 @@ export type UpdateDomainInput = z.infer<typeof UpdateDomainSchema>;
 export type DeleteDomainInput = z.infer<typeof DeleteDomainSchema>;
 export type ResolveCloudflareMigrationInput = z.infer<typeof ResolveCloudflareMigrationSchema>;
 export type DomainIngressMigrationInput = z.infer<typeof DomainIngressMigrationSchema>;
+export type DomainIngressPlacementInput = z.infer<typeof DomainIngressPlacementSchema>;
 export type IssueDomainCertificateInput = z.infer<typeof IssueDomainCertificateSchema>;
 export type DomainListQuery = z.infer<typeof DomainListQuerySchema>;

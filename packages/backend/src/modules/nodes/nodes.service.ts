@@ -8,6 +8,8 @@ import {
   hostingNodeBindings,
   hostingOperations,
   hostingResources,
+  ingressGroupMembers,
+  ingressGroups,
   managedDatabaseInstances,
   nodes,
   proxyHosts,
@@ -815,6 +817,31 @@ export class NodesService {
       throw new AppError(409, 'NODE_HAS_DOMAINS', 'Cannot delete a node with assigned domains. Reassign them first.', {
         domainCount: assignedDomains.length,
       });
+    }
+
+    // A member of an ingress group is removed from the group first (DNS first, then cleanup); cascading its hosts
+    // here would delete group routes it is the primary of.
+    const groupMemberships =
+      (await this.db
+        .select({ groupId: ingressGroupMembers.groupId })
+        .from(ingressGroupMembers)
+        .where(eq(ingressGroupMembers.nodeId, id))) ?? [];
+    if (groupMemberships.length > 0) {
+      const groupNames = await this.db
+        .select({ name: ingressGroups.name })
+        .from(ingressGroups)
+        .where(
+          inArray(
+            ingressGroups.id,
+            groupMemberships.map((membership) => membership.groupId)
+          )
+        );
+      throw new AppError(
+        409,
+        'NODE_IN_INGRESS_GROUP',
+        `Remove this node from ingress group ${groupNames.map((group) => group.name).join(', ')} first; its routes keep serving from the other members`,
+        { ingressGroupIds: groupMemberships.map((membership) => membership.groupId) }
+      );
     }
 
     if (assignedHosts.length > 0) {

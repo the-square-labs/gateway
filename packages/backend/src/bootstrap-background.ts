@@ -37,6 +37,7 @@ import { HostingInventoryService } from '@/modules/hosting/hosting-inventory.ser
 import { HostingManagementService } from '@/modules/hosting/hosting-management.service.js';
 import { HostingObservationsService } from '@/modules/hosting/hosting-observations.service.js';
 import { HostingProvisioningService } from '@/modules/hosting/hosting-provisioning.service.js';
+import { IngressGroupConvergence } from '@/modules/ingress-groups/ingress-group-convergence.js';
 import { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
@@ -215,6 +216,18 @@ export async function initializeBackgroundServices(): Promise<void> {
       proxyService.collectSecureLinkRuntimeSnapshots()
     );
   }
+  // Ingress groups converge without an operator: joining members are promoted, draining members cleaned up once
+  // DNS moved, and routes or certificates that missed a connected member are delivered again.
+  const ingressGroupConvergence = container.resolve(IngressGroupConvergence);
+  scheduler.registerInterval('ingress-group-convergence', 60 * 1000, () => ingressGroupConvergence.reconcile());
+  eventBus.subscribe('node.changed', (payload) => {
+    const event = payload as { status?: string } | undefined;
+    if (event?.status === 'online') {
+      void ingressGroupConvergence
+        .reconcile()
+        .catch((error) => logger.warn('Ingress group convergence after a node reconnect failed', { error }));
+    }
+  });
   scheduler.registerInterval('nginx-tls-certificate-integrity', 6 * 60 * 60 * 1000, async () => {
     await nginxCertificateDistribution.reconcileIntegrity();
     await nginxCertificateDistribution.cleanupDueReplicas();

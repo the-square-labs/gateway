@@ -229,7 +229,14 @@ export const relayRoutes = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
-    ownerUnique: unique('relay_routes_owner_unique').on(table.ownerKind, table.ownerId),
+    // One route per owner, except proxy Secure Links: a route served by an ingress group has one source (and so one
+    // route, connect grant and relay placement term) per member nginx node for the same link endpoint.
+    ownerUnique: uniqueIndex('relay_routes_owner_unique')
+      .on(table.ownerKind, table.ownerId)
+      .where(sql`${table.ownerKind} <> 'proxy_host_secure_link'`),
+    proxyLinkSourceUnique: uniqueIndex('relay_routes_proxy_link_source_unique')
+      .on(table.ownerKind, table.ownerId, table.sourceKind, table.sourceId)
+      .where(sql`${table.ownerKind} = 'proxy_host_secure_link'`),
     sourceIdx: index('relay_routes_source_idx').on(table.sourceKind, table.sourceId),
     targetIdx: index('relay_routes_target_idx').on(table.targetEndpointId),
   })

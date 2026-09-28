@@ -19,6 +19,7 @@ import {
   CreateDomainSchema,
   DeleteDomainSchema,
   DomainIngressMigrationSchema,
+  DomainIngressPlacementSchema,
   DomainListQuerySchema,
   PreviewDomainSchema,
   ResolveCloudflareMigrationSchema,
@@ -212,4 +213,15 @@ export const issueDomainCertificateRoute = appRoute({
     'Optional JSON body `{ "folderId": "<ssl certificate folder id>" }` creates the certificate in that SSL certificate folder; requires ssl:cert:issue on the destination.',
   request: { params: IdParamSchema },
   responses: createdJson(UnknownDataResponseSchema),
+});
+
+export const changeDomainIngressPlacementRoute = appRoute({
+  method: 'post',
+  path: '/{id}/ingress-placement',
+  tags: ['Domains'],
+  summary: 'Move a domain onto an ingress group or back to one node',
+  description:
+    'Moves the domain, every route on it and every related registered domain. Onto a group (ingressGroupId): the domain’s current node must be a member and keeps serving; config and certificates reach the other members first, then Cloudflare-managed DNS records become the union of the active members’ addresses (round robin, no health checks: DNS failover mode none). External DNS stays the operator’s: list the members’ addresses there. Back to one node (ingressGroupId null, nginxNodeId a current member): DNS first, then the routes leave the other members. A domain that backs the Pages wildcard profile stays on one node. Onto a group requires domains:create for every member and the multi-node availability entitlement.',
+  request: { params: IdParamSchema, ...jsonBody(DomainIngressPlacementSchema) },
+  responses: okJson(UnknownDataResponseSchema),
 });

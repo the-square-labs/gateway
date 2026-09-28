@@ -14,6 +14,11 @@ import {
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { proxyHostsServedByNode, resolveIngressNodes } from '@/modules/ingress-groups/ingress-nodes.js';
+import {
+  secureLinkSourceNodeIds,
+  secureLinksSourcedByNode,
+} from '@/modules/ingress-groups/ingress-secure-link-sources.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPolicyService } from '@/services/relay-policy.service.js';
@@ -75,6 +80,11 @@ const PROXY_SECURE_LINK_PROBE_RETRY_MS = 500;
 const NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY = 'nginx_secure_link_socket_only_v1';
 const logger = createChildLogger('ProxySecureLinkService');
 const DOCKER_UPSTREAM_KINDS = ['docker_container', 'docker_deployment'] as const;
+
+/** One source (a single-node route) is passed as before; a group route passes every member. */
+function relaySources(sources: readonly string[]): string | readonly string[] {
+  return sources.length === 1 ? sources[0]! : sources;
+}
 
 function isDockerUpstream(kind: string): kind is (typeof DOCKER_UPSTREAM_KINDS)[number] {
   return (DOCKER_UPSTREAM_KINDS as readonly string[]).includes(kind);
@@ -244,7 +254,8 @@ export class ProxySecureLinkService {
     if (!host.nodeId || host.type !== 'proxy' || host.rawConfigEnabled) {
       throw new AppError(409, 'AVAILABILITY_INGRESS_UNAVAILABLE', 'Availability requires a managed Proxy Host');
     }
-    if (!(await this.nodesSupportSecureLinks([host.nodeId, input.dockerNodeId], host.nodeId))) {
+    const availabilitySources = await this.hostSources(host);
+    if (!(await this.nodesSupportSecureLinks([...availabilitySources, input.dockerNodeId], availabilitySources))) {
       throw new AppError(
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
@@ -357,6 +368,7 @@ export class ProxySecureLinkService {
       .select({
         sourceNodeId: proxyAdditionalSecureLinks.sourceNodeId,
         dockerNodeId: proxyAdditionalSecureLinks.dockerNodeId,
+        proxyHostId: proxyAdditionalSecureLinks.proxyHostId,
       })
       .from(proxyAdditionalSecureLinks)
       .innerJoin(
@@ -369,8 +381,18 @@ export class ProxySecureLinkService {
           eq(dockerAvailabilityPlacements.policyId, policyId)
         )
       );
+    // A member of a route on an ingress group has a source on every group member.
+    const sources = new Set<string>();
+    for (const hostId of new Set(members.map(({ proxyHostId }) => proxyHostId))) {
+      const host = await this.db.query.proxyHosts.findFirst({
+        where: eq(proxyHosts.id, hostId),
+        columns: { nodeId: true, ingressGroupId: true },
+      });
+      const recorded = members.find((member) => member.proxyHostId === hostId)?.sourceNodeId ?? null;
+      for (const nodeId of await secureLinkSourceNodeIds(this.db, host, recorded)) sources.add(nodeId);
+    }
     await Promise.all([
-      ...[...new Set(members.map(({ sourceNodeId }) => sourceNodeId))].map((nodeId) => this.syncSourceNode(nodeId)),
+      ...[...sources].map((nodeId) => this.syncSourceNode(nodeId)),
       ...[...new Set(members.map(({ dockerNodeId }) => dockerNodeId))].map((nodeId) => this.syncTargetNode(nodeId)),
     ]);
   }
@@ -398,7 +420,10 @@ export class ProxySecureLinkService {
       )
       .returning();
     if (!updated) throw new AppError(404, 'AVAILABILITY_INGRESS_MEMBER_NOT_FOUND', 'Availability member not found');
-    await Promise.all([this.syncSourceNode(updated.sourceNodeId), this.syncTargetNode(updated.dockerNodeId)]);
+    await Promise.all([
+      this.syncSourceNodes(await this.bindingSources(updated, host)),
+      this.syncTargetNode(updated.dockerNodeId),
+    ]);
     return updated;
   }
 
@@ -428,7 +453,7 @@ export class ProxySecureLinkService {
           .set({ status: 'cleanup_pending', lastError: null, updatedAt: new Date() })
           .where(eq(proxyAdditionalSecureLinks.id, current.id));
         await beforeRuntimeCleanup?.();
-        await this.deprovisionAdditionalRuntime(current);
+        await this.deprovisionAdditionalRuntime(current, host);
         await this.db.delete(proxyAdditionalSecureLinks).where(eq(proxyAdditionalSecureLinks.id, current.id));
         this.emitAdditionalState(host, current, 'deleted');
       } catch (error) {
@@ -485,10 +510,11 @@ export class ProxySecureLinkService {
     }
 
     const target = await this.resolveAdditionalTarget(input, actorScopes);
+    const createSources = await this.hostSources(host);
     if (
       !(await this.nodesSupportSecureLinks(
-        isManagedStorageUpstream(input.upstreamKind) ? [host.nodeId] : [host.nodeId, target.nodeId],
-        host.nodeId
+        isManagedStorageUpstream(input.upstreamKind) ? createSources : [...createSources, target.nodeId],
+        createSources
       ))
     ) {
       throw new AppError(
@@ -570,7 +596,8 @@ export class ProxySecureLinkService {
       throw new AppError(409, 'ADDITIONAL_ROUTE_UNAVAILABLE', 'Additional Routes require a managed proxy host');
     }
     const target = await this.resolveAdditionalTarget(input);
-    if (!(await this.nodesSupportSecureLinks([host.nodeId, target.nodeId], host.nodeId))) {
+    const routeSources = await this.hostSources(host);
+    if (!(await this.nodesSupportSecureLinks([...routeSources, target.nodeId], routeSources))) {
       throw new AppError(
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
@@ -646,7 +673,7 @@ export class ProxySecureLinkService {
         }
       }
       if (existing.status === 'cleanup_pending') {
-        await this.deprovisionAdditionalRuntime(existing).catch(() => undefined);
+        await this.deprovisionAdditionalRuntime(existing, host).catch(() => undefined);
       }
       await this.db
         .update(proxyAdditionalSecureLinks)
@@ -814,7 +841,7 @@ export class ProxySecureLinkService {
       .update(proxyAdditionalSecureLinks)
       .set({ status: 'cleanup_pending', updatedAt: new Date() })
       .where(eq(proxyAdditionalSecureLinks.id, binding.id));
-    await this.deprovisionAdditionalRuntime(binding);
+    await this.deprovisionAdditionalRuntime(binding, host);
     await this.db
       .update(proxyAdditionalSecureLinks)
       .set({
@@ -871,10 +898,11 @@ export class ProxySecureLinkService {
     }
     const next = { ...input, name: binding.name };
     const target = await this.resolveAdditionalTarget(next, actorScopes);
+    const retargetSources = await this.hostSources(host);
     if (
       !(await this.nodesSupportSecureLinks(
-        isManagedStorageUpstream(input.upstreamKind) ? [host.nodeId!] : [host.nodeId!, target.nodeId],
-        host.nodeId!
+        isManagedStorageUpstream(input.upstreamKind) ? retargetSources : [...retargetSources, target.nodeId],
+        retargetSources
       ))
     ) {
       throw new AppError(
@@ -896,7 +924,7 @@ export class ProxySecureLinkService {
       .update(proxyAdditionalSecureLinks)
       .set({ status: 'cleanup_pending', updatedAt: new Date() })
       .where(eq(proxyAdditionalSecureLinks.id, binding.id));
-    await this.deprovisionAdditionalRuntime(binding);
+    await this.deprovisionAdditionalRuntime(binding, host);
     const stage = async (db: Pick<DrizzleClient, 'update'>, resolved: typeof target) =>
       db
         .update(proxyAdditionalSecureLinks)
@@ -998,14 +1026,15 @@ export class ProxySecureLinkService {
         throw new AppError(409, 'SECURE_LINK_BUSY', 'The Secure Link changed while it was being retargeted; retry');
       }
       try {
+        const sources = await this.bindingSources(staged, host);
         await this.relayPolicy.ensureManagedStorageProxySecureLink(
           staged.id,
           staged.managedStorageId,
-          staged.sourceNodeId,
+          relaySources(sources),
           staged.dockerNodeId
         );
-        await this.syncSourceNode(staged.sourceNodeId);
-        await this.probeSecureLink(staged.sourceNodeId, {
+        await this.syncSourceNodes(sources);
+        await this.probeSources(sources, {
           linkId: staged.id,
           scheme: staged.forwardScheme,
           path: '/',
@@ -1061,13 +1090,14 @@ export class ProxySecureLinkService {
       .returning();
     if (!restored?.managedStorageId) return null;
     try {
+      const sources = await this.bindingSources(restored, host);
       await this.relayPolicy.ensureManagedStorageProxySecureLink(
         restored.id,
         restored.managedStorageId,
-        restored.sourceNodeId,
+        relaySources(sources),
         restored.dockerNodeId
       );
-      await this.syncSourceNode(restored.sourceNodeId);
+      await this.syncSourceNodes(sources);
       return restored;
     } catch (error) {
       const [failed] = await this.db
@@ -1260,7 +1290,9 @@ export class ProxySecureLinkService {
     for (const binding of bindings) {
       await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id);
     }
-    const sourceNodes = [...new Set(bindings.map((binding) => binding.sourceNodeId))];
+    const sourceNodes = [
+      ...new Set([...bindings.map((binding) => binding.sourceNodeId), ...(await this.hostSources(host))]),
+    ];
     const targetNodes = [
       ...new Set(
         bindings.filter((binding) => isDockerUpstream(binding.upstreamKind)).map((binding) => binding.dockerNodeId)
@@ -1345,6 +1377,7 @@ export class ProxySecureLinkService {
     return this.withLinkOperation(bindingId, async () => {
       let binding = await this.requireAdditional(host.id, bindingId);
       if (binding.status !== 'provisioning') return binding;
+      const sources = await this.bindingSources(binding, host);
       // Relay state that already carries this link to the same node may be serving right now: an Availability
       // member whose holder took over while Gateway was away and is re-provisioned when Gateway returns (B-18), or
       // a member re-provisioned in place. A failed attempt must never tear that path down (make-before-break): it
@@ -1358,7 +1391,7 @@ export class ProxySecureLinkService {
           await this.relayPolicy.ensureManagedStorageProxySecureLink(
             binding.id,
             binding.managedStorageId,
-            binding.sourceNodeId,
+            relaySources(sources),
             binding.dockerNodeId
           );
         } else {
@@ -1369,11 +1402,11 @@ export class ProxySecureLinkService {
           // generation; any other concurrent change still fails the guards below.
           const synced = await this.requireAdditional(host.id, binding.id);
           if (isNetworkReselection(binding, synced)) binding = synced;
-          await this.relayPolicy.ensureProxySecureLink(binding.id, binding.sourceNodeId, binding.dockerNodeId);
+          await this.relayPolicy.ensureProxySecureLink(binding.id, relaySources(sources), binding.dockerNodeId);
         }
-        await this.syncSourceNode(binding.sourceNodeId);
+        await this.syncSourceNodes(sources);
         if (!binding.dormant) {
-          await this.probeSecureLink(binding.sourceNodeId, {
+          await this.probeSources(sources, {
             linkId: binding.id,
             scheme: binding.forwardScheme,
             path: '/',
@@ -1424,7 +1457,7 @@ export class ProxySecureLinkService {
           )
           .returning();
         await Promise.allSettled([
-          this.syncSourceNode(binding.sourceNodeId),
+          this.syncSourceNodes(sources),
           ...(isManagedStorageUpstream(binding.upstreamKind) ? [] : [this.syncTargetNode(binding.dockerNodeId)]),
         ]);
         if (failed) {
@@ -1437,6 +1470,7 @@ export class ProxySecureLinkService {
   }
 
   private async reconcileActiveAdditional(host: ProxyHostRow, binding: ProxyAdditionalSecureLinkRow): Promise<void> {
+    const sources = await this.bindingSources(binding, host);
     if (isManagedStorageUpstream(binding.upstreamKind)) {
       if (!binding.managedStorageId) throw new Error('Managed storage Secure Link is missing its storage identity');
       const target = await this.resolveAdditionalTarget(
@@ -1473,15 +1507,15 @@ export class ProxySecureLinkService {
       await this.relayPolicy.ensureManagedStorageProxySecureLink(
         binding.id,
         binding.managedStorageId,
-        binding.sourceNodeId,
+        relaySources(sources),
         binding.dockerNodeId
       );
-      await this.syncSourceNode(binding.sourceNodeId);
+      await this.syncSourceNodes(sources);
       return;
     }
     await this.syncTargetNode(binding.dockerNodeId, undefined, binding.id);
-    await this.relayPolicy.ensureProxySecureLink(binding.id, binding.sourceNodeId, binding.dockerNodeId);
-    await this.syncSourceNode(binding.sourceNodeId);
+    await this.relayPolicy.ensureProxySecureLink(binding.id, relaySources(sources), binding.dockerNodeId);
+    await this.syncSourceNodes(sources);
   }
 
   private async finishAdditionalDeletion(host: ProxyHostRow, binding: ProxyAdditionalSecureLinkRow): Promise<void> {
@@ -1492,7 +1526,7 @@ export class ProxySecureLinkService {
       if (!current) return;
       if (current.status !== 'cleanup_pending') return;
       try {
-        await this.deprovisionAdditionalRuntime(current);
+        await this.deprovisionAdditionalRuntime(current, host);
         await this.db.delete(proxyAdditionalSecureLinks).where(eq(proxyAdditionalSecureLinks.id, current.id));
         this.emitAdditionalState(host, current, 'deleted');
       } catch (error) {
@@ -1511,10 +1545,14 @@ export class ProxySecureLinkService {
     });
   }
 
-  private async deprovisionAdditionalRuntime(binding: ProxyAdditionalSecureLinkRow): Promise<void> {
+  private async deprovisionAdditionalRuntime(
+    binding: ProxyAdditionalSecureLinkRow,
+    host?: Pick<ProxyHostRow, 'nodeId' | 'ingressGroupId'>
+  ): Promise<void> {
+    const sources = await this.bindingSources(binding, host);
     await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id, { allowDeferredSnapshot: true });
     await Promise.allSettled([
-      this.syncSourceNode(binding.sourceNodeId),
+      this.syncSourceNodes(sources),
       ...(isManagedStorageUpstream(binding.upstreamKind) ? [] : [this.syncTargetNode(binding.dockerNodeId)]),
     ]);
   }
@@ -1573,9 +1611,11 @@ export class ProxySecureLinkService {
   private async prepareLocked(host: ProxyHostRow, requireCapabilities: boolean, force: boolean): Promise<ProxyHostRow> {
     if (host.type !== 'proxy' || !isDockerUpstream(host.upstreamKind) || !host.nodeId) return host;
     const target = await this.resolveTarget(host);
+    // A route on an ingress group has a source (relay route, grants, listener) on every member.
+    const sources = await this.hostSources(host);
     const supported = await this.nodesSupportSecureLinks(
-      [host.nodeId, target.nodeId],
-      host.rawConfigEnabled ? undefined : host.nodeId
+      [...sources, target.nodeId],
+      host.rawConfigEnabled ? undefined : sources
     );
     if (!supported) {
       if (requireCapabilities) {
@@ -1608,9 +1648,9 @@ export class ProxySecureLinkService {
       if (!force) return host;
       try {
         await this.syncTargetNode(target.nodeId, undefined, host.id);
-        await this.relayPolicy.ensureProxySecureLink(host.id, host.nodeId, target.nodeId);
-        await this.syncSourceNode(host.nodeId);
-        const probe = await this.probeSecureLink(host.nodeId, {
+        await this.relayPolicy.ensureProxySecureLink(host.id, relaySources(sources), target.nodeId);
+        await this.syncSourceNodes(sources);
+        const probe = await this.probeSources(sources, {
           linkId: host.id,
           scheme: host.forwardScheme ?? 'http',
           path: host.healthCheckUrl || '/',
@@ -1656,12 +1696,12 @@ export class ProxySecureLinkService {
         // The replacement source listener is intentionally unreachable from the
         // currently loaded Nginx config until probe and atomic config cutover.
         await this.relayPolicy.revokeOwner('proxy_host_secure_link', host.id);
-        await this.syncSourceNode(host.nodeId, host.id);
+        await this.syncSourceNodes(sources, host.id);
       }
       await this.syncTargetNode(target.nodeId, undefined, host.id);
-      await this.relayPolicy.ensureProxySecureLink(host.id, host.nodeId, target.nodeId);
-      if (!activeUpdate) await this.syncSourceNode(host.nodeId);
-      const probe = await this.probeSecureLink(host.nodeId, {
+      await this.relayPolicy.ensureProxySecureLink(host.id, relaySources(sources), target.nodeId);
+      if (!activeUpdate) await this.syncSourceNodes(sources);
+      const probe = await this.probeSources(sources, {
         linkId: host.id,
         scheme: host.forwardScheme ?? 'http',
         path: host.healthCheckUrl || '/',
@@ -1704,7 +1744,7 @@ export class ProxySecureLinkService {
         })
         .where(eq(proxyHosts.id, host.id));
       if (!cutoverCommitted) {
-        await Promise.allSettled([this.syncSourceNode(host.nodeId), this.syncTargetNode(target.nodeId)]);
+        await Promise.allSettled([this.syncSourceNodes(sources), this.syncTargetNode(target.nodeId)]);
       }
       if (requireCapabilities || cutoverCommitted) throw error;
       const restored = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) });
@@ -1727,7 +1767,7 @@ export class ProxySecureLinkService {
       // the source listener before making activation durable so the daemon can
       // drop the temporary loopback TCP listener. Raw/user-owned configs keep
       // TCP because their upstream may still reference the durable port.
-      await this.syncSourceNode(host.nodeId, undefined, host.id);
+      await this.syncSourceNodes(await this.hostSources(host), undefined, host.id);
     }
 
     await this.db
@@ -1750,8 +1790,9 @@ export class ProxySecureLinkService {
       // and prove the new lanes before making the cutover durable; otherwise the
       // immediate Nginx config probe can race that rebuild and reset a healthy
       // Secure Link.
-      await this.syncSourceNode(host.nodeId);
-      const probe = await this.probeSecureLink(host.nodeId, {
+      const sources = await this.hostSources(host);
+      await this.syncSourceNodes(sources);
+      const probe = await this.probeSources(sources, {
         linkId: host.id,
         scheme: host.forwardScheme ?? 'http',
         path: host.healthCheckUrl || '/',
@@ -1806,7 +1847,7 @@ export class ProxySecureLinkService {
     try {
       await this.relayPolicy.revokeOwner('proxy_host_secure_link', host.id);
       await Promise.all([
-        host.nodeId ? this.syncSourceNode(host.nodeId) : Promise.resolve(),
+        this.syncSourceNodes(await this.hostSources(host)),
         host.dockerNodeId ? this.syncTargetNode(host.dockerNodeId) : Promise.resolve(),
       ]);
       const current = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, host.id) });
@@ -1862,6 +1903,8 @@ export class ProxySecureLinkService {
   }
 
   async reconcileSourceNode(nodeId: string): Promise<void> {
+    // A daemon without Secure Link support has no source bindings to reconcile.
+    if (!(await this.nodesSupportSecureLinks([nodeId]))) return;
     await this.syncSourceNode(nodeId);
   }
 
@@ -1903,7 +1946,17 @@ export class ProxySecureLinkService {
     return 'secure_link_failed';
   }
 
-  private async nodesSupportSecureLinks(nodeIds: string[], socketOnlySourceNodeId?: string): Promise<boolean> {
+  private async nodesSupportSecureLinks(
+    nodeIds: string[],
+    socketOnlySourceNodeIds?: string | readonly string[]
+  ): Promise<boolean> {
+    const socketOnly = new Set(
+      socketOnlySourceNodeIds === undefined
+        ? []
+        : typeof socketOnlySourceNodeIds === 'string'
+          ? [socketOnlySourceNodeIds]
+          : socketOnlySourceNodeIds
+    );
     const unique = [...new Set(nodeIds)];
     const rows = await this.db
       .select({ id: nodes.id, capabilities: nodes.capabilities })
@@ -1915,7 +1968,7 @@ export class ProxySecureLinkService {
       return (
         Array.isArray(reported) &&
         reported.includes('proxy_secure_links_v1') &&
-        (row.id !== socketOnlySourceNodeId || reported.includes(NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY))
+        (!socketOnly.has(row.id) || reported.includes(NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY))
       );
     });
   }
@@ -2135,6 +2188,138 @@ export class ProxySecureLinkService {
     };
   }
 
+  /** Source nginx nodes of a route's primary link: every member of its ingress group, else its node. */
+  private async hostSources(host: Pick<ProxyHostRow, 'nodeId' | 'ingressGroupId'>): Promise<string[]> {
+    return resolveIngressNodes(this.db, host);
+  }
+
+  /** Source nginx nodes of an additional link: every member of its route's ingress group, else its source. */
+  private async bindingSources(
+    binding: ProxyAdditionalSecureLinkRow,
+    host?: Pick<ProxyHostRow, 'nodeId' | 'ingressGroupId'> | null
+  ): Promise<string[]> {
+    const owner =
+      host ??
+      (await this.db.query?.proxyHosts?.findFirst({
+        where: eq(proxyHosts.id, binding.proxyHostId),
+        columns: { nodeId: true, ingressGroupId: true },
+      }));
+    return secureLinkSourceNodeIds(this.db, owner, binding.sourceNodeId);
+  }
+
+  private async syncSourceNodes(
+    nodeIds: readonly string[],
+    rotateLinkId?: string,
+    forceSocketOnlyLinkId?: string
+  ): Promise<void> {
+    const extra =
+      forceSocketOnlyLinkId !== undefined
+        ? [rotateLinkId, forceSocketOnlyLinkId]
+        : rotateLinkId !== undefined
+          ? [rotateLinkId]
+          : [];
+    await Promise.all(
+      [...new Set(nodeIds)].map((nodeId) =>
+        (this.syncSourceNode as (nodeId: string, ...rest: Array<string | undefined>) => Promise<void>)(nodeId, ...extra)
+      )
+    );
+  }
+
+  /**
+   * End-to-end probe through every connected source. A group route's link must work on each member that is
+   * connected; members that are offline are probed after they reconnect (their source sync runs then). With no
+   * source connected the first one is probed, which fails like a single-node link on an offline node.
+   */
+  private async probeSources(
+    nodeIds: readonly string[],
+    input: Parameters<NodeDispatchService['probeProxySecureLink']>[1]
+  ): Promise<Awaited<ReturnType<NodeDispatchService['probeProxySecureLink']>>> {
+    // One source (a single-node route) is probed as before, connected or not.
+    if (nodeIds.length === 1) return this.probeSecureLink(nodeIds[0]!, input);
+    const connected = nodeIds.filter((nodeId) => this.dispatch.isNodeConnected(nodeId));
+    const targets = connected.length > 0 ? connected : nodeIds.slice(0, 1);
+    if (targets.length === 0) throw new Error('The Secure Link has no source nginx node');
+    let first: Awaited<ReturnType<NodeDispatchService['probeProxySecureLink']>> | undefined;
+    for (const nodeId of targets) {
+      const result = await this.probeSecureLink(nodeId, input);
+      first ??= result;
+    }
+    return first!;
+  }
+
+  /**
+   * Brings the source side of every Secure Link of a route in line with the nodes that serve it now: relay routes
+   * and grants for each source, listeners on each source node, and an end-to-end probe through each connected source
+   * that was added. Sources that no longer serve the route lose their routes and listeners. Used when a route moves
+   * between one node and an ingress group and when a group gains or loses a member.
+   */
+  async syncHostSources(host: ProxyHostRow, previousSourceNodeIds: readonly string[] = []): Promise<void> {
+    const sources = await this.hostSources(host);
+    const removed = previousSourceNodeIds.filter((nodeId) => !sources.includes(nodeId));
+    const added = sources.filter((nodeId) => !previousSourceNodeIds.includes(nodeId));
+    const primaryActive =
+      host.type === 'proxy' &&
+      isDockerUpstream(host.upstreamKind) &&
+      host.secureLinkGeneration > 0 &&
+      host.secureLinkStatus !== 'cleanup_pending' &&
+      host.dockerNodeId;
+    if (primaryActive) {
+      await this.withLinkOperation(host.id, async () => {
+        await this.relayPolicy.ensureProxySecureLink(host.id, relaySources(sources), host.dockerNodeId!);
+      });
+    }
+    const bindings = await this.db.query.proxyAdditionalSecureLinks.findMany({
+      where: and(
+        eq(proxyAdditionalSecureLinks.proxyHostId, host.id),
+        inArray(proxyAdditionalSecureLinks.status, ['provisioning', 'active'])
+      ),
+    });
+    for (const binding of bindings) {
+      await this.withLinkOperation(binding.id, async () => {
+        if (isManagedStorageUpstream(binding.upstreamKind)) {
+          if (!binding.managedStorageId) return;
+          await this.relayPolicy.ensureManagedStorageProxySecureLink(
+            binding.id,
+            binding.managedStorageId,
+            relaySources(sources),
+            binding.dockerNodeId
+          );
+        } else {
+          await this.relayPolicy.ensureProxySecureLink(binding.id, relaySources(sources), binding.dockerNodeId);
+        }
+      });
+    }
+    // Connected sources must take their listeners now; offline sources and sources that stopped serving the route
+    // converge when they reconnect (the reconnect resync sends each node its full source binding set).
+    const connectedSources = sources.filter((nodeId) => this.dispatch.isNodeConnected(nodeId));
+    await this.syncSourceNodes(connectedSources);
+    await Promise.allSettled(
+      [...sources.filter((nodeId) => !connectedSources.includes(nodeId)), ...removed].map((nodeId) =>
+        this.syncSourceNode(nodeId)
+      )
+    );
+    const connectedAdded = added.filter((nodeId) => this.dispatch.isNodeConnected(nodeId));
+    for (const nodeId of connectedAdded) {
+      if (primaryActive && host.secureLinkStatus === 'active') {
+        await this.probeSecureLink(nodeId, {
+          linkId: host.id,
+          scheme: host.forwardScheme ?? 'http',
+          path: host.healthCheckUrl || '/',
+          timeoutSeconds: 10,
+        });
+      }
+      for (const binding of bindings) {
+        if (binding.status !== 'active' || binding.dormant) continue;
+        await this.probeSecureLink(nodeId, {
+          linkId: binding.id,
+          scheme: binding.forwardScheme,
+          path: '/',
+          timeoutSeconds: 10,
+        });
+      }
+    }
+  }
+
   private async syncTargetNode(nodeId: string, excludedNetwork?: string, requiredLinkId?: string): Promise<void> {
     const previous = this.targetNodeSyncs.get(nodeId) ?? Promise.resolve();
     const current = previous
@@ -2338,9 +2523,10 @@ export class ProxySecureLinkService {
     rotateLinkId?: string,
     forceSocketOnlyLinkId?: string
   ): Promise<void> {
+    // A node is the source of its own routes' links and of the links of every route of its ingress groups.
     const hosts = await this.db.query.proxyHosts.findMany({
       where: and(
-        eq(proxyHosts.nodeId, nodeId),
+        proxyHostsServedByNode(this.db, nodeId),
         inArray(proxyHosts.upstreamKind, [...DOCKER_UPSTREAM_KINDS]),
         ne(proxyHosts.secureLinkStatus, 'cleanup_pending'),
         ne(proxyHosts.secureLinkGeneration, 0)
@@ -2349,7 +2535,7 @@ export class ProxySecureLinkService {
     const additional: ProxyAdditionalSecureLinkRow[] = (this.db.query as any).proxyAdditionalSecureLinks
       ? await (this.db.query as any).proxyAdditionalSecureLinks.findMany({
           where: and(
-            eq(proxyAdditionalSecureLinks.sourceNodeId, nodeId),
+            secureLinksSourcedByNode(this.db, nodeId),
             inArray(proxyAdditionalSecureLinks.status, ['provisioning', 'active'])
           ),
         })

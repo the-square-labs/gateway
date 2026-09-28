@@ -6,6 +6,7 @@ import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { stripProxyHealthHistory } from './proxy.service-helpers.js';
 import { withProxyHostLock } from './proxy-host-lock.js';
+import { forgetIngressMemberDeliveries } from './proxy-ingress-delivery.js';
 import type { CreateProxyAdditionalSecureLinkInput } from './proxy-secure-link.service.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
@@ -35,7 +36,9 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
     // Capture child keys before cleanup removes the bindings from persistence.
     const additionalLinks = (await this.secureLinks?.listAdditional?.(id)) ?? [];
 
-    const abandoningOfflineNode = options.abandonOfflineNode === true;
+    // A route on an ingress group is removed from its connected members; an offline member drops the stale config
+    // in the full sync that follows its reconnect resync, so a group route never needs the abandon path.
+    const abandoningOfflineNode = options.abandonOfflineNode === true && !existing.ingressGroupId;
     if (abandoningOfflineNode) {
       if (this.nodeDispatch.isNodeConnected(existing.nodeId)) {
         throw new AppError(409, 'NGINX_NODE_CONNECTED', 'Connected Nginx nodes require confirmed config cleanup');
@@ -48,8 +51,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
       // Preserve the currently active deployment until Nginx has confirmed
       // the config removal. This avoids GCing a certificate for a still-serving host.
       try {
-        await this.removeConfigFromNode(id, existing.nodeId);
-        await this.certificateDistribution.deactivateHost(id, existing.nodeId);
+        await this.withdrawHost(existing);
       } catch (error) {
         throw new AppError(
           500,
@@ -77,6 +79,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
       throw error;
     }
 
+    if (existing.ingressGroupId) await forgetIngressMemberDeliveries(this.db, id);
     this.forgetSecureLinkRuntime(id);
     this.hostConfigEpochs.delete(id);
     for (const binding of additionalLinks) this.forgetSecureLinkRuntime(`additional:${binding.id}`);

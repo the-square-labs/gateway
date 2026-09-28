@@ -4,6 +4,8 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { IngressGroupService } from '@/modules/ingress-groups/ingress-group.service.js';
+import { assertCanPlaceOnMembers } from '@/modules/ingress-groups/ingress-group-access.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import type { AppEnv } from '@/types.js';
@@ -23,6 +25,7 @@ import {
   redactAdditionalRouteForScopes as serializeAdditionalRoute,
 } from './page-target-visibility.js';
 import {
+  changeRouteIngressPlacementRoute,
   createProxyHostRoute,
   deleteProxyHostRoute,
   getProxyHostBySlugRoute,
@@ -43,6 +46,7 @@ import {
   ProxyHostListQuerySchema,
   parseRetargetAdditionalSecureLink,
   RouteIngressNodeListQuerySchema,
+  RouteIngressPlacementSchema,
   ToggleProxyHostSchema,
   ToggleProxyMaintenanceSchema,
   UpdateProxyHostSchema,
@@ -93,12 +97,21 @@ function hasProxyDestinationScope(
   scopes: string[],
   baseScope: string,
   folderId: string | null | undefined,
-  nodeId: string | null | undefined
+  nodeId: string | null | undefined | readonly string[]
 ): boolean {
+  // A route on an ingress group is created on every member: a node grant must cover each of them.
+  if (Array.isArray(nodeId)) {
+    return (
+      hasScope(scopes, baseScope) ||
+      (!!folderId && !folderId.includes('/') && hasScope(scopes, `${baseScope}:folder/${folderId}`)) ||
+      (nodeId.length > 0 && nodeId.every((id) => hasProxyDestinationScope(scopes, baseScope, null, id)))
+    );
+  }
+  const singleNodeId = nodeId as string | null | undefined;
   return (
     hasScope(scopes, baseScope) ||
     (!!folderId && !folderId.includes('/') && hasScope(scopes, `${baseScope}:folder/${folderId}`)) ||
-    (!!nodeId && !nodeId.includes('/') && hasScope(scopes, `${baseScope}:node/${nodeId}`))
+    (!!singleNodeId && !singleNodeId.includes('/') && hasScope(scopes, `${baseScope}:node/${singleNodeId}`))
   );
 }
 
@@ -339,17 +352,26 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
   if (!hasScopeBase(scopes, 'proxy:create')) {
     throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
   }
-  // Without nodeId the route takes the node of its registered domains or the caller's only eligible
-  // node; every destination check below runs against that node.
-  const nodeId = request.nodeId ?? (await proxyService.resolveRouteIngressNode(scopes, request)).nodeId;
-  const input = { ...request, nodeId };
-  if (!hasScopeForCreation(scopes, 'proxy:create', input.folderId, input.nodeId)) {
+  // Without nodeId the route takes the node or ingress group of its registered domains or the caller's only
+  // eligible node; every destination check below runs against it (every member of a group).
+  const placement =
+    request.nodeId && !request.ingressGroupId
+      ? { nodeId: request.nodeId, ingressGroupId: null }
+      : await proxyService.resolveRouteIngressNode(scopes, request);
+  const input = { ...request, nodeId: placement.nodeId, ingressGroupId: placement.ingressGroupId ?? undefined };
+  const destinationNodes: string | string[] = placement.ingressGroupId
+    ? await container.resolve(IngressGroupService).memberNodeIds(placement.ingressGroupId)
+    : input.nodeId;
+  if (placement.ingressGroupId) {
+    assertCanPlaceOnMembers(scopes, 'proxy:create', input.folderId, destinationNodes as string[]);
+    await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
+  } else if (!hasScopeForCreation(scopes, 'proxy:create', input.folderId, input.nodeId)) {
     throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
   }
   await container.resolve(FolderService).assertFolderExists(input.folderId);
   // Advanced, raw and unrestricted grants apply to the new route's destination:
   // a folder- or node-scoped grant covers routes created there.
-  if (input.advancedConfig && !hasProxyDestinationScope(scopes, 'proxy:advanced', input.folderId, input.nodeId)) {
+  if (input.advancedConfig && !hasProxyDestinationScope(scopes, 'proxy:advanced', input.folderId, destinationNodes)) {
     throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope for the selected destination', {
       requiredScope: 'proxy:advanced',
     });
@@ -360,8 +382,8 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
   ) {
     throw new AppError(403, 'FORBIDDEN', 'Viewing the selected Page Project is required');
   }
-  const unrestricted = hasProxyDestinationScope(scopes, 'proxy:unrestricted', input.folderId, input.nodeId);
-  const canWriteRaw = hasProxyDestinationScope(scopes, 'proxy:raw:write', input.folderId, input.nodeId);
+  const unrestricted = hasProxyDestinationScope(scopes, 'proxy:unrestricted', input.folderId, destinationNodes);
+  const canWriteRaw = hasProxyDestinationScope(scopes, 'proxy:raw:write', input.folderId, destinationNodes);
   if (requestTogglesRawProxyConfig(input) && !canWriteRaw) {
     throw new AppError(403, 'FORBIDDEN', 'Enabling raw mode requires proxy:raw:write scope', {
       requiredScope: 'proxy:raw:write',
@@ -469,9 +491,16 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   // grant form (broad, node, or the route's folder) is accepted.
   const destinationFolderId =
     input.folderId !== undefined ? input.folderId : ((existing as { folderId?: string | null }).folderId ?? null);
-  if (
+  const existingGroupId = (existing as { ingressGroupId?: string | null }).ingressGroupId ?? null;
+  if (input.ingressGroupId && input.ingressGroupId !== existingGroupId) {
+    // Moving onto an ingress group creates the route on every member.
+    const members = await container.resolve(IngressGroupService).memberNodeIds(input.ingressGroupId);
+    assertCanPlaceOnMembers(scopes, 'proxy:create', destinationFolderId, members);
+    await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
+  } else if (
     input.nodeId &&
     input.nodeId !== existing.nodeId &&
+    !(existingGroupId && input.ingressGroupId === null) &&
     !hasScopeForCreation(scopes, 'proxy:create', destinationFolderId, input.nodeId)
   ) {
     throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:node/${input.nodeId}`, {
@@ -486,6 +515,34 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
 });
+
+proxyRoutes.openapi(
+  { ...changeRouteIngressPlacementRoute, middleware: requireScopeForResource('proxy:edit', 'id') },
+  async (c) => {
+    const id = c.req.param('id')!;
+    const input = RouteIngressPlacementSchema.parse(await c.req.json());
+    const scopes = c.get('effectiveScopes') || [];
+    const proxyService = container.resolve(ProxyService);
+    const existing = await proxyService.getProxyHost(id);
+    if (input.ingressGroupId) {
+      const members = await container.resolve(IngressGroupService).memberNodeIds(input.ingressGroupId);
+      assertCanPlaceOnMembers(
+        scopes,
+        'proxy:create',
+        (existing as { folderId?: string | null }).folderId ?? null,
+        members
+      );
+      await container.resolve(LicensePolicyService).requireFeature('multi-node-availability');
+    }
+    await proxyService.changeRoutePlacement(
+      id,
+      { ingressGroupId: input.ingressGroupId, nodeId: input.nodeId ?? null },
+      c.get('user')!.id
+    );
+    const host = await proxyService.getProxyHost(id);
+    return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
+  }
+);
 
 proxyRoutes.openapi(
   { ...deleteProxyHostRoute, middleware: requireScopeForResource('proxy:delete', 'id') },

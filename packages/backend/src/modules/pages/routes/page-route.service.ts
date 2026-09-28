@@ -90,6 +90,13 @@ export class PageRouteService {
   async cleanupMigratedSource(_proxyHostId: string, _sourceNodeId: string, _connected: boolean): Promise<void> {
     return commercialModuleUnavailable();
   }
+  /**
+   * A Pages route on an ingress group: materialises its active deployment and runtime config on nodes that start
+   * serving it and removes them from nodes that stop serving it.
+   */
+  async syncServingNodes(_proxyHostId: string, _addedNodeIds: string[], _removedNodeIds: string[]): Promise<void> {
+    return commercialModuleUnavailable();
+  }
   async retarget(_proxyHostId: string, _projectId: string, _tagId: string, _userId: string): Promise<void> {
     return commercialModuleUnavailable();
   }

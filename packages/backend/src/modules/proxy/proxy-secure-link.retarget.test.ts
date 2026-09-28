@@ -184,7 +184,7 @@ describe('Additional Secure Link retarget', () => {
       []
     );
 
-    expect(deprovision).toHaveBeenCalledWith(expect.objectContaining({ id: LINK_ID }));
+    expect(deprovision).toHaveBeenCalledWith(expect.objectContaining({ id: LINK_ID }), HOST);
     expect(updates.at(-1)).toMatchObject({
       generation: 5,
       status: 'provisioning',

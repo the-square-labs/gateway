@@ -131,6 +131,60 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? '');
 }
 
+function proxyLinkSources(sourceNodeIds: string | readonly string[]): string[] {
+  return [...new Set(typeof sourceNodeIds === 'string' ? [sourceNodeIds] : sourceNodeIds)];
+}
+
+interface RelayRouteRuntimeReport {
+  routeId: string;
+  activeTunnels?: unknown;
+  openedTotal?: unknown;
+  completedTotal?: unknown;
+  failedTotal?: unknown;
+  throttledTotal?: unknown;
+  sourceToTargetBytes?: unknown;
+  targetToSourceBytes?: unknown;
+  setupLatencyP95Microseconds?: unknown;
+  averageDurationMilliseconds?: unknown;
+  lastActivityUnixMilliseconds?: unknown;
+  metricsSinceUnixMilliseconds?: unknown;
+}
+
+/** The runtime of a group route's Secure Link: the sum of its per-member relay routes. */
+function sumProxyRouteRuntimes(runtimes: RelayRouteRuntimeReport[]): RelayRouteRuntime {
+  const total = (pick: (runtime: RelayRouteRuntimeReport) => unknown) =>
+    runtimes.reduce((sum, runtime) => sum + Number(pick(runtime) || 0), 0);
+  const lastActivityMillis = Math.max(
+    0,
+    ...runtimes.map((runtime) => Number(runtime.lastActivityUnixMilliseconds || 0))
+  );
+  const since = runtimes
+    .map((runtime) => Number(runtime.metricsSinceUnixMilliseconds || 0))
+    .filter((value) => value > 0);
+  const opened = total((runtime) => runtime.openedTotal);
+  return {
+    routeId: runtimes[0]?.routeId ?? '',
+    activeStreams: total((runtime) => runtime.activeTunnels),
+    openedTotal: String(opened),
+    completedTotal: String(total((runtime) => runtime.completedTotal)),
+    failedTotal: String(total((runtime) => runtime.failedTotal)),
+    throttledTotal: String(total((runtime) => runtime.throttledTotal)),
+    sourceToTargetBytes: String(total((runtime) => runtime.sourceToTargetBytes)),
+    targetToSourceBytes: String(total((runtime) => runtime.targetToSourceBytes)),
+    setupLatencyP95Ms:
+      Math.max(0, ...runtimes.map((runtime) => Number(runtime.setupLatencyP95Microseconds || 0))) / 1000,
+    averageDurationMs:
+      opened > 0
+        ? runtimes.reduce(
+            (sum, runtime) => sum + Number(runtime.averageDurationMilliseconds || 0) * Number(runtime.openedTotal || 0),
+            0
+          ) / opened
+        : 0,
+    lastActivityAt: lastActivityMillis > 0 ? new Date(lastActivityMillis).toISOString() : null,
+    metricsSince: new Date(since.length > 0 ? Math.min(...since) : Date.now()).toISOString(),
+  };
+}
+
 /** The local relay could not be reached at all, as opposed to refusing what it was sent. */
 function isRelayUnavailable(error: unknown): boolean {
   const code = (error as { code?: number } | null)?.code;
@@ -1228,9 +1282,18 @@ export class RelayPolicyService {
     return Boolean(endpoint);
   }
 
-  async ensureProxySecureLink(linkId: string, sourceNodeId: string, targetNodeId: string): Promise<string> {
+  /**
+   * The relay endpoint of a proxy Secure Link on its target node and one route per source nginx node. A route on an
+   * ingress group has one source per member: every member gets its own route, connect grant and relay transports
+   * for the same endpoint, and routes of sources that no longer serve the link are removed. One source keeps today's
+   * behaviour: a changed source moves the existing route in place.
+   */
+  async ensureProxySecureLink(
+    linkId: string,
+    sourceNodeIds: string | readonly string[],
+    targetNodeId: string
+  ): Promise<string> {
     const target = await this.grantIssuer.requireNodeIdentity(targetNodeId);
-    const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
     const endpointId = await this.db.transaction(async (tx) => {
       const [current] = await tx
         .select()
@@ -1266,47 +1329,122 @@ export class RelayPolicyService {
       }
       return current.id;
     });
-    // The route first: whether the first assignment may leave the legacy shape depends on every daemon on the
-    // path, its source included.
-    const routeId = await this.ensureRoute(
-      'proxy_host_secure_link',
-      linkId,
-      'daemon',
-      sourceNodeId,
-      source.certificateFingerprint,
-      endpointId
-    );
+    // The routes first: whether the first assignment may leave the legacy shape depends on every daemon on the
+    // path, its sources included.
+    const { routeIds, removedSourceIds } = await this.ensureProxyLinkSourceRoutes(linkId, sourceNodeIds, endpointId);
     await this.ensureLegacyCompatibleAssignment(endpointId);
     await this.syncSnapshot();
     await Promise.all([
-      this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC),
+      ...[...new Set([...proxyLinkSources(sourceNodeIds), ...removedSourceIds])].map((nodeId) =>
+        this.syncNodeGrants(nodeId, ROUTINE_GRANT_SYNC)
+      ),
       this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
     ]);
-    return routeId;
+    return routeIds[0]!;
   }
 
   async ensureManagedStorageProxySecureLink(
     linkId: string,
     clusterId: string,
-    sourceNodeId: string,
+    sourceNodeIds: string | readonly string[],
     targetNodeId: string
   ): Promise<string> {
     const endpointId = await this.ensureManagedStorageEndpoint(clusterId, targetNodeId);
-    const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
-    const routeId = await this.ensureRoute(
-      'proxy_host_secure_link',
-      linkId,
-      'daemon',
-      sourceNodeId,
-      source.certificateFingerprint,
-      endpointId
-    );
+    const { routeIds, removedSourceIds } = await this.ensureProxyLinkSourceRoutes(linkId, sourceNodeIds, endpointId);
     await this.syncSnapshot();
     await Promise.all([
-      this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC),
+      ...[...new Set([...proxyLinkSources(sourceNodeIds), ...removedSourceIds])].map((nodeId) =>
+        this.syncNodeGrants(nodeId, ROUTINE_GRANT_SYNC)
+      ),
       this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
     ]);
-    return routeId;
+    return routeIds[0]!;
+  }
+
+  /**
+   * One `proxy_host_secure_link` route per source daemon for the link endpoint (relay_routes_proxy_link_source_unique).
+   * Returns the route ids in source order and the sources whose routes were removed or moved away.
+   */
+  private async ensureProxyLinkSourceRoutes(
+    linkId: string,
+    sourceNodeIds: string | readonly string[],
+    targetEndpointId: string
+  ): Promise<{ routeIds: string[]; removedSourceIds: string[] }> {
+    const sources = proxyLinkSources(sourceNodeIds);
+    if (sources.length === 0) throw new Error('A proxy Secure Link needs at least one source nginx node');
+    const identities = await Promise.all(sources.map((nodeId) => this.grantIssuer.requireNodeIdentity(nodeId)));
+    return this.db.transaction(async (tx) => {
+      const current = await tx
+        .select()
+        .from(relayRoutes)
+        .where(and(eq(relayRoutes.ownerKind, 'proxy_host_secure_link'), eq(relayRoutes.ownerId, linkId)));
+      let changed = false;
+      const routeIds: string[] = [];
+      const removedSourceIds: string[] = [];
+      // A single-source link moving to another node keeps its route (and its runtime metrics) in place.
+      const moveInPlace =
+        sources.length === 1 && current.length === 1 && current[0]!.sourceId !== sources[0] ? current[0]! : null;
+      for (const [index, sourceId] of sources.entries()) {
+        const fingerprint = identities[index]!.certificateFingerprint;
+        const existing =
+          moveInPlace ?? current.find((route) => route.sourceKind === 'daemon' && route.sourceId === sourceId);
+        if (!existing) {
+          const [created] = await tx
+            .insert(relayRoutes)
+            .values({
+              ownerKind: 'proxy_host_secure_link',
+              ownerId: linkId,
+              sourceKind: 'daemon',
+              sourceId,
+              sourceCertificateSha256: fingerprint,
+              targetEndpointId,
+              maxFrameBytes: RELAY_MAX_FRAME_BYTES,
+            })
+            .returning({ id: relayRoutes.id });
+          routeIds.push(created.id);
+          changed = true;
+          continue;
+        }
+        if (
+          existing.sourceKind !== 'daemon' ||
+          existing.sourceId !== sourceId ||
+          existing.sourceCertificateSha256 !== fingerprint ||
+          existing.targetEndpointId !== targetEndpointId ||
+          existing.managedDatabaseListener != null
+        ) {
+          if (existing.sourceKind === 'daemon' && existing.sourceId !== sourceId) {
+            removedSourceIds.push(existing.sourceId);
+          }
+          await tx
+            .update(relayRoutes)
+            .set({
+              sourceKind: 'daemon',
+              sourceId,
+              sourceCertificateSha256: fingerprint,
+              targetEndpointId,
+              managedDatabaseListener: null,
+              generation: existing.generation + 1,
+              updatedAt: new Date(),
+            })
+            .where(eq(relayRoutes.id, existing.id));
+          changed = true;
+        }
+        routeIds.push(existing.id);
+      }
+      const stale = current.filter((route) => !routeIds.includes(route.id));
+      if (stale.length > 0) {
+        await tx.delete(relayRoutes).where(
+          inArray(
+            relayRoutes.id,
+            stale.map((route) => route.id)
+          )
+        );
+        for (const route of stale) if (route.sourceKind === 'daemon') removedSourceIds.push(route.sourceId);
+        changed = true;
+      }
+      if (changed) await bumpRelayPolicyRevision(tx);
+      return { routeIds, removedSourceIds };
+    });
   }
 
   private async getOwnedRouteRuntime(ownerKind: string, ownerId: string): Promise<RelayRouteRuntime | null> {
@@ -1337,7 +1475,14 @@ export class RelayPolicyService {
   }
 
   async getProxyRouteRuntime(linkId: string): Promise<ProxyRouteRuntime | null> {
-    return this.getOwnedRouteRuntime('proxy_host_secure_link', linkId);
+    const routes = await this.db
+      .select({ id: relayRoutes.id })
+      .from(relayRoutes)
+      .where(and(eq(relayRoutes.ownerKind, 'proxy_host_secure_link'), eq(relayRoutes.ownerId, linkId)));
+    if (routes.length <= 1) return this.getOwnedRouteRuntime('proxy_host_secure_link', linkId);
+    // A route on an ingress group has one relay route per member: its runtime is their sum.
+    const runtimes = await Promise.all(routes.map((route) => this.relay.getRouteRuntime(route.id)));
+    return sumProxyRouteRuntimes(runtimes);
   }
 
   async getManagedDatabaseBindingRouteRuntime(bindingId: string): Promise<RelayRouteRuntime | null> {

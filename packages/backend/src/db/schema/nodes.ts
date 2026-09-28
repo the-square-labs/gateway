@@ -132,6 +132,20 @@ export interface NodeHealthReport {
   gpuDevices?: NodeGpuDevice[];
   // Smoothed round trip from this node to each relay it measured recently.
   relayLatencies?: Array<{ relayInstanceId: string; rttMs: number }>;
+  // Nginx daemons with ingress groups (ingress_group_v1): what the reserved health endpoint answers.
+  ingressHealth?: NodeIngressHealth;
+}
+
+/** What an nginx daemon's `/.well-known/gateway-ingress-health` endpoint answered when it last reported. */
+export interface NodeIngressHealth {
+  serving: boolean;
+  reason: string;
+  configGeneration: number;
+  nginxRunning: boolean;
+  configApplied: boolean;
+  secureLinkSources: number;
+  usableRelayTransports: number;
+  checkedAt: string | null;
 }
 
 export interface NodeStatsReport {

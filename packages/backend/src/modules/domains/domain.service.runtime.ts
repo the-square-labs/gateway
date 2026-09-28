@@ -6,6 +6,7 @@ import { domains } from '@/db/schema/domains.js';
 import { nodes } from '@/db/schema/nodes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { domainsServedByNode } from '@/modules/ingress-groups/ingress-nodes.js';
 import type { CloudflareDnsRecord } from '@/modules/integrations/cloudflare-client.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { getEffectiveNginxIngressAddresses } from '@/modules/nodes/node-service-address.js';
@@ -19,6 +20,7 @@ import {
   type CloudflareAddressRecord,
   type DomainCloudflarePlan,
   type DomainExternalPlan,
+  type DomainIngressPlacement,
   type DomainUsage,
   type EligibleNginxNode,
   logger,
@@ -495,8 +497,13 @@ export abstract class DomainsServiceRuntime {
     const rows = await this.db
       .select()
       .from(domains)
-      .where(nodeId ? eq(domains.nginxNodeId, nodeId) : undefined);
+      .where(nodeId ? domainsServedByNode(this.db, nodeId) : undefined);
     for (const row of rows) {
+      if (row.ingressGroupId) {
+        // A domain on an ingress group publishes the union of its active members' addresses.
+        await this.reconcileIngressGroupDomain(row);
+        continue;
+      }
       if (!row.nginxNodeId) continue;
       const node = await this.getNginxNodeSummary(row.nginxNodeId);
       if (!node?.effectiveAddress || this.getAllowedIngressAddresses(node).length === 0) {
@@ -746,13 +753,30 @@ export abstract class DomainsServiceRuntime {
     this.emitDomain(row.id, 'updated', row.domain);
   }
 
+  /**
+   * Where a new domain is served and which addresses its DNS gets: one node (its first effective address), or an
+   * ingress group (overridden by DomainsServiceIngressGroups: the union of the active members' addresses).
+   */
+  protected async resolveDomainIngressPlacement(
+    input: Pick<PreviewDomainInput, 'nginxNodeId' | 'ingressGroupId'>
+  ): Promise<DomainIngressPlacement> {
+    const nginxNode = await this.resolveRequestedNginxNode(input.nginxNodeId);
+    return {
+      nginxNode,
+      ingressGroupId: null,
+      targetIps: [nginxNode.effectiveAddress],
+      allowedIps: this.getAllowedIngressAddresses(nginxNode),
+    };
+  }
+
   protected async prepareCloudflareDomain(input: PreviewDomainInput): Promise<DomainCloudflarePlan> {
     if (!this.integrationsService) {
       throw new AppError(409, 'CLOUDFLARE_DNS_NOT_CONFIGURED', 'Cloudflare DNS integration is not configured');
     }
     const domainName = input.domain.toLowerCase();
-    const nginxNode = await this.resolveRequestedNginxNode(input.nginxNodeId);
-    const primaryTargetIps = [nginxNode.effectiveAddress];
+    const placement = await this.resolveDomainIngressPlacement(input);
+    const nginxNode = placement.nginxNode;
+    const primaryTargetIps = placement.targetIps;
     const context = await this.integrationsService.resolveCloudflareDnsContext(domainName);
     const ttl = input.ttl ?? context.settings.defaultTtl;
     const proxied = input.proxied ?? context.settings.defaultProxied;
@@ -762,13 +786,15 @@ export abstract class DomainsServiceRuntime {
     const addressRecords = existingRecords.filter((record) => record.type === 'A' || record.type === 'AAAA');
     const blockingRecords = existingRecords.filter((record) => record.type === 'CNAME');
     const currentIps = addressRecords.map((record) => record.content).sort();
-    const currentMatches = this.isNonEmptySubset(currentIps, this.getAllowedIngressAddresses(nginxNode));
+    const currentMatches = this.isNonEmptySubset(currentIps, placement.allowedIps);
     const targetIps = currentMatches ? currentIps : primaryTargetIps;
     const desiredIps = [...targetIps].sort();
     const desiredRecords = this.desiredCloudflareRecords(domainName, desiredIps, ttl, proxied);
     return {
       domainName,
       nginxNode,
+      ingressGroupId: placement.ingressGroupId,
+      placementTargetIps: placement.targetIps,
       targetIps,
       ttl,
       proxied,
@@ -784,18 +810,17 @@ export abstract class DomainsServiceRuntime {
 
   protected async prepareExternalDomain(input: PreviewDomainInput): Promise<DomainExternalPlan> {
     const domainName = input.domain.toLowerCase();
-    const nginxNode = await this.resolveRequestedNginxNode(input.nginxNodeId);
+    const placement = await this.resolveDomainIngressPlacement(input);
+    const nginxNode = placement.nginxNode;
     const probe = await probeDnsRecords(domainName);
-    const status = this.externalDnsStatus(
-      probe.addressResolution,
-      probe.records,
-      this.getAllowedIngressAddresses(nginxNode)
-    );
+    const status = this.externalDnsStatus(probe.addressResolution, probe.records, placement.allowedIps);
     const resolvedIps = [...probe.records.a, ...probe.records.aaaa].sort();
-    const targetIps = status === 'valid' ? resolvedIps : this.getAllowedIngressAddresses(nginxNode);
+    const targetIps =
+      status === 'valid' ? resolvedIps : placement.ingressGroupId ? placement.targetIps : placement.allowedIps;
     return {
       domainName,
       nginxNode,
+      ingressGroupId: placement.ingressGroupId,
       targetIps,
       queryName: probe.queryName,
       dnsRecords: probe.records,
@@ -820,17 +845,17 @@ export abstract class DomainsServiceRuntime {
     addressResolution: DnsAddressResolution = 'resolved',
     managedCloudflareRecords?: CloudflareDnsRecord[]
   ): Promise<'valid' | 'invalid' | 'pending' | 'unknown'> {
-    if (row.dnsProvider === 'cloudflare' && row.nginxNodeId) {
-      const node = await this.getNginxNodeSummary(row.nginxNodeId);
-      if (!node?.effectiveAddress || !this.isNonEmptySubset(row.dnsTargetIps, this.getAllowedIngressAddresses(node))) {
+    if (row.dnsProvider === 'cloudflare' && (row.nginxNodeId || row.ingressGroupId)) {
+      const allowed = await this.allowedIngressAddressesFor(row);
+      if (!allowed?.length || !this.isNonEmptySubset(row.dnsTargetIps, allowed)) {
         return 'invalid';
       }
     }
     if (row.dnsProvider !== 'cloudflare') {
-      if (!row.nginxNodeId) return 'unknown';
-      const node = await this.getNginxNodeSummary(row.nginxNodeId);
-      if (!node?.effectiveAddress) return 'invalid';
-      return this.externalDnsStatus(addressResolution, resolvedRecords, this.getAllowedIngressAddresses(node));
+      if (!row.nginxNodeId && !row.ingressGroupId) return 'unknown';
+      const allowed = await this.allowedIngressAddressesFor(row);
+      if (!allowed?.length) return 'invalid';
+      return this.externalDnsStatus(addressResolution, resolvedRecords, allowed);
     }
     const expectedIps = row.dnsTargetIps;
     if (expectedIps.length === 0) return 'unknown';
@@ -899,11 +924,13 @@ export abstract class DomainsServiceRuntime {
     dnsStatus: 'valid' | 'invalid' | 'pending' | 'unknown',
     resolvedRecords: DnsRecords
   ): Promise<Partial<typeof domains.$inferInsert>> {
-    if (row.dnsProvider === 'cloudflare' || dnsStatus !== 'valid' || !row.nginxNodeId) return {};
-    const node = await this.getNginxNodeSummary(row.nginxNodeId);
-    if (!node?.effectiveAddress) return {};
+    if (row.dnsProvider === 'cloudflare' || dnsStatus !== 'valid' || (!row.nginxNodeId && !row.ingressGroupId)) {
+      return {};
+    }
+    const allowed = await this.allowedIngressAddressesFor(row);
+    if (!allowed?.length) return {};
     const resolvedIps = [...resolvedRecords.a, ...resolvedRecords.aaaa].sort();
-    if (!this.isNonEmptySubset(resolvedIps, this.getAllowedIngressAddresses(node))) return {};
+    if (!this.isNonEmptySubset(resolvedIps, allowed)) return {};
     if (this.sameStringSet(row.dnsTargetIps, resolvedIps)) return {};
     return {
       dnsTargetIps: resolvedIps,
@@ -963,6 +990,22 @@ export abstract class DomainsServiceRuntime {
       )
     );
   }
+
+  /**
+   * The addresses DNS of a domain may point at: its node's ingress addresses, or for a domain on an ingress group
+   * the union over every serving member (see DomainsServiceIngressGroups). Null when the domain has no node.
+   */
+  protected async allowedIngressAddressesFor(
+    row: Pick<typeof domains.$inferSelect, 'nginxNodeId' | 'ingressGroupId'>
+  ): Promise<string[] | null> {
+    if (!row.nginxNodeId) return null;
+    const node = await this.getNginxNodeSummary(row.nginxNodeId);
+    if (!node?.effectiveAddress) return null;
+    return this.getAllowedIngressAddresses(node);
+  }
+
+  /** Brings a domain on an ingress group in line with its members (implemented by DomainsServiceIngressGroups). */
+  protected async reconcileIngressGroupDomain(_row: typeof domains.$inferSelect): Promise<void> {}
 
   protected recordTypeLabel(ips: string[]): string {
     const types = new Set(ips.map((ip) => (isIP(ip) === 6 ? 'AAAA' : 'A')));

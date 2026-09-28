@@ -4,6 +4,7 @@ import { nodes, proxyHosts } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { requireRoutableIngressGroup } from '@/modules/ingress-groups/ingress-group-routing.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { PageRouteNodeMigration } from '@/modules/pages/routes/page-route.service.js';
 import type { AdditionalRouteNodeMigration } from './additional-route.service.js';
@@ -17,16 +18,17 @@ import {
   storedRawConfigForRawModeEnablement,
 } from './proxy.service-helpers.js';
 import {
-  assertRegisteredDomainsUseNode,
+  assertRegisteredDomainsUseTarget,
   findRegisteredDomainNodes,
-  registeredDomainsIngressNodeId,
+  registeredDomainsIngressPlacement,
 } from './proxy-domain-node.js';
 import {
-  assertNoProxyDomainOverlap,
+  assertNoProxyDomainOverlapOnNodes,
   restoringProxyHostState,
   rethrowProxyHostDomainConflict,
 } from './proxy-domain-overlap.js';
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
+import { IngressDeliveryError } from './proxy-ingress-delivery.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 import {
   type RouteIngressNode,
@@ -39,7 +41,8 @@ import {
 
 export { __testOnly } from './proxy.service-helpers.js';
 
-import { isDockerUpstream, logger, ProxyServiceCore, sameDomainNames } from './proxy.service.core.js';
+import { isDockerUpstream, logger, type ProxyHostView, sameDomainNames } from './proxy.service.core.js';
+import { ProxyServicePlacement, requestedPlacementChange } from './proxy.service.placement.js';
 
 /**
  * A proxy host write that names an SSL certificate waits on that certificate's
@@ -59,7 +62,7 @@ function mapProxyHostCertificateReferenceError(error: unknown): never {
   throw error;
 }
 
-export abstract class ProxyServiceMutations extends ProxyServiceCore {
+export abstract class ProxyServiceMutations extends ProxyServicePlacement {
   /** Every nginx node as a route destination: identity and availability only (no node details). */
   protected async loadRouteIngressNodeCandidates(): Promise<RouteIngressNodeCandidate[]> {
     const rows = await this.db
@@ -96,31 +99,67 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
    */
   async resolveRouteIngressNode(
     scopes: readonly string[],
-    input: Pick<CreateProxyHostRequest, 'nodeId' | 'domainNames' | 'folderId'>
-  ): Promise<{ nodeId: string; source: RouteIngressNodeSource }> {
-    if (input.nodeId) return { nodeId: input.nodeId, source: 'request' };
+    input: Pick<CreateProxyHostRequest, 'nodeId' | 'domainNames' | 'folderId' | 'ingressGroupId'>
+  ): Promise<{ nodeId: string; ingressGroupId: string | null; source: RouteIngressNodeSource }> {
+    if (input.ingressGroupId) {
+      const group = await requireRoutableIngressGroup(this.db, input.ingressGroupId);
+      return { nodeId: group.primaryNodeId, ingressGroupId: group.group.id, source: 'request' };
+    }
+    if (input.nodeId) return { nodeId: input.nodeId, ingressGroupId: null, source: 'request' };
     const registered = await findRegisteredDomainNodes(this.db, input.domainNames);
-    const pinnedNodeId = registeredDomainsIngressNodeId(registered);
-    return resolveRouteIngressNode({
+    const pinned = registeredDomainsIngressPlacement(registered);
+    if (pinned?.ingressGroupId) {
+      // A registered domain on an ingress group places the route on that group.
+      const group = await requireRoutableIngressGroup(this.db, pinned.ingressGroupId);
+      return { nodeId: group.primaryNodeId, ingressGroupId: group.group.id, source: 'domain' };
+    }
+    const resolved = resolveRouteIngressNode({
       scopes,
       folderId: input.folderId,
-      pinnedNodeId,
+      pinnedNodeId: pinned?.nodeId ?? null,
       pinnedByDomain: registered[0]?.domain,
-      candidates: pinnedNodeId ? [] : await this.loadRouteIngressNodeCandidates(),
+      candidates: pinned ? [] : await this.loadRouteIngressNodeCandidates(),
     });
+    return { ...resolved, ingressGroupId: null };
+  }
+
+  /** Where a new route is served: its ingress group (every member) or its node. */
+  protected async resolveCreatePlacement(
+    request: Pick<CreateProxyHostRequest, 'nodeId' | 'ingressGroupId'>
+  ): Promise<{ nodeId: string; ingressGroupId: string | null; servingNodeIds: string[] }> {
+    if (request.ingressGroupId) {
+      const group = await requireRoutableIngressGroup(this.db, request.ingressGroupId);
+      if (request.nodeId && !group.memberNodeIds.includes(request.nodeId)) {
+        throw new AppError(
+          400,
+          'INGRESS_TARGET_CONFLICT',
+          'Pass either nodeId or ingressGroupId; a route on an ingress group is served by every member'
+        );
+      }
+      return {
+        nodeId: group.primaryNodeId,
+        ingressGroupId: group.group.id,
+        servingNodeIds: group.memberNodeIds,
+      };
+    }
+    if (!request.nodeId) {
+      throw new AppError(400, 'NODE_REQUIRED', 'A node must be selected for the proxy host');
+    }
+    return { nodeId: request.nodeId, ingressGroupId: null, servingNodeIds: [request.nodeId] };
   }
 
   async createProxyHost(request: CreateProxyHostRequest, userId: string, validationOptions: ProxyValidationInput = {}) {
     const options = normalizeProxyValidationOptions(validationOptions);
 
-    // 0. Require a node assignment (callers resolve an omitted nodeId with resolveRouteIngressNode
-    // before their destination checks)
-    if (!request.nodeId) {
-      throw new AppError(400, 'NODE_REQUIRED', 'A node must be selected for the proxy host');
+    // 0. Require a node or ingress group assignment (callers resolve an omitted nodeId with
+    // resolveRouteIngressNode before their destination checks). A group route keeps the group's first
+    // member in nodeId and is served by every member.
+    const placement = await this.resolveCreatePlacement(request);
+    const input: CreateProxyHostInput = { ...request, nodeId: placement.nodeId };
+    for (const servingNodeId of placement.servingNodeIds) {
+      await assertNodeAllowsServiceCreation(this.db, servingNodeId, 'nginx');
     }
-    const input: CreateProxyHostInput = { ...request, nodeId: request.nodeId };
-    await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
-    await assertRegisteredDomainsUseNode(this.db, input.domainNames, input.nodeId);
+    await assertRegisteredDomainsUseTarget(this.db, input.domainNames, placement);
 
     // 0b. Validate advanced config if provided
     if (input.advancedConfig && !options.bypassAdvancedValidation) {
@@ -165,9 +204,9 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
     // 1. Insert into DB. The node lock makes the domain check and the insert
     // atomic against other creates, moves and enables on this node, so a
     // retried or double-submitted create cannot add a second server block.
-    const nodeId = input.nodeId;
-    let host = await withProxyLocks([proxyNodeLockKey(nodeId)], async () => {
-      await assertNoProxyDomainOverlap(this.db, nodeId, input.domainNames);
+    const nodeLockKeys = placement.servingNodeIds.map(proxyNodeLockKey);
+    let host = await withProxyLocks(nodeLockKeys, async () => {
+      await assertNoProxyDomainOverlapOnNodes(this.db, placement.servingNodeIds, input.domainNames);
       return writeWithAllocatedSlug({
         source: input.domainNames[0] ?? '',
         fallback: 'proxy-host',
@@ -179,6 +218,7 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
             .values({
               type: input.type,
               nodeId: input.nodeId,
+              ingressGroupId: placement.ingressGroupId,
               domainNames: input.domainNames,
               slug,
               forwardHost: input.forwardHost ?? null,
@@ -226,7 +266,7 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
 
     // 2. Resolve SSL cert paths and build nginx config. The host and node locks
     // fence reconnect cleanup and concurrent edits until the create settles.
-    await withProxyLocks([proxyHostLockKey(host.id), host.nodeId && proxyNodeLockKey(host.nodeId)], async () => {
+    await withProxyLocks([proxyHostLockKey(host.id), ...nodeLockKeys], async () => {
       try {
         if (host.upstreamKind === 'pages') {
           if (!this.pageRoutes || !input.pageProjectId || !input.pageTagId) {
@@ -238,19 +278,8 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
           host = await this.secureLinks.prepare(host, true);
           host = (await this.secureLinks.commitCutover(host.id)) ?? host;
         }
-        const certPaths = await this.resolveCertPaths(host);
-        const accessList = await this.resolveAccessList(host.accessListId);
-        const config = await this.buildNginxConfig(host, certPaths, accessList);
-
-        // 3. Apply config via daemon or legacy docker
-        await this.applyConfigToNode(
-          host.id,
-          config,
-          host.nodeId,
-          certPaths.preparedTls,
-          this.configOwnershipForHost(host),
-          host.accessListId
-        );
+        // 3. Render and apply on every node that serves the route
+        await this.deliverHost(host);
         if (isDockerUpstream(host.upstreamKind)) {
           await this.secureLinks?.activate(host.id);
           const availabilityManaged = (await this.availabilityIngressReconciler?.(host.id)) ?? false;
@@ -273,7 +302,7 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
         // file (for example while the relay policy is being committed). Remove
         // that partial deployment before deleting the row or a stale server_name
         // can shadow the next successful create for the same domain.
-        await this.removeConfigFromNode(host.id, host.nodeId).catch((cleanupError) => {
+        await this.withdrawHost(host).catch((cleanupError) => {
           logger.warn('Failed to remove partially applied proxy config after create rollback', {
             hostId: host.id,
             cleanupError,
@@ -366,7 +395,7 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
     input: UpdateProxyHostInput,
     userId: string,
     validationOptions: ProxyValidationInput = {}
-  ) {
+  ): Promise<ProxyHostView> {
     const options = normalizeProxyValidationOptions(validationOptions);
 
     // 0. Validate advanced config if provided
@@ -396,6 +425,23 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
       where: eq(proxyHosts.id, id),
     });
     if (!existing) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
+    // A change between one node and an ingress group (or between groups) is a planned placement change that keeps
+    // the route served throughout; the other fields of the request are applied afterwards.
+    const placementChange = requestedPlacementChange(existing, input);
+    if (placementChange) {
+      await this.changeRoutePlacementLocked(existing, placementChange, userId, options);
+      const { nodeId: _nodeId, ingressGroupId: _ingressGroupId, ...rest } = input;
+      if (Object.keys(rest).length === 0) {
+        const moved = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
+        return (await attachDockerUpstreamDisplay(this.db, [moved!]))[0]!;
+      }
+      return this.updateProxyHostLocked(id, rest, userId, validationOptions);
+    }
+    if (existing.ingressGroupId) {
+      // Unchanged placement echoed by a full-object PUT; the primary member is Gateway-maintained.
+      delete input.nodeId;
+      delete input.ingressGroupId;
+    }
     const effectiveRelaySpreadMode = input.relaySpreadMode ?? existing.relaySpreadMode;
     const effectiveRelaySpreadCount =
       input.relaySpreadMode !== undefined && input.relaySpreadMode !== 'fixed'
@@ -478,8 +524,12 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
       (input.nodeId !== undefined && input.nodeId !== existing.nodeId) ||
       (input.domainNames !== undefined && !sameDomainNames(input.domainNames, existing.domainNames));
     if (domainAssignmentChanged && !options.skipDomainNodeValidation) {
-      await assertRegisteredDomainsUseNode(this.db, input.domainNames ?? existing.domainNames, effectiveNodeId);
+      await assertRegisteredDomainsUseTarget(this.db, input.domainNames ?? existing.domainNames, {
+        nodeId: effectiveNodeId,
+        ingressGroupId: existing.ingressGroupId,
+      });
     }
+    const servingNodeIds = existing.ingressGroupId ? await this.ingressNodesOf(existing) : [effectiveNodeId];
 
     assertSslPrerequisitesForUpdate(existing, input);
 
@@ -543,8 +593,13 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
     // two hosts serving one name on the target would still be duplicates.
     let updated =
       domainAssignmentChanged && existing.enabled && !options.restoringPriorState
-        ? await withProxyLocks([proxyNodeLockKey(effectiveNodeId)], async () => {
-            await assertNoProxyDomainOverlap(this.db, effectiveNodeId, input.domainNames ?? existing.domainNames, id);
+        ? await withProxyLocks(servingNodeIds.map(proxyNodeLockKey), async () => {
+            await assertNoProxyDomainOverlapOnNodes(
+              this.db,
+              servingNodeIds,
+              input.domainNames ?? existing.domainNames,
+              id
+            );
             return writeHost();
           })
         : await writeHost();
@@ -595,31 +650,17 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
           // Existing legacy/manual config must stop serving before the durable
           // no-fallback cutover marker is committed.
           if (existing.secureLinkGeneration === 0 && existing.enabled) {
-            await this.removeConfigFromNode(id, existing.nodeId);
+            await this.withdrawHost(existing);
           }
           updated = (await this.secureLinks.commitCutover(id)) ?? updated;
         }
       }
       if (updated.enabled) {
-        const certPaths = await this.resolveCertPaths(updated, {
-          preserveLegacyOnUnsupported: existing.sslEnabled && !tlsReferenceChanged,
+        // 4. Apply config (on every member of a group route) with rollback on failure
+        await this.deliverHost(updated, {
+          certOptions: { preserveLegacyOnUnsupported: existing.sslEnabled && !tlsReferenceChanged },
+          pagesRouteIncludePathOverride: pageNodeMigration?.targetIncludePath,
         });
-        const accessList = await this.resolveAccessList(updated.accessListId);
-        const config = await this.buildNginxConfig(
-          updated,
-          certPaths,
-          accessList,
-          pageNodeMigration?.targetIncludePath
-        );
-        // 4. Apply config with rollback on failure
-        await this.applyConfigToNode(
-          id,
-          config,
-          updated.nodeId,
-          certPaths.preparedTls,
-          this.configOwnershipForHost(updated),
-          updated.accessListId
-        );
         if (isDockerUpstream(updated.upstreamKind) && !updatedUsesRawMode) {
           await this.secureLinks?.activate(id);
           this.queueSecureLinkRuntimeSample(updated);
@@ -634,9 +675,7 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
         }
       } else {
         // If disabled, remove config and reload
-        const deployedNodeId = nodeChanged ? existing.nodeId : updated.nodeId;
-        await this.removeConfigFromNode(id, deployedNodeId);
-        await this.certificateDistribution.deactivateHost(id, deployedNodeId);
+        await this.withdrawHost(nodeChanged ? existing : updated);
       }
       if (updated.upstreamKind === 'pages' && (pageProjectId || pageTagId)) {
         if (!this.pageRoutes || !pageProjectId || !pageTagId) {
@@ -786,6 +825,24 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
           hostId: id,
           rollbackError,
         });
+      }
+      if (failure instanceof IngressDeliveryError && failure.appliedNodeIds.length > 0 && existing.enabled) {
+        // Members that already took the new config serve the restored row again.
+        try {
+          const restored = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
+          if (restored?.enabled) {
+            await this.deliverHost(restored, {
+              certOptions: { preserveLegacyOnUnsupported: true },
+              nodeIds: failure.appliedNodeIds,
+            });
+          }
+        } catch (restoreError) {
+          logger.error('Failed to restore ingress group members after a failed route update', {
+            hostId: id,
+            nodeIds: failure.appliedNodeIds,
+            restoreError,
+          });
+        }
       }
       if (failure instanceof AppError) throw failure;
       throw new AppError(
