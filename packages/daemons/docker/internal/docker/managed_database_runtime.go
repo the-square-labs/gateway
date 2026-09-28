@@ -653,18 +653,23 @@ func (m *managedDatabaseManager) reconcile(ctx context.Context) error {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".json")
+		// One broken database (container removed, volume missing, unreadable record) must not keep the whole node
+		// offline: the node comes up with the others, and Gateway sees this one as not running and can repair it.
 		record, err := m.loadRecord(id)
 		if err != nil {
-			return err
+			m.logger.Warn("managed database record could not be read at startup", "id", id, "error", err)
+			continue
 		}
 		if !record.DesiredRunning {
 			continue
 		}
 		if err := m.ensureStorageSize(ctx, &record, record.StorageSize); err != nil {
-			return fmt.Errorf("reconcile storage %s: %w", id, err)
+			m.logger.Warn("managed database storage could not be restored at startup", "id", id, "error", err)
+			continue
 		}
 		if err := m.startContainer(ctx, record.ContainerID); err != nil {
-			return fmt.Errorf("restart %s: %w", id, err)
+			m.logger.Warn("managed database could not be started at startup", "id", id, "error", err)
+			continue
 		}
 		if err := m.saveRecord(record); err != nil {
 			return err
