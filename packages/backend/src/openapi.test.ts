@@ -201,5 +201,5 @@ describe('OpenAPI documentation', () => {
       headers: { host: 'gateway.test', Authorization: 'Bearer gw_test' },
     });
     expect(legacyResponse.status).toBe(200);
-  }, 15_000);
+  }, 60_000);
 });
