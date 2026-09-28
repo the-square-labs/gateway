@@ -141,6 +141,12 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	l.mu.Lock()
 	l.serving[policyID] = serving
 	l.mu.Unlock()
+	if serving {
+		// The deployment router is not lease-governed (ServeSet), so nothing
+		// starts it with the workload: one that did not come back after a
+		// reboot (restart policy "no") would leave the links without target.
+		l.plugin.repairDeploymentRouters(policyID, deploymentRouterRepairLeaseTimeout)
+	}
 	if serving && l.plugin.secureLinks != nil {
 		// A dormant target binding could not be prepared while its standby
 		// was stopped; bind it now that the container runs.

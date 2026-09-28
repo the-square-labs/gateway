@@ -234,10 +234,14 @@ func deploymentRouterContainerNeedsRecreate(current container.InspectResponse, r
 // deploymentRouterHasCurrentShape reports whether a router keeps its last
 // written config across restarts and restarts with the Docker engine.
 func deploymentRouterHasCurrentShape(current container.InspectResponse) bool {
+	return deploymentRouterCommandCurrent(current) &&
+		current.HostConfig.RestartPolicy.Name == deploymentRouterRestartPolicy
+}
+
+// deploymentRouterCommandCurrent reports whether a router's start command
+// keeps the last written config instead of rewriting its creation-time one.
+func deploymentRouterCommandCurrent(current container.InspectResponse) bool {
 	if current.Config == nil || current.HostConfig == nil {
-		return false
-	}
-	if current.HostConfig.RestartPolicy.Name != deploymentRouterRestartPolicy {
 		return false
 	}
 	script := strings.Join(current.Config.Cmd, " ")
@@ -250,10 +254,14 @@ func deploymentContainerLabelsOwned(labels map[string]string, deploymentID strin
 }
 
 var (
-	// deploymentRouterUpstream matches the slot a rendered router config sends
-	// traffic to. Routers of older daemons used a static proxy_pass instead.
-	deploymentRouterUpstream       = regexp.MustCompile(`set \$deployment_upstream (blue|green):[0-9]+;`)
-	legacyDeploymentRouterUpstream = regexp.MustCompile(`proxy_pass http://(blue|green):[0-9]+`)
+	// deploymentRouterUpstream matches the slot and container port a rendered
+	// router config sends traffic to. Routers of older daemons used a static
+	// proxy_pass instead.
+	deploymentRouterUpstream       = regexp.MustCompile(`set \$deployment_upstream (blue|green):([0-9]+);`)
+	legacyDeploymentRouterUpstream = regexp.MustCompile(`proxy_pass http://(blue|green):([0-9]+)`)
+	// deploymentRouterListen matches the published port a router server
+	// block listens on, in both formats.
+	deploymentRouterListen = regexp.MustCompile(`listen ([0-9]+);`)
 )
 
 // deploymentRouterConfigSlot returns the one slot a router config serves, or ""

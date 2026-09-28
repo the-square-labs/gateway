@@ -263,6 +263,8 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		if err != nil {
 			return fmt.Errorf("initialize disk-image volume storage: %w", err)
 		}
+		// Before the secure-link restore, which binds links to the routers.
+		p.repairDeploymentRouters("", deploymentRouterRepairStartupTimeout)
 		p.secureLinks, err = newDockerSecureLinkManager(p)
 		if err != nil {
 			return fmt.Errorf("initialize proxy secure links: %w", err)
