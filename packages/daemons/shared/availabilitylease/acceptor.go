@@ -158,20 +158,28 @@ func (n *Node) validateProposal(from string, key Key, epoch, version uint64) (*M
 // refuse applies ballot order, release binding (A6), bootstrap reservation
 // (A5), the T × 1.1 hold for other proposers and the successor window (D9).
 func (n *Node) refuse(ak *acceptorKey, manifest *Manifest, key Key, ballot Ballot, proposer string, now time.Duration) (pb.LeaseNackReason, string) {
-	if ballot.Less(ak.promised()) {
+	if ballot.Less(ak.promised()) || ballot.Less(ak.commitBallot) {
+		// Below a commit this acceptor stores (it may have learned the commit
+		// without promising it, or lost its promises): a lease under a lower
+		// ballot would lose to that older commit everywhere (A13), and could
+		// never satisfy a bootstrap reservation. The NACK names the commit's
+		// ballot, so the proposer goes past it.
 		return pb.LeaseNackReason_LEASE_NACK_REASON_BALLOT_TOO_LOW, ""
 	}
 	if released, ok := ak.rec.Released[proposer]; ok && !released.Less(ballot) {
 		return pb.LeaseNackReason_LEASE_NACK_REASON_RELEASED, ""
+	}
+	if ak.lease.openAt(now) && ak.lease.holder != proposer {
+		// Also for a bootstrap holder: a lease another node still holds here
+		// (lease mode entered again soon after a close, whose unnamed holder
+		// is still stopping) must lapse first, or two copies overlap.
+		return pb.LeaseNackReason_LEASE_NACK_REASON_HELD, ak.lease.holder
 	}
 	if holder := manifest.Bootstrap[key.Slot]; holder != "" && ak.rec.BootstrapSatisfied != manifest.BootstrapID {
 		if proposer != holder {
 			return pb.LeaseNackReason_LEASE_NACK_REASON_RESERVED, holder
 		}
 		return 0, ""
-	}
-	if ak.lease.openAt(now) && ak.lease.holder != proposer {
-		return pb.LeaseNackReason_LEASE_NACK_REASON_HELD, ak.lease.holder
 	}
 	if ak.release.active && ak.release.successor != "" && proposer != ak.release.successor && now < ak.release.at+SuccessorWindow {
 		return pb.LeaseNackReason_LEASE_NACK_REASON_RESERVED, ak.release.successor
@@ -191,7 +199,7 @@ func (n *Node) nack(to string, key Key, ballot Ballot, reason pb.LeaseNackReason
 		nack.ManifestVersion = manifest.Version
 	}
 	if ak != nil {
-		promised := ak.promised()
+		promised := maxBallot(ak.promised(), ak.commitBallot)
 		if released, ok := ak.rec.Released[to]; ok && reason == pb.LeaseNackReason_LEASE_NACK_REASON_RELEASED {
 			// The proposer lost its own released ballot (a restart with a
 			// new incarnation): name it so the next round goes past it
