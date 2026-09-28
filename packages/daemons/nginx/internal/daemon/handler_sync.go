@@ -175,6 +175,10 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
 		return
 	}
+	// The configs of removed hosts are gone for good: so are their caches.
+	for name := range deletedStaleConfigs {
+		removeHostCache(strings.TrimSuffix(strings.TrimPrefix(name, "proxy-host-"), ".conf"))
+	}
 	// Update state
 	hostIDs := make([]string, 0, len(cmd.Hosts))
 	for _, host := range cmd.Hosts {

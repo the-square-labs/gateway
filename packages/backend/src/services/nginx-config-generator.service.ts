@@ -63,6 +63,11 @@ export interface ProxyHostConfig {
   pagesSpaFallback?: boolean;
   pagesFallbackUrl?: string | null;
   additionalRoutes?: ProxyAdditionalRouteConfig[];
+  /**
+   * The public status page route (system host): the ingress node serves the last good responses while Gateway, its
+   * upstream, is unreachable (C-2).
+   */
+  statusPageStaleCache?: boolean;
 }
 
 export interface ProxyAdditionalRouteConfig {

@@ -746,6 +746,7 @@ export abstract class ProxyServiceCore {
       pagesSpaFallback: pagesRouteConfig?.spaFallback,
       pagesFallbackUrl: pagesRouteConfig?.fallbackUrl,
       additionalRoutes,
+      statusPageStaleCache: host.isSystem && host.systemKind === 'status_page',
     };
 
     const hideExternalBranding = (await this.generalSettings?.getConfig())?.hideExternalBranding ?? false;

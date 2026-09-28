@@ -1,0 +1,32 @@
+package daemon
+
+import (
+	"path/filepath"
+	"regexp"
+
+	"github.com/wiolett-industries/gateway/nginx-daemon/internal/nginx"
+)
+
+// hostCacheRoot holds the per-host proxy cache directories that proxy host
+// configs declare as proxy_cache_path /tmp/nginx-cache-<host id>: the cache of
+// a route with caching enabled and the stale cache that keeps the public status
+// page up while Gateway is unreachable. A variable so tests can move it.
+var hostCacheRoot = "/tmp"
+
+var hostCacheIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
+// hostCacheDir is the cache directory of a proxy host, or "" for an id that is
+// not a plain host id (never a path outside hostCacheRoot).
+func hostCacheDir(hostID string) string {
+	if !hostCacheIDPattern.MatchString(hostID) {
+		return ""
+	}
+	return filepath.Join(hostCacheRoot, "nginx-cache-"+hostID)
+}
+
+// removeHostCache deletes a removed proxy host's cache directory.
+func removeHostCache(hostID string) {
+	if dir := hostCacheDir(hostID); dir != "" {
+		_ = nginx.RemoveDir(dir)
+	}
+}

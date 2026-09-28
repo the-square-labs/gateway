@@ -38,6 +38,8 @@ Outbound push of privacy-reduced audit events to up to five HTTPS collectors, en
 
 `manage_status_page({ resource, operation, ... })`: `settings` (`get`, `update`), `proxy_templates` (`list`), `services` (`list`, `create`, `update`, `delete`), `incidents` (`list`, `create`, `update`, `delete`, `resolve`, `promote`), `incident_updates` (`create_update`), and `preview`. Updating settings and services needs `status-page:manage`; incidents are split across `status-page:incidents:create|update|resolve|delete`. A status page is public: `preview` and check the exposed services and wording before telling the user it is live.
 
+The status page is served by Gateway through its ingress Node, which keeps the last good copy of the page, its assets and the status data it polls. While Gateway restarts, updates or is unreachable, visitors get that copy, the last one fetched while Gateway answered; a page that was never loaded before shows a short "Back in a moment" page that reloads by itself. Browsers never store the page themselves, so live data shows again as soon as Gateway answers.
+
 ## Audit log
 
 `get_audit_log` filters by `action` (`resource.action`, for example `ca.create` or `proxy.update`), `resourceType`, and pagination. Actions made through MCP record `details.source: "mcp"` with the tool name, token prefix, and OAuth client; embedded-assistant actions carry `details.ai_initiated: true`. It needs `admin:audit`, an OAuth manual-approval scope. SIEM export is a reduced copy, not a substitute for the audit log when full detail is needed.
