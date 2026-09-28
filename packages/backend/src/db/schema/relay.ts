@@ -296,7 +296,6 @@ export const relayInstances = pgTable(
     policyExpiresAt: timestamp('policy_expires_at', { withTimezone: true }),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
     health: jsonb('health').$type<RelayInstanceHealth>(),
-    policyRoutes: jsonb('policy_routes').$type<RelayPolicyRouteEntry[]>(),
     desiredArtifact: jsonb('desired_artifact').$type<RelayArtifactDescriptor>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -311,6 +310,27 @@ export const relayInstances = pgTable(
     ),
   })
 );
+
+/**
+ * Per relay instance, Gateway-side policy bookkeeping written by snapshot builds: the route tuples
+ * the relay may admit (see RelayPolicyRouteEntry) and the content key, revision and lease of the
+ * last snapshot built for it, so an unchanged policy is not rebuilt under a new revision.
+ *
+ * Kept out of relay_instances, and without a foreign key to it, on purpose: builds write it under
+ * the policy revision lock after a share lock on relay_policy_state, while other transactions lock
+ * a relay_instances row and then bump relay_policy_state. Any relay_instances lock taken here
+ * (a row update, or the key-share lock of a foreign key check) would deadlock with them. Rows of
+ * removed relays are pruned by the revocation evaluator.
+ */
+export const relayInstancePolicyState = pgTable('relay_instance_policy_state', {
+  instanceId: uuid('instance_id').primaryKey(),
+  routes: jsonb('routes').$type<RelayPolicyRouteEntry[]>().notNull().default([]),
+  snapshotKey: varchar('snapshot_key', { length: 64 }),
+  snapshotRevision: bigint('snapshot_revision', { mode: 'number' }),
+  snapshotIssuedAtUnix: bigint('snapshot_issued_at_unix', { mode: 'number' }),
+  snapshotExpiresAtUnix: bigint('snapshot_expires_at_unix', { mode: 'number' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const relayEndpointAssignmentGenerations = pgTable(
   'relay_endpoint_assignment_generations',

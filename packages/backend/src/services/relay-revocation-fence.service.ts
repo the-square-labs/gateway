@@ -1,6 +1,13 @@
-import { eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { relayEndpoints, relayInstances, relayPolicyState, relayPools, relayRoutes } from '@/db/schema/index.js';
+import {
+  relayEndpoints,
+  relayInstancePolicyState,
+  relayInstances,
+  relayPolicyState,
+  relayPools,
+  relayRoutes,
+} from '@/db/schema/index.js';
 import type { RelayPolicyRouteEntry } from '@/db/schema/relay.js';
 import {
   type BuiltPolicyRoute,
@@ -13,11 +20,18 @@ import {
   trustedAcknowledgement,
 } from './relay-revocation-fence.js';
 
-/** Serializes route history writes with policy snapshot builds, which hold the same lock. */
+/**
+ * Serializes route history writes with policy snapshot builds, which hold the same lock.
+ *
+ * Lock order: this advisory lock, then relay_policy_state (FOR SHARE in builds), then
+ * relay_pools and relay_instance_policy_state. Nothing here locks a relay_instances row: pool
+ * reconciliation updates an instance and then bumps relay_policy_state without this lock, so an
+ * instance row lock taken after relay_policy_state would deadlock with it.
+ */
 export const RELAY_POLICY_REVISION_LOCK = 'gateway-relay-remote-policy-revision';
 
-const HAS_UNACKNOWLEDGED_REMOVAL = sql`jsonb_path_exists(${relayInstances.policyRoutes}, '$[*] ? (exists(@.removedAtRevision))')`;
-const HAS_STALE_ROUTE = sql`jsonb_path_exists(${relayInstances.policyRoutes}, '$[*] ? (exists(@.staleAt))')`;
+const HAS_UNACKNOWLEDGED_REMOVAL = sql`jsonb_path_exists(${relayInstancePolicyState.routes}, '$[*] ? (exists(@.removedAtRevision))')`;
+const HAS_STALE_ROUTE = sql`jsonb_path_exists(${relayInstancePolicyState.routes}, '$[*] ? (exists(@.staleAt))')`;
 
 export interface RelayRevocationTransition {
   instanceId: string;
@@ -36,20 +50,75 @@ export interface RelayRevocationOutcome {
 
 const NO_OUTCOME: RelayRevocationOutcome = { transitions: [], nodeIds: [] };
 
+export type InstancePolicyState = typeof relayInstancePolicyState.$inferSelect;
+
+/** The bookkeeping row of one relay, read inside a snapshot build transaction. */
+export async function loadInstancePolicyState(
+  tx: Pick<DrizzleClient, 'select'>,
+  instanceId: string
+): Promise<InstancePolicyState | undefined> {
+  const [row] =
+    (await tx
+      .select()
+      .from(relayInstancePolicyState)
+      .where(eq(relayInstancePolicyState.instanceId, instanceId))
+      .limit(1)) ?? [];
+  return row;
+}
+
+export interface BuiltSnapshotRecord {
+  key: string;
+  revision: number;
+  issuedAtUnix: number;
+  expiresAtUnix: number;
+}
+
 /**
- * Records, inside a snapshot build transaction that holds RELAY_POLICY_REVISION_LOCK, the route
- * tuples the snapshot carries for the relay, keeping earlier tuples until it acknowledges.
+ * Records, inside a snapshot build transaction that holds RELAY_POLICY_REVISION_LOCK, the snapshot
+ * just built for the relay and the route tuples it carries, keeping earlier tuples until the relay
+ * acknowledges. Only builds that allocate a new revision call this.
  */
-export async function recordBuiltPolicyRoutes(
-  tx: Pick<DrizzleClient, 'update'>,
-  instance: { id: string; policyRoutes?: RelayPolicyRouteEntry[] | null },
+export async function recordBuiltSnapshot(
+  tx: Pick<DrizzleClient, 'insert'>,
+  instanceId: string,
+  previous: Pick<InstancePolicyState, 'routes'> | undefined,
   built: BuiltPolicyRoute[],
-  revision: number
+  snapshot: BuiltSnapshotRecord
 ): Promise<void> {
+  const values = {
+    routes: projectBuiltRoutes(previous?.routes, built, snapshot.revision),
+    snapshotKey: snapshot.key,
+    snapshotRevision: snapshot.revision,
+    snapshotIssuedAtUnix: snapshot.issuedAtUnix,
+    snapshotExpiresAtUnix: snapshot.expiresAtUnix,
+    updatedAt: new Date(),
+  };
   await tx
-    .update(relayInstances)
-    .set({ policyRoutes: projectBuiltRoutes(instance.policyRoutes, built, revision) })
-    .where(eq(relayInstances.id, instance.id));
+    .insert(relayInstancePolicyState)
+    .values({ instanceId, ...values })
+    .onConflictDoUpdate({ target: relayInstancePolicyState.instanceId, set: values });
+}
+
+/**
+ * Whether the relay already holds a snapshot with this content: Gateway built it, the relay
+ * reports that exact revision, and more than half of the relay's lease length is left. Rebuilding it
+ * would only spend a revision and make the relay re-apply the same policy.
+ */
+export function holdsCurrentSnapshot(
+  previous:
+    | Pick<InstancePolicyState, 'snapshotKey' | 'snapshotRevision' | 'snapshotIssuedAtUnix' | 'snapshotExpiresAtUnix'>
+    | undefined,
+  key: string,
+  reportedRevision: number,
+  nowUnix: number,
+  /** This relay's lease length now; the key covers it, so a changed length already rebuilds. */
+  leaseSeconds: number
+): boolean {
+  if (!previous?.snapshotKey || previous.snapshotKey !== key) return false;
+  const { snapshotRevision, snapshotExpiresAtUnix } = previous;
+  if (snapshotRevision == null || snapshotExpiresAtUnix == null) return false;
+  if (snapshotRevision !== reportedRevision) return false;
+  return snapshotExpiresAtUnix - nowUnix > leaseSeconds / 2;
 }
 
 /** Relays stale for at least one revoked route, with their route history. */
@@ -57,9 +126,20 @@ export async function loadStaleRelayRoutes(
   db: Pick<DrizzleClient, 'select'>
 ): Promise<Array<{ id: string; policyRoutes: RelayPolicyRouteEntry[] | null }>> {
   return db
-    .select({ id: relayInstances.id, policyRoutes: relayInstances.policyRoutes })
-    .from(relayInstances)
+    .select({ id: relayInstancePolicyState.instanceId, policyRoutes: relayInstancePolicyState.routes })
+    .from(relayInstancePolicyState)
+    .innerJoin(relayInstances, eq(relayInstances.id, relayInstancePolicyState.instanceId))
     .where(HAS_STALE_ROUTE);
+}
+
+/** Every relay's route history, for health surfaces. */
+export async function loadRelayRouteHistories(
+  db: Pick<DrizzleClient, 'select'>
+): Promise<Map<string, RelayPolicyRouteEntry[]>> {
+  const rows = await db
+    .select({ instanceId: relayInstancePolicyState.instanceId, routes: relayInstancePolicyState.routes })
+    .from(relayInstancePolicyState);
+  return new Map(rows.map(({ instanceId, routes }) => [instanceId, routes]));
 }
 
 /** What grant issuance needs to keep stale relays away from the routes they may still admit. */
@@ -118,28 +198,44 @@ export class RelayRevocationFenceService {
     // holding dropped tuples can acknowledge them or run past their deadline.
     const full = state.revision !== this.lastEvaluatedRevision;
     const candidates = await this.db
-      .select({ id: relayInstances.id })
-      .from(relayInstances)
-      .where(full ? isNotNull(relayInstances.policyRoutes) : HAS_UNACKNOWLEDGED_REMOVAL);
+      .select({ id: relayInstancePolicyState.instanceId })
+      .from(relayInstancePolicyState)
+      .where(full ? undefined : HAS_UNACKNOWLEDGED_REMOVAL);
     if (!candidates.length) {
       this.lastEvaluatedRevision = state.revision;
       return NO_OUTCOME;
     }
     const outcome = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${RELAY_POLICY_REVISION_LOCK}))`);
-      // One connection: the reads run in turn.
+      // Bookkeeping of removed relays: no foreign key cascades it (see the table).
+      if (full) {
+        const orphans = await tx
+          .select({ id: relayInstancePolicyState.instanceId })
+          .from(relayInstancePolicyState)
+          .leftJoin(relayInstances, eq(relayInstances.id, relayInstancePolicyState.instanceId))
+          .where(isNull(relayInstances.id));
+        if (orphans.length)
+          await tx.delete(relayInstancePolicyState).where(
+            inArray(
+              relayInstancePolicyState.instanceId,
+              orphans.map(({ id }) => id)
+            )
+          );
+      }
+      // One connection: the reads run in turn. Plain reads of relay_instances take no row lock.
       const instances = await tx
         .select({
           id: relayInstances.id,
           poolId: relayInstances.poolId,
           displayName: relayInstances.displayName,
           appliedPolicyRevision: relayInstances.appliedPolicyRevision,
-          policyRoutes: relayInstances.policyRoutes,
+          policyRoutes: relayInstancePolicyState.routes,
         })
-        .from(relayInstances)
+        .from(relayInstancePolicyState)
+        .innerJoin(relayInstances, eq(relayInstances.id, relayInstancePolicyState.instanceId))
         .where(
           inArray(
-            relayInstances.id,
+            relayInstancePolicyState.instanceId,
             candidates.map(({ id }) => id)
           )
         );
@@ -179,9 +275,9 @@ export class RelayRevocationFenceService {
         });
         if (!reconciled.changed) continue;
         await tx
-          .update(relayInstances)
-          .set({ policyRoutes: reconciled.entries })
-          .where(eq(relayInstances.id, instance.id));
+          .update(relayInstancePolicyState)
+          .set({ routes: reconciled.entries, updatedAt: new Date() })
+          .where(eq(relayInstancePolicyState.instanceId, instance.id));
         if (!reconciled.newlyStale.length && !reconciled.cleared.length) continue;
         const staleRoutes = new Set(reconciled.entries.filter((e) => e.staleAt).map(({ routeId }) => routeId));
         transitions.push({

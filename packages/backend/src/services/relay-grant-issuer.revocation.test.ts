@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { relayEndpoints, relayInstances, relayRoutes } from '@/db/schema/index.js';
+import { relayEndpoints, relayInstancePolicyState, relayRoutes } from '@/db/schema/index.js';
 import type { RelayPolicyRouteEntry } from '@/db/schema/relay.js';
 import { RelayGrantIssuerService } from './relay-grant-issuer.service.js';
 
@@ -124,7 +124,7 @@ const staleHistory: RelayPolicyRouteEntry[] = [
 ];
 
 const staleRelays: Rows = {
-  table: relayInstances,
+  table: relayInstancePolicyState,
   projected: true,
   filtered: true,
   rows: [{ id: 'relay-stale', policyRoutes: staleHistory }],

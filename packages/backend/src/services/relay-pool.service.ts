@@ -34,7 +34,7 @@ import {
 } from './relay-topology.js';
 import type { RelayTopologyService } from './relay-topology.service.js';
 import { describeRelayRevocation } from './relay-revocation-fence.js';
-import { RelayRevocationFenceService } from './relay-revocation-fence.service.js';
+import { loadRelayRouteHistories, RelayRevocationFenceService } from './relay-revocation-fence.service.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
@@ -816,7 +816,9 @@ export class RelayPoolService {
     const worstPressure = Math.max(0, ...instances.map((instance) => instance.health?.pressurePercent ?? 0));
     const unavailable =
       instances.length === 0 || instances.every(({ state }) => !['ready', 'draining'].includes(state));
-    const revocations = new Map(instances.map(({ id, policyRoutes }) => [id, describeRelayRevocation(policyRoutes)]));
+    // Advisory, like the trust and certificate status.
+    const routeHistories = await loadRelayRouteHistories(this.db).catch(() => new Map());
+    const revocations = new Map(instances.map(({ id }) => [id, describeRelayRevocation(routeHistories.get(id))]));
     const degraded =
       !unavailable &&
       (instances.some(({ state }) => ['offline', 'error'].includes(state)) ||
@@ -846,7 +848,7 @@ export class RelayPoolService {
       registeredEndpoints,
       worstPressurePercent: worstPressure,
       endpointCount: endpoints.length,
-      instances: instances.map(({ policyRoutes: _routeHistory, ...instance }) => {
+      instances: instances.map((instance) => {
         let activeAssignments = 0;
         for (const generation of activeByEndpoint.values()) {
           for (const assignment of assignmentsByGeneration.get(generation.id) ?? []) {

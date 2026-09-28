@@ -3,18 +3,28 @@ import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleClient } from '@/db/client.js';
-import { disposableDatabase, migrateDatabase } from '@/db/migration-database.test-helpers.js';
+import { disposableDatabase, migrateDatabase, pgError } from '@/db/migration-database.test-helpers.js';
 import * as schema from '@/db/schema/index.js';
-import { relayEndpoints, relayInstances, relayPolicyState, relayPools, relayRoutes } from '@/db/schema/index.js';
-import { RELAY_REVOCATION_ACK_TIMEOUT_MS } from './relay-revocation-fence.js';
 import {
+  relayEndpoints,
+  relayInstancePolicyState,
+  relayInstances,
+  relayPolicyState,
+  relayPools,
+  relayRoutes,
+} from '@/db/schema/index.js';
+import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
+import { type BuiltPolicyRoute, RELAY_REVOCATION_ACK_TIMEOUT_MS } from './relay-revocation-fence.js';
+import {
+  loadInstancePolicyState,
   loadRevocationFenceState,
   RELAY_POLICY_REVISION_LOCK,
   RelayRevocationFenceService,
-  recordBuiltPolicyRoutes,
+  recordBuiltSnapshot,
 } from './relay-revocation-fence.service.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
+type Transaction = Parameters<Parameters<DrizzleClient['transaction']>[0]>[0];
 const T0 = Date.parse('2026-09-27T10:00:00.000Z');
 
 /**
@@ -67,6 +77,17 @@ describe.skipIf(!url)('relay revocation fence on disposable PostgreSQL', () => {
     }
   }, 180_000);
 
+  /** What a snapshot build records, under the revision lock the caller holds. */
+  async function recordBuild(tx: Transaction, built: BuiltPolicyRoute[], revision: number) {
+    const previous = await loadInstancePolicyState(tx, relayId);
+    await recordBuiltSnapshot(tx, relayId, previous, built, {
+      key: `content-${revision}`,
+      revision,
+      issuedAtUnix: 0,
+      expiresAtUnix: 0,
+    });
+  }
+
   afterAll(async () => {
     await database?.drop();
   });
@@ -75,8 +96,7 @@ describe.skipIf(!url)('relay revocation fence on disposable PostgreSQL', () => {
     const tuple = (routeId: string) => ({ routeId, endpointId, routeGeneration: 1, endpointGeneration: 1 });
     await db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${RELAY_POLICY_REVISION_LOCK}))`);
-      const [instance] = await tx.select().from(relayInstances).where(eq(relayInstances.id, relayId));
-      await recordBuiltPolicyRoutes(tx, instance!, [tuple(keptRouteId), tuple(revokedRouteId)], 10);
+      await recordBuild(tx, [tuple(keptRouteId), tuple(revokedRouteId)], 10);
     });
     // The relay goes silent; Gateway revokes one route and bumps the policy revision.
     await db.delete(relayRoutes).where(eq(relayRoutes.id, revokedRouteId));
@@ -100,7 +120,103 @@ describe.skipIf(!url)('relay revocation fence on disposable PostgreSQL', () => {
     const cleared = await service.evaluate(new Date(T0 + 2 * RELAY_REVOCATION_ACK_TIMEOUT_MS));
     expect(cleared.transitions).toMatchObject([{ instanceId: relayId, stale: false, staleRoutes: 0 }]);
     expect((await loadRevocationFenceState(db)).staleRelaysByRoute.size).toBe(0);
-    const [instance] = await db.select().from(relayInstances).where(eq(relayInstances.id, relayId));
-    expect(instance?.policyRoutes).toEqual([tuple(keptRouteId)]);
+    const [history] = await db
+      .select()
+      .from(relayInstancePolicyState)
+      .where(eq(relayInstancePolicyState.instanceId, relayId));
+    expect(history?.routes).toEqual([tuple(keptRouteId)]);
+  });
+
+  /**
+   * B3 regression: a snapshot build (revision lock, relay_policy_state FOR SHARE, route history
+   * write) interleaved with a pool reconcile transaction (relay_instances update, then policy
+   * revision bump). Both must commit; the same interleaving with a relay_instances write in the
+   * build deadlocks, which proves the interleaving is forced.
+   */
+  async function interleave(buildWrite: (tx: Transaction) => Promise<unknown>) {
+    let buildLocked!: () => void;
+    let reconcileLocked!: () => void;
+    const buildHolds = new Promise<void>((resolve) => {
+      buildLocked = resolve;
+    });
+    const reconcileHolds = new Promise<void>((resolve) => {
+      reconcileLocked = resolve;
+    });
+    const build = db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${RELAY_POLICY_REVISION_LOCK}))`);
+      await tx.select().from(relayPolicyState).where(eq(relayPolicyState.id, 'current')).for('share');
+      buildLocked();
+      await reconcileHolds;
+      await tx
+        .update(relayPools)
+        .set({ desiredPolicyRevision: sql`${relayPools.desiredPolicyRevision} + 1` })
+        .where(eq(relayPools.id, 'system'));
+      await buildWrite(tx);
+    });
+    const reconcile = db.transaction(async (tx) => {
+      await tx.update(relayInstances).set({ updatedAt: new Date() }).where(eq(relayInstances.id, relayId));
+      reconcileLocked();
+      await buildHolds;
+      await bumpRelayPolicyRevision(tx);
+    });
+    return Promise.allSettled([build, reconcile]);
+  }
+
+  it('lets a snapshot build and a pool reconcile interleave without a deadlock', async () => {
+    const tuple = (routeId: string, generation: number) => ({
+      routeId,
+      endpointId,
+      routeGeneration: generation,
+      endpointGeneration: 1,
+    });
+    for (let generation = 2; generation < 6; generation++) {
+      const results = await interleave((tx) => recordBuild(tx, [tuple(keptRouteId, generation)], 20 + generation));
+      expect(results.map(({ status }) => status)).toEqual(['fulfilled', 'fulfilled']);
+    }
+    const control = await interleave((tx) =>
+      tx.update(relayInstances).set({ displayName: 'edge-1' }).where(eq(relayInstances.id, relayId))
+    );
+    expect(control.some((result) => result.status === 'rejected' && pgError(result.reason)?.code === '40P01')).toBe(
+      true
+    );
+  });
+
+  it('prunes the bookkeeping of removed relays', async () => {
+    const removed = randomUUID();
+    await db.insert(relayInstancePolicyState).values({ instanceId: removed, routes: [] });
+    await db.update(relayPolicyState).set({ revision: sql`${relayPolicyState.revision} + 1` });
+    await new RelayRevocationFenceService(db).evaluate(new Date(T0));
+    const rows = await db
+      .select({ id: relayInstancePolicyState.instanceId })
+      .from(relayInstancePolicyState)
+      .where(eq(relayInstancePolicyState.instanceId, removed));
+    expect(rows).toEqual([]);
+  });
+
+  it('carries the route history of relays out of relay_instances on upgrade', async () => {
+    const upgrade = await disposableDatabase(url!, 'revocation_upgrade');
+    try {
+      await migrateDatabase(upgrade.pool, '0215_relay_revocation_fence');
+      const instanceId = randomUUID();
+      const routes = [{ routeId: randomUUID(), endpointId: randomUUID(), routeGeneration: 1, endpointGeneration: 1 }];
+      await upgrade.pool.query(`insert into relay_pools (id) values ('system') on conflict do nothing`);
+      await upgrade.pool.query(
+        `insert into relay_instances (id, pool_id, kind, fault_domain_id, display_name, policy_routes)
+         values ($1, 'system', 'remote', $2, 'edge-1', $3)`,
+        [instanceId, randomUUID(), JSON.stringify(routes)]
+      );
+      await migrateDatabase(upgrade.pool);
+      const carried = await upgrade.pool.query(
+        'select routes from relay_instance_policy_state where instance_id = $1',
+        [instanceId]
+      );
+      expect(carried.rows).toEqual([{ routes }]);
+      const column = await upgrade.pool.query(
+        `select 1 from information_schema.columns where table_name = 'relay_instances' and column_name = 'policy_routes'`
+      );
+      expect(column.rowCount).toBe(0);
+    } finally {
+      await upgrade.drop();
+    }
   });
 });

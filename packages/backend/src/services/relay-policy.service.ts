@@ -23,14 +23,15 @@ import {
 import { encodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import {
   LEGACY_RELAY_POLICY_LEASE_SECONDS,
   LONG_POLICY_LEASE_CAPABILITY,
 } from '@/modules/settings/general-settings.service.js';
-import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
+import { relayGrantBundleFingerprint } from './relay-grant-bundle-fingerprint.js';
 import {
   type RelayGrantBundle,
   RelayGrantIssuerService,
@@ -44,12 +45,14 @@ import {
   reconcileManagedStorageRelayPolicy,
   updateManagedDatabaseRelayStatus,
 } from './relay-policy-reconciler.js';
+import { RelayPolicySigningKeyService, type RelayPolicyTrustAnchor } from './relay-policy-signing-key.service.js';
+import { relayPolicySnapshotContent, relayPolicySnapshotKey } from './relay-policy-snapshot-content.js';
 import {
-  RELAY_POLICY_KEY_VALID_FROM_SKEW_MS,
-  RelayPolicySigningKeyService,
-  type RelayPolicyTrustAnchor,
-} from './relay-policy-signing-key.service.js';
-import { RELAY_POLICY_REVISION_LOCK, recordBuiltPolicyRoutes } from './relay-revocation-fence.service.js';
+  holdsCurrentSnapshot,
+  loadInstancePolicyState,
+  RELAY_POLICY_REVISION_LOCK,
+  recordBuiltSnapshot,
+} from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
@@ -72,6 +75,17 @@ export interface RelayRouteRuntime {
 export type ProxyRouteRuntime = RelayRouteRuntime;
 
 const logger = createChildLogger('RelayPolicyService');
+
+export interface RelayGrantSyncOptions {
+  /** Skip a daemon that recently got a bundle allowing exactly the same (see deliveredRecently). */
+  skipUnchanged?: boolean;
+}
+
+/**
+ * Ensure calls repeat on every reconciliation and link probe with nothing changed. Revocations,
+ * identity changes and reconnects always deliver.
+ */
+const ROUTINE_GRANT_SYNC: RelayGrantSyncOptions = { skipUnchanged: true };
 const INTERNAL_REGISTRY_ID = 'gateway-internal-registry';
 const INTERNAL_REGISTRY_CERTIFICATE_ID = 'local:gateway-internal-registry';
 const REGISTRY_ROUTE_OWNER_KINDS = ['registry_secure_link', 'registry_ingress'] as const;
@@ -207,6 +221,8 @@ export class RelayPolicyService {
     Promise<Awaited<ReturnType<NodeDispatchService['sendRelayGrantBundle']>>>
   >();
   private readonly lastNodeGrantBundles = new Map<string, RelayGrantBundle>();
+  /** Per daemon: what the last delivered bundle allowed, and when it was delivered. */
+  private readonly deliveredGrantBundles = new Map<string, { fingerprint: string; at: number }>();
   private readonly nodeGrantEpochs = new Map<string, { valid: boolean; pending: number }>();
   /** Per remote node: builds and deliveries in order, so a relay never sees an older revision after a newer one. */
   private readonly remotePolicySyncs = new Map<string, Promise<unknown>>();
@@ -369,11 +385,19 @@ export class RelayPolicyService {
       .limit(1);
     if (!instance) throw new Error('Remote relay instance is unavailable');
     const snapshot = await this.buildInstanceSnapshot(instance.id);
-    const args = [nodeId, snapshot.encodedRequest, String(snapshot.revision), String(snapshot.expiresAtUnix)] as const;
-    const result = timeoutMs
-      ? await this.dispatch.sendRelayPolicy(...args, timeoutMs)
-      : await this.dispatch.sendRelayPolicy(...args);
-    if (!result.success) throw new Error(result.error || 'Remote relay rejected policy snapshot');
+    // A relay that reports the unchanged snapshot needs nothing sent.
+    if (snapshot.encodedRequest) {
+      const args = [
+        nodeId,
+        snapshot.encodedRequest,
+        String(snapshot.revision),
+        String(snapshot.expiresAtUnix),
+      ] as const;
+      const result = timeoutMs
+        ? await this.dispatch.sendRelayPolicy(...args, timeoutMs)
+        : await this.dispatch.sendRelayPolicy(...args);
+      if (!result.success) throw new Error(result.error || 'Remote relay rejected policy snapshot');
+    }
     this.remotePolicyRevisions.set(
       nodeId,
       Math.max(this.remotePolicyRevisions.get(nodeId) ?? 0, snapshot.globalRevision)
@@ -487,14 +511,14 @@ export class RelayPolicyService {
       let signed = await this.buildInstanceSnapshot(local.id, trustedKeyIds, revisionFloor);
       let response: { appliedRevision: string; unchanged: boolean };
       try {
-        response = await this.relay.applyEncodedSnapshot(signed.encodedRequest);
+        response = await this.applyLocalSnapshot(signed);
       } catch (error) {
         if (!isLocalPolicyLockout(error)) throw error;
         const trust = await this.policyKeys.getEnrollmentTrust();
         await this.recoverLocalPolicyTrust(trust, health, error);
         signed = await this.buildInstanceSnapshot(local.id, [trust.keyId], revisionFloor);
         try {
-          response = await this.relay.applyEncodedSnapshot(signed.encodedRequest);
+          response = await this.applyLocalSnapshot(signed);
         } catch (retryError) {
           if (errorMessage(retryError).includes('snapshot gateway instance changed')) {
             // The reset took, but this relay build cannot rebind to this Gateway instance.
@@ -528,6 +552,15 @@ export class RelayPolicyService {
     }
     this.grantIssuer.acknowledgeRevision(applied);
     return applied;
+  }
+
+  /** The local relay already holds an unchanged snapshot; applying it again would be a no-op. */
+  private applyLocalSnapshot(signed: {
+    encodedRequest: Buffer | null;
+    revision: number;
+  }): Promise<{ appliedRevision: string; unchanged: boolean }> {
+    if (!signed.encodedRequest) return Promise.resolve({ appliedRevision: String(signed.revision), unchanged: true });
+    return this.relay.applyEncodedSnapshot(signed.encodedRequest);
   }
 
   /**
@@ -957,7 +990,7 @@ export class RelayPolicyService {
       endpointId
     );
     await this.syncSnapshot();
-    await this.syncNodeGrants(sourceNodeId);
+    await this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC);
     return routeId;
   }
 
@@ -990,7 +1023,10 @@ export class RelayPolicyService {
       managedDatabaseListener
     );
     await this.syncSnapshot();
-    await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
+    await Promise.all([
+      this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC),
+      this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
+    ]);
     return routeId;
   }
 
@@ -1042,7 +1078,10 @@ export class RelayPolicyService {
         managedDatabaseListener
       ));
     await this.syncSnapshot();
-    await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
+    await Promise.all([
+      this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC),
+      this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
+    ]);
     return routeId;
   }
 
@@ -1094,7 +1133,10 @@ export class RelayPolicyService {
       endpointId
     );
     await this.syncSnapshot();
-    await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
+    await Promise.all([
+      this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC),
+      this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
+    ]);
     return routeId;
   }
 
@@ -1115,7 +1157,10 @@ export class RelayPolicyService {
       endpointId
     );
     await this.syncSnapshot();
-    await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
+    await Promise.all([
+      this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC),
+      this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
+    ]);
     return routeId;
   }
 
@@ -1170,7 +1215,7 @@ export class RelayPolicyService {
       endpointId
     );
     await this.syncSnapshot();
-    await this.syncNodeGrants(targetNodeId);
+    await this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC);
     return routeId;
   }
 
@@ -1243,8 +1288,8 @@ export class RelayPolicyService {
     const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
     await this.ensureRoute(ownerKind, runId, 'daemon', sourceNodeId, source.certificateFingerprint, endpointId);
     await this.syncSnapshot();
-    await this.syncNodeGrants(target.nodeId);
-    await this.syncNodeGrants(sourceNodeId);
+    await this.syncNodeGrants(target.nodeId, ROUTINE_GRANT_SYNC);
+    await this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC);
     // The daemon resolves an assignment by owner kind and this per-run owner ID.
     return runId;
   }
@@ -1277,8 +1322,8 @@ export class RelayPolicyService {
       endpointId
     );
     await this.syncSnapshot();
-    await this.syncNodeGrants(targetNodeId);
-    await this.syncNodeGrants(sourceNodeId);
+    await this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC);
+    await this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC);
     return routeId;
   }
 
@@ -1298,7 +1343,7 @@ export class RelayPolicyService {
       endpointId
     );
     await this.syncSnapshot();
-    await this.syncNodeGrants(targetNodeId);
+    await this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC);
     return routeId;
   }
 
@@ -1453,6 +1498,7 @@ export class RelayPolicyService {
       if (routes.length || endpoints.length) await bumpRelayPolicyRevision(tx);
     });
     this.lastNodeGrantBundles.delete(nodeId);
+    this.deliveredGrantBundles.delete(nodeId);
     const epoch = this.nodeGrantEpochs.get(nodeId);
     if (epoch) epoch.valid = false;
     this.nodeGrantEpochs.delete(nodeId);
@@ -1464,7 +1510,7 @@ export class RelayPolicyService {
     );
   }
 
-  async syncNodeGrantBundle(nodeId: string) {
+  async syncNodeGrantBundle(nodeId: string, options: RelayGrantSyncOptions = {}) {
     if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
     const epoch = this.nodeGrantEpochs.get(nodeId) ?? { valid: true, pending: 0 };
     epoch.pending += 1;
@@ -1485,6 +1531,10 @@ export class RelayPolicyService {
         // Give the remote relays a moment to take the policy these grants depend on.
         await this.waitForRemotePush();
         const bundle = await this.getNodeGrantBundle(nodeId);
+        const fingerprint = relayGrantBundleFingerprint(bundle);
+        if (options.skipUnchanged && (await this.deliveredRecently(nodeId, fingerprint))) {
+          return { commandId: '', success: true, error: '', detail: 'unchanged', data: Buffer.alloc(0) };
+        }
         if (!epoch.valid) {
           return {
             commandId: '',
@@ -1499,6 +1549,7 @@ export class RelayPolicyService {
         // authoritative even when B is queued and subsequently fails.
         if (result.success && epoch.valid) {
           this.lastNodeGrantBundles.set(nodeId, bundle);
+          this.deliveredGrantBundles.set(nodeId, { fingerprint, at: Date.now() });
         }
         return result;
       });
@@ -1512,14 +1563,25 @@ export class RelayPolicyService {
     }
   }
 
-  async syncNodeGrants(nodeId: string): Promise<void> {
+  async syncNodeGrants(nodeId: string, options: RelayGrantSyncOptions = {}): Promise<void> {
     if (!this.dispatch) return;
-    let result = await this.syncNodeGrantBundle(nodeId);
+    let result = await this.syncNodeGrantBundle(nodeId, options);
     if (!result.success && (await this.raiseRevisionAboveDaemon(nodeId, result.error))) {
-      result = await this.syncNodeGrantBundle(nodeId);
+      result = await this.syncNodeGrantBundle(nodeId, options);
     }
     if (result.success) this.staleGrantRefusals.delete(nodeId);
     if (!result.success) throw new Error(result.error || `Daemon ${nodeId} rejected relay grants`);
+  }
+
+  /**
+   * Whether the daemon got a bundle allowing exactly the same within the grant refresh interval.
+   * Its grants are then still fresh, and a resend only makes it re-apply and re-renew everything.
+   */
+  private async deliveredRecently(nodeId: string, fingerprint: string): Promise<boolean> {
+    const delivered = this.deliveredGrantBundles.get(nodeId);
+    if (delivered?.fingerprint !== fingerprint) return false;
+    const intervalMs = ((await this.settings.getConfig()).relayGrantTtlHours * 60 * 60 * 1000) / 4;
+    return Date.now() - delivered.at < intervalMs;
   }
 
   /**
@@ -1891,7 +1953,8 @@ export class RelayPolicyService {
     reportedPolicyKeyIds?: string[],
     appliedRevisionFloor = 0
   ): Promise<{
-    encodedRequest: Buffer;
+    /** Null when the relay already holds this content at `revision`: nothing to send. */
+    encodedRequest: Buffer | null;
     revision: number;
     globalRevision: number;
     expiresAtUnix: number;
@@ -1899,6 +1962,7 @@ export class RelayPolicyService {
     const generalSettings = await this.settings.getConfig();
     const relaySettings = generalSettings.relay;
     const issuedAt = new Date();
+    const issuedAtUnix = Math.floor(issuedAt.getTime() / 1000);
     const projection = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${RELAY_POLICY_REVISION_LOCK}))`);
       // Writers bump this row in the same transaction as projection changes.
@@ -1957,6 +2021,55 @@ export class RelayPolicyService {
           Number.isSafeInteger(appliedRevisionFloor) ? appliedRevisionFloor : 0
         )
       );
+
+      // An instance that has not reported policy_long_lease_v1 may still be running a relay build
+      // that rejects any envelope lease over 15 minutes; keep it on the legacy lease until it upgrades.
+      const instanceFeatures = Array.isArray(instance.capabilities?.features) ? instance.capabilities.features : [];
+      const leaseSeconds = instanceFeatures.includes(LONG_POLICY_LEASE_CAPABILITY)
+        ? generalSettings.relayPolicyLeaseHours * 60 * 60
+        : LEGACY_RELAY_POLICY_LEASE_SECONDS;
+      const expiresAtUnix = Math.floor((issuedAt.getTime() + leaseSeconds * 1000) / 1000);
+
+      // Everything that decides the envelope content is read before its content key, so an
+      // unchanged key means an unchanged envelope. These reads use their own connections and take
+      // no locks. The relay's own trust decides the signer: a relay that missed a rotation gets its
+      // snapshot signed by an old key it still trusts, and learns the active key from that snapshot.
+      const policyKeys = await this.policyKeys.resolveInstancePolicyKeys(instance, issuedAt, reportedPolicyKeyIds);
+      const lease = this.availabilityLeaseSource
+        ? await this.availabilityLeaseSource().catch((error) => {
+            // Relays keep the lease blocks they have; the next snapshot carries them again.
+            logger.warn('Relay snapshot is built without availability lease blocks', { error: errorMessage(error) });
+            return null;
+          })
+        : null;
+      // Never fail open: without the lease gate ids the relay would admit a lease-mode placement like a legacy one.
+      const leaseGate = this.availabilityLeaseGate ? await this.availabilityLeaseGate(endpoints, routes) : null;
+      const content = relayPolicySnapshotContent({
+        gatewayInstanceId: state.gatewayInstanceId,
+        poolId: instance.poolId,
+        relayInstanceId: instance.id,
+        grantKeys,
+        assignments: selectedAssignments,
+        endpoints,
+        routes,
+        admission: relaySettings,
+        policyKeys: policyKeys.keys,
+        routePolicy: relayRoutePolicy,
+        leaseGate,
+        lease,
+      });
+      const key = relayPolicySnapshotKey(content, policyKeys.signingKeyId, leaseSeconds);
+      const previous = await loadInstancePolicyState(tx, instance.id);
+      // Syncs run on every policy touch; unchanged content must not spend a revision, or the relay
+      // re-applies the same policy every few seconds. A lease past half its life is renewed.
+      if (holdsCurrentSnapshot(previous, key, reported, issuedAtUnix, leaseSeconds)) {
+        return {
+          unchanged: true as const,
+          state,
+          revision: previous!.snapshotRevision!,
+          expiresAtUnix: previous!.snapshotExpiresAtUnix!,
+        };
+      }
       const own = sql`greatest(${relayPools.desiredPolicyRevision}, ${state.revision})`;
       const [poolRevision] = await tx
         .update(relayPools)
@@ -1971,9 +2084,10 @@ export class RelayPolicyService {
       if (!poolRevision) throw new Error('Relay pool is unavailable');
       // Under the revision lock, so a revocation is always judged against the snapshots built.
       const endpointGenerations = new Map(endpoints.map((endpoint) => [endpoint.id, endpoint.generation]));
-      await recordBuiltPolicyRoutes(
+      await recordBuiltSnapshot(
         tx,
-        instance,
+        instance.id,
+        previous,
         selectedAssignments.flatMap(({ endpointId }) =>
           routes.flatMap((route) => {
             const endpointGeneration = endpointGenerations.get(endpointId);
@@ -1982,115 +2096,39 @@ export class RelayPolicyService {
               : [{ routeId: route.id, endpointId, routeGeneration: route.generation, endpointGeneration }];
           })
         ),
-        poolRevision.revision
+        { key, revision: poolRevision.revision, issuedAtUnix, expiresAtUnix }
       );
-      return { instance, state, grantKeys, selectedAssignments, endpoints, routes, revision: poolRevision.revision };
+      return {
+        unchanged: false as const,
+        state,
+        content,
+        signingKeyId: policyKeys.signingKeyId,
+        revision: poolRevision.revision,
+        expiresAtUnix,
+      };
     });
-
-    // An instance that has not reported policy_long_lease_v1 may still be running a relay build
-    // that rejects any envelope lease over 15 minutes; keep it on the legacy lease until it upgrades.
-    const instanceFeatures = Array.isArray(projection.instance.capabilities?.features)
-      ? projection.instance.capabilities.features
-      : [];
-    const leaseSeconds = instanceFeatures.includes(LONG_POLICY_LEASE_CAPABILITY)
-      ? generalSettings.relayPolicyLeaseHours * 60 * 60
-      : LEGACY_RELAY_POLICY_LEASE_SECONDS;
-    const expiresAtUnix = Math.floor((issuedAt.getTime() + leaseSeconds * 1000) / 1000);
-
-    // The relay's own trust decides the signer: a relay that missed a rotation gets its snapshot
-    // signed by an old key it still trusts, and learns the active key from that snapshot.
-    const policyKeys = await this.policyKeys.resolveInstancePolicyKeys(
-      projection.instance,
-      issuedAt,
-      reportedPolicyKeyIds
-    );
-    const endpointById = new Map(projection.endpoints.map((endpoint) => [endpoint.id, endpoint]));
-    const lease = this.availabilityLeaseSource
-      ? await this.availabilityLeaseSource().catch((error) => {
-          // Relays keep the lease blocks they have; the next snapshot carries them again.
-          logger.warn('Relay snapshot is built without availability lease blocks', { error: errorMessage(error) });
-          return null;
-        })
-      : null;
-    // Never fail open: without the lease gate ids the relay would admit a lease-mode placement like a legacy one.
-    const leaseGate = this.availabilityLeaseGate
-      ? await this.availabilityLeaseGate(projection.endpoints, projection.routes)
-      : null;
+    if (projection.unchanged) {
+      return {
+        encodedRequest: null,
+        revision: projection.revision,
+        globalRevision: projection.state.revision,
+        expiresAtUnix: projection.expiresAtUnix,
+      };
+    }
     const payload = encodeRelayV1Message('PolicyEnvelopePayload', {
-      schemaVersion: 2,
-      gatewayInstanceId: projection.state.gatewayInstanceId,
-      poolId: projection.instance.poolId,
-      relayInstanceId: projection.instance.id,
+      ...projection.content,
       revision: String(projection.revision),
-      issuedAtUnix: String(Math.floor(issuedAt.getTime() / 1000)),
-      expiresAtUnix: String(expiresAtUnix),
-      grantPublicKeys: projection.grantKeys.map((key) => ({
-        keyId: key.keyId,
-        publicKey: Buffer.from(key.publicKey, 'base64'),
-      })),
-      endpoints: projection.selectedAssignments.flatMap((assignment) => {
-        const endpoint = endpointById.get(assignment.endpointId);
-        if (!endpoint) return [];
-        return [
-          {
-            endpointId: endpoint.id,
-            generation: String(endpoint.generation),
-            subjectKind: endpoint.subjectKind,
-            subjectId: endpoint.subjectId,
-            certificateSha256: endpoint.certificateSha256,
-            maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
-            poolId: projection.instance.poolId,
-            relayInstanceId: projection.instance.id,
-            assignmentGeneration: String(assignment.assignmentGeneration),
-            ...(leaseGate?.endpoints.get(endpoint.id) ? { leasePolicyId: leaseGate.endpoints.get(endpoint.id) } : {}),
-          },
-        ];
-      }),
-      routes: projection.selectedAssignments.flatMap((assignment) =>
-        projection.routes
-          .filter(({ targetEndpointId }) => targetEndpointId === assignment.endpointId)
-          .map((route) => ({
-            routeId: route.id,
-            generation: String(route.generation),
-            sourceKind: route.sourceKind,
-            sourceId: route.sourceId,
-            sourceCertificateSha256: route.sourceCertificateSha256,
-            targetEndpointId: route.targetEndpointId,
-            maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
-            maxFrameBytes: route.maxFrameBytes,
-            ...relayRoutePolicy(route.ownerKind),
-            assignmentGeneration: String(assignment.assignmentGeneration),
-            ...(leaseGate?.routes.get(route.id) ? { leasePolicyId: leaseGate.routes.get(route.id) } : {}),
-          }))
-      ),
-      admissionPolicy: {
-        enabled: relaySettings.adaptiveAdmissionEnabled,
-        proxyTargetPressurePercent: relaySettings.proxyTargetPressurePercent,
-        databaseReservePercent: relaySettings.databaseReservePercent,
-        hardPressurePercent: relaySettings.hardPressurePercent,
-      },
-      capabilities: ['relay_pool_v1'],
-      policySigningKeys: policyKeys.keys.map((key) => ({
-        keyId: key.keyId,
-        publicKey: key.publicKey,
-        publicKeyFingerprint: key.fingerprint,
-        status: key.status === 'pending' ? 'active' : key.status,
-        // Relays check validFrom against their own clock; start it early by the skew they allow.
-        validFromUnix: String(
-          key.activatedAt ? Math.floor((key.activatedAt.getTime() - RELAY_POLICY_KEY_VALID_FROM_SKEW_MS) / 1000) : 0
-        ),
-        verifyUntilUnix: String(key.verifyUntil ? Math.floor(key.verifyUntil.getTime() / 1000) : 0),
-      })),
-      ...(lease ? { leaseBlocks: lease.leaseBlocks, leaseKeyRotations: lease.leaseKeyRotations } : {}),
+      issuedAtUnix: String(issuedAtUnix),
+      expiresAtUnix: String(projection.expiresAtUnix),
     });
-    const signed = await this.policyKeys.signPayload(payload, policyKeys.signingKeyId);
+    const signed = await this.policyKeys.signPayload(payload, projection.signingKeyId);
     return {
       encodedRequest: encodeRelayV1Message('ApplySnapshotRequest', {
         signedEnvelope: { signingKeyId: signed.signingKeyId, payload, signature: signed.signature },
       }),
       revision: projection.revision,
       globalRevision: projection.state.revision,
-      expiresAtUnix,
+      expiresAtUnix: projection.expiresAtUnix,
     };
   }
 

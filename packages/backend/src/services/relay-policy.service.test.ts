@@ -5,6 +5,7 @@ import {
   relayEndpointAssignments,
   relayEndpoints,
   relayGrantSigningKeys,
+  relayInstancePolicyState,
   relayInstances,
   relayPolicyState,
   relayRoutes,
@@ -216,7 +217,12 @@ describe('RelayPolicyService route runtime', () => {
       return q;
     };
     const set = vi.fn(() => ({ where: () => ({ returning: async () => [{ revision: 901 }] }) }));
-    const db: any = { select, execute: vi.fn(), update: () => ({ set }) };
+    const db: any = {
+      select,
+      execute: vi.fn(),
+      update: () => ({ set }),
+      insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
+    };
     db.transaction = (fn: any) => fn(db);
     const service = createService(db, { applySnapshot: vi.fn() });
     (service as any).policyKeys.resolveInstancePolicyKeys = async () => ({ signingKeyId: 'test', keys: [] });
@@ -232,11 +238,12 @@ describe('RelayPolicyService route runtime', () => {
     const dropped = { routeId: 'route-old', endpointId: 'endpoint', routeGeneration: 1, endpointGeneration: 2 };
     const rows = [
       [{ revision: 900, gatewayInstanceId: 'gateway' }],
-      [{ id: 'remote', poolId: 'system', policyRoutes: [dropped] }],
+      [{ id: 'remote', poolId: 'system' }],
       [],
       [{ endpointId: 'endpoint', assignmentGeneration: 3, generationState: 'active' }],
       [{ id: 'endpoint', generation: 2, subjectKind: 'daemon', subjectId: 'node', certificateSha256: 'sha256:n' }],
       [{ id: 'route-new', generation: 5, targetEndpointId: 'endpoint', sourceKind: 'daemon', ownerKind: 'x' }],
+      [{ routes: [dropped] }],
     ];
     const select = () => {
       const q: any = Promise.resolve(rows.shift());
@@ -244,18 +251,31 @@ describe('RelayPolicyService route runtime', () => {
       return q;
     };
     const set = vi.fn(() => ({ where: () => ({ returning: async () => [{ revision: 901 }] }) }));
-    const db: any = { select, execute: vi.fn(), update: () => ({ set }) };
+    const history = vi.fn();
+    const db: any = {
+      select,
+      execute: vi.fn(),
+      update: (table: unknown) => {
+        // The build must not lock a relay_instances row after relay_policy_state (lock order).
+        expect(table).not.toBe(relayInstances);
+        return { set };
+      },
+      insert: () => ({ values: (values: unknown) => ({ onConflictDoUpdate: async () => history(values) }) }),
+    };
     db.transaction = (fn: any) => fn(db);
     const service = createService(db, { applySnapshot: vi.fn() });
     (service as any).policyKeys.resolveInstancePolicyKeys = async () => ({ signingKeyId: 'test', keys: [] });
     (service as any).policyKeys.signPayload = async () => ({ signingKeyId: 'test', signature: Buffer.alloc(64) });
     await (service as any).buildInstanceSnapshot('remote');
-    expect((set.mock.calls[1] as any)[0]).toEqual({
-      policyRoutes: [
-        { routeId: 'route-new', endpointId: 'endpoint', routeGeneration: 5, endpointGeneration: 2 },
-        { ...dropped, removedAtRevision: 901 },
-      ],
-    });
+    expect(history).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instanceId: 'remote',
+        routes: [
+          { routeId: 'route-new', endpointId: 'endpoint', routeGeneration: 5, endpointGeneration: 2 },
+          { ...dropped, removedAtRevision: 901 },
+        ],
+      })
+    );
   });
 
   it('reads managed database binding runtime from its owned Relay route', async () => {
@@ -424,6 +444,7 @@ describe('RelayPolicyService snapshots', () => {
         return query;
       },
       execute: vi.fn(),
+      insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
       update: () => ({
         set: () => ({ where: () => ({ returning: async () => [{ revision: ++transportRevision }] }) }),
       }),
@@ -476,6 +497,134 @@ describe('RelayPolicyService snapshots', () => {
     await expect(service.syncSnapshot()).resolves.toBe(102);
     issuer.acknowledgeRevision(10); // A late ACK cannot regress the already confirmed fence.
     await expect(issuer.signGrant(claims)).resolves.toMatchObject({ keyId: 'grant-key' });
+  });
+
+  it('does not spend a revision or re-apply policy while the relay holds unchanged content', async () => {
+    const local = {
+      id: 'local',
+      poolId: 'system',
+      buildVersion: 'test',
+      protocolMajor: 1,
+      capabilities: { protocolMajor: 1, features: ['relay_pool_v1'] },
+    };
+    let grantKeys = [{ keyId: 'grant-a', publicKey: '' }];
+    let bookkeeping: Record<string, unknown> | undefined;
+    let poolRevision = 100;
+    let applied = 0;
+    const db: any = {
+      select: () => {
+        let table: unknown;
+        const query: any = {
+          from: (value: unknown) => {
+            table = value;
+            return query;
+          },
+          // biome-ignore lint/suspicious/noThenProperty: emulate Drizzle's lazy thenable query
+          then: (resolve: (rows: unknown[]) => unknown) =>
+            Promise.resolve(
+              table === relayPolicyState
+                ? [{ revision: 10, gatewayInstanceId: 'gateway' }]
+                : table === relayInstances
+                  ? [local]
+                  : table === relayGrantSigningKeys
+                    ? grantKeys
+                    : table === relayInstancePolicyState && bookkeeping
+                      ? [bookkeeping]
+                      : []
+            ).then(resolve),
+        };
+        for (const method of ['where', 'limit', 'innerJoin', 'for']) query[method] = () => query;
+        return query;
+      },
+      execute: vi.fn(),
+      update: () => ({
+        set: () => ({ where: () => ({ returning: async () => [{ revision: ++poolRevision }] }) }),
+      }),
+      insert: () => ({
+        values: (values: Record<string, unknown>) => ({
+          onConflictDoUpdate: async () => {
+            bookkeeping = values;
+          },
+        }),
+      }),
+    };
+    db.transaction = (fn: any) => fn(db);
+    const applyEncodedSnapshot = vi.fn(async () => {
+      applied = poolRevision;
+      return { appliedRevision: String(poolRevision) };
+    });
+    const service = createService(db, {
+      applySnapshot: vi.fn(),
+      getHealth: vi.fn(async () => ({
+        ...local,
+        relayInstanceId: local.id,
+        capabilities: local.capabilities.features,
+        appliedRevision: String(applied),
+      })),
+      bootstrapPolicyTrust: vi.fn(),
+      applyEncodedSnapshot,
+    });
+    const keys = (service as any).policyKeys;
+    let signingKeyId = 'policy-key';
+    keys.resolveInstancePolicyKeys = async () => ({ signingKeyId, keys: [] });
+    keys.signPayload = async () => ({ signingKeyId, signature: Buffer.alloc(64) });
+    keys.getEnrollmentTrust = async () => ({ keyId: 'policy-key', publicKey: '', fingerprint: '' });
+    let leaseBlocks: unknown[] = [];
+    let leaseKeyRotations: unknown[] = [];
+    let gatedRoutes = new Map<string, string>();
+    service.setAvailabilityLeaseSource({
+      relayPolicyFields: async () => ({ leaseBlocks, leaseKeyRotations }),
+      retainedSigningKeyIds: async () => [],
+      relayLeasePolicyIds: async () => ({ endpoints: new Map(), routes: gatedRoutes }),
+    });
+    let expected = 101;
+    const sync = async (changed: boolean) => {
+      const applies = applyEncodedSnapshot.mock.calls.length;
+      if (changed) expected += 1;
+      await expect(service.syncSnapshot()).resolves.toBe(expected);
+      expect(poolRevision).toBe(expected);
+      expect(applyEncodedSnapshot).toHaveBeenCalledTimes(applies + (changed ? 1 : 0));
+    };
+
+    expected = 100;
+    await sync(true);
+    await sync(false);
+    await sync(false);
+
+    // Every kind of content change is built and applied under a new revision, and only once.
+    grantKeys = [...grantKeys, { keyId: 'grant-b', publicKey: '' }];
+    await sync(true);
+    await sync(false);
+    leaseBlocks = [
+      {
+        signingKeyId: 'policy-key',
+        kind: 'LEASE_BLOCK_KIND_MANIFEST',
+        payload: Buffer.from('m1'),
+        signature: Buffer.alloc(64),
+      },
+    ];
+    await sync(true);
+    await sync(false);
+    leaseKeyRotations = [
+      {
+        previousKeyId: 'old',
+        keyId: 'policy-key',
+        publicKey: Buffer.alloc(32, 1),
+        publicKeyFingerprint: 'sha256:a',
+        signature: Buffer.alloc(64, 3),
+      },
+    ];
+    await sync(true);
+    gatedRoutes = new Map([['route-1', 'policy-1']]);
+    // No route of this relay is gated: the gate adds nothing to its envelope.
+    await sync(false);
+    signingKeyId = 'rotated-key';
+    await sync(true);
+    await sync(false);
+
+    // So is unchanged content once the relay no longer reports holding it (restored relay).
+    applied = 50;
+    await sync(true);
   });
 
   it('does not replace a pool snapshot with legacy policy when Relay health lookup fails', async () => {
@@ -623,6 +772,46 @@ describe('RelayPolicyService snapshots', () => {
     releaseFirst();
     await Promise.all([first, second]);
     expect(sendRelayGrantBundle.mock.calls.map((call) => call[1].generatedAtUnixMs)).toEqual(['100', '101']);
+  });
+
+  it('does not resend a routine bundle that allows the same as the one just delivered', async () => {
+    const service = createService({} as never, { applySnapshot: vi.fn() });
+    const sendRelayGrantBundle = vi.fn().mockResolvedValue({ success: true });
+    service.setNodeDispatch({ sendRelayGrantBundle } as never);
+    const signed = (claims: Record<string, unknown>) => ({
+      keyId: 'grant-key',
+      payload: Buffer.from(JSON.stringify(claims)),
+      signature: Buffer.from(String(Math.random())),
+    });
+    let routeGeneration = 1;
+    let issuedAt = 1_000;
+    vi.spyOn(service, 'getNodeGrantBundle').mockImplementation(async () => {
+      issuedAt += 1;
+      return {
+        revision: '7',
+        generatedAtUnixMs: String(issuedAt),
+        grants: [
+          {
+            role: 'connect',
+            ownerKind: 'proxy_host_secure_link',
+            ownerId: 'link',
+            routeId: 'route',
+            grant: signed({ grantId: `g-${issuedAt}`, issuedAt, expiresAt: issuedAt + 60, routeGeneration }),
+          },
+        ],
+      };
+    });
+
+    await service.syncNodeGrants('node-1', { skipUnchanged: true });
+    await service.syncNodeGrants('node-1', { skipUnchanged: true });
+    expect(sendRelayGrantBundle).toHaveBeenCalledTimes(1);
+    // A reconnect or revocation path delivers regardless.
+    await service.syncNodeGrants('node-1');
+    expect(sendRelayGrantBundle).toHaveBeenCalledTimes(2);
+    // A changed grant is delivered even on the routine path.
+    routeGeneration = 2;
+    await service.syncNodeGrants('node-1', { skipUnchanged: true });
+    expect(sendRelayGrantBundle).toHaveBeenCalledTimes(3);
   });
 
   it('probes the managed database source route before declaring the binding usable', async () => {
@@ -900,6 +1089,7 @@ describe('RelayPolicyService policy signing trust', () => {
         return query;
       },
       execute: vi.fn(),
+      insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
       update: () => ({
         set: () => ({ where: () => ({ returning: async () => [{ revision: ++transportRevision }] }) }),
       }),
@@ -1265,7 +1455,12 @@ describe('RelayPolicyService relay recovery surfaces', () => {
       return q;
     };
     const set = vi.fn(() => ({ where: () => ({ returning: async () => [{ revision: 7001 }] }) }));
-    const db: any = { select, execute: vi.fn(), update: () => ({ set }) };
+    const db: any = {
+      select,
+      execute: vi.fn(),
+      update: () => ({ set }),
+      insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
+    };
     db.transaction = (fn: any) => fn(db);
     const service = createService(db, { applySnapshot: vi.fn() });
     (service as any).policyKeys.resolveInstancePolicyKeys = async () => ({ signingKeyId: 'test', keys: [] });

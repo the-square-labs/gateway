@@ -637,12 +637,11 @@ describe('RelayPoolService status', () => {
     expect(query.params.at(-1)).toBe(20);
   });
 
-  function snapshotDb(latest: any[], kind = 'test', capable = true, updateState?: string, extra: object = {}) {
+  function snapshotDb(latest: any[], kind = 'test', capable = true, updateState?: string, histories?: unknown[]) {
     const relay = {
       ...instance('relay', 'host'),
       kind: 'local',
       capabilities: { features: capable ? ['relay_pool_v1'] : [] },
-      ...extra,
     };
     const active = { id: 'old', endpointId: 'endpoint', generation: 1, state: 'active' };
     return queuedDb([
@@ -654,6 +653,7 @@ describe('RelayPoolService status', () => {
       updateState ? [{ id: 'update', state: updateState, targetArtifact: { version: 'next' } }] : [],
       ...(updateState ? [[]] : []),
       latest,
+      ...(histories ? [histories] : []),
     ]);
   }
 
@@ -731,7 +731,7 @@ describe('RelayPoolService status', () => {
         staleAt: '2026-09-27T10:01:30.000Z',
       },
     ];
-    const { db } = snapshotDb([], 'test', true, undefined, { policyRoutes });
+    const { db } = snapshotDb([], 'test', true, undefined, [{ instanceId: 'relay', routes: policyRoutes }]);
     const { pool } = service(db);
     const snapshot = await pool.getSnapshot();
     expect(snapshot.state).toBe('degraded');
