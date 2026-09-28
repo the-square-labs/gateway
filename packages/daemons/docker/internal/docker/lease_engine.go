@@ -24,6 +24,9 @@ type leaseEngine struct {
 	cgroupRoot string
 	// composeProjects maps compose project names of live placements to them.
 	composeProjects func() map[string]availabilityPlacement
+	// runtimeIdentities maps the recorded runtimes of container and deployment
+	// placements (origin workloads carry no availability labels, D1).
+	runtimeIdentities func() leaseRuntimeIdentities
 
 	infoMu        sync.Mutex
 	cgroupDriver  string
@@ -50,7 +53,48 @@ func (e *leaseEngine) ListLeaseContainers(ctx context.Context) ([]lease.Containe
 			out = append(out, c)
 		}
 	}
+	out, err = e.appendRuntimeIdentities(ctx, out, seen)
+	if err != nil {
+		return nil, err
+	}
 	return e.appendComposeProjects(ctx, out, seen)
+}
+
+// appendRuntimeIdentities adds the unlabeled containers a placement recorded
+// as its runtime: the origin container or deployment a policy was enabled on
+// keeps running as the slot's workload without availability labels (D1,
+// stand run rc20 B-2: the orders origin never acquired its bootstrap slot).
+func (e *leaseEngine) appendRuntimeIdentities(ctx context.Context, out []lease.Container, seen map[string]bool) ([]lease.Container, error) {
+	if e.runtimeIdentities == nil {
+		return out, nil
+	}
+	identities := e.runtimeIdentities()
+	if identities.empty() {
+		return out, nil
+	}
+	listed, err := e.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list placement runtime containers: %w", err)
+	}
+	for _, item := range listed.Items {
+		if seen[item.ID] {
+			continue
+		}
+		placement, ok := identities.match(item.ID, item.Names, item.Labels)
+		if !ok {
+			continue
+		}
+		c, found, inspectErr := e.Inspect(ctx, item.ID)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if found {
+			c.PolicyID, c.PlacementID = placement.PolicyID, placement.PlacementID
+			seen[c.ID] = true
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 // appendComposeProjects adds the containers of compose placements: user
