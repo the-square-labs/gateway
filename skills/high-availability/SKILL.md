@@ -39,7 +39,7 @@ Either mode can prefer Nodes in a fixed order: `priorityMode: true` with `nodePr
 
 ## Data-plane failover (lease mode)
 
-A policy runs in lease mode when every ingress nginx Node of the workload's routes and every relay that carries it advertise `availability_lease_v2`, and enough members that can vote exist for a quorum. In lease mode failover no longer depends on Gateway being reachable.
+A policy runs in lease mode when every ingress nginx Node of the workload's routes and every relay that carries it advertise `availability_lease_v2`, and enough members that can vote exist for a quorum. A policy on the backend path enters lease mode only once every candidate Node, ingress nginx Node, carrying relay and witness has run `availability_lease_v2` (with its lease watchdog and identity) for 2 minutes without a restart; until then `reason` is `participants_settling` with the Nodes or relays still settling, so a fleet in the middle of an update (Gateway first, then the Nodes one by one) never switches. In lease mode failover no longer depends on Gateway being reachable.
 - **Who decides.** The Nodes and relays hold a lease per serving slot. A serving Node renews it every few seconds and stops its own copy if it cannot, so a dead or cut-off Node is replaced by the next candidate within about 45 seconds even while Gateway is down.
 - **Standbys.** They are created ahead of time: the image is pulled and the container is created but not started.
 - **Traffic.** It reaches only the current lease holder.
@@ -58,7 +58,7 @@ A planned move of a slot (failback, drain, manual move, `nodePriority` change) i
 
 `get` returns a `lease` object:
 - `mode`: `legacy`, `bootstrapping`, `lease` or `closing`;
-- `reason`: why a policy is legacy, or why lease mode is impossible right now, with `since` while a lease-mode policy waits out the 2 minutes. `nodeIds` or `relayIds` name what to fix. With `watchdog_missing`, the listed Nodes have no running lease watchdog; when their daemon cannot install it (it runs without root), re-run the node installer there;
+- `reason`: why a policy is legacy (for example `participants_settling` while the fleet settles after an update), or why lease mode is impossible right now, with `since` while a lease-mode policy waits out the 2 minutes. `nodeIds` or `relayIds` name what to fix. With `watchdog_missing`, the listed Nodes have no running lease watchdog; when their daemon cannot install it (it runs without root), re-run the node installer there;
 - `excludedNodes`: `[{ nodeId, reason }]` as above;
 - `holders` per slot, with Node, placement and holder time;
 - `voters` and `witness` (with `warning`: `witness_near_candidate`, `no_eligible_witness` or `configured_witness_unavailable`);
