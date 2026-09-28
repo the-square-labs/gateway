@@ -8,6 +8,15 @@
 export const AVAILABILITY_UPSTREAM_SERVER_PARAMS = 'max_fails=1 fail_timeout=1s';
 
 /**
+ * Every member again as a backup that is never taken out (B-13). With one failure taking a member out for a second,
+ * a moment where every member refused at once (the nginx daemon restarting, a holder's socket reopening) left nginx
+ * with "no live upstreams" for up to that second although a member served again: 502 without trying anything. Once
+ * every member is out, nginx tries the backups, so a member that serves again answers at once; while members are in
+ * rotation the backups are never used.
+ */
+export const AVAILABILITY_BACKUP_SERVER_PARAMS = 'max_fails=0 backup';
+
+/**
  * Where an Availability upstream sends a request that failed on one member (D6): connect errors and timeouts as
  * before, and a 502/503/504 from the member (a deployment router whose app is not up yet, a member stopping), so the
  * next member answers instead (stand runs a-d, B-5). nginx never passes a non-idempotent request (POST, LOCK, PATCH)
@@ -25,9 +34,13 @@ export const AVAILABILITY_NEXT_UPSTREAM_DIRECTIVES = [
 /** Body of a managed Secure Link upstream block. */
 export function managedSecureLinkUpstreamBody(socketPaths: string[], availability: boolean): string {
   const params = availability ? ` ${AVAILABILITY_UPSTREAM_SERVER_PARAMS}` : '';
-  return `${socketPaths.length > 1 ? '    least_conn;\n' : ''}${socketPaths
-    .map((socketPath) => `    server unix:${socketPath}${params};`)
-    .join('\n')}\n    keepalive 64;`;
+  const servers = socketPaths.map((socketPath) => `    server unix:${socketPath}${params};`);
+  if (availability) {
+    servers.push(
+      ...socketPaths.map((socketPath) => `    server unix:${socketPath} ${AVAILABILITY_BACKUP_SERVER_PARAMS};`)
+    );
+  }
+  return `${socketPaths.length > 1 ? '    least_conn;\n' : ''}${servers.join('\n')}\n    keepalive 64;`;
 }
 
 function escapeRegExp(value: string): string {

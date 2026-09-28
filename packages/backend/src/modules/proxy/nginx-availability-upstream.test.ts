@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { AVAILABILITY_NEXT_UPSTREAM_DIRECTIVES, withAvailabilityNextUpstream } from './nginx-availability-upstream.js';
+import {
+  AVAILABILITY_NEXT_UPSTREAM_DIRECTIVES,
+  managedSecureLinkUpstreamBody,
+  withAvailabilityNextUpstream,
+} from './nginx-availability-upstream.js';
 
 const upstream = 'gateway_secure_link_11111111_1111_4111_8111_111111111111';
 
@@ -30,5 +34,28 @@ describe('Availability next-upstream directives (D6)', () => {
   it('touches nothing without Availability upstreams', () => {
     const template = `location / {\n    proxy_pass http://${upstream};\n}\n`;
     expect(withAvailabilityNextUpstream(template, [])).toBe(template);
+  });
+});
+
+describe('Availability upstream members (B-13)', () => {
+  it('lists every member once more as a backup that is never taken out, so a serving member is always tried', () => {
+    expect(
+      managedSecureLinkUpstreamBody(['/run/gateway-secure-links/a.sock', '/run/gateway-secure-links/b.sock'], true)
+    ).toBe(
+      [
+        '    least_conn;',
+        '    server unix:/run/gateway-secure-links/a.sock max_fails=1 fail_timeout=1s;',
+        '    server unix:/run/gateway-secure-links/b.sock max_fails=1 fail_timeout=1s;',
+        '    server unix:/run/gateway-secure-links/a.sock max_fails=0 backup;',
+        '    server unix:/run/gateway-secure-links/b.sock max_fails=0 backup;',
+        '    keepalive 64;',
+      ].join('\n')
+    );
+  });
+
+  it('leaves a plain Secure Link upstream as it was', () => {
+    expect(managedSecureLinkUpstreamBody(['/run/gateway-secure-links/a.sock'], false)).toBe(
+      '    server unix:/run/gateway-secure-links/a.sock;\n    keepalive 64;'
+    );
   });
 });
