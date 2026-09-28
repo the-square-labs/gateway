@@ -50,6 +50,7 @@ const MIB = 1024 ** 2;
 const GIB = 1024 ** 3;
 const POWER_PREFIX = 'power:';
 const MARKER = /^gw-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+const MARKER_SUFFIX = /-(gw-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/;
 /** CloudBlast sells only x86-64 KVM plans (no ARM plans are documented); installer-supported families only. */
 const ADMITTED_DISTRIBUTIONS = new Set(['ubuntu', 'debian']);
 const RESIZE_UNSUPPORTED = 'CloudBlast does not expose plan changes through its API';
@@ -110,6 +111,10 @@ function parseAddress(value: unknown): HostingAddress {
   const ip = normalizeIp(string(object.address));
   return ip ? { ip, network: 'public', direct: true } : unsafe();
 }
+/**
+ * Neither the server list nor its details report a location (only an internal `node_id`), so this is
+ * normally empty; Gateway then keeps the location it requested at creation.
+ */
 function locationOf(object: Json): string {
   const location = optionalRecord(object.location);
   if (location && location.id !== undefined && location.id !== null) return id(location.id);
@@ -119,9 +124,13 @@ function parseServer(value: unknown): CbServer {
   const object = record(value);
   const serverUuid = uuid(object.uuid);
   const plan = optionalRecord(object.plan);
+  const host = optionalString(object.hostname) ?? '';
+  const marker = MARKER_SUFFIX.exec(host)?.[1];
+  // `name` is the plan label (for example "VMA21"); the hostname is the server's own name.
+  const label = marker ? host.slice(0, -(marker.length + 1)) : host;
   return {
     uuid: serverUuid,
-    name: optionalString(object.name) ?? optionalString(object.hostname) ?? serverUuid,
+    name: label || (optionalString(object.name) ?? serverUuid),
     status: optionalString(object.status),
     cpu: number(object.cpu),
     memoryMb: bytesTo(object.memory, MIB),
@@ -129,7 +138,7 @@ function parseServer(value: unknown): CbServer {
     location: locationOf(object),
     addresses: values(object.ip_addresses).map(parseAddress),
     plan: plan ? { id: id(plan.id), price: planPrice(plan) } : null,
-    marker: /-(gw-[0-9a-f-]{36})$/.exec(optionalString(object.hostname) ?? '')?.[1],
+    marker,
   };
 }
 function parseStatus(value: unknown): CbStatus {

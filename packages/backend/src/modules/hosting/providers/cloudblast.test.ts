@@ -33,16 +33,20 @@ const SERVER = '0a1b2c3d-1111-4222-8333-444455556666';
 const OTHER = '0a1b2c3d-7777-4888-9999-aaaabbbbcccc';
 const GIB = 1024 ** 3;
 const meta = (page = 1, last = 1) => ({ meta: { current_page: page, last_page: last, per_page: 25, total: 1 } });
+// Real shape: `name` is the plan label, the hostname is the server's own name, and neither the list
+// nor the details report a location (only an internal node_id).
 const server = (uuid = SERVER) => ({
   id: 42,
   uuid,
   uuid_short: uuid.slice(0, 8),
-  name: 'gateway-web',
-  hostname: 'gateway-web.example.com',
+  name: 'VMA21',
+  hostname: 'gateway-web',
   status: null,
   cpu: 2,
   memory: 4 * GIB,
   disk: 80 * GIB,
+  node_id: 10,
+  os: 'Ubuntu 24.04 LTS',
   created_at: '2026-09-01T10:00:00+00:00',
   ip_addresses: [
     { address: '203.0.113.20', type: 'ipv4', gateway: '203.0.113.1', cidr: 24, rdns: null, reserved: false },
@@ -54,7 +58,7 @@ const detail = (uuid = SERVER) => ({
     ...server(uuid),
     root_password: 'never-persist-me',
     password_status: 'ready',
-    plan: { id: 7, name: 'Cloud M', monthly_price: 9.99, hourly_price: 0.015 },
+    plan: { id: 7, name: 'VMA21', monthly_price: 9.99, hourly_price: 0.015 },
     operating_system: 'Ubuntu 24.04 LTS',
   },
 });
@@ -110,6 +114,7 @@ describe('CloudBlastHostingAdapter', () => {
     expect(inventory.resources[0]).toMatchObject({
       kind: 'vm',
       name: 'gateway-web',
+      location: '',
       cpu: 2,
       memoryMb: 4096,
       diskGb: 80,
@@ -343,7 +348,27 @@ describe('CloudBlastHostingAdapter', () => {
         : { data: { ...detail().data, hostname: `web-1-${marker}`, status: 'installing' } }
     );
     const vm = await resource(http);
-    expect(vm).toMatchObject({ marker, powerState: 'starting' });
+    expect(vm).toMatchObject({ marker, name: 'web-1', powerState: 'starting' });
+  });
+
+  it('names a server by its hostname without the operation marker, never by the plan label', async () => {
+    const named = async (fields: Record<string, unknown>) =>
+      (
+        await resource(
+          new FakeHostingHttp((path) =>
+            path.endsWith('/status') ? running : { data: { ...detail().data, ...fields } }
+          )
+        )
+      ).name;
+    await expect(named({ hostname: 'docker-uk-2-gw-44444444-4444-4444-8444-444444444444' })).resolves.toBe(
+      'docker-uk-2'
+    );
+    await expect(named({ hostname: 'signer-01' })).resolves.toBe('signer-01');
+    // Not a Gateway marker: the full hostname stays visible.
+    await expect(named({ hostname: 'web-gw-not-a-marker' })).resolves.toBe('web-gw-not-a-marker');
+    // Without a hostname the plan label is still better than nothing; without both, the UUID.
+    await expect(named({ hostname: null })).resolves.toBe('VMA21');
+    await expect(named({ hostname: '', name: null })).resolves.toBe(SERVER);
   });
 
   it('reads the EUR credit balance, paginated invoices and estimated monthly VM expenses', async () => {
