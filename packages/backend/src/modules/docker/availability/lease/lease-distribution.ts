@@ -10,7 +10,11 @@ import {
   type LeaseKeyRotationValue,
   type LeaseSignedBlockValue,
 } from './lease-codec.js';
-import { AVAILABILITY_LEASE_CAPABILITY, DAEMON_SYNC_RETRY_MS } from './lease-constants.js';
+import {
+  AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY,
+  advertisesLeaseProtocol,
+  DAEMON_SYNC_RETRY_MS,
+} from './lease-constants.js';
 import { type LeaseMemberRow, loadLeaseCluster, loadLeaseKeyRotations } from './lease-store.js';
 
 const logger = createChildLogger('AvailabilityLeaseDistribution');
@@ -104,15 +108,18 @@ export class AvailabilityLeaseDistribution {
   }
 
   /**
-   * Sends the current distribution to every connected capable docker and nginx daemon that has not applied it. A
-   * daemon that reported the revision is up to date; one that did not gets it again after a short retry interval.
+   * Sends the current distribution to every connected docker and nginx daemon that runs the lease protocol (any
+   * version: an outdated holder must still see a closed manifest) and has not applied it. A daemon that reported the
+   * revision is up to date; one that did not gets it again after a short retry interval.
    */
   async syncDaemons(members: Map<string, LeaseMemberRow>, now = Date.now()): Promise<void> {
     const targets = this.registry
       .getAllNodes()
       .filter(
         (node) =>
-          (node.type === 'docker' || node.type === 'nginx') && node.capabilities.has(AVAILABILITY_LEASE_CAPABILITY)
+          (node.type === 'docker' || node.type === 'nginx') &&
+          (advertisesLeaseProtocol(node.capabilities) ||
+            node.capabilities.has(AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY))
       );
     const live = new Set(targets.map((node) => node.connectionId));
     for (const connectionId of this.delivered.keys()) if (!live.has(connectionId)) this.delivered.delete(connectionId);

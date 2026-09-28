@@ -12,7 +12,7 @@ function reportedCapabilities(value: unknown): string[] {
 }
 
 /**
- * A19: a configured witness must be a relay instance or a docker node that advertises availability_lease_v1, is not a
+ * A19: a configured witness must be a relay instance or a docker node that advertises availability_lease_v2, is not a
  * candidate of the policy and runs on another host than every known candidate. nginx daemons are observers only.
  * Candidates chosen later (all compatible nodes) are checked at run time; an ineligible witness then falls back to
  * the automatic choice with the warning configured_witness_unavailable.
@@ -71,7 +71,7 @@ export async function validateLeaseWitness(
     throw new AppError(
       400,
       'AVAILABILITY_WITNESS_NOT_CAPABLE',
-      'The witness does not run a version with data-plane failover (availability_lease_v1)'
+      'The witness does not run a version with data-plane failover (availability_lease_v2)'
     );
   }
   const witnessNodeId = relay ? relay.nodeId : node!.id;

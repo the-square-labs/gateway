@@ -144,6 +144,18 @@ export function encodeLeaseManifest(content: LeaseManifestContent, manifestVersi
   });
 }
 
+/** Candidate ids of a published manifest block (base64 relay.v1.LeaseSignedBlock); empty when there is none. */
+export function leaseManifestCandidateIds(manifestBlock: string | null | undefined): string[] {
+  if (!manifestBlock) return [];
+  try {
+    const block = decodeLeaseSignedBlock(Buffer.from(manifestBlock, 'base64'));
+    const manifest = decodeRelayV1Message('LeaseManifest', block.payload) as { candidates?: Array<{ id?: string }> };
+    return (manifest.candidates ?? []).flatMap((candidate) => (candidate.id ? [candidate.id] : []));
+  } catch {
+    return [];
+  }
+}
+
 /** Digest of everything a manifest says except its version: a new digest publishes a new version. */
 export function leaseManifestDigest(content: LeaseManifestContent): string {
   return createHash('sha256')

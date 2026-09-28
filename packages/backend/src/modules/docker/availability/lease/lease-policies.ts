@@ -17,12 +17,18 @@ import {
   encodeLeaseSignedBlock,
   type LeaseManifestContent,
   type LeaseSigner,
+  leaseManifestCandidateIds,
   leaseManifestDigest,
   signLeaseBlock,
 } from './lease-codec.js';
-import { CLOSE_SETTLE_MS, GATE_WINDOW_MS, LEASE_TERM_MS } from './lease-constants.js';
+import { CLOSE_SETTLE_MS, GATE_WINDOW_MS, LEASE_IMPOSSIBLE_HYSTERESIS_MS, LEASE_TERM_MS } from './lease-constants.js';
 import { evaluateLeaseGating } from './lease-gating.js';
-import { type LeaseParticipants, leaseVoterCandidates, leaseWitnessPool } from './lease-participants.js';
+import {
+  type LeaseParticipants,
+  leaseVoterCandidates,
+  leaseWitnessPool,
+  manifestCandidateAllowed,
+} from './lease-participants.js';
 import {
   bootstrapAcknowledged,
   bootstrapFromHolders,
@@ -35,7 +41,7 @@ import { loadPolicyRelays } from './lease-policy-relays.js';
 import { planPolicyVoters } from './lease-policy-voters.js';
 import type { LeaseClusterRow, LeaseMemberRow, LeaseStateRow } from './lease-store.js';
 import { ensureLeaseState } from './lease-store.js';
-import { holdsEveryMajority, selectPolicyVoters } from './lease-voters.js';
+import { holdsEveryMajority, type PolicyVoterSelection, selectPolicyVoters } from './lease-voters.js';
 
 const logger = createChildLogger('AvailabilityLeasePolicies');
 
@@ -84,6 +90,52 @@ export interface LeasePoliciesContext {
   cluster: LeaseClusterRow;
   controllerSupportsLease: boolean;
   now: Date;
+}
+
+/** D3 exclusion of a candidate node; a node Gateway has no docker row for cannot be reached at all. */
+function participantExclusion(participants: LeaseParticipants, nodeId: string) {
+  const participant = participants.byId.get(nodeId);
+  return participant ? participant.exclusion : ('offline' as const);
+}
+
+/** Since when lease mode has been impossible without a break, from the stored reason; now when it just became so. */
+function impossibleSince(reason: DockerAvailabilityLeaseReason | null | undefined, now: Date): Date {
+  const since = reason?.since ? Date.parse(reason.since) : Number.NaN;
+  return Number.isFinite(since) && since <= now.getTime() ? new Date(since) : now;
+}
+
+/** Nodes that hold, run or are reserved for a slot right now: a per-node exclusion never cuts them (D3). */
+function activeLeaseNodeIds(observations: ObservationRow[], state: LeaseStateRow): Set<string> {
+  const ids = new Set<string>();
+  for (const observation of observations) {
+    if (observation.holderId) ids.add(observation.holderId);
+    for (const claimant of Object.keys(observation.claimants ?? {})) ids.add(claimant);
+  }
+  if (state.mode === 'bootstrapping') for (const entry of state.bootstrap) ids.add(entry.holderId);
+  return ids;
+}
+
+/**
+ * A5 / D3: closing may hand the policy to legacy before the settle time only when no copy can run anywhere: no slot has
+ * a holder or a daemon reporting a role in which its copy may run, and every node that could hold (candidates, last
+ * holders, claimants, reserved holders) persisted the closed manifest, so none of them acquires again.
+ */
+function closedEverywhere(input: {
+  observations: ObservationRow[];
+  bootstrap: Array<{ slot: number; holderId: string }>;
+  candidateNodeIds: readonly string[];
+  closedAckers: ReadonlySet<string>;
+}): boolean {
+  const running = input.observations.some(
+    (observation) => observation.holderId !== null || Object.keys(observation.claimants ?? {}).length > 0
+  );
+  if (running) return false;
+  const possible = new Set<string>(input.candidateNodeIds);
+  for (const observation of input.observations) {
+    if (observation.lastHolderId) possible.add(observation.lastHolderId);
+  }
+  for (const entry of input.bootstrap) possible.add(entry.holderId);
+  return possible.size > 0 && [...possible].every((id) => input.closedAckers.has(id));
 }
 
 /**
@@ -212,25 +264,35 @@ export class AvailabilityLeasePolicies {
     context: LeasePoliciesContext
   ): Promise<{ changed: boolean; modeChange: LeaseModeChange | null }> {
     const now = context.now;
-    const candidateNodes = [...new Set(leaseCandidatePlacements(placements).map((placement) => placement.nodeId))];
+    const participants = context.participants;
+    const candidatePlacements = leaseCandidatePlacements(placements);
+    const candidateNodes = [...new Set(candidatePlacements.map((placement) => placement.nodeId))];
+    const servingNodes = new Set(
+      candidatePlacements.filter((placement) => placement.serving).map((placement) => placement.nodeId)
+    );
+    const ranked = orderLeaseCandidates(policy, placements);
+    const selection = this.selectVoters(policy, state, ranked, participants);
     const gating = evaluateLeaseGating({
       controllerSupportsLease: context.controllerSupportsLease,
       legacyRequested: state.legacyRequested,
       policyMode: policy.mode,
       signingReady: Boolean(context.cluster.signingKeyId),
+      entering: state.mode === 'legacy',
       candidates: candidateNodes.map((nodeId) => ({
         nodeId,
-        capable: context.participants.byId.get(nodeId)?.capable ?? false,
-        watchdogMissing: context.participants.byId.get(nodeId)?.watchdogMissing ?? false,
+        exclusion: participantExclusion(participants, nodeId),
+        serving: servingNodes.has(nodeId),
       })),
+      heldSlots: observations.filter((observation) => observation.holderId !== null).length,
       ingress: [...new Set(ingressNodes)].map((nodeId) => ({
         nodeId,
-        capable: context.participants.byId.get(nodeId)?.capable ?? false,
+        capable: participants.byId.get(nodeId)?.capable ?? false,
       })),
       relays: relayIds.map((relayId) => ({
         relayId,
-        capable: context.participants.byId.get(relayId)?.capable ?? false,
+        capable: participants.byId.get(relayId)?.capable ?? false,
       })),
+      voters: { viable: selection.viable, nonVotingCandidateIds: selection.nonVotingCandidateIds },
     });
     // D9: a rollout's surge is a temporary extra slot; failover stays at one slot.
     const slots = policy.mode === 'replicated' ? Math.min(32, policy.desiredReplicaCount + state.surgeSlots) : 1;
@@ -239,6 +301,14 @@ export class AvailabilityLeasePolicies {
     let next: DockerAvailabilityLeaseMode = state.mode;
     const plannedHandoffs = state.plannedHandoffs.filter((handoff) => Date.parse(handoff.expiresAt) > now.getTime());
     if (plannedHandoffs.length !== state.plannedHandoffs.length) updates.plannedHandoffs = plannedHandoffs;
+    // D3: a lease-mode policy leaves only after lease mode stayed impossible for 2 minutes without a break; an
+    // explicit request (lifecycle hold, disable) closes at once. Meanwhile the lease keeps running as it is.
+    const since = gating.eligible ? null : gating.immediate ? now : impossibleSince(state.reason, now);
+    const leaving =
+      !gating.eligible &&
+      state.mode !== 'legacy' &&
+      state.mode !== 'closing' &&
+      (gating.immediate || now.getTime() - since!.getTime() >= LEASE_IMPOSSIBLE_HYSTERESIS_MS);
 
     if (state.mode === 'legacy') {
       // Only a policy that already left lease mode waits; a policy that never ran one bootstraps right away.
@@ -253,11 +323,12 @@ export class AvailabilityLeasePolicies {
         updates.closingStartedAt = null;
         updates.closingAckedAt = null;
       }
-    } else if (state.mode !== 'closing' && !gating.eligible) {
+    } else if (leaving) {
       next = 'closing';
       updates.closingStartedAt = now;
       updates.closingAckedAt = null;
     } else if (
+      gating.eligible &&
       state.mode === 'lease' &&
       state.publishedPartitionMode === 'available' &&
       policy.partitionMode === 'strict'
@@ -294,15 +365,21 @@ export class AvailabilityLeasePolicies {
           })
           .map((member) => member.memberId)
       );
-      const holders = lastHolders(observations, state.bootstrap);
-      // Without a known holder only the majority path is safe: someone may hold without the Gateway having seen it.
-      const holdersAcked = holders.length > 0 && holders.every(({ holderId }) => closedAckers.has(holderId));
       let ackedAt = state.closingAckedAt;
       if (!ackedAt && holdsEveryMajority(state.quorumSets, closedAckers)) {
         ackedAt = now;
         updates.closingAckedAt = now;
       }
-      if (holdersAcked || (ackedAt && now.getTime() - ackedAt.getTime() >= CLOSE_SETTLE_MS)) {
+      // D3: legacy starts nothing before every slot's lease was released or expired. Released: no copy runs anywhere
+      // and every node that could hold knows the lease is closed. Expired: a voter majority persisted the close, so
+      // no renewal succeeded since, and T x 1.1 / 0.9 plus the fence stop margin passed.
+      const released = closedEverywhere({
+        observations,
+        bootstrap: state.bootstrap,
+        candidateNodeIds: candidateNodes,
+        closedAckers,
+      });
+      if (released || (ackedAt && now.getTime() - ackedAt.getTime() >= CLOSE_SETTLE_MS)) {
         next = 'legacy';
         updates.manifestBlock = null;
         updates.bootstrap = [];
@@ -316,8 +393,8 @@ export class AvailabilityLeasePolicies {
     }
     const strictRequestedAt =
       updates.strictRequestedAt !== undefined ? updates.strictRequestedAt : state.strictRequestedAt;
-    const reason = !gating.eligible
-      ? gating.reason
+    const reason: DockerAvailabilityLeaseReason | null = !gating.eligible
+      ? { ...gating.reason, ...(gating.immediate ? {} : { since: since!.toISOString() }) }
       : next === 'bootstrapping' && strictRequestedAt
         ? STRICT_SWITCH_PENDING
         : null;
@@ -326,7 +403,16 @@ export class AvailabilityLeasePolicies {
     const merged: LeaseStateRow = { ...state, ...(updates as Partial<LeaseStateRow>) };
     let blockChanged = false;
     if (next !== 'legacy') {
-      const published = await this.publishManifest(policy, merged, placements, slots, observations, context);
+      const published = await this.publishManifest(
+        policy,
+        merged,
+        slots,
+        observations,
+        context,
+        ranked,
+        // Voters change only to a viable selection, and never while the lease closes (the close needs stable sets).
+        selection.viable && next !== 'closing' ? selection : null
+      );
       Object.assign(updates, published.updates);
       blockChanged = published.published;
     }
@@ -350,57 +436,87 @@ export class AvailabilityLeasePolicies {
     return { changed: blockChanged || (next === 'legacy' && state.mode === 'closing'), modeChange };
   }
 
+  /**
+   * The desired voters (A18, D3): voter-capable candidates, then witnesses. A current voter or witness keeps its place
+   * through a short incapability (grace), so a daemon restart or a rolling update never changes the voters.
+   */
+  private selectVoters(
+    policy: PolicyRow,
+    state: LeaseStateRow,
+    ranked: string[],
+    participants: LeaseParticipants
+  ): PolicyVoterSelection {
+    const currentVoters = new Set(state.quorumSets.flat());
+    const currentAuto = state.witnesses.filter((witness) => witness.auto).map((witness) => witness.memberId);
+    return selectPolicyVoters({
+      candidates: leaseVoterCandidates(participants, ranked, currentVoters),
+      pool: leaseWitnessPool(participants, new Set(state.witnesses.map((witness) => witness.memberId))),
+      configuredWitness: policy.witness,
+      currentAutoWitnesses: currentAuto,
+    });
+  }
+
   private async publishManifest(
     policy: PolicyRow,
     state: LeaseStateRow,
-    placements: LeasePlanningPlacement[],
     slots: number,
     observations: ObservationRow[],
-    context: LeasePoliciesContext
+    context: LeasePoliciesContext,
+    ranked: string[],
+    selection: PolicyVoterSelection | null
   ): Promise<{ updates: Partial<typeof dockerAvailabilityLeaseState.$inferInsert>; published: boolean }> {
     const none = { updates: {}, published: false };
     const signingKeyId = context.cluster.signingKeyId;
     if (!signingKeyId) return none;
     const closed = state.mode === 'closing';
     const participants = context.participants;
-    const ranked = orderLeaseCandidates(policy, placements);
+    // D3: a node that runs an outdated daemon (or has no identity) is no manifest candidate, so it never acquires. A
+    // node already listed keeps its place through the 2-minute grace, and a node that holds or runs a copy is never
+    // cut (removal from the manifest fences it). Offline and watchdog-less nodes stay: the data plane keeps them from
+    // holding by itself, and taking them out would only churn the manifest.
+    const active = activeLeaseNodeIds(observations, state);
+    const listed = new Set(leaseManifestCandidateIds(state.manifestBlock));
     const candidates = ranked.flatMap((nodeId) => {
-      const publicKey = participants.byId.get(nodeId)?.publicKey;
-      return publicKey ? [{ id: nodeId, publicKey: Buffer.from(publicKey, 'base64') }] : [];
+      const participant = participants.byId.get(nodeId);
+      const publicKey = participant?.publicKey;
+      if (
+        !publicKey ||
+        !manifestCandidateAllowed(participant, { active: active.has(nodeId), listed: listed.has(nodeId) })
+      )
+        return [];
+      return [{ id: nodeId, publicKey: Buffer.from(publicKey, 'base64') }];
     });
     if (candidates.length === 0 && !closed) return none;
-    const selection = selectPolicyVoters({
-      candidates: leaseVoterCandidates(participants, ranked),
-      pool: leaseWitnessPool(participants),
-      configuredWitness: policy.witness,
-      currentAutoWitnesses: state.witnesses.filter((witness) => witness.auto).map((witness) => witness.memberId),
-    });
-    const plan = planPolicyVoters({
-      state,
-      desired: selection.voterIds,
-      memberOf: (id) => {
-        const participant = participants.byId.get(id);
-        return participant?.publicKey ? { id, role: participant.role, publicKey: participant.publicKey } : null;
-      },
-      ackedEpoch: (memberId) => {
-        const ack = context.members.get(memberId)?.manifestAcks[policy.id];
-        if (!ack) return 0;
-        if (ack.voterEpoch) return ack.voterEpoch;
-        return state.jointVersion > 0 && ack.version >= state.jointVersion ? state.voterEpoch : 0;
-      },
-      activeLeaseEpochs: observations
-        .filter(
-          (observation) =>
-            observation.holderId && context.now.getTime() - observation.observedAt.getTime() <= 2 * LEASE_TERM_MS
-        )
-        .map((observation) => observation.epoch),
-      now: context.now,
-    });
+    const currentVoters = state.quorumSets.at(-1) ?? [];
+    // A closing lease keeps its voters as they are, joint or not: the close needs a majority of the sets it names.
+    const plan = closed
+      ? { next: state, jointStarted: false }
+      : planPolicyVoters({
+          state,
+          desired: selection ? selection.voterIds : currentVoters,
+          memberOf: (id) => {
+            const participant = participants.byId.get(id);
+            return participant?.publicKey ? { id, role: participant.role, publicKey: participant.publicKey } : null;
+          },
+          ackedEpoch: (memberId) => {
+            const ack = context.members.get(memberId)?.manifestAcks[policy.id];
+            if (!ack) return 0;
+            if (ack.voterEpoch) return ack.voterEpoch;
+            return state.jointVersion > 0 && ack.version >= state.jointVersion ? state.voterEpoch : 0;
+          },
+          activeLeaseEpochs: observations
+            .filter(
+              (observation) =>
+                observation.holderId && context.now.getTime() - observation.observedAt.getTime() <= 2 * LEASE_TERM_MS
+            )
+            .map((observation) => observation.epoch),
+          now: context.now,
+        });
     const voters = plan.next;
     const updates: Partial<typeof dockerAvailabilityLeaseState.$inferInsert> = {};
-    if (JSON.stringify(selection.witnesses) !== JSON.stringify(state.witnesses))
+    if (selection && JSON.stringify(selection.witnesses) !== JSON.stringify(state.witnesses))
       updates.witnesses = selection.witnesses;
-    if (selection.warning !== state.witnessWarning) updates.witnessWarning = selection.warning;
+    if (selection && selection.warning !== state.witnessWarning) updates.witnessWarning = selection.warning;
     if (voters.jointAckedAt !== state.jointAckedAt) updates.jointAckedAt = voters.jointAckedAt;
     // Members (A18): the voters of every quorum set, plus every capable relay as a non-voting member so its data-path
     // gate keeps shadow accepts for this policy (A11, A15). nginx daemons are observers and never members.
@@ -408,7 +524,7 @@ export class AvailabilityLeasePolicies {
     const members = [
       ...voters.voterMembers.filter((member) => voterIds.has(member.id)),
       ...participants.relays
-        .filter((relay) => relay.capable && relay.publicKey && !voterIds.has(relay.id))
+        .filter((relay) => relay.voterCapable && relay.publicKey && !voterIds.has(relay.id))
         .map((relay) => ({ id: relay.id, role: 'relay' as const, publicKey: relay.publicKey! })),
     ].sort((left, right) => left.id.localeCompare(right.id));
     const known = new Set(candidates.map((candidate) => candidate.id));

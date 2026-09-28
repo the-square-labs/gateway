@@ -38,6 +38,25 @@ export interface DockerAvailabilityLeaseHolderView {
   source: DockerAvailabilityLeaseObservationSource;
 }
 
+/**
+ * Why a Docker candidate cannot hold a slot or receive a standby right now (D3). A per-node condition never changes the
+ * policy's mode: the node is only left out.
+ * - offline: its daemon has no control connection to Gateway;
+ * - watchdog_missing: its lease watchdog is not running (or cannot be installed), so the daemon refuses to hold;
+ * - daemon_outdated: its daemon does not advertise availability_lease_v2;
+ * - identity_pending: its daemon has not reported a lease identity key yet.
+ */
+export type DockerAvailabilityLeaseExclusionReason =
+  | 'offline'
+  | 'watchdog_missing'
+  | 'daemon_outdated'
+  | 'identity_pending';
+
+export interface DockerAvailabilityLeaseExcludedNode {
+  nodeId: string;
+  reason: DockerAvailabilityLeaseExclusionReason;
+}
+
 /** Read-only lease state of a policy for the API, the UI and the controller. */
 export interface DockerAvailabilityLeaseView {
   mode: DockerAvailabilityLeaseMode;
@@ -58,6 +77,12 @@ export interface DockerAvailabilityLeaseView {
    * relay gate window (24 s) passed since then (A16); null while other copies may still run.
    */
   copiesStoppedAt: Date | null;
+  /**
+   * Candidates left out of holding and of standby provisioning right now, with the reason (D3). Voters and manifest
+   * candidates follow an outdated or unidentified node only after the condition lasted 2 minutes; offline and
+   * watchdog conditions never change them (the data plane itself keeps such a node from holding).
+   */
+  excludedNodes: DockerAvailabilityLeaseExcludedNode[];
   /** Per-policy voter reachability margin over its quorum sets (A18). */
   voterMargin: LeaseVoterMargin | null;
   /** Voters of the newest quorum set: candidate hosts in rank order, then witnesses (A18). */

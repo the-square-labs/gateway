@@ -9,8 +9,13 @@ import {
   selectPolicyVoters,
 } from './lease-voters.js';
 
-function candidate(id: string, hostKey = `host-${id}`, faultDomains: string[] = []): LeaseVoterCandidateNode {
-  return { id, hostKey, faultDomains, publicKey: `pk-${id}` };
+function candidate(
+  id: string,
+  hostKey = `host-${id}`,
+  faultDomains: string[] = [],
+  voterCapable = true
+): LeaseVoterCandidateNode {
+  return { id, hostKey, faultDomains, publicKey: `pk-${id}`, voterCapable };
 }
 
 function witness(
@@ -37,7 +42,13 @@ describe('per-policy lease voters (A18, A20)', () => {
       pool: [witness('r1')],
       configuredWitness: null,
     });
-    expect(selection).toEqual({ voterIds: ['d1', 'd2', 'd3'], witnesses: [], warning: null });
+    expect(selection).toEqual({
+      voterIds: ['d1', 'd2', 'd3'],
+      witnesses: [],
+      warning: null,
+      viable: true,
+      nonVotingCandidateIds: [],
+    });
   });
 
   it('gives one vote per physical host across daemons and relays', () => {
@@ -148,7 +159,9 @@ describe('lease witness (A19)', () => {
       pool: [witness('old', { capable: false }), witness('keyless', { publicKey: null })],
       configuredWitness: null,
     });
-    expect(selection).toEqual({ voterIds: ['d1', 'd2'], witnesses: [], warning: 'no_eligible_witness' });
+    expect(selection).toMatchObject({ voterIds: ['d1', 'd2'], witnesses: [], warning: 'no_eligible_witness' });
+    // Two voters are still a quorum of the three the policy needs: lease mode runs, with margin 0.
+    expect(selection.viable).toBe(true);
   });
 
   it('keeps a current automatic witness instead of churning to a farther one', () => {
@@ -159,6 +172,105 @@ describe('lease witness (A19)', () => {
       currentAutoWitnesses: ['current'],
     });
     expect(selection.voterIds).toEqual(['d1', 'd2', 'current']);
+  });
+
+  it('never picks the local relay while another ready relay can witness, and moves off it (N-2)', () => {
+    // Stand rc20: checkout/payments had the local relay as witness (it had RTT data first and stayed sticky), so the
+    // margin was 0 and losing the Gateway host plus one node fenced a slot.
+    const pool = [
+      witness('local', { local: true, rtt: { d1: 0.2, d2: 0.3 } }),
+      witness('r136', { rtt: { d1: 0.6, d2: 0.7 } }),
+      witness('r137'),
+    ];
+    const selection = selectPolicyVoters({
+      candidates: [candidate('d1'), candidate('d2')],
+      pool,
+      configuredWitness: null,
+      currentAutoWitnesses: ['local'],
+    });
+    expect(selection.voterIds).toEqual(['d1', 'd2', 'r136']);
+    // A remote relay that is not ready (or cannot vote) does not count as another relay.
+    expect(
+      selectPolicyVoters({
+        candidates: [candidate('d1'), candidate('d2')],
+        pool: [
+          witness('local', { local: true }),
+          witness('r136', { ready: false }),
+          witness('old', { capable: false }),
+        ],
+        configuredWitness: null,
+        currentAutoWitnesses: ['local'],
+      }).voterIds
+    ).toEqual(['d1', 'd2', 'local']);
+    // Without a remote relay the local one keeps its usual rank (a relay in its own fault domain).
+    expect(
+      selectPolicyVoters({
+        candidates: [candidate('d1'), candidate('d2')],
+        pool: [witness('local', { local: true }), witness('docker-w', { kind: 'docker', faultDomain: null })],
+        configuredWitness: null,
+      }).voterIds
+    ).toEqual(['d1', 'd2', 'local']);
+    // A configured local relay is respected.
+    expect(
+      selectPolicyVoters({
+        candidates: [candidate('d1'), candidate('d2')],
+        pool: [witness('local', { local: true }), witness('r136')],
+        configuredWitness: 'local',
+      }).voterIds
+    ).toEqual(['d1', 'd2', 'local']);
+  });
+
+  it('keeps its choice under round-trip jitter and prefers a ready relay for a new pick', () => {
+    const pick = (rtt136: number, rtt137: number, current: string[] = []) =>
+      selectPolicyVoters({
+        candidates: [candidate('d1'), candidate('d2')],
+        pool: [
+          witness('r136', { rtt: { d1: rtt136, d2: rtt136 + 0.1 } }),
+          witness('r137', { rtt: { d1: rtt137, d2: rtt137 + 0.1 } }),
+        ],
+        configuredWitness: null,
+        currentAutoWitnesses: current,
+      });
+    // Sub-millisecond differences tie; the member id decides, whatever the jitter.
+    expect(pick(0.6, 0.8).voterIds).toEqual(['d1', 'd2', 'r136']);
+    expect(pick(0.8, 0.6).voterIds).toEqual(['d1', 'd2', 'r136']);
+    // A current witness stays even when another one measures farther now.
+    expect(pick(3, 40, ['r136']).voterIds).toEqual(['d1', 'd2', 'r136']);
+    // The stored round trip is kept to a tenth of a millisecond, so jitter below that rewrites nothing.
+    expect(pick(0.61, 0.8).witnesses[0]?.minRttMs).toBe(pick(0.64, 0.8).witnesses[0]?.minRttMs);
+    expect(
+      selectPolicyVoters({
+        candidates: [candidate('d1'), candidate('d2')],
+        pool: [witness('down', { ready: false, rtt: { d1: 50, d2: 50 } }), witness('up', { rtt: { d1: 5, d2: 5 } })],
+        configuredWitness: null,
+      }).voterIds
+    ).toEqual(['d1', 'd2', 'up']);
+  });
+
+  it('takes voters only from members with availability_lease_v2 and says when a quorum is impossible (D3)', () => {
+    const outdated = selectPolicyVoters({
+      candidates: [candidate('d1'), candidate('d2', 'host-d2', [], false), candidate('d3')],
+      pool: [witness('r1')],
+      configuredWitness: null,
+    });
+    expect(outdated.voterIds).toEqual(['d1', 'd3', 'r1']);
+    expect(outdated.nonVotingCandidateIds).toEqual(['d2']);
+    expect(outdated.viable).toBe(true);
+    const lonely = selectPolicyVoters({
+      candidates: [candidate('d1'), candidate('d2', 'host-d2', [], false)],
+      pool: [witness('old', { capable: false })],
+      configuredWitness: null,
+    });
+    expect(lonely.voterIds).toEqual(['d1']);
+    expect(lonely.viable).toBe(false);
+    // The outdated candidate's host still is a candidate host: no witness may run there.
+    expect(
+      selectPolicyVoters({
+        candidates: [candidate('d1'), candidate('d2', 'host-d2', [], false)],
+        pool: [witness('co-hosted', { hostKey: 'host-d2' })],
+        configuredWitness: null,
+      }).viable
+    ).toBe(false);
   });
 
   it('survives the loss of any one site in the invoise layout: two candidate sites plus a witness site', () => {
@@ -207,45 +319,104 @@ describe('availability lease quorum math', () => {
   });
 });
 
-describe('availability lease capability gating (D10)', () => {
+describe('availability lease capability gating (D10, D3)', () => {
+  const [n1, n2, n3] = [
+    '11111111-1111-4111-8111-111111111111',
+    '22222222-2222-4222-8222-222222222222',
+    '44444444-4444-4444-8444-444444444444',
+  ];
   const eligible: LeaseGatingInput = {
     controllerSupportsLease: true,
     policyMode: 'failover',
     signingReady: true,
     candidates: [
-      { nodeId: '11111111-1111-4111-8111-111111111111', capable: true },
-      { nodeId: '22222222-2222-4222-8222-222222222222', capable: true },
+      { nodeId: n1, exclusion: null, serving: true },
+      { nodeId: n2, exclusion: null },
     ],
+    heldSlots: 1,
     ingress: [{ nodeId: '33333333-3333-4333-8333-333333333333', capable: true }],
+    voters: { viable: true, nonVotingCandidateIds: [] },
   };
 
-  it('runs lease mode only when candidates and ingress are capable and a key can sign', () => {
+  it('never leaves or refuses lease mode for a per-node condition of a standby (D3)', () => {
     expect(evaluateLeaseGating(eligible)).toEqual({ eligible: true });
+    for (const exclusion of ['offline', 'watchdog_missing', 'daemon_outdated', 'identity_pending'] as const) {
+      const candidates = [eligible.candidates[0]!, { nodeId: n2, exclusion }];
+      expect(evaluateLeaseGating({ ...eligible, candidates })).toEqual({ eligible: true });
+      expect(evaluateLeaseGating({ ...eligible, candidates, entering: true })).toEqual({ eligible: true });
+    }
+    // The holder's own watchdog loss (stand l) is a per-node condition too: the successor takes over in lease mode.
     expect(
       evaluateLeaseGating({
         ...eligible,
-        candidates: [eligible.candidates[0]!, { ...eligible.candidates[1]!, capable: false }],
+        heldSlots: 0,
+        candidates: [{ nodeId: n1, exclusion: 'watchdog_missing', serving: true }, eligible.candidates[1]!],
       })
-    ).toMatchObject({
-      eligible: false,
-      reason: { code: 'candidates_not_capable', nodeIds: ['22222222-2222-4222-8222-222222222222'] },
-    });
+    ).toEqual({ eligible: true });
+  });
+
+  it('enters lease mode only when the serving nodes can hold, since the bootstrap reserves them', () => {
     expect(
       evaluateLeaseGating({
         ...eligible,
-        candidates: [eligible.candidates[0]!, { ...eligible.candidates[1]!, capable: false, watchdogMissing: true }],
+        entering: true,
+        candidates: [{ nodeId: n1, exclusion: 'daemon_outdated', serving: true }, eligible.candidates[1]!],
+      })
+    ).toMatchObject({ eligible: false, immediate: false, reason: { code: 'candidates_not_capable', nodeIds: [n1] } });
+    expect(
+      evaluateLeaseGating({
+        ...eligible,
+        entering: true,
+        candidates: [{ nodeId: n1, exclusion: 'watchdog_missing', serving: true }, eligible.candidates[1]!],
       })
     ).toMatchObject({
       eligible: false,
       reason: {
         code: 'watchdog_missing',
         message: expect.stringContaining('re-run the node installer'),
-        nodeIds: ['22222222-2222-4222-8222-222222222222'],
+        nodeIds: [n1],
       },
     });
+    // Offline is not the node's own condition: the reservation waits for it (and is reissued when it stays away).
+    expect(
+      evaluateLeaseGating({
+        ...eligible,
+        entering: true,
+        candidates: [{ nodeId: n1, exclusion: 'offline', serving: true }, eligible.candidates[1]!],
+      })
+    ).toEqual({ eligible: true });
+  });
+
+  it('is impossible when no candidate can hold and no slot is held', () => {
+    const unable = [
+      { nodeId: n1, exclusion: 'watchdog_missing' as const },
+      { nodeId: n2, exclusion: 'daemon_outdated' as const },
+      { nodeId: n3, exclusion: 'identity_pending' as const },
+    ];
+    expect(evaluateLeaseGating({ ...eligible, candidates: unable, heldSlots: 0 })).toMatchObject({
+      eligible: false,
+      immediate: false,
+      reason: { code: 'candidates_not_capable', nodeIds: [n1, n2, n3].sort() },
+    });
+    // An outdated holder still serves: keep lease mode until it hands over or is updated.
+    expect(evaluateLeaseGating({ ...eligible, candidates: unable, heldSlots: 1 })).toEqual({ eligible: true });
+    // Every node offline to Gateway says nothing about the data plane.
+    expect(
+      evaluateLeaseGating({
+        ...eligible,
+        heldSlots: 0,
+        candidates: [
+          { nodeId: n1, exclusion: 'offline' },
+          { nodeId: n2, exclusion: 'offline' },
+        ],
+      })
+    ).toEqual({ eligible: true });
+  });
+
+  it('is impossible without v2 ingress, v2 relays, a voter quorum, a signing key or the controller', () => {
     expect(
       evaluateLeaseGating({ ...eligible, ingress: [{ nodeId: eligible.ingress[0]!.nodeId, capable: false }] })
-    ).toMatchObject({ eligible: false, reason: { code: 'ingress_not_capable' } });
+    ).toMatchObject({ eligible: false, immediate: false, reason: { code: 'ingress_not_capable' } });
     // H4: every relay carrying the policy's endpoints and DB routes must run the lease gate.
     expect(
       evaluateLeaseGating({
@@ -262,17 +433,36 @@ describe('availability lease capability gating (D10)', () => {
     expect(
       evaluateLeaseGating({ ...eligible, relays: [{ relayId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', capable: true }] })
     ).toEqual({ eligible: true });
+    expect(
+      evaluateLeaseGating({ ...eligible, voters: { viable: false, nonVotingCandidateIds: [n2, n1] } })
+    ).toMatchObject({ eligible: false, immediate: false, reason: { code: 'insufficient_voters', nodeIds: [n1, n2] } });
     expect(evaluateLeaseGating({ ...eligible, signingReady: false })).toMatchObject({
       eligible: false,
+      immediate: false,
       reason: { code: 'signing_key_pending' },
     });
     expect(evaluateLeaseGating({ ...eligible, controllerSupportsLease: false })).toMatchObject({
       eligible: false,
+      immediate: false,
       reason: { code: 'controller_unsupported' },
     });
+    expect(evaluateLeaseGating({ ...eligible, candidates: [] })).toMatchObject({
+      eligible: false,
+      immediate: false,
+      reason: { code: 'no_candidates' },
+    });
+  });
+
+  it('closes at once only for an explicit request: a lifecycle hold or a disable', () => {
     expect(evaluateLeaseGating({ ...eligible, legacyRequested: true })).toMatchObject({
       eligible: false,
+      immediate: true,
       reason: { code: 'legacy_requested' },
+    });
+    expect(evaluateLeaseGating({ ...eligible, policyMode: 'single' })).toMatchObject({
+      eligible: false,
+      immediate: true,
+      reason: { code: 'availability_disabled' },
     });
   });
 

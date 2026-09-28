@@ -13,6 +13,14 @@ export const DockerAvailabilityWitnessSchema = UUID.nullable();
 
 export const DockerAvailabilityLeaseModeSchema = z.enum(['legacy', 'bootstrapping', 'lease', 'closing']);
 
+/** Why a candidate node is excluded from holding and standby provisioning (D3). */
+export const DockerAvailabilityLeaseExclusionReasonSchema = z.enum([
+  'offline',
+  'watchdog_missing',
+  'daemon_outdated',
+  'identity_pending',
+]);
+
 const DockerAvailabilityLeaseBallotSchema = z.object({
   round: z.string(),
   incarnation: z.string(),
@@ -28,6 +36,8 @@ export const DockerAvailabilityLeaseSchema = z.object({
       message: z.string(),
       nodeIds: z.array(UUID).optional(),
       relayIds: z.array(UUID).optional(),
+      /** Since when lease mode has been impossible; a lease-mode policy starts closing once this is 2 minutes old. */
+      since: z.string().datetime().optional(),
     })
     .nullable(),
   manifestVersion: z.number().int().nonnegative(),
@@ -48,6 +58,13 @@ export const DockerAvailabilityLeaseSchema = z.object({
   surgeSlots: z.number().int().min(0).max(32),
   strictPending: z.boolean(),
   copiesStoppedAt: z.coerce.date().nullable(),
+  /** D3: candidates left out of holding and standby provisioning right now; never a reason to leave lease mode. */
+  excludedNodes: z.array(
+    z.object({
+      nodeId: UUID,
+      reason: DockerAvailabilityLeaseExclusionReasonSchema,
+    })
+  ),
   voters: z.array(UUID),
   witness: z
     .object({
