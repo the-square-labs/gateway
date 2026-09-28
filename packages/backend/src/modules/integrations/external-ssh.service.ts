@@ -239,7 +239,13 @@ export class ExternalSshService {
   }
 
   /** Hosting bootstrap cannot run on an unrelated SSH target or return the secret-bearing command. */
-  async executeForHosting(user: User, connectorId: string, command: string, expectedAddresses: string[]) {
+  async executeForHosting(
+    user: User,
+    connectorId: string,
+    command: string,
+    expectedAddresses: string[],
+    signal?: AbortSignal
+  ) {
     this.assertScope(user, 'integrations:ssh:use');
     const connector = await this.get(connectorId);
     if (!connector.enabled) throw new AppError(409, 'SSH_CONNECTOR_DISABLED', 'SSH connector is disabled');
@@ -251,7 +257,7 @@ export class ExternalSshService {
         'HOSTING_SSH_TARGET_MISMATCH',
         'SSH connection does not target an assigned address of the selected VM'
       );
-    const output = await this.execConnector(connector, targetAddress, command);
+    const output = await this.execConnector(connector, targetAddress, command, signal);
     // Output only; the caller keeps a redacted tail for a failed install. The command itself never leaves.
     return { exitCode: output.exitCode, stdout: output.stdout, stderr: output.stderr };
   }
@@ -279,6 +285,8 @@ export class ExternalSshService {
     hostFingerprint: string;
     /** Runs after authentication and returns the command; it owns the dispatch fence. */
     prepare: () => Promise<string>;
+    /** Ends the session (Gateway shutdown). Before `prepare` nothing was sent; after it the command may run. */
+    signal?: AbortSignal;
   }): Promise<{ exitCode: number | null; stdout: string; stderr: string; sent: true }> {
     const targetAddress = await this.assertExternalTarget(input.address);
     if (normalizeIp(targetAddress) !== normalizeIp(input.address))
@@ -290,8 +298,12 @@ export class ExternalSshService {
       throw Object.assign(mapSshConnectionError(error, 'target'), { sent: false as const });
     }
     try {
+      if (input.signal?.aborted)
+        throw Object.assign(new AppError(499, 'SSH_OPERATION_CANCELLED', 'SSH command was cancelled'), {
+          sent: false as const,
+        });
       const command = await input.prepare();
-      const output = await execOnClient(client, command);
+      const output = await execOnClient(client, command, input.signal);
       return { exitCode: output.exitCode, stdout: output.stdout, stderr: output.stderr, sent: true };
     } finally {
       client.end();
@@ -433,15 +445,17 @@ export class ExternalSshService {
     return addresses[0];
   }
 
-  private async execConnector(connector: Connector, targetAddress: string, command: string) {
+  private async execConnector(connector: Connector, targetAddress: string, command: string, signal?: AbortSignal) {
     const jump = connector.jumpConnectorId ? await this.get(connector.jumpConnectorId) : null;
     const jumpAddress = jump ? await this.assertExternalTarget(jump.host) : null;
-    const jumpClient = jump && jumpAddress ? await this.connect(jump, undefined, jumpAddress) : null;
+    const jumpClient = jump && jumpAddress ? await this.connect(jump, undefined, jumpAddress, signal) : null;
     try {
-      const stream = jumpClient ? await forwardThroughJump(jumpClient, targetAddress, connector.port) : undefined;
-      const client = await this.connect(connector, stream, targetAddress);
+      const stream = jumpClient
+        ? await forwardThroughJump(jumpClient, targetAddress, connector.port, signal)
+        : undefined;
+      const client = await this.connect(connector, stream, targetAddress, signal);
       try {
-        return await execOnClient(client, command);
+        return await execOnClient(client, command, signal);
       } finally {
         client.end();
       }

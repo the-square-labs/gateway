@@ -1252,3 +1252,12 @@ describe('hosting paid provisioning state machine', () => {
     expect(() => assertHostingQuote(input, catalog, false)).not.toThrow();
   });
 });
+
+describe('hosting provisioning during Gateway shutdown', () => {
+  it('claims no operation once the scheduler stop signal aborted', async () => {
+    const test = runner();
+    await test.service.reconcileDue(AbortSignal.abort());
+    expect(test.operations.claim).not.toHaveBeenCalled();
+    expect(test.adapter.create).not.toHaveBeenCalled();
+  });
+});

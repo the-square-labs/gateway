@@ -99,6 +99,34 @@ describe('SchedulerService shutdown', () => {
     vi.useRealTimers();
   });
 
+  it('aborts the signal of a running task on stop so a long session ends instead of blocking shutdown', async () => {
+    vi.useFakeTimers();
+    const scheduler = new SchedulerService();
+    let received: AbortSignal | undefined;
+    const task = vi.fn(
+      (signal?: AbortSignal) =>
+        new Promise<void>((resolve) => {
+          received = signal;
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+        })
+    );
+    scheduler.registerInterval('ssh-install', 100, task);
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(received?.aborted).toBe(false);
+
+    await scheduler.stop();
+    expect(received?.aborted).toBe(true);
+
+    // A restart hands new runs a fresh, unaborted signal.
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(task).toHaveBeenCalledTimes(2);
+    expect(received?.aborted).toBe(false);
+    await scheduler.stop();
+    vi.useRealTimers();
+  });
+
   it('does not overlap repeated runs of the same interval', async () => {
     vi.useFakeTimers();
     const scheduler = new SchedulerService();

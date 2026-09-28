@@ -135,6 +135,45 @@ describe('HostingSshInstaller', () => {
     expect(JSON.stringify(test.row().result)).not.toContain('PRIVATE KEY');
   });
 
+  it('leaves an installer interrupted by Gateway shutdown dispatched instead of failing the operation', async () => {
+    const test = setup();
+    const controller = new AbortController();
+    test.ssh.executeWithKeyForHosting.mockImplementationOnce(async (input: Exec & { signal?: AbortSignal }) => {
+      await input.prepare();
+      expect(input.signal).toBe(controller.signal);
+      controller.abort();
+      throw new AppError(499, 'SSH_OPERATION_CANCELLED', 'SSH command was cancelled');
+    });
+
+    await test.installer.install(test.row(), resource, key, test.script, test.adapter as never, controller.signal);
+
+    // The outcome is unknown, exactly as after a crash: dispatched, not failed and no key cleanup yet.
+    expect(test.row()).toMatchObject({ phase: 'installing' });
+    expect(test.row().dispatchStartedAt).toBeInstanceOf(Date);
+    expect(test.operations.finish).not.toHaveBeenCalled();
+    expect(test.adapter.releaseInstallKey).not.toHaveBeenCalled();
+    expect(test.audit.log.mock.calls.map(([entry]) => entry.action)).toEqual([
+      'hosting.install.ssh_host_key_pinned',
+      'hosting.install.ssh_dispatched',
+      'hosting.install.ssh_interrupted',
+    ]);
+  });
+
+  it('sends nothing and changes nothing when shutdown cancels before the installer is dispatched', async () => {
+    const test = setup();
+    test.ssh.executeWithKeyForHosting.mockImplementationOnce(async () => {
+      throw Object.assign(new AppError(499, 'SSH_OPERATION_CANCELLED', 'SSH command was cancelled'), {
+        sent: false as const,
+      });
+    });
+
+    await test.installer.install(test.row(), resource, key, test.script, test.adapter as never, AbortSignal.abort());
+
+    expect(test.operations.dispatch).not.toHaveBeenCalled();
+    expect(test.row()).toMatchObject({ phase: 'provisioning', dispatchStartedAt: null });
+    expect(test.audit.log.mock.calls.map(([entry]) => entry.action)).toEqual(['hosting.install.ssh_host_key_pinned']);
+  });
+
   it('still deletes the provider key when installation fails and keeps the guest key', async () => {
     const test = setup({ exitCode: 3, stdout: 'failed' });
     await test.install();

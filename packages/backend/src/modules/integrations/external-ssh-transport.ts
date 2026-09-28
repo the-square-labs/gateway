@@ -108,15 +108,37 @@ export function forwardThroughJump(
   });
 }
 
-export function execOnClient(client: Client, command: string) {
+export function isSshOperationCancelled(error: unknown): boolean {
+  return error instanceof AppError && error.code === 'SSH_OPERATION_CANCELLED';
+}
+
+/**
+ * Runs one command. An abort ends the session at once and rejects with SSH_OPERATION_CANCELLED;
+ * the remote command may or may not have run, so callers treat it as dispatched.
+ */
+export function execOnClient(client: Client, command: string, signal?: AbortSignal) {
   return new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
+    let settled = false;
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', cancel);
+      finish();
+    };
+    const cancel = () =>
+      settle(() => {
+        client.end();
+        reject(new AppError(499, 'SSH_OPERATION_CANCELLED', 'SSH command was cancelled'));
+      });
+    if (signal?.aborted) return cancel();
+    signal?.addEventListener('abort', cancel, { once: true });
     client.exec(command, (error, channel) => {
-      if (error) return reject(error);
+      if (error) return settle(() => reject(error));
       let stdout = '';
       let stderr = '';
       channel.on('data', (chunk: Buffer) => (stdout = limitOutput(stdout, chunk.toString())));
       channel.stderr.on('data', (chunk: Buffer) => (stderr = limitOutput(stderr, chunk.toString())));
-      channel.on('close', (code: number | null) => resolve({ stdout, stderr, exitCode: code }));
+      channel.on('close', (code: number | null) => settle(() => resolve({ stdout, stderr, exitCode: code })));
     });
   });
 }

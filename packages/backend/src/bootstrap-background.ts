@@ -352,9 +352,12 @@ export async function initializeBackgroundServices(): Promise<void> {
     eventBus
   );
   scheduler.registerInterval('hosting-alert-observations', 30_000, () => hostingObservations.publish());
-  scheduler.registerInterval('hosting-operations', 5000, async () => {
-    await container.resolve(HostingProvisioningService).reconcileDue();
+  scheduler.registerInterval('hosting-operations', 5000, async (signal) => {
+    // An SSH installer session can run for minutes; shutdown ends it instead of waiting for it.
+    await container.resolve(HostingProvisioningService).reconcileDue(signal);
+    if (signal?.aborted) return;
     await container.resolve(HostingManagementService).reconcileDue();
+    if (signal?.aborted) return;
     await container.resolve(HostingFinanceService).reconcileDue();
   });
   scheduler.registerInterval('hosting-firewalls', 5000, () => container.resolve(HostingFirewallService).reconcileDue());

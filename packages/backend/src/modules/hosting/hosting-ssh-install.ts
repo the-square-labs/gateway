@@ -7,6 +7,7 @@ import { normalizeIp } from '@/lib/ip-cidr.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
+import { isSshOperationCancelled } from '@/modules/integrations/external-ssh-transport.js';
 import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from '@/modules/nodes/node-enrollment-token.js';
 import type { HostingOperationRow, HostingOperationsService } from './hosting-operations.service.js';
 import type { HostingProviderAdapter, HostingResourceSnapshot } from './hosting-provider.types.js';
@@ -177,7 +178,8 @@ export class HostingSshInstaller {
     resource: HostingResourceSnapshot,
     key: SshInstallKey,
     script: () => Promise<string>,
-    adapter: HostingProviderAdapter
+    adapter: HostingProviderAdapter,
+    signal?: AbortSignal
   ): Promise<HostingOperationRow> {
     let state = sshInstallState(row) ?? initialSshInstallState();
     const direct = resource.addresses.filter((address) => address.direct).map((address) => address.ip);
@@ -219,8 +221,17 @@ export class HostingSshInstaller {
           await this.audit(row, 'hosting.install.ssh_dispatched', { address, hostFingerprint: state.hostFingerprint });
           return command;
         },
+        signal,
       });
     } catch (error) {
+      if (isSshOperationCancelled(error)) {
+        // Gateway is shutting down and ended the session. Before dispatch nothing was sent. After it,
+        // the installer outcome is unknown, exactly as after a crash: the operation stays dispatched
+        // and completes when the node enrolls, or fails at its bootstrap deadline.
+        if ((error as { sent?: boolean }).sent !== false)
+          await this.audit(row, 'hosting.install.ssh_interrupted', { address }).catch(() => undefined);
+        return row;
+      }
       const code = error instanceof AppError ? error.code : '';
       if ((error as { sent?: boolean }).sent === false && code !== 'HOSTING_SSH_HOST_KEY_MISMATCH')
         return this.wait(
