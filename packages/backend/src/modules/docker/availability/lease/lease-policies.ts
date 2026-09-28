@@ -272,12 +272,14 @@ export class AvailabilityLeasePolicies {
     );
     const ranked = orderLeaseCandidates(policy, placements);
     const selection = this.selectVoters(policy, state, ranked, participants);
+    const entering = state.mode === 'legacy';
+    const entryStable = (id: string) => participants.byId.get(id)?.entryStable === true;
     const gating = evaluateLeaseGating({
       controllerSupportsLease: context.controllerSupportsLease,
       legacyRequested: state.legacyRequested,
       policyMode: policy.mode,
       signingReady: Boolean(context.cluster.signingKeyId),
-      entering: state.mode === 'legacy',
+      entering,
       candidates: candidateNodes.map((nodeId) => ({
         nodeId,
         exclusion: participantExclusion(participants, nodeId),
@@ -293,6 +295,19 @@ export class AvailabilityLeasePolicies {
         capable: participants.byId.get(relayId)?.capable ?? false,
       })),
       voters: { viable: selection.viable, nonVotingCandidateIds: selection.nonVotingCandidateIds },
+      unsettled: entering
+        ? {
+            nodeIds: [
+              ...candidateNodes,
+              ...ingressNodes,
+              ...selection.witnesses.filter((witness) => witness.kind === 'docker').map(({ memberId }) => memberId),
+            ].filter((id) => !entryStable(id)),
+            relayIds: [
+              ...relayIds,
+              ...selection.witnesses.filter((witness) => witness.kind === 'relay').map(({ memberId }) => memberId),
+            ].filter((id) => !entryStable(id)),
+          }
+        : undefined,
     });
     // D9: a rollout's surge is a temporary extra slot; failover stays at one slot.
     const slots = policy.mode === 'replicated' ? Math.min(32, policy.desiredReplicaCount + state.surgeSlots) : 1;

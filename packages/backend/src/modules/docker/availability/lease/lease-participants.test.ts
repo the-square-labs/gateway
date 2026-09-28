@@ -56,6 +56,10 @@ function participant(extra: Partial<LeaseParticipant> = {}): LeaseParticipant {
     local: false,
     ready: true,
     offlineLong: false,
+    entryReady: true,
+    connectedAt: NOW - 3_600_000,
+    incarnation: 1,
+    entryStable: false,
     publicKey: 'pk',
     ...extra,
   };
@@ -143,5 +147,26 @@ describe('2-minute grace for voters and manifest candidates (D3)', () => {
     expect(manifestCandidateAllowed({ ...outdated, withinGrace: false }, { active: false, listed: true })).toBe(false);
     expect(manifestCandidateAllowed(participant({ publicKey: null }), { active: true, listed: true })).toBe(false);
     expect(manifestCandidateAllowed(undefined, { active: true, listed: true })).toBe(false);
+  });
+
+  it('lets a policy enter lease mode only after a participant stayed ready 2 minutes without a restart', () => {
+    const tracker = new LeaseCapabilityTracker();
+    const observe = (at: number, extra: Partial<LeaseParticipant> = {}) => {
+      const current = participant(extra);
+      tracker.observe(participants([current]), at);
+      return current.entryStable;
+    };
+    expect(observe(NOW)).toBe(false);
+    expect(observe(NOW + 119_000)).toBe(false);
+    expect(observe(NOW + 120_000)).toBe(true);
+    // A daemon restart shows as a new incarnation (A3) or a new control connection: the clock starts again.
+    expect(observe(NOW + 130_000, { incarnation: 2 })).toBe(false);
+    expect(observe(NOW + 249_000, { incarnation: 2 })).toBe(false);
+    expect(observe(NOW + 250_000, { incarnation: 2 })).toBe(true);
+    expect(observe(NOW + 260_000, { incarnation: 2, connectedAt: NOW + 255_000 })).toBe(false);
+    // Losing readiness (a watchdog restart, an outdated daemon during an update) as well.
+    expect(observe(NOW + 400_000, { incarnation: 2, connectedAt: NOW + 255_000 })).toBe(true);
+    expect(observe(NOW + 401_000, { entryReady: false })).toBe(false);
+    expect(observe(NOW + 402_000, { incarnation: 2, connectedAt: NOW + 255_000 })).toBe(false);
   });
 });

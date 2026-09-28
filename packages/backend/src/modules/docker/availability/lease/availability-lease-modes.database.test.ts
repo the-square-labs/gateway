@@ -206,6 +206,8 @@ describe.skipIf(!url)('availability lease modes on disposable PostgreSQL', () =>
       await reportAll();
       await service.reconcile();
     });
+    // Lease mode starts once every participant was ready for 2 minutes without a restart.
+    await at(121_000, () => service.reconcile());
   });
 
   afterAll(async () => {

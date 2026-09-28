@@ -131,6 +131,13 @@ describe.skipIf(!url)('availability lease identity renewal and relay gating on d
     for (const id of nodeIds) await service.ingestDaemonReport(id, 'docker', report(id));
     await service.ingestRelayReport(relayId, report(relayId));
     await service.reconcile();
+    // Lease mode starts once every participant was ready for 2 minutes without a restart.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 121_000 });
+    try {
+      await service.reconcile();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   afterAll(async () => {

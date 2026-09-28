@@ -87,6 +87,13 @@ export const VOTER_OFFLINE_REPLACE_MS = 10 * 60_000;
  */
 export const LEASE_IMPOSSIBLE_HYSTERESIS_MS = 2 * 60_000;
 
+/**
+ * A legacy policy enters lease mode only after every participant it needs (candidate docker nodes, ingress nginx
+ * nodes, carrying relays, witnesses) has been fully capable this long without a break and without a restart, so a
+ * fleet in the middle of a rolling update (Gateway first, then the nodes one by one) never enters lease mode.
+ */
+export const LEASE_ENTRY_STABLE_MS = 2 * 60_000;
+
 /** A planned handoff classifies the next holder change as a handoff for this long (D9). */
 export const PLANNED_HANDOFF_TTL_MS = 5 * 60_000;
 

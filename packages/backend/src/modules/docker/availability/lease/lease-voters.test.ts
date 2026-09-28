@@ -453,6 +453,24 @@ describe('availability lease capability gating (D10, D3)', () => {
     });
   });
 
+  it('enters lease mode only once every participant ran v2 for 2 minutes without a restart', () => {
+    const relay = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    expect(
+      evaluateLeaseGating({ ...eligible, entering: true, unsettled: { nodeIds: [n2], relayIds: [relay] } })
+    ).toMatchObject({
+      eligible: false,
+      immediate: false,
+      reason: { code: 'participants_settling', nodeIds: [n2], relayIds: [relay] },
+    });
+    expect(evaluateLeaseGating({ ...eligible, entering: true, unsettled: { nodeIds: [], relayIds: [] } })).toEqual({
+      eligible: true,
+    });
+    // Staying in lease mode never waits for it: per-node conditions only exclude.
+    expect(evaluateLeaseGating({ ...eligible, unsettled: { nodeIds: [n2], relayIds: [] } })).toEqual({
+      eligible: true,
+    });
+  });
+
   it('closes at once only for an explicit request: a lifecycle hold or a disable', () => {
     expect(evaluateLeaseGating({ ...eligible, legacyRequested: true })).toMatchObject({
       eligible: false,

@@ -6,6 +6,7 @@ import {
   AVAILABILITY_LEASE_CAPABILITY,
   AVAILABILITY_LEASE_V1_CAPABILITY,
   AVAILABILITY_LEASE_WATCHDOG_MISSING_CAPABILITY,
+  LEASE_ENTRY_STABLE_MS,
   LEASE_IMPOSSIBLE_HYSTERESIS_MS,
   MEMBER_REPORT_FRESH_MS,
   VOTER_OFFLINE_REPLACE_MS,
@@ -58,6 +59,22 @@ export interface LeaseParticipant {
   ready: boolean;
   /** Docker daemons: offline for VOTER_OFFLINE_REPLACE_MS or more (never a voter then). */
   offlineLong: boolean;
+  /**
+   * Fully capable for a policy to enter lease mode right now: docker: v2, identity, watchdog, connected; nginx: v2,
+   * connected; relay: v2, identity, ready.
+   */
+  entryReady: boolean;
+  /**
+   * Restart markers: the daemon's control connection (ms) and the lease incarnation it reports (bumped on every
+   * start, A3). A change restarts the entry stability clock.
+   */
+  connectedAt: number | null;
+  incarnation: number | null;
+  /**
+   * entryReady without a break or a restart for LEASE_ENTRY_STABLE_MS. Set by the service's capability tracker;
+   * false until it ran.
+   */
+  entryStable: boolean;
   publicKey: string | null;
 }
 
@@ -191,6 +208,7 @@ export async function loadLeaseParticipants(
       const features = relay.capabilities?.features ?? [];
       const protocol = leaseProtocolOf((capability) => features.includes(capability));
       const voterCapable = leaseMemberCapable('relay', protocol === 'v2', member);
+      const ready = relay.state === 'ready';
       return {
         id: relay.id,
         role: 'relay' as const,
@@ -205,8 +223,12 @@ export async function loadLeaseParticipants(
         withinGrace: false,
         online: relay.state !== 'offline' && relay.state !== 'error',
         local: relay.kind === 'local',
-        ready: relay.state === 'ready',
+        ready,
         offlineLong: false,
+        entryReady: voterCapable && ready,
+        connectedAt: null,
+        incarnation: member?.incarnation ?? null,
+        entryStable: false,
         publicKey: member?.identityPublicKey ?? null,
       };
     });
@@ -224,6 +246,8 @@ export async function loadLeaseParticipants(
     const offlineLong =
       !connected && (node.lastSeenAt === null || now - node.lastSeenAt.getTime() >= VOTER_OFFLINE_REPLACE_MS);
     const voterCapable = kind === 'docker' && protocol === 'v2' && Boolean(member?.identityPublicKey) && !offlineLong;
+    const exclusion =
+      kind === 'docker' ? classifyDockerLeaseNode({ connected: Boolean(connected), has, member, now }) : null;
     return {
       id: node.id,
       role: 'daemon' as const,
@@ -234,13 +258,16 @@ export async function loadLeaseParticipants(
       protocol,
       voterCapable,
       capable: leaseMemberCapable(kind, protocol === 'v2', member),
-      exclusion:
-        kind === 'docker' ? classifyDockerLeaseNode({ connected: Boolean(connected), has, member, now }) : null,
+      exclusion,
       withinGrace: false,
       online: Boolean(connected),
       local: false,
       ready: Boolean(connected),
       offlineLong,
+      entryReady: kind === 'docker' ? exclusion === null : protocol === 'v2' && Boolean(connected),
+      connectedAt: connected?.connectedAt ? connected.connectedAt.getTime() : null,
+      incarnation: kind === 'docker' ? (member?.incarnation ?? null) : null,
+      entryStable: false,
       publicKey: member?.identityPublicKey ?? null,
     };
   });
@@ -268,11 +295,17 @@ export async function loadLeaseParticipants(
  */
 export class LeaseCapabilityTracker {
   private readonly incapableSince = new Map<string, number>();
+  /** Since when each member has been entryReady, with the restart markers seen then. */
+  private readonly readySince = new Map<
+    string,
+    { since: number; connectedAt: number | null; incarnation: number | null }
+  >();
 
   observe(participants: LeaseParticipants, now: number): void {
     const seen = new Set<string>();
     for (const participant of participants.byId.values()) {
       seen.add(participant.id);
+      this.observeEntry(participant, now);
       // An offline daemon's capabilities are the persisted ones from its last registration: not new evidence.
       if (participant.role === 'daemon' && !participant.online) {
         const since = this.incapableSince.get(participant.id);
@@ -290,6 +323,27 @@ export class LeaseCapabilityTracker {
       participant.withinGrace = now - since < LEASE_IMPOSSIBLE_HYSTERESIS_MS;
     }
     for (const id of this.incapableSince.keys()) if (!seen.has(id)) this.incapableSince.delete(id);
+    for (const id of this.readySince.keys()) if (!seen.has(id)) this.readySince.delete(id);
+  }
+
+  /** Entry stability: a loss of readiness, a reconnect or a new incarnation (a restart) starts the clock again. */
+  private observeEntry(participant: LeaseParticipant, now: number): void {
+    if (!participant.entryReady) {
+      this.readySince.delete(participant.id);
+      participant.entryStable = false;
+      return;
+    }
+    const previous = this.readySince.get(participant.id);
+    const entry =
+      previous &&
+      previous.connectedAt === participant.connectedAt &&
+      (previous.incarnation === null ||
+        participant.incarnation === null ||
+        previous.incarnation === participant.incarnation)
+        ? { ...previous, incarnation: previous.incarnation ?? participant.incarnation }
+        : { since: now, connectedAt: participant.connectedAt, incarnation: participant.incarnation };
+    this.readySince.set(participant.id, entry);
+    participant.entryStable = now - entry.since >= LEASE_ENTRY_STABLE_MS;
   }
 }
 

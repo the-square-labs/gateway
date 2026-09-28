@@ -30,6 +30,11 @@ export interface LeaseGatingInput {
    * Omitted: treated as viable (callers that only check the other conditions).
    */
   voters?: { viable: boolean; nonVotingCandidateIds: string[] };
+  /**
+   * Entering only: participants the policy needs (candidates, ingress nginx nodes, carrying relays, witnesses) that
+   * have not been fully capable for LEASE_ENTRY_STABLE_MS without a restart (a fleet in the middle of an update).
+   */
+  unsettled?: { nodeIds: string[]; relayIds: string[] };
 }
 
 export type LeaseGatingResult =
@@ -77,7 +82,8 @@ function candidatesReason(
  * the controller does not run it (edition, license), the policy is disabled or held on legacy, it has no candidates,
  * no candidate can hold and no slot is held, an ingress nginx node or a carrying relay lacks availability_lease_v2,
  * fewer members that may vote exist than a quorum needs, or no key signs manifests. Entering lease mode additionally
- * needs every serving node to be able to hold, because the bootstrap reserves them.
+ * needs every serving node to be able to hold, because the bootstrap reserves them, and every participant to have
+ * been fully capable for 2 minutes without a restart, so a fleet in the middle of an update never enters it.
  */
 export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult {
   if (!input.controllerSupportsLease) {
@@ -166,6 +172,20 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
       reason: {
         code: 'signing_key_pending',
         message: 'No relay policy signing key can sign lease manifests yet',
+      },
+    };
+  }
+  const unsettled = input.unsettled;
+  if (input.entering && unsettled && unsettled.nodeIds.length + unsettled.relayIds.length > 0) {
+    return {
+      eligible: false,
+      immediate: false,
+      reason: {
+        code: 'participants_settling',
+        message:
+          'Data-plane failover starts once every node and relay of this workload has run availability_lease_v2 (with its lease watchdog and identity) for 2 minutes without a restart',
+        ...(unsettled.nodeIds.length > 0 ? { nodeIds: [...new Set(unsettled.nodeIds)].sort() } : {}),
+        ...(unsettled.relayIds.length > 0 ? { relayIds: [...new Set(unsettled.relayIds)].sort() } : {}),
       },
     };
   }

@@ -259,6 +259,17 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
   it('bootstraps with per-policy voters and every relay as a non-voting member (A5, A18)', async () => {
     await ackAll(0);
     await service.reconcile();
+    // Every participant must have been ready for 2 minutes without a restart before lease mode starts.
+    expect(await service.getPolicyLease(policyId)).toMatchObject({
+      mode: 'legacy',
+      reason: { code: 'participants_settling' },
+    });
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 121_000 });
+    try {
+      await service.reconcile();
+    } finally {
+      vi.useRealTimers();
+    }
     const view = await service.getPolicyLease(policyId);
     expect(view.mode).toBe('bootstrapping');
     expect(view.bootstrap).toEqual([{ slot: 0, holderNodeId: nodeIds[0] }]);
