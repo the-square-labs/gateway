@@ -160,8 +160,11 @@ func (c *Coordinator) Send(frame *relayv1.CoordinationFrame) {
 
 func (c *Coordinator) register(member *memberStream) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.streams[member.id] = append(c.streams[member.id], member)
+	c.mu.Unlock()
+	// The member's first frame from this relay carries the relay's clock: a
+	// holder that reconnects after a freeze learns of it at once (D4).
+	c.node.Beacon(member.id)
 }
 
 func (c *Coordinator) unregister(member *memberStream) {

@@ -150,7 +150,9 @@ func TestR2FenceIndependentOfDaemonDockerdAndClock(t *testing.T) {
 	})
 }
 
-// R3: an acceptor that restarts (or loses relay.db) abstains for T x 1.1, so
+// R3: an acceptor that loses its state (relay.db renamed) or restarts on
+// another boot abstains for T x 1.1; one restarted within the same boot
+// restores the persisted hold of its last accept instead. Either way
 // holder H's lease cannot be taken by P through that acceptor.
 func TestR3AcceptorRestartAbstainsAndPersistsBallots(t *testing.T) {
 	w := newScenario(t, scenarioSpec{
@@ -169,16 +171,22 @@ func TestR3AcceptorRestartAbstainsAndPersistsBallots(t *testing.T) {
 	promised := a.node.acceptors[keyP1].rec.Promised
 	incarnation := a.node.Incarnation()
 	restartProcess(w, a, false, 3*time.Second)
-	w.runUntil(w.now + 4*time.Second)
+	w.runUntil(w.now + 3*time.Second + time.Millisecond)
 	if got := a.node.acceptors[keyP1].rec.Promised; got.Less(promised) {
 		t.Fatalf("promised ballot not persisted: %s < %s", got, promised)
 	}
 	if a.node.Incarnation() <= incarnation {
 		t.Fatal("incarnation did not increase on restart")
 	}
-	if a.node.voting("p1", a.local()) {
-		t.Fatal("restarted acceptor votes during its abstention window")
+	// A restart within the same boot keeps voting, holding the key for the
+	// proposer of its last promise instead of abstaining.
+	if !a.node.voting("p1", a.local()) {
+		t.Fatal("an acceptor restarted within the same boot abstains")
 	}
+	if lease := a.node.acceptors[keyP1].lease; lease.holder != "d1" || !lease.openAt(a.local()) {
+		t.Fatalf("restarted acceptor holds %+v, want the holder d1", lease)
+	}
+	w.runUntil(w.now + time.Second)
 	restartProcess(w, a, true, 3*time.Second) // relay.db renamed
 	w.runUntil(w.now + 4*time.Second)
 	if a.node.voting("p1", a.local()) {

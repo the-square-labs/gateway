@@ -16,7 +16,9 @@ import (
 // observers only: they never vote and hold no acceptor state (A18-A20; the
 // per-policy voter set now travels inside the manifest, and witnesses are
 // relays or docker nodes, never nginx).
-const availabilityLeaseCapability = "availability_lease_v1"
+// It is versioned (D3): Gateway requires v2 of every lease participant and
+// treats v1 as outdated.
+const availabilityLeaseCapability = "availability_lease_v2"
 
 // availabilityLeaseSweepInterval bounds how often stale Secure Link sockets
 // are noticed and closed without waiting for a relay to broadcast that their

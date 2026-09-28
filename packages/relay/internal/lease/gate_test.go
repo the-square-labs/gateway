@@ -74,22 +74,47 @@ func TestGateMovesOnHandoffAndCloseForSupersededHolder(t *testing.T) {
 	}
 }
 
-func TestSuspendClosesGatesUntilFreshPromise(t *testing.T) {
+func TestWallClockStepNeverClosesGates(t *testing.T) {
 	h := newHarness(t, true)
 	h.ready("d1", "d2")
 	acquire(t, h, "d1")
-	// A VM freeze: the lease clock stood still, the wall clock moved on.
-	h.wallSkew += 20 * time.Second
-	admission := h.relay.Admit(policyID, "d1")
-	if admission.Open || !strings.Contains(admission.Reason, "suspend") {
-		t.Fatalf("admission after suspend = %+v", admission)
+	for _, step := range []time.Duration{100 * time.Second, -100 * time.Second, 10 * time.Minute} {
+		// NTP steps the wall clock; the lease clock is untouched (D4).
+		h.wallSkew += step
+		h.step(time.Second)
+		if admission := h.relay.Admit(policyID, "d1"); !admission.Open {
+			t.Fatalf("a wall-clock step of %s closed the gate: %+v", step, admission)
+		}
+	}
+	if report := h.relay.Report(); report.GetLastSuspendDurationMs() != 0 {
+		t.Fatalf("a wall-clock step was reported as a suspend: %v", report)
+	}
+}
+
+func TestRelayFreezeClosesGatesUntilFreshPromise(t *testing.T) {
+	h := newHarness(t, true)
+	h.ready("d1", "d2")
+	acquire(t, h, "d1")
+	// The relay learns every member's clock first.
+	h.step(3 * time.Second)
+	h.freezeRelay(8 * time.Second)
+	// Before any member frame arrives the relay cannot know; the first one
+	// (a beacon within a second) shows the freeze.
+	if !h.stepUntil(1500*time.Millisecond, func() bool { return !h.relay.Admit(policyID, "d1").Open }) {
+		t.Fatalf("gate stayed open after the relay resumed from a freeze: %+v", h.relay.Admit(policyID, "d1"))
+	}
+	if admission := h.relay.Admit(policyID, "d1"); !strings.Contains(admission.Reason, "freeze") {
+		t.Fatalf("admission after the freeze = %+v", admission)
 	}
 	report := h.relay.Report()
-	if report.GetLastSuspendDurationMs() < 19_000 || report.GetAcceptor()[0].GetGateOpen() {
-		t.Fatalf("report after suspend = %v", report)
+	if ms := report.GetLastSuspendDurationMs(); ms < 5_000 || ms > 9_000 {
+		t.Fatalf("report after the freeze = %d ms, want about 8 s", ms)
 	}
 	if !h.stepUntil(availabilitylease.RenewInterval+2*time.Second, func() bool { return h.relay.Admit(policyID, "d1").Open }) {
 		t.Fatalf("gate did not reopen on a fresh promise: %+v", h.relay.Admit(policyID, "d1"))
+	}
+	if !h.holding("d1") {
+		t.Fatal("an 8 s relay freeze must not cost the holder its lease")
 	}
 }
 

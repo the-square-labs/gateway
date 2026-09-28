@@ -76,16 +76,19 @@ func (n *Node) Holders() []HolderStatus {
 
 // Recover registers a lease-mode container that was running when the daemon
 // started (A2.3). deadline is the watchdog record. The container is treated
-// as unfenced: unless a round succeeds before the soft fence point the
-// daemon must stop it, and the watchdog kills it at deadline.
+// as unfenced: unless a round succeeds before RecoverStopReserve ahead of the
+// deadline the daemon must kill it, and the watchdog kills it at deadline.
+// Renewing until then, rather than keeping the holder's usual graceful-stop
+// budget, lets a daemon restart that took most of the budget (a rolling
+// update) keep its slot.
 func (n *Node) Recover(key Key, deadline time.Duration) {
 	n.run(func(now time.Duration) {
 		pk := n.proposerFor(key)
 		if pk.holdsLease() {
 			return
 		}
-		pk.role, pk.round = RoleRecovering, nil
-		pk.deadline, pk.softAt = deadline, deadline-(FenceCompleteAfter-SoftFenceAfter)
+		pk.role, pk.round, pk.fenceReason = RoleRecovering, nil, FenceNone
+		pk.deadline, pk.softAt = deadline, deadline-RecoverStopReserve
 		if manifest := n.manifests[key.PolicyID]; manifest != nil && manifest.Available {
 			// Available mode never fences on time (A7): renew or yield to a
 			// commit that beats ours.
@@ -102,8 +105,11 @@ func (n *Node) Recover(key Key, deadline time.Duration) {
 }
 
 // FenceComplete tells the node the container is confirmed dead (cgroup
-// empty). After a timer or recovery fence it releases the key so successors
-// need not wait for the acceptors' hold to lapse.
+// empty). The caller must not call it before the stop is confirmed. After any
+// local fence (timer, recovery, freeze, lost watchdog, abandoned renewals,
+// lease closed, slot removed) it releases the key so successors need not wait
+// for the acceptors' hold to lapse; after another holder's commit there is
+// nothing to release.
 func (n *Node) FenceComplete(key Key) {
 	n.run(func(now time.Duration) {
 		pk := n.proposers[key]
@@ -115,15 +121,20 @@ func (n *Node) FenceComplete(key Key) {
 		default:
 			return
 		}
-		switch pk.fenceReason {
-		case FenceTimer, FenceRecovery, FenceNone:
-			if !pk.lastIssued.IsZero() {
-				n.beginRelease(pk, "", now)
-				return
-			}
+		if releaseAfterFence(pk.fenceReason) && !pk.lastIssued.IsZero() {
+			n.beginRelease(pk, "", now)
+			return
 		}
 		pk.role, pk.deadline, pk.softAt = RoleNone, 0, 0
 	})
+}
+
+// releaseAfterFence says whether a confirmed local fence releases the key, so
+// successors start at once instead of waiting for the acceptors' hold to
+// lapse (D4, B-9). Only a fence for another holder's commit does not: that
+// holder already has the key.
+func releaseAfterFence(reason FenceReason) bool {
+	return reason != FenceOtherHolder
 }
 
 // Release gives the key up, optionally to a designated successor (D9). The
@@ -144,12 +155,20 @@ func (n *Node) Release(key Key, successor string) error {
 }
 
 // Abandon stops renewing without releasing, for a stop that did not
-// complete: the watchdog fences at the deadline (A6).
-func (n *Node) Abandon(key Key) {
+// complete: the watchdog fences at the deadline (A6). The key is released
+// once FenceComplete confirms the stop.
+func (n *Node) Abandon(key Key) { n.AbandonFor(key, FenceAbandoned) }
+
+// AbandonFor is Abandon with the reason reported for a key that was not
+// fencing yet (for example FenceWatchdogLost); a fencing key keeps its reason.
+func (n *Node) AbandonFor(key Key, reason FenceReason) {
 	n.run(func(now time.Duration) {
 		pk := n.proposers[key]
 		if pk == nil || (!pk.holdsLease() && pk.role != RoleFencing) {
 			return
+		}
+		if pk.role != RoleFencing {
+			pk.fenceReason = reason
 		}
 		pk.round = nil
 		pk.role = RoleAbandoned
@@ -214,6 +233,15 @@ func (n *Node) tickRelease(pk *proposerKey, now time.Duration) {
 	}
 	if rel.successor != "" {
 		targets[rel.successor] = !rel.finalAcked[rel.successor]
+	} else if manifest := n.manifests[pk.key.PolicyID]; manifest != nil {
+		// An open release also goes to every candidate, so the next one by
+		// rank takes over at once instead of waiting out the quiet period
+		// after this holder's last commit (B-9).
+		for _, id := range manifest.Candidates {
+			if id != n.id {
+				targets[id] = !rel.finalAcked[id]
+			}
+		}
 	}
 	for _, id := range sortedKeys(targets) {
 		if targets[id] {

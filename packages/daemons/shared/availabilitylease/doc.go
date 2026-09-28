@@ -31,7 +31,10 @@
 //     shadow promises and accepts, which the relay gate uses;
 //   - proposer, for every slot of every policy whose manifest lists the node
 //     as a candidate and that the daemon marked ready. Candidates need not be
-//     voters (A18 cap of 7). A slot the latest manifest removed (scale-down,
+//     voters (A18 cap of 7). A node never acquires a slot while it holds,
+//     recovers, fences or releases another slot of the policy (designated
+//     successor or bootstrap holder included), and takes its own last slot
+//     back before a foreign one. A slot the latest manifest removed (scale-down,
 //     lowered surge) gets no new rounds or queries; a holder of it keeps its
 //     deadline until the daemon releases it (A6) or the timer fences it;
 //   - relay gate evaluator (Gate), on relays.
@@ -41,7 +44,10 @@
 //	LeaseTerm          T = 30 s
 //	AcceptorHold       T x 1.1 = 33 s: an acceptor refuses other proposers
 //	                   until 33 s after its last accept of the holder
-//	AbstainAfterStart  33 s: no votes after process start or fresh state
+//	AbstainAfterStart  33 s: no votes after fresh state, a start on another
+//	                   boot or a failed write; a restart within the same
+//	                   boot (the store's boot stamp) restores the persisted
+//	                   hold of each key's last counted accept instead
 //	RenewInterval      5 s, one schedule per node so renewals of all keys
 //	                   share frames
 //	SoftFenceAfter     15 s after the send time of the last successful round
@@ -116,23 +122,32 @@
 //     FenceNow/SoftFenceAt: stop the container now (docker stop with
 //     min(stop timeout, 10 s), then kill); the watchdog kills the cgroup at
 //     Deadline regardless.
-//   - FenceComplete(key) once the cgroup is confirmed empty. After a timer
-//     or recovery fence the node then releases the key for its successors.
+//   - FenceComplete(key) once the cgroup is confirmed empty, never before.
+//     After any local fence (timer, recovery, host freeze, lost watchdog,
+//     abandoned renewals, lease closed, slot removed) the node then releases
+//     the key, to the relays, the members and every candidate, so the next
+//     candidate by rank takes over at once (B-9). Only a fence for another
+//     holder's commit releases nothing.
 //   - Release(key, successor) for a planned handoff or a health release
 //     (D6, D9), only after the cgroup is empty and the endpoint is
 //     deregistered (A6). The node relinquishes every relay gate first and
 //     releases the acceptors only when all relays acked or RelinquishWait
 //     passed. If the stop does not complete, call Abandon(key) instead: the
-//     node stops renewing and the watchdog fences.
+//     node stops renewing and the watchdog fences. AbandonFor names the
+//     reason of the fence event (for example FenceWatchdogLost).
 //   - Recover(key, deadline) on daemon start for every lease-mode container
 //     found running, with the watchdog record's deadline (A2.3). The node
-//     renews if it still can, else FenceNow turns true.
+//     renews until RecoverStopReserve (2 s) before that deadline, else
+//     FenceNow turns true, so a slow restart (a rolling update) keeps its
+//     slot whenever a round succeeds in time.
 //   - LeaseMode(policy): while true refuse every backend start or serve
 //     command for the policy's placements unless HolderStatus.MayStart (A5).
-//   - ObserveSuspend(d) when the host resumes from a suspend or RAM snapshot
-//     that the monotonic clock did not see (wall clock jumped by d). It moves
-//     deadlines and gate anchors back by d so the resumed holder fences at
-//     once instead of running on its frozen budget.
+//   - BeaconRelays every BeaconInterval: an empty batch that carries only
+//     the clock, so relays detect their own freezes (D4). Freezes of this
+//     host are detected from the peers' clocks in every batch (freeze.go):
+//     every key held when one is detected fences at once (FenceFrozen) with
+//     its deadline moved back by the frozen time; DrainFreezes reports them.
+//     The wall clock is never evidence of a freeze.
 //   - DrainEvents: acquired, fence, released and handoff transitions for
 //     lease reports in the heartbeat and audit events (D9). Holders lists
 //     current holder statuses.
@@ -158,7 +173,10 @@
 // such promise. A renewal this relay missed therefore neither closes the gate
 // nor extends it. Proposers send a propose to every member whose promise
 // arrives before the round deadline, even after the round reached its
-// quorum. Re-evaluate on every registration and
+// quorum. After a freeze of the relay's host, detected from a member's
+// clock, the gate stays closed until the relay promises afresh (D4); the
+// relay coordinator calls Beacon for its connected members every
+// BeaconInterval and when one connects. Re-evaluate on every registration and
 // tunnel and at least every second; Until says when it closes. AcceptorView
 // feeds GetHealth. A relay votes for a policy only when it is that policy's
 // witness; to keep shadow accepts for its gate it must be listed as a member
@@ -211,7 +229,9 @@
 //
 // CoordinationFrame{destination_id, sender_id, payload, signature,
 // additional_signatures} carries
-// one LeaseBatch per destination. signature is ECDSA P-256 (ASN.1) by the
+// one LeaseBatch per destination. Every batch also carries the sender's lease
+// clock with its origin and an echo of the destination's clock (peer-time
+// freeze detection, D4, freeze.go); a batch without items is a clock beacon. signature is ECDSA P-256 (ASN.1) by the
 // sender's identity key over SHA-256("gateway-availability-lease/frame/v1"
 // 0x00 || payload). LeaseBatch repeats sender, incarnation and destination
 // inside the signed payload, has a message id for deduplication, and may
@@ -250,9 +270,12 @@
 // two live containers for a key; I2, all relay gates together admit at most
 // one holder; I3, a successor commits within 45 s of a holder's death when a
 // voter majority is reachable; I4, available mode converges to one copy
-// after a partition heals. Residual (A2.5): a VM whose clock froze may run
-// its container after resuming until its first renewal round trip, or until
-// its frozen budget ends when it reaches no acceptor; relays refuse its
-// traffic throughout. ObserveSuspend shrinks this further when the daemon
-// can detect the suspend.
+// after a partition heals. Residual (A2.5): a VM whose clocks froze may run
+// its container after resuming until the first frame from a peer whose clock
+// it knew before the freeze (a relay beacon, within a second of reaching any
+// relay), or until its frozen budget ends when it reaches nobody; relays
+// refuse its traffic throughout. A frozen relay may keep a stale gate until
+// the first member frame after its resume (a daemon beacon, within a
+// second). Freezes shorter than the skew budget (2 s) stay inside the timing
+// margins.
 package availabilitylease

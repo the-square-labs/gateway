@@ -186,14 +186,3 @@ func TestLeaseClosedFencesHolderAndLiftsGate(t *testing.T) {
 		t.Fatalf("records must be removed once the lease is closed and the cgroup is empty, have %d", len(d1.fence.records))
 	}
 }
-
-func TestSuspendedHolderFencesOnResume(t *testing.T) {
-	w := twoCandidateWorld(t)
-	w.waitServing("d1", 45*time.Second)
-	// The VM froze for a minute: the wall clock jumps, BOOTTIME did not.
-	w.wallJump += time.Minute
-	w.run(time.Second)
-	if w.daemon("d1").engine.running() {
-		t.Fatalf("resumed holder kept running on its frozen budget (A17)\n%s", w.dump())
-	}
-}

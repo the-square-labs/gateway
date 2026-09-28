@@ -32,6 +32,7 @@ func (gateTestFence) Records() (map[string]leasefence.Record, error) {
 }
 func (gateTestFence) WriteRecord(leasefence.Record) error { return nil }
 func (gateTestFence) DeleteRecord(string) error           { return nil }
+func (gateTestFence) DaemonAlive(time.Duration) error     { return nil }
 
 type gateTestEngine struct{}
 

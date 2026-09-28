@@ -147,8 +147,8 @@ func TestUnprivilegedDaemonReportsWhyTheWatchdogIsMissing(t *testing.T) {
 	}
 	plugin := availabilityPluginForTest(t)
 	plugin.lease = &leaseIntegration{plugin: plugin, fence: leaseFenceNeverFresh(t), watchdog: b}
-	if capabilities := plugin.leaseCapabilities(); len(capabilities) != 1 || capabilities[0] != watchdogMissingCapability {
-		t.Fatalf("capabilities %v, want the missing-watchdog marker", capabilities)
+	if capabilities := plugin.leaseCapabilities(); len(capabilities) != 2 || capabilities[0] != availabilityLeaseCapability || capabilities[1] != watchdogMissingCapability {
+		t.Fatalf("capabilities %v, want the lease capability and the missing-watchdog marker", capabilities)
 	}
 	host.manager = ""
 	host.root = true

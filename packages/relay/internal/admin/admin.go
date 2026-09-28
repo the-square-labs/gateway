@@ -123,8 +123,10 @@ func healthCapabilities(mode relayv1.RelayMode, availabilityLease bool) []string
 }
 
 // AvailabilityLeaseCapability tells Gateway the relay coordinates Docker
-// Availability data-plane leases (Coordinate, gate fencing, lease view).
-const AvailabilityLeaseCapability = "availability_lease_v1"
+// Availability data-plane leases (Coordinate, gate fencing, lease view). It is
+// versioned (D3): v2 sends clock beacons and carries its clock in lease frames
+// for peer-time freeze detection (D4). Gateway treats v1 as outdated.
+const AvailabilityLeaseCapability = "availability_lease_v2"
 
 func (s *Service) leaseReport() *relayv1.AvailabilityLeaseReport {
 	if s.lease == nil {

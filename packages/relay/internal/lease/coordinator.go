@@ -17,8 +17,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// tickCeiling bounds how long the loop sleeps between protocol ticks, suspend
-// checks and gate enforcement.
+// tickCeiling bounds how long the loop sleeps between protocol ticks, clock
+// beacons and gate enforcement.
 const tickCeiling = 250 * time.Millisecond
 
 type Config struct {
@@ -30,8 +30,13 @@ type Config struct {
 	// TrustedKeys returns the policy signing keys the relay pins, oldest first.
 	TrustedKeys func() []policy.TrustedPolicyKey
 	Clock       availabilitylease.Clock
-	Wall        func() time.Time
-	Logger      *slog.Logger
+	// Wall is for the incarnation floor, key-rotation times and report
+	// timestamps only; it is never evidence of a freeze (D4).
+	Wall   func() time.Time
+	Logger *slog.Logger
+	// Suspends reports real host suspends for logs and reports; nil uses the
+	// host clocks.
+	Suspends *availabilitylease.SuspendWatch
 }
 
 // Coordinator owns the relay's availability lease node.
@@ -44,8 +49,7 @@ type Coordinator struct {
 	trustedKeys func() []policy.TrustedPolicyKey
 	logger      *slog.Logger
 	view        *memberView
-	suspend     *suspendDetector
-	startedAt   time.Duration
+	suspends    *availabilitylease.SuspendWatch
 
 	seedOnce   sync.Once
 	seedLinks  []*relayv1.LeasePolicyKeyRotation
@@ -53,13 +57,13 @@ type Coordinator struct {
 
 	mu      sync.Mutex
 	streams map[string][]*memberStream
-	// suspendAt is the lease clock when the last suspend was detected; gates
-	// stay closed until a promise anchored after it (A17).
-	suspended       bool
-	suspendAt       time.Duration
-	lastSuspendWall time.Time
-	lastSuspend     time.Duration
-	enforce         func() time.Duration
+	// lastFreezeWall and lastFreeze describe the last freeze or suspend of
+	// this host, for reports (A17). The node keeps gates closed after a
+	// freeze until a fresh promise (D4).
+	lastFreezeWall time.Time
+	lastFreeze     time.Duration
+	beaconAt       time.Duration
+	enforce        func() time.Duration
 	// identityKey is the PKIX DER key the node signs with (the current one).
 	identityKey []byte
 
@@ -110,8 +114,10 @@ func New(cfg Config) (*Coordinator, error) {
 		// Restarted within the overlap of a key renewal: keep dual-signing.
 		c.checkIdentityKey()
 	}
-	c.startedAt = cfg.Clock.Now()
-	c.suspend = newSuspendDetector(cfg.Wall, cfg.Clock.Now)
+	c.suspends = cfg.Suspends
+	if c.suspends == nil {
+		c.suspends = availabilitylease.NewSuspendWatch()
+	}
 	return c, nil
 }
 
@@ -188,6 +194,7 @@ func (c *Coordinator) loop() {
 		c.checkIdentityKey()
 		c.node.Tick()
 		c.node.DrainEvents()
+		c.beacon(false)
 		wait := tickCeiling
 		if next := c.node.NextWakeup() - c.clock.Now(); next < wait {
 			wait = max(next, 5*time.Millisecond)
@@ -204,20 +211,46 @@ func (c *Coordinator) loop() {
 	}
 }
 
-// observeSuspend closes every gate until a fresh promise after a detected
-// suspend, then ages the node's gate anchors by the missed time (A17).
+// observeSuspend records freezes of this host that the node detected from
+// its members' clocks (D4) and real suspends BOOTTIME counted, for logs and
+// reports. The node itself keeps every gate anchored before a freeze closed
+// until this relay promises afresh (A17); a real suspend needs nothing: the
+// gate windows run on BOOTTIME and expired in real time.
 func (c *Coordinator) observeSuspend() {
-	missed := c.suspend.check()
-	if missed <= 0 {
+	for _, freeze := range c.node.DrainFreezes() {
+		c.mu.Lock()
+		c.lastFreezeWall, c.lastFreeze = c.wall(), freeze.Frozen
+		c.mu.Unlock()
+		c.logger.Warn("host freeze detected from a member's clock; availability lease gates closed until fresh promises",
+			"member", freeze.Peer, "frozen_for", freeze.Frozen.String())
+		c.kick()
+	}
+	if suspended := c.suspends.Check(); suspended > 0 {
+		c.mu.Lock()
+		c.lastFreezeWall, c.lastFreeze = c.wall(), suspended
+		c.mu.Unlock()
+		c.logger.Warn("host resumed from a suspend; lease gate windows counted it", "suspended_for", suspended.String())
+	}
+}
+
+// beacon sends every connected member a clock beacon each BeaconInterval, so
+// a member that resumed from a freeze detects it within a second of reaching
+// this relay (D4). force beacons right away (a member just connected).
+func (c *Coordinator) beacon(force bool) {
+	now := c.clock.Now()
+	c.mu.Lock()
+	if !force && now < c.beaconAt {
+		c.mu.Unlock()
 		return
 	}
-	c.mu.Lock()
-	c.suspended, c.suspendAt = true, c.clock.Now()
-	c.lastSuspendWall, c.lastSuspend = c.wall(), missed
+	c.beaconAt = now + availabilitylease.BeaconInterval
+	members := make([]string, 0, len(c.streams))
+	for id := range c.streams {
+		members = append(members, id)
+	}
 	c.mu.Unlock()
-	c.node.ObserveSuspend(missed)
-	c.logger.Warn("host suspend detected; availability lease gates closed until fresh promises", "missed", missed.String())
-	c.kick()
+	sort.Strings(members)
+	c.node.Beacon(members...)
 }
 
 // ApplyPolicy trusts the relay's pinned policy keys and adopts the lease

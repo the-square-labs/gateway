@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Store persists acceptor and proposer state. Apply must be atomic and
@@ -22,19 +23,58 @@ type Store interface {
 const (
 	recordIncarnation = "incarnation"
 	recordKeyChain    = "keychain"
-	prefixVoters      = "voters/"
-	prefixManifest    = "manifest/"
-	prefixKey         = "key/"
-	prefixLink        = "link/"
+	// recordBootStamp proves on restart that the store was written earlier
+	// in the same boot (lease clock origin and reading, and the abstention
+	// deadline then in force); older builds never write it.
+	recordBootStamp = "bootstamp"
+	prefixVoters    = "voters/"
+	prefixManifest  = "manifest/"
+	prefixKey       = "key/"
+	prefixLink      = "link/"
 )
 
-// keyRecord is the persisted acceptor state of one key. Lease timers are not
-// persisted: a restarted acceptor abstains instead (A3).
+type bootStamp struct {
+	origin       uint64
+	clock        time.Duration
+	abstainUntil time.Duration
+}
+
+func (n *Node) bootStamp(now time.Duration) []byte {
+	data := make([]byte, 24)
+	binary.BigEndian.PutUint64(data[0:], n.clockOrigin)
+	binary.BigEndian.PutUint64(data[8:], uint64(now))
+	binary.BigEndian.PutUint64(data[16:], uint64(n.abstainUntil))
+	return data
+}
+
+func decodeBootStamp(data []byte) (bootStamp, bool) {
+	if len(data) != 24 {
+		return bootStamp{}, false
+	}
+	return bootStamp{
+		origin:       binary.BigEndian.Uint64(data[0:]),
+		clock:        time.Duration(binary.BigEndian.Uint64(data[8:])),
+		abstainUntil: time.Duration(binary.BigEndian.Uint64(data[16:])),
+	}, true
+}
+
+// keyRecord is the persisted acceptor state of one key. The hold of the last
+// counted accept is persisted with its lease clock reading; a restart on
+// another boot cannot use it and abstains instead (A3).
 type keyRecord struct {
 	Promised           Ballot            `json:"promised"`
 	Released           map[string]Ballot `json:"released,omitempty"`
 	BootstrapSatisfied uint64            `json:"bootstrapSatisfied,omitempty"`
 	Commit             []byte            `json:"commit,omitempty"`
+	// Accepted is this acceptor's latest counted accept and its lease
+	// clock reading; after a restart within the same boot it restores the
+	// hold exactly (restoreHolds). Older builds ignore it.
+	Accepted *acceptedRecord `json:"accepted,omitempty"`
+}
+
+type acceptedRecord struct {
+	Ballot Ballot `json:"ballot"`
+	AtNs   int64  `json:"atNs"`
 }
 
 func keyRecordName(key Key) string { return fmt.Sprintf("%s%s/%d", prefixKey, key.PolicyID, key.Slot) }

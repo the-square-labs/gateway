@@ -32,6 +32,12 @@ type simWorld struct {
 	strict  map[string]bool
 	wire    bool
 
+	// freezeDrift is the nodes' FreezeDriftRate: drifting clocks need more
+	// than the production default. noBeacons turns relay clock beacons off.
+	freezeDrift  float64
+	freezeBudget time.Duration
+	noBeacons    bool
+
 	violation string
 	chaosOver bool
 	checkI1   bool
@@ -93,6 +99,9 @@ func (h *eventHeap) Pop() any {
 	*h = old[:len(old)-1]
 	return item
 }
+
+// simFreezeDrift covers two clocks at the opposite ends of MaxClockDrift.
+const simFreezeDrift = 2.5 * MaxClockDrift
 
 func newSimWorld(seed int64) *simWorld {
 	return &simWorld{
@@ -170,6 +179,9 @@ func (w *simWorld) link(a, b string) *simLink {
 }
 
 func (w *simWorld) addNode(id string, relay bool, rate float64) *simNode {
+	if rate != 1 {
+		w.freezeDrift = simFreezeDrift
+	}
 	n := &simNode{
 		id: id, relay: relay, w: w, rate: rate, hostUp: true, store: NewMemoryStore(),
 		containers: map[Key]*simContainer{}, watchdog: map[Key]time.Duration{}, ready: true,

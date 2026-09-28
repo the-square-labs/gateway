@@ -10,9 +10,17 @@ const (
 	// AcceptorHold is how long an acceptor refuses other proposers after its
 	// last accept of the current holder (T × 1.1).
 	AcceptorHold = LeaseTerm * 11 / 10
-	// AbstainAfterStart is how long an acceptor refuses to promise or accept
-	// after its process starts or its state was created fresh (A3).
+	// AbstainAfterStart is how long an acceptor's votes do not count after
+	// its state was created fresh, came from another boot, or a write failed
+	// (A3). A restart within the same boot keeps voting: the store proves it
+	// (boot stamp) and the hold of every key's last counted accept, persisted
+	// with its clock reading, is restored exactly (restoreHolds).
 	AbstainAfterStart = AcceptorHold
+	// RecoverStopReserve is how long before its recorded deadline a holder
+	// recovering an unconfirmed container after a daemon restart gives up
+	// renewing and kills it (A2.3): a restart that takes most of the budget
+	// still keeps the slot when a round succeeds in time.
+	RecoverStopReserve = 2 * time.Second
 	// RenewInterval is the holder's renewal cadence, batched per holder node.
 	RenewInterval = 5 * time.Second
 	// SoftFenceAfter starts the holder's self-fence (graceful stop) when no

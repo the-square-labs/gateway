@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"testing"
-	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
@@ -47,28 +46,5 @@ func TestMemberViewFollowsRotationChainInAnyOrder(t *testing.T) {
 	}
 	if !view.adoptBlock(manifestBlock(t, "k1", priv1, 2, "d2")) || view.authorized("d1") || !view.authorized("d2") {
 		t.Fatal("newer manifest did not replace the candidates")
-	}
-}
-
-func TestSuspendDetectorComparesWallAndLeaseClocks(t *testing.T) {
-	wall := time.Unix(1_800_000_000, 0)
-	var mono time.Duration
-	detector := newSuspendDetector(func() time.Time { return wall }, func() time.Duration { return mono })
-	wall, mono = wall.Add(time.Second), mono+time.Second
-	if missed := detector.check(); missed != 0 {
-		t.Fatalf("steady clocks reported a suspend of %s", missed)
-	}
-	wall = wall.Add(12 * time.Second)
-	if missed := detector.check(); missed != 12*time.Second {
-		t.Fatalf("frozen lease clock reported %s, want 12s", missed)
-	}
-	wall = wall.Add(-time.Minute)
-	if missed := detector.check(); missed != 0 {
-		t.Fatalf("a wall clock step back reported a suspend of %s", missed)
-	}
-	// A real suspend that BOOTTIME counted is no gap for the lease clock.
-	wall, mono = wall.Add(time.Hour), mono+time.Hour
-	if missed := detector.check(); missed != 0 {
-		t.Fatalf("a suspend the lease clock saw reported %s", missed)
 	}
 }

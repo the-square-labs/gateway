@@ -37,6 +37,7 @@ type Watchdog struct {
 	cfg           Config
 	lastHeartbeat time.Duration
 	problems      map[string]bool
+	orphansLogged bool
 }
 
 func New(cfg Config) *Watchdog {
@@ -65,11 +66,20 @@ type PassResult struct {
 	// kill failed; the heartbeat is then withheld so the daemon stops
 	// renewing and fences on its own (A12.4).
 	Healthy bool
+	// Orphans counts records removed because no lease-aware docker daemon
+	// was seen for leasefence.DaemonGoneAfter.
+	Orphans int
 }
 
 // Pass reads every record and kills the cgroup of each stale one. It never
-// deletes records: only the daemon does, after the lease is released and the
-// cgroup is confirmed empty (A12.3).
+// deletes records while a lease-aware docker daemon is around: only the
+// daemon does, after the lease is released and the cgroup is confirmed empty
+// (A12.3). With no sign of one (its daemon-heartbeat, or any record write)
+// for leasefence.DaemonGoneAfter, the node was rolled back to a daemon
+// without the lease: the records are orphans and are removed, so containers
+// that daemon starts are not killed until the next reboot. A lease-aware
+// daemon that returns kills unfenced lease-mode containers at its start and
+// writes their records again.
 func (w *Watchdog) Pass() PassResult {
 	result := PassResult{Healthy: true}
 	records, problems, err := w.cfg.Dir.ReadRecords()
@@ -86,6 +96,22 @@ func (w *Watchdog) Pass() PassResult {
 	}
 	now := w.cfg.Now()
 	result.Records = len(records)
+	if len(records) > 0 && w.orphaned(records, now) {
+		for _, record := range records {
+			if err := w.cfg.Dir.DeleteRecord(record.ContainerID); err != nil {
+				w.cfg.Logger.Error("lease watchdog cannot remove an orphaned deadline record", "container_id", record.ContainerID, "error", err)
+				continue
+			}
+			result.Orphans++
+		}
+		if !w.orphansLogged {
+			w.orphansLogged = true
+			w.cfg.Logger.Warn("no lease-aware docker daemon for a long time; removed its orphaned deadline records",
+				"after", leasefence.DaemonGoneAfter, "records", result.Orphans)
+		}
+		return result
+	}
+	w.orphansLogged = false
 	for _, record := range records {
 		if !record.Stale(now) {
 			continue
@@ -109,6 +135,26 @@ func (w *Watchdog) Pass() PassResult {
 		}
 	}
 	return result
+}
+
+// orphaned reports whether no lease-aware docker daemon showed life for
+// leasefence.DaemonGoneAfter: no daemon-heartbeat and no record written in
+// that time (daemons before availability_lease_v2 write no heartbeat, but do
+// write records while they hold or create lease-mode containers).
+func (w *Watchdog) orphaned(records []leasefence.Record, now time.Duration) bool {
+	var last time.Duration
+	sign := func(at int64) {
+		if at > 0 && time.Duration(at) <= now+leasefence.HeartbeatMaxAge && time.Duration(at) > last {
+			last = time.Duration(at)
+		}
+	}
+	if heartbeat, err := w.cfg.Dir.ReadDaemonHeartbeat(); err == nil {
+		sign(heartbeat.NowNs)
+	}
+	for _, record := range records {
+		sign(record.WrittenNs)
+	}
+	return now-last >= leasefence.DaemonGoneAfter
 }
 
 // Heartbeat writes the liveness proof when due and the last pass was healthy.

@@ -129,8 +129,16 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 			adoptServingLocked(wl, serve, now-stableBeforeReady)
 		}
 	case availabilitylease.RoleFencing:
+		// A freeze of this host moves the deadline back (D4): the watchdog
+		// record follows, so a stop that hangs is still killed in time.
+		if status.Deadline > 0 {
+			r.armRecordsLocked(status, serve, containers)
+		}
 		r.stopLocked(wl, status, containers, purposeFence)
 	case availabilitylease.RoleAbandoned:
+		if status.Deadline > 0 {
+			r.armRecordsLocked(status, serve, containers)
+		}
 		if !wl.busy && now >= wl.retryAt {
 			r.stopLocked(wl, status, containers, purposeAbandon)
 		}
@@ -247,7 +255,7 @@ func (r *Runtime) writeRecordLocked(c Container, slot uint32, deadline time.Dura
 	}
 	if ok && current.CgroupPath == c.CgroupPath && current.Slot == slot {
 		delta := deadline - current.Deadline()
-		// Lower deadlines are always written (ObserveSuspend moves them
+		// Lower deadlines are always written (a detected freeze moves them
 		// back); raising by less than a second is not worth a write.
 		if delta >= 0 && delta < time.Second {
 			return
@@ -324,10 +332,11 @@ func (r *Runtime) setEndpointsLocked(wl *workload, serving bool) {
 
 // abandonLocked stops renewing at once when the watchdog is gone (A12.4):
 // without it a hung daemon could not be fenced. The container is then killed
-// by the daemon itself and the key released once its cgroup is empty.
+// by the daemon itself and the key released once its cgroup is empty, so the
+// successor starts at once (B-9); never before the stop is confirmed.
 func (r *Runtime) abandonLocked(wl *workload, status availabilitylease.HolderStatus, reason string) {
 	r.logger.Warn("availability lease holder stops renewing", "policy_id", status.Key.PolicyID, "slot", status.Key.Slot, "reason", reason)
-	r.node.Abandon(status.Key)
+	r.node.AbandonFor(status.Key, availabilitylease.FenceWatchdogLost)
 	if !wl.busy {
 		r.stopLocked(wl, status, r.snapshot.byPolicy[wl.policyID], purposeAbandon)
 	}

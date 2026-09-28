@@ -19,8 +19,8 @@ type simNode struct {
 	frozen              bool
 	frozenAt            time.Duration
 	resumedLocal        time.Duration
-	detectSuspend       bool
 	frozenInbox         []func()
+	beaconGen           uint64
 
 	hostUp bool
 	procUp bool
@@ -58,6 +58,21 @@ type simContainer struct {
 type simClock struct{ n *simNode }
 
 func (c simClock) Now() time.Duration { return c.n.local() }
+
+// Origin changes with every host boot, like the kernel boot id: bootHost
+// jumps the local clock.
+func (c simClock) Origin() uint64 {
+	return uint64(len(c.n.id))<<48 ^ uint64(c.n.hostGen+1)*0x9e3779b97f4a7c15 ^ hashString(c.n.id)
+}
+
+func hashString(value string) uint64 {
+	var h uint64 = 1469598103934665603
+	for i := 0; i < len(value); i++ {
+		h ^= uint64(value[i])
+		h *= 1099511628211
+	}
+	return h
+}
 
 type simTransport struct{ n *simNode }
 
@@ -102,7 +117,8 @@ func (n *simNode) start() {
 	n.gen++
 	cfg := Config{
 		ID: n.id, Clock: simClock{n}, Store: n.store, Signer: n.signer, Verifier: n.verify,
-		IncarnationFloor: uint64(n.w.now / time.Millisecond),
+		IncarnationFloor: uint64(n.w.now / time.Millisecond), FreezeDriftRate: n.w.freezeDrift,
+		FreezeSkewBudget: n.w.freezeBudget,
 	}
 	if n.w.wire {
 		cfg.Transport = simTransport{n}
@@ -118,6 +134,10 @@ func (n *simNode) start() {
 	n.node = node
 	n.w.tracef("%s start incarnation=%d", n.id, node.Incarnation())
 	n.w.gw.onNodeStart(n)
+	if !n.w.noBeacons {
+		n.beaconGen++
+		n.scheduleBeacon(n.beaconGen, n.gen)
+	}
 	for _, key := range n.w.keys {
 		if c := n.containers[key]; c != nil && (c.live || c.starting) && !c.legacy {
 			if deadline, ok := n.watchdog[key]; ok {
@@ -184,11 +204,8 @@ func (n *simNode) resume() {
 	for _, fn := range inbox {
 		fn()
 	}
-	// Half the seeds model a daemon that detects the suspend from the wall
-	// clock jump (after it already processed the buffered frames).
-	if n.detectSuspend && n.processUp() && n.node != nil {
-		n.node.ObserveSuspend(n.w.now - n.frozenAt)
-	}
+	// The resumed host learns of the freeze only from its peers' clocks
+	// (D4): the first frame from a peer with a pre-freeze baseline.
 	if n.processUp() {
 		n.after()
 	}
@@ -245,6 +262,25 @@ func (n *simNode) after() {
 		n.reconcile()
 	}
 	n.scheduleWake()
+}
+
+// scheduleBeacon models the clock beacons (D4): a relay coordinator beacons
+// every daemon, a daemon every relay member. A frozen host sends none; lost
+// links drop them.
+func (n *simNode) scheduleBeacon(beaconGen, gen uint64) {
+	n.w.after(BeaconInterval, func() {
+		if n.beaconGen != beaconGen || n.gen != gen || !n.processUp() || n.node == nil {
+			return
+		}
+		if !n.frozen {
+			if n.relay {
+				n.node.Beacon(n.w.daemons...)
+			} else {
+				n.node.BeaconRelays()
+			}
+		}
+		n.scheduleBeacon(beaconGen, gen)
+	})
 }
 
 func (n *simNode) scheduleWake() {

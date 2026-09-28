@@ -45,25 +45,50 @@ func (c *fakeClock) advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
+// laggedClock is the relay host's lease clock: the shared clock minus the
+// time the relay VM spent frozen (its clocks stood still meanwhile).
+type laggedClock struct {
+	base *fakeClock
+	mu   sync.Mutex
+	lag  time.Duration
+	// boot changes the clock origin, like a host reboot.
+	boot uint64
+}
+
+func (c *laggedClock) Now() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.base.Now() - c.lag
+}
+
+func (c *laggedClock) Origin() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return 0x5eed + c.boot
+}
+
 // harness wires one relay Coordinator with T1 daemon nodes over the relay's
 // routing (daemon -> relay -> daemon), deterministically on a fake clock.
 type harness struct {
-	t         *testing.T
-	clock     *fakeClock
-	wallBase  time.Time
-	wallSkew  time.Duration
-	policyPub ed25519.PublicKey
-	policyKey ed25519.PrivateKey
-	keys      map[string]*ecdsa.PrivateKey
-	dir       string
-	store     *policy.Store
-	relay     *Coordinator
-	daemons   map[string]*availabilitylease.Node
-	streams   map[string]*memberStream
-	down      map[string]bool
-	voters    []string
-	relayVote bool
-	fresh     bool
+	t          *testing.T
+	clock      *fakeClock
+	relayClock *laggedClock
+	// relayFrozen: the relay VM is paused; it neither ticks nor routes.
+	relayFrozen bool
+	wallBase    time.Time
+	wallSkew    time.Duration
+	policyPub   ed25519.PublicKey
+	policyKey   ed25519.PrivateKey
+	keys        map[string]*ecdsa.PrivateKey
+	dir         string
+	store       *policy.Store
+	relay       *Coordinator
+	daemons     map[string]*availabilitylease.Node
+	streams     map[string]*memberStream
+	down        map[string]bool
+	voters      []string
+	relayVote   bool
+	fresh       bool
 	// previousRelayKey and renewedAt model a relay certificate renewal.
 	previousRelayKey *ecdsa.PrivateKey
 	renewedAt        time.Time
@@ -106,6 +131,7 @@ func newHarness(t *testing.T, relayVotes bool) *harness {
 		relayFrames: map[string][]*relayv1.CoordinationFrame{},
 		manifests:   map[string]*relayv1.LeaseSignedBlock{}, versions: map[string]uint64{},
 	}
+	h.relayClock = &laggedClock{base: h.clock}
 	h.voters = []string{relayID, "v1", "v2"}
 	if !relayVotes {
 		h.voters = []string{"v1", "v2", "v3"}
@@ -160,7 +186,8 @@ func (h *harness) openRelay() {
 		TrustedKeys: func() []policy.TrustedPolicyKey {
 			return []policy.TrustedPolicyKey{{KeyID: policyKey, PublicKey: h.policyPub}}
 		},
-		Clock: h.clock, Wall: h.wall, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock: h.relayClock, Wall: h.wall, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Suspends: noSuspends(),
 	})
 	if err != nil {
 		h.t.Fatal(err)
@@ -304,7 +331,7 @@ func (h *harness) pump() {
 		h.mu.Unlock()
 		progressed := len(out) > 0
 		for _, frame := range out {
-			if h.down[frame.GetSenderId()] {
+			if h.down[frame.GetSenderId()] || h.relayFrozen {
 				continue
 			}
 			h.relay.ingestFrame(frame)
@@ -337,19 +364,43 @@ func (h *harness) pump() {
 	h.t.Fatal("network did not settle")
 }
 
-// step advances time in 100 ms increments, ticking every live node.
+// step advances time in 100 ms increments, ticking every live node. Daemons
+// beacon the relay every second like the docker daemon runtime (D4).
 func (h *harness) step(total time.Duration) {
 	for elapsed := time.Duration(0); elapsed < total; elapsed += 100 * time.Millisecond {
 		h.clock.advance(100 * time.Millisecond)
+		beacon := h.clock.Now()%time.Second == 0
 		for _, id := range sortedIDs(h.daemons) {
 			if !h.down[id] {
 				h.daemons[id].Tick()
+				if beacon {
+					h.daemons[id].BeaconRelays()
+				}
 			}
 		}
-		h.relay.checkIdentityKey()
-		h.relay.node.Tick()
+		if !h.relayFrozen {
+			h.relay.observeSuspend()
+			h.relay.checkIdentityKey()
+			h.relay.node.Tick()
+			h.relay.beacon(false)
+		}
 		h.pump()
 	}
+}
+
+// freezeRelay pauses the relay VM for d: it neither ticks nor routes, and its
+// lease clock stands still while the daemons' clocks move on.
+func (h *harness) freezeRelay(d time.Duration) {
+	h.relayFrozen = true
+	h.step(d)
+	h.relayClock.mu.Lock()
+	h.relayClock.lag += d
+	h.relayClock.mu.Unlock()
+	h.relayFrozen = false
+}
+
+func noSuspends() *availabilitylease.SuspendWatch {
+	return availabilitylease.NewSuspendWatchFrom(func() (time.Duration, bool) { return 0, false })
 }
 
 // stepUntil steps until cond holds or the timeout passes.

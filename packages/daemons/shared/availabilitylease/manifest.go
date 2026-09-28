@@ -201,6 +201,10 @@ func (c *VoterConfig) quorumImpossible(refused map[string]bool) bool {
 
 func (c *VoterConfig) isVoter(id string) bool { return c.voters[id] }
 
+// isMember reports whether id is one of the policy's coordination members
+// (voters and serving relays, A18).
+func (c *VoterConfig) isMember(id string) bool { return c.members[id] != nil }
+
 func (c *VoterConfig) isRelay(id string) bool {
 	member := c.members[id]
 	return member != nil && member.GetRole() == pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY

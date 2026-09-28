@@ -3450,9 +3450,26 @@ type LeaseBatch struct {
 	// Signed manifests and voter configs forwarded so lagging peers adopt them (A4).
 	Blocks []*LeaseSignedBlock `protobuf:"bytes,6,rep,name=blocks,proto3" json:"blocks,omitempty"`
 	// Policy key rotation chain for the forwarded blocks (A14).
-	KeyRotations  []*LeasePolicyKeyRotation `protobuf:"bytes,7,rep,name=key_rotations,json=keyRotations,proto3" json:"key_rotations,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	KeyRotations []*LeasePolicyKeyRotation `protobuf:"bytes,7,rep,name=key_rotations,json=keyRotations,proto3" json:"key_rotations,omitempty"`
+	// Peer-time freeze detection (D4). The sender's lease clock
+	// (CLOCK_BOOTTIME on Linux) in milliseconds when it sealed the batch, and
+	// an id of that clock's origin (derived from the kernel boot id, so it
+	// changes whenever the clock may be discontinuous). Receivers track the
+	// offset between their own lease clock and each sender's; a drop beyond the
+	// skew budget means the receiver's host was frozen since the sender's
+	// previous frame. The echo fields return the destination's own clock from
+	// the newest batch the sender received from it, and how long the sender
+	// held it, so the destination bounds this batch's delay by the round trip
+	// (only such batches form the reference). A batch may carry no items at
+	// all: relays and daemons send such clock beacons every second. All zero
+	// from senders that predate availability_lease_v2.
+	SenderClockMs     uint64 `protobuf:"varint,8,opt,name=sender_clock_ms,json=senderClockMs,proto3" json:"sender_clock_ms,omitempty"`
+	SenderClockOrigin uint64 `protobuf:"fixed64,9,opt,name=sender_clock_origin,json=senderClockOrigin,proto3" json:"sender_clock_origin,omitempty"`
+	EchoClockMs       uint64 `protobuf:"varint,10,opt,name=echo_clock_ms,json=echoClockMs,proto3" json:"echo_clock_ms,omitempty"`
+	EchoClockOrigin   uint64 `protobuf:"fixed64,11,opt,name=echo_clock_origin,json=echoClockOrigin,proto3" json:"echo_clock_origin,omitempty"`
+	EchoAgeMs         uint64 `protobuf:"varint,12,opt,name=echo_age_ms,json=echoAgeMs,proto3" json:"echo_age_ms,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *LeaseBatch) Reset() {
@@ -3532,6 +3549,41 @@ func (x *LeaseBatch) GetKeyRotations() []*LeasePolicyKeyRotation {
 		return x.KeyRotations
 	}
 	return nil
+}
+
+func (x *LeaseBatch) GetSenderClockMs() uint64 {
+	if x != nil {
+		return x.SenderClockMs
+	}
+	return 0
+}
+
+func (x *LeaseBatch) GetSenderClockOrigin() uint64 {
+	if x != nil {
+		return x.SenderClockOrigin
+	}
+	return 0
+}
+
+func (x *LeaseBatch) GetEchoClockMs() uint64 {
+	if x != nil {
+		return x.EchoClockMs
+	}
+	return 0
+}
+
+func (x *LeaseBatch) GetEchoClockOrigin() uint64 {
+	if x != nil {
+		return x.EchoClockOrigin
+	}
+	return 0
+}
+
+func (x *LeaseBatch) GetEchoAgeMs() uint64 {
+	if x != nil {
+		return x.EchoAgeMs
+	}
+	return 0
 }
 
 type LeaseKey struct {
@@ -6295,7 +6347,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\x12\x1c\n" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x123\n" +
-	"\x15additional_signatures\x18\x05 \x03(\fR\x14additionalSignatures\"\xc4\x02\n" +
+	"\x15additional_signatures\x18\x05 \x03(\fR\x14additionalSignatures\"\x8c\x04\n" +
 	"\n" +
 	"LeaseBatch\x12\x1d\n" +
 	"\n" +
@@ -6305,7 +6357,13 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x0edestination_id\x18\x04 \x01(\tR\rdestinationId\x12)\n" +
 	"\x05items\x18\x05 \x03(\v2\x13.relay.v1.LeaseItemR\x05items\x122\n" +
 	"\x06blocks\x18\x06 \x03(\v2\x1a.relay.v1.LeaseSignedBlockR\x06blocks\x12E\n" +
-	"\rkey_rotations\x18\a \x03(\v2 .relay.v1.LeasePolicyKeyRotationR\fkeyRotations\";\n" +
+	"\rkey_rotations\x18\a \x03(\v2 .relay.v1.LeasePolicyKeyRotationR\fkeyRotations\x12&\n" +
+	"\x0fsender_clock_ms\x18\b \x01(\x04R\rsenderClockMs\x12.\n" +
+	"\x13sender_clock_origin\x18\t \x01(\x06R\x11senderClockOrigin\x12\"\n" +
+	"\recho_clock_ms\x18\n" +
+	" \x01(\x04R\vechoClockMs\x12*\n" +
+	"\x11echo_clock_origin\x18\v \x01(\x06R\x0fechoClockOrigin\x12\x1e\n" +
+	"\vecho_age_ms\x18\f \x01(\x04R\techoAgeMs\";\n" +
 	"\bLeaseKey\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\"f\n" +

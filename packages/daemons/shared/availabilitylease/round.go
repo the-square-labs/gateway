@@ -198,6 +198,10 @@ func (n *Node) roundSucceeded(pk *proposerKey, r *round, majority bool, now time
 		commit.Quorum = append(commit.Quorum, r.accepts[id])
 	}
 	acquired := pk.role != RoleHolding
+	if acquired {
+		// A fence reason belongs to the lease it ended.
+		pk.fenceReason = FenceNone
+	}
 	pk.role = RoleHolding
 	pk.ballot, pk.ownMajority, pk.anchor = r.ballot, majority, r.anchor
 	pk.deadline, pk.softAt = r.anchor+FenceCompleteAfter, r.anchor+SoftFenceAfter
@@ -280,7 +284,19 @@ func (n *Node) onNack(from string, msg *pb.LeaseNack, now time.Duration) {
 			n.queue(from, &pb.LeaseItem{Body: &pb.LeaseItem_Prepare{Prepare: prepare}})
 		}
 		return
-	case pb.LeaseNackReason_LEASE_NACK_REASON_BALLOT_TOO_LOW, pb.LeaseNackReason_LEASE_NACK_REASON_RELEASED,
+	case pb.LeaseNackReason_LEASE_NACK_REASON_RELEASED:
+		r.higher = true
+		if (pk.role == RoleAcquiring || pk.role == RoleBootstrapping) && !r.proposing {
+			// Our own released ballot from before a restart (a new
+			// incarnation) outranks this one; the NACK names it, so go past
+			// it at once rather than after the round timeout, the
+			// re-observation and the rank delay again. Only this proposer's
+			// own history is involved, so there is no duel.
+			pk.round = nil
+			n.startRound(pk, r.manifest, r.purpose, now)
+			return
+		}
+	case pb.LeaseNackReason_LEASE_NACK_REASON_BALLOT_TOO_LOW,
 		pb.LeaseNackReason_LEASE_NACK_REASON_STALE_EPOCH, pb.LeaseNackReason_LEASE_NACK_REASON_STALE_MANIFEST:
 		r.higher = true
 	case pb.LeaseNackReason_LEASE_NACK_REASON_HELD, pb.LeaseNackReason_LEASE_NACK_REASON_RESERVED:

@@ -72,7 +72,7 @@ func buildRandomWorld(seed int64, wire bool) (*simWorld, simTopology) {
 		if i <= candidates {
 			topo.candidates = append(topo.candidates, id)
 		}
-		w.newNode(id, false, rate(i > candidates)).detectSuspend = rng.Intn(2) == 0
+		w.newNode(id, false, rate(i > candidates))
 	}
 	w.gw = newSimGateway(w)
 	policy := &simPolicy{id: "p1", slots: 1, available: topo.available, candidates: topo.candidates, bootstrap: map[uint32]string{}}

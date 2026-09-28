@@ -13,7 +13,7 @@ import (
 // node knows; manifests allow at most 32 slots.
 const maxSlots = 32
 
-// keyGate is the relay data-path gate for one key after the suspend rule.
+// keyGate is the relay data-path gate for one key.
 type keyGate struct {
 	decision  availabilitylease.GateDecision
 	open      bool
@@ -21,21 +21,14 @@ type keyGate struct {
 	reason    string
 }
 
-// gate evaluates the node's gate (a valid commit nothing known supersedes,
-// plus this relay's own promise of that ballot within GateWindow: A11, A15)
-// and keeps it closed after a detected suspend until the relay promised the
-// ballot afresh (A17).
+// gate evaluates the node's gate: a valid commit nothing known supersedes,
+// plus this relay's own promise of that ballot within GateWindow (A11, A15),
+// made after the last freeze of this host the node detected from its members'
+// clocks (A17, D4).
 func (c *Coordinator) gate(key availabilitylease.Key) keyGate {
 	decision := c.node.Gate(key)
 	result := keyGate{decision: decision, open: decision.LeaseMode && decision.Open, reason: decision.Reason}
 	if !result.open {
-		return result
-	}
-	c.mu.Lock()
-	suspended, suspendAt := c.suspended, c.suspendAt
-	c.mu.Unlock()
-	if suspended && decision.Until-availabilitylease.GateWindow <= suspendAt {
-		result.open, result.reason = false, "host suspend: waiting for a fresh promise"
 		return result
 	}
 	result.remaining = decision.Until - c.clock.Now()
@@ -126,7 +119,7 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 	c.mu.Unlock()
 	report := &relayv1.AvailabilityLeaseReport{
 		MemberId: c.id, IdentityPublicKey: identityKey, Incarnation: c.node.Incarnation(),
-		AcceptorAbstaining: c.clock.Now() < c.startedAt+availabilitylease.AbstainAfterStart,
+		AcceptorAbstaining: c.node.Abstaining(),
 	}
 	for _, id := range c.view.keyIDs() {
 		if c.node.TrustsPolicyKey(id) {
@@ -170,9 +163,9 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 	for id := range c.streams {
 		report.ConnectedMemberIds = append(report.ConnectedMemberIds, id)
 	}
-	if c.suspended {
-		report.LastSuspendUnixMs = c.lastSuspendWall.UnixMilli()
-		report.LastSuspendDurationMs = uint64(c.lastSuspend.Milliseconds())
+	if !c.lastFreezeWall.IsZero() {
+		report.LastSuspendUnixMs = c.lastFreezeWall.UnixMilli()
+		report.LastSuspendDurationMs = uint64(c.lastFreeze.Milliseconds())
 	}
 	c.mu.Unlock()
 	sortStrings(report.ConnectedMemberIds)

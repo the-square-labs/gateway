@@ -166,6 +166,9 @@ func TestN3HigherBallotNackRetriesInsteadOfFencing(t *testing.T) {
 
 	t.Run("commit for another holder fences at once", func(t *testing.T) {
 		w := twoCandidateWorld(t, false)
+		// Peer-time freeze detection would fence the resumed holder first
+		// (host_frozen); switch it off to check the A13 path on its own.
+		w.freezeBudget = time.Hour
 		w.startAll()
 		w.waitHolderIs(t, keyP1, "d1", 60*time.Second)
 		d1 := w.nodes["d1"]

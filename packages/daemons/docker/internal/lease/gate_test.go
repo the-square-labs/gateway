@@ -37,7 +37,7 @@ func TestBackendGateAllowsOnlyTheHolder(t *testing.T) {
 	}
 }
 
-func TestDaemonVoterPersistsAndAbstainsAfterRestart(t *testing.T) {
+func TestDaemonVoterPersistsAndHoldsAcrossARestart(t *testing.T) {
 	w := newWorld(t, worldSpec{
 		relays: []string{"r1"}, daemons: []string{"d1", "d2", "d3"}, candidates: []string{"d1"},
 		voters: []string{"r1", "d2", "d3"},
@@ -63,8 +63,10 @@ func TestDaemonVoterPersistsAndAbstainsAfterRestart(t *testing.T) {
 	}
 	w.run(time.Second)
 	views = d2.runtime.Node().AcceptorView()
-	if len(views) != 1 || !views[0].Abstaining || views[0].Promised.IsZero() {
-		t.Fatalf("restarted voter must abstain and keep its persisted promise: %+v", views)
+	// Restarted within the same boot (the store's boot stamp proves it): it
+	// keeps voting and restores the hold of its last accept.
+	if len(views) != 1 || views[0].Abstaining || views[0].Promised.IsZero() || views[0].Holder != "d1" {
+		t.Fatalf("voter restarted within the same boot must keep voting for the holder and its persisted promise: %+v", views)
 	}
 	w.run(60 * time.Second)
 	w.requireClean()

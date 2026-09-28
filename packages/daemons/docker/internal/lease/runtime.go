@@ -25,13 +25,10 @@ const (
 	// maxGracefulStop caps docker stop before the kill (D5).
 	maxGracefulStop = 10 * time.Second
 	// killMargin keeps the graceful stop inside the fence deadline.
-	killMargin     = time.Second
-	opTimeout      = 25 * time.Second
-	dockerCallWait = 5 * time.Second
-	abandonRetry   = 2 * time.Second
-	// suspendThreshold is the wall-clock jump beyond the BOOTTIME advance
-	// that is treated as a frozen VM (A17).
-	suspendThreshold = 3 * time.Second
+	killMargin       = time.Second
+	opTimeout        = 25 * time.Second
+	dockerCallWait   = 5 * time.Second
+	abandonRetry     = 2 * time.Second
 	maxPendingEvents = 256
 )
 
@@ -42,9 +39,13 @@ type Options struct {
 	StateDir string
 	// Clock is CLOCK_BOOTTIME; it must be the clock of the watchdog records.
 	Clock availabilitylease.Clock
-	// Wall is the wall clock without a monotonic reading, for suspend
-	// detection (A17) and event timestamps.
+	// Wall is the wall clock, for event timestamps and the incarnation floor
+	// only. It is never evidence of a freeze (D4): a VM freeze is detected
+	// from the peers' clocks in lease frames (availabilitylease freeze.go).
 	Wall func() time.Time
+	// Suspends reports real host suspends (BOOTTIME over MONOTONIC) for the
+	// log; nil uses the host clocks.
+	Suspends *availabilitylease.SuspendWatch
 	// Signer is the key the node starts with: after a restart inside a
 	// rotation overlap, the previous key (Identity then rotates to the new).
 	Signer availabilitylease.Signer
@@ -68,6 +69,9 @@ type bootClock struct{}
 
 func (bootClock) Now() time.Duration { return leasefence.Now() }
 
+// Origin names the boot of the BOOTTIME clock for peers' freeze detection.
+func (bootClock) Origin() uint64 { return availabilitylease.BootOrigin() }
+
 // Runtime is the lease side of a docker daemon.
 type Runtime struct {
 	opts      Options
@@ -88,8 +92,7 @@ type Runtime struct {
 	ready       map[string]bool
 	events      []ReportEvent
 	revision    uint64
-	lastWall    time.Time
-	lastClock   time.Duration
+	beaconAt    time.Duration
 }
 
 type snapshot struct {
@@ -115,6 +118,9 @@ func New(opts Options) (*Runtime, error) {
 	}
 	if opts.Async == nil {
 		opts.Async = func(fn func()) { go fn() }
+	}
+	if opts.Suspends == nil {
+		opts.Suspends = availabilitylease.NewSuspendWatch()
 	}
 	if opts.Store == nil {
 		store, err := OpenFileStore(filepath.Join(opts.StateDir, "availability-lease", "acceptor.json"))
@@ -190,10 +196,30 @@ func (r *Runtime) kick() {
 // Step runs one loop iteration: protocol timers, completed operations,
 // then the container side of every policy.
 func (r *Runtime) Step() {
-	now := r.opts.Clock.Now()
-	r.detectSuspend(now)
+	if suspended := r.opts.Suspends.Check(); suspended > 0 {
+		// BOOTTIME counted the suspend, so the lease timers already did:
+		// a holder whose budget ran out fences on its timer below.
+		r.logger.Warn("host resumed from a suspend; lease timers counted it", "suspended_for", suspended)
+	}
 	r.node.Tick()
-	now = r.opts.Clock.Now()
+	now := r.opts.Clock.Now()
+	if now >= r.beaconAt {
+		// Relays learn of their own freezes from daemons' clocks (D4); the
+		// watchdog learns that a lease-aware daemon keeps its records.
+		r.beaconAt = now + availabilitylease.BeaconInterval
+		r.node.BeaconRelays()
+		if err := r.opts.Fence.DaemonAlive(now); err != nil {
+			r.logger.Debug("could not write the lease daemon heartbeat", "error", err)
+		}
+	}
+	for _, freeze := range r.node.DrainFreezes() {
+		keys := make([]string, 0, len(freeze.Fenced))
+		for _, key := range freeze.Fenced {
+			keys = append(keys, key.String())
+		}
+		r.logger.Warn("host was frozen: a peer's clock moved on while this host's clocks stood still; fencing every lease held across it",
+			"peer", freeze.Peer, "frozen_for", freeze.Frozen, "fenced", keys)
+	}
 	manifests := r.node.Manifests()
 	holders := map[string]availabilitylease.HolderStatus{}
 	for _, status := range r.node.Holders() {
@@ -265,26 +291,6 @@ func (r *Runtime) rotateIdentity() {
 	}
 	if !r.node.IdentityOverlap() {
 		r.opts.Identity.OverlapEnded()
-	}
-}
-
-// detectSuspend compares the wall-clock advance with the BOOTTIME advance.
-// A frozen VM (suspend or RAM snapshot under kvmclock) does not advance
-// BOOTTIME; the protocol then shifts deadlines back so the resumed holder
-// fences at once instead of running on its frozen budget (A17, A2.5).
-func (r *Runtime) detectSuspend(now time.Duration) {
-	wall := r.opts.Wall()
-	r.mu.Lock()
-	previousWall, previousClock := r.lastWall, r.lastClock
-	r.lastWall, r.lastClock = wall, now
-	r.mu.Unlock()
-	if previousWall.IsZero() {
-		return
-	}
-	gap := wall.Sub(previousWall) - (now - previousClock)
-	if gap > suspendThreshold {
-		r.logger.Warn("host resumed from a freeze the monotonic clock did not see; fencing on the frozen budget", "frozen_for", gap)
-		r.node.ObserveSuspend(gap)
 	}
 }
 

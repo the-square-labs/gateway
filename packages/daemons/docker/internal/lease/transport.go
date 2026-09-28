@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
 	"sort"
 	"sync"
 	"time"
@@ -116,16 +117,24 @@ func (t *RelayTransport) Targets() []string {
 	return out
 }
 
+// Lease-lane reconnects back off exponentially with jitter but stay short
+// (D7): a failover or a resumed holder's fence must not wait for a long retry
+// timer (the rc.20 stand saw a 32 s cap delay a resumed holder's first frame).
+const (
+	coordinateRetryMin = 250 * time.Millisecond
+	coordinateRetryMax = 2 * time.Second
+)
+
 // Run keeps one Coordinate stream open to target until ctx ends, reopening
 // it after failures. target is the relay instance id (the relay's voter id)
 // or "local" for the legacy local relay lane.
 func (t *RelayTransport) Run(ctx context.Context, target string, open func(context.Context) (FrameStream, error)) {
-	backoff := time.Second
+	backoff := coordinateRetryMin
 	for ctx.Err() == nil {
 		streamCtx, cancel := context.WithCancel(ctx)
 		stream, err := open(streamCtx)
 		if err == nil {
-			backoff = time.Second
+			backoff = coordinateRetryMin
 			err = t.serve(streamCtx, target, stream)
 		}
 		cancel()
@@ -136,12 +145,15 @@ func (t *RelayTransport) Run(ctx context.Context, target string, open func(conte
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(jittered(backoff)):
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-		}
+		backoff = min(backoff*2, coordinateRetryMax)
 	}
+}
+
+// jittered spreads retries by ±20% so daemons do not reconnect in step.
+func jittered(wait time.Duration) time.Duration {
+	return wait - wait/5 + time.Duration(rand.Int64N(int64(wait/5)*2+1))
 }
 
 func (t *RelayTransport) serve(ctx context.Context, target string, stream FrameStream) error {
