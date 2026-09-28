@@ -142,12 +142,15 @@ type storageCopyRunnerResult struct {
 type storageCopyExecutor func(ctx context.Context, jobID string, payload storageCopyPayload, workdir string) (storageCopyStatus, error)
 
 type storageCopyRuntime struct {
-	plugin  *DockerPlugin
-	root    string
-	mu      sync.Mutex
-	jobs    map[string]*storageCopyStatus
-	cancel  map[string]context.CancelFunc
-	execute storageCopyExecutor
+	plugin *DockerPlugin
+	root   string
+	mu     sync.Mutex
+	// persistMu serializes status file writes: goroutines of one job (progress, cancel, completion) persist
+	// concurrently, and an interleaved write through one temporary name used to leave a corrupt status file.
+	persistMu sync.Mutex
+	jobs      map[string]*storageCopyStatus
+	cancel    map[string]context.CancelFunc
+	execute   storageCopyExecutor
 	// stopRunner stops and removes a job's runner container found after a
 	// daemon restart; it reports whether one existed.
 	stopRunner func(jobID, containerID string) (bool, error)
@@ -621,13 +624,30 @@ func (r *storageCopyRuntime) persist(status storageCopyStatus) error {
 	if err != nil {
 		return err
 	}
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
 	path := filepath.Join(r.root, status.JobID+".json")
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, data, 0600); err != nil {
+	// A late progress or cancelling write never replaces the job's final status.
+	if !isTerminalStorageCopyStatus(status.Status) {
+		if previous, err := r.load(status.JobID); err == nil && isTerminalStorageCopyStatus(previous.Status) {
+			return nil
+		}
+	}
+	temporary, err := os.CreateTemp(r.root, status.JobID+".*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		_ = os.Remove(temporary.Name())
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporary.Name())
+		return err
+	}
+	if err := os.Rename(temporary.Name(), path); err != nil {
+		_ = os.Remove(temporary.Name())
 		return err
 	}
 	return nil
