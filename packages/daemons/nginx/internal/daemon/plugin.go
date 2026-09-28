@@ -163,12 +163,16 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	if err != nil {
 		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
-	p.secureLinks = newSourceLinkManager(p.openProxySecureLink, p.cfg.Nginx.Binary, p.mgr.GetPID)
+	// Secure Link peers are authorized against the cached master PID: no
+	// subprocess per connection (B-22). Resolve it now, off the first
+	// connection's path.
+	go func() { _, _ = mgr.CachedPID() }()
+	p.secureLinks = newSourceLinkManager(p.openProxySecureLink, p.cfg.Nginx.Binary, p.mgr.CachedPID)
 	p.registryLinks = newSourceLinkManagerAt(
 		p.openRegistrySecureLink,
 		registrySecureLinkSocketDir,
 		p.cfg.Nginx.Binary,
-		p.mgr.GetPID,
+		p.mgr.CachedPID,
 	)
 	p.secureLinkState, err = securelink.NewStateStore(baseCfg.StateDir)
 	if err != nil {

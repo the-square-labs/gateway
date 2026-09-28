@@ -138,6 +138,19 @@ func (s *StateStore) Get() *pb.SyncProxySecureLinksCommand {
 	return proto.Clone(s.current).(*pb.SyncProxySecureLinksCommand)
 }
 
+// Binding returns a copy of the binding of linkID in role, or nil. Unlike Get
+// it copies one binding, not the whole set: it runs per relayed connection.
+func (s *StateStore) Binding(linkID, role string) *pb.ProxySecureLinkBinding {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, binding := range s.current.GetBindings() {
+		if binding.GetLinkId() == linkID && binding.GetRole() == role {
+			return proto.Clone(binding).(*pb.ProxySecureLinkBinding)
+		}
+	}
+	return nil
+}
+
 // SetSourceConfigManaged durably records whether restart recovery owns the
 // generated Nginx proxy_pass for one source binding. It returns the previous
 // value and whether the binding currently exists.

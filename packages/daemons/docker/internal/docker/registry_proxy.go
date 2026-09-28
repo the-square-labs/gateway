@@ -405,7 +405,7 @@ func registryRequestScope(method, path string) (string, string, bool) {
 }
 
 func (m *dockerRegistryProxyManager) openRelayConnection(ctx context.Context, binding *registryProxyBinding) (net.Conn, error) {
-	assignment := findRelayAssignment(m.plugin.relayGrants.get(), "connect", registryRelayOwnerKind, binding.id)
+	assignment := m.plugin.relayGrants.lookup("connect", registryRelayOwnerKind, binding.id)
 	if assignment == nil {
 		return nil, errors.New("registry relay grant is unavailable")
 	}

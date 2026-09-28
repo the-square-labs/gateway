@@ -621,3 +621,42 @@ func TestSecureLinkDialStateDoesNotWaitForAnApplyInProgress(t *testing.T) {
 		t.Fatal("a dial waited for the apply lock")
 	}
 }
+
+// B-22: a relayed connection costs no dockerd call of its own. Dials of one link within secureLinkValidateTTL share
+// one validated check, and concurrent dials share a running one.
+func TestSecureLinkDialValidationIsSharedBetweenDials(t *testing.T) {
+	var calls atomic.Int32
+	manager := &dockerSecureLinkManager{plugin: &DockerPlugin{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	manager.resolveTargetForDial = func(_ context.Context, _, network, _ string, _ bool) (string, string, error) {
+		calls.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		return "10.0.0.5", network, nil
+	}
+	binding := dockerSecureLinkBinding{port: 1, targetContainer: "app", targetNetwork: "net", targetHost: "10.0.0.5"}
+	now := time.Now()
+	var wg sync.WaitGroup
+	for range 100 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := manager.validateDialTarget(context.Background(), "link", binding, now); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("dockerd calls for 100 concurrent dials = %d", got)
+	}
+	if err := manager.validateDialTarget(context.Background(), "link", binding, now.Add(time.Second)); err != nil || calls.Load() != 1 {
+		t.Fatalf("a dial within the TTL called dockerd again: %v, %d", err, calls.Load())
+	}
+	if err := manager.validateDialTarget(context.Background(), "link", binding, now.Add(secureLinkValidateTTL)); err != nil || calls.Load() != 2 {
+		t.Fatalf("a dial after the TTL did not check again: %v, %d", err, calls.Load())
+	}
+	changed := binding
+	changed.targetHost = "10.0.0.9"
+	if err := manager.validateDialTarget(context.Background(), "link", changed, now.Add(secureLinkValidateTTL)); err == nil {
+		t.Fatal("a changed binding reused the previous check")
+	}
+}

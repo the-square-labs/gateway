@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
@@ -69,13 +70,7 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 }
 
 func (p *DockerPlugin) serveStorageConnectorRelay(listener net.Listener) {
-	for {
-		connection, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		go p.handleStorageConnectorRelay(connection)
-	}
+	netaccept.Serve(listener, nil, p.handleStorageConnectorRelay)
 }
 
 func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
@@ -89,7 +84,7 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: "invalid storage connector relay request"})
 		return
 	}
-	assignment := findRelayAssignment(p.relayGrants.get(), "connect", storageBindingOwnerKind, request.BindingID)
+	assignment := p.relayGrants.lookup("connect", storageBindingOwnerKind, request.BindingID)
 	if assignment == nil || (assignment.GetGrant() == nil && len(relaybridge.PoolCandidates(assignment, false)) == 0) {
 		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: "storage binding relay route is unavailable"})
 		return
