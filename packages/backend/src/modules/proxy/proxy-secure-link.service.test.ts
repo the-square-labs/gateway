@@ -564,6 +564,53 @@ describe('ProxySecureLinkService migration rollback', () => {
     );
   });
 
+  it('rejects deleting an additional binding still referenced by the route Advanced config', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      advancedConfig: 'location /apislink/ { proxy_pass {{additionalSecureLinks.apislink}}/; }',
+      domainNames: ['api.example.test'],
+    } as any;
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      name: 'apislink',
+      status: 'active',
+    } as any;
+    const service = new ProxySecureLinkService({} as any, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'requireAdditional').mockResolvedValue(binding);
+
+    await expect(service.deleteAdditional(host, binding.id)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'SECURE_LINK_IN_USE',
+    });
+    await expect(service.deleteAdditional(host, binding.id)).rejects.toThrow(
+      /api\.example\.test.*additionalSecureLinks\.apislink/
+    );
+  });
+
+  it('rejects the same reference regardless of whitespace inside the Handlebars delimiters', async () => {
+    const host = {
+      id: '11111111-1111-4111-8111-111111111111',
+      // Handlebars renders `{{ additionalSecureLinks.apislink }}` identically to the
+      // tight form; the reference guard must not be defeated by this whitespace.
+      advancedConfig: 'location /apislink/ { proxy_pass {{ additionalSecureLinks.apislink }}/; }',
+      domainNames: ['api.example.test'],
+    } as any;
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      name: 'apislink',
+      status: 'active',
+    } as any;
+    const service = new ProxySecureLinkService({} as any, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service as any, 'requireAdditional').mockResolvedValue(binding);
+
+    await expect(service.deleteAdditional(host, binding.id)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'SECURE_LINK_IN_USE',
+    });
+  });
+
   it('does not keep cleanup pending when an offline node cannot receive the updated link set', async () => {
     const relayPolicy = { revokeOwner: vi.fn().mockResolvedValue(undefined) };
     const service = new ProxySecureLinkService({} as any, {} as any, relayPolicy as any, 'connector@sha256:test');
@@ -591,6 +638,15 @@ describe('ProxySecureLinkService migration rollback', () => {
     ).resolves.toBeUndefined();
     await expect(
       service.assertAdditionalReferences('host-1', 'location /admin { proxy_pass {{additionalSecureLinks.admin}}; }')
+    ).rejects.toMatchObject({ code: 'INVALID_SECURE_LINK_REFERENCE' });
+  });
+
+  it('detects a dangling reference regardless of whitespace inside the Handlebars delimiters', async () => {
+    const service = new ProxySecureLinkService({} as any, {} as any, {} as any, 'connector@sha256:test');
+    vi.spyOn(service, 'getActiveAdditional').mockResolvedValue([]);
+
+    await expect(
+      service.assertAdditionalReferences('host-1', 'location /admin { proxy_pass {{ additionalSecureLinks.admin }}; }')
     ).rejects.toMatchObject({ code: 'INVALID_SECURE_LINK_REFERENCE' });
   });
 

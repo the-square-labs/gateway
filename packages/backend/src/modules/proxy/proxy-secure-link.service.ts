@@ -83,6 +83,14 @@ function isManagedStorageUpstream(kind: string): kind is 'managed_storage' {
   return kind === 'managed_storage';
 }
 
+// Handlebars tolerates whitespace inside the delimiters (`{{ additionalSecureLinks.x }}`
+// renders the same as `{{additionalSecureLinks.x}}`), so the reference guard below must
+// tolerate it too. A binding name is already constrained to `[A-Za-z][A-Za-z0-9_]{0,63}`
+// (see assertAdditionalReferences), so no regex escaping is required.
+function additionalSecureLinkVariablePattern(name: string): RegExp {
+  return new RegExp(`\\{\\{\\s*additionalSecureLinks\\.${name}\\s*\\}\\}`);
+}
+
 /** True when `after` differs from `before` only by the target network the daemon picked during target sync. */
 function isNetworkReselection(before: ProxyAdditionalSecureLinkRow, after: ProxyAdditionalSecureLinkRow): boolean {
   return (
@@ -1064,11 +1072,12 @@ export class ProxySecureLinkService {
   async deleteAdditional(host: ProxyHostRow, bindingId: string): Promise<void> {
     const binding = await this.requireAdditional(host.id, bindingId, 'user_managed');
     const variable = `{{additionalSecureLinks.${binding.name}}}`;
-    if (host.advancedConfig?.includes(variable)) {
+    if (host.advancedConfig && additionalSecureLinkVariablePattern(binding.name).test(host.advancedConfig)) {
+      const routeLabel = host.domainNames?.[0] ?? host.id;
       throw new AppError(
         409,
         'SECURE_LINK_IN_USE',
-        `Remove ${variable} from Advanced config before deleting this binding`
+        `Route ${routeLabel} still references ${variable} in its Advanced config; remove it there before deleting this binding`
       );
     }
     const [pending] = await this.db
@@ -1262,7 +1271,10 @@ export class ProxySecureLinkService {
   }
 
   async assertAdditionalReferences(proxyHostId: string, snippet: string | null | undefined): Promise<void> {
-    const matches = [...(snippet ?? '').matchAll(/\{\{additionalSecureLinks\.([A-Za-z][A-Za-z0-9_]{0,63})\}\}/g)];
+    // Whitespace-tolerant to match what Handlebars actually resolves (see
+    // additionalSecureLinkVariablePattern above): `{{ additionalSecureLinks.x }}`
+    // renders identically to `{{additionalSecureLinks.x}}`.
+    const matches = [...(snippet ?? '').matchAll(/\{\{\s*additionalSecureLinks\.([A-Za-z][A-Za-z0-9_]{0,63})\s*\}\}/g)];
     if (matches.length === 0) return;
     const active = await this.getActiveAdditional(proxyHostId);
     const names = new Set(active.map((binding) => binding.name));

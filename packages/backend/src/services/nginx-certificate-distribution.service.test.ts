@@ -153,6 +153,55 @@ describe('NginxCertificateDistributionService helpers', () => {
       expect.objectContaining({ status: 'ready', appliedVersion: 'a'.repeat(64) })
     );
   });
+
+  it('includes the underlying failure reason when a TLS bundle apply fails', async () => {
+    const candidate = { id: 'candidate-1' };
+    const db = {
+      query: { nginxProxyHostDeployments: { findMany: vi.fn().mockResolvedValue([]) } },
+      insert: vi.fn(() => ({
+        values: vi.fn(() => ({
+          onConflictDoUpdate: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([candidate]) })),
+        })),
+      })),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })),
+    };
+    const nodeDispatch = {
+      applyTlsBundle: vi
+        .fn()
+        .mockRejectedValue(new Error('daemon socket write /etc/nginx/certs/host.pem: broken pipe')),
+    };
+    const service = new NginxCertificateDistributionService(
+      db as never,
+      {} as never,
+      {} as never,
+      nodeDispatch as never
+    );
+    vi.spyOn(service as any, 'markReplicaById').mockResolvedValue(1);
+
+    const prepared = {
+      assetId: 'asset-1',
+      nodeId: 'node-1',
+      daemonCertId: '11111111-1111-4111-8111-111111111111',
+      version: 'a'.repeat(64),
+      fingerprint: 'b'.repeat(64),
+      certificatePem: Buffer.from('cert'),
+      keyPem: Buffer.from('key'),
+      chainPem: Buffer.from('chain'),
+      sslCertPath: null,
+      sslKeyPath: null,
+      sslChainPath: null,
+    } as never;
+
+    // No hint about the underlying cause was the actual bug (O7): a caller
+    // used to see only the generic "Failed to safely activate the TLS proxy
+    // configuration" with no indication of what actually failed downstream.
+    await expect(
+      service.applyHostBundle({ id: 'host-1', nodeId: 'node-1' }, 'server {}', prepared)
+    ).rejects.toMatchObject({ statusCode: 500, code: 'NGINX_TLS_BUNDLE_FAILED' });
+    await expect(service.applyHostBundle({ id: 'host-1', nodeId: 'node-1' }, 'server {}', prepared)).rejects.toThrow(
+      /broken pipe/
+    );
+  });
 });
 
 describe('NginxCertificateDistributionService replica retries', () => {

@@ -496,7 +496,11 @@ export class NginxCertificateDistributionService {
         status: 'failed',
         lastError: safeError(error),
       });
-      throw new AppError(500, 'NGINX_TLS_BUNDLE_FAILED', 'Failed to safely activate the TLS proxy configuration');
+      throw new AppError(
+        500,
+        'NGINX_TLS_BUNDLE_FAILED',
+        `Failed to safely activate the TLS proxy configuration: ${safeError(error)}`
+      );
     }
   }
 
