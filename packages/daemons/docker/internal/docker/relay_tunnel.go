@@ -17,6 +17,7 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
+	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
@@ -549,7 +550,7 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 	defer connection.Close()
 	r.plugin.relayTunnelOutcomes.Succeeded(r.plugin.logger, relayTunnelOutcome(assignment))
 	if assignment.OwnerKind == proxySecureLinkOwnerKind {
-		readChunk := int(r.plugin.relayGrants.get().GetReadChunkBytes())
+		readChunk := int(r.plugin.relayGrants.readChunkBytes())
 		if readChunk == 0 {
 			readChunk = relaybridge.DefaultChunkBytes
 		}
@@ -613,13 +614,8 @@ func (p *DockerPlugin) startRelayListener() error {
 }
 
 func (p *DockerPlugin) acceptRelayLoop(listener net.Listener) {
-	for {
-		connection, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		go p.openSidecar(connection)
-	}
+	// A transient accept error (out of descriptors) must not end the loop.
+	netaccept.Serve(listener, nil, p.openSidecar)
 }
 
 func (p *DockerPlugin) openSidecar(connection net.Conn) {
@@ -634,7 +630,7 @@ func (p *DockerPlugin) openSidecar(connection net.Conn) {
 }
 
 func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID string, routeGeneration uint64) {
-	assignment := findRelayAssignment(p.relayGrants.get(), "connect", "managed_database_binding", bindingID)
+	assignment := p.relayGrants.lookup("connect", "managed_database_binding", bindingID)
 	if assignment == nil {
 		return
 	}
@@ -688,7 +684,7 @@ func (p *DockerPlugin) OpenBackupRelayRoute(ctx context.Context, ownerKind, rout
 	if !managedStorageIDPattern.MatchString(routeID) {
 		return nil, errors.New("backup relay route id must be a UUID")
 	}
-	assignment := findRelayAssignment(p.relayGrants.get(), "connect", ownerKind, routeID)
+	assignment := p.relayGrants.lookup("connect", ownerKind, routeID)
 	if assignment == nil || (assignment.GetGrant() == nil && len(relaybridge.PoolCandidates(assignment, false)) == 0) {
 		return nil, errors.New("backup relay route is unavailable")
 	}
@@ -702,11 +698,16 @@ func (p *DockerPlugin) OpenBackupRelayRoute(ctx context.Context, ownerKind, rout
 		defer close(route.done)
 		defer listener.Close()
 		defer route.active.Wait()
+		var backoff netaccept.Backoff
 		for {
 			connection, acceptErr := listener.Accept()
 			if acceptErr != nil {
+				if routeCtx.Err() == nil && backoff.Retry(acceptErr, routeCtx.Done()) {
+					continue
+				}
 				return
 			}
+			backoff.Reset()
 			if routeCtx.Err() != nil {
 				_ = connection.Close()
 				return
@@ -726,7 +727,7 @@ func (p *DockerPlugin) OpenBackupRelayRoute(ctx context.Context, ownerKind, rout
 				defer close(closeOnCancel)
 				// A backup can outlive its grants (TTL, generation or key change):
 				// use the newest bundle's assignment for each connection.
-				current := findRelayAssignment(p.relayGrants.get(), "connect", ownerKind, routeID)
+				current := p.relayGrants.lookup("connect", ownerKind, routeID)
 				if current == nil {
 					current = assignment
 				}

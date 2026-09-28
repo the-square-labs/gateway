@@ -196,12 +196,8 @@ func (p *DockerPlugin) availabilityLinkPolicy(linkID string) string {
 	if p.secureLinkState == nil {
 		return ""
 	}
-	for _, binding := range p.secureLinkState.Get().GetBindings() {
-		if binding.GetLinkId() == linkID && binding.GetRole() == "target" {
-			return binding.GetAvailabilityPolicyId()
-		}
-	}
-	return ""
+	// Per relayed connection: one binding, not a copy of all of them (B-22).
+	return p.secureLinkState.Binding(linkID, "target").GetAvailabilityPolicyId()
 }
 
 // secureLinkTargets are the Secure Link targets this node serves.

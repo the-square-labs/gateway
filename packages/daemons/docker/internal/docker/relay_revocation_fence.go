@@ -54,7 +54,10 @@ func (r *relayTunnelRouter) admitIncoming(assignment *pb.RelayGrantAssignment, i
 		r.mu.Unlock()
 		close(tunnel.done)
 	}
-	if refusal = relaybridge.RevocationRefusal(r.plugin.relayGrants.get(), tunnel.relayInstanceID, tunnel.endpointID, tunnel.route); refusal != "" {
+	r.plugin.relayGrants.withCurrent(func(bundle *pb.SyncRelayGrantsCommand) {
+		refusal = relaybridge.RevocationRefusal(bundle, tunnel.relayInstanceID, tunnel.endpointID, tunnel.route)
+	})
+	if refusal != "" {
 		release()
 		attrs := []any{"relay_instance_id", tunnel.relayInstanceID, "endpoint_id", tunnel.endpointID,
 			"route_id", tunnel.route.GetRouteId(), "route_generation", tunnel.route.GetRouteGeneration(),

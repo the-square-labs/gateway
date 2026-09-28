@@ -64,6 +64,12 @@ type dockerSecureLinkManager struct {
 	dockerQuietMu    sync.Mutex
 	dockerQuietUntil time.Time
 
+	// validated and validating share a link's target check between the dials
+	// of a moment (see validateDialTarget); guarded by validationMu.
+	validationMu sync.Mutex
+	validated    map[string]dialValidation
+	validating   map[string]*dialValidation
+
 	// view is what dials read: a copy of bindings, unbound and managementIP
 	// published after every change. apply holds mu across dockerd calls, and a
 	// dial must not wait for them (B-8, D5).
@@ -111,7 +117,19 @@ const (
 	// secureLinkDockerQuiet is how long dials skip that call after dockerd
 	// did not answer it; the first dial after it tries again.
 	secureLinkDockerQuiet = 2 * time.Second
+	// secureLinkValidateTTL is how long a validated target is trusted by the
+	// dials that follow (B-22): every relayed connection used to ask dockerd,
+	// which under load queued the connections behind dockerd.
+	secureLinkValidateTTL = 2 * time.Second
 )
+
+// dialValidation is a target check that ran or runs for one link.
+type dialValidation struct {
+	binding dockerSecureLinkBinding
+	at      time.Time
+	done    chan struct{}
+	err     error
+}
 
 type dockerSecureLinkRecovery struct {
 	done        chan struct{}
@@ -712,7 +730,50 @@ func (m *dockerSecureLinkManager) dialCurrent(ctx context.Context, linkID string
 // while dockerd answered, and only dockerd can hand its address to another
 // container. Dials skip the check for secureLinkDockerQuiet after such a
 // timeout, so a frozen dockerd costs one wait per period, not one per tunnel.
+//
+// A target validated less than secureLinkValidateTTL ago for the same binding
+// is not checked again, and concurrent dials of one link share one check: a
+// relayed connection costs no dockerd call of its own (B-22).
 func (m *dockerSecureLinkManager) validateDialTarget(ctx context.Context, linkID string, binding dockerSecureLinkBinding, now time.Time) error {
+	m.validationMu.Lock()
+	if last, ok := m.validated[linkID]; ok && last.binding == binding && now.Sub(last.at) < secureLinkValidateTTL {
+		m.validationMu.Unlock()
+		return nil
+	}
+	if running := m.validating[linkID]; running != nil && running.binding == binding {
+		m.validationMu.Unlock()
+		select {
+		case <-running.done:
+			return running.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	call := &dialValidation{binding: binding, at: now, done: make(chan struct{})}
+	if m.validating == nil {
+		m.validating = map[string]*dialValidation{}
+	}
+	m.validating[linkID] = call
+	m.validationMu.Unlock()
+	call.err = m.validateDialTargetNow(ctx, linkID, binding, now)
+	m.validationMu.Lock()
+	if m.validating[linkID] == call {
+		delete(m.validating, linkID)
+	}
+	if m.validated == nil {
+		m.validated = map[string]dialValidation{}
+	}
+	if call.err == nil {
+		m.validated[linkID] = dialValidation{binding: binding, at: now}
+	} else {
+		delete(m.validated, linkID)
+	}
+	m.validationMu.Unlock()
+	close(call.done)
+	return call.err
+}
+
+func (m *dockerSecureLinkManager) validateDialTargetNow(ctx context.Context, linkID string, binding dockerSecureLinkBinding, now time.Time) error {
 	m.dockerQuietMu.Lock()
 	quiet := now.Before(m.dockerQuietUntil)
 	m.dockerQuietMu.Unlock()

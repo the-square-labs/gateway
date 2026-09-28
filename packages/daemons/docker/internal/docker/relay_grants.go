@@ -114,6 +114,36 @@ func (s *relayGrantStore) get() *pb.SyncRelayGrantsCommand {
 	return proto.Clone(s.current).(*pb.SyncRelayGrantsCommand)
 }
 
+// The accessors below run for every relayed connection: they read the current
+// bundle in place (it is replaced, never modified) and copy at most one
+// assignment, never the whole bundle (B-22).
+
+// lookup returns a copy of one assignment of the current bundle.
+func (s *relayGrantStore) lookup(role, ownerKind, ownerID string) *pb.RelayGrantAssignment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	assignment := findRelayAssignment(s.current, role, ownerKind, ownerID)
+	if assignment == nil {
+		return nil
+	}
+	return proto.Clone(assignment).(*pb.RelayGrantAssignment)
+}
+
+// readChunkBytes is the bundle's relay read chunk size.
+func (s *relayGrantStore) readChunkBytes() uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.current.GetReadChunkBytes()
+}
+
+// withCurrent runs read on the current bundle, which read must not modify or
+// keep.
+func (s *relayGrantStore) withCurrent(read func(*pb.SyncRelayGrantsCommand)) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	read(s.current)
+}
+
 func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (string, error) {
 	if p.relayGrants == nil {
 		return "", errors.New("relay grant store is unavailable")
