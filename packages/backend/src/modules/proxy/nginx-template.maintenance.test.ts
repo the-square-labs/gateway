@@ -284,7 +284,8 @@ describe('canonical Gateway nginx pages', () => {
     expect(rendered).toContain('ssl_certificate /etc/nginx/certs/example.crt;');
     expect(rendered).toContain('ssl_certificate_key /etc/nginx/certs/example.key;');
     expect(rendered).toContain('location /.well-known/acme-challenge/');
-    expect(rendered).toContain('if ($uri !~ ^/\\.well-known/acme-challenge/)');
+    // The reserved ingress health path keeps answering while a route is in maintenance.
+    expect(rendered).toContain('if ($uri !~ ^/\\.well-known/(acme-challenge/|gateway-ingress-health$))');
     expect(rendered).toContain('return 503');
     expect(rendered).toContain('Cache-Control "no-store" always');
     expect(rendered).toContain(escapeNginxReturnText(GATEWAY_MAINTENANCE_HTML));

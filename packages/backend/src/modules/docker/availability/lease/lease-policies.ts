@@ -9,7 +9,6 @@ import {
   dockerAvailabilityOperations,
   dockerAvailabilityPlacements,
   dockerAvailabilityPolicies,
-  proxyAdditionalSecureLinks,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import {
@@ -34,6 +33,7 @@ import {
 import { evaluateLeaseGating } from './lease-gating.js';
 import {
   type LeaseParticipants,
+  leaseIngressNodesOfPlacements,
   leaseVoterCandidates,
   leaseWitnessPool,
   manifestCandidateAllowed,
@@ -321,20 +321,8 @@ export class AvailabilityLeasePolicies {
     ]);
     const runtimeChanging = new Set(runtimeOperations.map((operation) => operation.policyId));
     const placementIds = placements.map((placement) => placement.id);
-    const ingressRows = placementIds.length
-      ? await this.db
-          .select({
-            referenceId: proxyAdditionalSecureLinks.referenceId,
-            nodeId: proxyAdditionalSecureLinks.sourceNodeId,
-          })
-          .from(proxyAdditionalSecureLinks)
-          .where(
-            and(
-              eq(proxyAdditionalSecureLinks.purpose, 'availability_member'),
-              inArray(proxyAdditionalSecureLinks.referenceId, placementIds)
-            )
-          )
-      : [];
+    // Every source of a member link: all members of the route's ingress group, else the route's node.
+    const ingressRows = await leaseIngressNodesOfPlacements(this.db, placementIds);
     const policyOfPlacement = new Map(placements.map((placement) => [placement.id, placement.policyId]));
     const policyRelays = await loadPolicyRelays(this.db, policyIds);
     for (const policy of relevant) {

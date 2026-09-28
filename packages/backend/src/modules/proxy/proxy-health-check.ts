@@ -368,6 +368,9 @@ export function runImmediateProxyHealthCheck({
         where: eq(proxyHosts.id, hostId),
       });
       if (!host?.enabled || !host.healthCheckEnabled || host.maintenanceEnabled) return;
+      // A route on an ingress group is probed through every member by the scheduled job (within its next tick,
+      // a few seconds): one immediate sample from a single member would misstate it.
+      if (host.ingressGroupId) return;
 
       const path = host.healthCheckUrl || '/';
       const url = resolveProxyHealthCheckUrl(host);

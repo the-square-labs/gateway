@@ -1,9 +1,17 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { proxyHosts } from '@/db/schema/index.js';
+import { nodes, proxyHosts } from '@/db/schema/index.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { ingressHealthOf } from '@/modules/ingress-groups/ingress-health.js';
+import { resolveIngressNodesForMany } from '@/modules/ingress-groups/ingress-nodes.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
+import {
+  aggregateMemberOutcomes,
+  type GroupRouteHealth,
+  type MemberProbeStatus,
+  withMemberIngressHealth,
+} from '@/modules/proxy/proxy-group-health.js';
 import {
   type DirectProxyProbeDeps,
   daemonProbeOutcome,
@@ -49,6 +57,8 @@ interface HealthEntry {
   status: string;
   responseMs?: number;
   slow?: boolean;
+  /** Routes on an ingress group: the sample of each member. */
+  members?: GroupRouteHealth['members'];
 }
 
 function healthCheckDue(host: typeof proxyHosts.$inferSelect, now: number): boolean {
@@ -129,6 +139,8 @@ export class HealthCheckJob {
       this.db,
       hosts.filter(isRelayBacked).map((host) => host.id)
     );
+    const groupHosts = hosts.filter((host) => host.ingressGroupId);
+    const servingNodes = groupHosts.length > 0 ? await resolveIngressNodesForMany(this.db, groupHosts) : new Map();
 
     const check = async (host: typeof proxyHosts.$inferSelect) => {
       const relayBacked = isRelayBacked(host);
@@ -137,7 +149,11 @@ export class HealthCheckJob {
         return { hostId: host.id, status: 'skipped' as const };
       }
       const previousStatus = host.healthStatus as HealthStatus;
-      const { status: checkStatus, responseMs } = await this.checkHost(host, availabilityMembers.get(host.id));
+      const {
+        status: checkStatus,
+        responseMs,
+        members: memberSamples,
+      } = await this.checkHost(host, availabilityMembers.get(host.id), servingNodes.get(host));
 
       if (relayBacked && this.relayUnavailable) {
         await this.recordRelayUnavailable(host);
@@ -180,6 +196,7 @@ export class HealthCheckJob {
       const entry: HealthEntry = { ts: new Date(now).toISOString(), status: checkStatus };
       if (responseMs != null) entry.responseMs = responseMs;
       if (slow) entry.slow = true;
+      if (memberSamples) entry.members = memberSamples;
       const history = compactHealthHistory([...existingHistory, entry], { nowMs: now });
 
       // Derive the stored healthStatus field from the check
@@ -188,8 +205,17 @@ export class HealthCheckJob {
         checkStatus === 'offline' &&
         (previousStatus === 'online' || previousStatus === 'degraded') &&
         !previousProbeFailed;
+      // A group route with a failing member is degraded right away: the other members still serve it.
       const newStatus: HealthStatus =
-        checkStatus === 'online' ? (slow ? 'degraded' : 'online') : transientFailure ? previousStatus : 'offline';
+        checkStatus === 'online'
+          ? slow
+            ? 'degraded'
+            : 'online'
+          : checkStatus === 'degraded'
+            ? 'degraded'
+            : transientFailure
+              ? previousStatus
+              : 'offline';
 
       // Write to DB
       const persisted = await this.db
@@ -257,7 +283,8 @@ export class HealthCheckJob {
     const daemonHostsByNode = new Map<string, typeof hosts>();
     for (const host of hosts) {
       const relayBacked = isRelayBacked(host);
-      if (!relayBacked && host.upstreamKind !== 'pages') {
+      // Group routes probe through every member; they run in the shared pool.
+      if ((!relayBacked && host.upstreamKind !== 'pages') || host.ingressGroupId) {
         directHosts.push(host);
         continue;
       }
@@ -387,15 +414,67 @@ export class HealthCheckJob {
     return (await this.nodeDispatch?.isNodeUpdateInProgress?.(nodeId)?.catch(() => false)) === true;
   }
 
+  /**
+   * One health sample. A route on an ingress group is probed through every member (daemon probes) or once from
+   * Gateway with the members' ingress health folded in (direct upstreams); see proxy-group-health.
+   */
   private async checkHost(
     host: typeof proxyHosts.$inferSelect,
+    memberLinkIds?: string[],
+    servingNodeIds?: string[]
+  ): Promise<{
+    status: 'online' | 'offline' | 'degraded' | 'skipped' | 'deferred' | 'unknown';
+    responseMs?: number;
+    members?: GroupRouteHealth['members'];
+  }> {
+    if (!host.ingressGroupId || !servingNodeIds || servingNodeIds.length === 0) {
+      return this.checkHostOnNode(host, host.nodeId, memberLinkIds);
+    }
+    if (host.upstreamKind === 'pages' || isRelayBacked(host)) {
+      const outcomes = await Promise.all(
+        servingNodeIds.map(async (nodeId) => {
+          if (this.nodeDispatch && !this.nodeDispatch.isNodeConnected(nodeId)) {
+            return {
+              nodeId,
+              status: (Date.now() - this.startedAt < NODE_RECONNECT_GRACE_MS
+                ? 'deferred'
+                : 'offline') as MemberProbeStatus,
+              error: 'The ingress node is not connected',
+            };
+          }
+          const outcome = await this.checkHostOnNode(host, nodeId, memberLinkIds);
+          return { nodeId, status: outcome.status, responseMs: outcome.responseMs };
+        })
+      );
+      return aggregateMemberOutcomes(outcomes);
+    }
+    const upstream = await this.checkHostOnNode(host, host.nodeId, memberLinkIds);
+    if (upstream.status !== 'online' && upstream.status !== 'offline') return upstream;
+    const nodeRows = await this.db.query.nodes.findMany({
+      where: inArray(nodes.id, servingNodeIds),
+      columns: { id: true, lastHealthReport: true },
+    });
+    const combined = withMemberIngressHealth(
+      upstream.status,
+      servingNodeIds.map((nodeId) => ({
+        nodeId,
+        connected: this.nodeDispatch ? this.nodeDispatch.isNodeConnected(nodeId) : true,
+        serving: ingressHealthOf(nodeRows.find((row) => row.id === nodeId)?.lastHealthReport)?.serving ?? null,
+      }))
+    );
+    return { ...combined, responseMs: upstream.responseMs };
+  }
+
+  private async checkHostOnNode(
+    host: typeof proxyHosts.$inferSelect,
+    nodeId: string | null,
     memberLinkIds?: string[]
   ): Promise<{ status: 'online' | 'offline' | 'skipped' | 'deferred' | 'unknown'; responseMs?: number }> {
     if (host.upstreamKind === 'pages') {
       const domain = resolvePagesRouteProbeDomain(host);
-      if (!host.nodeId || !this.nodeDispatch || !domain) return { status: 'unknown' };
+      if (!nodeId || !this.nodeDispatch || !domain) return { status: 'unknown' };
       try {
-        const result = await this.nodeDispatch.probePagesRoute(host.nodeId, {
+        const result = await this.nodeDispatch.probePagesRoute(nodeId, {
           routeId: host.id,
           domain,
           tls: host.sslEnabled ?? false,
@@ -408,7 +487,7 @@ export class HealthCheckJob {
         if (result.skipped) {
           logger.debug('Pages Route health probe is unavailable', {
             hostId: host.id,
-            nodeId: host.nodeId,
+            nodeId: nodeId,
             domain,
             error: result.error,
           });
@@ -417,7 +496,7 @@ export class HealthCheckJob {
         if (!result.ok && result.error === DAEMON_BUSY_ERROR) {
           logger.debug('Pages Route health probe deferred', {
             hostId: host.id,
-            nodeId: host.nodeId,
+            nodeId: nodeId,
             domain,
             error: result.error,
           });
@@ -426,7 +505,7 @@ export class HealthCheckJob {
         if (!result.ok) {
           logger.warn('Pages Route health probe failed', {
             hostId: host.id,
-            nodeId: host.nodeId,
+            nodeId: nodeId,
             domain,
             httpStatus: result.httpStatus,
             error: result.error,
@@ -434,17 +513,17 @@ export class HealthCheckJob {
         }
         return { status: daemonProbeOutcome(result), responseMs: result.responseMs };
       } catch (error) {
-        if (await this.awaitingNodeReconnect(host.nodeId, [error instanceof Error ? error.message : String(error)])) {
+        if (await this.awaitingNodeReconnect(nodeId, [error instanceof Error ? error.message : String(error)])) {
           logger.debug('Pages Route health probe waits for its node to reconnect', {
             hostId: host.id,
-            nodeId: host.nodeId,
+            nodeId: nodeId,
             domain,
           });
           return { status: 'deferred' };
         }
         logger.warn('Pages Route health probe command failed', {
           hostId: host.id,
-          nodeId: host.nodeId,
+          nodeId: nodeId,
           domain,
           error,
         });
@@ -452,17 +531,17 @@ export class HealthCheckJob {
       }
     }
     if (isRelayBacked(host)) {
-      if (!host.nodeId || !this.nodeDispatch) return { status: 'offline' };
+      if (!nodeId || !this.nodeDispatch) return { status: 'offline' };
       const result = await probeSecureLinkRoute(
         this.nodeDispatch,
-        { ...host, nodeId: host.nodeId },
+        { ...host, nodeId },
         memberLinkIds,
         Math.ceil(HEALTH_CHECK_TIMEOUT_MS / 1000)
       );
       if (result.busy) {
         logger.debug('Secure Link health probe deferred because daemon is busy', {
           hostId: host.id,
-          nodeId: host.nodeId,
+          nodeId: nodeId,
           domain: host.domainNames?.[0],
         });
         return { status: 'skipped' };
@@ -470,13 +549,13 @@ export class HealthCheckJob {
       if (
         !result.ok &&
         (await this.awaitingNodeReconnect(
-          host.nodeId,
+          nodeId,
           result.failures.map((failure) => failure.error)
         ))
       ) {
         logger.debug('Secure Link health probe waits for its node to reconnect', {
           hostId: host.id,
-          nodeId: host.nodeId,
+          nodeId: nodeId,
           domain: host.domainNames?.[0],
         });
         return { status: 'deferred' };
@@ -484,7 +563,7 @@ export class HealthCheckJob {
       if (!result.ok) {
         logger.warn('Secure Link health probe failed', {
           hostId: host.id,
-          nodeId: host.nodeId,
+          nodeId: nodeId,
           domain: host.domainNames?.[0],
           httpStatus: result.httpStatus,
           error: result.failures.map((failure) => failure.error).join('; '),

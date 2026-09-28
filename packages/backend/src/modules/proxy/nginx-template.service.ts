@@ -692,6 +692,7 @@ function maintenanceMaps(hostId: string) {
   return `map "$uri:$secure_link" $gm_block_${suffix} {
     default 1;
     ~^/\\.well-known/acme-challenge/ 0;
+    ~^/\\.well-known/gateway-ingress-health: 0;
     ~^/_gateway/maintenance-access: 0;
     ~^/_gateway/maintenance-access/status: 0;
     ~:1$ 0;
@@ -760,7 +761,7 @@ const LEGACY_MAINTENANCE_SERVER_GUARD = `
     # selection, so upstream/access/cache/rewrite behavior is never reached.
     default_type text/html;
     add_header Cache-Control "no-store" always;
-    if ($uri !~ ^/\\.well-known/acme-challenge/) {
+    if ($uri !~ ^/\\.well-known/(acme-challenge/|gateway-ingress-health$)) {
         return 503 ${escapeNginxReturnText(GATEWAY_MAINTENANCE_HTML)};
     }
 `;
