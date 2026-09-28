@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
+	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/config"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/daemon"
 )
@@ -50,6 +51,9 @@ func main() {
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: launcher unavailable; continuing in direct mode: %v\n", err)
 	}
+	// Take over the Secure Link sockets the previous process kept, before
+	// nginx or anything else is started.
+	listenerkeep.Init()
 	// Default: run the daemon
 	configPath := os.Getenv("NGINX_DAEMON_CONFIG")
 	if configPath == "" {
@@ -82,6 +86,9 @@ func main() {
 	go func() {
 		sig := <-sigCh
 		logger.Info("received signal, shutting down", "signal", sig)
+		// A restart or update must not refuse a connection: the sockets go to
+		// the next daemon process first (B-13).
+		d.HandOverListeners()
 		cancel()
 	}()
 
@@ -197,6 +204,8 @@ ExecStart=/usr/local/bin/nginx-daemon run
 Restart=always
 RestartSec=5
 Environment=NGINX_DAEMON_CONFIG=/etc/nginx-daemon/config.yaml
+FileDescriptorStoreMax=4096
+NotifyAccess=main
 
 [Install]
 WantedBy=multi-user.target

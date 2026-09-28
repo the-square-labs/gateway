@@ -1,8 +1,11 @@
 package daemon
 
 import (
+	"errors"
 	"io"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -327,5 +330,45 @@ func TestHolderSocketSurvivesItsPolicyEnteringLeaseMode(t *testing.T) {
 		}
 		coordinator.reconcileSockets()
 		echo(name + ", back to legacy")
+	}
+}
+
+// M-2: before nginx loads a config, every Secure Link socket it references that this daemon provides listens: a
+// plain binding whose socket file went missing is re-created first. A member socket the lease gate keeps closed stays
+// closed (nginx refuses it and moves on), and a socket without a binding is reported, never invented.
+func TestReferencedSecureLinkSocketsListenBeforeAConfigLoads(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	command := plainAndMemberCommand()
+	statuses, err := manager.sync(command)
+	if err != nil || len(statuses) != 2 {
+		t.Fatalf("sync: %#v %v", statuses, err)
+	}
+	paths := map[string]string{}
+	for _, status := range statuses {
+		paths[status.LinkID] = status.SocketPath
+	}
+	if err := os.Remove(paths[testSecureLinkID]); err != nil {
+		t.Fatal(err)
+	}
+	unknown := manager.socketDir + "/33333333-3333-4333-8333-333333333333.sock"
+	config := "upstream u {\n    server unix:" + paths[testSecureLinkID] + " max_fails=1 fail_timeout=1s;\n" +
+		"    server unix:" + paths[testMemberLinkID] + ";\n    server unix:" + unknown + ";\n" +
+		"    server unix:/run/elsewhere/x.sock;\n}\n"
+
+	absent := manager.ensureReferencedListeners(config)
+
+	if len(absent) != 2 || absent[0] != paths[testMemberLinkID] || absent[1] != unknown {
+		t.Fatalf("absent = %v, want the closed member and the unknown socket", absent)
+	}
+	connection, err := net.DialTimeout("unix", paths[testSecureLinkID], time.Second)
+	if err != nil {
+		t.Fatalf("the plain socket was not re-created before the config loads: %v", err)
+	}
+	_ = connection.Close()
+	if _, err := net.DialTimeout("unix", paths[testMemberLinkID], time.Second); !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("the closed member socket = %v, want a refusal", err)
+	}
+	if _, err := os.Stat(unknown); !os.IsNotExist(err) {
+		t.Fatalf("a socket without a binding was created: %v", err)
 	}
 }

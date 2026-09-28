@@ -25,6 +25,14 @@ const availabilityLeaseCapability = "availability_lease_v2"
 // gate view is gone (D8, A8).
 const availabilityLeaseSweepInterval = 250 * time.Millisecond
 
+// availabilityLeaseAdoptionGrace is how long a member socket taken over open
+// from the previous daemon process stays open while no relay has reported on
+// its policy yet: long enough for this process to reach its relays after a
+// restart, short enough that a socket nothing vouches for closes. The relays
+// gate the member's tunnels themselves meanwhile, so this only decides whether
+// nginx connects or moves on before sending a byte.
+const availabilityLeaseAdoptionGrace = 10 * time.Second
+
 // availabilityLeaseReconnectDelay paces WatchLeaseGates retries.
 const availabilityLeaseReconnectDelay = time.Second
 
@@ -126,6 +134,12 @@ func (c *availabilityLeaseCoordinator) reconcileSockets() {
 	now := time.Now()
 	for _, binding := range c.sockets.leaseGatedBindings() {
 		open := c.gates.openFor(binding.PolicyID, binding.CandidateID, now)
+		if !open && !c.gates.reported(binding.PolicyID, now) &&
+			c.sockets.adoptedWithin(binding.LinkID, now, availabilityLeaseAdoptionGrace) {
+			// Taken over open from the previous process: no relay reported on
+			// this policy yet since the restart.
+			continue
+		}
 		if err := c.sockets.setLeaseOpen(binding.LinkID, open); err != nil {
 			c.logf("availability lease socket %s: %v", binding.LinkID, err)
 		}

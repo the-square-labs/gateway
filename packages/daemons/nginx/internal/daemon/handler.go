@@ -43,6 +43,26 @@ type Handler struct {
 	pagesRuntime                *pages.Runtime
 	pagesRuntimeConfigAvailable bool
 	reporter                    *Reporter
+	// secureLinkListeners provides the Secure Link sockets a config references
+	// before nginx loads it (M-2); nil when the daemon runs without them.
+	secureLinkListeners interface {
+		ensureReferencedListeners(config string) []string
+	}
+}
+
+// prepareSecureLinkListeners runs before a config is tested and reloaded: every
+// Secure Link socket it references that this daemon should provide listens
+// first. Sockets it cannot provide are logged; nginx treats them as refused
+// connections and moves to the next member.
+func (h *Handler) prepareSecureLinkListeners(configs ...string) {
+	if h.secureLinkListeners == nil {
+		return
+	}
+	for _, config := range configs {
+		if absent := h.secureLinkListeners.ensureReferencedListeners(config); len(absent) > 0 {
+			h.logger.Debug("config references Secure Link sockets that do not listen now", "sockets", absent)
+		}
+	}
 }
 
 func NewHandler(cfg *config.Config, mgr *nginx.Manager, st *sharedstate.State, logger *slog.Logger, secureLinkState *securelink.StateStore, pagesRuntime *pages.Runtime, pagesRuntimeConfigAvailable bool) *Handler {
@@ -174,6 +194,9 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 		return
 	}
 
+	// Make-before-break (M-2): the sockets the new config proxies to listen
+	// before nginx can load it.
+	h.prepareSecureLinkListeners(cmd.ConfigContent)
 	if err := nginx.WriteAtomic(path, []byte(cmd.ConfigContent)); err != nil {
 		restoreOwnership()
 		result.Success = false
