@@ -99,6 +99,26 @@ Handlebars.registerHelper('sanitize', (value: unknown) => {
   return new Handlebars.SafeString(value.replace(DANGEROUS_CHARS, ''));
 });
 
+// Rewrite regexes and replacements need `$` for anchors and captures ($1), so
+// only the characters that could end or break out of the directive are removed.
+const DANGEROUS_REWRITE_CHARS = /[\n\r;'"{}`#]/g;
+
+Handlebars.registerHelper('sanitizeRewrite', (value: unknown) => {
+  if (typeof value !== 'string') return value;
+  return new Handlebars.SafeString(value.replace(DANGEROUS_REWRITE_CHARS, ''));
+});
+
+// Custom templates cloned before regex rewrites worked render them with the
+// generic sanitize helper, which strips `$`. Upgrade that exact directive.
+const LEGACY_REWRITE_ARGUMENTS = /rewrite \{\{sanitize this\.source\}\} \{\{sanitize this\.destination\}\}/g;
+
+export function upgradeLegacyRewriteArguments(content: string): string {
+  return content.replace(
+    LEGACY_REWRITE_ARGUMENTS,
+    'rewrite {{sanitizeRewrite this.source}} {{sanitizeRewrite this.destination}}'
+  );
+}
+
 Handlebars.registerHelper('eq', (a: unknown, b: unknown) => a === b);
 
 Handlebars.registerHelper('indent', (value: unknown, spaces: unknown) => {
@@ -533,7 +553,7 @@ ${ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER}
 {{/if}}
 {{/each}}
 {{#each customRewrites}}
-        rewrite {{sanitize this.source}} {{sanitize this.destination}} {{#if (eq this.type "permanent")}}permanent{{else}}redirect{{/if}};
+        rewrite {{sanitizeRewrite this.source}} {{sanitizeRewrite this.destination}} {{#if (eq this.type "permanent")}}permanent{{else}}redirect{{/if}};
 {{/each}}
     }
 
@@ -990,7 +1010,7 @@ export class NginxTemplateService {
   // -----------------------------------------------------------------------
 
   renderTemplate(content: string, host: ProxyHostConfig): string {
-    const template = this.compileTemplate(content);
+    const template = this.compileTemplate(upgradeLegacyRewriteArguments(content));
     const baseContext = this.buildBaseContext(host);
     const advancedConfig = host.advancedConfig ? this.renderTemplateString(host.advancedConfig, baseContext) : null;
     if (advancedConfig && this.configValidator) {
