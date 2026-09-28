@@ -42,6 +42,9 @@ type relayEndpointRegistration struct {
 	ready  atomic.Bool
 	// done closes when the registration stream and its tunnels have ended.
 	done chan struct{}
+	// The assignment last handed to the registration. An identical one is not renewed again:
+	// Gateway resends unchanged bundles, and each renewal is a relay round trip.
+	latest *pb.RelayGrantAssignment
 }
 
 // BackupRelayRoute is a daemon-local TCP entrypoint for one signed, per-run
@@ -160,27 +163,38 @@ func (r *relayTunnelRouter) reconcileRegistrations() []chan struct{} {
 	}
 	var cancelled []chan struct{}
 	r.mu.Lock()
+	removed, renewed := 0, 0
 	for id, registration := range r.registrations {
 		assignment := desired[id]
 		if assignment == nil {
 			registration.cancel()
 			cancelled = append(cancelled, registration.done)
 			delete(r.registrations, id)
+			removed++
 			continue
 		}
-		queueLatestRelayGrant(registration.renew, assignment)
+		if !proto.Equal(registration.latest, assignment) {
+			registration.latest = assignment
+			queueLatestRelayGrant(registration.renew, assignment)
+			renewed++
+		}
 		delete(desired, id)
 	}
 	for id, assignment := range desired {
 		ctx, cancel := context.WithCancel(r.ctx)
-		registration := &relayEndpointRegistration{cancel: cancel, renew: make(chan *pb.RelayGrantAssignment, 1), done: make(chan struct{})}
+		registration := &relayEndpointRegistration{cancel: cancel, renew: make(chan *pb.RelayGrantAssignment, 1), done: make(chan struct{}), latest: assignment}
 		r.registrations[id] = registration
 		go func() {
 			defer close(registration.done)
 			r.runRegistration(ctx, assignment, registration.renew)
 		}()
 	}
-	r.plugin.logger.Info("relay endpoint registrations reconciled", "relay_instance_id", r.targetID, "registrations", len(r.registrations))
+	log := r.plugin.logger.Debug
+	if removed > 0 || len(desired) > 0 {
+		log = r.plugin.logger.Info
+	}
+	log("relay endpoint registrations reconciled", "relay_instance_id", r.targetID, "registrations", len(r.registrations),
+		"added", len(desired), "removed", removed, "renewed", renewed)
 	r.mu.Unlock()
 	return cancelled
 }
@@ -250,6 +264,7 @@ func queueLatestRelayGrant(target chan *pb.RelayGrantAssignment, assignment *pb.
 func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.RelayGrantAssignment, renew <-chan *pb.RelayGrantAssignment) {
 	current := assignment
 	for ctx.Err() == nil {
+		registered := false
 		attemptCtx, cancelAttempt := context.WithCancel(ctx)
 		stream, err := r.client.RegisterEndpoint(attemptCtx)
 		if err == nil {
@@ -281,7 +296,13 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.
 					err = stream.Send(&relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Renew{Renew: &relayv1.RenewEndpoint{Grant: relayGrant(current.Grant)}}})
 				case message := <-received:
 					if message.GetRegistered() != nil {
-						r.plugin.logger.Info("relay endpoint registered", "relay_instance_id", r.targetID, "endpoint_id", current.EndpointId)
+						// The relay confirms every renewal the same way; only the first is news.
+						log := r.plugin.logger.Debug
+						if !registered {
+							log = r.plugin.logger.Info
+						}
+						registered = true
+						log("relay endpoint registered", "relay_instance_id", r.targetID, "endpoint_id", current.EndpointId)
 						r.mu.Lock()
 						if registration := r.registrations[relayRegistrationKey(current)]; registration != nil {
 							registration.ready.Store(true)

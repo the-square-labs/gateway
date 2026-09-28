@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	dockerconfig "github.com/wiolett-industries/gateway/docker-daemon/internal/config"
+	"google.golang.org/grpc"
 )
 
 const fenceEndpointID = "22222222-2222-4222-8222-222222222222"
@@ -137,4 +139,52 @@ func TestRevocationFenceClosesAcceptedTunnelsOfRevokedRoutesAndClearsOnAcknowled
 	}
 	release()
 	other.release()
+}
+
+type unavailableBroker struct{ relayv1.TunnelBrokerClient }
+
+func (unavailableBroker) RegisterEndpoint(context.Context, ...grpc.CallOption) (relayv1.TunnelBroker_RegisterEndpointClient, error) {
+	return nil, errors.New("relay unavailable")
+}
+
+func TestReconcileDoesNotRenewAnUnchangedRegistration(t *testing.T) {
+	router := fenceTestRouter(t, "relay-1")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	router.ctx, router.client = ctx, unavailableBroker{}
+	bundle := func(revision uint64, grant string) *pb.SyncRelayGrantsCommand {
+		assignment := fenceEndpointAssignment("relay-1")
+		assignment.Candidates[0].Capabilities = []string{relaybridge.PoolCapability}
+		assignment.Candidates[0].AssignmentState = "active"
+		assignment.Candidates[0].Grant = &pb.RelaySignedGrant{KeyId: "key", Payload: []byte(grant)}
+		return &pb.SyncRelayGrantsCommand{PolicyRevision: revision, Grants: []*pb.RelayGrantAssignment{assignment}}
+	}
+	latest := func() *pb.RelayGrantAssignment {
+		router.mu.Lock()
+		defer router.mu.Unlock()
+		if len(router.registrations) != 1 {
+			t.Fatalf("registrations = %d", len(router.registrations))
+		}
+		for _, registration := range router.registrations {
+			return registration.latest
+		}
+		return nil
+	}
+	if err := router.plugin.relayGrants.sync(bundle(1, "first")); err != nil {
+		t.Fatal(err)
+	}
+	router.reconcileRegistrations()
+	first := latest()
+	// Gateway resends the same bundle: nothing to renew.
+	router.reconcileRegistrations()
+	if latest() != first {
+		t.Fatal("an unchanged assignment was renewed")
+	}
+	if err := router.plugin.relayGrants.sync(bundle(2, "refreshed")); err != nil {
+		t.Fatal(err)
+	}
+	router.reconcileRegistrations()
+	if next := latest(); next == first || string(next.GetGrant().GetPayload()) != "refreshed" {
+		t.Fatal("a refreshed grant was not renewed")
+	}
 }
