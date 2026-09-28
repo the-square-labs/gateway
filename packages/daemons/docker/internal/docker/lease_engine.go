@@ -120,6 +120,9 @@ func (e *leaseEngine) convert(ctx context.Context, inspect container.InspectResp
 		if state.Health != nil {
 			c.Health = string(state.Health.Status)
 		}
+		if started, err := time.Parse(time.RFC3339Nano, state.StartedAt); err == nil && started.Year() > 1 {
+			c.StartedAt = started
+		}
 	}
 	c.CgroupPath = e.cgroupPath(ctx, inspect, pid)
 	return c

@@ -141,6 +141,9 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	l.mu.Lock()
 	l.serving[policyID] = serving
 	l.mu.Unlock()
+	if serving {
+		l.plugin.startLeaseDeploymentRouters(policyID)
+	}
 	if serving && l.plugin.secureLinks != nil {
 		// A dormant target binding could not be prepared while its standby
 		// was stopped; bind it now that the container runs.
@@ -162,6 +165,53 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 			return
 		}
 	}
+}
+
+// startLeaseDeploymentRouters starts the stopped routers of this node's
+// deployment placements of a policy before its holder serves. A router is not
+// lease-governed: it only forwards to the active slot, which the holder alone
+// runs. After a host reboot nothing else starts it, while the placement's
+// Secure Link member targets it (stand run c2).
+func (p *DockerPlugin) startLeaseDeploymentRouters(policyID string) {
+	if p.client == nil || p.client.cli == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	containers, err := p.client.ListContainers(ctx)
+	if err != nil {
+		p.logger.Warn("could not list the deployment routers of a lease holder", "policy_id", policyID, "error", err)
+		return
+	}
+	for _, id := range leaseDeploymentRoutersToStart(policyID, containers) {
+		if err := p.client.StartContainer(ctx, id); err != nil {
+			p.logger.Warn("could not start the deployment router of a lease holder", "policy_id", policyID, "container_id", id, "error", err)
+			continue
+		}
+		p.logger.Info("started the deployment router of a lease holder", "policy_id", policyID, "container_id", id)
+	}
+}
+
+// leaseDeploymentRoutersToStart lists the stopped routers owned by the
+// deployments whose app containers belong to the policy on this node.
+func leaseDeploymentRoutersToStart(policyID string, containers []ContainerInfo) []string {
+	deployments := map[string]bool{}
+	for _, c := range containers {
+		if c.Labels[availabilityPolicyLabel] == policyID && c.Labels[deploymentRoleLabel] == "app" {
+			if id := c.Labels[deploymentIDLabel]; deploymentContainerLabelsOwned(c.Labels, id) {
+				deployments[id] = true
+			}
+		}
+	}
+	var out []string
+	for _, c := range containers {
+		id := c.Labels[deploymentIDLabel]
+		if c.State == "running" || c.Labels[deploymentRoleLabel] != "router" || !deployments[id] || !deploymentContainerLabelsOwned(c.Labels, id) {
+			continue
+		}
+		out = append(out, c.ID)
+	}
+	return out
 }
 
 // endpointAllowed is the registration gate (D8, A8): the Secure Link
@@ -224,12 +274,47 @@ func (l *leaseIntegration) ServeSet(policyID string, containers []lease.Containe
 		if known && c.PlacementID != "" && c.PlacementID != placement.PlacementID {
 			continue
 		}
-		if activeSlot != "" && c.Labels[deploymentRoleLabel] == "app" && c.Labels[deploymentSlotLabel] != activeSlot {
-			continue
-		}
 		out = append(out, c)
 	}
-	return out
+	if activeSlot == "" {
+		activeSlot = lastStartedDeploymentSlot(out)
+	}
+	if activeSlot == "" {
+		return out
+	}
+	serve := out[:0:0]
+	for _, c := range out {
+		if c.Labels[deploymentRoleLabel] == "app" && c.Labels[deploymentSlotLabel] != activeSlot {
+			continue
+		}
+		serve = append(serve, c)
+	}
+	return serve
+}
+
+// lastStartedDeploymentSlot picks the active blue/green slot when the placement
+// record does not name it (a placement recorded by the legacy path): the slot
+// whose app container Docker started last, since a switch starts the new slot
+// before it stops the old one. Without it both slots would start after a host
+// reboot (stand run c2). Blue, the deployment default, when neither ever ran.
+func lastStartedDeploymentSlot(containers []lease.Container) string {
+	slot, latest, slots := "", time.Time{}, map[string]bool{}
+	for _, c := range containers {
+		if c.Labels[deploymentRoleLabel] != "app" || c.Labels[deploymentSlotLabel] == "" {
+			continue
+		}
+		slots[c.Labels[deploymentSlotLabel]] = true
+		if slot == "" || c.StartedAt.After(latest) {
+			slot, latest = c.Labels[deploymentSlotLabel], c.StartedAt
+		}
+	}
+	if len(slots) < 2 {
+		return ""
+	}
+	if latest.IsZero() {
+		return "blue"
+	}
+	return slot
 }
 
 // MarkServing implements lease.Placements (T6 §3.1).
