@@ -97,3 +97,38 @@ func TestLeaseGateTrackerSecondRelayReopensAfterFirstGoesStale(t *testing.T) {
 		t.Fatal("some relay's still-fresh view should keep the socket open even after another relay's view expired")
 	}
 }
+
+// D6: a holder whose workload is not ready yet registers dormant on the relays
+// that carry its endpoint; its socket stays closed until one relay says it
+// serves, so nginx refuses the member before sending a byte (B-5).
+func TestLeaseGateTrackerWaitsForTheHoldersEndpoint(t *testing.T) {
+	tracker := newLeaseGateTracker()
+	now := time.Now()
+	view := func(readiness relayv1.LeaseHolderEndpoint) *relayv1.LeaseGateSnapshot {
+		return &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+			PolicyId: "policy-1", Slot: 1, LeaseMode: true, Open: true, HolderId: "node-a", RemainingMs: 20000, HolderEndpoint: readiness,
+		}}}
+	}
+	tracker.apply("relay-1", view(relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY), now)
+	tracker.apply("relay-2", view(relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY), now)
+	if tracker.openFor("policy-1", "node-a", now) {
+		t.Fatal("a holder that is not ready yet must keep its socket closed")
+	}
+	// A relay that does not report readiness (older, or not carrying the
+	// endpoint) does not open it while another relay says it is not ready.
+	tracker.apply("relay-old", view(relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN), now)
+	if tracker.openFor("policy-1", "node-a", now) {
+		t.Fatal("an unknown readiness overrode a relay that says the holder is not ready")
+	}
+	tracker.apply("relay-2", view(relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY), now)
+	if !tracker.openFor("policy-1", "node-a", now) {
+		t.Fatal("a holder one relay reports ready must open")
+	}
+
+	// Only relays without the readiness: the gate alone decides, as before.
+	legacy := newLeaseGateTracker()
+	legacy.apply("relay-old", view(relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN), now)
+	if !legacy.openFor("policy-1", "node-a", now) {
+		t.Fatal("views from relays without readiness must open on the gate")
+	}
+}

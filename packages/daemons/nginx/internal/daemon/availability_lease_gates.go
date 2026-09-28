@@ -26,7 +26,10 @@ type leaseGateEntry struct {
 	leaseMode bool
 	open      bool
 	holderID  string
-	expiresAt time.Time
+	// holderEndpoint is whether the holder takes traffic through that relay
+	// (D6): UNKNOWN from relays that do not report it.
+	holderEndpoint relayv1.LeaseHolderEndpoint
+	expiresAt      time.Time
 }
 
 // leaseGateTracker holds the most recent gate view every connected relay
@@ -78,19 +81,28 @@ func (t *leaseGateTracker) apply(relayID string, snapshot *relayv1.LeaseGateSnap
 			t.entries[key] = byRelay
 		}
 		byRelay[relayID] = leaseGateEntry{
-			leaseMode: gate.GetLeaseMode(),
-			open:      gate.GetOpen(),
-			holderID:  gate.GetHolderId(),
-			expiresAt: now.Add(ttl),
+			leaseMode:      gate.GetLeaseMode(),
+			open:           gate.GetOpen(),
+			holderID:       gate.GetHolderId(),
+			holderEndpoint: gate.GetHolderEndpoint(),
+			expiresAt:      now.Add(ttl),
 		}
 	}
 }
 
 // openFor reports whether policyID currently admits candidateID (D8, A8,
-// B2). It is open when some relay's latest, unexpired view either:
+// B2, D6). It is open when some relay's latest, unexpired view either:
 //   - says the policy is not lease-bound (lease_mode=false: legacy or
 //     lease-closed), so legacy admission applies to every member; or
-//   - says the lease is open and candidateID holds it.
+//   - says the lease is open, candidateID holds it and its endpoint takes
+//     traffic through that relay (holder_endpoint READY).
+//
+// A holder whose workload is not ready yet registers dormant, and every relay
+// carrying its endpoint says NOT_READY: the socket stays closed, so nginx
+// moves on to the next member before sending a byte, even for a POST (D6).
+// Views without the readiness (UNKNOWN: an older relay, or one that carries no
+// endpoint of the holder) open on the gate alone as before, unless another
+// relay says the holder is not ready.
 //
 // A stale or absent view never opens anything by itself: a genuinely
 // lease-bound member with no fresh view at all stays closed, and the caller
@@ -101,6 +113,7 @@ func (t *leaseGateTracker) openFor(policyID, candidateID string, now time.Time) 
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	unknown, notReady := false, false
 	for key, byRelay := range t.entries {
 		if key.policyID != policyID {
 			continue
@@ -112,10 +125,18 @@ func (t *leaseGateTracker) openFor(policyID, candidateID string, now time.Time) 
 			if !entry.leaseMode {
 				return true
 			}
-			if entry.open && entry.holderID == candidateID {
+			if !entry.open || entry.holderID != candidateID {
+				continue
+			}
+			switch entry.holderEndpoint {
+			case relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY:
 				return true
+			case relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY:
+				notReady = true
+			default:
+				unknown = true
 			}
 		}
 	}
-	return false
+	return unknown && !notReady
 }

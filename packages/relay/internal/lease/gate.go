@@ -113,6 +113,14 @@ func (c *Coordinator) gateView(key availabilitylease.Key) *relayv1.LeaseGateView
 	}
 	if gate.open {
 		view.RemainingMs = uint64(gate.remaining.Milliseconds())
+		c.mu.Lock()
+		holderEndpoint := c.holderEndpoint
+		c.mu.Unlock()
+		if holderEndpoint != nil {
+			// Called without the coordinator lock: the broker takes its own
+			// lock and consults the gate under it.
+			view.HolderEndpoint = holderEndpoint(key.PolicyID, gate.decision.Holder)
+		}
 	}
 	return view
 }

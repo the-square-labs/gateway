@@ -28,14 +28,31 @@ type endpointRegistration struct {
 	expiresAt            atomic.Int64
 	maxSessions          atomic.Uint32
 	incoming             chan *relayv1.IncomingTunnel
-	stop                 chan struct{}
-	stopOnce             sync.Once
+	// state is the relayv1.EndpointServingState the endpoint last sent (D6,
+	// D7): UNSPECIFIED from endpoints built before serving states.
+	state    atomic.Int32
+	stop     chan struct{}
+	stopOnce sync.Once
 	// stopReason is written before stop closes, so readers of a closed stop
 	// see it without a lock.
 	stopReason string
 }
 
 func (r *endpointRegistration) close() { r.closeWith("") }
+
+func (r *endpointRegistration) servingState() relayv1.EndpointServingState {
+	return relayv1.EndpointServingState(r.state.Load())
+}
+
+// stateful reports a registration that states whether it serves: it is kept
+// whatever the lease gate says, and only SERVING receives tunnels (D7).
+func (r *endpointRegistration) stateful() bool {
+	return r.servingState() != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED
+}
+
+func (r *endpointRegistration) dormant() bool {
+	return r.servingState() == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+}
 
 func (r *endpointRegistration) closeWith(reason string) {
 	r.stopOnce.Do(func() {

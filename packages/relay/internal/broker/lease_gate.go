@@ -131,9 +131,13 @@ func (b *Broker) enforceLeaseGatesLocked() time.Duration {
 			continue
 		}
 		if ok, reason := open(endpoint.LeasePolicyId, endpoint.SubjectId); !ok {
+			b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
+			if registration.stateful() {
+				// A stateful registration outlives the gate (D7); its tunnels do not.
+				continue
+			}
 			registration.closeWith("availability lease gate closed: " + reason)
 			delete(b.endpoints, key)
-			b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
 		}
 	}
 	for _, tunnel := range b.active {
@@ -150,4 +154,42 @@ func (b *Broker) enforceLeaseGatesLocked() time.Duration {
 		}
 	}
 	return next
+}
+
+// HolderEndpoint reports whether a lease holder takes traffic through this
+// relay (D6), for the gate views nginx daemons watch. It is READY when one of
+// the holder's lease-bound endpoints of the policy is registered here and not
+// dormant (an endpoint built before serving states registers only while it
+// serves), NOT_READY when this relay carries such an endpoint but none is
+// registered serving (a standby's dormant registration, or a new holder whose
+// workload is not ready yet), and UNKNOWN when this relay carries no
+// lease-bound endpoint of the holder for the policy (not assigned here, or the
+// policy is still bootstrapping), which says nothing either way.
+func (b *Broker) HolderEndpoint(policyID, holderID string) relayv1.LeaseHolderEndpoint {
+	if policyID == "" || holderID == "" {
+		return relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	snapshot := b.store.Current()
+	holderOwns := func(endpoint *relayv1.EndpointPolicy) bool {
+		return endpoint != nil && endpoint.LeasePolicyId == policyID && endpoint.SubjectId == holderID
+	}
+	now := time.Now().Unix()
+	for _, registration := range b.endpoints {
+		if !holderOwns(snapshot.Endpoint(registration.endpointID, registration.assignmentGeneration)) || now > registration.expiresAt.Load() {
+			continue
+		}
+		if !registration.dormant() {
+			return relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY
+		}
+	}
+	for _, endpoints := range []map[string]*relayv1.EndpointPolicy{snapshot.EndpointAssignments, snapshot.Endpoints} {
+		for _, endpoint := range endpoints {
+			if holderOwns(endpoint) {
+				return relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY
+			}
+		}
+	}
+	return relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN
 }

@@ -60,6 +60,9 @@ type Coordinator struct {
 	lastSuspendWall time.Time
 	lastSuspend     time.Duration
 	enforce         func() time.Duration
+	// holderEndpoint reports whether a holder's endpoint takes traffic through
+	// this relay (the broker's registrations), for gate views (D6).
+	holderEndpoint func(policyID, holderID string) relayv1.LeaseHolderEndpoint
 	// identityKey is the PKIX DER key the node signs with (the current one).
 	identityKey []byte
 
@@ -154,6 +157,15 @@ func (c *Coordinator) Start(enforce func() time.Duration) {
 	c.enforce = enforce
 	c.mu.Unlock()
 	go c.loop()
+}
+
+// SetHolderEndpoints installs the broker's view of holder endpoint readiness
+// for the gate views nginx daemons watch (D6). It must not call back into the
+// coordinator.
+func (c *Coordinator) SetHolderEndpoints(holderEndpoint func(policyID, holderID string) relayv1.LeaseHolderEndpoint) {
+	c.mu.Lock()
+	c.holderEndpoint = holderEndpoint
+	c.mu.Unlock()
 }
 
 // Stop ends the protocol loop. Streams end with the gRPC server.

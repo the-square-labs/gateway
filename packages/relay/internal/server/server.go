@@ -193,6 +193,7 @@ func startLease(cfg config.Config, state *policy.Store, identityStore *identity.
 		slog.Warn("availability lease state created fresh; the relay abstains from voting after start", "abstain", availabilitylease.AbstainAfterStart.String())
 	}
 	tunnelBroker.SetLeaseGate(coordinator)
+	coordinator.SetHolderEndpoints(tunnelBroker.HolderEndpoint)
 	coordinator.ApplyPolicy(state.Current())
 	coordinator.Start(tunnelBroker.EnforceLeaseGates)
 	adminService.SetLeaseReporter(coordinator)
