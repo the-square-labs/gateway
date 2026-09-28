@@ -61,6 +61,14 @@ type sourceLinkManager struct {
 	authorizeUnixPeer func(net.Conn) bool
 	socketOwnerUID    func() (int, error)
 	renameSocket      func(string, string) error
+	// setup bounds the connections accepted but not yet through to their
+	// relay tunnel; shed counts the ones closed because it was full.
+	setup setupLimiter
+	shed  atomic.Uint64
+	// authorizeTimeout and firstByteWait override the defaults when
+	// positive (tests); set before the first listener starts.
+	authorizeTimeout time.Duration
+	firstByteWait    time.Duration
 	// suspended is set once this process handed its kept listeners over to
 	// the next one (a restart or update): no socket is created or re-created
 	// at a path any more, the successor adopts the kept ones.
@@ -118,26 +126,14 @@ func newSourceLinkManagerAt(
 	nginxBinary string,
 	masterPID func() (int, error),
 ) *sourceLinkManager {
-	canonicalNginxBinary := canonicalExecutablePath(nginxBinary)
-	socketOwnerUID := func() (int, error) {
-		if masterPID == nil {
-			return os.Getuid(), nil
-		}
-		pid, err := masterPID()
-		if err != nil {
-			return 0, err
-		}
-		return managedNginxWorkerUID(pid, canonicalNginxBinary)
-	}
+	authority := newNginxPeerAuthority(canonicalExecutablePath(nginxBinary), masterPID)
 	return &sourceLinkManager{
-		bindings:  map[string]*sourceLinkBinding{},
-		opener:    opener,
-		socketDir: socketDir,
-		authorizeUnixPeer: func(connection net.Conn) bool {
-			return isAuthorizedUnixPeer(connection, canonicalNginxBinary, masterPID)
-		},
-		socketOwnerUID: socketOwnerUID,
-		renameSocket:   os.Rename,
+		bindings:          map[string]*sourceLinkBinding{},
+		opener:            opener,
+		socketDir:         socketDir,
+		authorizeUnixPeer: authority.authorize,
+		socketOwnerUID:    authority.socketOwnerUID,
+		renameSocket:      os.Rename,
 	}
 }
 
@@ -154,24 +150,6 @@ func canonicalExecutablePath(path string) string {
 		return filepath.Clean(resolved)
 	}
 	return filepath.Clean(path)
-}
-
-func isAuthorizedUnixPeer(connection net.Conn, nginxBinary string, masterPID func() (int, error)) bool {
-	peer, err := unixPeerCredentials(connection)
-	if err != nil {
-		return false
-	}
-	if peer.pid == os.Getpid() {
-		return true
-	}
-	if nginxBinary == "" || masterPID == nil {
-		return false
-	}
-	managedPID, err := masterPID()
-	if err != nil {
-		return false
-	}
-	return isManagedNginxProcess(peer.pid, managedPID, nginxBinary)
 }
 
 func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sourceLinkStatus, error) {
@@ -643,36 +621,99 @@ func (m *sourceLinkManager) start(id string, binding *sourceLinkBinding) {
 	}
 }
 
+// accept serves a listener for the life of the binding (B-22). The loop only
+// accepts: authorizing and serving each connection happen in its own
+// goroutine, so a slow connection never holds up the next one and the
+// backlog never fills behind it. Connections that have not reached their
+// relay tunnel yet are bounded (secureLinkSetupLimit): beyond it a new one is
+// closed at once, which nginx sees as a fast upstream error, instead of
+// queueing without bound. A transient accept error (out of file descriptors)
+// backs off and retries; only closing the listener ends the loop.
 func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listener net.Listener, authorizePeer bool) {
 	go func() {
+		backoff := 5 * time.Millisecond
 		for {
 			connection, err := listener.Accept()
 			if err != nil {
-				return
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				select {
+				case <-binding.done:
+					return
+				case <-time.After(backoff):
+				}
+				backoff = min(backoff*2, time.Second)
+				continue
 			}
-			if authorizePeer && (m.authorizeUnixPeer == nil || !m.authorizeUnixPeer(connection)) {
+			backoff = 5 * time.Millisecond
+			if !m.setup.tryAcquire() {
+				m.shed.Add(1)
 				_ = connection.Close()
 				continue
 			}
-			connection = newTrackedConn(connection)
-			binding.activeMu.Lock()
-			if !authorizePeer && binding.socketOnly {
-				binding.activeMu.Unlock()
-				_ = connection.Close()
-				continue
-			}
-			binding.active[connection] = authorizePeer
-			binding.activeMu.Unlock()
-			go func() {
-				defer func() {
-					binding.activeMu.Lock()
-					delete(binding.active, connection)
-					binding.activeMu.Unlock()
-				}()
-				m.opener(id, connection)
-			}()
+			go m.serve(id, binding, connection, authorizePeer)
 		}
 	}()
+}
+
+// serve authorizes one accepted connection, drops it if its peer already went
+// away, and hands it to the opener.
+func (m *sourceLinkManager) serve(id string, binding *sourceLinkBinding, connection net.Conn, authorizePeer bool) {
+	tracked := newTrackedConn(connection).(*trackedConn)
+	releaseSetup := m.setup.releaseOnce()
+	tracked.established = releaseSetup
+	defer releaseSetup()
+	authorizeTimeout, firstByteWait := secureLinkAuthorizeTimeout, secureLinkFirstByteWait
+	if m.authorizeTimeout > 0 {
+		authorizeTimeout = m.authorizeTimeout
+	}
+	if m.firstByteWait > 0 {
+		firstByteWait = m.firstByteWait
+	}
+	if authorizePeer && !m.authorizeWithin(connection, authorizeTimeout) {
+		_ = connection.Close()
+		return
+	}
+	if authorizePeer && !awaitFirstBytes(tracked, firstByteWait) {
+		// The peer closed before sending anything: after an overload the
+		// backlog holds connections nginx gave up on long ago. Opening a
+		// relay tunnel for each would only delay the live ones.
+		_ = connection.Close()
+		return
+	}
+	binding.activeMu.Lock()
+	if !authorizePeer && binding.socketOnly {
+		binding.activeMu.Unlock()
+		_ = connection.Close()
+		return
+	}
+	binding.active[tracked] = authorizePeer
+	binding.activeMu.Unlock()
+	defer func() {
+		binding.activeMu.Lock()
+		delete(binding.active, tracked)
+		binding.activeMu.Unlock()
+	}()
+	m.opener(id, tracked)
+}
+
+// authorizeWithin runs the peer check with a deadline: a check that cannot
+// finish in time refuses the connection instead of holding it.
+func (m *sourceLinkManager) authorizeWithin(connection net.Conn, timeout time.Duration) bool {
+	if m.authorizeUnixPeer == nil {
+		return false
+	}
+	result := make(chan bool, 1)
+	go func() { result <- m.authorizeUnixPeer(connection) }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case ok := <-result:
+		return ok
+	case <-timer.C:
+		return false
+	}
 }
 
 func (b *sourceLinkBinding) close() {
@@ -994,7 +1035,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	// Outcomes are logged per link and state change (L-1): while a target is down every request of its route
 	// fails, and the 3 s hold retries every 150 ms, so per-attempt lines went to about 20 WARN per request.
 	outcome := logepisode.Subject{Name: logName + " connections", IDAttr: "link_id", ID: linkID}
-	assignment := findRelayAssignment(p.relayGrants.get(), "connect", ownerKind, linkID)
+	assignment := p.relayGrants.lookup("connect", ownerKind, linkID)
 	if assignment == nil {
 		p.logger.Debug(logName+" connection rejected", "link_id", linkID, "stage", "grant")
 		p.secureLinkOutcomes.Failed(p.logger, outcome, "stage", "grant", "error", "no relay grant for the link")
@@ -1022,6 +1063,8 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	// Recorded once the tunnel is ready, before the bridge: a connection that lives on must not report its
 	// outcome when it ends, after the outcomes of later connections.
 	opened := func() {
+		// Through to its relay tunnel: no longer counts against the setup limit.
+		secureLinkEstablished(connection)
 		if failedAttempts == 0 && !waited {
 			p.secureLinkOutcomes.Succeeded(p.logger, outcome)
 			return
@@ -1182,7 +1225,7 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.
 	if opened != nil {
 		opened()
 	}
-	readChunk := int(p.relayGrants.get().GetReadChunkBytes())
+	readChunk := int(p.relayGrants.readChunkBytes())
 	if readChunk == 0 {
 		readChunk = relaybridge.DefaultChunkBytes
 	}

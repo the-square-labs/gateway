@@ -35,6 +35,10 @@ type trackedConn struct {
 	accepted  int64
 	lastRead  atomic.Int64
 	lastWrite atomic.Int64
+	// pending holds bytes read before the opener took over (awaitFirstBytes).
+	pending []byte
+	// established releases the connection's setup slot (secureLinkEstablished).
+	established func()
 }
 
 func newTrackedConn(connection net.Conn) net.Conn {
@@ -42,6 +46,11 @@ func newTrackedConn(connection net.Conn) net.Conn {
 }
 
 func (c *trackedConn) Read(buffer []byte) (int, error) {
+	if len(c.pending) > 0 {
+		n := copy(buffer, c.pending)
+		c.pending = c.pending[n:]
+		return n, nil
+	}
 	n, err := c.Conn.Read(buffer)
 	if n > 0 {
 		c.lastRead.Store(time.Now().UnixNano())

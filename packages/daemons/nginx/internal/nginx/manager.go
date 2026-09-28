@@ -24,17 +24,31 @@ type Manager struct {
 	checkedAt          time.Time
 	observerMu         sync.RWMutex
 	configTestObserver func() func()
+	pids               masterPIDCache
+	// resolvePIDFile and readPID are the slow and the cheap step of CachedPID
+	// (replaceable in tests).
+	resolvePIDFile func() (string, error)
+	readPID        func(pidFile string) (int, error)
 }
 
 var effectivePIDDirectivePattern = regexp.MustCompile(`(?m)^\s*pid\s+(?:"([^"]+)"|'([^']+)'|([^;\s]+))\s*;`)
 
 func NewManager(binary, configDir, certsDir, globalConfig string) *Manager {
-	return &Manager{
+	m := &Manager{
 		binary:    binary,
 		configDir: configDir,
 		certsDir:  certsDir,
 		globalCfg: globalConfig,
 	}
+	m.resolvePIDFile = func() (string, error) {
+		path, err := m.authoritativePidFile()
+		if err == nil {
+			err = prepareOpenRCPIDDirectory(path)
+		}
+		return path, err
+	}
+	m.readPID = m.readMasterPID
+	return m
 }
 
 func (m *Manager) TestConfig() (bool, string) {
@@ -105,6 +119,8 @@ func (m *Manager) Reload() error {
 	}
 	cmd := exec.Command(m.binary, args...)
 	output, err := cmd.CombinedOutput()
+	// A reload may load a pid directive the cached path does not know.
+	m.pids.invalidatePath()
 	if err != nil {
 		return fmt.Errorf("nginx reload failed: %s: %w", string(output), err)
 	}
