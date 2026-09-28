@@ -101,9 +101,14 @@ const (
 	RoleAbandoned
 	// RoleReleasing relinquishes relay gates, then releases acceptors (A6).
 	RoleReleasing
+	// RoleRetained kept its copy running when the lease closed: a majority
+	// of every quorum set of the closed manifest confirmed the close to it,
+	// so no node can acquire the key any more. The copy is no longer
+	// lease-bound: no renewals, no deadline (graceful close, retain.go).
+	RoleRetained
 )
 
-var roleNames = [...]string{"none", "candidate", "acquiring", "bootstrapping", "recovering", "holding", "fencing", "abandoned", "releasing"}
+var roleNames = [...]string{"none", "candidate", "acquiring", "bootstrapping", "recovering", "holding", "fencing", "abandoned", "releasing", "retained"}
 
 func (r Role) String() string {
 	if int(r) < len(roleNames) {
@@ -153,6 +158,13 @@ type HolderStatus struct {
 	FenceNow    bool
 	FenceReason FenceReason
 	Available   bool
+	// Retained: the lease closed and this node keeps its copy running
+	// without a lease (RoleRetained): disarm its watchdog deadline, keep its
+	// endpoints, never stop it for lease reasons. Retaining: the lease is
+	// closing and a closed manifest names this node the retained holder;
+	// the copy keeps running on its lease budget while the voters confirm.
+	Retained  bool
+	Retaining bool
 }
 
 // EventKind classifies lease transitions reported to the Gateway (D9 audit).
@@ -163,6 +175,8 @@ const (
 	EventFence    EventKind = "fence"
 	EventReleased EventKind = "released"
 	EventHandoff  EventKind = "handoff"
+	// EventRetained: graceful close confirmed; the copy keeps running.
+	EventRetained EventKind = "retained"
 )
 
 type Event struct {

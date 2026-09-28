@@ -28,6 +28,22 @@ type Manifest struct {
 	// BootstrapID and Bootstrap name the reserved initial holder per slot (A5).
 	BootstrapID uint64
 	Bootstrap   map[uint32]string
+	// bootstrapSince is the first adopted version that carries BootstrapID:
+	// only commits formed under it or later satisfy the reservation. A
+	// manifest restored from the store starts at its own version (safe: the
+	// reservation then waits for a commit under it).
+	bootstrapSince uint64
+	// Retained names, per slot of a closed manifest, the holder that keeps
+	// its copy running once a majority of every quorum set confirmed the
+	// close to it (graceful close, retain.go).
+	Retained map[uint32]RetainedHolder
+}
+
+// RetainedHolder is a closed manifest's retained holder of one slot.
+type RetainedHolder struct {
+	Holder string
+	// Ballot is the holder's committed ballot Gateway saw when it closed.
+	Ballot Ballot
 }
 
 func parseManifest(block *pb.LeaseSignedBlock) (*Manifest, error) {
@@ -61,7 +77,8 @@ func parseManifest(block *pb.LeaseSignedBlock) (*Manifest, error) {
 		Available: partition == pb.LeasePartitionMode_LEASE_PARTITION_MODE_AVAILABLE,
 		Slots:     slots, Closed: value.GetClosed(),
 		rank: map[string]int{}, keys: map[string][]byte{},
-		BootstrapID: value.GetBootstrapId(), Bootstrap: map[uint32]string{},
+		BootstrapID: value.GetBootstrapId(), Bootstrap: map[uint32]string{}, Retained: map[uint32]RetainedHolder{},
+		bootstrapSince: value.GetManifestVersion(),
 	}
 	for _, candidate := range value.GetCandidates() {
 		if candidate.GetId() == "" || len(candidate.GetPublicKey()) == 0 {
@@ -86,6 +103,25 @@ func parseManifest(block *pb.LeaseSignedBlock) (*Manifest, error) {
 		}
 		manifest.Bootstrap[entry.GetSlot()] = entry.GetHolderId()
 	}
+	if manifest.Closed {
+		for _, entry := range value.GetRetained() {
+			holder := entry.GetHolderId()
+			if entry.GetSlot() >= slots || holder == "" {
+				return nil, errors.New("lease manifest retained holder is invalid")
+			}
+			if _, ok := manifest.rank[holder]; !ok {
+				return nil, errors.New("lease manifest retained holder is not a candidate")
+			}
+			if _, dup := manifest.Retained[entry.GetSlot()]; dup {
+				return nil, fmt.Errorf("lease manifest names two retained holders for slot %d", entry.GetSlot())
+			}
+			ballot := ballotFromProto(entry.GetBallot())
+			if !ballot.IsZero() && ballot.Proposer != holder {
+				return nil, errors.New("lease manifest retained ballot is not the holder's")
+			}
+			manifest.Retained[entry.GetSlot()] = RetainedHolder{Holder: holder, Ballot: ballot}
+		}
+	}
 	voters, err := newVoterConfig(manifest.PolicyID, value.GetVoterEpoch(), value.GetMembers(), value.GetQuorumSets(), manifest.Closed)
 	if err != nil {
 		return nil, err
@@ -102,6 +138,17 @@ func parseManifest(block *pb.LeaseSignedBlock) (*Manifest, error) {
 func (m *Manifest) isCandidate(id string) bool {
 	_, ok := m.rank[id]
 	return ok
+}
+
+// retains reports whether this closed manifest names id the retained holder
+// of slot and can confirm it: it has at least one quorum set to count a
+// majority in.
+func (m *Manifest) retains(slot uint32, id string) bool {
+	if m == nil || !m.Closed || m.Voters == nil || len(m.Voters.sets) == 0 {
+		return false
+	}
+	retained, ok := m.Retained[slot]
+	return ok && retained.Holder == id
 }
 
 // maxVoters caps a policy's voter set (A18).

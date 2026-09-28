@@ -1061,7 +1061,7 @@ message AvailabilityLeaseHeld {
   string policy_id = 1;
   uint32 slot = 2;
   // availabilitylease.Role: candidate, acquiring, bootstrapping, recovering,
-  // holding, fencing, abandoned or releasing.
+  // holding, fencing, abandoned, releasing or retained.
   string role = 3;
   // Ballot of the last committed round, when any.
   AvailabilityLeaseBallot ballot = 4;
@@ -1070,6 +1070,11 @@ message AvailabilityLeaseHeld {
   uint64 manifest_version = 6;
   string placement_id = 7;
   uint64 placement_generation = 8;
+  // Graceful close: this node kept its copy of the slot running after the
+  // lease closed; a majority of every quorum set of the closed manifest
+  // confirmed it (ballot = its last committed ballot). Its watchdog deadline
+  // is disarmed and the copy is no longer lease-bound: adopt it as running.
+  bool retained = 9;
 }
 
 message AvailabilityLeaseKeyView {

@@ -48,6 +48,9 @@ type workload struct {
 	cooldownUntil time.Duration
 	health        healthTracker
 	serveIDs      map[string]bool
+	// retainChecked: the copy was found running (or released) once after
+	// the lease closed and this node was confirmed retained.
+	retainChecked bool
 }
 
 func (r *Runtime) workloadLocked(policyID string) *workload {
@@ -100,7 +103,34 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 		wl.release = &releaseIntent{reason: "slot removed from the manifest"}
 		r.logger.Info("availability lease slot left the manifest; releasing it", "policy_id", manifest.PolicyID, "slot", status.Key.Slot)
 	}
+	if manifest.Closed && held && !status.FenceNow && !r.watchdog.lost && wl.release == nil {
+		// Graceful close: the retained holder named by the closed manifest
+		// keeps its copy running on its lease budget while the voters
+		// confirm the close; nothing starts, no health release, endpoints
+		// stay as they are. It fences like any holder if they do not
+		// confirm in time.
+		r.armRecordsLocked(status, serve, containers)
+		r.updateReadyLocked(manifest, wl, serve, containers, now)
+		return
+	}
+	if status.Role != availabilitylease.RoleRetained {
+		wl.retainChecked = false
+	}
 	switch status.Role {
+	case availabilitylease.RoleRetained:
+		r.disarmRetainedLocked(wl, containers)
+		if !wl.retainChecked && !wl.busy && fresh {
+			wl.retainChecked = true
+			if !anyRunning(serve) {
+				// A start the close cut short: there is no serving copy to
+				// keep, so the slot is released for the legacy heal instead
+				// of being reported as a running retained copy.
+				r.logger.Warn("availability lease closed, but this node's retained copy is not running; releasing the slot",
+					"policy_id", manifest.PolicyID, "slot", status.Key.Slot)
+				wl.release = &releaseIntent{reason: "retained copy not running"}
+				r.stopLocked(wl, status, containers, purposeRelease)
+			}
+		}
 	case availabilitylease.RoleHolding:
 		switch {
 		case r.watchdog.lost:
@@ -122,11 +152,16 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 			break
 		}
 		// Unconfirmed container after a restart (A2.3): it keeps running on
-		// its recorded budget; nothing starts and no endpoint opens until a
-		// renewal succeeds.
+		// its recorded budget, which proves the lease is still this node's
+		// until then, and nothing starts until a renewal succeeds. A copy
+		// that runs keeps serving meanwhile (B-13): its endpoints never go
+		// dormant for a same-boot daemon restart (a new boot has no records).
 		r.armRecordsLocked(status, serve, containers)
 		if anyRunning(serve) && wl.phase == phaseIdle {
 			adoptServingLocked(wl, serve, now-stableBeforeReady)
+		}
+		if anyRunning(serve) && !wl.endpointsOn && !wl.busy && !status.FenceNow {
+			r.setEndpointsLocked(wl, true)
 		}
 	case availabilitylease.RoleFencing:
 		// A freeze of this host moves the deadline back (D4): the watchdog
@@ -219,6 +254,25 @@ func (r *Runtime) serveLocked(wl *workload, status availabilitylease.HolderStatu
 	}
 	if !wl.endpointsOn && r.readyLocked(wl, serve, now) {
 		r.setEndpointsLocked(wl, true)
+	}
+}
+
+// disarmRetainedLocked removes the watchdog deadline records of this node's
+// containers of a retained policy: the lease closed and a majority of every
+// quorum set confirmed this copy retained, so no other node can acquire the
+// key and the watchdog must never kill the copy. Nothing re-arms them while
+// the manifest stays closed; the endpoints and the copy are left as they are.
+func (r *Runtime) disarmRetainedLocked(wl *workload, containers []Container) {
+	for _, c := range containers {
+		if _, armed := r.records[c.ID]; !armed {
+			continue
+		}
+		if err := r.opts.Fence.DeleteRecord(c.ID); err != nil {
+			r.logger.Error("could not disarm the lease deadline of a retained copy; retrying", "policy_id", wl.policyID, "container_id", c.ID, "error", err)
+			continue
+		}
+		delete(r.records, c.ID)
+		r.logger.Info("lease closed; the retained copy keeps running without a lease deadline", "policy_id", wl.policyID, "container_id", c.ID)
 	}
 }
 

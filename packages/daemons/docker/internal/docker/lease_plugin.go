@@ -21,7 +21,10 @@ const (
 	// leaseWatchdogStartupWait lets a watchdog that boots after the daemon
 	// prove itself before the registration capabilities are computed.
 	leaseWatchdogStartupWait = 5 * time.Second
-	endpointCloseWait        = 5 * time.Second
+	// leaseStartupPrimeWait bounds how long the daemon start waits for the
+	// lease runtime's first container view (a hung dockerd).
+	leaseStartupPrimeWait = 5 * time.Second
+	endpointCloseWait     = 5 * time.Second
 )
 
 // leaseIntegration wires the availability lease runtime into the plugin: the
@@ -49,6 +52,10 @@ type leaseIntegration struct {
 	// bootstrap holder's legacy copy: after that holder acquires, they keep
 	// serving until the runtime's SetServing takes over (see endpointAllowed).
 	bootstrapServed map[string]bool
+	// recovered marks policies whose copy this process found running on a
+	// live lease record at start and kept serving (B-13); until the first
+	// readiness probe of this process, that copy counts as ready.
+	recovered map[string]bool
 }
 
 // initAvailabilityLease starts the lease runtime on a general Docker node.
@@ -95,6 +102,9 @@ func (p *DockerPlugin) initAvailabilityLease() {
 	p.client.beforeStart = integration.beforeStart
 	ctx, cancel := context.WithCancel(context.Background())
 	integration.cancel = cancel
+	// Recover copies that run on live records before any relay registration,
+	// so they register serving, not dormant, after a daemon restart (B-13).
+	runtime.Prime(leaseStartupPrimeWait)
 	go runtime.Run(ctx)
 	p.lease = integration
 	integration.watchdog = newWatchdogBootstrap(p.logger, integration.watchdogReady, p.cfg.Docker.LeaseWatchdogReleasesURL, p.cfg.Docker.LeaseWatchdogArtifactBaseURL)
@@ -158,7 +168,18 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	l.mu.Lock()
 	l.serving[policyID] = serving
 	delete(l.bootstrapServed, policyID)
+	if !serving {
+		delete(l.recovered, policyID)
+	}
 	l.mu.Unlock()
+	if serving && l.leaseView().Recovering(policyID) {
+		l.mu.Lock()
+		if l.recovered == nil {
+			l.recovered = map[string]bool{}
+		}
+		l.recovered[policyID] = true
+		l.mu.Unlock()
+	}
 	if !serving {
 		// A member that stops serving registers dormant at once, and serving
 		// again is probed from scratch (D6, D7). A holder that starts serving
@@ -206,6 +227,7 @@ type endpointLeaseView interface {
 	LeaseMode(policyID string) bool
 	BootstrapPending(policyID string) bool
 	Holds(policyID string) bool
+	Recovering(policyID string) bool
 }
 
 func (l *leaseIntegration) leaseView() endpointLeaseView {
@@ -247,9 +269,22 @@ func (l *leaseIntegration) endpointAllowed(linkID string) bool {
 	// enable must not produce a 502 window). Only while this node holds the
 	// slot: a lost bootstrap race ends it.
 	holds := view.Holds(policyID)
+	recovering := view.Recovering(policyID)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.serving[policyID] {
+	serving, decided := l.serving[policyID]
+	if serving {
+		return true
+	}
+	if !decided && recovering {
+		// B-13: a copy recovered after a same-boot daemon restart on a live
+		// lease record keeps serving from its first registration, before
+		// the runtime's SetServing(true); an explicit SetServing(false)
+		// (a stop under way) always wins.
+		if l.recovered == nil {
+			l.recovered = map[string]bool{}
+		}
+		l.recovered[policyID] = true
 		return true
 	}
 	if l.bootstrapServed[policyID] {
@@ -338,4 +373,16 @@ func (l *leaseIntegration) MarkServing(policyID string, serving bool) {
 	if err := l.plugin.availability.markLeaseLifecycle(policyID, serving); err != nil {
 		l.plugin.logger.Warn("could not record the availability placement lifecycle", "policy_id", policyID, "serving", serving, "error", err)
 	}
+}
+
+// recoveredUnprobed reports whether policyID's copy was recovered serving
+// after this daemon's start and no readiness probe has judged it yet: it was
+// serving before the restart and keeps doing so (B-13).
+func (l *leaseIntegration) recoveredUnprobed(policyID string, probed bool) bool {
+	if l == nil || probed {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.recovered[policyID]
 }

@@ -16,6 +16,19 @@ type ManifestInfo struct {
 	Candidates  []string
 	BootstrapID uint64
 	Bootstrap   map[uint32]string
+	// Retained names the retained holder per slot of a closed manifest.
+	Retained map[uint32]string
+}
+
+// RetainedSlot returns the slot this closed manifest names id the retained
+// holder of.
+func (m ManifestInfo) RetainedSlot(id string) (uint32, bool) {
+	for slot, holder := range m.Retained {
+		if holder == id {
+			return slot, true
+		}
+	}
+	return 0, false
 }
 
 // IsVoter reports whether id votes for this policy (A18).
@@ -109,10 +122,13 @@ func manifestInfo(manifest *Manifest) ManifestInfo {
 	info := ManifestInfo{
 		PolicyID: manifest.PolicyID, Version: manifest.Version, Epoch: manifest.Epoch, Available: manifest.Available,
 		Closed: manifest.Closed, Slots: manifest.Slots, Candidates: append([]string(nil), manifest.Candidates...),
-		BootstrapID: manifest.BootstrapID, Bootstrap: map[uint32]string{},
+		BootstrapID: manifest.BootstrapID, Bootstrap: map[uint32]string{}, Retained: map[uint32]string{},
 	}
 	for slot, holder := range manifest.Bootstrap {
 		info.Bootstrap[slot] = holder
+	}
+	for slot, retained := range manifest.Retained {
+		info.Retained[slot] = retained.Holder
 	}
 	if manifest.Voters != nil {
 		info.Voters = append([]string(nil), manifest.Voters.voterIDs...)

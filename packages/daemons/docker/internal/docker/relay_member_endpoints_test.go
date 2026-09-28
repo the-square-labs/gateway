@@ -379,12 +379,62 @@ func TestTCPProbeThroughConnectorNeedsTheTargetToAccept(t *testing.T) {
 }
 
 type bootstrapLeaseView struct {
-	pending, holds bool
+	pending, holds, recovering bool
 }
 
 func (v *bootstrapLeaseView) LeaseMode(string) bool        { return true }
 func (v *bootstrapLeaseView) BootstrapPending(string) bool { return v.pending }
-func (v *bootstrapLeaseView) Holds(string) bool            { return v.holds }
+func (v *bootstrapLeaseView) Holds(string) bool            { return v.holds || v.recovering }
+func (v *bootstrapLeaseView) Recovering(string) bool       { return v.recovering }
+
+// B-13: after a same-boot daemon restart the holder recovers its running copy
+// on a live lease record; its member endpoint registers serving from the
+// first registration (no dormant announcement), keeps serving through
+// SetServing(true) and the renewal, and only this process's first readiness
+// probe can take it out. A holder without that proof registers dormant.
+func TestRecoveredHolderServesFromItsFirstRegistration(t *testing.T) {
+	serving := relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
+	dormant := relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+	plugin := memberPluginForTest(t)
+	view := &bootstrapLeaseView{recovering: true}
+	plugin.lease.view = view
+	if got := plugin.memberEndpointState(memberLeaseLink); got != serving {
+		t.Fatalf("recovered holder's first registration = %v", got)
+	}
+	plugin.lease.SetServing("policy-1", true)
+	if got := plugin.memberEndpointState(memberLeaseLink); got != serving {
+		t.Fatalf("recovered holder after SetServing(true) = %v", got)
+	}
+	// The renewal succeeded: holding, still not probed.
+	view.recovering, view.holds = false, true
+	if got := plugin.memberEndpointState(memberLeaseLink); got != serving {
+		t.Fatalf("recovered holder after its renewal = %v", got)
+	}
+	// This process's first probe judges it.
+	plugin.memberReadiness.set("policy-1", false, "c", time.Now())
+	if got := plugin.memberEndpointState(memberLeaseLink); got != dormant {
+		t.Fatalf("a probe that finds the copy not ready = %v", got)
+	}
+	plugin.memberReadiness.set("policy-1", true, "c", time.Now())
+	if got := plugin.memberEndpointState(memberLeaseLink); got != serving {
+		t.Fatalf("a ready copy = %v", got)
+	}
+
+	// No proof (its lease lapsed, or a new boot: no live record): dormant
+	// until it acquires and SetServing opens it.
+	other := memberPluginForTest(t)
+	other.lease.view = &bootstrapLeaseView{}
+	if got := other.memberEndpointState(memberLeaseLink); got != dormant {
+		t.Fatalf("holder without a live record = %v", got)
+	}
+	// A stop under way (SetServing(false)) wins over the recovery.
+	stopping := memberPluginForTest(t)
+	stopping.lease.view = &bootstrapLeaseView{recovering: true}
+	stopping.lease.SetServing("policy-1", false)
+	if got := stopping.memberEndpointState(memberLeaseLink); got != dormant {
+		t.Fatalf("recovered holder whose stop began = %v", got)
+	}
+}
 
 // Agent A's note on enable: when the named bootstrap holder acquires, its
 // legacy copy keeps serving until the runtime's SetServing takes over, with

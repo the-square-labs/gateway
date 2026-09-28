@@ -98,6 +98,11 @@ type world struct {
 	slots      uint32
 	watchdogOn bool
 	logger     *slog.Logger
+	// Graceful close and re-entry: retained holders of a closed manifest,
+	// and per-slot bootstrap holders with their bootstrap id.
+	retained       map[uint32]availabilitylease.RetainedHolder
+	bootstrapSlots map[uint32]string
+	bootstrapID    uint64
 	// blocked cuts single links, in both directions.
 	blocked map[string]bool
 }
@@ -221,6 +226,23 @@ func (w *world) buildManifest() {
 		manifest.BootstrapId = 1
 		manifest.Bootstrap = []*pb.LeaseBootstrapSlot{{Slot: 0, HolderId: w.bootstrap}}
 	}
+	if len(w.bootstrapSlots) > 0 {
+		manifest.BootstrapId = w.bootstrapID
+		manifest.Bootstrap = nil
+		for slot := uint32(0); slot < w.slots; slot++ {
+			if holder := w.bootstrapSlots[slot]; holder != "" {
+				manifest.Bootstrap = append(manifest.Bootstrap, &pb.LeaseBootstrapSlot{Slot: slot, HolderId: holder})
+			}
+		}
+	}
+	if w.closed {
+		for slot := uint32(0); slot < w.slots; slot++ {
+			if retained, ok := w.retained[slot]; ok {
+				manifest.Retained = append(manifest.Retained, &pb.LeaseRetainedSlot{Slot: slot, HolderId: retained.Holder,
+					Ballot: &pb.LeaseBallot{Round: retained.Ballot.Round, Incarnation: retained.Ballot.Incarnation, ProposerId: retained.Ballot.Proposer}})
+			}
+		}
+	}
 	payload, _ := proto.Marshal(manifest)
 	w.manifest = availabilitylease.SignPolicyBlock("k1", w.policyPriv, pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, payload)
 }
@@ -234,6 +256,33 @@ func (w *world) setSlots(slots uint32) {
 // closeLease publishes a lease-closed manifest (A5) to every host.
 func (w *world) closeLease() {
 	w.closed = true
+	w.publishManifest()
+}
+
+// closeGracefully publishes a closed manifest that names the committed holder
+// of every slot retained, as Gateway does (graceful close).
+func (w *world) closeGracefully() {
+	w.retained = map[uint32]availabilitylease.RetainedHolder{}
+	for _, h := range w.daemons {
+		if h.down || h.daemonOff {
+			continue
+		}
+		for _, status := range h.runtime.Node().Holders() {
+			if status.Role == availabilitylease.RoleHolding {
+				w.retained[status.Key.Slot] = availabilitylease.RetainedHolder{Holder: h.id, Ballot: status.Ballot}
+			}
+		}
+	}
+	w.logf("gateway closes gracefully, retained %v", w.retained)
+	w.closeLease()
+}
+
+// reopen enters lease mode again naming a bootstrap holder per slot (D1).
+func (w *world) reopen(bootstrap map[uint32]string) {
+	w.closed, w.retained = false, nil
+	w.bootstrapID = max(w.bootstrapID, 1) + 1
+	w.bootstrapSlots = bootstrap
+	w.logf("gateway reopens, bootstrap %v", bootstrap)
 	w.publishManifest()
 }
 

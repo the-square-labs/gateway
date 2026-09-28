@@ -31,12 +31,19 @@ type simPolicyKey struct {
 }
 
 type simPolicy struct {
-	id          string
-	version     uint64
-	available   bool
-	slots       uint32
-	candidates  []string
-	closed      bool
+	id         string
+	version    uint64
+	available  bool
+	slots      uint32
+	candidates []string
+	closed     bool
+	// retained names the retained holder per slot of a closed manifest;
+	// adopted is the Gateway's placement per slot adopted as running when a
+	// close retained it (kept across later closes until another holder).
+	retained map[uint32]RetainedHolder
+	adopted  map[uint32]string
+	// bootstrapAt is when the current bootstrap reservation was issued.
+	bootstrapAt time.Duration
 	bootstrapID uint64
 	bootstrap   map[uint32]string
 	block       *pb.LeaseSignedBlock
@@ -101,6 +108,9 @@ func (g *simGateway) buildManifest(p *simPolicy) *pb.LeaseSignedBlock {
 	for slot := uint32(0); slot < p.slots; slot++ {
 		if holder := p.bootstrap[slot]; holder != "" {
 			value.Bootstrap = append(value.Bootstrap, &pb.LeaseBootstrapSlot{Slot: slot, HolderId: holder})
+		}
+		if retained, ok := p.retained[slot]; ok && p.closed {
+			value.Retained = append(value.Retained, &pb.LeaseRetainedSlot{Slot: slot, HolderId: retained.Holder, Ballot: retained.Ballot.proto()})
 		}
 	}
 	members := map[string]bool{}
@@ -307,4 +317,111 @@ func (g *simGateway) republish(policyID string, deliverP float64) {
 		return
 	}
 	g.deliver(g.buildManifest(g.policies[policyID]), deliverP)
+}
+
+// closeLease publishes a closed manifest that names, per slot, the holder the
+// Gateway sees (graceful close); stale makes it name another candidate.
+func (g *simGateway) closeLease(policyID string, stale bool, deliverP float64) {
+	p := g.policies[policyID]
+	if !g.alive || p.closed {
+		return
+	}
+	p.closed, p.retained = true, map[uint32]RetainedHolder{}
+	for slot := uint32(0); slot < p.slots; slot++ {
+		key := Key{PolicyID: policyID, Slot: slot}
+		for _, id := range p.candidates {
+			n := g.w.nodes[id]
+			if !n.processUp() || n.node == nil {
+				continue
+			}
+			if st := n.node.HolderStatus(key); st.Holding {
+				holder := RetainedHolder{Holder: id, Ballot: st.Ballot}
+				if stale {
+					// A stale view names another node for the slot. The
+					// simulator keys copies by slot, so it never names a node
+					// that runs another slot's copy (on a real node that
+					// copy is simply its one placement of the policy).
+					for _, other := range p.candidates {
+						if other != id && !g.runsOtherSlot(p, other, slot) {
+							holder = RetainedHolder{Holder: other}
+							break
+						}
+					}
+				}
+				p.retained[slot] = holder
+			}
+		}
+	}
+	if p.adopted == nil {
+		p.adopted = map[uint32]string{}
+	}
+	for slot := uint32(0); slot < p.slots; slot++ {
+		// The placement the Gateway records as running: the retained holder,
+		// else a pending bootstrap holder's legacy copy (D1), else the one
+		// recorded before.
+		if holder, ok := p.retained[slot]; ok {
+			p.adopted[slot] = holder.Holder
+		} else if holder := p.bootstrap[slot]; holder != "" {
+			p.adopted[slot] = holder
+		}
+	}
+	g.w.tracef("gateway closes %s retained=%v", policyID, p.retained)
+	g.deliver(g.buildManifest(p), deliverP)
+}
+
+// reopenLease enters lease mode again: the node running a slot's copy is its
+// bootstrap holder (D1), a slot without a running copy has none.
+func (g *simGateway) reopenLease(policyID string, deliverP float64) {
+	p := g.policies[policyID]
+	if !g.alive || !p.closed {
+		return
+	}
+	p.closed, p.retained = false, nil
+	p.bootstrapID++
+	p.bootstrap = map[uint32]string{}
+	named := map[string]bool{} // one slot per node
+	for slot := uint32(0); slot < p.slots; slot++ {
+		key := Key{PolicyID: policyID, Slot: slot}
+		// D1: the node running the slot's copy. The Gateway adopted a retained
+		// holder's placement as running, so it names that node (even while
+		// its daemon is restarting) unless its host went down, which ends a
+		// lease-mode container; otherwise the copy a reachable node reports.
+		reporting := func(id string) bool {
+			n := g.w.nodes[id]
+			return n.hostUp && n.processUp() && !n.frozen && n.node != nil
+		}
+		if holder, ok := p.adopted[slot]; ok {
+			if n := g.w.nodes[holder]; n.hostUp && !named[holder] {
+				p.bootstrap[slot], named[holder] = holder, true
+				continue
+			}
+			delete(p.adopted, slot)
+		}
+		for _, id := range p.candidates {
+			if c := g.w.nodes[id].containers[key]; reporting(id) && c != nil && c.live && !named[id] {
+				p.bootstrap[slot], named[id] = id, true
+				break
+			}
+		}
+	}
+	p.bootstrapAt = g.w.now
+	g.w.tracef("gateway reopens %s bootstrap=%v", policyID, p.bootstrap)
+	g.deliver(g.buildManifest(p), deliverP)
+	if policyID == "p1" && len(p.bootstrap) > 0 {
+		g.w.after(5*time.Second, func() { gatewayBootstrapLoop(g.w) })
+	}
+}
+
+// runsOtherSlot reports whether id has a copy of another slot of the policy.
+func (g *simGateway) runsOtherSlot(p *simPolicy, id string, slot uint32) bool {
+	n := g.w.nodes[id]
+	for other := uint32(0); other < p.slots; other++ {
+		if other == slot {
+			continue
+		}
+		if c := n.containers[Key{PolicyID: p.id, Slot: other}]; c != nil && (c.live || c.starting) {
+			return true
+		}
+	}
+	return false
 }

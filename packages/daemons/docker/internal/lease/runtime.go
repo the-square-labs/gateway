@@ -263,7 +263,7 @@ func (r *Runtime) Step() {
 // one node holds at most one slot per policy.
 func rolePriority(role availabilitylease.Role) int {
 	switch role {
-	case availabilitylease.RoleHolding, availabilitylease.RoleRecovering:
+	case availabilitylease.RoleHolding, availabilitylease.RoleRecovering, availabilitylease.RoleRetained:
 		return 5
 	case availabilitylease.RoleFencing, availabilitylease.RoleAbandoned:
 		return 4

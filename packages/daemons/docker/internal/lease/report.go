@@ -46,8 +46,10 @@ type AcceptorView struct {
 // Held is one key this node proposes for, with the D12 mapping of the lease
 // ballot to this node's placement and generation.
 type Held struct {
-	Key                 availabilitylease.Key
-	Role                string
+	Key  availabilitylease.Key
+	Role string
+	// Retained: graceful close confirmed; the copy runs without a lease.
+	Retained            bool
 	Ballot              availabilitylease.Ballot
 	Epoch               uint64
 	ManifestVersion     uint64
@@ -79,7 +81,7 @@ func (r *Runtime) Report() Report {
 		}
 	}
 	for _, status := range r.node.Holders() {
-		held := Held{Key: status.Key, Role: status.Role.String(), Ballot: status.Ballot}
+		held := Held{Key: status.Key, Role: status.Role.String(), Ballot: status.Ballot, Retained: status.Retained}
 		held.Epoch, held.ManifestVersion, _ = r.node.HeldCommit(status.Key)
 		if placement, ok := r.opts.Placements.Local(status.Key.PolicyID); ok {
 			held.PlacementID, held.PlacementGeneration = placement.PlacementID, placement.Generation

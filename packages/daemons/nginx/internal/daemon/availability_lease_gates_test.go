@@ -132,3 +132,36 @@ func TestLeaseGateTrackerWaitsForTheHoldersEndpoint(t *testing.T) {
 		t.Fatal("views from relays without readiness must open on the gate")
 	}
 }
+
+// Graceful close: across the switch from the holder's open lease gate to the
+// closed policy's view (lease_mode=false, naming the retained holder) the
+// retained holder's socket never closes, on any relay's order of updates.
+func TestLeaseGateTrackerKeepsTheRetainedHolderOpenAcrossAClose(t *testing.T) {
+	tracker := newLeaseGateTracker()
+	now := time.Now()
+	open := &relayv1.LeaseGateView{PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-a",
+		RemainingMs: 24000, HolderEndpoint: relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY}
+	closed := &relayv1.LeaseGateView{PolicyId: "policy-1", Slot: 0, LeaseMode: false, HolderId: "node-a", Reason: "lease closed: retained holder"}
+	tracker.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{open}}, now)
+	tracker.apply("relay-2", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{open}}, now)
+	steps := []struct {
+		relay string
+		view  *relayv1.LeaseGateView
+	}{{"relay-1", closed}, {"relay-2", closed}}
+	for i, step := range steps {
+		now = now.Add(time.Second)
+		tracker.apply(step.relay, &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{step.view}}, now)
+		if !tracker.openFor("policy-1", "node-a", now) {
+			t.Fatalf("retained holder's socket closed after step %d", i)
+		}
+	}
+	// The relays keep broadcasting the closed view; the holder never stops
+	// being admitted, long after its last lease gate would have expired.
+	for elapsed := time.Duration(0); elapsed < 2*time.Minute; elapsed += time.Second {
+		now = now.Add(time.Second)
+		tracker.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{closed}}, now)
+		if !tracker.openFor("policy-1", "node-a", now) {
+			t.Fatalf("retained holder's socket closed %s after the close", elapsed)
+		}
+	}
+}

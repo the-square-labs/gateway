@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
 	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
@@ -112,6 +113,40 @@ func (r *Runtime) BeforeStart(containerID, policyID, cgroupPath string) error {
 }
 
 // Holds reports whether this node holds (or recovers) a slot of the policy.
+// Recovering reports whether this node recovered a running copy of the
+// policy after a daemon start on a watchdog record that is still live, and
+// renews it now (A2.3): the lease is provably still this node's until that
+// deadline, so the copy keeps serving meanwhile (B-13).
+func (r *Runtime) Recovering(policyID string) bool {
+	for _, status := range r.node.Holders() {
+		if status.Key.PolicyID == policyID && status.Role == availabilitylease.RoleRecovering && !status.FenceNow {
+			return true
+		}
+	}
+	return false
+}
+
+// Prime runs the daemon-start steps (the first container view and the
+// startup fence, which recovers running copies on live records) before the
+// loop starts, for at most wait, so the endpoints of a recovered copy
+// register serving from the first registration (B-13). A hung dockerd only
+// delays the start by wait; Run finishes the steps then.
+func (r *Runtime) Prime(wait time.Duration) {
+	deadline := time.Now().Add(wait)
+	for time.Now().Before(deadline) {
+		r.Step()
+		r.mu.Lock()
+		started := r.started
+		r.mu.Unlock()
+		if started {
+			// The recovered keys show up in the next step's holder view.
+			r.Step()
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func (r *Runtime) Holds(policyID string) bool {
 	for _, status := range r.node.Holders() {
 		if status.Key.PolicyID == policyID && (status.Role == availabilitylease.RoleHolding || status.Role == availabilitylease.RoleRecovering) {

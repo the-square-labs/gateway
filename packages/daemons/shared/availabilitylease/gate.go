@@ -78,7 +78,16 @@ func (n *Node) Gate(key Key) GateDecision {
 
 func (n *Node) gateLocked(key Key, now time.Duration) GateDecision {
 	manifest := n.manifests[key.PolicyID]
-	if manifest == nil || manifest.Closed {
+	if manifest == nil {
+		return GateDecision{Reason: "not in lease mode"}
+	}
+	if manifest.Closed {
+		// Legacy admission applies to a closed policy, so its retained
+		// holder keeps serving through the close (graceful close); the view
+		// names it for the lease view.
+		if retained, ok := manifest.Retained[key.Slot]; ok {
+			return GateDecision{Holder: retained.Holder, Ballot: retained.Ballot, Reason: "lease closed: retained holder"}
+		}
 		return GateDecision{Reason: "not in lease mode"}
 	}
 	decision := GateDecision{LeaseMode: true}
