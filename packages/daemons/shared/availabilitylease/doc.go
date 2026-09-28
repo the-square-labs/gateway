@@ -31,7 +31,10 @@
 //     shadow promises and accepts, which the relay gate uses;
 //   - proposer, for every slot of every policy whose manifest lists the node
 //     as a candidate and that the daemon marked ready. Candidates need not be
-//     voters (A18 cap of 7). A slot the latest manifest removed (scale-down,
+//     voters (A18 cap of 7). A node never acquires a slot while it holds,
+//     recovers, fences or releases another slot of the policy (designated
+//     successor or bootstrap holder included), and takes its own last slot
+//     back before a foreign one. A slot the latest manifest removed (scale-down,
 //     lowered surge) gets no new rounds or queries; a holder of it keeps its
 //     deadline until the daemon releases it (A6) or the timer fences it;
 //   - relay gate evaluator (Gate), on relays.
@@ -41,7 +44,10 @@
 //	LeaseTerm          T = 30 s
 //	AcceptorHold       T x 1.1 = 33 s: an acceptor refuses other proposers
 //	                   until 33 s after its last accept of the holder
-//	AbstainAfterStart  33 s: no votes after process start or fresh state
+//	AbstainAfterStart  33 s: no votes after fresh state, a start on another
+//	                   boot or a failed write; a restart within the same
+//	                   boot (the store's boot stamp) restores the persisted
+//	                   hold of each key's last counted accept instead
 //	RenewInterval      5 s, one schedule per node so renewals of all keys
 //	                   share frames
 //	SoftFenceAfter     15 s after the send time of the last successful round
@@ -131,7 +137,9 @@
 //     reason of the fence event (for example FenceWatchdogLost).
 //   - Recover(key, deadline) on daemon start for every lease-mode container
 //     found running, with the watchdog record's deadline (A2.3). The node
-//     renews if it still can, else FenceNow turns true.
+//     renews until RecoverStopReserve (2 s) before that deadline, else
+//     FenceNow turns true, so a slow restart (a rolling update) keeps its
+//     slot whenever a round succeeds in time.
 //   - LeaseMode(policy): while true refuse every backend start or serve
 //     command for the policy's placements unless HolderStatus.MayStart (A5).
 //   - BeaconRelays every BeaconInterval: an empty batch that carries only

@@ -76,8 +76,11 @@ func (n *Node) Holders() []HolderStatus {
 
 // Recover registers a lease-mode container that was running when the daemon
 // started (A2.3). deadline is the watchdog record. The container is treated
-// as unfenced: unless a round succeeds before the soft fence point the
-// daemon must stop it, and the watchdog kills it at deadline.
+// as unfenced: unless a round succeeds before RecoverStopReserve ahead of the
+// deadline the daemon must kill it, and the watchdog kills it at deadline.
+// Renewing until then, rather than keeping the holder's usual graceful-stop
+// budget, lets a daemon restart that took most of the budget (a rolling
+// update) keep its slot.
 func (n *Node) Recover(key Key, deadline time.Duration) {
 	n.run(func(now time.Duration) {
 		pk := n.proposerFor(key)
@@ -85,7 +88,7 @@ func (n *Node) Recover(key Key, deadline time.Duration) {
 			return
 		}
 		pk.role, pk.round, pk.fenceReason = RoleRecovering, nil, FenceNone
-		pk.deadline, pk.softAt = deadline, deadline-(FenceCompleteAfter-SoftFenceAfter)
+		pk.deadline, pk.softAt = deadline, deadline-RecoverStopReserve
 		if manifest := n.manifests[key.PolicyID]; manifest != nil && manifest.Available {
 			// Available mode never fences on time (A7): renew or yield to a
 			// commit that beats ours.

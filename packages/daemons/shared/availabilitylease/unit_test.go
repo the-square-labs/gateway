@@ -350,7 +350,106 @@ func TestRestartPersistsIncarnationAndAbstains(t *testing.T) {
 	if err != nil || floor.Incarnation() != 5000 {
 		t.Fatalf("incarnation floor ignored: %v %d", err, floor.Incarnation())
 	}
-	if second.startedAt != clock.now || AbstainAfterStart != LeaseTerm*11/10 {
-		t.Fatal("abstention must start at process start and last T x 1.1")
+	if !second.Abstaining() || second.abstainUntil != clock.now+AbstainAfterStart || AbstainAfterStart != LeaseTerm*11/10 {
+		t.Fatal("a start on another boot must abstain for T x 1.1")
+	}
+}
+
+type bootClock struct {
+	now    time.Duration
+	origin uint64
+}
+
+func (c *bootClock) Now() time.Duration { return c.now }
+func (c *bootClock) Origin() uint64     { return c.origin }
+
+// A3 amended: a restart within the same boot (the store's boot stamp has this
+// clock's origin and an earlier reading) keeps voting and restores the hold of
+// its latest counted accept exactly, unless that holder released it; a stale
+// accept whose hold lapsed restores nothing.
+func TestRestartWithinTheSameBootHoldsInsteadOfAbstaining(t *testing.T) {
+	store := NewMemoryStore()
+	clock := &bootClock{now: 10 * time.Minute, origin: 42}
+	start := func() *Node {
+		t.Helper()
+		node, err := NewNode(Config{ID: "r1", Clock: clock, Store: store, Signer: fakeSigner{id: "r1"}, Verifier: fakeVerifier{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return node
+	}
+	first := start()
+	clock.now += AbstainAfterStart + time.Second
+	keyP2, keyP3 := Key{PolicyID: "p2"}, Key{PolicyID: "p3"}
+	acceptedAt := clock.now
+	first.mu.Lock()
+	held := first.acceptorFor(keyP1)
+	held.rec.Promised = Ballot{Round: 9, Incarnation: 1, Proposer: "d1"}
+	held.rec.Accepted = &acceptedRecord{Ballot: held.rec.Promised, AtNs: int64(acceptedAt)}
+	released := first.acceptorFor(keyP2)
+	released.rec.Promised = Ballot{Round: 4, Incarnation: 1, Proposer: "d3"}
+	released.rec.Accepted = &acceptedRecord{Ballot: released.rec.Promised, AtNs: int64(acceptedAt)}
+	released.rec.Released = map[string]Ballot{"d3": {Round: 4, Incarnation: 1, Proposer: "d3"}}
+	stale := first.acceptorFor(keyP3)
+	stale.rec.Promised = Ballot{Round: 7, Incarnation: 1, Proposer: "d5"}
+	stale.rec.Accepted = &acceptedRecord{Ballot: Ballot{Round: 6, Incarnation: 1, Proposer: "d4"}, AtNs: int64(acceptedAt - AcceptorHold)}
+	for _, key := range []Key{keyP1, keyP2, keyP3} {
+		first.markDirty(key)
+	}
+	first.commitLocked(clock.now)
+	first.mu.Unlock()
+
+	clock.now += 5 * time.Second
+	second := start()
+	if second.Abstaining() {
+		t.Fatal("a restart within the same boot abstains")
+	}
+	if lease := second.acceptors[keyP1].lease; lease.holder != "d1" || lease.at != acceptedAt || !lease.openAt(acceptedAt+AcceptorHold-time.Millisecond) || lease.openAt(acceptedAt+AcceptorHold) {
+		t.Fatalf("hold after restart = %+v, want d1 until T x 1.1 after the accept", lease)
+	}
+	if lease := second.acceptors[keyP2].lease; lease.openAt(clock.now) {
+		t.Fatalf("a released key is held after restart: %+v", lease)
+	}
+	if lease := second.acceptors[keyP3].lease; lease.openAt(clock.now) {
+		t.Fatalf("a lapsed hold came back after restart: %+v", lease)
+	}
+
+	// Restarted again inside a fresh start's abstention: it keeps abstaining
+	// until the recorded deadline.
+	fresh := NewMemoryStore()
+	clock.now += time.Minute
+	firstFresh, err := NewNode(Config{ID: "r2", Clock: clock, Store: fresh, Signer: fakeSigner{id: "r2"}, Verifier: fakeVerifier{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := firstFresh.abstainUntil
+	clock.now += 10 * time.Second
+	again, err := NewNode(Config{ID: "r2", Clock: clock, Store: fresh, Signer: fakeSigner{id: "r2"}, Verifier: fakeVerifier{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.abstainUntil != until || !again.Abstaining() {
+		t.Fatalf("restart shortened the abstention of a fresh start: %s, want %s", again.abstainUntil, until)
+	}
+
+	// A boot stamp from another boot, or from later on this clock (a store
+	// restored from elsewhere), proves nothing.
+	for name, restart := range map[string]bootClock{
+		"other origin":    {now: 200 * time.Second, origin: 43},
+		"clock went back": {now: 50 * time.Second, origin: 42},
+	} {
+		written := NewMemoryStore()
+		writer := &bootClock{now: 100 * time.Second, origin: 42}
+		if _, err := NewNode(Config{ID: "r3", Clock: writer, Store: written, Signer: fakeSigner{id: "r3"}}); err != nil {
+			t.Fatal(err)
+		}
+		writer.now += AbstainAfterStart + time.Second
+		node, err := NewNode(Config{ID: "r3", Clock: &restart, Store: written, Signer: fakeSigner{id: "r3"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !node.Abstaining() {
+			t.Fatalf("%s: restart did not abstain", name)
+		}
 	}
 }

@@ -119,7 +119,7 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 	c.mu.Unlock()
 	report := &relayv1.AvailabilityLeaseReport{
 		MemberId: c.id, IdentityPublicKey: identityKey, Incarnation: c.node.Incarnation(),
-		AcceptorAbstaining: c.clock.Now() < c.startedAt+availabilitylease.AbstainAfterStart,
+		AcceptorAbstaining: c.node.Abstaining(),
 	}
 	for _, id := range c.view.keyIDs() {
 		if c.node.TrustsPolicyKey(id) {

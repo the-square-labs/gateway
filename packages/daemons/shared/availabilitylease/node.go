@@ -63,7 +63,9 @@ type Node struct {
 
 	incarnation uint64
 	startedAt   time.Duration
-	chain       *keyChain
+	// abstainUntil is when this node's votes start to count (A3).
+	abstainUntil time.Duration
+	chain        *keyChain
 	// history keeps each policy's recent voter configs, oldest first, to
 	// verify commits formed under an earlier voter epoch.
 	history   map[string][]*VoterConfig
@@ -159,12 +161,50 @@ func NewNode(cfg Config) (*Node, error) {
 	if cfg.IncarnationFloor > n.incarnation {
 		n.incarnation = cfg.IncarnationFloor
 	}
-	if err := cfg.Store.Apply(map[string][]byte{recordIncarnation: encodeUint64(n.incarnation)}, nil); err != nil {
+	now := cfg.Clock.Now()
+	n.startedAt = now
+	n.renewAt = now
+	// A3: votes do not count for AbstainAfterStart unless the store proves it
+	// was written earlier in this boot (a process restart); then the hold of
+	// every key's last counted accept is restored instead (restoreHolds).
+	n.abstainUntil = now + AbstainAfterStart
+	if stamp, ok := decodeBootStamp(records[recordBootStamp]); ok && stamp.origin == n.clockOrigin && stamp.clock <= now {
+		n.abstainUntil = stamp.abstainUntil
+		n.restoreHolds(now)
+	}
+	puts := map[string][]byte{recordIncarnation: encodeUint64(n.incarnation), recordBootStamp: n.bootStamp(now)}
+	if err := cfg.Store.Apply(puts, nil); err != nil {
 		return nil, fmt.Errorf("persist availability lease incarnation: %w", err)
 	}
-	n.startedAt = cfg.Clock.Now()
-	n.renewAt = n.startedAt
 	return n, nil
+}
+
+// restoreHolds replaces the restart abstention after a process restart
+// within the same boot. Only counted accepts create holds, and every one was
+// persisted with its lease clock reading before its reply left, so the hold
+// of the latest one is restored exactly: it lapses when it would have without
+// the restart. Promises are persisted too. What the restart loses (release
+// reservations, echo anchors, shadow state) affects liveness and the relay
+// gate only, never whose lease this acceptor protects, so a rolling restart
+// of the voters does not cost a quorum.
+func (n *Node) restoreHolds(now time.Duration) {
+	for _, ak := range n.acceptors {
+		accepted := ak.rec.Accepted
+		if accepted == nil || accepted.Ballot.IsZero() || time.Duration(accepted.AtNs) > now {
+			continue
+		}
+		if released, ok := ak.rec.Released[accepted.Ballot.Proposer]; ok && !released.Less(accepted.Ballot) {
+			continue
+		}
+		ak.lease = acceptedLease{holder: accepted.Ballot.Proposer, ballot: accepted.Ballot, at: time.Duration(accepted.AtNs), open: true}
+	}
+}
+
+// Abstaining reports whether this node's votes do not count yet (A3).
+func (n *Node) Abstaining() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.clock.Now() < n.abstainUntil
 }
 
 func (n *Node) restore(records map[string][]byte) error {
@@ -351,11 +391,12 @@ func (n *Node) commitLocked(now time.Duration) []outgoing {
 				puts[keyRecordName(key)] = encodeKeyRecord(ak.rec)
 			}
 		}
+		puts[recordBootStamp] = n.bootStamp(now)
 		err := n.store.Apply(puts, n.deletes)
 		n.dirty, n.dirtyOther, n.deletes = map[Key]bool{}, map[string][]byte{}, nil
 		if err != nil {
 			n.logf("availability lease state write failed, abstaining: %v", err)
-			n.startedAt = now
+			n.abstainUntil = max(n.abstainUntil, now+AbstainAfterStart)
 			n.outbox, n.attach, n.beacons = map[string][]*pb.LeaseItem{}, map[string]map[string]bool{}, map[string]bool{}
 			return nil
 		}

@@ -179,7 +179,7 @@ func (n *Node) tickCandidate(pk *proposerKey, manifest *Manifest, now time.Durat
 	reserved := false
 	if holder, ok := manifest.Bootstrap[pk.key.Slot]; ok && pk.bootstrapDone != manifest.BootstrapID &&
 		!(pk.commit != nil && pk.commitBallot.Proposer == holder) {
-		if holder == n.id {
+		if holder == n.id && !n.holdsOtherSlot(pk.key) {
 			n.startRound(pk, manifest, RoleBootstrapping, now)
 			return
 		}
@@ -189,14 +189,18 @@ func (n *Node) tickCandidate(pk *proposerKey, manifest *Manifest, now time.Durat
 		n.forwardOnce(holder, manifest.PolicyID)
 		reserved = true
 	}
+	// One slot per node (anti-affinity): no path acquires a slot while this
+	// node holds, recovers, fences or releases another slot of the policy,
+	// designated successor or not.
+	if n.holdsOtherSlot(pk.key) {
+		pk.designated = false
+		return
+	}
 	if pk.designated && now < pk.designatedUntil && !reserved {
 		n.startRound(pk, manifest, RoleAcquiring, now)
 		return
 	}
 	pk.designated = false
-	if n.holdsOtherSlot(pk.key) {
-		return
-	}
 	if pk.hasFreshCommit && pk.commitBallot.Proposer != n.id && now-pk.freshCommitAt < commitQuietPeriod {
 		pk.expiredSeen = false
 		return
@@ -298,7 +302,18 @@ func (n *Node) rank(pk *proposerKey, manifest *Manifest) int {
 	if pk.releasedBy != "" && n.clock.Now() < pk.releasedAt+SuccessorWindow {
 		skip[pk.releasedBy] = true
 	}
-	rank := 0
+	// Slot affinity: a node whose own last slot of the policy is free takes
+	// that one first, so slots do not swap between nodes after a restart.
+	penalty := 0
+	if pk.commit == nil || pk.commitBallot.Proposer != n.id {
+		for key, other := range n.proposers {
+			if key.PolicyID == pk.key.PolicyID && key.Slot != pk.key.Slot && other.commit != nil && other.commitBallot.Proposer == n.id {
+				penalty = len(manifest.Candidates)
+				break
+			}
+		}
+	}
+	rank := penalty
 	for _, id := range manifest.Candidates {
 		if id == n.id {
 			break

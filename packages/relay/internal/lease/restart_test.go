@@ -70,9 +70,31 @@ func TestAcceptorStatePersistsAcrossRelayRestart(t *testing.T) {
 	if len(restored) != 1 || restored[0].GetPromised().GetRound() < promised.GetRound() || restored[0].GetPromised().GetProposerId() != "d1" {
 		t.Fatalf("persisted promise was not restored: %v", restored)
 	}
-	relayAbstains(t, h)
+	// A restart within the same boot keeps voting (the relay.db boot stamp
+	// proves it) and restores the hold of its last accept.
+	if after.GetAcceptorAbstaining() {
+		t.Fatal("relay restarted within the same boot abstains")
+	}
+	h.relayFrames = map[string][]*relayv1.CoordinationFrame{}
+	h.step(availabilitylease.RenewInterval + time.Second)
+	counted := false
+	for _, promise := range relayPromises(t, h.relayFrames["d1"]) {
+		counted = counted || !promise.GetShadow()
+	}
+	if !counted {
+		t.Fatal("relay restarted within the same boot did not vote for the holder's renewal")
+	}
 	if !h.holding("d1") || h.holding("d2") {
 		t.Fatal("holder changed across the relay restart")
+	}
+	// Restarted on another boot (host reboot): abstain for T x 1.1.
+	h.relayClock.mu.Lock()
+	h.relayClock.boot++
+	h.relayClock.mu.Unlock()
+	h.restartRelay(false)
+	relayAbstains(t, h)
+	if !h.holding("d1") || h.holding("d2") {
+		t.Fatal("holder changed across the relay reboot")
 	}
 }
 

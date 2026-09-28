@@ -50,7 +50,6 @@ type Coordinator struct {
 	logger      *slog.Logger
 	view        *memberView
 	suspends    *availabilitylease.SuspendWatch
-	startedAt   time.Duration
 
 	seedOnce   sync.Once
 	seedLinks  []*relayv1.LeasePolicyKeyRotation
@@ -115,7 +114,6 @@ func New(cfg Config) (*Coordinator, error) {
 		// Restarted within the overlap of a key renewal: keep dual-signing.
 		c.checkIdentityKey()
 	}
-	c.startedAt = cfg.Clock.Now()
 	c.suspends = cfg.Suspends
 	if c.suspends == nil {
 		c.suspends = availabilitylease.NewSuspendWatch()

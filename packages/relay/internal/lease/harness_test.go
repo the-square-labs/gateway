@@ -51,6 +51,8 @@ type laggedClock struct {
 	base *fakeClock
 	mu   sync.Mutex
 	lag  time.Duration
+	// boot changes the clock origin, like a host reboot.
+	boot uint64
 }
 
 func (c *laggedClock) Now() time.Duration {
@@ -59,7 +61,11 @@ func (c *laggedClock) Now() time.Duration {
 	return c.base.Now() - c.lag
 }
 
-func (c *laggedClock) Origin() uint64 { return 0x5eed }
+func (c *laggedClock) Origin() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return 0x5eed + c.boot
+}
 
 // harness wires one relay Coordinator with T1 daemon nodes over the relay's
 // routing (daemon -> relay -> daemon), deterministically on a fake clock.

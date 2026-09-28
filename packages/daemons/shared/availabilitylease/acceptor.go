@@ -124,7 +124,7 @@ func (n *Node) nextEcho() uint64 {
 // passed.
 func (n *Node) voting(policyID string, now time.Duration) bool {
 	config := n.policyConfig(policyID)
-	return config != nil && config.isVoter(n.id) && now >= n.startedAt+AbstainAfterStart
+	return config != nil && config.isVoter(n.id) && now >= n.abstainUntil
 }
 
 // validateProposal applies the manifest, epoch and candidacy checks (A4).
@@ -188,7 +188,14 @@ func (n *Node) nack(to string, key Key, ballot Ballot, reason pb.LeaseNackReason
 		nack.ManifestVersion = manifest.Version
 	}
 	if ak != nil {
-		nack.Promised = ak.promised().proto()
+		promised := ak.promised()
+		if released, ok := ak.rec.Released[to]; ok && reason == pb.LeaseNackReason_LEASE_NACK_REASON_RELEASED {
+			// The proposer lost its own released ballot (a restart with a
+			// new incarnation): name it so the next round goes past it
+			// instead of retrying below it round after round.
+			promised = maxBallot(promised, released)
+		}
+		nack.Promised = promised.proto()
 		nack.LatestCommit = ak.commit
 	}
 	switch reason {
@@ -264,6 +271,10 @@ func (n *Node) onPropose(from string, msg *pb.LeasePropose, now time.Duration) {
 	if !voting {
 		return
 	}
+	// Persisted before the accepted reply leaves (commitLocked), so a
+	// restart within the same boot restores this hold exactly.
+	ak.rec.Accepted = &acceptedRecord{Ballot: ballot, AtNs: int64(now)}
+	n.markDirty(key)
 	accepted := &pb.LeaseAccepted{
 		Key: key.proto(), Ballot: ballot.proto(), Epoch: msg.GetEpoch(), ManifestVersion: msg.GetManifestVersion(),
 		AcceptorId: n.id, AcceptorIncarnation: n.incarnation,
