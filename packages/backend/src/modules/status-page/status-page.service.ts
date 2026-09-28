@@ -23,6 +23,7 @@ export interface StatusPageConfig {
   description: string;
   domain: string;
   nodeId: string | null;
+  ingressGroupId: string | null;
   sslCertificateId: string | null;
   proxyTemplateId: string | null;
   upstreamUrl: string | null;
@@ -79,6 +80,7 @@ const DEFAULT_CONFIG: StatusPageConfig = {
   description: '',
   domain: '',
   nodeId: null,
+  ingressGroupId: null,
   sslCertificateId: null,
   proxyTemplateId: null,
   upstreamUrl: null,

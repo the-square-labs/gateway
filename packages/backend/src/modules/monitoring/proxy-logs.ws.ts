@@ -1,14 +1,12 @@
-import { eq } from 'drizzle-orm';
 import type { WSContext } from 'hono/ws';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { proxyHosts } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { resolveWebSocketCredential, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
 import { getNginxLogHistory, logRelay, type RelayedLogEntry } from './log-relay.service.js';
-import { requestNginxHostLogHistory, subscribeNginxHostLogs } from './nginx-log-subscriptions.js';
+import { requestProxyLogHistory, resolveProxyLogNodes, subscribeProxyLogs } from './proxy-log-nodes.js';
 
 const logger = createChildLogger('ProxyLogStream');
 const HISTORY_BATCH_SIZE = 200;
@@ -45,6 +43,7 @@ function send(ws: WSContext, msg: Record<string, unknown>): void {
 
 export function proxyLogEntryKey(entry: RelayedLogEntry): string {
   return [
+    entry.nodeId,
     entry.logType,
     entry.timestamp,
     entry.remoteAddr,
@@ -91,14 +90,9 @@ export function selectProxyLogHistoryPage(
   };
 }
 
-async function resolveHostNode(hostId: string): Promise<string | null> {
-  const db = container.resolve(TOKENS.DrizzleClient) as DrizzleClient;
-  const [host] = await db
-    .select({ nodeId: proxyHosts.nodeId })
-    .from(proxyHosts)
-    .where(eq(proxyHosts.id, hostId))
-    .limit(1);
-  return host?.nodeId ?? null;
+/** The nodes whose logs a route view shows: its node, or every member of its ingress group. */
+async function resolveHostNodes(hostId: string): Promise<string[]> {
+  return resolveProxyLogNodes(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, hostId);
 }
 
 export function createProxyLogStreamWSHandlers(hostId: string, tail: number, credential: WebSocketCredential | null) {
@@ -205,15 +199,16 @@ async function authenticateAndStartStream(
   state.user = user;
   state.authenticated = true;
 
-  const nodeId = await resolveHostNode(hostId);
-  if (!nodeId) {
+  const nodeIds = await resolveHostNodes(hostId);
+  if (nodeIds.length === 0) {
     send(ws, { type: 'error', message: 'Proxy host has no nginx node assigned' });
     ws.close(1011, 'Node not connected');
     return;
   }
+  const servingNodes = new Set(nodeIds);
 
   const onLog = (entry: RelayedLogEntry) => {
-    if (entry.nodeId !== nodeId || entry.hostId !== hostId) return;
+    if (!servingNodes.has(entry.nodeId) || entry.hostId !== hostId) return;
     if (state.loadingMore) {
       state.pendingWhileLoading.push(entry);
       return;
@@ -230,7 +225,7 @@ async function authenticateAndStartStream(
   };
 
   logRelay.on('log', onLog);
-  const subscription = subscribeNginxHostLogs(registry, nodeId, hostId, 0);
+  const subscription = subscribeProxyLogs(registry, nodeIds, hostId);
   if (!subscription.ok) {
     logRelay.off('log', onLog);
     send(ws, { type: 'error', message: subscription.message });
@@ -245,7 +240,7 @@ async function authenticateAndStartStream(
   state.loadingMore = true;
   state.pendingWhileLoading = [];
   const normalizedTail = Math.max(1, Math.min(Math.floor(tail), HISTORY_BATCH_SIZE));
-  const bufferedEntries = getNginxLogHistory(hostId).filter((entry) => entry.nodeId === nodeId);
+  const bufferedEntries = getNginxLogHistory(hostId).filter((entry) => servingNodes.has(entry.nodeId));
   if (bufferedEntries.length > 0) {
     send(ws, {
       type: 'initial',
@@ -255,7 +250,7 @@ async function authenticateAndStartStream(
     });
   }
 
-  const initialResult = await requestNginxHostLogHistory(registry, nodeId, hostId, normalizedTail + 1);
+  const initialResult = await requestProxyLogHistory(registry, nodeIds, hostId, normalizedTail + 1);
   if (!initialResult.ok && bufferedEntries.length === 0) {
     state.loadingMore = false;
     state.pendingWhileLoading = [];
@@ -310,8 +305,8 @@ async function handleLoadMore(
       return;
     }
 
-    const nodeId = await resolveHostNode(hostId);
-    if (!nodeId) {
+    const nodeIds = await resolveHostNodes(hostId);
+    if (nodeIds.length === 0) {
       send(ws, { type: 'history', entries: [], hasMore: false });
       state.hasMore = false;
       return;
@@ -319,7 +314,7 @@ async function handleLoadMore(
 
     state.pendingWhileLoading = [];
     const requestedTail = Math.min(state.historyLoadedCount + HISTORY_BATCH_SIZE + 1, MAX_HISTORY_ENTRIES + 1);
-    const result = await requestNginxHostLogHistory(registry, nodeId, hostId, requestedTail);
+    const result = await requestProxyLogHistory(registry, nodeIds, hostId, requestedTail);
     if (!result.ok) {
       send(ws, { type: 'error', message: result.message });
       return;

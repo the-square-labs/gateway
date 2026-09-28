@@ -20,6 +20,11 @@ export const StatusPageSettingsSchema = z.object({
   description: z.string().max(500).optional(),
   domain: z.string().trim().toLowerCase().regex(domainNameRegex, 'Invalid domain name').optional().or(z.literal('')),
   nodeId: z.string().uuid().optional().nullable(),
+  /**
+   * Serve the public page from every member of this ingress group (multi-node availability). Moving between one
+   * node and a group works while the page is enabled; null serves it from nodeId again (a current member).
+   */
+  ingressGroupId: z.string().uuid().optional().nullable(),
   sslCertificateId: z.string().uuid().optional().nullable(),
   proxyTemplateId: z.string().uuid().optional().nullable(),
   upstreamUrl: upstreamUrlSchema.optional().nullable().or(z.literal('')),

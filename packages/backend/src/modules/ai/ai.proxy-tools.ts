@@ -5,7 +5,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import { assertRoutePlacementOnGroup } from '@/modules/ingress-groups/ingress-group-operations.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { getNginxLogHistory } from '@/modules/monitoring/log-relay.service.js';
-import { requestNginxHostLogHistory } from '@/modules/monitoring/nginx-log-subscriptions.js';
+import { requestProxyLogHistory } from '@/modules/monitoring/proxy-log-nodes.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { CreateFolderSchema, MoveHostsToFolderSchema } from '@/modules/proxy/folder.schemas.js';
 import type { FolderService } from '@/modules/proxy/folder.service.js';
@@ -410,13 +410,22 @@ async function routeAccessLogs(context: ProxyToolContext, routeId: string, tailA
   const host = await context.proxyService.getProxyHost(routeId);
   const nodeId = typeof host.nodeId === 'string' ? host.nodeId : null;
   if (!nodeId) throw new AppError(409, 'ROUTE_NODE_REQUIRED', 'The route has no nginx node');
+  // A route on an ingress group logs on every member; the lines of all members are merged by time.
+  const nodeIds: string[] =
+    Array.isArray(host.servingNodeIds) && host.servingNodeIds.length ? host.servingNodeIds : [nodeId];
   const tail = Math.min(Math.max(Math.trunc(typeof tailArg === 'number' ? tailArg : 100), 1), ACCESS_LOG_TAIL_MAX);
-  const buffered = getNginxLogHistory(routeId).filter((entry) => entry.nodeId === nodeId);
-  const result = await requestNginxHostLogHistory(container.resolve(NodeRegistryService), nodeId, routeId, tail);
+  const buffered = getNginxLogHistory(routeId).filter((entry) => nodeIds.includes(entry.nodeId));
+  const result = await requestProxyLogHistory(container.resolve(NodeRegistryService), nodeIds, routeId, tail);
   if (!result.ok && buffered.length === 0) {
     throw new AppError(503, 'ROUTE_LOGS_UNAVAILABLE', result.message);
   }
-  return { routeId, nodeId, cached: !result.ok, entries: (result.ok ? result.entries : buffered).slice(-tail) };
+  return {
+    routeId,
+    nodeId,
+    ...(nodeIds.length > 1 ? { nodeIds } : {}),
+    cached: !result.ok,
+    entries: (result.ok ? result.entries : buffered).slice(-tail),
+  };
 }
 
 function requireRouteView(user: User, routeId: string) {
