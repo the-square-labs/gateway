@@ -254,8 +254,8 @@ describe('managed Additional Route rendering', () => {
     );
 
     expect(rendered).toContain('least_conn;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=5s;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=1s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=1s;');
     expect(rendered).not.toContain('original.sock');
     expect(rendered).toMatch(
       /proxy_pass http:\/\/gateway_additional_secure_link_66666666_6666_4666_8666_666666666666;\n\s+proxy_next_upstream error timeout;/
@@ -281,8 +281,8 @@ describe('managed Additional Route rendering', () => {
 
     expect(rendered).toContain('upstream gateway_additional_secure_link_77777777_7777_4777_8777_777777777777');
     expect(rendered).toContain('least_conn;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=5s;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-a.sock max_fails=1 fail_timeout=1s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/placement-b.sock max_fails=1 fail_timeout=1s;');
     expect(rendered).not.toContain('original.sock');
   });
 
@@ -298,8 +298,8 @@ describe('managed Additional Route rendering', () => {
       null
     );
 
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/member-a.sock max_fails=1 fail_timeout=5s;');
-    expect(rendered).toContain('server unix:/run/gateway-secure-links/member-b.sock max_fails=1 fail_timeout=5s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/member-a.sock max_fails=1 fail_timeout=1s;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/member-b.sock max_fails=1 fail_timeout=1s;');
     expect(rendered).toMatch(
       /proxy_pass http:\/\/gateway_secure_link_[0-9a-f_]+;\n\s+proxy_next_upstream error timeout;/
     );
