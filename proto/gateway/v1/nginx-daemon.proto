@@ -186,6 +186,26 @@ message HealthReport {
   // Smoothed round-trip time from this node to each relay it measured
   // recently. Gateway places relay assignments by network distance with it.
   repeated RelayLatencySample relay_latencies = 40;
+  // Nginx daemons advertising ingress_group_v1: what the reserved endpoint
+  // /.well-known/gateway-ingress-health answers (sf-ingress range 195-199).
+  IngressHealthReport ingress_health = 195;
+}
+
+// The local answer of an nginx node's ingress health endpoint. Serving only
+// while nginx runs the configuration of the daemon's last successful reload
+// and, on a node that sources Secure Links, at least one relay transport is up.
+message IngressHealthReport {
+  bool serving = 1;
+  // Empty while serving; otherwise why the endpoint answers 503.
+  string reason = 2;
+  // Config generation of the daemon's last successful reload.
+  uint64 config_generation = 3;
+  bool nginx_running = 4;
+  // nginx serves config_generation (verified through the local probe).
+  bool config_applied = 5;
+  uint32 secure_link_sources = 6;
+  uint32 usable_relay_transports = 7;
+  int64 checked_at_unix_ms = 8;
 }
 
 message RelayLatencySample {

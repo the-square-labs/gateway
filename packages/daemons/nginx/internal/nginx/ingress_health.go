@@ -1,0 +1,157 @@
+package nginx
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+)
+
+const (
+	// IngressHealthPath is the reserved path every Gateway-rendered server block and the node's default servers
+	// answer. Probes (DNS failover monitors, the DNS steward) use it to learn whether this ingress node serves.
+	IngressHealthPath = "/.well-known/gateway-ingress-health"
+	// IngressHealthSocketDir holds the daemon's health responder socket; nginx proxies the reserved path there, so
+	// nginx itself answers 502 while the daemon is not running.
+	IngressHealthSocketDir = "/run/gateway-ingress-health"
+	// IngressHealthSocketPath is the responder socket inside IngressHealthSocketDir.
+	IngressHealthSocketPath = IngressHealthSocketDir + "/health.sock"
+	// IngressHealthHostname is answered on :80 and :443 by a daemon-managed server block, for probes that address a
+	// node by IP (any Host is not enough on :443, where the catch-all rejects unknown SNI).
+	IngressHealthHostname = "ingress-health.gateway.invalid"
+	// IngressGenerationHeader carries the config generation of the nginx configuration that handled a probe.
+	IngressGenerationHeader = "X-Gateway-Ingress-Generation"
+
+	ingressGenerationFilename = "00-gateway-ingress-generation.conf"
+	ingressGenerationVariable = "$gateway_ingress_generation"
+)
+
+var ingressGenerationPattern = regexp.MustCompile(`default\s+"(\d+)";`)
+
+// IngressGenerationFilename is the managed http-level file that defines $gateway_ingress_generation. It is written
+// before every reload, so the value in the configuration nginx runs tells which reload it loaded.
+func IngressGenerationFilename() string {
+	return ingressGenerationFilename
+}
+
+func ingressGenerationConfig(generation uint64) []byte {
+	return []byte(fmt.Sprintf(`# Gateway managed: config generation of the nginx configuration in service (auto-generated).
+map $pid %s {
+    default "%d";
+}
+`, ingressGenerationVariable, generation))
+}
+
+// IngressHealthLocation is the location the backend and the daemon-managed servers render for the reserved path.
+func IngressHealthLocation() string {
+	return fmt.Sprintf(`    location = %s {
+        access_log off;
+        allow all;
+        auth_basic off;
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        proxy_pass http://unix:%s:/health;
+        proxy_set_header Host $host;
+        proxy_set_header %s %s;
+        proxy_connect_timeout 2s;
+        proxy_send_timeout 3s;
+        proxy_read_timeout 3s;
+    }
+`, IngressHealthPath, IngressHealthSocketPath, IngressGenerationHeader, ingressGenerationVariable)
+}
+
+func (m *Manager) generationPath() string {
+	if m.configDir == "" {
+		return ""
+	}
+	return filepath.Join(m.configDir, ingressGenerationFilename)
+}
+
+// LoadConfigGeneration reads the generation the managed file records. It is the generation nginx runs when its
+// last reload succeeded; the health responder verifies that on every probe through the header nginx adds.
+func (m *Manager) LoadConfigGeneration() uint64 {
+	path := m.generationPath()
+	if path == "" {
+		return 0
+	}
+	content, err := ReadFile(path)
+	if err != nil || content == nil {
+		return 0
+	}
+	match := ingressGenerationPattern.FindSubmatch(content)
+	if match == nil {
+		return 0
+	}
+	generation, err := strconv.ParseUint(string(match[1]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	m.generationMu.Lock()
+	m.generation = generation
+	m.generationMu.Unlock()
+	return generation
+}
+
+// ConfigGeneration is the generation of the last configuration nginx accepted a reload for.
+func (m *Manager) ConfigGeneration() uint64 {
+	m.generationMu.Lock()
+	defer m.generationMu.Unlock()
+	return m.generation
+}
+
+// EnsureConfigGeneration writes the generation file when it is missing (a node upgraded to a daemon with ingress
+// health), so the variable exists before a Gateway-rendered config refers to it. Returns true when written.
+func (m *Manager) EnsureConfigGeneration() (bool, error) {
+	path := m.generationPath()
+	if path == "" {
+		return false, nil
+	}
+	existing, err := ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if existing != nil && ingressGenerationPattern.Match(existing) {
+		m.LoadConfigGeneration()
+		return false, nil
+	}
+	m.generationMu.Lock()
+	m.generation++
+	next := m.generation
+	m.generationMu.Unlock()
+	return true, WriteAtomic(path, ingressGenerationConfig(next))
+}
+
+// stageNextGeneration writes generation+1 before a reload and returns a function that commits it (reload
+// succeeded) or restores the previous file (reload failed). Without a config dir it is a no-op.
+func (m *Manager) stageNextGeneration() (commit func(ok bool)) {
+	path := m.generationPath()
+	if path == "" {
+		return func(bool) {}
+	}
+	if _, err := os.Stat(m.configDir); err != nil {
+		return func(bool) {}
+	}
+	previous, _ := ReadFile(path)
+	m.generationMu.Lock()
+	next := m.generation + 1
+	m.generationMu.Unlock()
+	if err := WriteAtomic(path, ingressGenerationConfig(next)); err != nil {
+		return func(bool) {}
+	}
+	return func(ok bool) {
+		if ok {
+			m.generationMu.Lock()
+			if next > m.generation {
+				m.generation = next
+			}
+			m.generationMu.Unlock()
+			return
+		}
+		if previous != nil {
+			_ = WriteAtomic(path, previous)
+		} else {
+			_ = RemoveFile(path)
+		}
+	}
+}

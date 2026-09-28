@@ -58,6 +58,8 @@ type NginxPlugin struct {
 	registryListenersOnce    sync.Once
 	// secureLinkOutcomes logs Secure Link connection failures and holds per link and state change (L-1).
 	secureLinkOutcomes logepisode.Tracker
+	// Ingress groups: the reserved health endpoint's responder (nil when it could not start).
+	ingressHealth *ingressHealthResponder
 
 	// Session-scoped resources
 	sessionCancel              context.CancelFunc
@@ -245,6 +247,20 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		configDirModified = true
 	}
 
+	// The reserved ingress health endpoint (ingress groups): config generation variable, reserved-hostname
+	// server and default-server location, then the local responder nginx proxies to.
+	healthChanged, healthReady := p.ensureIngressHealthConfig(logger)
+	if healthChanged {
+		configDirModified = true
+	}
+	if healthReady {
+		if responder, err := startIngressHealthResponder(p, logger); err != nil {
+			logger.Warn("ingress health responder is unavailable; this node cannot join ingress groups", "error", err)
+		} else {
+			p.ingressHealth = responder
+		}
+	}
+
 	// Ensure gateway log format is present in nginx.conf.
 	if modified, err := nginx.EnsureLogFormat(p.cfg.Nginx.GlobalConfig); err != nil {
 		logger.Warn("failed to inject log format", "error", err)
@@ -416,6 +432,9 @@ func (p *NginxPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 			report.AvailabilityLease = lease
 		}
 	}
+	if p.ingressHealth != nil {
+		report.IngressHealth = p.ingressHealth.report()
+	}
 	return report
 }
 
@@ -424,6 +443,7 @@ func (p *NginxPlugin) Shutdown() {
 	if p.availabilityLease != nil {
 		p.availabilityLease.close()
 	}
+	p.ingressHealth.close()
 }
 
 func (p *NginxPlugin) CollectStats() *pb.StatsReport {
@@ -446,6 +466,9 @@ func (p *NginxPlugin) capabilities() []string {
 	}
 	if p.availabilityLease != nil {
 		capabilities = append(capabilities, availabilityLeaseCapability)
+	}
+	if p.ingressHealth != nil {
+		capabilities = append(capabilities, ingressGroupCapability)
 	}
 	return capabilities
 }
