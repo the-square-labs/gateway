@@ -363,6 +363,9 @@ func (n *simNode) checkWatchdog() {
 			continue
 		}
 		n.w.tracef("%s watchdog kills %s", n.id, key)
+		if n.processUp() && n.node != nil && n.node.HolderStatus(key).Retained {
+			n.w.fail("the watchdog killed the retained copy of %s on %s", key, n.id)
+		}
 		c.live, c.starting, c.stopping = false, false, false
 	}
 	n.armWatchdog(true)
@@ -379,6 +382,22 @@ func (n *simNode) reconcile() {
 		case RoleHolding, RoleRecovering, RoleFencing, RoleAbandoned:
 			if st.Deadline > 0 {
 				n.setWatchdog(key, st.Deadline)
+			}
+		case RoleRetained:
+			// Graceful close: the copy runs on without a lease; legacy owns
+			// it and the watchdog record is disarmed. A copy that is not
+			// running after all (a start the close cut short) is released,
+			// like the docker daemon does.
+			delete(n.watchdog, key)
+			if c := n.containers[key]; c != nil && c.live && !c.stopping {
+				if !c.legacy {
+					c.legacy = true
+					n.w.tracef("%s retains %s: deadline disarmed", n.id, key)
+				}
+			} else if c == nil || !c.starting && !c.stopping {
+				if err := n.node.Release(key, ""); err == nil {
+					n.w.tracef("%s releases retained %s: no running copy", n.id, key)
+				}
 			}
 		}
 		c := n.containers[key]

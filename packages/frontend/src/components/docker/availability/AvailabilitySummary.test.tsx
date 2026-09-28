@@ -213,4 +213,44 @@ describe("AvailabilitySummary", () => {
     expect(screen.queryByText("Witness")).not.toBeInTheDocument();
     expect(screen.queryByText(/Voter reachability margin is insufficient/)).not.toBeInTheDocument();
   });
+
+  it("shows which copy keeps serving while the lease closes", async () => {
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [{ id: "node-a", displayName: "Node A", type: "docker", status: "online" }],
+    } as never);
+    const closingPolicy = {
+      ...(policy("failed") as DockerAvailabilityPolicy),
+      lease: {
+        mode: "closing",
+        reason: {
+          code: "legacy_requested",
+          message: "The Availability controller runs this policy on the backend path",
+        },
+        manifestVersion: 12,
+        epoch: 4,
+        publishedPartitionMode: "strict",
+        holders: [],
+        bootstrap: [],
+        strictPending: false,
+        copiesStoppedAt: null,
+        excludedNodes: [],
+        retainedHolders: [{ slot: 0, holderNodeId: "node-a", confirmed: true }],
+        voterMargin: null,
+        witness: null,
+      },
+    } as DockerAvailabilityPolicy;
+
+    render(
+      <AvailabilitySummary
+        resource={{ type: "deployment", deploymentId: "deployment-1" }}
+        policy={closingPolicy}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByText("Closing")).toBeInTheDocument();
+    expect(screen.getByText("Kept serving")).toBeInTheDocument();
+    expect(await screen.findByText("Node A")).toBeInTheDocument();
+    expect(screen.getByText("keeps running")).toBeInTheDocument();
+  });
 });

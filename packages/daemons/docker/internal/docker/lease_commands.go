@@ -87,7 +87,7 @@ func leaseReportProto(report lease.Report, identity []byte) *pb.AvailabilityLeas
 		out.Held = append(out.Held, &pb.AvailabilityLeaseHeld{
 			PolicyId: held.Key.PolicyID, Slot: held.Key.Slot, Role: held.Role, Ballot: leaseBallotProto(held.Ballot),
 			Epoch: held.Epoch, ManifestVersion: held.ManifestVersion,
-			PlacementId: held.PlacementID, PlacementGeneration: held.PlacementGeneration,
+			PlacementId: held.PlacementID, PlacementGeneration: held.PlacementGeneration, Retained: held.Retained,
 		})
 	}
 	for _, view := range report.Acceptor {

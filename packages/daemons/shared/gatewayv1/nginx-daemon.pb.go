@@ -8438,7 +8438,7 @@ type AvailabilityLeaseHeld struct {
 	PolicyId string                 `protobuf:"bytes,1,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
 	Slot     uint32                 `protobuf:"varint,2,opt,name=slot,proto3" json:"slot,omitempty"`
 	// availabilitylease.Role: candidate, acquiring, bootstrapping, recovering,
-	// holding, fencing, abandoned or releasing.
+	// holding, fencing, abandoned, releasing or retained.
 	Role string `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
 	// Ballot of the last committed round, when any.
 	Ballot *AvailabilityLeaseBallot `protobuf:"bytes,4,opt,name=ballot,proto3" json:"ballot,omitempty"`
@@ -8447,8 +8447,13 @@ type AvailabilityLeaseHeld struct {
 	ManifestVersion     uint64 `protobuf:"varint,6,opt,name=manifest_version,json=manifestVersion,proto3" json:"manifest_version,omitempty"`
 	PlacementId         string `protobuf:"bytes,7,opt,name=placement_id,json=placementId,proto3" json:"placement_id,omitempty"`
 	PlacementGeneration uint64 `protobuf:"varint,8,opt,name=placement_generation,json=placementGeneration,proto3" json:"placement_generation,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Graceful close: this node kept its copy of the slot running after the
+	// lease closed; a majority of every quorum set of the closed manifest
+	// confirmed it (ballot = its last committed ballot). Its watchdog deadline
+	// is disarmed and the copy is no longer lease-bound: adopt it as running.
+	Retained      bool `protobuf:"varint,9,opt,name=retained,proto3" json:"retained,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AvailabilityLeaseHeld) Reset() {
@@ -8535,6 +8540,13 @@ func (x *AvailabilityLeaseHeld) GetPlacementGeneration() uint64 {
 		return x.PlacementGeneration
 	}
 	return 0
+}
+
+func (x *AvailabilityLeaseHeld) GetRetained() bool {
+	if x != nil {
+		return x.Retained
+	}
+	return false
 }
 
 type AvailabilityLeaseKeyView struct {
@@ -12721,7 +12733,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\vvoter_epoch\x18\x14 \x01(\x04R\n" +
 	"voterEpoch\x12\x14\n" +
 	"\x05voter\x18\x15 \x01(\bR\x05voter\x12\x16\n" +
-	"\x06member\x18\x16 \x01(\bR\x06member\"\xb0\x02\n" +
+	"\x06member\x18\x16 \x01(\bR\x06member\"\xcc\x02\n" +
 	"\x15AvailabilityLeaseHeld\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x12\n" +
@@ -12730,7 +12742,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x05epoch\x18\x05 \x01(\x04R\x05epoch\x12)\n" +
 	"\x10manifest_version\x18\x06 \x01(\x04R\x0fmanifestVersion\x12!\n" +
 	"\fplacement_id\x18\a \x01(\tR\vplacementId\x121\n" +
-	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\"\xa0\x04\n" +
+	"\x14placement_generation\x18\b \x01(\x04R\x13placementGeneration\x12\x1a\n" +
+	"\bretained\x18\t \x01(\bR\bretained\"\xa0\x04\n" +
 	"\x18AvailabilityLeaseKeyView\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x14\n" +

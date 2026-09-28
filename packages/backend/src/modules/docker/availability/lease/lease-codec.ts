@@ -116,6 +116,23 @@ export interface LeaseManifestContent {
   members: Array<{ id: string; role: 'relay' | 'daemon'; publicKey: Buffer }>;
   /** One quorum set when settled, two (old, new) during a joint voter change. */
   quorumSets: string[][];
+  /**
+   * Graceful close (closed manifests only, relay.v1 LeaseManifest.retained = 16): per slot, the committed holder that
+   * keeps its copy running without a lease once a majority of every quorum set confirmed the close to it. Undefined
+   * on every other manifest, so their digest does not change.
+   */
+  retained?: LeaseRetainedSlot[];
+}
+
+/** A slot's retained holder in a closed manifest; holderId is one of the manifest's candidates. */
+export interface LeaseRetainedSlot {
+  slot: number;
+  holderId: string;
+  /**
+   * The committed ballot Gateway saw; null for a reserved bootstrap holder Gateway saw no commit of (the close may have
+   * raced its bootstrap commit: acceptors then confirm it on the commit they hold).
+   */
+  ballot: DockerAvailabilityLeaseBallot | null;
 }
 
 /** Serialized relay.v1.LeaseManifest; schema version 1 and the fixed 30 s term. */
@@ -141,7 +158,47 @@ export function encodeLeaseManifest(content: LeaseManifestContent, manifestVersi
       role: member.role === 'relay' ? 'LEASE_MEMBER_ROLE_RELAY' : 'LEASE_MEMBER_ROLE_DAEMON',
     })),
     quorumSets: content.quorumSets.map((voterIds) => ({ voterIds })),
+    retained: content.closed
+      ? (content.retained ?? []).map((entry) => ({
+          slot: entry.slot,
+          holderId: entry.holderId,
+          ...(entry.ballot
+            ? {
+                ballot: {
+                  round: entry.ballot.round,
+                  incarnation: entry.ballot.incarnation,
+                  proposerId: entry.ballot.proposerId,
+                },
+              }
+            : {}),
+        }))
+      : [],
   });
+}
+
+/**
+ * The published manifest of a policy: whether it is closed and, for a closed one, its retained holders. Null when
+ * there is none or it cannot be read.
+ */
+export function leaseManifestClosure(
+  manifestBlock: string | null | undefined
+): { closed: boolean; retained: LeaseRetainedSlot[] } | null {
+  if (!manifestBlock) return null;
+  try {
+    const block = decodeLeaseSignedBlock(Buffer.from(manifestBlock, 'base64'));
+    const manifest = decodeRelayV1Message('LeaseManifest', block.payload) as {
+      closed?: boolean;
+      retained?: Array<{ slot?: number; holderId?: string; ballot?: Partial<DockerAvailabilityLeaseBallot> | null }>;
+    };
+    const retained = (manifest.retained ?? []).flatMap((entry) =>
+      entry.holderId
+        ? [{ slot: entry.slot ?? 0, holderId: entry.holderId, ballot: normalizeLeaseBallot(entry.ballot ?? undefined) }]
+        : []
+    );
+    return { closed: manifest.closed === true, retained: manifest.closed === true ? retained : [] };
+  } catch {
+    return null;
+  }
 }
 
 /** Candidate ids of a published manifest block (base64 relay.v1.LeaseSignedBlock); empty when there is none. */

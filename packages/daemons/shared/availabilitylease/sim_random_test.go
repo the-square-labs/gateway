@@ -167,7 +167,12 @@ func runRandomSeed(seed int64, trace, wire bool) (*simWorld, seedResult) {
 	result := seedResult{}
 	if w.violation == "" {
 		quiet(w, topo)
-		if topo.available {
+		if w.gw.policies["p1"].closed {
+			// Closed with the Gateway gone: nothing can fail over; the
+			// invariants still ran through the whole quiet phase.
+			w.runUntil(w.now + healTimeout)
+			result.kind = "closed"
+		} else if topo.available {
 			checkConvergence(w, topo, &result)
 		} else {
 			checkFailover(w, topo, &result)
@@ -245,16 +250,20 @@ func (w *simWorld) successorsInformed(topo simTopology, holder string) bool {
 	return true
 }
 
-// canLearnManifest is false when no ready candidate holds the manifest and
-// config and no Gateway is left to deliver them: a daemon that lost its
-// state while the Gateway is down waits for the Gateway (documented limit).
+// canLearnManifest is false when no ready candidate holds a lease-mode
+// manifest and config and no Gateway is left to deliver them: a daemon that
+// lost its state, or only holds a closed manifest, while the Gateway is down
+// waits for the Gateway (documented limit).
 func (w *simWorld) canLearnManifest(policyID string) bool {
 	if w.gw.alive {
 		return true
 	}
 	for _, id := range w.gw.policies[policyID].candidates {
 		n := w.nodes[id]
-		if n.processUp() && n.node.ManifestVersion(policyID) > 0 && n.node.Epoch(policyID) > 0 {
+		// A candidate that only holds a closed manifest does not talk to the
+		// members, so it never learns a reopening manifest the Gateway sent
+		// to others before it died: it waits for the Gateway (documented).
+		if n.processUp() && n.node.LeaseMode(policyID) && n.node.Epoch(policyID) > 0 {
 			return true
 		}
 	}

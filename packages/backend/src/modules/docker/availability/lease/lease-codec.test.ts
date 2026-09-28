@@ -9,6 +9,7 @@ import {
   type LeaseManifestContent,
   leaseBlockMessage,
   leaseKeyRotationMessage,
+  leaseManifestClosure,
   leaseManifestDigest,
   policyKeyFingerprint,
   signLeaseBlock,
@@ -131,5 +132,47 @@ describe('availability lease codec', () => {
     expect(compareLeaseBallots(ballot('18446744073709551615', '0', 'a'), ballot('1', '0', 'a'))).toBe(1);
     expect(compareLeaseBallots(null, ballot('1', '0', 'a'))).toBe(-1);
     expect(compareLeaseBallots(ballot('1', '0', 'a'), ballot('1', '0', 'a'))).toBe(0);
+  });
+
+  it('names the retained holders in a closed manifest only, and leaves other manifests unchanged (graceful close)', async () => {
+    const ballot = { round: '12', incarnation: '3', proposerId: 'node-1' };
+    const closed: LeaseManifestContent = {
+      ...manifest,
+      closed: true,
+      retained: [{ slot: 0, holderId: 'node-1', ballot }],
+    };
+    const decoded = decodeRelayV1Message('LeaseManifest', encodeLeaseManifest(closed, 9)) as {
+      closed: boolean;
+      retained: Array<{ slot: number; holderId: string; ballot: typeof ballot }>;
+    };
+    expect(decoded.closed).toBe(true);
+    expect(decoded.retained).toEqual([{ slot: 0, holderId: 'node-1', ballot }]);
+    const block = encodeLeaseSignedBlock(
+      await signLeaseBlock('LEASE_BLOCK_KIND_MANIFEST', encodeLeaseManifest(closed, 9), 'k1', signer)
+    ).toString('base64');
+    expect(leaseManifestClosure(block)).toEqual({ closed: true, retained: [{ slot: 0, holderId: 'node-1', ballot }] });
+    expect(leaseManifestDigest(closed)).not.toBe(leaseManifestDigest({ ...closed, retained: [] }));
+    // An open manifest never carries retained holders, and its digest is what it was before the field existed.
+    expect(encodeLeaseManifest({ ...manifest, retained: closed.retained }, 9)).toEqual(
+      encodeLeaseManifest(manifest, 9)
+    );
+    expect(leaseManifestDigest(manifest)).toBe(leaseManifestDigest({ ...manifest, retained: undefined }));
+    expect(leaseManifestClosure(null)).toBeNull();
+    // A reserved bootstrap holder Gateway saw no commit of is named with an empty ballot.
+    const reserved = { ...closed, retained: [{ slot: 0, holderId: 'node-2', ballot: null }] };
+    const reservedBlock = encodeLeaseSignedBlock(
+      await signLeaseBlock('LEASE_BLOCK_KIND_MANIFEST', encodeLeaseManifest(reserved, 10), 'k1', signer)
+    ).toString('base64');
+    expect(leaseManifestClosure(reservedBlock)).toEqual({
+      closed: true,
+      retained: [{ slot: 0, holderId: 'node-2', ballot: null }],
+    });
+    expect(
+      (
+        decodeRelayV1Message('LeaseManifest', encodeLeaseManifest(reserved, 10)) as {
+          retained: Array<{ ballot: unknown }>;
+        }
+      ).retained[0]?.ballot
+    ).toBeNull();
   });
 });

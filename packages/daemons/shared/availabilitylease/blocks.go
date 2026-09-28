@@ -147,6 +147,9 @@ func (n *Node) adoptBlock(block *pb.LeaseSignedBlock, now time.Duration) (bool, 
 		if err := n.chain.verifyBlock(block, domainManifest); err != nil {
 			return false, err
 		}
+		if previous != nil && previous.BootstrapID == manifest.BootstrapID {
+			manifest.bootstrapSince = previous.bootstrapSince
+		}
 		n.manifests[manifest.PolicyID] = manifest
 		n.dirtyOther[prefixManifest+manifest.PolicyID] = data
 		n.keyCache = nil

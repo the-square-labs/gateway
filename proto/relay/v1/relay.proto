@@ -383,6 +383,9 @@ enum LeaseNackReason {
   LEASE_NACK_REASON_LEASE_CLOSED = 8;
   LEASE_NACK_REASON_NOT_CANDIDATE = 9;
   LEASE_NACK_REASON_UNKNOWN_POLICY = 10;
+  // Graceful close: the acceptor does not confirm the close to this holder
+  // (it is not the slot's retained holder, or another proposer superseded it).
+  LEASE_NACK_REASON_RETAIN_REFUSED = 11;
 }
 
 enum LeaseKeyState {
@@ -469,6 +472,8 @@ message LeaseItem {
     LeaseReleaseAck release_ack = 8;
     LeaseQuery query = 9;
     LeaseStatus status = 10;
+    LeaseRetain retain = 11;
+    LeaseRetained retained = 12;
   }
 }
 
@@ -553,6 +558,31 @@ message LeaseQuery {
   repeated LeaseKey keys = 1;
 }
 
+// Graceful close. The holder of a slot that a closed manifest names in
+// retained[] asks every member to confirm the close to it, every second until
+// a majority of every quorum set of the closed manifest confirmed (or refused).
+message LeaseRetain {
+  LeaseKey key = 1;
+  // The holder's last committed ballot.
+  LeaseBallot ballot = 2;
+  uint64 epoch = 3;
+  // Version of the closed manifest the holder adopted.
+  uint64 manifest_version = 4;
+}
+
+// CLOSED_RETAINED: the acceptor durably adopted the closed manifest (it refuses
+// every acquisition of the policy's keys) and the sender is the slot's retained
+// holder. Refusals are LeaseNack (RETAIN_REFUSED for anyone else or a holder
+// the acceptor knows was superseded; STALE_MANIFEST / ACCEPTOR_BEHIND as for
+// proposals).
+message LeaseRetained {
+  LeaseKey key = 1;
+  LeaseBallot ballot = 2;
+  uint64 epoch = 3;
+  uint64 manifest_version = 4;
+  uint64 acceptor_incarnation = 5;
+}
+
 message LeaseStatus {
   LeaseKey key = 1;
   LeaseKeyState state = 2;
@@ -613,6 +643,23 @@ message LeaseManifest {
   // One quorum set when settled; two (old, new) during a joint-consensus
   // voter change (D2, A4). A quorum is a majority of every set.
   repeated LeaseQuorumSet quorum_sets = 15;
+  // Graceful close (closed manifests only). Per slot, the holder that keeps
+  // its copy running without a lease once a majority of every quorum set
+  // confirmed the close to it (LeaseRetained). Gateway names the committed
+  // holder it sees for the slot when it closes; an unheld slot has no entry.
+  // A holder that is not named, or cannot reach such a majority, fences.
+  repeated LeaseRetainedSlot retained = 16;
+}
+
+message LeaseRetainedSlot {
+  uint32 slot = 1;
+  // Candidate id of the holder; it must be listed in candidates as well.
+  string holder_id = 2;
+  // The holder's committed ballot Gateway saw; empty when it saw none (a
+  // reserved bootstrap holder whose commit may have raced the close). Acceptors
+  // refuse to confirm when they know a commit, open lease or accept of another
+  // proposer above it and above every ballot of the holder they know.
+  LeaseBallot ballot = 3;
 }
 
 message LeaseMember {
@@ -737,6 +784,8 @@ message AvailabilityLeaseHeld {
   uint64 manifest_version = 6;
   string placement_id = 7;
   uint64 placement_generation = 8;
+  // Daemons only: graceful close (see gateway.v1).
+  bool retained = 9;
 }
 
 message AvailabilityLeaseKeyView {

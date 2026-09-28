@@ -103,6 +103,7 @@ export function AvailabilityLeaseSummaryRows({ policy }: { policy: DockerAvailab
   const holders = [...lease.holders].sort((a, b) => a.slot - b.slot);
   const insufficientMargin = lease.voterMargin !== null && lease.voterMargin.margin <= 0;
   const excludedNodes = lease.excludedNodes ?? [];
+  const retainedHolders = lease.mode === "closing" ? (lease.retainedHolders ?? []) : [];
   const witnessMemberId = lease.witness?.memberId ?? null;
   const leaving =
     (lease.mode === "lease" || lease.mode === "bootstrapping") && lease.reason?.since
@@ -157,8 +158,28 @@ export function AvailabilityLeaseSummaryRows({ policy }: { policy: DockerAvailab
       {leaving && lease.reason ? (
         <p className="border-b border-border px-4 py-3 text-sm text-warning-text">
           Data-plane failover is impossible right now: {lease.reason.message}. The policy goes back
-          to backend failover at {leaving.toLocaleTimeString()} unless this is fixed before.
+          to backend failover at {leaving.toLocaleTimeString()} unless this is fixed before; the
+          serving copy keeps running.
         </p>
+      ) : null}
+      {retainedHolders.length > 0 ? (
+        <DetailRow
+          label="Kept serving"
+          value={
+            <span className="inline-flex min-w-0 flex-col items-end gap-1">
+              {[...retainedHolders]
+                .sort((a, b) => a.slot - b.slot)
+                .map((entry) => (
+                  <span key={entry.slot} className="inline-flex min-w-0 items-center gap-2">
+                    <span className="truncate">{nodeLabel(entry.holderNodeId, nodes)}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {entry.confirmed ? "keeps running" : "confirming"}
+                    </span>
+                  </span>
+                ))}
+            </span>
+          }
+        />
       ) : null}
       {excludedNodes.length > 0 ? (
         <DetailRow

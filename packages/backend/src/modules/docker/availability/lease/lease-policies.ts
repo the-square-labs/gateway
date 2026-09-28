@@ -17,12 +17,20 @@ import {
   encodeLeaseManifest,
   encodeLeaseSignedBlock,
   type LeaseManifestContent,
+  type LeaseRetainedSlot,
   type LeaseSigner,
   leaseManifestCandidateIds,
+  leaseManifestClosure,
   leaseManifestDigest,
   signLeaseBlock,
 } from './lease-codec.js';
-import { CLOSE_SETTLE_MS, GATE_WINDOW_MS, LEASE_IMPOSSIBLE_HYSTERESIS_MS, LEASE_TERM_MS } from './lease-constants.js';
+import {
+  CLOSE_SETTLE_MS,
+  GATE_WINDOW_MS,
+  LEASE_IMPOSSIBLE_HYSTERESIS_MS,
+  LEASE_TERM_MS,
+  RETAINED_LEASE_ROLE,
+} from './lease-constants.js';
 import { evaluateLeaseGating } from './lease-gating.js';
 import {
   type LeaseParticipants,
@@ -84,6 +92,12 @@ export interface LeaseModeChange {
   reason: DockerAvailabilityLeaseReason | null;
   /** Legacy adopts these as its serving placements (A5): the last observed holder per slot. */
   lastHolders: Array<{ slot: number; holderId: string }>;
+  /**
+   * Graceful close (closing -> legacy): the slots whose holder reported itself retained under the closed manifest. Its
+   * copy never stopped and runs on; legacy adopts it as RUNNING and never restarts it. Every other slot of lastHolders
+   * expired (its holder fenced, or may have) and the legacy path starts it again. Empty for any other transition.
+   */
+  retainedHolders: Array<{ slot: number; holderId: string }>;
 }
 
 export interface LeasePoliciesOutcome {
@@ -125,6 +139,80 @@ function activeLeaseNodeIds(observations: ObservationRow[], state: LeaseStateRow
 }
 
 /**
+ * Graceful close: the retained holders a new closed manifest names, one per slot: the committed holder Gateway sees
+ * for the slot now (its ballot is the one it proposed with). Closing from bootstrapping also names each slot's
+ * reserved holder Gateway saw no commit of, with an empty ballot: if its bootstrap commit raced the close the acceptors
+ * confirm it on the commit they hold and its copy is retained instead of fenced; if it never committed nothing changes
+ * (its legacy copy was never lease-bound). Any other unheld slot has none; its holder, if any, fences.
+ */
+function retainedFromObservations(
+  observations: ObservationRow[],
+  slots: number,
+  bootstrap: Array<{ slot: number; holderId: string }> = []
+): LeaseRetainedSlot[] {
+  const committed = committedHolders(observations, slots);
+  const named = new Set(committed.map((entry) => entry.slot));
+  const reserved = bootstrap
+    .filter((entry) => entry.slot < slots && !named.has(entry.slot))
+    .map((entry) => ({ slot: entry.slot, holderId: entry.holderId, ballot: null }));
+  return [...committed, ...reserved].sort((left, right) => left.slot - right.slot);
+}
+
+function committedHolders(observations: ObservationRow[], slots: number): LeaseRetainedSlot[] {
+  return observations
+    .filter(
+      (observation) =>
+        observation.slot < slots &&
+        observation.holderId !== null &&
+        observation.ballot !== null &&
+        observation.ballot.proposerId === observation.holderId
+    )
+    .sort((left, right) => left.slot - right.slot)
+    .map((observation) => ({
+      slot: observation.slot,
+      holderId: observation.holderId!,
+      // Field order fixed (jsonb reorders keys): the manifest digest must not change from one reconcile to the next.
+      ballot: {
+        round: observation.ballot!.round,
+        incarnation: observation.ballot!.incarnation,
+        proposerId: observation.ballot!.proposerId,
+      },
+    }));
+}
+
+/**
+ * A named holder's copy keeps running through the close: it reported itself retained (a majority of every quorum set
+ * confirmed the close to it), or it is a reserved bootstrap holder named without a ballot that persisted the close,
+ * does not hold the key and runs no lease role for it. A not-yet-acquired bootstrap holder drops its round on the
+ * closed manifest and can no longer commit, and the close never touches its legacy copy; a bootstrap commit that raced
+ * the close shows as a lease role (holding, then retained or fencing) in its reports first.
+ */
+export function keepsRunningThroughClose(
+  entry: LeaseRetainedSlot,
+  observation: Pick<ObservationRow, 'claimants' | 'holderId'> | undefined,
+  closedAckers: ReadonlySet<string>
+): boolean {
+  if (reportsRetained(observation, entry.holderId)) return true;
+  if (entry.ballot !== null) return false;
+  const holds = observation?.holderId === entry.holderId;
+  const leaseRole = Boolean(observation?.claimants?.[entry.holderId]);
+  return !holds && !leaseRole && closedAckers.has(entry.holderId);
+}
+
+/** The named holder reported itself retained: a majority of every quorum set confirmed the close to it. */
+export function reportsRetained(observation: Pick<ObservationRow, 'claimants'> | undefined, holderId: string): boolean {
+  return observation?.claimants?.[holderId]?.role === RETAINED_LEASE_ROLE;
+}
+
+/** The observation without the slot's retained holder, whose copy legitimately keeps running. */
+function withoutRetainedHolder(observation: ObservationRow, holderId: string | undefined): ObservationRow {
+  if (!holderId) return observation;
+  const claimants = { ...(observation.claimants ?? {}) };
+  delete claimants[holderId];
+  return { ...observation, holderId: observation.holderId === holderId ? null : observation.holderId, claimants };
+}
+
+/**
  * A5 / D3: closing may hand the policy to legacy before the settle time only when no copy can run anywhere: no slot has
  * a holder or a daemon reporting a role in which its copy may run, and every node that could hold (candidates, last
  * holders, claimants, reserved holders) persisted the closed manifest, so none of them acquires again.
@@ -134,11 +222,14 @@ function closedEverywhere(input: {
   bootstrap: Array<{ slot: number; holderId: string }>;
   candidateNodeIds: readonly string[];
   closedAckers: ReadonlySet<string>;
+  /** Every slot has a confirmed retained holder: nobody can acquire any key any more, acks are not needed. */
+  everySlotRetained?: boolean;
 }): boolean {
   const running = input.observations.some(
     (observation) => observation.holderId !== null || Object.keys(observation.claimants ?? {}).length > 0
   );
   if (running) return false;
+  if (input.everySlotRetained) return true;
   const possible = new Set<string>(input.candidateNodeIds);
   for (const observation of input.observations) {
     if (observation.lastHolderId) possible.add(observation.lastHolderId);
@@ -347,6 +438,12 @@ export class AvailabilityLeasePolicies {
       state.mode !== 'closing' &&
       (gating.immediate || now.getTime() - since!.getTime() >= LEASE_IMPOSSIBLE_HYSTERESIS_MS);
 
+    // Graceful close: the closed manifest being published names the retained holders; they stay the same for the whole
+    // close (read back from the published block), and a new close names the committed holders seen now.
+    const closedManifest = state.mode === 'closing' ? leaseManifestClosure(state.manifestBlock) : null;
+    const closure = { retained: closedManifest?.closed ? closedManifest.retained : [] };
+    let retainedNow: LeaseRetainedSlot[] = [];
+
     if (state.mode === 'legacy') {
       // Only a policy that already left lease mode waits; a policy that never ran one bootstraps right away.
       const settled =
@@ -407,15 +504,29 @@ export class AvailabilityLeasePolicies {
         ackedAt = now;
         updates.closingAckedAt = now;
       }
-      // D3: legacy starts nothing before every slot's lease was released or expired. Released: no copy runs anywhere
-      // and every node that could hold knows the lease is closed. Expired: a voter majority persisted the close, so
-      // no renewal succeeded since, and T x 1.1 / 0.9 plus the fence stop margin passed.
-      const released = closedEverywhere({
-        observations,
-        bootstrap: state.bootstrap,
-        candidateNodeIds: candidateNodes,
-        closedAckers,
-      });
+      // Graceful close + D3: legacy starts nothing before every held slot is retained by its named holder (its copy
+      // keeps running, legacy adopts it as running) or expired, and every other copy is gone. Retained: the holder
+      // reports that a majority of every quorum set confirmed the close to it; nobody can acquire the key any more.
+      // Released: besides the retained copies no copy runs anywhere and every node that could hold knows the lease is
+      // closed. Expired: a voter majority persisted the close, so no renewal succeeded since, and T x 1.1 / 0.9 plus
+      // the fence stop margin passed; a named holder that never reported retained (partitioned) fenced by then.
+      const retainedBySlot = new Map(closure.retained.map((entry) => [entry.slot, entry.holderId]));
+      retainedNow = closure.retained.filter((entry) =>
+        keepsRunningThroughClose(entry, observationBySlot.get(entry.slot), closedAckers)
+      );
+      const released =
+        retainedNow.length === closure.retained.length &&
+        closedEverywhere({
+          observations: observations.map((observation) =>
+            withoutRetainedHolder(observation, retainedBySlot.get(observation.slot))
+          ),
+          bootstrap: state.bootstrap,
+          candidateNodeIds: candidateNodes,
+          closedAckers,
+          everySlotRetained: Array.from({ length: slots }, (_, slot) => slot).every((slot) =>
+            retainedNow.some((entry) => entry.slot === slot)
+          ),
+        });
       if (released || (ackedAt && now.getTime() - ackedAt.getTime() >= CLOSE_SETTLE_MS)) {
         next = 'legacy';
         updates.manifestBlock = null;
@@ -448,7 +559,12 @@ export class AvailabilityLeasePolicies {
         context,
         ranked,
         // Voters change only to a viable selection, and never while the lease closes (the close needs stable sets).
-        selection.viable && next !== 'closing' ? selection : null
+        selection.viable && next !== 'closing' ? selection : null,
+        next === 'closing'
+          ? closedManifest?.closed
+            ? closure.retained
+            : retainedFromObservations(observations, slots, state.mode === 'bootstrapping' ? state.bootstrap : [])
+          : undefined
       );
       Object.assign(updates, published.updates);
       blockChanged = published.published;
@@ -467,6 +583,10 @@ export class AvailabilityLeasePolicies {
             to: next,
             reason,
             lastHolders: lastHolders(observations, state.bootstrap),
+            retainedHolders:
+              next === 'legacy' && state.mode === 'closing'
+                ? retainedNow.map(({ slot, holderId }) => ({ slot, holderId }))
+                : [],
           }
         : null;
     if (modeChange) logger.info('Availability lease mode changes', { ...modeChange, lastHolders: undefined });
@@ -500,7 +620,8 @@ export class AvailabilityLeasePolicies {
     observations: ObservationRow[],
     context: LeasePoliciesContext,
     ranked: string[],
-    selection: PolicyVoterSelection | null
+    selection: PolicyVoterSelection | null,
+    retained?: LeaseRetainedSlot[]
   ): Promise<{ updates: Partial<typeof dockerAvailabilityLeaseState.$inferInsert>; published: boolean }> {
     const none = { updates: {}, published: false };
     const signingKeyId = context.cluster.signingKeyId;
@@ -579,6 +700,10 @@ export class AvailabilityLeasePolicies {
       bootstrap: state.bootstrap.filter((entry) => entry.slot < slots && known.has(entry.holderId)),
       members: members.map((member) => ({ ...member, publicKey: Buffer.from(member.publicKey, 'base64') })),
       quorumSets: voters.quorumSets,
+      // Graceful close: a retained holder must be a candidate of the same manifest (acceptors check it by its key).
+      ...(closed
+        ? { retained: (retained ?? []).filter((entry) => entry.slot < slots && known.has(entry.holderId)) }
+        : {}),
     };
     const digest = leaseManifestDigest(content);
     if (digest === state.manifestDigest && state.manifestBlock) {

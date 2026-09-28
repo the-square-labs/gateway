@@ -108,6 +108,8 @@ export interface DockerAvailabilityLease {
   copiesStoppedAt: string | null;
   /** Candidate nodes left out of holding and standbys right now; never a reason to leave lease mode. */
   excludedNodes?: DockerAvailabilityLeaseExcludedNode[];
+  /** While closing: the holders that keep their copy running through the close, and whether each confirmed it. */
+  retainedHolders?: Array<{ slot: number; holderNodeId: string; confirmed: boolean }>;
   voterMargin: DockerAvailabilityLeaseVoterMargin | null;
   witness: DockerAvailabilityLeaseWitness | null;
 }

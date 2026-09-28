@@ -23,13 +23,14 @@ const (
 	faultKeyRotation
 	faultRateChange
 	faultSiteOutage
+	faultClose
 	faultKinds
 )
 
 var faultNames = [...]string{
 	"partition", "isolate-holder", "loss-burst", "delay-spike", "acceptor-restart", "proposer-restart",
 	"freeze", "host-reboot", "docker-hang", "epoch-change", "manifest-bump", "handoff", "health-release",
-	"key-rotation", "rate-change", "site-outage",
+	"key-rotation", "rate-change", "site-outage", "close",
 }
 
 // scheduleChaos places random faults between 3 s and chaosEnd-5 s. The
@@ -62,18 +63,29 @@ func scheduleChaos(w *simWorld, topo simTopology) {
 // reported acquiring (A5), like the Gateway does on the lease report.
 func gatewayBootstrapLoop(w *simWorld) {
 	policy := w.gw.policies["p1"]
-	if policy.bootstrap[0] == "" || !w.gw.alive {
+	if len(policy.bootstrap) == 0 || !w.gw.alive {
 		return
 	}
-	for _, acquired := range w.acquired {
-		if acquired.node == policy.bootstrap[0] && acquired.key == w.keys[0] {
-			policy.bootstrap = map[uint32]string{}
-			w.gw.republish("p1", 1)
-			w.tracef("gateway drops bootstrap reservation")
-			return
+	// Per slot: a reservation is dropped once its named holder reported
+	// acquiring that slot under it.
+	dropped := false
+	for slot, holder := range policy.bootstrap {
+		key := Key{PolicyID: "p1", Slot: slot}
+		for _, acquired := range w.acquired {
+			if acquired.node == holder && acquired.key == key && acquired.at >= policy.bootstrapAt {
+				delete(policy.bootstrap, slot)
+				dropped = true
+				break
+			}
 		}
 	}
-	w.after(5*time.Second, func() { gatewayBootstrapLoop(w) })
+	if dropped {
+		w.gw.republish("p1", 1)
+		w.tracef("gateway drops bootstrap reservation")
+	}
+	if len(policy.bootstrap) > 0 {
+		w.after(5*time.Second, func() { gatewayBootstrapLoop(w) })
+	}
 }
 
 func (w *simWorld) pick(ids []string) string { return ids[w.rng.Intn(len(ids))] }
@@ -243,6 +255,16 @@ func applyFault(w *simWorld, topo simTopology, kind faultKind) {
 	case faultRateChange:
 		n := w.nodes[w.pick(w.ids)]
 		n.setRate(1 - MaxClockDrift + w.rng.Float64()*2*MaxClockDrift)
+	case faultClose:
+		// Graceful close and re-entry: leave lease mode (naming the holder
+		// the Gateway sees, sometimes a stale one), then enter it again.
+		stale := w.rng.Float64() < 0.2
+		w.gw.closeLease("p1", stale, 0.4+0.6*w.rng.Float64())
+		w.after(w.randDuration(5*time.Second, 40*time.Second), func() {
+			if !w.chaosOver {
+				w.gw.reopenLease("p1", 0.4+0.6*w.rng.Float64())
+			}
+		})
 	}
 }
 
@@ -293,10 +315,23 @@ func quiet(w *simWorld, topo simTopology) {
 		}
 	}
 	policy := w.gw.policies["p1"]
-	if holder := policy.bootstrap[0]; holder != "" && w.gw.alive {
-		if c := w.nodes[holder].containers[w.keys[0]]; c == nil || !c.live || !c.legacy {
-			policy.bootstrap = map[uint32]string{}
-			w.gw.republish("p1", 1)
+	if policy.closed {
+		// Only the Gateway enters lease mode again (a dead one leaves the
+		// policy closed: runRandomSeed then checks no failover).
+		w.gw.reopenLease("p1", 1)
+	}
+	// The Gateway drops a slot's bootstrap reservation once its named holder
+	// no longer runs the legacy copy (it acquired, or the copy is gone); a
+	// holder that still runs it keeps its reservation.
+	dropped := false
+	for slot, holder := range policy.bootstrap {
+		key := Key{PolicyID: "p1", Slot: slot}
+		if c := w.nodes[holder].containers[key]; holder != "" && w.gw.alive && (c == nil || !c.live || !c.legacy) {
+			delete(policy.bootstrap, slot)
+			dropped = true
 		}
+	}
+	if dropped {
+		w.gw.republish("p1", 1)
 	}
 }

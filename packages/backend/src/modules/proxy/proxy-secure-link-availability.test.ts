@@ -69,10 +69,50 @@ describe('Availability member secure-link sync (D7, D8)', () => {
     });
   });
 
-  it('gates members by the lease only while their policy is in lease mode (B2)', async () => {
+  it('gates members by the lease only while their policy is in lease mode, a serving copy stays a plain link (B2)', async () => {
     const legacy = await availabilityMemberSyncContext(db(['availability_lease_v1'], []), 'nginx', [link()]);
     expect(availabilityMemberBindingFields(link(), legacy)).toEqual({ dormant: false });
-    expect(availabilityMemberBindingFields(link({ dormant: true }), legacy)).toEqual({ dormant: true });
+  });
+
+  it('never leaves a socket open to a copy that does not serve, in any mode (B-12c)', async () => {
+    // Stand rc20 (agent D): during bootstrapping the standby members were sent dormant without their policy, so the
+    // nginx daemon kept their sockets open and requests reached stopped copies ("upstream prematurely closed"); a
+    // POST landing there got 502.
+    const standby = link({ id: 'standby', dormant: true, dockerNodeId: 'standby-node' });
+    const holder = link({ id: 'holder', dormant: false });
+    const gatedStandby = {
+      dormant: true,
+      availabilityPolicyId: POLICY_ID,
+      availabilityCandidateId: 'standby-node',
+    };
+    const sequence = [
+      { mode: 'legacy', lease: false },
+      { mode: 'bootstrapping', lease: false },
+      { mode: 'lease', lease: true },
+      { mode: 'closing', lease: false },
+      { mode: 'legacy', lease: false },
+    ];
+    for (const step of sequence) {
+      const context = await availabilityMemberSyncContext(
+        db(['availability_lease_v2'], step.lease ? [POLICY_ID] : []),
+        'nginx',
+        [holder, standby]
+      );
+      // A standby (or a stopped copy) is closed and gated in every mode.
+      expect(availabilityMemberBindingFields(standby, context), step.mode).toEqual(gatedStandby);
+      expect(syncableAvailabilityMember(standby, context), step.mode).toBe(true);
+      // The serving copy is a plain link outside lease mode and lease-gated (its socket kept open by the relay gate
+      // view that names its holder) in lease mode: never dormant without the lease.
+      expect(availabilityMemberBindingFields(holder, context), step.mode).toEqual(
+        step.lease
+          ? { dormant: true, availabilityPolicyId: POLICY_ID, availabilityCandidateId: DOCKER_NODE_ID }
+          : { dormant: false }
+      );
+    }
+    // A daemon that does not know dormant members never gets one (as before): only the serving copy reaches it.
+    const old = await availabilityMemberSyncContext(db(['proxy_secure_links_v1'], []), 'nginx', [holder, standby]);
+    expect(syncableAvailabilityMember(standby, old)).toBe(false);
+    expect(syncableAvailabilityMember(holder, old)).toBe(true);
   });
 
   it('adds nothing to other bindings and queries nothing without Availability members', async () => {

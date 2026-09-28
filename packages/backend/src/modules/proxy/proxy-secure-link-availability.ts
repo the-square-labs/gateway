@@ -75,9 +75,17 @@ export function availabilityMemberBindingFields(
 ): AvailabilityMemberBindingFields {
   if (binding.purpose !== 'availability_member' || !binding.referenceId) return {};
   const policyId = context.policyByPlacement.get(binding.referenceId);
-  // B2: only a lease-mode policy's members are gated by the lease; bootstrapping, closing and legacy members keep
-  // today's always-open sockets. The field is cleared as soon as the policy leaves lease mode (the sync is complete).
-  if (!policyId || !context.leasePolicies.has(policyId)) return { dormant: binding.dormant };
+  if (!policyId) return { dormant: binding.dormant };
+  if (!context.leasePolicies.has(policyId)) {
+    // B2 + B-12c: outside lease mode (legacy, bootstrapping, closing) a member whose copy serves is a plain link: its
+    // socket listens and no lease gates it, so entering or leaving lease mode never closes the serving copy's socket.
+    // Every other member (a standby, a stopped copy) is sent dormant AND gated: the nginx daemon keeps its socket
+    // closed (no relay gate view ever names it) and the Docker daemon keeps its endpoint dormant, so nginx never sends
+    // a request, a POST included, to a copy that does not run; it only fails a connect and tries the next member.
+    // Before, a dormant member without the policy kept an open socket in every mode but lease.
+    if (!binding.dormant) return { dormant: false };
+    return { dormant: true, availabilityPolicyId: policyId, availabilityCandidateId: binding.dockerNodeId };
+  }
   // In lease mode the lease, not the member's dormant flag, decides where the workload runs (D8), and Gateway learns
   // it after the fact: a successor's container starts after Gateway already marked its member live, and a takeover
   // happens while Gateway still marks the member dormant. Every lease-mode member is sent dormant, so a target daemon

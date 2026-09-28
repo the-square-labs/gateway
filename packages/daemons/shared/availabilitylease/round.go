@@ -268,6 +268,10 @@ func (n *Node) onNack(from string, msg *pb.LeaseNack, now time.Duration) {
 		if promised := ballotFromProto(msg.GetPromised()); promised.Round > pk.maxRound {
 			pk.maxRound = promised.Round
 		}
+		if pk.retain != nil && ballotFromProto(msg.GetBallot()) == pk.ballot {
+			n.onRetainRefused(from, pk, msg, now)
+			return
+		}
 	}
 	if r == nil {
 		return
