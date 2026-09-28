@@ -411,14 +411,14 @@ describe('hosting paid provisioning state machine', () => {
     expect(test.row()).toMatchObject({ phase: 'installing', dispatchStartedAt: null });
     expect(test.row().result?.sshInstall).toMatchObject({ guestKey: 'removed', providerKey: 'deleted' });
   });
-  it('fails a CloudBlast SSH install whose session was lost once its enrollment token expired', async () => {
-    const lost = (minutesAgo: number) => {
+  it('sends a CloudBlast SSH install again once when a Gateway restart lost its session, then fails', async () => {
+    const lost = (minutesAgo: number, redispatched = false) => {
       const test = runner(
         {
           phase: 'installing',
           resourceId: 'resource',
           dispatchStartedAt: new Date(Date.now() - minutesAgo * 60 * 1000),
-          result: { sshInstall: { ...initialSshInstallState(), providerKey: 'deleted' } },
+          result: { sshInstall: { ...initialSshInstallState(), providerKey: 'deleted', redispatched } },
         },
         undefined,
         {},
@@ -432,20 +432,22 @@ describe('hosting paid provisioning state machine', () => {
       });
       return test;
     };
-    const running = lost(10);
-    await running.service.reconcileDue();
-    expect(running.operations.finish).not.toHaveBeenCalled();
-    expect(running.ssh.executeWithKeyForHosting).not.toHaveBeenCalled();
+    const first = lost(10);
+    await first.service.reconcileDue();
+    expect(first.operations.finish).not.toHaveBeenCalled();
+    expect(first.row()).toMatchObject({ phase: 'provisioning', dispatchStartedAt: null });
+    expect(first.row().result?.sshInstall).toMatchObject({ redispatched: true });
 
-    const expired = lost(36);
-    await expired.service.reconcileDue();
-    expect(expired.ssh.executeWithKeyForHosting).not.toHaveBeenCalled();
-    expect(expired.operations.finish).toHaveBeenCalledWith(
-      expect.anything(),
-      'failed',
-      undefined,
-      expect.objectContaining({ code: 'HOSTING_INSTALL_OUTCOME_UNKNOWN' })
-    );
+    for (const again of [lost(10, true), lost(36)]) {
+      await again.service.reconcileDue();
+      expect(again.ssh.executeWithKeyForHosting).not.toHaveBeenCalled();
+      expect(again.operations.finish).toHaveBeenCalledWith(
+        expect.anything(),
+        'failed',
+        undefined,
+        expect.objectContaining({ code: 'HOSTING_INSTALL_OUTCOME_UNKNOWN' })
+      );
+    }
   });
   it('fails a queued create before dispatch when scope validation is denied', async () => {
     const test = runner();

@@ -53,6 +53,7 @@ import {
   rotateSshInstallToken,
   SSH_INSTALL_TOKEN_TTL_MS,
   type SshInstallKey,
+  sshInstallState,
 } from './hosting-ssh-install.js';
 import { allocateProxmoxPool } from './proxmox-allocation.js';
 import { reserveProxmoxQuota } from './proxmox-quota.js';
@@ -1225,19 +1226,33 @@ export class HostingProvisioningService {
         await this.operations.update(row, { phase: 'enrolling' });
         return;
       }
-      // An SSH install whose session ended without a result (Gateway restarted mid-install) never reports one, and
-      // once its enrollment token expired the node cannot enroll either: fail it so it can be retried.
+      // A dispatched SSH install that runs in no session of this process lost it with a Gateway restart: the guest's
+      // installer died with the session (SIGHUP) and never reports. Send it once more with the same one-time key;
+      // the bootstrap's lock and clean-host checks stop a second copy. A second loss, or an old one whose enrollment
+      // token expired, fails so it can be retried by hand.
       if (
         row.dispatchStartedAt &&
         connector.provider === 'cloudblast' &&
         row.action === 'create' &&
-        Date.now() - row.dispatchStartedAt.getTime() > SSH_INSTALL_OUTCOME_TIMEOUT_MS &&
+        !this.sshInstall.isInFlight(row.id) &&
         !(await this.enrollmentObserved(row))
       ) {
+        const state = sshInstallState(row);
+        const expired = Date.now() - row.dispatchStartedAt.getTime() > SSH_INSTALL_OUTCOME_TIMEOUT_MS;
+        if (state && !state.redispatched && !expired && row.encryptedBootstrap) {
+          await this.operations.update(row, {
+            phase: 'provisioning',
+            dispatchStartedAt: null,
+            errorCode: 'HOSTING_SSH_INSTALL_WAITING',
+            errorMessage: 'Installing again: Gateway restarted during the installation',
+            result: { ...row.result, sshInstall: { ...state, redispatched: true } },
+          });
+          return;
+        }
         await this.sshInstall.finish(adapter, row, 'failed', undefined, {
           code: 'HOSTING_INSTALL_OUTCOME_UNKNOWN',
           message:
-            'The installation session ended without a result (for example, Gateway restarted during it) and the node never enrolled. Retry installation on this VM.',
+            'The installation session ended without a result (Gateway restarted during it) and the node never enrolled. Retry installation on this VM.',
         });
       }
       return;

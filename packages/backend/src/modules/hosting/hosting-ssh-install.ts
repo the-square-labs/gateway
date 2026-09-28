@@ -37,6 +37,8 @@ export interface SshInstallState {
   providerKeyError?: string;
   guestKey: 'pending' | 'removed' | 'failed' | 'retained';
   guestKeyAttempts: number;
+  /** Set once the installer was sent again after its first session was lost with a Gateway restart. */
+  redispatched?: boolean;
   /** Tail of a failed installer's output, without colours or enrollment tokens. */
   diagnostics?: string;
   deferred?: Outcome;
@@ -150,7 +152,14 @@ type Deps = {
  * host key trusted on first use and pinned for the rest of the operation, then both key cleanups.
  */
 export class HostingSshInstaller {
+  /** Operations whose SSH session runs in this process; a dispatched one missing here lost its session. */
+  private readonly inFlight = new Set<string>();
+
   constructor(private readonly deps: Deps) {}
+
+  isInFlight(operationId: string): boolean {
+    return this.inFlight.has(operationId);
+  }
 
   private save(row: HostingOperationRow, state: SshInstallState, patch: Record<string, unknown> = {}) {
     return this.deps.operations.update(row, { ...patch, result: { ...row.result, sshInstall: state } });
@@ -204,6 +213,7 @@ export class HostingSshInstaller {
       await this.audit(row, 'hosting.install.ssh_host_key_pinned', { address, hostFingerprint });
     }
     let output: { exitCode: number | null; stdout: string; stderr?: string };
+    this.inFlight.add(row.id);
     try {
       output = await this.deps.ssh.executeWithKeyForHosting({
         address,
@@ -224,6 +234,7 @@ export class HostingSshInstaller {
         signal,
       });
     } catch (error) {
+      this.inFlight.delete(row.id);
       if (isSshOperationCancelled(error)) {
         // Gateway is shutting down and ended the session. Before dispatch nothing was sent. After it,
         // the installer outcome is unknown, exactly as after a crash: the operation stays dispatched
@@ -240,6 +251,7 @@ export class HostingSshInstaller {
         );
       throw error;
     }
+    this.inFlight.delete(row.id);
     const installed = output.exitCode === 0;
     const diagnostics = installed ? undefined : installDiagnostics(output);
     state = {
