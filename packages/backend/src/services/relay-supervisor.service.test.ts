@@ -23,6 +23,7 @@ function harness(
     recover?: ReturnType<typeof vi.fn>;
     inspectRelay?: ReturnType<typeof vi.fn>;
     readinessWaitMs?: number;
+    clock?: { now: () => number; sleep: (ms: number) => Promise<void> };
   } = {}
 ) {
   let persisted: unknown = null;
@@ -58,8 +59,9 @@ function harness(
       probeIntervalMs: 60_000,
       recoveryDelaysMs: [0, 0, 0],
       readinessWaitMs: options.readinessWaitMs ?? 1,
-      readinessPollMs: 1,
-      sleep: async () => {},
+      readinessPollMs: options.clock ? 1_000 : 1,
+      sleep: options.clock?.sleep ?? (async () => {}),
+      ...(options.clock ? { now: options.clock.now } : {}),
     }
   );
   return { supervisor, getHealth, recover, inspectRelay, events, audit, cache };
@@ -483,5 +485,257 @@ describe('RelaySupervisorService', () => {
 
     await supervisor.retryRecovery('admin-1');
     await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(6));
+  });
+
+  describe('external restarts of any duration (O1)', () => {
+    const T0 = Date.parse('2026-09-28T09:23:45.000Z');
+    const OLD_RUN = '2026-09-28T08:43:42.000Z';
+    const at = (ms: number) => new Date(T0 + ms).toISOString();
+
+    /** A virtual clock: each sleep advances it, so second-long waits take no real time. */
+    function virtualClock() {
+      const clock = { t: T0, now: () => clock.t, sleep: async (ms: number) => void (clock.t += ms) };
+      return clock;
+    }
+
+    /**
+     * Drives the supervisor the way its 5 s timer does: probes at the given offsets from T0, each
+     * after the virtual clock reached it (a recovery cycle in between moves the clock itself).
+     */
+    async function probeAt(
+      supervisor: RelaySupervisorService,
+      clock: ReturnType<typeof virtualClock>,
+      offsets: number[]
+    ) {
+      for (const offset of offsets) {
+        if (clock.t < T0 + offset) clock.t = T0 + offset;
+        await supervisor.probeNow();
+      }
+    }
+
+    it('waits through a slow external docker restart and never starts the relay a second time', async () => {
+      const clock = virtualClock();
+      // `docker restart` at +4.08 s: the relay drains for 9.9 s (well past the 5 s the rc.18 fix
+      // covered), exits at +13.98 s, the new run starts at +14.0 s and answers from +14.9 s.
+      const stopAt = 4_080;
+      const newRunAt = 14_000;
+      const getHealth = vi.fn(async () => {
+        const t = clock.t - T0;
+        if (t < stopAt + 100 || t >= newRunAt + 900) return healthy();
+        throw new Error('connect refused');
+      });
+      const inspectRelay = vi.fn(async () => {
+        const t = clock.t - T0;
+        const events = t >= stopAt ? [{ action: 'kill', timeMs: T0 + stopAt, attributes: { signal: '15' } }] : [];
+        if (t < newRunAt - 20)
+          return { id: 'relay-id', running: true, startedAt: OLD_RUN, stopTimeoutSeconds: 10, events };
+        if (t < newRunAt)
+          return { id: 'relay-id', running: false, startedAt: OLD_RUN, finishedAt: at(newRunAt - 20), events };
+        return { id: 'relay-id', running: true, startedAt: at(newRunAt), stopTimeoutSeconds: 10, events };
+      });
+      const { supervisor, recover, audit } = harness({ getHealth, inspectRelay, readinessWaitMs: 20_000, clock });
+
+      // Probes every 5 s: healthy, then suspect at +4.9 s, recovering at +9.9 s (inside the stop).
+      await probeAt(supervisor, clock, [0, 4_900, 9_900]);
+      await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy', attempt: 0 }));
+
+      expect(recover).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'relay.recovery.succeeded' }));
+      // It came back as soon as the external run answered, not after a supervisor restart.
+      expect(clock.t - T0).toBeLessThan(newRunAt + 2_000);
+    });
+
+    it('waits through an external restart whose stop takes as long as Docker allows', async () => {
+      const clock = virtualClock();
+      // SIGTERM ignored: Docker kills after the 10 s stop timeout, the new run starts right after.
+      const stopAt = 1_000;
+      const newRunAt = stopAt + 10_050;
+      const getHealth = vi.fn(async () => {
+        const t = clock.t - T0;
+        if (t < stopAt || t >= newRunAt + 3_000) return healthy();
+        throw new Error('connect refused');
+      });
+      const inspectRelay = vi.fn(async () => {
+        const t = clock.t - T0;
+        const events =
+          t >= stopAt + 10_000
+            ? [
+                { action: 'kill', timeMs: T0 + stopAt, attributes: { signal: '15' } },
+                { action: 'kill', timeMs: T0 + stopAt + 10_000, attributes: { signal: '9' } },
+              ]
+            : t >= stopAt
+              ? [{ action: 'kill', timeMs: T0 + stopAt, attributes: { signal: '15' } }]
+              : [];
+        if (t < newRunAt) return { id: 'relay-id', running: true, startedAt: OLD_RUN, events };
+        return { id: 'relay-id', running: true, startedAt: at(newRunAt), events };
+      });
+      const { supervisor, recover } = harness({ getHealth, inspectRelay, readinessWaitMs: 20_000, clock });
+
+      await probeAt(supervisor, clock, [0, 1_500, 6_500]);
+      await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy', attempt: 0 }));
+      expect(recover).not.toHaveBeenCalled();
+    });
+
+    it('re-judges instead of acting when the relay was started between its decision and its action', async () => {
+      const clock = virtualClock();
+      // Docker's event history is unavailable here, so the running old run looks hung; the external
+      // restart's new run starts just as recovery is about to restart it.
+      const newRunAt = 9_950;
+      const getHealth = vi.fn(async () => {
+        const t = clock.t - T0;
+        if (t < 1_000 || t >= newRunAt + 1_500) return healthy();
+        throw new Error('connect refused');
+      });
+      const inspectRelay = vi.fn(async () =>
+        clock.t - T0 < newRunAt
+          ? { id: 'relay-id', running: true, startedAt: OLD_RUN }
+          : { id: 'relay-id', running: true, startedAt: at(newRunAt) }
+      );
+      const recover = vi.fn(async (decidedOn: { startedAt: string } | undefined) => {
+        clock.t = Math.max(clock.t, T0 + newRunAt);
+        // The recovery service compares Docker's current run with the observation it was given.
+        return decidedOn && decidedOn.startedAt !== at(newRunAt) ? 'superseded' : 'restart';
+      });
+      const { supervisor, audit } = harness({ getHealth, inspectRelay, recover, readinessWaitMs: 20_000, clock });
+
+      await probeAt(supervisor, clock, [0, 4_000, 9_000]);
+      await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy', attempt: 0 }));
+
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(recover).toHaveBeenCalledWith(expect.objectContaining({ startedAt: OLD_RUN }));
+      expect(audit.log).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'relay.recovery.succeeded' }));
+    });
+
+    it('leaves a relay alone while Docker restart policy restarts it after a crash', async () => {
+      const clock = virtualClock();
+      const crashAt = 2_000;
+      const newRunAt = crashAt + 3_000;
+      const getHealth = vi.fn(async () => {
+        const t = clock.t - T0;
+        if (t < crashAt || t >= newRunAt + 2_000) return healthy();
+        throw new Error('connect refused');
+      });
+      const inspectRelay = vi.fn(async () =>
+        clock.t - T0 < newRunAt
+          ? { id: 'relay-id', running: false, restarting: true, startedAt: OLD_RUN, finishedAt: at(crashAt) }
+          : { id: 'relay-id', running: true, startedAt: at(newRunAt) }
+      );
+      const { supervisor, recover } = harness({ getHealth, inspectRelay, readinessWaitMs: 20_000, clock });
+
+      await probeAt(supervisor, clock, [0, 2_500, 3_000]);
+      await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy', attempt: 0 }));
+      expect(recover).not.toHaveBeenCalled();
+    });
+
+    it('still restarts a crashed relay that nobody brings back, at once', async () => {
+      const clock = virtualClock();
+      let recoveredAt: number | null = null;
+      const getHealth = vi.fn(async () => {
+        const t = clock.t - T0;
+        if (t < 1_000 || (recoveredAt !== null && clock.t >= recoveredAt + 800)) return healthy();
+        throw new Error('connect refused');
+      });
+      // The process died at +1 s and Docker left it down (no restart policy, or it gave up).
+      const inspectRelay = vi.fn(async () =>
+        recoveredAt === null
+          ? { id: 'relay-id', running: false, startedAt: OLD_RUN, finishedAt: at(1_000) }
+          : { id: 'relay-id', running: true, startedAt: new Date(recoveredAt).toISOString() }
+      );
+      const recover = vi.fn(async () => {
+        recoveredAt = clock.t;
+        return 'start';
+      });
+      const { supervisor, audit } = harness({ getHealth, inspectRelay, recover, readinessWaitMs: 20_000, clock });
+
+      await probeAt(supervisor, clock, [0, 1_500, 6_500]);
+      await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy' }));
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(recover).toHaveBeenCalledWith(expect.objectContaining({ running: false }));
+      // Acted on the recovering probe itself, without waiting.
+      expect((recoveredAt ?? 0) - T0).toBe(6_500);
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'relay.recovery.succeeded',
+          details: expect.objectContaining({ action: 'start' }),
+        })
+      );
+    });
+
+    it('still restarts a hung relay whose run was healthy before, at once', async () => {
+      const clock = virtualClock();
+      let restartedAt: number | null = null;
+      const getHealth = vi.fn(async () => {
+        if (clock.t - T0 < 1_000 || (restartedAt !== null && clock.t >= restartedAt + 800)) return healthy();
+        throw new Error('deadline exceeded');
+      });
+      const inspectRelay = vi.fn(async () => ({ id: 'relay-id', running: true, startedAt: OLD_RUN, events: [] }));
+      const recover = vi.fn(async () => {
+        restartedAt = clock.t;
+        return 'restart';
+      });
+      const { supervisor } = harness({ getHealth, inspectRelay, recover, readinessWaitMs: 20_000, clock });
+
+      await probeAt(supervisor, clock, [0, 1_500, 6_500]);
+      await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy' }));
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect((restartedAt ?? 0) - T0).toBe(6_500);
+    });
+
+    it('restarts a relay whose external stop hung past its kill deadline', async () => {
+      const clock = virtualClock();
+      let restartedAt: number | null = null;
+      const getHealth = vi.fn(async () => {
+        if (clock.t - T0 < 1_000 || (restartedAt !== null && clock.t >= restartedAt + 800)) return healthy();
+        throw new Error('connect refused');
+      });
+      const inspectRelay = vi.fn(async () => ({
+        id: 'relay-id',
+        running: true,
+        startedAt: OLD_RUN,
+        stopTimeoutSeconds: 10,
+        events: [{ action: 'kill', timeMs: T0 + 1_000, attributes: { signal: '15' } }],
+      }));
+      const recover = vi.fn(async () => {
+        restartedAt = clock.t;
+        return 'restart';
+      });
+      const { supervisor } = harness({ getHealth, inspectRelay, recover, readinessWaitMs: 20_000, clock });
+
+      await probeAt(supervisor, clock, [0, 1_500, 6_500]);
+      await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy' }));
+      expect(recover).toHaveBeenCalledTimes(1);
+      // Kill deadline: SIGTERM at +1 s + 10 s stop timeout + 5 s grace.
+      expect((restartedAt ?? 0) - T0).toBeGreaterThanOrEqual(16_000);
+      expect((restartedAt ?? 0) - T0).toBeLessThan(18_000);
+    });
+
+    it('starts a relay an operator stopped once the stop has settled', async () => {
+      const clock = virtualClock();
+      let startedAt: number | null = null;
+      const stoppedAt = 6_000;
+      const getHealth = vi.fn(async () => {
+        if (clock.t - T0 < 1_000 || (startedAt !== null && clock.t >= startedAt + 800)) return healthy();
+        throw new Error('connect refused');
+      });
+      // `docker stop`: SIGTERM at +1 s, exit at +6 s; nothing starts it again.
+      const inspectRelay = vi.fn(async () => {
+        const events = [{ action: 'kill', timeMs: T0 + 1_000, attributes: { signal: '15' } }];
+        if (startedAt !== null) return { id: 'relay-id', running: true, startedAt: new Date(startedAt).toISOString() };
+        if (clock.t - T0 < stoppedAt) return { id: 'relay-id', running: true, startedAt: OLD_RUN, events };
+        return { id: 'relay-id', running: false, startedAt: OLD_RUN, finishedAt: at(stoppedAt), events };
+      });
+      const recover = vi.fn(async () => {
+        startedAt = clock.t;
+        return 'start';
+      });
+      const { supervisor } = harness({ getHealth, inspectRelay, recover, readinessWaitMs: 20_000, clock });
+
+      await probeAt(supervisor, clock, [0, 1_500, 5_500]);
+      await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy' }));
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(recover).toHaveBeenCalledWith(expect.objectContaining({ running: false }));
+      expect((startedAt ?? 0) - T0).toBeGreaterThanOrEqual(stoppedAt + 2_000);
+      expect((startedAt ?? 0) - T0).toBeLessThan(stoppedAt + 3_500);
+    });
   });
 });

@@ -29,6 +29,7 @@ function docker() {
     startContainer: vi.fn(),
     restartContainer: vi.fn(),
     runOneShot: vi.fn().mockResolvedValue({ exitCode: 0, output: '' }),
+    listContainerEvents: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -84,11 +85,79 @@ describe('RelayDockerRecoveryService', () => {
     await expect(recovery.inspectRelay()).resolves.toEqual({
       id: 'relay-id',
       running: true,
+      restarting: false,
       startedAt: '2026-09-28T00:38:30.123456789Z',
+      finishedAt: null,
+      stopTimeoutSeconds: null,
     });
     expect(mock.startContainer).not.toHaveBeenCalled();
     expect(mock.restartContainer).not.toHaveBeenCalled();
     expect(mock.runOneShot).not.toHaveBeenCalled();
+    expect(mock.listContainerEvents).not.toHaveBeenCalled();
+  });
+
+  it('reads the stop requests Docker recorded for the relay run', async () => {
+    const { service: recovery, mock } = service();
+    mock.listContainersByLabel.mockResolvedValue([{ Id: 'relay-id' }]);
+    mock.inspectContainer.mockResolvedValue({
+      Id: 'relay-id',
+      State: { Running: true, Restarting: false, StartedAt: '2026-09-28T08:43:42.000Z', FinishedAt: '' },
+      Config: { Image: IMAGE, Labels: labels('relay'), StopTimeout: 30 },
+    });
+    const kill = { action: 'kill', timeMs: 1_000, attributes: { signal: '15' } };
+    mock.listContainerEvents.mockResolvedValue([kill]);
+    await expect(recovery.inspectRelay(500)).resolves.toMatchObject({ stopTimeoutSeconds: 30, events: [kill] });
+    expect(mock.listContainerEvents).toHaveBeenCalledWith('relay-id', 500, expect.any(Number));
+
+    // Docker's event history is a hint: without it the container's own state still counts.
+    mock.listContainerEvents.mockRejectedValue(new Error('events unavailable'));
+    const observed = await recovery.inspectRelay(500);
+    expect(observed).toMatchObject({ id: 'relay-id', running: true });
+    expect(observed).not.toHaveProperty('events');
+  });
+
+  it('does nothing when the relay was started after the observation recovery decided on', async () => {
+    const { service: recovery, mock } = service();
+    mock.listContainersByLabel.mockResolvedValue([{ Id: 'relay-id' }]);
+    // An external `docker restart` finished between the decision and the action.
+    mock.inspectContainer.mockResolvedValue({
+      Id: 'relay-id',
+      State: { Running: true, StartedAt: '2026-09-28T09:23:55.051Z' },
+      Config: { Image: IMAGE, Labels: labels('relay') },
+    });
+    const decidedOn = { id: 'relay-id', running: true, startedAt: '2026-09-28T08:43:42.000Z' };
+    await expect(recovery.recover(decidedOn)).resolves.toBe('superseded');
+    expect(mock.restartContainer).not.toHaveBeenCalled();
+    expect(mock.startContainer).not.toHaveBeenCalled();
+    expect(mock.runOneShot).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when a stopped relay was started or a missing one created meanwhile', async () => {
+    const { service: recovery, mock } = service();
+    mock.listContainersByLabel.mockResolvedValue([{ Id: 'relay-id' }]);
+    mock.inspectContainer.mockResolvedValue({
+      Id: 'relay-id',
+      State: { Running: true, StartedAt: '2026-09-28T09:23:55.051Z' },
+      Config: { Image: IMAGE, Labels: labels('relay') },
+    });
+    const stopped = { id: 'relay-id', running: false, startedAt: '2026-09-28T08:43:42.000Z' };
+    await expect(recovery.recover(stopped)).resolves.toBe('superseded');
+    await expect(recovery.recover(null)).resolves.toBe('superseded');
+    expect(mock.startContainer).not.toHaveBeenCalled();
+    expect(mock.runOneShot).not.toHaveBeenCalled();
+  });
+
+  it('acts when the relay is still the run recovery decided on', async () => {
+    const { service: recovery, mock } = service();
+    mock.listContainersByLabel.mockResolvedValue([{ Id: 'relay-id' }]);
+    mock.inspectContainer.mockResolvedValue({
+      Id: 'relay-id',
+      State: { Running: true, StartedAt: '2026-09-28T08:43:42.000Z' },
+      Config: { Image: IMAGE, Labels: labels('relay') },
+    });
+    const decidedOn = { id: 'relay-id', running: true, restarting: false, startedAt: '2026-09-28T08:43:42.000Z' };
+    await expect(recovery.recover(decidedOn)).resolves.toBe('restart');
+    expect(mock.restartContainer).toHaveBeenCalledWith('relay-id', 10);
   });
 
   it('uses the already-present pinned Compose helper only when the relay is missing', async () => {

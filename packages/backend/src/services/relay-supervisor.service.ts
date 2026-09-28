@@ -9,17 +9,27 @@ import type { GeneralSettingsService } from '@/modules/settings/general-settings
 import type { CacheService } from './cache.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import {
+  type RelayContainerObservation,
   type RelayDockerRecoveryService,
   type RelayRecoveryAction,
   RelayRecoverySafetyError,
 } from './relay-docker-recovery.service.js';
-import { freshRelayStartWaitMs } from './relay-recovery-decision.js';
+import { type RelayExternalActivity, relayRecoveryWait } from './relay-recovery-decision.js';
 
 const logger = createChildLogger('RelaySupervisor');
 const CONTROL_STATE_KEY = 'relay:control-state';
 const MAX_ATTEMPTS = 3;
 /** The legacy policy lease; a gap past this is long enough that the relay served stale policy. */
 const RELAY_STALE_POLICY_GAP_MS = 15 * 60 * 1000;
+/**
+ * How far back recovery reads Docker's lifecycle events of the relay: far enough to see the stop
+ * request of the slowest `docker stop`/`restart` still in progress (Compose stop_grace_period).
+ */
+const RELAY_EVENT_LOOKBACK_MS = 2 * 60_000;
+/** The longest recovery leaves the relay to other actors in one go, however they keep changing it. */
+const RELAY_EXTERNAL_WAIT_CAP_MS = 3 * 60_000;
+/** A container that keeps changing under recovery's hands is acted on after this many rounds. */
+const MAX_SUPERSEDED_ROUNDS = 3;
 
 export const RELAY_HEALTH_REASONS = [
   'unreachable',
@@ -94,6 +104,7 @@ export interface RelaySupervisorOptions {
   readinessWaitMs?: number;
   readinessPollMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 type ProbeResult =
@@ -150,6 +161,9 @@ export class RelaySupervisorService {
   private readonly readinessWaitMs: number;
   private readonly readinessPollMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
+  /** When the supervisor's own last start/restart of the relay returned; its run is not someone else's. */
+  private lastOwnActionAt: number | null = null;
   private availabilityLease?: {
     ingestRelayReport(
       relayInstanceId: string,
@@ -172,6 +186,7 @@ export class RelaySupervisorService {
     this.readinessWaitMs = options.readinessWaitMs ?? 20_000;
     this.readinessPollMs = options.readinessPollMs ?? 1_000;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.now = options.now ?? Date.now;
   }
 
   /** The local relay's acceptor and gate view goes to the availability lease service with every health probe. */
@@ -267,11 +282,11 @@ export class RelaySupervisorService {
     this.probing = true;
     try {
       const result = await this.checkRelay();
-      this.state.lastProbeAt = new Date().toISOString();
+      this.state.lastProbeAt = new Date(this.now()).toISOString();
       if (result.healthy) {
         this.failureCount = 0;
         const healthyUpdate = {
-          lastHealthyAt: new Date().toISOString(),
+          lastHealthyAt: new Date(this.now()).toISOString(),
           relayBuildVersion: result.response.buildVersion,
           protocolMajor: Number(result.response.protocolMajor),
           registeredEndpoints: Number(result.response.registeredEndpoints),
@@ -372,7 +387,7 @@ export class RelaySupervisorService {
       // supervisor. Re-probe before any mutating Docker action so the manual
       // endpoint cannot restart an already healthy relay.
       const current = await this.checkRelay();
-      this.state.lastProbeAt = new Date().toISOString();
+      this.state.lastProbeAt = new Date(this.now()).toISOString();
       if (current.healthy) {
         this.failureCount = 0;
         await this.transition({
@@ -381,7 +396,7 @@ export class RelaySupervisorService {
           recoveryBlocked: null,
           attempt: 0,
           attemptHistory: [],
-          lastHealthyAt: new Date().toISOString(),
+          lastHealthyAt: new Date(this.now()).toISOString(),
           relayBuildVersion: current.response.buildVersion,
           protocolMajor: Number(current.response.protocolMajor),
           registeredEndpoints: Number(current.response.registeredEndpoints),
@@ -459,9 +474,13 @@ export class RelaySupervisorService {
       return;
     }
     const startAttempt = Math.max(1, this.state.attempt + 1);
+    let supersededRounds = 0;
+    let rejudge = false;
     for (let attempt = startAttempt; attempt <= MAX_ATTEMPTS; attempt += 1) {
       if (this.stopping) return;
-      const delay = this.recoveryDelaysMs[attempt - 1] ?? 0;
+      // A round whose action was superseded judges the relay again at once, on the same attempt.
+      const delay = rejudge ? 0 : (this.recoveryDelaysMs[attempt - 1] ?? 0);
+      rejudge = false;
       if (delay > 0) await this.sleep(delay);
       if (this.stopping || this.inMaintenance()) return;
       // The relay may have recovered on its own meanwhile, or an update may have taken it over.
@@ -474,20 +493,40 @@ export class RelaySupervisorService {
           return;
         }
       }
-      if (await this.awaitRelayStartedElsewhere()) {
+      const external = await this.awaitExternalActivity();
+      if (external.healthy) {
         if (this.inMaintenance()) return;
         await this.markRecovered();
         return;
       }
       if (this.stopping || this.inMaintenance()) return;
-      const startedAt = new Date().toISOString();
+      const startedAt = new Date(this.now()).toISOString();
       await this.allocateAttempt(attempt, startedAt);
       let action: RelayRecoveryAction;
       try {
-        action = await this.recovery.recover();
+        // Acts only if the container is still what it was when the decision was made.
+        const outcome = await this.recovery.recover(
+          external.observationKnown && supersededRounds < MAX_SUPERSEDED_ROUNDS ? external.observed : undefined
+        );
+        if (outcome === 'superseded') {
+          supersededRounds += 1;
+          logger.info('Gateway relay changed while recovery was about to act; judging it again', {
+            attempt,
+            round: supersededRounds,
+          });
+          this.state.attemptHistory = this.state.attemptHistory.filter((record) => record.attempt !== attempt);
+          this.state.attempt = attempt - 1;
+          await this.persistAndPublish();
+          rejudge = true;
+          attempt -= 1;
+          continue;
+        }
+        this.lastOwnActionAt = this.now();
+        action = outcome;
         this.updateAttempt(attempt, { action });
         await this.persistAndPublish();
       } catch (error) {
+        this.lastOwnActionAt = this.now();
         this.updateAttempt(attempt, { result: 'failed' });
         logger.warn('Gateway relay recovery action failed', {
           attempt,
@@ -576,28 +615,60 @@ export class RelaySupervisorService {
   }
 
   /**
-   * A relay container started after the relay was last seen healthy is a run someone else began;
-   * restarting it would only double the outage. Wait out its readiness window instead. Returns
-   * true when it became healthy; false sends recovery on to its restart attempt.
+   * Leaves the relay to whoever else is acting on it: a run started after the supervisor last saw
+   * the relay (an operator's `docker restart`, Docker's restart policy, an update) gets its own
+   * readiness window, a stop someone requested runs to its end, and a relay that just exited gets
+   * a moment for a restart's start to follow. Only then may recovery act, and only on the state it
+   * observed last (`observed`). Returns healthy when the relay came back meanwhile.
    */
-  private async awaitRelayStartedElsewhere(): Promise<boolean> {
-    if (!this.recovery) return false;
-    const observed = await this.recovery.inspectRelay().catch(() => null);
-    const waitMs = freshRelayStartWaitMs(observed, this.state.lastHealthyAt, this.readinessWaitMs);
-    if (waitMs <= 0) return false;
-    logger.info('Gateway relay was started outside the supervisor; waiting for it instead of restarting it', {
-      startedAt: observed?.startedAt,
-      waitMs,
-    });
-    return this.waitForReadiness(waitMs);
+  private async awaitExternalActivity(): Promise<
+    { healthy: true } | { healthy: false; observationKnown: boolean; observed: RelayContainerObservation | null }
+  > {
+    if (!this.recovery) return { healthy: false, observationKnown: false, observed: null };
+    const cap = this.now() + RELAY_EXTERNAL_WAIT_CAP_MS;
+    let announced: RelayExternalActivity | null = null;
+    for (;;) {
+      if (this.stopping || this.inMaintenance()) return { healthy: false, observationKnown: false, observed: null };
+      const now = this.now();
+      let observed: RelayContainerObservation | null;
+      try {
+        observed = await this.recovery.inspectRelay(now - RELAY_EVENT_LOOKBACK_MS);
+      } catch {
+        // Docker did not answer: recovery's own action reports that (docker_unavailable).
+        return { healthy: false, observationKnown: false, observed: null };
+      }
+      const wait = relayRecoveryWait(observed, this.observationBaseline(), this.readinessWaitMs, this.now());
+      if (!wait || this.now() >= cap) return { healthy: false, observationKnown: true, observed };
+      if (announced !== wait.activity) {
+        announced = wait.activity;
+        logger.info('Gateway relay is being handled outside the supervisor; waiting instead of restarting it', {
+          activity: wait.activity,
+          startedAt: observed?.startedAt,
+          waitMs: wait.waitMs,
+        });
+      }
+      if ((await this.checkRelay()).healthy) return { healthy: true };
+      // Look at the container again every poll: a stop that ended turns into a fresh run or a
+      // stopped relay, each judged on its own at once.
+      await this.sleep(Math.max(1, Math.min(this.readinessPollMs, wait.waitMs, cap - this.now())));
+    }
+  }
+
+  /** The supervisor's last own sight of the relay: its last healthy probe or its own last action. */
+  private observationBaseline(): number | null {
+    const lastHealthy = this.state.lastHealthyAt ? Date.parse(this.state.lastHealthyAt) : Number.NaN;
+    const candidates = [Number.isFinite(lastHealthy) ? lastHealthy : null, this.lastOwnActionAt].filter(
+      (value): value is number => value !== null
+    );
+    return candidates.length > 0 ? Math.max(...candidates) : null;
   }
 
   private async waitForReadiness(waitMs = this.readinessWaitMs): Promise<boolean> {
-    const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) {
+    const deadline = this.now() + waitMs;
+    while (this.now() < deadline) {
       const result = await this.checkRelay();
       if (result.healthy) return true;
-      await this.sleep(this.readinessPollMs);
+      await this.sleep(Math.max(1, Math.min(this.readinessPollMs, deadline - this.now())));
     }
     return false;
   }
