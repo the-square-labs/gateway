@@ -22,6 +22,7 @@ import (
 func (r *Runtime) startupFenceLocked(now time.Duration, manifests []availabilitylease.ManifestInfo) {
 	for _, manifest := range manifests {
 		if manifest.Closed {
+			r.startupRetainedLocked(now, manifest)
 			continue
 		}
 		var running []Container
@@ -71,4 +72,44 @@ func (r *Runtime) recoverableLocked(running []Container, now time.Duration) (ava
 		deadline = min(deadline, record.Deadline())
 	}
 	return key, deadline, true
+}
+
+// startupRetainedLocked handles a closed policy at daemon start (graceful
+// close). Legacy owns a closed policy's containers, except the copy of the
+// slot the closed manifest names this node the retained holder of: with live
+// deadline records it was still confirming the close when the daemon stopped,
+// so it recovers on that budget and asks again (fencing if the voters do not
+// confirm in time); without records it was already retained and only asks the
+// voters to confirm it again, for the lease report.
+func (r *Runtime) startupRetainedLocked(now time.Duration, manifest availabilitylease.ManifestInfo) {
+	slot, named := manifest.RetainedSlot(r.opts.NodeID)
+	if !named {
+		return
+	}
+	var running []Container
+	armed := false
+	for _, c := range r.snapshot.byPolicy[manifest.PolicyID] {
+		if !c.Running {
+			continue
+		}
+		running = append(running, c)
+		if _, ok := r.records[c.ID]; ok {
+			armed = true
+		}
+	}
+	if len(running) == 0 {
+		return
+	}
+	key := availabilitylease.Key{PolicyID: manifest.PolicyID, Slot: slot}
+	if !armed {
+		r.logger.Info("reconfirming a retained copy of a closed availability lease after a daemon start", "policy_id", key.PolicyID, "slot", key.Slot)
+		r.node.ReconfirmRetained(key)
+		return
+	}
+	if recovered, deadline, ok := r.recoverableLocked(running, now); ok && recovered.Slot == slot && r.watchdog.alive {
+		r.logger.Info("recovering a closing lease's retained copy after a daemon start", "policy_id", key.PolicyID, "slot", key.Slot, "budget", deadline-now)
+		r.node.Recover(key, deadline)
+	}
+	// Otherwise its records are stale: the budget ran out before the close
+	// was confirmed, and the watchdog fences it as before.
 }

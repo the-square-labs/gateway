@@ -151,6 +151,39 @@ func TestClosedManifestUsesLegacyAdmissionAndUnknownPolicyStaysClosed(t *testing
 	}
 }
 
+// Graceful close: the relay confirms the close to the named holder, which
+// keeps its copy; the relay keeps admitting it (legacy admission of a closed
+// policy) and its gate view names it retained, so nginx keeps its socket open.
+func TestGracefulCloseRetainsTheHolderAndKeepsItAdmitted(t *testing.T) {
+	h := newHarness(t, true)
+	h.ready("d1", "d2")
+	acquire(t, h, "d1")
+	d1 := h.daemons["d1"]
+	ballot := d1.HolderStatus(testKey).Ballot
+	h.retained = []*relayv1.LeaseRetainedSlot{{Slot: 0, HolderId: "d1", Ballot: &relayv1.LeaseBallot{Round: ballot.Round, Incarnation: ballot.Incarnation, ProposerId: ballot.Proposer}}}
+	block := h.signManifest([]string{"d1", "d2"}, true)
+	h.relay.ApplyPolicy(h.snapshot())
+	if _, err := d1.AdoptManifest(block); err != nil {
+		t.Fatal(err)
+	}
+	for elapsed := time.Duration(0); elapsed < 2*time.Minute; elapsed += 100 * time.Millisecond {
+		h.step(100 * time.Millisecond)
+		if admission := h.relay.Admit(policyID, "d1"); admission.LeaseMode && !admission.Open {
+			t.Fatalf("retained holder refused at %s: %+v", elapsed, admission)
+		}
+	}
+	if st := d1.HolderStatus(testKey); !st.Retained {
+		t.Fatalf("holder not retained through the relay and voters: %+v", st)
+	}
+	views := h.relay.gateViews(nil)
+	if len(views) != 1 || views[0].GetLeaseMode() || views[0].GetHolderId() != "d1" || !strings.Contains(views[0].GetReason(), "retained") {
+		t.Fatalf("gate view after the close = %v", views)
+	}
+	if st := h.daemons["d2"].HolderStatus(testKey); st.Holding || st.Retained {
+		t.Fatalf("d2 after the close: %+v", st)
+	}
+}
+
 func relayPromises(t *testing.T, frames []*relayv1.CoordinationFrame) []*relayv1.LeasePromise {
 	t.Helper()
 	var promises []*relayv1.LeasePromise

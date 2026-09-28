@@ -369,6 +369,10 @@ func (n *Node) handleItem(from string, item *pb.LeaseItem, now time.Duration) {
 		n.onQuery(from, body.Query, now)
 	case *pb.LeaseItem_Status:
 		n.onStatus(from, body.Status, now)
+	case *pb.LeaseItem_Retain:
+		n.onRetain(from, body.Retain, now)
+	case *pb.LeaseItem_Retained:
+		n.onRetained(from, body.Retained, now)
 	}
 }
 

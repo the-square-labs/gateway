@@ -165,9 +165,15 @@ type fakeEndpoints struct {
 	w       *world
 	host    string
 	serving map[string]bool
+	// stops counts SetServing(false) calls: each renews the members dormant
+	// and cuts the policy's tunnels on this node.
+	stops int
 }
 
 func (e *fakeEndpoints) SetServing(policyID string, serving bool) {
+	if !serving {
+		e.stops++
+	}
 	if e.serving[policyID] != serving {
 		e.w.logf("%s endpoints serving=%v", e.host, serving)
 	}

@@ -1,0 +1,284 @@
+package lease
+
+import (
+	"crypto/ed25519"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
+)
+
+// requireUninterrupted fails when id's copy stops or its endpoints are told to
+// stop serving (dormant, tunnels cut) from now on.
+func requireUninterrupted(t *testing.T, w *world, id string) func() {
+	t.Helper()
+	h := w.daemon(id)
+	stops, from := h.endpoints.stops, len(w.log)
+	return func() {
+		t.Helper()
+		for _, line := range w.log[from:] {
+			if strings.Contains(line, id+" docker stop") || strings.Contains(line, id+" docker kill") || strings.Contains(line, id+" watchdog killed") {
+				t.Fatalf("%s's copy was stopped: %s\n%s", id, line, w.dump())
+			}
+		}
+		if h.endpoints.stops != stops {
+			t.Fatalf("%s's endpoints were taken out of service %d times\n%s", id, h.endpoints.stops-stops, w.dump())
+		}
+		if !h.engine.running() {
+			t.Fatalf("%s's copy is not running\n%s", id, w.dump())
+		}
+	}
+}
+
+// Graceful close: the holder keeps its copy and its endpoints, the voters
+// confirm, the watchdog deadline of exactly that copy is removed, and the
+// lease report says retained.
+func TestGracefulCloseKeepsTheCopyAndDisarmsItsWatchdog(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	w.run(3 * time.Second)
+	d1, d2 := w.daemon("d1"), w.daemon("d2")
+	check := requireUninterrupted(t, w, "d1")
+	w.closeGracefully()
+	if !w.runUntil(5*time.Second, func() bool { return len(d1.fence.records) == 0 }) {
+		t.Fatalf("the retained copy's watchdog record is still armed: %v\n%s", d1.fence.records, w.dump())
+	}
+	if len(d2.fence.records) == 0 {
+		t.Fatal("the standby's always-stale record must stay: only the retained copy is disarmed")
+	}
+	w.run(3 * time.Minute)
+	w.requireClean()
+	check()
+	report := d1.runtime.Report()
+	if len(report.Held) != 1 || !report.Held[0].Retained || report.Held[0].Role != "retained" {
+		t.Fatalf("lease report held %+v, want the slot retained", report.Held)
+	}
+	sawRetained := false
+	for _, event := range report.Events {
+		sawRetained = sawRetained || event.Kind == string(availabilitylease.EventRetained)
+		if event.Kind == string(availabilitylease.EventFence) {
+			t.Fatalf("fence event on a graceful close: %+v", event)
+		}
+	}
+	if !sawRetained {
+		t.Fatalf("no retained event: %+v", report.Events)
+	}
+	if d2.engine.running() || w.indexOf("d2 docker start") >= 0 {
+		t.Fatal("the standby started after the close")
+	}
+	// The docker plugin's endpoint gate admits every registration of a policy
+	// that is not in lease mode (a closed one): the retained copy's endpoints
+	// stay registered.
+	if d1.runtime.LeaseMode(testPolicy) || !d1.endpoints.serving[testPolicy] {
+		t.Fatal("the retained copy's endpoints would be refused after the close")
+	}
+}
+
+// A holder the closed manifest does not name fences at once.
+func TestGracefulCloseNamingAnotherNodeFencesTheHolder(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	w.retained = map[uint32]availabilitylease.RetainedHolder{0: {Holder: "d2"}}
+	w.closed = true
+	w.publishManifest()
+	if !w.runUntil(5*time.Second, func() bool { return !w.daemon("d1").engine.running() }) {
+		t.Fatalf("unnamed holder kept its copy\n%s", w.dump())
+	}
+	w.run(time.Minute)
+	w.requireClean()
+	if w.daemon("d2").engine.running() {
+		t.Fatal("the named node without a copy started one")
+	}
+}
+
+// A holder cut off from the voters when the lease closes cannot be
+// confirmed: it fences at its renewal timeout and releases, like any holder.
+func TestGracefulClosePartitionedHolderFencesAtItsTimeout(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1 := w.daemon("d1")
+	w.closeGracefully()
+	// Closed manifest reaches d1 over the Gateway, the voters do not answer.
+	d1.cut = true
+	w.deliverBlocks(d1)
+	start := w.clock.now
+	if !w.runUntil(availabilitylease.FenceCompleteAfter+time.Second, func() bool { return !d1.engine.running() }) {
+		t.Fatalf("partitioned holder kept its copy past its budget\n%s", w.dump())
+	}
+	if took := w.clock.now - start; took > availabilitylease.SoftFenceAfter+2*time.Second {
+		t.Fatalf("partitioned holder stopped %s after the close", took)
+	}
+	if len(w.fenceLog("d1")) == 0 || w.fenceLog("d1")[0] != string(availabilitylease.FenceClosed) {
+		t.Fatalf("fence reasons %v", w.fenceLog("d1"))
+	}
+	for _, held := range d1.runtime.Report().Held {
+		if held.Retained {
+			t.Fatal("partitioned holder reported retained")
+		}
+	}
+	w.requireClean()
+}
+
+// A daemon restart after the copy was retained: nothing kills it, and the
+// voters confirm it again for the lease report.
+func TestRetainedCopySurvivesADaemonRestart(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1 := w.daemon("d1")
+	w.closeGracefully()
+	w.runUntil(5*time.Second, func() bool { return len(d1.fence.records) == 0 })
+	check := requireUninterrupted(t, w, "d1")
+	restartDaemon(w, d1, 5*time.Second)
+	w.run(time.Minute)
+	w.requireClean()
+	check()
+	if held := d1.runtime.Report().Held; len(held) != 1 || !held[0].Retained {
+		t.Fatalf("restarted daemon does not report the retained copy: %+v", held)
+	}
+}
+
+// A retained holder whose copy is not running (a start the close cut short)
+// releases the slot instead of reporting a running copy.
+func TestRetainedHolderWithoutARunningCopyReleases(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1 := w.daemon("d1")
+	for _, c := range d1.engine.containers {
+		c.Running = false
+	}
+	w.closeGracefully()
+	w.run(10 * time.Second)
+	released := false
+	for _, event := range d1.runtime.Report().Events {
+		released = released || event.Kind == string(availabilitylease.EventReleased)
+	}
+	if !released {
+		t.Fatalf("retained holder without a copy did not release\n%s", w.dump())
+	}
+	for _, held := range d1.runtime.Report().Held {
+		if held.Retained {
+			t.Fatal("still reported retained without a running copy")
+		}
+	}
+}
+
+// Closing from bootstrapping (agent B): Gateway closes while the reserved
+// bootstrap holder still runs its legacy copy. A holder that has not acquired
+// yet was never lease-bound: the closed manifest leaves its copy, endpoints
+// and watchdog alone, also after a daemon restart. A bootstrap holder whose
+// commit raced the close is retained when Gateway names the reserved holder
+// (with an empty ballot, it has seen no commit): its acceptors confirm it on
+// the commit they hold, so the race does not stop the copy either.
+func TestCloseFromBootstrappingKeepsTheLegacyCopy(t *testing.T) {
+	bootstrapWorld := func(t *testing.T) *world {
+		w := newWorld(t, worldSpec{relays: []string{"r1", "r2", "r3"}, daemons: []string{"d1", "d2"}, candidates: []string{"d1", "d2"}, bootstrap: "d2"})
+		w.daemon("d1").addContainer(testPolicy, false)
+		w.daemon("d2").addContainer(testPolicy, true)
+		return w
+	}
+	requireLeftAlone := func(t *testing.T, w *world, d2 *daemonHost) {
+		t.Helper()
+		w.requireClean()
+		if len(d2.fence.records) != 0 {
+			t.Fatalf("the legacy copy got watchdog records: %v\n%s", d2.fence.records, w.dump())
+		}
+		if w.daemon("d1").engine.running() {
+			t.Fatalf("another candidate started a copy after the close\n%s", w.dump())
+		}
+		for _, event := range d2.runtime.Report().Events {
+			if event.Kind == string(availabilitylease.EventFence) {
+				t.Fatalf("fence event for a copy that was never lease-bound: %+v", event)
+			}
+		}
+	}
+	t.Run("not acquired yet", func(t *testing.T) {
+		w := bootstrapWorld(t)
+		d2 := w.daemon("d2")
+		d2.cut = true // the voters never hear its prepare
+		w.run(40 * time.Second)
+		if role := d2.runtime.Node().HolderStatus(availabilitylease.Key{PolicyID: testPolicy}).Role; role == availabilitylease.RoleHolding {
+			t.Fatal("the cut-off bootstrap holder acquired")
+		}
+		check := requireUninterrupted(t, w, "d2")
+		w.closeGracefully()
+		if len(w.retained) != 0 {
+			t.Fatalf("no holder committed, yet the close names %v", w.retained)
+		}
+		w.run(20 * time.Second)
+		d2.cut = false
+		w.run(2 * time.Minute)
+		restartDaemon(w, d2, 5*time.Second)
+		w.run(time.Minute)
+		check()
+		requireLeftAlone(t, w, d2)
+	})
+	t.Run("bootstrap commit raced the close", func(t *testing.T) {
+		w := bootstrapWorld(t)
+		d2 := w.daemon("d2")
+		w.waitServing("d2", 45*time.Second)
+		w.run(3 * time.Second)
+		check := requireUninterrupted(t, w, "d2")
+		// Gateway still saw bootstrapping: it names the reserved holder
+		// without a ballot.
+		w.retained = map[uint32]availabilitylease.RetainedHolder{0: {Holder: "d2"}}
+		w.closeLease()
+		if !w.runUntil(5*time.Second, func() bool { return len(d2.fence.records) == 0 }) {
+			t.Fatalf("the raced bootstrap holder was not retained\n%s", w.dump())
+		}
+		w.run(2 * time.Minute)
+		check()
+		requireLeftAlone(t, w, d2)
+		if held := d2.runtime.Report().Held; len(held) != 1 || !held[0].Retained {
+			t.Fatalf("lease report held %+v, want the bootstrap holder retained", held)
+		}
+	})
+}
+
+// After closing -> legacy Gateway stops publishing the policy's manifest
+// (agent B). The retained copy keeps running with its watchdog disarmed:
+// nodes never forget an adopted manifest, so the policy stays closed on the
+// daemon (and on the voters) across distributions without it and across a
+// daemon restart.
+func TestRetainedCopyOutlivesThePolicyLeavingTheDistribution(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1, d2 := w.daemon("d1"), w.daemon("d2")
+	w.closeGracefully()
+	if !w.runUntil(5*time.Second, func() bool { return len(d1.fence.records) == 0 }) {
+		t.Fatalf("not retained\n%s", w.dump())
+	}
+	check := requireUninterrupted(t, w, "d1")
+	withoutPolicy := func(h *daemonHost) {
+		w.manifestV++
+		err := h.runtime.ApplyLeaseBlocks(BlockUpdate{
+			Revision: w.manifestV, MemberID: h.id,
+			PolicyKeys: []PolicyKey{{ID: "k1", PublicKey: w.policyPriv.Public().(ed25519.PublicKey)}},
+		})
+		if err != nil {
+			t.Fatalf("apply blocks on %s: %v", h.id, err)
+		}
+	}
+	for range 3 {
+		withoutPolicy(d1)
+		withoutPolicy(d2)
+		w.run(time.Minute)
+	}
+	restartDaemon(w, d1, 5*time.Second)
+	withoutPolicy(d1)
+	w.run(2 * time.Minute)
+	check()
+	w.requireClean()
+	if len(d1.fence.records) != 0 {
+		t.Fatalf("the retained copy's watchdog was armed again: %v", d1.fence.records)
+	}
+	if d1.runtime.LeaseMode(testPolicy) || !d1.endpoints.serving[testPolicy] {
+		t.Fatal("the retained copy's endpoints would be refused without the manifest")
+	}
+	if held := d1.runtime.Report().Held; len(held) != 1 || !held[0].Retained {
+		t.Fatalf("lease report held %+v, want the copy still retained", held)
+	}
+	if d2.engine.running() {
+		t.Fatal("the standby started without the manifest")
+	}
+}

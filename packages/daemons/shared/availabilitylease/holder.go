@@ -52,6 +52,14 @@ func (n *Node) holderStatusLocked(key Key, now time.Duration) HolderStatus {
 		status.FenceNow, status.FenceReason = true, pk.fenceReason
 	case RoleReleasing:
 		status.Deadline = pk.deadline
+	case RoleRetained:
+		status.Retained = true
+	}
+	if manifest != nil && manifest.Closed && pk.holdsLease() {
+		// Nothing starts under a closing lease; the copy keeps running on
+		// its budget while the voters confirm it retained (or it fences).
+		status.MayStart = false
+		status.Retaining = pk.retain != nil && !status.FenceNow
 	}
 	return status
 }
@@ -139,13 +147,14 @@ func releaseAfterFence(reason FenceReason) bool {
 
 // Release gives the key up, optionally to a designated successor (D9). The
 // caller guarantees the container's cgroup is empty and its endpoint is
-// deregistered (A6). Relays are relinquished first; acceptors are released
+// deregistered (A6). A retained key is released when its copy stopped after
+// all (a drain that was under way, or a start the close cut short). Relays are relinquished first; acceptors are released
 // only once every relay acked or RelinquishWait passed since the last propose.
 func (n *Node) Release(key Key, successor string) error {
 	var err error
 	n.run(func(now time.Duration) {
 		pk := n.proposers[key]
-		if pk == nil || (!pk.holdsLease() && pk.role != RoleFencing && pk.role != RoleAbandoned) {
+		if pk == nil || (!pk.holdsLease() && pk.role != RoleFencing && pk.role != RoleAbandoned && pk.role != RoleRetained) {
 			err = errors.New("availability lease is not held")
 			return
 		}

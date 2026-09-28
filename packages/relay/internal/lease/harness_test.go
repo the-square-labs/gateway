@@ -96,6 +96,8 @@ type harness struct {
 	// the policy's own voters (A18).
 	manifests map[string]*relayv1.LeaseSignedBlock
 	versions  map[string]uint64
+	// retained names retained holders in the next closed manifest.
+	retained []*relayv1.LeaseRetainedSlot
 
 	mu  sync.Mutex
 	out []*relayv1.CoordinationFrame
@@ -273,6 +275,9 @@ func (h *harness) signPolicy(id string, candidates, voters []string, closed bool
 		SchemaVersion: 1, PolicyId: id, ManifestVersion: h.versions[id], Slots: 1, VoterEpoch: 1, Closed: closed,
 		Mode: relayv1.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: relayv1.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
 		LeaseTermMs: 30000, QuorumSets: []*relayv1.LeaseQuorumSet{{VoterIds: voters}},
+	}
+	if closed {
+		value.Retained = h.retained
 	}
 	members := map[string]bool{relayID: true}
 	for _, member := range append(append([]string(nil), voters...), candidates...) {

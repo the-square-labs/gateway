@@ -43,6 +43,9 @@ func (n *simNode) finishStart(key Key, c *simContainer) {
 }
 
 func (n *simNode) stopContainer(key Key, c *simContainer) {
+	if n.processUp() && n.node != nil && n.node.HolderStatus(key).Retained && !c.draining {
+		n.w.fail("the retained copy of %s on %s was stopped", key, n.id)
+	}
 	c.stopping = true
 	delay := n.w.randDuration(200*time.Millisecond, 10*time.Second)
 	if n.stopDelay > 0 {

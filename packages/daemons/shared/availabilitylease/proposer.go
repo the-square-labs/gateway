@@ -50,6 +50,8 @@ type proposerKey struct {
 	recoverUntil    time.Duration
 
 	release releaseState
+	// retain is the graceful-close confirmation in progress (retain.go).
+	retain *retainState
 
 	// releasedBy is a holder whose final release of its committed ballot this
 	// node saw at releasedAt; it lifts the quiet period and does not count
@@ -112,6 +114,10 @@ func sortKeys(set map[Key]bool) []Key {
 
 func (n *Node) tickKey(pk *proposerKey, now time.Duration, renewDue bool) {
 	manifest := n.manifests[pk.key.PolicyID]
+	if manifest != nil && manifest.Closed {
+		n.tickClosed(pk, manifest, now)
+		return
+	}
 	slotGone := manifest == nil || pk.key.Slot >= manifest.Slots
 	if slotGone && pk.round != nil {
 		// The adopted manifest removed the slot: originate nothing more for
@@ -434,7 +440,8 @@ func (n *Node) fence(pk *proposerKey, reason FenceReason, now time.Duration) {
 	n.emit(Event{Kind: EventFence, Key: pk.key, Ballot: pk.ballot, Reason: reason, At: now})
 }
 
-// onManifestChanged fences on a lease-closed manifest (A5, A13). On a switch
+// onManifestChanged fences on a lease-closed manifest (A5, A13) unless it
+// names the holder retained (graceful close). On a switch
 // from available to strict a holder keeps only a strict lease: one backed
 // by a majority certificate, timed from its send time (A7).
 func (n *Node) onManifestChanged(previous, manifest *Manifest, now time.Duration) {
@@ -444,14 +451,19 @@ func (n *Node) onManifestChanged(previous, manifest *Manifest, now time.Duration
 			continue
 		}
 		if manifest.Closed {
-			n.fence(pk, FenceClosed, now)
-			if pk.round != nil {
-				pk.round = nil
-				if pk.role == RoleAcquiring || pk.role == RoleBootstrapping {
-					pk.role = RoleNone
-				}
-			}
+			// Graceful close: the named retained holder keeps its copy while
+			// the voters confirm; any other holder fences (retain.go).
+			n.tickClosed(pk, manifest, now)
 			continue
+		}
+		if pk.role == RoleRetained || pk.retain != nil {
+			// Lease mode again: a retained copy is legacy-owned until its
+			// node acquires as the bootstrap holder (D1); a confirmation in
+			// progress is moot.
+			if pk.role == RoleRetained {
+				pk.role = RoleNone
+			}
+			pk.retain = nil
 		}
 		if toStrict && pk.holdsLease() {
 			if !pk.ownMajority {
