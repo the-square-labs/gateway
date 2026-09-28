@@ -42,7 +42,9 @@ Never delete a Node record while its old daemon might still reconnect: deletion 
 - `set_node_service_creation_lock` locks or unlocks creation of new services on a Node; `manage_relay_pool` manages relay Nodes.
 - A Docker, database, or storage Node can set an explicit `serviceAddress` for cross-node and upstream reachability (`nodes:manage`); otherwise Gateway uses the first reported local address, then a public one.
 - Daemon mTLS certificates renew automatically once a third of their lifetime remains; Gateway alerts below 30 days.
-- Daemon updates come from the `maintenance` toolset (`manage_system_updates`; `read_gateway_documentation({ topic: "licensing-updates" })`). Update per `nodeId`, never "everything" at once.
+- Daemon updates come from the `maintenance` toolset (`manage_system_updates`; `read_gateway_documentation({ topic: "licensing-updates" })`). Update per `nodeId`, never "everything" at once. After a Gateway update, update the Node daemons before the Relay Pool (the pool update also recreates the local relay; current daemons reconnect to it within a second and ingress Nodes hold new Secure Link connections for up to 3 seconds). Nodes and relays that take part in a lease-mode Availability policy are sequenced by Gateway, one member per policy at a time: a queued update shows `metadata.updatePhase: waiting_for_lease_peers` with `metadata.updateWaitingFor` (see `high-availability`).
+- Restarts: a graceful Docker daemon restart is announced, so relays hold its registrations and ingress Nodes hold new connections to it for a few seconds instead of failing them; its containers keep running. The nginx daemon hands its Secure Link sockets to the next process across restarts and updates, except for the one restart that installs the new launcher after an upgrade. A daemon whose host becomes unreachable is dropped by the relays within about 3.5 seconds.
+- Relays keep admitting connections on their last signed policy for the relay policy lease (72 hours by default, `relayPolicyLeaseHours` 1 to 168 in the general settings) while Gateway is down; revocations and changes need Gateway.
 
 ## Console and files
 
