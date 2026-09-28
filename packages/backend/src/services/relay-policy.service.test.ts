@@ -877,6 +877,55 @@ describe('RelayPolicyService snapshots', () => {
     expect(sendRelayGrantBundle).toHaveBeenCalledTimes(3);
   });
 
+  it('skips an unchanged routine bundle without waiting for remote relay pushes (N-14)', async () => {
+    const service = createService({} as never, { applySnapshot: vi.fn() });
+    const sendRelayGrantBundle = vi.fn().mockResolvedValue({ success: true });
+    service.setNodeDispatch({ sendRelayGrantBundle } as never);
+    vi.spyOn(service, 'getNodeGrantBundle').mockResolvedValue({
+      revision: '7',
+      generatedAtUnixMs: '100',
+      grants: [],
+    } as never);
+    await service.syncNodeGrants('node-1', { skipUnchanged: true });
+    expect(sendRelayGrantBundle).toHaveBeenCalledTimes(1);
+    // A remote push that never finishes (a busy or unreachable pool relay) no longer costs every routine sync the grace.
+    const wait = vi.spyOn(service as any, 'waitForRemotePush');
+    await service.syncNodeGrants('node-1', { skipUnchanged: true });
+    expect(wait).not.toHaveBeenCalled();
+    expect(sendRelayGrantBundle).toHaveBeenCalledTimes(1);
+    // A delivery that is not routine still waits for the push.
+    await service.syncNodeGrants('node-1');
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(sendRelayGrantBundle).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes and grants a node's registry routes once for all of its bindings (N-14)", async () => {
+    const service = createService({} as never, { applySnapshot: vi.fn() }) as any;
+    const reconcile = vi.spyOn(service, 'reconcileInternalRegistryEndpoint').mockResolvedValue('endpoint');
+    service.grantIssuer = { requireNodeIdentity: vi.fn().mockResolvedValue({ certificateFingerprint: 'fp' }) };
+    const ensureRoute = vi
+      .spyOn(service, 'ensureRoute')
+      .mockImplementation(async (_kind: unknown, ownerId: unknown) => `route-${ownerId}`);
+    const snapshot = vi.spyOn(service, 'syncSnapshot').mockResolvedValue(1);
+    const grants = vi.spyOn(service, 'syncNodeGrants').mockResolvedValue(undefined);
+
+    const routes = await service.ensureInternalRegistryRoutes(['a', 'b', 'c'], 'node-1');
+
+    expect([...routes.entries()]).toEqual([
+      ['a', 'route-a'],
+      ['b', 'route-b'],
+      ['c', 'route-c'],
+    ]);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(ensureRoute).toHaveBeenCalledTimes(3);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(grants).toHaveBeenCalledTimes(1);
+    expect(grants).toHaveBeenCalledWith('node-1', { skipUnchanged: true });
+    // Published only after every route exists.
+    expect(snapshot.mock.invocationCallOrder[0]).toBeGreaterThan(ensureRoute.mock.invocationCallOrder[2]!);
+    await expect(service.ensureInternalRegistryRoute('d', 'node-1')).resolves.toBe('route-d');
+  });
+
   it('probes the managed database source route before declaring the binding usable', async () => {
     const service = createService({} as never, { applySnapshot: vi.fn() });
     const sendRelayGrantBundle = vi.fn().mockResolvedValue({ success: true });
