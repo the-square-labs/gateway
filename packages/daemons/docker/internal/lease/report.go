@@ -22,6 +22,9 @@ type Report struct {
 	WatchdogReady      bool
 	Events             []ReportEvent
 	LeaseRevision      uint64
+	// ReportedAtUnixMs is the wall clock the report's times were converted
+	// with; Gateway measures this daemon's clock offset from it (N-15).
+	ReportedAtUnixMs int64
 }
 
 type ManifestAck struct {
@@ -62,6 +65,18 @@ type Held struct {
 	SinceUnixMs int64
 }
 
+// EventRecovered is the report event of a key renewed by a copy that kept
+// running through a daemon restart: the same holding, not a new acquisition.
+const EventRecovered = "recovered"
+
+// markRecoveringLocked notes a key recovered after a daemon start.
+func (r *Runtime) markRecoveringLocked(key availabilitylease.Key) {
+	if r.recovering == nil {
+		r.recovering = map[availabilitylease.Key]bool{}
+	}
+	r.recovering[key] = true
+}
+
 type ReportEvent struct {
 	Kind      string
 	Key       availabilitylease.Key
@@ -69,6 +84,9 @@ type ReportEvent struct {
 	Successor string
 	Reason    string
 	AtUnixMs  int64
+	// at is the transition on the lease clock; the report converts it with the
+	// same wall clock as ReportedAtUnixMs, so Gateway's offset applies to it.
+	at time.Duration
 }
 
 // Report returns the current lease state and drains the events collected
@@ -86,6 +104,7 @@ func (r *Runtime) Report() Report {
 		}
 	}
 	now, wall := r.opts.Clock.Now(), r.opts.Wall()
+	report.ReportedAtUnixMs = wall.UnixMilli()
 	r.mu.Lock()
 	heldSince := make(map[availabilitylease.Key]time.Duration, len(r.heldSince))
 	for key, at := range r.heldSince {
@@ -119,6 +138,11 @@ func (r *Runtime) Report() Report {
 	r.mu.Lock()
 	report.Events = r.events
 	r.events = nil
+	for i := range report.Events {
+		if at := report.Events[i].at; at > 0 && at <= now {
+			report.Events[i].AtUnixMs = wall.Add(-(now - at)).UnixMilli()
+		}
+	}
 	report.LeaseRevision = r.revision
 	r.mu.Unlock()
 	return report
@@ -136,20 +160,29 @@ func (r *Runtime) collectEventsLocked() {
 		r.heldSince = map[availabilitylease.Key]time.Duration{}
 	}
 	for _, event := range events {
+		kind := string(event.Kind)
 		// The current holding starts with its acquired transition and ends with
 		// a fence, release or handoff; renewals do not move it.
 		switch event.Kind {
 		case availabilitylease.EventAcquired:
+			if r.recovering[event.Key] {
+				// The copy kept running through the restart: the same holding
+				// goes on (M-5), reported as recovered and without a start time.
+				delete(r.recovering, event.Key)
+				kind = EventRecovered
+				break
+			}
 			r.heldSince[event.Key] = event.At
 		case availabilitylease.EventFence, availabilitylease.EventReleased, availabilitylease.EventHandoff:
 			delete(r.heldSince, event.Key)
+			delete(r.recovering, event.Key)
 		}
 		at := wall.Add(-(now - event.At))
-		r.logger.Info("availability lease transition", "kind", event.Kind, "policy_id", event.Key.PolicyID, "slot", event.Key.Slot,
+		r.logger.Info("availability lease transition", "kind", kind, "policy_id", event.Key.PolicyID, "slot", event.Key.Slot,
 			"ballot", event.Ballot.String(), "successor_id", event.Successor, "reason", event.Reason, "at", at.Format(time.RFC3339Nano))
 		r.events = append(r.events, ReportEvent{
-			Kind: string(event.Kind), Key: event.Key, Ballot: event.Ballot, Successor: event.Successor,
-			Reason: string(event.Reason), AtUnixMs: at.UnixMilli(),
+			Kind: kind, Key: event.Key, Ballot: event.Ballot, Successor: event.Successor,
+			Reason: string(event.Reason), AtUnixMs: at.UnixMilli(), at: event.At,
 		})
 	}
 	if len(r.events) > maxPendingEvents {

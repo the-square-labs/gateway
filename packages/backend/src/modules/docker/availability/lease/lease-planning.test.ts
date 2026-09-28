@@ -199,6 +199,116 @@ describe('availability lease observations', () => {
     );
   });
 
+  // Stand run rc20pre2 d: slot 1 of a replicated policy, fenced by a partition and re-acquired by the same node 27 min
+  // later, kept holderSince 15:10:04 instead of 15:37:06. Soak M-5: the slot lapsed for 10 min and the same node took
+  // it again while Gateway was down; no audit row, holderSince unchanged. A re-acquisition is a new holding: recorded,
+  // audited and dated at the takeover.
+  it('records a slot the same node acquired again after a lapse as a new holding (M-5)', () => {
+    const own = (since: Date, round: number, holdingStart = true): LeaseObservationCandidate => ({
+      ...holding('n-1', round),
+      since,
+      exact: true,
+      holdingStart,
+    });
+    const held = mergeLeaseObservation(null, { candidates: [own(at(0), 5)], now: at(1) }).next;
+    expect(held.holderSince).toEqual(at(0));
+    // Renewals keep it, and so does a few seconds of clock jitter between reports.
+    const renewed = mergeLeaseObservation(held, {
+      candidates: [own(at(1), 9)],
+      reporter: { id: 'n-1', role: 'holding' },
+      now: at(60),
+    });
+    expect(renewed.change).toBeNull();
+    const steady = mergeLeaseObservation(renewed.next, {
+      candidates: [own(at(0), 10)],
+      reporter: { id: 'n-1', role: 'holding' },
+      now: at(65),
+    }).next;
+    expect(steady.holderSince).toEqual(at(0));
+
+    // The lapse and the re-acquisition fell while Gateway was away: the holder's own time starts a new holding.
+    const unseen = mergeLeaseObservation(steady, {
+      candidates: [own(at(1_620), 14)],
+      reporter: { id: 'n-1', role: 'holding' },
+      now: at(9_000),
+    });
+    expect(unseen.next).toMatchObject({ holderId: 'n-1', holderSince: at(1_620) });
+    expect(unseen.change).toMatchObject({
+      from: 'n-1',
+      to: 'n-1',
+      reacquired: true,
+      holderSince: at(1_620),
+      takeoverSource: 'holder',
+    });
+    expect(classifyLeaseHolderChange(unseen.change!, 0, [], new Set(), at(9_000))).toBe('reacquired');
+
+    // A copy that kept running through a daemon restart reports its recovered key without a start time; an older
+    // daemon reports the recovery as an acquisition, which corrects the time but is no new holding.
+    const recovered = mergeLeaseObservation(steady, {
+      candidates: [own(at(1_620), 14, false)],
+      reporter: { id: 'n-1', role: 'holding' },
+      now: at(1_622),
+    });
+    expect(recovered.change).toBeNull();
+
+    // A fence Gateway saw clears the holder. The same node holding again is a new holding once a time proves it
+    // started after that report: its own start, or a voter's first commit of it.
+    const fenced = mergeLeaseObservation(steady, {
+      candidates: [],
+      reporter: { id: 'n-1', role: 'fencing' },
+      now: at(100),
+    }).next;
+    expect(fenced).toMatchObject({ holderId: null, holderSince: null, lastHolderId: 'n-1' });
+    const reacquired = mergeLeaseObservation(fenced, {
+      candidates: [own(at(1_620), 14)],
+      reporter: { id: 'n-1', role: 'holding' },
+      now: at(1_622),
+    });
+    expect(reacquired.next).toMatchObject({ holderId: 'n-1', holderSince: at(1_620) });
+    expect(reacquired.change).toMatchObject({
+      from: 'n-1',
+      to: 'n-1',
+      reacquired: true,
+      holderSince: at(1_620),
+      takeoverSource: 'holder',
+      takeoverNotBefore: at(95),
+    });
+    const sightedAfter = mergeLeaseObservation(fenced, {
+      candidates: [{ ...holding('n-1', 14, 'relay'), since: at(1_600) }],
+      now: at(1_622),
+    });
+    expect(sightedAfter.change).toMatchObject({ reacquired: true, holderSince: at(1_600), takeoverSource: 'voters' });
+
+    // A voter's sighting from before the lapse (its first commit of the node outlived it), or no time at all (also a
+    // restarted daemon reporting its key before recovering it): nothing proves a new holding yet. The node's own start,
+    // once reported, does.
+    const stale = mergeLeaseObservation(fenced, {
+      candidates: [{ ...holding('n-1', 14, 'relay'), since: at(40) }],
+      now: at(1_622),
+    });
+    expect(stale.change).toBeNull();
+    const unknown = mergeLeaseObservation(fenced, { candidates: [holding('n-1', 14, 'relay')], now: at(1_622) });
+    expect(unknown.change).toBeNull();
+    expect(unknown.next.holderSince).toEqual(at(100));
+    for (const guess of [stale.next, unknown.next]) {
+      const own14 = mergeLeaseObservation(guess, {
+        candidates: [own(at(1_620), 15)],
+        reporter: { id: 'n-1', role: 'holding' },
+        now: at(1_630),
+      });
+      expect(own14.change).toMatchObject({ reacquired: true, holderSince: at(1_620), takeoverSource: 'holder' });
+      expect(own14.next.holderSince).toEqual(at(1_620));
+    }
+    // A recovered key (no start time) after such a report is the same holding.
+    expect(
+      mergeLeaseObservation(unknown.next, {
+        candidates: [own(at(1_625), 15, false)],
+        reporter: { id: 'n-1', role: 'holding' },
+        now: at(1_630),
+      }).change
+    ).toBeNull();
+  });
+
   it('audits a planned or designated-successor change as a handoff and any other as a failover (D9)', () => {
     const change = { from: 'n-1', to: 'n-2', ballot: ballot(5, 'n-2') };
     const planned = [

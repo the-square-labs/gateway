@@ -8218,8 +8218,14 @@ type AvailabilityLeaseReport struct {
 	// report as is): members with a live Coordinate stream to this relay. The
 	// Gateway derives voter reachability from them.
 	ConnectedMemberIds []string `protobuf:"bytes,21,rep,name=connected_member_ids,json=connectedMemberIds,proto3" json:"connected_member_ids,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Docker daemons: the daemon's wall clock (Unix ms) when it built this
+	// report, the clock every *_unix_ms time in it was converted with. Gateway
+	// measures the daemon's clock offset from it and corrects those times (a VM
+	// resumed from suspend runs minutes behind until NTP steps it; N-15).
+	// gateway.v1 only; 30 is unused in relay.v1, whose reports are forwarded as is.
+	ReportedAtUnixMs int64 `protobuf:"varint,30,opt,name=reported_at_unix_ms,json=reportedAtUnixMs,proto3" json:"reported_at_unix_ms,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AvailabilityLeaseReport) Reset() {
@@ -8341,6 +8347,13 @@ func (x *AvailabilityLeaseReport) GetConnectedMemberIds() []string {
 		return x.ConnectedMemberIds
 	}
 	return nil
+}
+
+func (x *AvailabilityLeaseReport) GetReportedAtUnixMs() int64 {
+	if x != nil {
+		return x.ReportedAtUnixMs
+	}
+	return 0
 }
 
 type AvailabilityLeaseManifestAck struct {
@@ -8712,7 +8725,9 @@ func (x *AvailabilityLeaseKeyView) GetHolderSinceUnixMs() int64 {
 
 type AvailabilityLeaseEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// acquired, fence, released or handoff (availabilitylease.EventKind).
+	// acquired, fence, released or handoff (availabilitylease.EventKind), or
+	// recovered: a key renewed by a copy that kept running through a daemon
+	// restart, the same holding and not a new acquisition.
 	Kind          string                   `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
 	PolicyId      string                   `protobuf:"bytes,2,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
 	Slot          uint32                   `protobuf:"varint,3,opt,name=slot,proto3" json:"slot,omitempty"`
@@ -12722,7 +12737,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x05round\x18\x01 \x01(\x04R\x05round\x12 \n" +
 	"\vincarnation\x18\x02 \x01(\x04R\vincarnation\x12\x1f\n" +
 	"\vproposer_id\x18\x03 \x01(\tR\n" +
-	"proposerId\"\x81\x05\n" +
+	"proposerId\"\xb0\x05\n" +
 	"\x17AvailabilityLeaseReport\x12\x1b\n" +
 	"\tmember_id\x18\x01 \x01(\tR\bmemberId\x12.\n" +
 	"\x13identity_public_key\x18\x02 \x01(\fR\x11identityPublicKey\x12 \n" +
@@ -12737,7 +12752,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	" \x01(\bR\rwatchdogReady\x12:\n" +
 	"\x06events\x18\v \x03(\v2\".gateway.v1.AvailabilityLeaseEventR\x06events\x12%\n" +
 	"\x0elease_revision\x18\f \x01(\x04R\rleaseRevision\x120\n" +
-	"\x14connected_member_ids\x18\x15 \x03(\tR\x12connectedMemberIds\"\xcd\x01\n" +
+	"\x14connected_member_ids\x18\x15 \x03(\tR\x12connectedMemberIds\x12-\n" +
+	"\x13reported_at_unix_ms\x18\x1e \x01(\x03R\x10reportedAtUnixMs\"\xcd\x01\n" +
 	"\x1cAvailabilityLeaseManifestAck\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12)\n" +
 	"\x10manifest_version\x18\x02 \x01(\x04R\x0fmanifestVersion\x12\x16\n" +

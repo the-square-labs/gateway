@@ -1040,6 +1040,12 @@ message AvailabilityLeaseReport {
   // report as is): members with a live Coordinate stream to this relay. The
   // Gateway derives voter reachability from them.
   repeated string connected_member_ids = 21;
+  // Docker daemons: the daemon's wall clock (Unix ms) when it built this
+  // report, the clock every *_unix_ms time in it was converted with. Gateway
+  // measures the daemon's clock offset from it and corrects those times (a VM
+  // resumed from suspend runs minutes behind until NTP steps it; N-15).
+  // gateway.v1 only; 30 is unused in relay.v1, whose reports are forwarded as is.
+  int64 reported_at_unix_ms = 30;
 }
 
 message AvailabilityLeaseManifestAck {
@@ -1108,7 +1114,9 @@ message AvailabilityLeaseKeyView {
 }
 
 message AvailabilityLeaseEvent {
-  // acquired, fence, released or handoff (availabilitylease.EventKind).
+  // acquired, fence, released or handoff (availabilitylease.EventKind), or
+  // recovered: a key renewed by a copy that kept running through a daemon
+  // restart, the same holding and not a new acquisition.
   string kind = 1;
   string policy_id = 2;
   uint32 slot = 3;

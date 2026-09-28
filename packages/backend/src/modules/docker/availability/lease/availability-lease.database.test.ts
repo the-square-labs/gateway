@@ -680,6 +680,179 @@ describe.skipIf(!url)('availability lease host on disposable PostgreSQL', () => 
     }
   });
 
+  // Stand run rc20pre3 i (N-15): a handoff to a VM that had just resumed from suspend was recorded on the VM's wall
+  // clock, 101 s behind, until NTP stepped it. Its times are moved onto Gateway's clock by the offset measured on the
+  // report, and not used at all when the offset cannot be measured.
+  it("records a skewed daemon's times on Gateway's clock, and ignores them when its clock is unknown", async () => {
+    // After the previous tests' clocks: the third node holds, last seen about 450 s from now.
+    const base = Date.now() + 480_000;
+    const skew = -101_000;
+    const acquired = new Date(base - 2_000);
+    vi.useFakeTimers({ toFake: ['Date'], now: base });
+    try {
+      audit.log.mockClear();
+      await service.registerPlannedHandoff(policyId, { slot: 0, fromHolderId: nodeIds[2]!, toHolderId: nodeIds[1]! });
+      const vmReport = {
+        ...holding(nodeIds[1]!, 70, new Date(acquired.getTime() + skew)),
+        reportedAtUnixMs: String(base + skew),
+      };
+      await service.ingestDaemonReport(nodeIds[1]!, 'docker', vmReport, { receivedAtMs: base });
+      expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({
+        holderNodeId: nodeIds[1],
+        holderSince: acquired,
+      });
+      expect(audit.log).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          action: 'docker.availability.lease_handoff',
+          occurredAt: acquired,
+          details: expect.objectContaining({ toNodeId: nodeIds[1], takeoverSource: 'holder' }),
+        })
+      );
+
+      // A daemon without the report clock is measured by its health report's whole seconds.
+      vi.setSystemTime(base + 10_000);
+      await service.registerPlannedHandoff(policyId, { slot: 0, fromHolderId: nodeIds[1]!, toHolderId: nodeIds[0]! });
+      const olderDaemon = holding(nodeIds[0]!, 71, new Date(base + 8_000 + skew));
+      await service.ingestDaemonReport(nodeIds[0]!, 'docker', olderDaemon, {
+        healthTimestampMs: Math.floor((base + 10_000 + skew) / 1000) * 1000,
+        receivedAtMs: base + 10_000,
+      });
+      const measured = (await service.getPolicyLease(policyId)).holders[0]!;
+      expect(measured.holderNodeId).toBe(nodeIds[0]);
+      expect(Math.abs(measured.holderSince!.getTime() - (base + 8_000))).toBeLessThanOrEqual(1_000);
+
+      // No clock at all on a live report: the daemon's times are not used; Gateway notices the change itself.
+      vi.setSystemTime(base + 20_000);
+      await service.registerPlannedHandoff(policyId, { slot: 0, fromHolderId: nodeIds[0]!, toHolderId: nodeIds[2]! });
+      await service.ingestDaemonReport(nodeIds[2]!, 'docker', holding(nodeIds[2]!, 72, new Date(base - 500_000)), {
+        receivedAtMs: base + 20_000,
+      });
+      const unknown = (await service.getPolicyLease(policyId)).holders[0]!;
+      expect(unknown).toMatchObject({ holderNodeId: nodeIds[2], holderSince: new Date(base + 20_000) });
+      // The holder is back on the third node for the tests below.
+      await service.ingestDaemonReport(nodeIds[0]!, 'docker', report(nodeIds[0]!, { epoch: '1' }));
+      await service.ingestDaemonReport(nodeIds[1]!, 'docker', report(nodeIds[1]!, { epoch: '1' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Soak M-5: slot 1 lapsed for 10 min (its node stopped) and the same node took it again while Gateway was down;
+  // Gateway later showed the old holderSince and audited nothing.
+  it('audits a slot the same node took again while Gateway was away, dated at the re-acquisition (M-5)', async () => {
+    // After the previous test: the third node holds (round 72), noticed about 500 s from now.
+    const base = Date.now() + 600_000;
+    const reacquiredAt = new Date(base - 30_000);
+    const current = (round: number, heldSince: Date | null, events: AvailabilityLeaseReport['events'] = []) => {
+      const view = holding(nodeIds[2]!, round, heldSince ?? new Date(0));
+      return {
+        ...view,
+        held: view.held.map((held) => ({ ...held, heldSinceUnixMs: heldSince ? String(heldSince.getTime()) : '0' })),
+        events,
+        reportedAtUnixMs: String(Date.now()),
+      };
+    };
+    const reacquisitions = () =>
+      (audit.log.mock.calls as unknown as Array<[Record<string, any>]>)
+        .map(([entry]) => entry)
+        .filter((entry) => entry.action === 'docker.availability.lease_reacquired');
+    vi.useFakeTimers({ toFake: ['Date'], now: base });
+    try {
+      audit.log.mockClear();
+      await service.ingestDaemonReport(nodeIds[2]!, 'docker', current(80, reacquiredAt), { receivedAtMs: base });
+      expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({
+        holderNodeId: nodeIds[2],
+        holderSince: reacquiredAt,
+      });
+      expect(reacquisitions()).toEqual([
+        expect.objectContaining({
+          occurredAt: reacquiredAt,
+          details: expect.objectContaining({
+            fromNodeId: nodeIds[2],
+            toNodeId: nodeIds[2],
+            takeoverSource: 'holder',
+          }),
+        }),
+      ]);
+      expect(holderChanges.at(-1)).toMatchObject({ kind: 'reacquired', to: nodeIds[2] });
+      const leaseAudits = () =>
+        (audit.log.mock.calls as unknown as Array<[Record<string, any>]>).filter(([entry]) =>
+          String(entry.action).startsWith('docker.availability.lease_')
+        ).length;
+      const auditedBefore = leaseAudits();
+
+      // Renewals of that holding, and a daemon restart its copy ran through (recovered, no start time), are no new
+      // holding.
+      vi.setSystemTime(base + 10_000);
+      await service.ingestDaemonReport(nodeIds[2]!, 'docker', current(81, reacquiredAt), {
+        receivedAtMs: base + 10_000,
+      });
+      vi.setSystemTime(base + 20_000);
+      await service.ingestDaemonReport(
+        nodeIds[2]!,
+        'docker',
+        current(82, null, [
+          {
+            kind: 'recovered',
+            policyId,
+            slot: 0,
+            ballot: { round: '82', incarnation: '1', proposerId: nodeIds[2]! },
+            successorId: '',
+            reason: '',
+            atUnixMs: String(base + 19_000),
+          },
+        ]),
+        { receivedAtMs: base + 20_000 }
+      );
+      expect(reacquisitions()).toHaveLength(1);
+      expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({ holderSince: reacquiredAt });
+
+      // Second instance on rc20pre3: a docker-daemon restart on the holder recovered its running copy under a new
+      // ballot and holderSince moved to the restart. Its first report, before the recovery, lacks the key: that clears
+      // nothing; the recovered key continues the holding.
+      const restartedAt = base + 29_000;
+      const restarted = (extra: Partial<AvailabilityLeaseReport>) => ({
+        ...current(83, null),
+        incarnation: String(restartedAt),
+        ...extra,
+      });
+      vi.setSystemTime(base + 30_000);
+      await service.ingestDaemonReport(nodeIds[2]!, 'docker', restarted({ held: [], events: [] }), {
+        receivedAtMs: base + 30_000,
+      });
+      expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({
+        holderNodeId: nodeIds[2],
+        holderSince: reacquiredAt,
+      });
+      vi.setSystemTime(base + 31_000);
+      const recoveredBallot = { round: '84', incarnation: String(restartedAt), proposerId: nodeIds[2]! };
+      const recoveredReport = restarted({
+        events: [
+          {
+            kind: 'recovered',
+            policyId,
+            slot: 0,
+            ballot: recoveredBallot,
+            successorId: '',
+            reason: '',
+            atUnixMs: String(base + 30_500),
+          },
+        ],
+      });
+      recoveredReport.held = recoveredReport.held.map((held) => ({ ...held, ballot: recoveredBallot }));
+      await service.ingestDaemonReport(nodeIds[2]!, 'docker', recoveredReport, { receivedAtMs: base + 31_000 });
+      expect((await service.getPolicyLease(policyId)).holders[0]).toMatchObject({
+        holderNodeId: nodeIds[2],
+        holderSince: reacquiredAt,
+        ballot: recoveredBallot,
+      });
+      expect(reacquisitions()).toHaveLength(1);
+      expect(leaseAudits()).toBe(auditedBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('counts only votes that reach a relay other than the local one, and gives every voter lanes to all relays', async () => {
     // Stand run c1: secure-node-1 had lanes only to the local relay, so with Gateway down its vote was lost while the
     // margin still counted it.

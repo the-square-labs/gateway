@@ -96,14 +96,28 @@ export interface LeaseObservationCandidate {
   since?: Date | null;
   /** `since` is the holder's own acquisition time (its daemon knows it exactly), not a voter's sighting (B-14). */
   exact?: boolean;
+  /**
+   * `since` starts the holding and a daemon restart that kept the copy running does not move it (such a daemon reports
+   * a recovered key's time as unknown): a later one than recorded is a new holding of the same node (M-5).
+   */
+  holdingStart?: boolean;
 }
 
 /** Where a takeover time came from: the holder itself, the earliest voter sighting, or when Gateway noticed it. */
 export type LeaseTakeoverSource = 'holder' | 'voters' | 'noticed';
 
+/**
+ * M-5: a holder's own acquisition time this much later than the recorded start of its holding is a new holding: the
+ * slot lapsed (a fence, the node stopped) and the same node acquired it again. Below it is clock jitter between
+ * reports; a lapse and a fresh acquisition take longer than that.
+ */
+export const LEASE_REACQUIRE_MIN_GAP_MS = 5_000;
+
 export interface LeaseHolderChange {
   from: string | null;
   to: string;
+  /** The same node took the slot again after it lapsed (M-5): a new holding, audited as such. */
+  reacquired?: boolean;
   ballot: DockerAvailabilityLeaseBallot | null;
   /** The takeover time: the holder's own, the earliest voter sighting, or when Gateway noticed it. */
   holderSince?: Date;
@@ -126,6 +140,15 @@ export function leaseExactHolderSince(
     .map((candidate) => candidate.since!.getTime())
     .filter((time) => Number.isFinite(time) && time <= now.getTime());
   return exact.length > 0 ? new Date(Math.min(...exact)) : null;
+}
+
+/** M-5: the holder's own start of its current holding, from a daemon whose time a restart never moves. */
+function leaseHoldingStart(holderId: string, candidates: LeaseObservationCandidate[], now: Date): Date | null {
+  return leaseExactHolderSince(
+    holderId,
+    candidates.filter((candidate) => candidate.holdingStart),
+    now
+  );
 }
 
 /**
@@ -207,13 +230,39 @@ export function mergeLeaseObservation(
     (winner, candidate) => (!winner || compareLeaseBallots(candidate.ballot, winner.ballot) > 0 ? candidate : winner),
     null
   );
+  const previousHolder = stored?.holderId ?? null;
+  const lastKnown = previousHolder ?? stored?.lastHolderId ?? null;
   // The previous holder was last seen holding when it was last observed; a takeover cannot be earlier.
   const previousSeenAt = stored?.holderId ? stored.observedAt : null;
+  // When Gateway saw the last holder stop holding (a fence, a release), while the key has no holder since.
+  const lapsedAt = !previousHolder && lastKnown && stored ? stored.observedAt : null;
   let takeoverSource: LeaseTakeoverSource | undefined;
+  let reacquired = false;
   if (best) {
     const order = compareLeaseBallots(best.ballot, next.ballot);
     if (order > 0) {
-      if (next.holderId !== best.holderId) {
+      if (next.holderId !== best.holderId && best.holderId === lastKnown && lapsedAt) {
+        // M-5: the node Gateway saw stop holding holds the key again. A new holding when a time proves it started after
+        // that report: the node's own start, or a voter's first commit of it. A voter's sighting from before may date
+        // from the holding that lapsed (stand run rc20pre2 d kept 15:10:04 for a re-acquisition at 15:37:06), and a
+        // daemon that restarted reports its key before it recovered it, so without such a time nothing is audited and
+        // the node's own start, once reported, decides below.
+        const after = lapsedAt.getTime() - LEASE_REACQUIRE_MIN_GAP_MS;
+        const started = leaseHoldingStart(best.holderId, input.candidates, now);
+        const takeover = leaseTakeover(best.holderId, input.candidates, { notBefore: null, now });
+        if (started && started.getTime() >= after) {
+          reacquired = true;
+          next.holderSince = started;
+          takeoverSource = 'holder';
+        } else if (takeover.source === 'voters' && takeover.at.getTime() >= after) {
+          reacquired = true;
+          next.holderSince = takeover.at;
+          takeoverSource = 'voters';
+        } else {
+          next.holderSince = takeover.source === 'noticed' ? lapsedAt : takeover.at;
+          takeoverSource = takeover.source;
+        }
+      } else if (next.holderId !== best.holderId) {
         const takeover = leaseTakeover(best.holderId, input.candidates, { notBefore: previousSeenAt, now });
         next.holderSince = takeover.at;
         takeoverSource = takeover.source;
@@ -231,30 +280,37 @@ export function mergeLeaseObservation(
       next.observedAt = now;
     }
   }
-  const previousHolder = stored?.holderId ?? null;
   // B-14: the same holder's own acquisition time corrects a takeover time first taken from a voter that saw it late
-  // (one that restarted after the takeover) or from when Gateway noticed it.
+  // (one that restarted after the takeover) or from when Gateway noticed it. M-5: recorded times of one holding are
+  // never earlier than its acquisition, so a later acquisition is a new holding: the key lapsed and the same node took
+  // it again while Gateway was away or between two reports.
   if (next.holderId && next.holderId === previousHolder) {
     const exact = leaseExactHolderSince(next.holderId, input.candidates, now);
+    const started = leaseHoldingStart(next.holderId, input.candidates, now);
+    if (started && next.holderSince && started.getTime() - next.holderSince.getTime() > LEASE_REACQUIRE_MIN_GAP_MS) {
+      reacquired = true;
+      takeoverSource = 'holder';
+    }
     if (exact && exact.getTime() !== next.holderSince?.getTime()) next.holderSince = exact;
   }
-  const lastKnown = previousHolder ?? stored?.lastHolderId ?? null;
   if (next.holderId) next.lastHolderId = next.holderId;
   const change =
-    next.holderId && next.holderId !== previousHolder && next.holderId !== lastKnown
+    next.holderId && (reacquired || (next.holderId !== previousHolder && next.holderId !== lastKnown))
       ? {
-          from: lastKnown,
+          from: reacquired ? next.holderId : lastKnown,
           to: next.holderId,
           ballot: next.ballot,
           holderSince: next.holderSince ?? now,
           takeoverSource: takeoverSource ?? 'noticed',
-          takeoverNotBefore: previousSeenAt,
+          takeoverNotBefore:
+            reacquired && lapsedAt ? new Date(lapsedAt.getTime() - LEASE_REACQUIRE_MIN_GAP_MS) : previousSeenAt,
+          ...(reacquired ? { reacquired: true } : {}),
         }
       : null;
   return { next, change };
 }
 
-export type LeaseHolderChangeKind = 'failover' | 'handoff';
+export type LeaseHolderChangeKind = 'failover' | 'handoff' | 'reacquired';
 
 /**
  * D9 audit: a holder change the backend planned (a handoff command, or a release that named the new holder as its
@@ -269,6 +325,7 @@ export function classifyLeaseHolderChange(
   now: Date
 ): LeaseHolderChangeKind | null {
   if (!change.from) return null;
+  if (change.reacquired) return 'reacquired';
   const plannedMatch = planned.some(
     (handoff) =>
       handoff.slot === slot &&

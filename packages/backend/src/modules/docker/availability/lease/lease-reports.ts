@@ -81,6 +81,45 @@ function reporterStartedAt(incarnation: string | number | undefined | null): Dat
   return started && started.getTime() >= Date.UTC(2020, 0, 1) ? started : null;
 }
 
+/**
+ * N-15: how far a daemon's wall clock is from Gateway's, measured on the report itself: the daemon's clock when it
+ * built the report against Gateway's when the report arrived. A VM resumed from suspend runs minutes behind until NTP
+ * steps it (stand run rc20pre3 i: 101 s), and every time the daemon reports is on that clock.
+ */
+export interface LeaseReporterClock {
+  /** The daemon's wall clock (Unix ms) from its health report; resolution one second. */
+  healthTimestampMs?: number;
+  /** Gateway's wall clock when the report arrived. */
+  receivedAtMs: number;
+}
+
+/** Offsets up to this much are transit and clock resolution, not skew: times are taken as reported. */
+export const LEASE_REPORTER_CLOCK_TOLERANCE_MS = 2_000;
+
+/**
+ * The reporter's clock offset (its clock minus Gateway's) in ms; null when the report arrived with a clock that cannot
+ * be measured, so its reported times are not used (voters decide). Without a clock at all (a replayed report) the
+ * times are taken as reported.
+ */
+export function leaseReporterClockOffset(
+  report: Pick<AvailabilityLeaseReport, 'reportedAtUnixMs'>,
+  clock: LeaseReporterClock | undefined
+): number | null {
+  if (!clock) return 0;
+  const precise = Number(report.reportedAtUnixMs ?? 0);
+  if (Number.isSafeInteger(precise) && precise > 0) return precise - clock.receivedAtMs;
+  const coarse = Number(clock.healthTimestampMs ?? 0);
+  // Whole seconds, truncated: the report was built up to a second after it.
+  return Number.isSafeInteger(coarse) && coarse > 0 ? coarse + 500 - clock.receivedAtMs : null;
+}
+
+/** A time the reporter stated on its own clock, on Gateway's clock; null when the offset is unknown. */
+function onGatewayClock(reported: Date | null, offsetMs: number | null): Date | null {
+  if (!reported || offsetMs === null) return null;
+  if (Math.abs(offsetMs) <= LEASE_REPORTER_CLOCK_TOLERANCE_MS) return reported;
+  return new Date(reported.getTime() - offsetMs);
+}
+
 /** A voter's first sighting of the holder, unless it may only be the voter catching up after its own restart. */
 function voterSighting(since: Date | null, startedAt: Date | null): Date | null {
   if (!since) return null;
@@ -99,7 +138,8 @@ export class AvailabilityLeaseReports {
   async ingest(
     sender: LeaseReportSender,
     report: AvailabilityLeaseReport,
-    now = new Date()
+    now = new Date(),
+    clock?: LeaseReporterClock
   ): Promise<{ notices: LeaseHolderChangeNotice[]; sightings: LeaseTakeoverSighting[]; identityChanged: boolean }> {
     // Nginx daemons only observe leases and report just the applied revision, without a member id; the sender
     // itself comes from the authenticated control stream.
@@ -122,10 +162,18 @@ export class AvailabilityLeaseReports {
     };
     const reporterRoles = new Map<string, { policyId: string; slot: number; role: string }>();
     const startedAt = reporterStartedAt(report.incarnation);
+    // N-15: a daemon states times on its own wall clock; they are moved onto Gateway's by the measured offset, and not
+    // used at all when it cannot be measured. Relays keep their times (their reports carry no clock yet).
+    const offsetMs = sender.kind === 'relay' ? 0 : leaseReporterClockOffset(report, clock);
+    const daemonTime = (value: string | number | undefined | null) => onGatewayClock(reportedTime(value), offsetMs);
+    const startedOnGatewayClock = startedAt ? daemonTime(startedAt.getTime()) : null;
+    const starting = Boolean(
+      startedOnGatewayClock && now.getTime() - startedOnGatewayClock.getTime() < LEASE_VOTER_RESTART_GRACE_MS
+    );
     // The holder's own acquired events carry its takeover time (N-5).
     const acquiredAt = new Map<string, Date>();
     for (const event of report.events ?? []) {
-      const at = reportedTime(event.atUnixMs);
+      const at = daemonTime(event.atUnixMs);
       if (event.kind !== 'acquired' || !event.policyId || !at) continue;
       const key = keyOf(event.policyId, event.slot);
       const known = acquiredAt.get(key);
@@ -145,7 +193,7 @@ export class AvailabilityLeaseReports {
         if (!ballot || !HOLDING_LEASE_ROLES.has(role)) continue;
         // B-14: the holder reports when it acquired the key with every report; the acquired event is lost when the
         // report carrying it could not be delivered.
-        const since = reportedTime(held.heldSinceUnixMs) ?? acquiredAt.get(keyOf(held.policyId, held.slot)) ?? null;
+        const since = daemonTime(held.heldSinceUnixMs) ?? acquiredAt.get(keyOf(held.policyId, held.slot)) ?? null;
         addCandidate(held.policyId, held.slot, {
           holderId: sender.memberId,
           ballot,
@@ -155,6 +203,8 @@ export class AvailabilityLeaseReports {
           sourceId: sender.memberId,
           since,
           exact: since !== null,
+          // A daemon that states its clock (N-15) also reports a key it recovered after a restart without a time.
+          holdingStart: since !== null && Number(report.reportedAtUnixMs ?? 0) > 0,
         });
       }
     }
@@ -163,7 +213,9 @@ export class AvailabilityLeaseReports {
       const ballot = normalizeLeaseBallot(view.committed);
       // When this voter first stored a commit of the committed ballot's proposer (N-5), unless that was right after
       // its own start (B-14).
-      const commitSince = voterSighting(reportedTime(view.holderSinceUnixMs), startedAt);
+      // Its own start is on the same clock as the sighting, so the restart check compares them as reported.
+      const sighted = voterSighting(reportedTime(view.holderSinceUnixMs), startedAt);
+      const commitSince = sighted ? daemonTime(sighted.getTime()) : null;
       const sinceFor = (holderId: string) => (commitSince && ballot?.proposerId === holderId ? commitSince : null);
       if (view.state === 'held' && view.holderId && ballot) {
         addCandidate(view.policyId, view.slot, {
@@ -225,10 +277,12 @@ export class AvailabilityLeaseReports {
       const [policyId, slotText] = [key.slice(0, key.lastIndexOf('/')), key.slice(key.lastIndexOf('/') + 1)];
       const slot = Number(slotText);
       try {
+        const role = reporterRoles.get(key)?.role ?? null;
         const notice = await this.applyKey(policyId, slot, {
           candidates: candidates.get(key)?.list ?? [],
-          reporter:
-            sender.kind === 'relay' ? undefined : { id: sender.memberId, role: reporterRoles.get(key)?.role ?? null },
+          // A daemon that just started reports a key it recovers for a running copy only after its first step: until
+          // then the key's absence says nothing (a restart would clear the holder and bring it back as new).
+          reporter: sender.kind === 'relay' || (role === null && starting) ? undefined : { id: sender.memberId, role },
           handoffSuccessors: handoffSuccessors.get(key) ?? new Set(),
           now,
         });

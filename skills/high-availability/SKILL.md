@@ -54,7 +54,7 @@ Leaving never stops the serving copy. The policy passes through `closing`: Gatew
 What Gateway still does in lease mode:
 - plans moves: failback, drain, manual moves, rollouts;
 - keeps two standbys provisioned;
-- reconciles its records with the actual holders after it returns, within seconds of starting: the local relay reports the holder before the Nodes reconnect. An autonomous takeover appears in the audit log as `docker.availability.lease_failover`, a planned move as `docker.availability.lease_handoff`.
+- reconciles its records with the actual holders after it returns, within seconds of starting: the local relay reports the holder before the Nodes reconnect. An autonomous takeover appears in the audit log as `docker.availability.lease_failover`, a planned move as `docker.availability.lease_handoff`, and a slot that lapsed and was taken again by the same Node (it was stopped or cut off, also while the Gateway was down) as `docker.availability.lease_reacquired`. Each is dated at the takeover, and `holderSince` then shows the new holding.
 
 A planned move of a slot (failback, drain, manual move, `nodePriority` change) is a handoff: the serving Node stops its copy and releases the lease, and only then does the next Node start its own. The slot serves nothing for the old copy's stop plus the new copy's start and readiness (a container without a health check counts as ready after 3 seconds), usually 5 to 15 seconds. A `strict` policy never runs two copies of a slot, so in failover mode, which has one slot and no surge, requests fail for that time; in replicated mode the other replicas keep serving. Schedule `failbackDelaySeconds` and priority changes accordingly.
 

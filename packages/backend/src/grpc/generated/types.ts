@@ -852,6 +852,8 @@ export interface AvailabilityLeaseReport {
   leaseRevision: string;
   /** Relays only: members with a live Coordinate stream to the relay. */
   connectedMemberIds?: string[];
+  /** Docker daemons: their wall clock (Unix ms) when the report was built; '0' when not sent (N-15). */
+  reportedAtUnixMs?: string;
 }
 
 export interface AvailabilityLeaseManifestAck {

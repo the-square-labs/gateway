@@ -97,6 +97,10 @@ type Runtime struct {
 	// heldSince is when each key held now was acquired (lease clock), kept
 	// from the transitions even when their report events are dropped.
 	heldSince map[availabilitylease.Key]time.Duration
+	// recovering marks keys this process recovers for a copy that kept
+	// running through a daemon restart: renewing one continues the holding
+	// that started before the restart, at a time this process does not know.
+	recovering map[availabilitylease.Key]bool
 }
 
 type snapshot struct {

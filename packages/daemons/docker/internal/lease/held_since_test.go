@@ -67,3 +67,62 @@ func TestHolderReportsItsAcquisitionTimeUntilItStopsHolding(t *testing.T) {
 		t.Fatalf("successor held since %d, want its own acquisition after %d", successor.SinceUnixMs, acquiredAt)
 	}
 }
+
+// N-15: Gateway measures a daemon's clock offset from ReportedAtUnixMs and
+// moves the report's times by it, so every time in one report is on the wall
+// clock of that moment, also a transition collected before the wall clock was
+// stepped (a VM resumed from suspend runs behind until NTP steps it).
+func TestReportTimesShareTheReportsWallClock(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1 := w.daemon("d1")
+
+	w.wallJump += 101 * time.Second
+	report := d1.runtime.Report()
+	if report.ReportedAtUnixMs != w.wall().UnixMilli() {
+		t.Fatalf("reported at %d, want the report's wall clock %d", report.ReportedAtUnixMs, w.wall().UnixMilli())
+	}
+	var acquiredAt int64
+	for _, event := range report.Events {
+		if event.Kind == string(availabilitylease.EventAcquired) && event.Key.PolicyID == testPolicy {
+			acquiredAt = event.AtUnixMs
+		}
+	}
+	if acquiredAt == 0 {
+		t.Fatalf("acquired event missing: %+v", report.Events)
+	}
+	if age := report.ReportedAtUnixMs - acquiredAt; age < 0 || age > (45*time.Second).Milliseconds() {
+		t.Fatalf("acquisition %d ms before the report, want it on the report's wall clock (within the 45 s it took)", age)
+	}
+	if held := heldView(t, report); held.SinceUnixMs != acquiredAt {
+		t.Fatalf("held since %d, want the acquisition %d", held.SinceUnixMs, acquiredAt)
+	}
+}
+
+// M-5: a copy that kept running through a daemon restart continues its
+// holding. Its renewal is reported as recovered, without a start time, so
+// Gateway neither resets holderSince nor audits a re-acquisition. A key the
+// node acquires anew reports its start (TestHolderReportsItsAcquisitionTime...).
+func TestRecoveredKeyContinuesTheHoldingWithoutAStartTime(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	w.daemon("d1").runtime.Report()
+	w.run(3 * time.Second)
+	d1 := w.restartDaemon("d1")
+	w.waitServing("d1", 10*time.Second)
+	w.run(2 * time.Second)
+
+	report := d1.runtime.Report()
+	var kinds []string
+	for _, event := range report.Events {
+		if event.Key.PolicyID == testPolicy {
+			kinds = append(kinds, event.Kind)
+		}
+	}
+	if len(kinds) != 1 || kinds[0] != EventRecovered {
+		t.Fatalf("events after the restart %v, want one %q\n%s", kinds, EventRecovered, w.dump())
+	}
+	if held := heldView(t, report); held.SinceUnixMs != 0 || held.Role != availabilitylease.RoleHolding.String() {
+		t.Fatalf("recovered key held %+v, want holding without a start time", held)
+	}
+}
