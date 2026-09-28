@@ -424,3 +424,104 @@ func TestBootstrapHolderServesWithoutAGapUntilTheRuntimeTakesOver(t *testing.T) 
 		t.Fatalf("the bridge came back after it ended: %v", got)
 	}
 }
+
+// B-12b (stand, bootstrapping -> lease at 14:34:28): a member link is plain to
+// the daemon until its policy is in lease mode, then its binding names the
+// policy. The holder's copy kept serving, but its readiness was not known yet,
+// so the link went DORMANT: the relay reset every tunnel through it and nginx
+// closed the socket, a 1.9 s burst of 502 until the probe put it back. A flip
+// happens only on evidence now: the link stays SERVING, with its tunnels,
+// until a probe says otherwise.
+func TestLinkEnteringLeaseModeKeepsServingWithItsTunnels(t *testing.T) {
+	plugin := memberPluginForTest(t)
+	const link = "44444444-4444-4444-8444-444444444444"
+	commit := func(policyID string) {
+		t.Helper()
+		if err := plugin.secureLinkState.Commit(&pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{
+			{LinkId: link, Role: "target", TargetContainer: "gwav-hafo", AvailabilityPolicyId: policyID, Dormant: policyID != ""},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit("") // bootstrapping: a plain link
+	store, err := newRelayGrantStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.sync(&pb.SyncRelayGrantsCommand{PolicyRevision: 1, Grants: []*pb.RelayGrantAssignment{
+		{Role: "endpoint", OwnerKind: proxySecureLinkOwnerKind, OwnerId: link, EndpointId: "endpoint-hafo", Grant: &pb.RelaySignedGrant{KeyId: "k"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	plugin.relayGrants = store
+	client := &stateRecordingBrokerClient{messages: make(chan *relayv1.EndpointControl, 16)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	router := &relayTunnelRouter{plugin: plugin, ctx: ctx, client: client, targetID: relaybridge.LegacyTargetID,
+		registrations: map[string]*relayEndpointRegistration{}, accepted: map[*acceptedRelayTunnel]struct{}{}}
+	plugin.relayTunnels = map[string]*relayTunnelRouter{relaybridge.LegacyTargetID: router}
+
+	router.reconcileRegistrations()
+	if register := nextEndpointControl(t, client.messages).GetRegister(); register.GetState() != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED {
+		t.Fatalf("plain link registered as %v", register.GetState())
+	}
+	// A live connection through the link.
+	cancelled := false
+	tunnel := &acceptedRelayTunnel{endpointID: "endpoint-hafo", done: make(chan struct{}), cancel: func() { cancelled = true }}
+	router.mu.Lock()
+	router.accepted[tunnel] = struct{}{}
+	router.mu.Unlock()
+
+	// Lease mode: this node holds the slot, its copy kept running; the probe
+	// has not run yet.
+	setServing(plugin, "policy-1", true)
+	commit("policy-1")
+	router.reconcileRegistrations()
+	renew := nextEndpointControl(t, client.messages).GetRenew()
+	if renew == nil || renew.GetState() != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING {
+		t.Fatalf("link entering lease mode renewed as %v, want SERVING in place", renew)
+	}
+	// The probe confirms it: no further renewal, the tunnel lives on.
+	plugin.memberProbe = func(context.Context, []string, bool) memberProbeResult {
+		return memberProbeResult{ready: true, fingerprint: "hafo@1", known: true}
+	}
+	if !plugin.refreshMemberReadiness(context.Background(), time.Now()) {
+		t.Fatal("the probe result was not recorded")
+	}
+	router.reconcileRegistrations()
+	select {
+	case message := <-client.messages:
+		t.Fatalf("a confirmed serving link was renewed again: %v", message)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if cancelled || len(router.registrations) != 1 {
+		t.Fatalf("the flip broke the link: tunnel cancelled %v, registrations %d", cancelled, len(router.registrations))
+	}
+
+	// Evidence still flips it: a probe that finds the workload down.
+	plugin.memberProbe = func(context.Context, []string, bool) memberProbeResult {
+		return memberProbeResult{ready: false, fingerprint: "hafo@2", known: true}
+	}
+	plugin.memberReadiness.set("policy-1", true, "hafo@1", time.Now().Add(-time.Minute))
+	plugin.refreshMemberReadiness(context.Background(), time.Now())
+	router.reconcileRegistrations()
+	if renew := nextEndpointControl(t, client.messages).GetRenew(); renew.GetState() != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+		t.Fatalf("a member found not ready renewed as %v", renew.GetState())
+	}
+}
+
+// A link that never took traffic (a standby, or a new successor) does not get
+// the benefit of the doubt: it stays DORMANT until its probe says ready.
+func TestLinkThatNeverServedStaysDormantUntilProbed(t *testing.T) {
+	plugin := memberPluginForTest(t)
+	setServing(plugin, "policy-1", true)
+	if got := plugin.memberEndpointState(memberLeaseLink); got != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+		t.Fatalf("unprobed new holder = %v", got)
+	}
+	// Leaving the serving set is evidence too, whatever the link did before.
+	plugin.memberReadiness.recordState(memberLeaseLink, relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	setServing(plugin, "policy-1", false)
+	if got := plugin.memberEndpointState(memberLeaseLink); got != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+		t.Fatalf("released holder = %v", got)
+	}
+}

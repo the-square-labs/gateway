@@ -74,11 +74,55 @@ type memberReadinessEntry struct {
 type memberReadiness struct {
 	mu      sync.Mutex
 	entries map[string]memberReadinessEntry
-	wake    chan struct{}
+	// states is the serving state each Secure Link target last registered
+	// with (see memberEndpointState).
+	states map[string]relayv1.EndpointServingState
+	wake   chan struct{}
 }
 
 func newMemberReadiness() *memberReadiness {
-	return &memberReadiness{entries: map[string]memberReadinessEntry{}, wake: make(chan struct{}, 1)}
+	return &memberReadiness{
+		entries: map[string]memberReadinessEntry{},
+		states:  map[string]relayv1.EndpointServingState{},
+		wake:    make(chan struct{}, 1),
+	}
+}
+
+// recordState remembers the state a link registers with and returns it.
+func (m *memberReadiness) recordState(linkID string, state relayv1.EndpointServingState) relayv1.EndpointServingState {
+	if m == nil {
+		return state
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.states == nil {
+		m.states = map[string]relayv1.EndpointServingState{}
+	}
+	m.states[linkID] = state
+	return state
+}
+
+// tookTraffic reports whether a link last registered as one that takes
+// traffic: SERVING, or UNSPECIFIED (a plain link, which serves).
+func (m *memberReadiness) tookTraffic(linkID string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.states[linkID]
+	return ok && state != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+}
+
+// keepLinks forgets the states of links this node no longer targets.
+func (m *memberReadiness) keepLinks(linkIDs map[string]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for linkID := range m.states {
+		if !linkIDs[linkID] {
+			delete(m.states, linkID)
+		}
+	}
 }
 
 func (m *memberReadiness) ready(policyID string) bool {
@@ -91,6 +135,9 @@ func (m *memberReadiness) ready(policyID string) bool {
 }
 
 func (m *memberReadiness) entry(policyID string) (memberReadinessEntry, bool) {
+	if m == nil {
+		return memberReadinessEntry{}, false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry, ok := m.entries[policyID]
@@ -157,6 +204,20 @@ func (p *DockerPlugin) availabilityLinkPolicy(linkID string) string {
 	return ""
 }
 
+// secureLinkTargets are the Secure Link targets this node serves.
+func (p *DockerPlugin) secureLinkTargets() map[string]bool {
+	result := map[string]bool{}
+	if p.secureLinkState == nil {
+		return result
+	}
+	for _, binding := range p.secureLinkState.Get().GetBindings() {
+		if binding.GetRole() == "target" {
+			result[binding.GetLinkId()] = true
+		}
+	}
+	return result
+}
+
 // availabilityMemberLinks groups this node's availability member targets by
 // policy.
 func (p *DockerPlugin) availabilityMemberLinks() map[string][]string {
@@ -181,14 +242,35 @@ func (p *DockerPlugin) availabilityMemberLinks() map[string][]string {
 // (it registers as it always did), SERVING for a member this node serves whose
 // workload is ready, DORMANT for every other member (D6, D7).
 func (p *DockerPlugin) memberEndpointState(linkID string) relayv1.EndpointServingState {
+	return p.memberReadiness.recordState(linkID, p.decideMemberEndpointState(linkID))
+}
+
+// decideMemberEndpointState flips a link only on evidence (B-12b): DORMANT when
+// this node does not serve the member (lease released, fenced, standby) or a
+// probe found its workload not ready. A link whose readiness is not known yet
+// keeps taking traffic if it took traffic until now: a plain link of a policy
+// that just entered lease mode (its binding only now names the policy), or a
+// member whose readiness was forgotten while its copy kept serving. Flipping
+// it dormant first would reset every established connection through it and
+// refuse new ones while the same copy serves; the probe that follows decides.
+func (p *DockerPlugin) decideMemberEndpointState(linkID string) relayv1.EndpointServingState {
 	policyID := p.availabilityLinkPolicy(linkID)
 	if policyID == "" {
 		return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED
 	}
-	if !p.lease.endpointAllowed(linkID) || !p.memberReadiness.ready(policyID) {
+	if !p.lease.endpointAllowed(linkID) {
 		return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
 	}
-	return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
+	if entry, known := p.memberReadiness.entry(policyID); known {
+		if entry.ready {
+			return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
+		}
+		return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+	}
+	if p.memberReadiness.tookTraffic(linkID) {
+		return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
+	}
+	return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
 }
 
 // runMemberReadiness keeps the readiness of the members this node serves
@@ -214,6 +296,7 @@ func (p *DockerPlugin) runMemberReadiness(ctx context.Context) {
 func (p *DockerPlugin) refreshMemberReadiness(ctx context.Context, now time.Time) bool {
 	policies := p.availabilityMemberLinks()
 	changed := p.memberReadiness.keepOnly(policies)
+	p.memberReadiness.keepLinks(p.secureLinkTargets())
 	for policyID, links := range policies {
 		if len(links) == 0 || !p.lease.endpointAllowed(links[0]) {
 			if p.memberReadiness.reset(policyID) {
