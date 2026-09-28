@@ -278,7 +278,7 @@ export class ExternalSshService {
     hostFingerprint: string;
     /** Runs after authentication and returns the command; it owns the dispatch fence. */
     prepare: () => Promise<string>;
-  }): Promise<{ exitCode: number | null; stdout: string; sent: true }> {
+  }): Promise<{ exitCode: number | null; stdout: string; stderr: string; sent: true }> {
     const targetAddress = await this.assertExternalTarget(input.address);
     if (normalizeIp(targetAddress) !== normalizeIp(input.address))
       throw new AppError(409, 'HOSTING_SSH_TARGET_MISMATCH', 'SSH target must be the created VM address');
@@ -291,7 +291,7 @@ export class ExternalSshService {
     try {
       const command = await input.prepare();
       const output = await execOnClient(client, command);
-      return { exitCode: output.exitCode, stdout: output.stdout, sent: true };
+      return { exitCode: output.exitCode, stdout: output.stdout, stderr: output.stderr, sent: true };
     } finally {
       client.end();
     }

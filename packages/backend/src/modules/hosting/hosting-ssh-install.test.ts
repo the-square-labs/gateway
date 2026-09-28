@@ -8,6 +8,7 @@ import {
   createSshInstallKey,
   HostingSshInstaller,
   initialSshInstallState,
+  installDiagnostics,
   rotateSshInstallToken,
   SSH_INSTALL_TOKEN_TTL_MS,
   type SshInstallState,
@@ -144,8 +145,32 @@ describe('HostingSshInstaller', () => {
       undefined,
       expect.objectContaining({ code: 'HOSTING_INSTALL_FAILED' })
     );
-    expect(test.state()).toMatchObject({ exitCode: 3, guestKey: 'retained', providerKey: 'deleted' });
+    expect(test.state()).toMatchObject({
+      exitCode: 3,
+      guestKey: 'retained',
+      providerKey: 'deleted',
+      diagnostics: 'failed',
+    });
+    expect(test.operations.finish).toHaveBeenCalledWith(
+      expect.anything(),
+      'failed',
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining('exited with code 3: failed') })
+    );
     expect(test.commands[0]).toContain('if [ "$status" -eq 0 ]; then');
+  });
+
+  it('keeps the tail of a failed installer output without colours or enrollment tokens', () => {
+    const token = 'gw_node_v2_0123abcd_89efcdef0123';
+    const diagnostics = installDiagnostics({
+      stdout: `${'x'.repeat(5000)}\n\u001b[32m✓\u001b[0m Docker ready\nEnrolling with --token ${token}`,
+      stderr: `\u001b[31mError:\u001b[0m enrollment refused for ${token}`,
+    });
+    expect(diagnostics.length).toBeLessThanOrEqual(4000);
+    expect(diagnostics).not.toContain(token);
+    expect(diagnostics).not.toContain('\u001b');
+    expect(diagnostics).toContain('✓ Docker ready');
+    expect(diagnostics.endsWith('Error: enrollment refused for gw_node_[redacted]')).toBe(true);
   });
 
   it('defers the terminal outcome and retries a failed provider key cleanup', async () => {

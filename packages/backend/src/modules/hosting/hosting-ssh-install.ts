@@ -36,6 +36,8 @@ export interface SshInstallState {
   providerKeyError?: string;
   guestKey: 'pending' | 'removed' | 'failed' | 'retained';
   guestKeyAttempts: number;
+  /** Tail of a failed installer's output, without colours or enrollment tokens. */
+  diagnostics?: string;
   deferred?: Outcome;
 }
 
@@ -43,6 +45,31 @@ export function createSshInstallKey(marker: string): SshInstallKey {
   const pair = ssh2.utils.generateKeyPairSync('ed25519', { comment: marker });
   return { privateKey: pair.private, publicKey: pair.public.trim() };
 }
+const INSTALL_DIAGNOSTICS_MAX_CHARS = 4000;
+const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, 'g');
+
+/** The end of a failed installer's output, so the operator sees why without guest access. */
+export function installDiagnostics(output: { stdout: string; stderr?: string }): string {
+  const text = [output.stdout, output.stderr ?? '']
+    .filter((part) => part.trim().length > 0)
+    .join('\n')
+    .replace(ANSI_ESCAPE, '')
+    .replace(/gw_node_[A-Za-z0-9_]+/g, 'gw_node_[redacted]')
+    .replace(/(--token\s+)\S+/g, '$1[redacted]')
+    .trim();
+  return text.length > INSTALL_DIAGNOSTICS_MAX_CHARS ? text.slice(-INSTALL_DIAGNOSTICS_MAX_CHARS) : text;
+}
+
+function lastDiagnosticLine(diagnostics: string): string {
+  const line =
+    diagnostics
+      .split('\n')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .at(-1) ?? '';
+  return line.length > 300 ? `${line.slice(0, 300)}…` : line;
+}
+
 export function initialSshInstallState(): SshInstallState {
   return { providerKey: 'pending', providerKeyAttempts: 0, guestKey: 'pending', guestKeyAttempts: 0 };
 }
@@ -160,7 +187,7 @@ export class HostingSshInstaller {
       row = await this.save(row, state);
       await this.audit(row, 'hosting.install.ssh_host_key_pinned', { address, hostFingerprint });
     }
-    let output: { exitCode: number | null; stdout: string };
+    let output: { exitCode: number | null; stdout: string; stderr?: string };
     try {
       output = await this.deps.ssh.executeWithKeyForHosting({
         address,
@@ -189,11 +216,13 @@ export class HostingSshInstaller {
       throw error;
     }
     const installed = output.exitCode === 0;
+    const diagnostics = installed ? undefined : installDiagnostics(output);
     state = {
       ...state,
       exitCode: output.exitCode,
       guestKey: installed ? (output.stdout.includes(KEY_REMOVED) ? 'removed' : 'failed') : 'retained',
       guestKeyAttempts: installed ? 1 : 0,
+      diagnostics,
     };
     row = await this.save(row, state);
     await this.audit(row, 'hosting.install.ssh_completed', { exitCode: output.exitCode, guestKey: state.guestKey });
@@ -202,7 +231,9 @@ export class HostingSshInstaller {
     if (!installed)
       return this.finish(adapter, row, 'failed', undefined, {
         code: 'HOSTING_INSTALL_FAILED',
-        message: 'Installation exited unsuccessfully. Inspect guest diagnostics, then retry installation on this VM.',
+        message: `Installation exited with code ${output.exitCode ?? 'unknown'}${
+          diagnostics ? `: ${lastDiagnosticLine(diagnostics)}` : ''
+        }. The output tail is in the operation result; fix the cause, then retry installation on this VM.`,
       });
     row = await this.releaseProviderKey(row, adapter);
     return this.deps.operations.update(row, { phase: 'installing', dispatchStartedAt: null });
