@@ -46,7 +46,10 @@ function database(hosts: ReturnType<typeof host>[]) {
     returning: vi.fn().mockResolvedValue([{ id: 'persisted' }]),
   });
   const db = {
-    query: { proxyHosts: { findMany: vi.fn().mockResolvedValue(hosts) } },
+    query: {
+      proxyHosts: { findMany: vi.fn().mockResolvedValue(hosts) },
+      proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+    },
     update: vi.fn(() => ({
       set: vi.fn((values: Record<string, unknown>) => {
         writes.push(values);

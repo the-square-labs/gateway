@@ -26,7 +26,10 @@ describe('HealthCheckJob maintenance race', () => {
     };
     const returning = vi.fn().mockResolvedValue([]);
     const db = {
-      query: { proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) } },
+      query: {
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
       update: vi.fn(() => ({
         set: vi.fn(() => ({ where: vi.fn(() => ({ returning })) })),
       })),
@@ -73,7 +76,10 @@ describe('HealthCheckJob maintenance race', () => {
     };
     const returning = vi.fn().mockResolvedValue([{ id: host.id }]);
     const db = {
-      query: { proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) } },
+      query: {
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
       update: vi.fn(() => ({
         set: vi.fn(() => ({ where: vi.fn(() => ({ returning })) })),
       })),
@@ -119,7 +125,10 @@ describe('HealthCheckJob maintenance race', () => {
       nodeId: 'nginx-node',
     };
     const db = {
-      query: { proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) } },
+      query: {
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
       update: vi.fn(() => ({
         set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: host.id }]) })) })),
       })),
@@ -154,7 +163,10 @@ describe('HealthCheckJob maintenance race', () => {
       nodeId: 'nginx-node',
     };
     const db = {
-      query: { proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) } },
+      query: {
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
       update: vi.fn(() => ({
         set: vi.fn(() => ({
           where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: host.id }]) })),
@@ -198,7 +210,10 @@ describe('HealthCheckJob maintenance race', () => {
     };
     const writes: Array<Record<string, unknown>> = [];
     const db = {
-      query: { proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) } },
+      query: {
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) },
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([]) },
+      },
       update: vi.fn(() => ({
         set: vi.fn((values: Record<string, unknown>) => {
           writes.push(values);

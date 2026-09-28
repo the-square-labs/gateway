@@ -22,6 +22,7 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { HealthCheckBodyMatchMode } from './proxy.service-helpers.js';
 import { matchesExpectedBody } from './proxy.service-helpers.js';
+import { loadAvailabilityRouteProbeLinks, probeSecureLinkRoute } from './proxy-secure-link-health-probe.js';
 
 export const PROXY_HEALTH_CHECK_TIMEOUT_MS = 10_000;
 // Same ceiling as the daemon-side Secure Link and Pages probes.
@@ -368,7 +369,6 @@ export function runImmediateProxyHealthCheck({
       });
       if (!host?.enabled || !host.healthCheckEnabled || host.maintenanceEnabled) return;
 
-      const scheme = host.forwardScheme || 'http';
       const path = host.healthCheckUrl || '/';
       const url = resolveProxyHealthCheckUrl(host);
       const secureLinkProbe =
@@ -402,15 +402,14 @@ export function runImmediateProxyHealthCheck({
           }
         } else if (secureLinkProbe) {
           if (!host.nodeId || !nodeDispatch) throw new Error('Secure Link health probe is unavailable');
-          const probe = await nodeDispatch.probeProxySecureLink(host.nodeId, {
-            linkId: host.id,
-            scheme,
-            path,
-            expectedStatus: host.healthCheckExpectedStatus,
-            expectedBody: host.healthCheckExpectedBody,
-            bodyMatchMode: host.healthCheckBodyMatchMode,
-            timeoutSeconds: PROXY_HEALTH_CHECK_TIMEOUT_MS / 1000,
-          });
+          const members = await loadAvailabilityRouteProbeLinks(db, [host.id]);
+          const probe = await probeSecureLinkRoute(
+            nodeDispatch,
+            { ...host, nodeId: host.nodeId },
+            members.get(host.id),
+            PROXY_HEALTH_CHECK_TIMEOUT_MS / 1000
+          );
+          if (probe.busy) return;
           responseMs = probe.responseMs;
           status = daemonProbeOutcome(probe);
         } else {

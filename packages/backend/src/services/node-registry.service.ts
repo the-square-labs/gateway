@@ -10,6 +10,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import type { DockerRuntimeStatus } from '@/modules/docker/docker.schemas.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import { NodeOfflineDebounce } from '@/services/node-offline-debounce.js';
 
 const logger = createChildLogger('NodeRegistry');
 const TRAFFIC_STATS_CACHE_TTL_MS = 60_000;
@@ -86,8 +87,14 @@ export class NodeRegistryService {
   private trafficStatsInFlight = new Map<string, Promise<CommandResult>>();
   private trafficStatsNodeTails = new Map<string, Promise<void>>();
   private trafficStatsCache = new Map<string, { sampledAt: number; result: CommandResult }>();
+  private readonly offlineDebounce: NodeOfflineDebounce;
 
-  constructor(private db: DrizzleClient) {}
+  constructor(
+    private db: DrizzleClient,
+    options: { offlineDebounceMs?: number } = {}
+  ) {
+    this.offlineDebounce = new NodeOfflineDebounce(options.offlineDebounceMs);
+  }
 
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
@@ -318,6 +325,9 @@ export class NodeRegistryService {
       pendingCommands: new Map(),
     });
 
+    if (this.offlineDebounce.cancel(nodeId)) {
+      logger.info('Node reconnected before its offline grace elapsed', { nodeId, hostname });
+    }
     logger.info('Node registered', { nodeId, type, hostname });
     this.observeNodeState(nodeId, 'online', hostname);
   }
@@ -334,6 +344,30 @@ export class NodeRegistryService {
     this.nodes.delete(nodeId);
     this.clearTrafficStatsState(nodeId);
 
+    // A stream that ended on its own may come back in a moment; an explicit removal (no stream) is final.
+    if (commandStream && this.offlineDebounce.enabled) {
+      logger.info('Node stream closed; waiting for it to reconnect before marking it offline', {
+        nodeId,
+        graceMs: this.offlineDebounce.delayMs,
+      });
+      this.offlineDebounce.schedule(
+        nodeId,
+        () => this.markDisconnectedOffline(nodeId, node.hostname),
+        (error) =>
+          logger.warn('Failed to mark disconnected node offline', {
+            nodeId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+      );
+      return;
+    }
+    this.offlineDebounce.cancel(nodeId);
+    await this.markDisconnectedOffline(nodeId, node.hostname);
+  }
+
+  private async markDisconnectedOffline(nodeId: string, hostname: string): Promise<void> {
+    // A replacement stream registered meanwhile: the node never went offline.
+    if (this.nodes.has(nodeId)) return;
     const [dbNode] = await this.db
       .select({ metadata: nodes.metadata })
       .from(nodes)
@@ -344,6 +378,7 @@ export class NodeRegistryService {
       logger.info('Node disconnected for daemon update; preserving status', { nodeId });
       return;
     }
+    if (this.nodes.has(nodeId)) return;
 
     await this.db
       .update(nodes)
@@ -361,9 +396,9 @@ export class NodeRegistryService {
       id: nodeId,
       action: 'updated',
       status: 'offline',
-      hostname: node.hostname,
+      hostname,
     });
-    this.observeNodeState(nodeId, 'offline', node.hostname);
+    this.observeNodeState(nodeId, 'offline', hostname);
   }
 
   getNode(nodeId: string): ConnectedNode | undefined {
