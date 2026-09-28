@@ -17,6 +17,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
+	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	sharedstate "github.com/wiolett-industries/gateway/daemon-shared/state"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
@@ -51,6 +52,9 @@ type NginxPlugin struct {
 	validatedConfigFingerprint  string
 	pendingConfigFingerprint    string
 	configFingerprintReady      bool
+	// registryListenersRelease releases kept registry sockets no sync claimed.
+	registryListenersRelease *time.Timer
+	registryListenersOnce    sync.Once
 
 	// Session-scoped resources
 	sessionCancel              context.CancelFunc
@@ -63,6 +67,22 @@ var _ lifecycle.ProxySecureLinkPlugin = (*NginxPlugin)(nil)
 var _ lifecycle.ProxySecureLinkProbePlugin = (*NginxPlugin)(nil)
 var _ lifecycle.PagesRouteProbePlugin = (*NginxPlugin)(nil)
 var _ lifecycle.ShutdownPlugin = (*NginxPlugin)(nil)
+
+// registryListenerAdoptionWindow bounds how long registry sockets kept by the
+// previous process wait for the registry sync that adopts them. They queue
+// connections meanwhile, which only a sync can serve.
+const registryListenerAdoptionWindow = 30 * time.Second
+
+// releaseUnclaimedRegistryListeners closes the registry sockets the previous
+// process kept that the first registry sync did not adopt.
+func (p *NginxPlugin) releaseUnclaimedRegistryListeners() {
+	p.registryListenersOnce.Do(func() {
+		if p.registryListenersRelease != nil {
+			p.registryListenersRelease.Stop()
+		}
+		listenerkeep.ReleaseUnclaimed(registrySecureLinkSocketDir + "/")
+	})
+}
 
 func secureLinkProxyPassPattern(linkID string, port int) *regexp.Regexp {
 	portPattern := `[0-9]+`
@@ -151,6 +171,14 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	if err != nil {
 		return fmt.Errorf("initialize proxy secure-link state: %w", err)
 	}
+	// Units installed before the template carried it get a file descriptor
+	// store, so Secure Link sockets also survive a restart of the whole unit
+	// (effective from its next start).
+	if installed, storeErr := listenerkeep.EnsureSystemdStore(); storeErr != nil {
+		logger.Warn("could not give the daemon unit a file descriptor store; a unit restart refuses Secure Link connections briefly", "error", storeErr)
+	} else if installed {
+		logger.Info("gave the daemon unit a file descriptor store for Secure Link sockets", "drop_in", listenerkeep.SystemdDropInName)
+	}
 	p.availabilityLease = newAvailabilityLeaseCoordinator(baseCfg.StateDir, p.secureLinks, logger)
 	p.availabilityLease.start()
 	p.pagesRuntime, err = pages.New(p.cfg.Nginx.PagesRoot, p.cfg.Nginx.ConfigDir, p.cfg.Nginx.CertsDir, p.mgr)
@@ -175,6 +203,8 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 			logger.Warn("Gateway Pages runtime configuration is unavailable; nginx was built without http_sub_module")
 		}
 	}
+	removeStaleTemporarySockets(proxySecureLinkSocketDir)
+	removeStaleTemporarySockets(registrySecureLinkSocketDir)
 	if restored := p.secureLinkState.Get(); len(restored.Bindings) > 0 {
 		statuses, restoreErr := p.secureLinks.sync(restored)
 		if restoreErr != nil {
@@ -187,6 +217,12 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 			return fmt.Errorf("persist restored proxy secure-link listeners: %w", saveErr)
 		}
 	}
+	// Restoring adopted every proxy Secure Link socket the previous process
+	// kept for a binding it still has; the others were removed meanwhile.
+	if released := listenerkeep.ReleaseUnclaimed(proxySecureLinkSocketDir + "/"); len(released) > 0 {
+		logger.Info("released kept Secure Link sockets without a binding", "sockets", len(released))
+	}
+	p.registryListenersRelease = time.AfterFunc(registryListenerAdoptionWindow, p.releaseUnclaimedRegistryListeners)
 
 	// Clean up leftover .tmp files from potential crashes
 	nginx.CleanTmpFiles(p.cfg.Nginx.ConfigDir)
@@ -298,6 +334,9 @@ func (p *NginxPlugin) SetState(st *sharedstate.State) {
 	p.state = st
 	p.reporter = NewReporter(p.cfg, p.mgr, p.logger)
 	p.handler = NewHandler(p.cfg, p.mgr, st, p.logger, p.secureLinkState, p.pagesRuntime, p.pagesRuntimeConfigAvailable)
+	if p.secureLinks != nil {
+		p.handler.secureLinkListeners = p.secureLinks
+	}
 	p.handler.reporter = p.reporter
 }
 

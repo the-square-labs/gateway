@@ -300,6 +300,9 @@ describe('managed Additional Route rendering', () => {
 
     expect(rendered).toContain('server unix:/run/gateway-secure-links/member-a.sock max_fails=1 fail_timeout=1s;');
     expect(rendered).toContain('server unix:/run/gateway-secure-links/member-b.sock max_fails=1 fail_timeout=1s;');
+    // B-13: never "no live upstreams" while a member serves.
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/member-a.sock max_fails=0 backup;');
+    expect(rendered).toContain('server unix:/run/gateway-secure-links/member-b.sock max_fails=0 backup;');
     expect(rendered).toMatch(
       /proxy_pass http:\/\/gateway_secure_link_[0-9a-f_]+;\n\s+proxy_next_upstream error timeout http_502 http_503 http_504;\n\s+proxy_next_upstream_tries 5;\n\s+proxy_next_upstream_timeout 10s;/
     );

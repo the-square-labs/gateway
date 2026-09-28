@@ -92,6 +92,20 @@ function effectiveCount(spread: RelayAssignmentSpread, readyCount: number): numb
 }
 
 /**
+ * The sources a staged generation probes: one per (source kind, source id), however many routes that source has to
+ * the endpoint. A daemon reaches one endpoint through several routes (two bindings of the same managed database, a
+ * Secure Link and a binding); probing it once per relay is what the unique key of the probe table allows (M-3).
+ */
+export function sourcesToProbe<T extends { sourceKind: string; sourceId: string }>(routes: T[]): T[] {
+  const sources = new Map<string, T>();
+  for (const route of routes) {
+    const key = `${route.sourceKind}\u0000${route.sourceId}`;
+    if (!sources.has(key)) sources.set(key, route);
+  }
+  return [...sources.values()];
+}
+
+/**
  * Places one endpoint. A path with a daemon that lacks Relay Pool support runs on legacy grants,
  * which only the local relay serves: such workloads stay there until every participant is updated.
  *
@@ -1323,15 +1337,16 @@ export class RelayPoolService {
           }))
         );
         const routes = await tx.select().from(relayRoutes).where(eq(relayRoutes.targetEndpointId, endpoint.id));
-        if (routes.length) {
+        const sources = sourcesToProbe(routes);
+        if (sources.length) {
           await tx.insert(relayAssignmentSourceProbes).values(
-            routes.flatMap((route) =>
+            sources.flatMap((source) =>
               selectedIds.map((relayInstanceId) => ({
                 assignmentGenerationId: generation.id,
                 relayInstanceId,
-                sourceKind: route.sourceKind,
-                sourceId: route.sourceId,
-                certificateFingerprint: route.sourceCertificateSha256,
+                sourceKind: source.sourceKind,
+                sourceId: source.sourceId,
+                certificateFingerprint: source.sourceCertificateSha256,
               }))
             )
           );

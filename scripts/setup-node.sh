@@ -1811,6 +1811,9 @@ ExecStart=/usr/local/bin/nginx-daemon run
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
+# Secure Link sockets outlive a daemon restart in the file descriptor store.
+FileDescriptorStoreMax=4096
+NotifyAccess=main
 
 [Install]
 WantedBy=multi-user.target

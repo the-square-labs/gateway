@@ -200,7 +200,7 @@ func TestLauncherChildRetainsOwnerLockIfLauncherCrashes(t *testing.T) {
 		StateDir:   stateDir,
 		BinaryPath: binary,
 		ChildArgs:  []string{"run"},
-	}, lock)
+	}, lock, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

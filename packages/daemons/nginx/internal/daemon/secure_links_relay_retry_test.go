@@ -153,3 +153,31 @@ func TestSecureLinkGivesUpAfterTheTransientWait(t *testing.T) {
 		t.Fatalf("attempts = %d", got)
 	}
 }
+
+// TestAvailabilityMemberLinkWaitsForALaneAfterARestart is B-13: right after the nginx daemon started (or while every
+// relay restarts) it has no lane at all, so every member of the upstream fails alike. A member's link then waits for
+// a lane like any other link instead of failing the whole upstream at once.
+func TestAvailabilityMemberLinkWaitsForALaneAfterARestart(t *testing.T) {
+	previous := secureLinkTransientRetry
+	secureLinkTransientRetry = 20 * time.Millisecond
+	t.Cleanup(func() { secureLinkTransientRetry = previous })
+	broker := &scriptedBroker{}
+	plugin := relayOpenPlugin(t, broker, true)
+	lane := plugin.relayTunnels[0]
+	plugin.relayTunnels = nil
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		plugin.relayTunnelMu.Lock()
+		plugin.relayTunnels = []*nginxRelayTunnel{lane}
+		plugin.relayTunnelMu.Unlock()
+	}()
+
+	elapsed := openThroughRelay(plugin)
+
+	if got := broker.attempts.Load(); got != 1 {
+		t.Fatalf("attempts = %d, want the tunnel opened once the lane came up", got)
+	}
+	if elapsed < 100*time.Millisecond || elapsed >= secureLinkTransientWait {
+		t.Fatalf("took %s", elapsed)
+	}
+}

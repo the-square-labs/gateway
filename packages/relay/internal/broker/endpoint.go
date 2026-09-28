@@ -113,6 +113,13 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 				return status.Error(codes.PermissionDenied, err.Error())
 			}
 			state := servingState(renew.GetState())
+			if state == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED && registration.stateful() {
+				// The endpoint's policy left lease mode (its link is plain again)
+				// while the registration serves: it keeps serving in place, with
+				// its tunnels, instead of falling back to the rule that drops a
+				// registration the gate does not admit (B-12b, make-before-break).
+				state = relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
+			}
 			if state == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED {
 				if err := b.endpointLeaseErrorLocked(current.Endpoint(next.EndpointID, next.AssignmentGeneration)); err != nil {
 					b.mu.Unlock()

@@ -412,3 +412,107 @@ func TestHolderEndpointReadinessFollowsRegistrations(t *testing.T) {
 		t.Fatalf("holder endpoint without a policy = %v", got)
 	}
 }
+
+// reapply replaces the fixture's policy snapshot, binding plain-ep to leasePolicy
+// ("" keeps it outside lease mode), as Gateway does when a policy enters or
+// leaves lease mode.
+func (f *leaseFixture) reapply(t *testing.T, revision uint64, leasePolicy string) {
+	t.Helper()
+	endpoint := func(id, policy string) *relayv1.EndpointPolicy {
+		return &relayv1.EndpointPolicy{EndpointId: id, Generation: 1, SubjectKind: "node", SubjectId: "node-a", CertificateSha256: f.fingerprint, LeasePolicyId: policy}
+	}
+	route := func(id, sourceKind, sourceID, target, policy string) *relayv1.RoutePolicy {
+		return &relayv1.RoutePolicy{RouteId: id, Generation: 1, SourceKind: sourceKind, SourceId: sourceID, SourceCertificateSha256: f.fingerprint, TargetEndpointId: target, LeasePolicyId: policy}
+	}
+	if _, _, err := f.broker.store.Apply(&relayv1.ApplySnapshotRequest{
+		Revision: revision, GatewayInstanceId: "gateway-1",
+		PublicKeys: []*relayv1.PublicKey{{KeyId: "grant-key", PublicKey: f.grantKey.Public().(ed25519.PublicKey)}},
+		Endpoints:  []*relayv1.EndpointPolicy{endpoint("lease-ep", "policy-1"), endpoint("plain-ep", leasePolicy)},
+		Routes: []*relayv1.RoutePolicy{
+			route("db-route", "node", "node-a", "plain-ep", "policy-1"),
+			route("proxy-route", "nginx", "nginx-1", "lease-ep", ""),
+			route("plain-route", "nginx", "nginx-1", "plain-ep", ""),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// B-12b: a member whose policy enters lease mode (bootstrapping -> lease) and
+// later leaves it (closing -> legacy) flips its registration in place while
+// the same copy serves: the registration and the tunnels through it survive
+// every step, and the lease gate still decides new tunnels.
+func TestModeFlipsKeepTheServingRegistrationAndItsTunnels(t *testing.T) {
+	f := newLeaseFixture(t)
+	// Bootstrapping: the link is plain to the daemon, the endpoint not lease-bound.
+	stream, result, _ := f.register(t, "plain-ep")
+	waitRegistered(t, stream, result)
+	live := &activeTunnel{routeID: "plain-route", routeGeneration: 1, endpointID: "plain-ep", endpointGeneration: 1, stop: make(chan struct{})}
+	f.broker.mu.Lock()
+	f.broker.active["live"] = live
+	f.broker.mu.Unlock()
+	assertLive := func(step string) {
+		t.Helper()
+		select {
+		case <-live.stop:
+			t.Fatalf("%s: the live tunnel was closed", step)
+		case err := <-result:
+			t.Fatalf("%s: the registration ended: %v", step, err)
+		default:
+		}
+	}
+
+	// Lease mode: the endpoint becomes lease-bound; the copy holds the slot.
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	f.reapply(t, 2, "policy-1")
+	f.broker.EnforceLeaseGates()
+	assertLive("endpoint became lease-bound")
+	// The daemon now knows the link as a member and renews it SERVING in place.
+	f.renew(t, stream, "plain-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, stream, result)
+	f.broker.EnforceLeaseGates()
+	assertLive("renewed SERVING")
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+		t.Fatalf("holder endpoint after the flip = %v", got)
+	}
+
+	// Closing: Gateway takes the policy out of lease mode (legacy admission on
+	// the relay) before any lease is released; the daemon renews the link as a
+	// plain one; then the lease goes. Registration and tunnel stay throughout.
+	f.reapply(t, 3, "")
+	f.renew(t, stream, "plain-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED)
+	waitRegistered(t, stream, result)
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Reason: "released"})
+	f.broker.EnforceLeaseGates()
+	assertLive("left lease mode")
+	f.broker.mu.Lock()
+	legacy := f.broker.endpointLeaseErrorLocked(f.broker.store.Current().Endpoint("plain-ep", 0))
+	f.broker.mu.Unlock()
+	if legacy != nil {
+		t.Fatalf("legacy admission refused: %v", legacy)
+	}
+	if registered, _ := f.broker.Counts(); registered != 1 {
+		t.Fatalf("registered endpoints after the flips = %d", registered)
+	}
+}
+
+// A plain renewal of a serving registration while the relay still sees the
+// endpoint lease-bound with its gate closed (the relay's snapshot lags the
+// daemon's): the registration keeps serving in place instead of being dropped;
+// the gate alone refuses new tunnels until the relay sees legacy admission.
+func TestPlainRenewalOfAServingRegistrationIsNotDroppedByTheGate(t *testing.T) {
+	f := newLeaseFixture(t)
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	stream, result, _ := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, stream, result)
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Reason: "released"})
+	f.renew(t, stream, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED)
+	waitRegistered(t, stream, result)
+	f.broker.EnforceLeaseGates()
+	select {
+	case err := <-result:
+		t.Fatalf("serving registration dropped by a plain renewal: %v", err)
+	default:
+	}
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.FailedPrecondition, "availability lease gate closed")
+}

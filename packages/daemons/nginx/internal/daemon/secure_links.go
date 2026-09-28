@@ -21,6 +21,7 @@ import (
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
+	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
@@ -54,6 +55,10 @@ type sourceLinkManager struct {
 	authorizeUnixPeer func(net.Conn) bool
 	socketOwnerUID    func() (int, error)
 	renameSocket      func(string, string) error
+	// suspended is set once this process handed its kept listeners over to
+	// the next one (a restart or update): no socket is created or re-created
+	// at a path any more, the successor adopts the kept ones.
+	suspended atomic.Bool
 }
 
 type sourceLinkBinding struct {
@@ -76,6 +81,12 @@ type sourceLinkBinding struct {
 	availabilityPolicyID    string
 	availabilityCandidateID string
 	dormant                 bool
+
+	// keptName is the listener keeper's name of the Unix listener (empty when
+	// it is not kept), and adoptedAt when this process took it over from the
+	// previous one. Both are guarded by leaseMu.
+	keptName  string
+	adoptedAt time.Time
 }
 
 type sourceLinkStatus struct {
@@ -454,49 +465,160 @@ func (m *sourceLinkManager) createAtPath(
 			return nil, err
 		}
 	}
-	unixListener, err := m.listenUnixSocket(socketPath)
+	unixListener, keptName, err := m.listenUnixSocket(socketPath)
 	if err != nil {
 		if listener != nil {
 			_ = listener.Close()
 		}
 		return nil, err
 	}
-	binding := &sourceLinkBinding{generation: generation, listener: listener, unix: unixListener, socketPath: socketPath, done: make(chan struct{}), active: map[net.Conn]bool{}, socketOnly: socketOnly}
+	binding := &sourceLinkBinding{generation: generation, listener: listener, unix: unixListener, socketPath: socketPath, done: make(chan struct{}), active: map[net.Conn]bool{}, socketOnly: socketOnly, keptName: keptName}
+	if keptName != "" {
+		binding.adoptedAt = time.Now()
+	}
 	return binding, nil
 }
 
-// listenUnixSocket creates the authenticated Unix listener at socketPath,
-// owned by the managed nginx worker. It is shared by binding creation and by
-// reopening a lease-gated binding's socket once its candidate holds the
+// listenUnixSocket returns the authenticated Unix listener at socketPath,
+// owned by the managed nginx worker, and its keeper name when it was taken
+// over from the previous daemon process. It is shared by binding creation and
+// by reopening a lease-gated binding's socket once its candidate holds the
 // lease (D8, A8).
-func (m *sourceLinkManager) listenUnixSocket(socketPath string) (net.Listener, error) {
+//
+// A listener the previous process kept is adopted while the path still names
+// that very socket: connections made during the restart waited in its backlog
+// and are served now, none was refused. Otherwise a new socket is created (see
+// createUnixSocket).
+func (m *sourceLinkManager) listenUnixSocket(socketPath string) (net.Listener, string, error) {
+	if m.suspended.Load() {
+		return nil, "", errors.New("secure-link sockets are being handed over to the next daemon process")
+	}
+	if listener, name := m.adoptKeptUnixSocket(socketPath); listener != nil {
+		return listener, name, nil
+	}
+	listener, err := m.createUnixSocket(socketPath)
+	return listener, "", err
+}
+
+// temporarySocketSequence names the temporary sockets createUnixSocket binds.
+var temporarySocketSequence atomic.Uint64
+
+// createUnixSocket binds a new socket under a temporary name in the socket
+// directory, gives it its final owner and mode, and renames it over
+// socketPath (M-2). nginx therefore never sees the path missing while a
+// socket is re-created, nor a socket it may not connect to yet (connect()
+// failing with EACCES before the owner was set); a stale socket file at the
+// path, refusing connections, is replaced in one step.
+func (m *sourceLinkManager) createUnixSocket(socketPath string) (net.Listener, error) {
 	if err := os.MkdirAll(m.socketDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create proxy secure-link socket directory: %w", err)
 	}
-	if err := removeExistingSocket(socketPath); err != nil {
+	if info, err := os.Lstat(socketPath); err == nil && info.Mode()&os.ModeSocket == 0 {
+		return nil, fmt.Errorf("refuse to replace non-socket secure-link path %s", socketPath)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
-	}
-	unixListener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		return nil, fmt.Errorf("listen on proxy secure-link socket %s: %w", socketPath, err)
 	}
 	ownerUID, err := m.socketOwnerUID()
 	if err != nil {
-		_ = unixListener.Close()
-		_ = os.Remove(socketPath)
 		return nil, fmt.Errorf("resolve managed nginx worker uid: %w", err)
 	}
-	if err := os.Chown(socketPath, ownerUID, -1); err != nil {
-		_ = unixListener.Close()
-		_ = os.Remove(socketPath)
-		return nil, fmt.Errorf("set proxy secure-link socket owner: %w", err)
+	temporary := filepath.Join(filepath.Dir(socketPath), fmt.Sprintf(".%d.%d.tmp", os.Getpid(), temporarySocketSequence.Add(1)))
+	_ = os.Remove(temporary)
+	listener, err := net.Listen("unix", temporary)
+	if err != nil {
+		return nil, fmt.Errorf("listen on proxy secure-link socket %s: %w", socketPath, err)
 	}
-	if err := os.Chmod(socketPath, 0o600); err != nil {
-		_ = unixListener.Close()
-		_ = os.Remove(socketPath)
+	// The listener's own path is the temporary one: closing it must never
+	// unlink anything, the binding removes its path itself.
+	listener.(*net.UnixListener).SetUnlinkOnClose(false)
+	fail := func(err error) (net.Listener, error) {
+		_ = listener.Close()
+		_ = os.Remove(temporary)
 		return nil, err
 	}
-	return unixListener, nil
+	if err := os.Chown(temporary, ownerUID, -1); err != nil {
+		return fail(fmt.Errorf("set proxy secure-link socket owner: %w", err))
+	}
+	if err := os.Chmod(temporary, 0o600); err != nil {
+		return fail(err)
+	}
+	if err := os.Rename(temporary, socketPath); err != nil {
+		return fail(fmt.Errorf("publish proxy secure-link socket %s: %w", socketPath, err))
+	}
+	return listener, nil
+}
+
+var temporarySocketName = regexp.MustCompile(`^\.([0-9]+)\.[0-9]+\.tmp$`)
+
+// removeStaleTemporarySockets removes the temporary sockets a daemon process
+// that stopped between binding and publishing one left in directory.
+func removeStaleTemporarySockets(directory string) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return
+	}
+	own := fmt.Sprint(os.Getpid())
+	for _, entry := range entries {
+		match := temporarySocketName.FindStringSubmatch(entry.Name())
+		if match == nil || match[1] == own || entry.Type()&os.ModeSocket == 0 {
+			continue
+		}
+		_ = os.Remove(filepath.Join(directory, entry.Name()))
+	}
+}
+
+// adoptKeptUnixSocket takes over the listener the previous daemon process
+// kept for socketPath, if the path still names it.
+func (m *sourceLinkManager) adoptKeptUnixSocket(socketPath string) (net.Listener, string) {
+	name, err := listenerkeep.Name(socketPath)
+	if err != nil {
+		return nil, ""
+	}
+	file, ok := listenerkeep.Take(name)
+	if !ok {
+		return nil, ""
+	}
+	defer file.Close()
+	listener, err := net.FileListener(file)
+	if err != nil {
+		_ = listenerkeep.Drop(name)
+		return nil, ""
+	}
+	unixListener, ok := listener.(*net.UnixListener)
+	if !ok {
+		_ = listener.Close()
+		_ = listenerkeep.Drop(name)
+		return nil, ""
+	}
+	unixListener.SetUnlinkOnClose(false)
+	if ownerUID, err := m.socketOwnerUID(); err == nil {
+		// The nginx worker user may have changed while no daemon ran.
+		_ = os.Chown(socketPath, ownerUID, -1)
+	}
+	return listener, name
+}
+
+// keepUnixListener hands a copy of a Unix listener to the listener keeper so
+// that it outlives this process, and returns its keeper name ("" when there is
+// no keeper or it could not be kept).
+func keepUnixListener(listener net.Listener, socketPath string) string {
+	unixListener, ok := listener.(*net.UnixListener)
+	if !ok || !listenerkeep.Available() {
+		return ""
+	}
+	name, err := listenerkeep.Name(socketPath)
+	if err != nil {
+		return ""
+	}
+	file, err := unixListener.File()
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	if err := listenerkeep.Keep(name, file); err != nil {
+		return ""
+	}
+	return name
 }
 
 func (m *sourceLinkManager) start(id string, binding *sourceLinkBinding) {
@@ -505,8 +627,13 @@ func (m *sourceLinkManager) start(id string, binding *sourceLinkBinding) {
 	}
 	// A lease-gated binding starts with its Unix socket closed (D8, A8): it is
 	// opened later, once a relay gate view says its candidate holds the lease.
+	binding.leaseMu.Lock()
+	defer binding.leaseMu.Unlock()
 	if binding.unix != nil {
 		m.accept(id, binding, binding.unix, true)
+		if binding.keptName == "" {
+			binding.keptName = keepUnixListener(binding.unix, binding.socketPath)
+		}
 	}
 }
 
@@ -521,6 +648,7 @@ func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listen
 				_ = connection.Close()
 				continue
 			}
+			connection = newTrackedConn(connection)
 			binding.activeMu.Lock()
 			if !authorizePeer && binding.socketOnly {
 				binding.activeMu.Unlock()
@@ -561,9 +689,15 @@ func (b *sourceLinkBinding) closeBinding(removeSocketPath bool) {
 		if b.listener != nil {
 			_ = b.listener.Close()
 		}
+		b.leaseMu.Lock()
+		if b.keptName != "" {
+			_ = listenerkeep.Drop(b.keptName)
+			b.keptName = ""
+		}
 		if b.unix != nil {
 			_ = b.unix.Close()
 		}
+		b.leaseMu.Unlock()
 		if removeSocketPath {
 			_ = os.Remove(b.socketPath)
 		}
@@ -842,13 +976,15 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
 	}
-	wait := secureLinkTransientWait
-	if ownerKind == proxySecureLinkOwnerKind && p.secureLinks.availabilityMember(linkID) {
-		wait = 0
-	}
-	deadline := time.Now().Add(wait)
+	// A member's link fails at once when a relay refused it, so its upstream
+	// moves on to the next member. While this daemon has no lane to any of
+	// its relays (just started, or every relay restarting) every member fails
+	// alike, so it waits for a lane like any other link (B-13).
+	member := ownerKind == proxySecureLinkOwnerKind && p.secureLinks.availabilityMember(linkID)
+	deadline := time.Now().Add(secureLinkTransientWait)
 	for {
 		retryable := false
+		reachedRelay := false
 		ordered := p.orderRelayCandidates(candidates)
 		for index, candidate := range ordered {
 			tunnel := p.selectRelayTunnel(candidate.GetRelayInstanceId())
@@ -857,6 +993,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 				retryable = true
 				continue
 			}
+			reachedRelay = true
 			grant := relaybridge.GrantForCandidate(candidate)
 			if grant == nil {
 				tunnel.active.Add(-1)
@@ -872,7 +1009,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 				time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
 			}
 		}
-		if !retryable || !time.Now().Add(secureLinkTransientRetry).Before(deadline) {
+		if !retryable || (member && reachedRelay) || !time.Now().Add(secureLinkTransientRetry).Before(deadline) {
 			break
 		}
 		time.Sleep(secureLinkTransientRetry)

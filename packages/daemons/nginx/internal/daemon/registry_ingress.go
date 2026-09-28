@@ -23,6 +23,9 @@ func (p *NginxPlugin) SyncDockerRegistryBindings(command *pb.SyncDockerRegistryB
 	if err != nil {
 		return "", err
 	}
+	// Registry bindings are not persisted: the first sync after a restart is
+	// what adopts the sockets the previous process kept, and the rest go.
+	p.releaseUnclaimedRegistryListeners()
 	detail, err := json.Marshal(map[string]any{"bindings": statuses})
 	return string(detail), err
 }

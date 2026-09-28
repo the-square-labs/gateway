@@ -140,3 +140,20 @@ func (t *leaseGateTracker) openFor(policyID, candidateID string, now time.Time) 
 	}
 	return unknown && !notReady
 }
+
+// reported reports whether some relay's unexpired view covers policyID at all.
+func (t *leaseGateTracker) reported(policyID string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for key, byRelay := range t.entries {
+		if key.policyID != policyID {
+			continue
+		}
+		for _, entry := range byRelay {
+			if now.Before(entry.expiresAt) {
+				return true
+			}
+		}
+	}
+	return false
+}

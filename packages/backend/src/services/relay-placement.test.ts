@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AVAILABILITY_LEASE_CAPABILITY } from '@/modules/docker/availability/lease/lease-constants.js';
-import { planRelays, RelayPoolService } from './relay-pool.service.js';
+import { planRelays, RelayPoolService, sourcesToProbe } from './relay-pool.service.js';
 import { type EndpointLatencyPath, includeRemoteRelay } from './relay-topology.js';
 
 const ENDPOINT = '20000000-0000-4000-8000-000000000001';
@@ -164,5 +164,17 @@ describe('RelayPoolService availability member lookup', () => {
       await (pool as any).availabilityMemberEndpointIds([{ id: 'db', ownerKind: 'managed_database', ownerId: 'x' }])
     ).toEqual(new Set());
     expect(db.select).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sourcesToProbe (M-3)', () => {
+  it('keeps one route per source, however many routes it has to the endpoint', () => {
+    const routes = [
+      { id: 'binding-a', sourceKind: 'daemon', sourceId: 'eb934522', sourceCertificateSha256: 'sha256:a' },
+      { id: 'binding-b', sourceKind: 'daemon', sourceId: 'eb934522', sourceCertificateSha256: 'sha256:a' },
+      { id: 'other-node', sourceKind: 'daemon', sourceId: '0ac1f00d', sourceCertificateSha256: 'sha256:b' },
+      { id: 'gateway', sourceKind: 'gateway', sourceId: 'eb934522', sourceCertificateSha256: 'sha256:c' },
+    ];
+    expect(sourcesToProbe(routes).map(({ id }) => id)).toEqual(['binding-a', 'other-node', 'gateway']);
   });
 });

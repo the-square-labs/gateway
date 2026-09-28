@@ -59,3 +59,10 @@ func New(cfg *config.Config, cfgPath string, logger *slog.Logger) (*Daemon, erro
 func (d *Daemon) Run(ctx context.Context) error {
 	return d.base.Run(ctx)
 }
+
+// HandOverListeners runs once the daemon is asked to stop, before Run's
+// context is cancelled: the Secure Link sockets go to the next daemon process
+// while this one still reaches Gateway and the relays to finish its requests.
+func (d *Daemon) HandOverListeners() {
+	d.plugin.HandOverSecureLinks()
+}

@@ -1,7 +1,11 @@
 package daemon
 
 import (
+	"errors"
+	"io"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -256,5 +260,115 @@ func TestAvailabilityLeaseCoordinatorSocketSweepClosesStaleViewOnItsOwn(t *testi
 			t.Fatal("background sweep never closed the socket once its view went stale")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// B-12b: the holder's member socket when its policy enters lease mode. The
+// binding becomes lease-gated while its candidate holds the lease and serves
+// (holder_endpoint READY, or UNKNOWN from a relay not yet carrying the
+// endpoint lease-bound): the socket keeps listening and a connection
+// established before the flip keeps working.
+func TestHolderSocketSurvivesItsPolicyEnteringLeaseMode(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
+		defer connection.Close()
+		buffer := make([]byte, 64)
+		for {
+			n, err := connection.Read(buffer)
+			if err != nil {
+				return
+			}
+			if _, err := connection.Write(buffer[:n]); err != nil {
+				return
+			}
+		}
+	})
+	coordinator := newAvailabilityLeaseCoordinator(t.TempDir(), manager, nil)
+	defer coordinator.close()
+	statuses, err := manager.sync(availabilityMemberCommand("", ""))
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("sync: statuses=%#v err=%v", statuses, err)
+	}
+	socketPath := statuses[0].SocketPath
+	live, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	echo := func(step string) {
+		t.Helper()
+		_ = live.SetDeadline(time.Now().Add(2 * time.Second))
+		if _, err := live.Write([]byte(step)); err != nil {
+			t.Fatalf("%s: write on the live connection: %v", step, err)
+		}
+		buffer := make([]byte, len(step))
+		if _, err := io.ReadFull(live, buffer); err != nil || string(buffer) != step {
+			t.Fatalf("%s: the live connection broke: %q %v", step, buffer, err)
+		}
+	}
+	echo("bootstrapping")
+
+	for name, readiness := range map[string]relayv1.LeaseHolderEndpoint{
+		"relay carries the endpoint lease-bound": relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY,
+		"relay not yet updated":                  relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN,
+	} {
+		coordinator.gates = newLeaseGateTracker()
+		coordinator.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+			PolicyId: "policy-1", Slot: 0, LeaseMode: true, Open: true, HolderId: "node-a", RemainingMs: 20000, HolderEndpoint: readiness,
+		}}}, time.Now())
+		if _, err := manager.sync(availabilityMemberCommand("policy-1", "node-a")); err != nil {
+			t.Fatal(err)
+		}
+		coordinator.reconcileSockets()
+		echo(name)
+		fresh, err := net.DialTimeout("unix", socketPath, time.Second)
+		if err != nil {
+			t.Fatalf("%s: the holder's socket stopped listening at the flip: %v", name, err)
+		}
+		_ = fresh.Close()
+		if _, err := manager.sync(availabilityMemberCommand("", "")); err != nil {
+			t.Fatal(err)
+		}
+		coordinator.reconcileSockets()
+		echo(name + ", back to legacy")
+	}
+}
+
+// M-2: before nginx loads a config, every Secure Link socket it references that this daemon provides listens: a
+// plain binding whose socket file went missing is re-created first. A member socket the lease gate keeps closed stays
+// closed (nginx refuses it and moves on), and a socket without a binding is reported, never invented.
+func TestReferencedSecureLinkSocketsListenBeforeAConfigLoads(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	command := plainAndMemberCommand()
+	statuses, err := manager.sync(command)
+	if err != nil || len(statuses) != 2 {
+		t.Fatalf("sync: %#v %v", statuses, err)
+	}
+	paths := map[string]string{}
+	for _, status := range statuses {
+		paths[status.LinkID] = status.SocketPath
+	}
+	if err := os.Remove(paths[testSecureLinkID]); err != nil {
+		t.Fatal(err)
+	}
+	unknown := manager.socketDir + "/33333333-3333-4333-8333-333333333333.sock"
+	config := "upstream u {\n    server unix:" + paths[testSecureLinkID] + " max_fails=1 fail_timeout=1s;\n" +
+		"    server unix:" + paths[testMemberLinkID] + ";\n    server unix:" + unknown + ";\n" +
+		"    server unix:/run/elsewhere/x.sock;\n}\n"
+
+	absent := manager.ensureReferencedListeners(config)
+
+	if len(absent) != 2 || absent[0] != paths[testMemberLinkID] || absent[1] != unknown {
+		t.Fatalf("absent = %v, want the closed member and the unknown socket", absent)
+	}
+	connection, err := net.DialTimeout("unix", paths[testSecureLinkID], time.Second)
+	if err != nil {
+		t.Fatalf("the plain socket was not re-created before the config loads: %v", err)
+	}
+	_ = connection.Close()
+	if _, err := net.DialTimeout("unix", paths[testMemberLinkID], time.Second); !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("the closed member socket = %v, want a refusal", err)
+	}
+	if _, err := os.Stat(unknown); !os.IsNotExist(err) {
+		t.Fatalf("a socket without a binding was created: %v", err)
 	}
 }

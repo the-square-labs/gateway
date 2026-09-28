@@ -125,6 +125,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 			}
 		}
 		path := h.mgr.ConfigPath(host.HostId)
+		h.prepareSecureLinkListeners(host.ConfigContent)
 		if err := nginx.WriteAtomic(path, []byte(host.ConfigContent)); err != nil {
 			rollback()
 			result.Success = false
