@@ -388,7 +388,16 @@ describe('hosting paid provisioning state machine', () => {
       ...snapshot,
       addresses: [{ ip: '203.0.113.20', network: 'public', direct: true }],
     });
+    let command = '';
+    test.ssh.executeWithKeyForHosting.mockImplementationOnce(async (call: { prepare: () => Promise<string> }) => {
+      command = await call.prepare();
+      return { exitCode: 0, stdout: 'GATEWAY_INSTALL_KEY_REMOVED', sent: true as const };
+    });
     await test.service.reconcileDue();
+    // SSH comes up while cloud-init still runs apt: the script built at dispatch must wait for it.
+    const script = Buffer.from(/printf '%s' '([A-Za-z0-9+/=]+)'/.exec(command)?.[1] ?? '', 'base64').toString('utf8');
+    expect(script).toContain('cloud-init status --wait');
+    expect(script.indexOf('cloud-init status --wait')).toBeLessThan(script.indexOf('bash "$installer"'));
     expect(test.adapter.bootstrap).not.toHaveBeenCalled();
     expect(test.ssh.readHostKeyForHosting).toHaveBeenCalledWith('203.0.113.20');
     expect(test.ssh.executeWithKeyForHosting).toHaveBeenCalledWith(

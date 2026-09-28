@@ -96,9 +96,10 @@ if command -v cloud-init >/dev/null 2>&1; then
   timeout 600 cloud-init status --wait >/dev/null 2>&1 || { echo 'Cloud-init did not finish successfully' >&2; exit 46; }
 fi
 # Boot-time package runs (apt-daily, unattended-upgrades) hold the package locks for a while after cloud-init.
-if command -v pgrep >/dev/null 2>&1; then
+# unattended-upgrade-shutdown idles for the whole uptime and holds no lock, so only the upgrade run itself counts.
+if command -v pidof >/dev/null 2>&1; then
   waited=0
-  while pgrep -x 'apt|apt-get|dpkg|unattended-upgr|yum|dnf|apk' >/dev/null 2>&1; do
+  while pidof apt apt-get dpkg yum dnf apk >/dev/null 2>&1 || pgrep -f '/usr/bin/unattended-upgrade( |$)' >/dev/null 2>&1; do
     [ "$waited" -ge 600 ] && { echo 'A package manager on the server kept running for 10 minutes' >&2; exit 48; }
     sleep 5
     waited=$((waited + 5))

@@ -47,6 +47,7 @@ import {
   createSshInstallKey,
   HostingSshInstaller,
   initialSshInstallState,
+  installFailure,
   rotateSshInstallToken,
   SSH_INSTALL_TOKEN_TTL_MS,
   type SshInstallKey,
@@ -1282,10 +1283,7 @@ export class HostingProvisioningService {
         resource.addresses.filter((address) => address.direct).map((address) => address.ip)
       );
       if (result.exitCode !== 0) {
-        await this.sshInstall.finish(adapter, row, 'failed', undefined, {
-          code: 'HOSTING_INSTALL_FAILED',
-          message: 'Installation exited unsuccessfully. Inspect guest diagnostics, then retry installation on this VM.',
-        });
+        await this.sshInstall.finish(adapter, row, 'failed', undefined, installFailure(result));
         return;
       }
       await this.operations.update(row, {
@@ -1303,6 +1301,8 @@ export class HostingProvisioningService {
       throw new AppError(409, 'HOSTING_GATEWAY_NOT_READY', 'Configure a reachable Gateway enrollment endpoint');
     validateHostingGateway(gateway, connector.provider === 'proxmox');
     return buildHostingBootstrap({
+      // SSH comes up while cloud-init still runs apt on the new server.
+      waitForCloudInit: true,
       role: input.role,
       gateway,
       certificateFingerprint: await this.nodeService.getGatewayEnrollmentCertificateFingerprint(),

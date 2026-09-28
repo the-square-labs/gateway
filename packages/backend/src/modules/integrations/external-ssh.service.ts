@@ -252,7 +252,8 @@ export class ExternalSshService {
         'SSH connection does not target an assigned address of the selected VM'
       );
     const output = await this.execConnector(connector, targetAddress, command);
-    return { exitCode: output.exitCode };
+    // Output only; the caller keeps a redacted tail for a failed install. The command itself never leaves.
+    return { exitCode: output.exitCode, stdout: output.stdout, stderr: output.stderr };
   }
 
   /**

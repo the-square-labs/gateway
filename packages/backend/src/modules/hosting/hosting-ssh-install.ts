@@ -60,6 +60,20 @@ export function installDiagnostics(output: { stdout: string; stderr?: string }):
   return text.length > INSTALL_DIAGNOSTICS_MAX_CHARS ? text.slice(-INSTALL_DIAGNOSTICS_MAX_CHARS) : text;
 }
 
+/** The operation error for an installer that exited non-zero, naming its last output line. */
+export function installFailure(output: { exitCode: number | null; stdout?: string; stderr?: string }): {
+  code: string;
+  message: string;
+} {
+  const diagnostics = installDiagnostics({ stdout: output.stdout ?? '', stderr: output.stderr });
+  return {
+    code: 'HOSTING_INSTALL_FAILED',
+    message: `Installation exited with code ${output.exitCode ?? 'unknown'}${
+      diagnostics ? `: ${lastDiagnosticLine(diagnostics)}` : ''
+    }. Fix the cause, then retry installation on this VM.`,
+  };
+}
+
 function lastDiagnosticLine(diagnostics: string): string {
   const line =
     diagnostics
@@ -228,13 +242,7 @@ export class HostingSshInstaller {
     await this.audit(row, 'hosting.install.ssh_completed', { exitCode: output.exitCode, guestKey: state.guestKey });
     if (state.guestKey === 'failed') row = await this.removeGuestKey(row, key);
     // finish() owns the key cleanup attempt (and its deferral) for the failure outcome.
-    if (!installed)
-      return this.finish(adapter, row, 'failed', undefined, {
-        code: 'HOSTING_INSTALL_FAILED',
-        message: `Installation exited with code ${output.exitCode ?? 'unknown'}${
-          diagnostics ? `: ${lastDiagnosticLine(diagnostics)}` : ''
-        }. The output tail is in the operation result; fix the cause, then retry installation on this VM.`,
-      });
+    if (!installed) return this.finish(adapter, row, 'failed', undefined, installFailure(output));
     row = await this.releaseProviderKey(row, adapter);
     return this.deps.operations.update(row, { phase: 'installing', dispatchStartedAt: null });
   }
