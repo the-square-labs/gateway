@@ -347,7 +347,7 @@ describe('NodeRegistryService', () => {
 
   it('preserves node status when the daemon disconnects during an update', async () => {
     const db = makeDb();
-    const registry = new NodeRegistryService(db as never);
+    const registry = new NodeRegistryService(db as never, { offlineDebounceMs: 0 });
     const commandStream = { write: vi.fn() };
     await registry.register('node-1', 'nginx', 'worker-1', 'hash-1', commandStream as never);
     db.update.mockClear();
@@ -357,6 +357,67 @@ describe('NodeRegistryService', () => {
 
     expect(db.update).not.toHaveBeenCalled();
     expect(registry.getNode('node-1')).toBeUndefined();
+  });
+
+  it('does not publish offline for a control stream that reconnects within the grace', async () => {
+    vi.useFakeTimers();
+    try {
+      const db = makeDb();
+      const publish = vi.fn();
+      const registry = new NodeRegistryService(db as never, { offlineDebounceMs: 5_000 });
+      registry.setEventBus({ publish } as never);
+      const firstStream = { write: vi.fn() };
+      await registry.register('node-1', 'docker', 'worker-1', 'hash-1', firstStream as never);
+      db.update.mockClear();
+
+      await registry.deregister('node-1', firstStream as never);
+      expect(registry.getNode('node-1')).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1_500);
+      await registry.register('node-1', 'docker', 'worker-1', 'hash-1', { write: vi.fn() } as never);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(publish).not.toHaveBeenCalledWith('node.changed', expect.objectContaining({ status: 'offline' }));
+      // Only the re-registration touched the node row; nothing wrote status offline.
+      expect(db.update).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('publishes offline once a dropped control stream stays away past the grace', async () => {
+    vi.useFakeTimers();
+    try {
+      const db = makeDb();
+      const publish = vi.fn();
+      const registry = new NodeRegistryService(db as never, { offlineDebounceMs: 5_000 });
+      registry.setEventBus({ publish } as never);
+      const stream = { write: vi.fn() };
+      await registry.register('node-1', 'docker', 'worker-1', 'hash-1', stream as never);
+
+      await registry.deregister('node-1', stream as never);
+      await vi.advanceTimersByTimeAsync(4_900);
+      expect(publish).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(publish).toHaveBeenCalledExactlyOnceWith(
+        'node.changed',
+        expect.objectContaining({ id: 'node-1', status: 'offline', hostname: 'worker-1' })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks an explicitly removed node offline at once', async () => {
+    const db = makeDb();
+    const publish = vi.fn();
+    const registry = new NodeRegistryService(db as never, { offlineDebounceMs: 5_000 });
+    registry.setEventBus({ publish } as never);
+    await registry.register('node-1', 'docker', 'worker-1', 'hash-1', { write: vi.fn() } as never);
+
+    await registry.deregister('node-1');
+
+    expect(publish).toHaveBeenCalledWith('node.changed', expect.objectContaining({ status: 'offline' }));
   });
 
   it('does not mark a disconnected updating node offline as stale', async () => {
