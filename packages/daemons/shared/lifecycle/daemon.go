@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +46,7 @@ type DaemonBase struct {
 	// sessionReceivedCommand is set by runSession once the gateway sent a
 	// command, i.e. accepted the registration. Only the Run loop reads it.
 	sessionReceivedCommand bool
+	prepareShutdownOnce    sync.Once
 }
 
 // NewDaemonBase creates a new DaemonBase with the given plugin.
@@ -128,6 +130,7 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 		}
 		if restart, ok := err.(*RestartRequestedError); ok {
 			d.logger.Info(restart.Message, "action", "restarting")
+			d.PrepareShutdown()
 			return restart
 		}
 		var delay time.Duration
@@ -596,4 +599,15 @@ func (d *DaemonBase) saveCertificates(caCert, clientCert, clientKey []byte) erro
 // GetState returns the daemon's state for use by plugins.
 func (d *DaemonBase) GetState() *state.State {
 	return d.state
+}
+
+// PrepareShutdown lets the plugin announce the restart to its peers while
+// the daemon still reaches them (RestartAnnouncerPlugin). Call it before
+// cancelling the context of Run; later calls do nothing.
+func (d *DaemonBase) PrepareShutdown() {
+	d.prepareShutdownOnce.Do(func() {
+		if announcer, ok := d.plugin.(RestartAnnouncerPlugin); ok {
+			announcer.AnnounceRestart()
+		}
+	})
 }

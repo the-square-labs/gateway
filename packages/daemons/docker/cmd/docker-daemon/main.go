@@ -98,6 +98,9 @@ func main() {
 	go func() {
 		sig := <-sigCh
 		logger.Info("received signal, shutting down", "signal", sig)
+		// While the relays are still reachable: they hold this daemon's
+		// traffic for its next process instead of dropping it (B-13).
+		d.PrepareShutdown()
 		cancel()
 	}()
 
