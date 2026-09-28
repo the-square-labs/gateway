@@ -7,6 +7,7 @@ import {
   dockerDeployments,
   managedStorageClusters,
   nodes,
+  proxyAdditionalRoutes,
   proxyAdditionalSecureLinks,
   proxyHosts,
 } from '@/db/schema/index.js';
@@ -89,6 +90,23 @@ function isManagedStorageUpstream(kind: string): kind is 'managed_storage' {
 // (see assertAdditionalReferences), so no regex escaping is required.
 function additionalSecureLinkVariablePattern(name: string): RegExp {
   return new RegExp(`\\{\\{\\s*additionalSecureLinks\\.${name}\\s*\\}\\}`);
+}
+
+// The variable renders to the nginx upstream `gateway_additional_secure_link_<id>` (dashes
+// become underscores), and a config can name that upstream directly. A binding id is a UUID
+// (hex and dashes), so no regex escaping is required; either separator is accepted.
+function additionalSecureLinkUpstreamPattern(bindingId: string): RegExp {
+  const id = bindingId.toLowerCase().split('-').join('[-_]');
+  return new RegExp(`gateway_additional_secure_link_${id}(?![A-Za-z0-9_])`, 'i');
+}
+
+function firstReference(text: string | null | undefined, patterns: RegExp[]): string | null {
+  if (!text) return null;
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[0];
+  }
+  return null;
 }
 
 /** True when `after` differs from `before` only by the target network the daemon picked during target sync. */
@@ -1071,13 +1089,13 @@ export class ProxySecureLinkService {
 
   async deleteAdditional(host: ProxyHostRow, bindingId: string): Promise<void> {
     const binding = await this.requireAdditional(host.id, bindingId, 'user_managed');
-    const variable = `{{additionalSecureLinks.${binding.name}}}`;
-    if (host.advancedConfig && additionalSecureLinkVariablePattern(binding.name).test(host.advancedConfig)) {
+    const reference = await this.findAdditionalReference(host, binding);
+    if (reference) {
       const routeLabel = host.domainNames?.[0] ?? host.id;
       throw new AppError(
         409,
         'SECURE_LINK_IN_USE',
-        `Route ${routeLabel} still references ${variable} in its Advanced config; remove it there before deleting this binding`
+        `Route ${routeLabel} still references ${reference.text} in its ${reference.location}; remove it there before deleting this binding`
       );
     }
     const [pending] = await this.db
@@ -1093,6 +1111,34 @@ export class ProxySecureLinkService {
         error,
       });
     });
+  }
+
+  /**
+   * A config that still uses the binding, by its template variable or by the rendered upstream
+   * name: the route's Advanced config, its raw config while raw mode is on, and the Advanced
+   * config of its additional routes (inserted verbatim, so only the upstream name applies there).
+   */
+  private async findAdditionalReference(
+    host: ProxyHostRow,
+    binding: ProxyAdditionalSecureLinkRow
+  ): Promise<{ text: string; location: string } | null> {
+    const patterns = [
+      additionalSecureLinkVariablePattern(binding.name),
+      additionalSecureLinkUpstreamPattern(binding.id),
+    ];
+    const advanced = firstReference(host.advancedConfig, patterns);
+    if (advanced) return { text: advanced, location: 'Advanced config' };
+    const raw = host.rawConfigEnabled ? firstReference(host.rawConfig, patterns) : null;
+    if (raw) return { text: raw, location: 'raw config' };
+    const routes = await this.db
+      .select({ path: proxyAdditionalRoutes.path, advancedConfig: proxyAdditionalRoutes.advancedConfig })
+      .from(proxyAdditionalRoutes)
+      .where(eq(proxyAdditionalRoutes.proxyHostId, host.id));
+    for (const route of routes) {
+      const text = firstReference(route.advancedConfig, [additionalSecureLinkUpstreamPattern(binding.id)]);
+      if (text) return { text, location: `additional route ${route.path} Advanced config` };
+    }
+    return null;
   }
 
   async reconcileAdditionalLifecycle(): Promise<boolean> {
