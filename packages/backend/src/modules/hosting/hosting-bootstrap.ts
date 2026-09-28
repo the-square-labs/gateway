@@ -91,9 +91,18 @@ exec 9>/var/lib/gateway/hosting-install.lock
 flock -n 9 || { echo 'A Gateway hosting installer is already running' >&2; exit 44; }
 ${
   input.waitForCloudInit
-    ? `# QGA starts before cloud-init finishes package/network setup. Never race its package manager.
+    ? `# QGA and SSH come up before cloud-init finishes package/network setup. Never race its package manager.
 if command -v cloud-init >/dev/null 2>&1; then
   timeout 600 cloud-init status --wait >/dev/null 2>&1 || { echo 'Cloud-init did not finish successfully' >&2; exit 46; }
+fi
+# Boot-time package runs (apt-daily, unattended-upgrades) hold the package locks for a while after cloud-init.
+if command -v pgrep >/dev/null 2>&1; then
+  waited=0
+  while pgrep -x 'apt|apt-get|dpkg|unattended-upgr|yum|dnf|apk' >/dev/null 2>&1; do
+    [ "$waited" -ge 600 ] && { echo 'A package manager on the server kept running for 10 minutes' >&2; exit 48; }
+    sleep 5
+    waited=$((waited + 5))
+  done
 fi`
     : ''
 }

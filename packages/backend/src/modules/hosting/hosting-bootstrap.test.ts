@@ -18,7 +18,13 @@ describe('hosting bootstrap reuses released role installers', () => {
     const guest = buildHostingBootstrap({ ...base, role: 'docker', waitForCloudInit: true });
     expect(guest).toContain('timeout 600 cloud-init status --wait');
     expect(guest.indexOf('cloud-init status --wait')).toBeLessThan(guest.indexOf('curl --fail'));
+    // Boot-time apt runs (unattended-upgrades) outlive cloud-init and would fail the installer's apt-get update.
+    expect(guest.indexOf("pgrep -x 'apt|apt-get|dpkg|unattended-upgr|yum|dnf|apk'")).toBeGreaterThan(
+      guest.indexOf('cloud-init status --wait')
+    );
+    expect(guest.indexOf('pgrep -x')).toBeLessThan(guest.indexOf('curl --fail'));
     expect(buildHostingBootstrap({ ...base, role: 'docker' })).not.toContain('cloud-init status --wait');
+    expect(buildHostingBootstrap({ ...base, role: 'docker' })).not.toContain('pgrep -x');
   });
   it.each<[HostingRole, string]>([
     ['nginx', 'setup-node.sh'],

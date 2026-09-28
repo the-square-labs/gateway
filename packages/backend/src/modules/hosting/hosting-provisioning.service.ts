@@ -317,7 +317,9 @@ export class HostingProvisioningService {
           ? await this.nodeService.create(nodeInput, user.id, tx, { enrollmentTokenTtlMs: SSH_INSTALL_TOKEN_TTL_MS })
           : await this.nodeService.create(nodeInput, user.id, tx);
         const script = buildHostingBootstrap({
-          waitForCloudInit: connector.provider === 'proxmox' && !proxmoxProfile?.imageStorage,
+          // CloudBlast's SSH comes up while cloud-init still runs apt; Proxmox guests seeded from image storage
+          // are installed after the fact.
+          waitForCloudInit: connector.provider === 'proxmox' ? !proxmoxProfile?.imageStorage : true,
           role: acceptedRequest.role,
           gateway,
           token: created.enrollmentToken,
@@ -477,7 +479,7 @@ export class HostingProvisioningService {
           })
           .where(eq(nodes.id, pending.id));
         const script = buildHostingBootstrap({
-          waitForCloudInit: connector.provider === 'proxmox',
+          waitForCloudInit: true,
           role: previous.role,
           gateway,
           certificateFingerprint,
