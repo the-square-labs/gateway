@@ -133,6 +133,31 @@ describe("RelaySettingsSection", () => {
     expect(screen.getByRole("button", { name: "Rebalance" })).toBeDisabled();
   });
 
+  it("names links whose node reaches no relay off the Gateway host without a degraded pool", async () => {
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    const message =
+      "No relay off the Gateway host is reachable from isolated-node: traffic of this link depends on the Gateway host.";
+    vi.spyOn(api, "getRelayStatus").mockResolvedValue({
+      ...relayStatus(),
+      poolId: "system",
+      rebalanceAvailable: false,
+      instances: [],
+      warnings: [
+        {
+          code: "gateway_host_only",
+          endpointId: "endpoint",
+          ownerKind: "proxy_host_secure_link",
+          ownerId: "link",
+          nodeId: "node",
+          message,
+        },
+      ],
+    });
+    renderRelaySettings();
+    const warning = await screen.findByText(message);
+    expect(warning.closest('[role="alert"]')).toBeNull();
+  });
+
   it("renders relay-owned telemetry as metric cards without a last-probe header", async () => {
     vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue({
       generalSettings: {

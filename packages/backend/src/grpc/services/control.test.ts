@@ -1210,6 +1210,77 @@ describe('CommandStream daemon certificate identity', () => {
     expect(stream.end).not.toHaveBeenCalled();
   });
 
+  it('pushes a reconnecting relay its policy even when records say it holds it, and notes lost state (N-7)', async () => {
+    let selectCount = 0;
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => {
+              selectCount += 1;
+              if (selectCount === 1) {
+                return Promise.resolve([
+                  {
+                    type: 'relay',
+                    configVersionHash: null,
+                    certificateSerial: 'aa01',
+                    certificateFingerprint: null,
+                    hostIdentityId: 'host-relay-1',
+                    status: 'offline',
+                  },
+                ]);
+              }
+              return Promise.resolve([
+                {
+                  id: '22222222-2222-4222-8222-222222222222',
+                  faultDomainId: 'host-relay-1',
+                  state: 'ready',
+                  appliedPolicyRevision: 41,
+                },
+              ]);
+            }),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+      })),
+    } as any;
+    const deps = makeDeps(db);
+    deps.relayPolicy = {
+      syncRemoteInstancePolicy: vi.fn(async () => 42),
+      noteRemoteAppliedRevision: vi.fn(),
+    };
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'relay-136',
+        configVersionHash: '',
+        daemonVersion: 'dev',
+        daemonType: 'relay',
+        capabilities: ['relay_pool_v1'],
+        relayInstanceId: '22222222-2222-4222-8222-222222222222',
+        hostIdentityId: 'host-relay-1',
+      },
+    });
+    await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(deps.relayPolicy.syncRemoteInstancePolicy).toHaveBeenCalledWith(nodeId, undefined, { force: true })
+    );
+    // The relay restarted with a fresh relay.db: it reports no applied policy.
+    stream.emit('data', {
+      relayRuntimeStatus: {
+        relayInstanceId: '22222222-2222-4222-8222-222222222222',
+        state: 'synchronizing',
+        appliedPolicyRevision: '0',
+      },
+    });
+    await vi.waitFor(() => expect(deps.relayPolicy.noteRemoteAppliedRevision).toHaveBeenCalledWith(nodeId, 0, 41));
+  });
+
   it('does not let an older pending registration replace a newer command stream', async () => {
     const queued = makeQueuedDbNode({ certificateSerial: 'aa01' });
     const deps = makeDeps(queued.db);

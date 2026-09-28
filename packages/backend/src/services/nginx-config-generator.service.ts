@@ -290,7 +290,10 @@ export class NginxConfigGenerator {
 
     if (host.secureLinkUpstream) lines.push(`        # gateway-managed-secure-link-upstream ${host.id}`);
     lines.push(`        proxy_pass ${upstream};`);
-    if (availability) lines.push(`        ${availabilityUpstream.AVAILABILITY_NEXT_UPSTREAM_DIRECTIVE}`);
+    if (availability) {
+      for (const directive of availabilityUpstream.AVAILABILITY_NEXT_UPSTREAM_DIRECTIVES)
+        lines.push(`        ${directive}`);
+    }
     lines.push('');
     lines.push('        proxy_set_header Host $host;');
     lines.push('        proxy_set_header X-Real-IP $remote_addr;');

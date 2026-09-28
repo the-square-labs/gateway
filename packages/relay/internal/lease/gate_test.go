@@ -202,3 +202,32 @@ func TestRelayVotesOnlyWhereItIsThePolicyWitness(t *testing.T) {
 		t.Fatalf("per-policy report = %v", acks)
 	}
 }
+
+// D6: gate views carry whether the open gate's holder serves through this
+// relay, from the broker's registrations; a closed gate carries nothing.
+func TestGateViewReportsHolderEndpointReadiness(t *testing.T) {
+	h := newHarness(t, true)
+	h.ready("d1", "d2")
+	readiness := relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY
+	var asked []string
+	h.relay.SetHolderEndpoints(func(policy, holder string) relayv1.LeaseHolderEndpoint {
+		asked = append(asked, policy+"/"+holder)
+		return readiness
+	})
+	acquire(t, h, "d1")
+	view := h.relay.gateView(testKey)
+	if !view.GetOpen() || view.GetHolderEndpoint() != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY {
+		t.Fatalf("view of a holder that is not ready = %v", view)
+	}
+	readiness = relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY
+	if view := h.relay.gateView(testKey); view.GetHolderEndpoint() != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+		t.Fatalf("view of a ready holder = %v", view)
+	}
+	if len(asked) == 0 || asked[len(asked)-1] != policyID+"/d1" {
+		t.Fatalf("readiness asked for %v", asked)
+	}
+	asked = nil
+	if view := h.relay.gateView(availabilitylease.Key{PolicyID: "unknown-policy"}); view.GetOpen() || view.GetHolderEndpoint() != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN || len(asked) != 0 {
+		t.Fatalf("closed gate view = %v (asked %v)", view, asked)
+	}
+}

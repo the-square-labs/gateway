@@ -767,6 +767,10 @@ export async function initializeContainer(): Promise<void> {
     : undefined;
   if (relayPoolService) container.registerInstance(RelayPoolService, relayPoolService);
   relayPoolService?.setTopology(new RelayTopologyService(db));
+  // An Availability member's Secure Link starts on every lease relay, not on the local relay alone (D7).
+  if (relayPoolService && relayPolicyService) {
+    relayPolicyService.setInitialAssignmentPlanner((endpointId) => relayPoolService.planInitialAssignment(endpointId));
+  }
   if (relayPoolService && relayPolicyService) {
     relayPoolService.setCertificateRenewal(
       new RelayCertificateRenewalService(

@@ -132,6 +132,14 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		metrics.recordFailedOpen(time.Since(startedAt))
 		return status.Error(codes.Unavailable, "target endpoint is not registered")
 	}
+	if registration.dormant() {
+		// A standby, or a holder whose workload is not ready yet (D6, D7).
+		metrics.opened.Add(1)
+		metrics.touch()
+		b.mu.Unlock()
+		metrics.recordFailedOpen(time.Since(startedAt))
+		return status.Error(codes.Unavailable, "target endpoint is dormant")
+	}
 	if err := b.sessionCapacityErrorLocked(route, endpoint, claims.MaxConcurrentSessions, registration.maxSessions.Load()); err != nil {
 		metrics.throttled.Add(1)
 		metrics.touch()

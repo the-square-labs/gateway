@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -208,8 +209,142 @@ func (c *Client) repairDeploymentRouter(ctx context.Context, deploymentID string
 		}
 		actions = append(actions, "started")
 	}
+	upgraded, err := c.upgradeDeploymentRouterConfig(ctx, current)
+	if upgraded {
+		actions = append(actions, "config upgraded")
+	}
 	repair.Action = strings.Join(actions, ", ")
+	if err != nil {
+		return repair, err
+	}
 	return repair, nil
+}
+
+// upgradeDeploymentRouterConfig rewrites the config of a running router that
+// still serves an older daemon's config (per-request slot resolution through
+// dockerd's DNS, B-8), or a config naming another address than the active
+// slot's current one, with the current config for the same slot and routes.
+func (c *Client) upgradeDeploymentRouterConfig(ctx context.Context, current container.InspectResponse) (bool, error) {
+	name := trimContainerName(current.Name)
+	content, err := c.readContainerFile(ctx, current.ID, deploymentRouterConfigPath, deploymentRouterOutputLimit)
+	if err != nil {
+		if isNotFoundErr(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read the config of deployment router %s: %w", name, err)
+	}
+	config := string(content)
+	var labels map[string]string
+	if current.Config != nil {
+		labels = current.Config.Labels
+	}
+	slot := deploymentRouterConfigSlot(config)
+	address := ""
+	if slot != "" && labels[deploymentIDLabel] != "" && current.HostConfig != nil {
+		address = c.deploymentSlotAddress(ctx, labels[deploymentIDLabel], slot, string(current.HostConfig.NetworkMode))
+	}
+	if deploymentRouterConfigCurrent(config) && (address == "" || deploymentRouterConfigAddress(config) == address) {
+		return false, nil
+	}
+	slot, routes, err := deploymentRouterConfigRoutes(config, current.HostConfig.PortBindings)
+	if err != nil {
+		return false, fmt.Errorf("deployment router %s serves a config that cannot be carried over: %w", name, err)
+	}
+	if err := c.writeRouterConfig(ctx, name, renderDeploymentNginxAt(routes, slot, address)); err != nil {
+		return false, fmt.Errorf("upgrade the config of deployment router %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// deploymentSlotAddress is the address of a deployment's running app slot on
+// the router's network, or "" when no such slot runs or dockerd does not tell.
+func (c *Client) deploymentSlotAddress(ctx context.Context, deploymentID, slot, networkName string) string {
+	if networkName == "" {
+		return ""
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	containers, err := c.ListContainers(lookupCtx)
+	if err != nil {
+		return ""
+	}
+	for _, ctr := range containers {
+		if !deploymentContainerLabelsOwned(ctr.Labels, deploymentID) || ctr.Labels[deploymentRoleLabel] != "app" ||
+			ctr.Labels[deploymentSlotLabel] != slot || ctr.State != "running" {
+			continue
+		}
+		if ip, err := c.containerIP(lookupCtx, ctr.ID, networkName); err == nil {
+			return ip
+		}
+	}
+	return ""
+}
+
+// Router address reconciliation (B-8, D5). A router whose nginx lacks upstream
+// re-resolution (before 1.27.3) proxies to the slot address rendered into its
+// config, never asking dockerd's DNS; when the slot restarts with another
+// address the config is rendered again. Routers with re-resolution follow the
+// address themselves; their config is kept current the same way.
+const (
+	deploymentRouterAddressInterval = 5 * time.Second
+	deploymentRouterAddressLockWait = time.Second
+)
+
+func (p *DockerPlugin) runDeploymentRouterAddresses(ctx context.Context) {
+	ticker := time.NewTicker(deploymentRouterAddressInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		p.reconcileDeploymentRouterAddresses(ctx)
+	}
+}
+
+// reconcileDeploymentRouterAddresses re-renders the config of every running
+// router whose active slot now runs at another address than its config names.
+// A deployment operation in progress keeps its lock; its router is checked on
+// the next pass.
+func (p *DockerPlugin) reconcileDeploymentRouterAddresses(ctx context.Context) {
+	if p.client == nil {
+		return
+	}
+	listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	containers, err := p.client.ListContainers(listCtx)
+	cancel()
+	if err != nil {
+		return
+	}
+	for deploymentID, members := range groupDeploymentMembers(containers) {
+		if len(members.routers) != 1 || members.routers[0].State != "running" || !members.serving() {
+			continue
+		}
+		func() {
+			lockCtx, cancelLock := context.WithTimeout(ctx, deploymentRouterAddressLockWait)
+			defer cancelLock()
+			unlock, err := p.lockDeployment(lockCtx, deploymentID)
+			if err != nil {
+				return
+			}
+			defer unlock()
+			inspectCtx, cancelInspect := context.WithTimeout(ctx, 10*time.Second)
+			defer cancelInspect()
+			inspect, err := p.client.cli.ContainerInspect(inspectCtx, members.routers[0].ID, mobyclient.ContainerInspectOptions{})
+			if err != nil || inspect.Container.State == nil || !inspect.Container.State.Running || inspect.Container.HostConfig == nil {
+				return
+			}
+			upgraded, err := p.client.upgradeDeploymentRouterConfig(inspectCtx, inspect.Container)
+			if err != nil {
+				p.logger.Warn("deployment router address update failed; retried", "deployment_id", deploymentID, "error", err)
+				return
+			}
+			if upgraded {
+				p.logger.Info("deployment router follows its active slot's address", "deployment_id", deploymentID, "router", members.routers[0].Name)
+			}
+		}()
+	}
 }
 
 // replaceLegacyDeploymentRouter recreates a router of an older daemon with
@@ -287,6 +422,9 @@ func (c *Client) restoreSetAsideRouter(ctx context.Context, oldID, name string, 
 	return cause
 }
 
+// heredocRouterConfig is the first config a router start command writes.
+var heredocRouterConfig = regexp.MustCompile(`<<'EOF'[^\n]*\n([\s\S]*?)\nEOF\n`)
+
 // deploymentRouterServedConfig returns the config a router serves: the file
 // on disk, which every config write replaces, else, for a router that never
 // started, the config its start command writes.
@@ -298,7 +436,12 @@ func (c *Client) deploymentRouterServedConfig(ctx context.Context, current conta
 	if err == nil && deploymentRouterConfigSlot(string(content)) != "" {
 		return string(content), nil
 	}
-	if script := strings.Join(current.Config.Cmd, " "); deploymentRouterConfigSlot(script) != "" {
+	script := strings.Join(current.Config.Cmd, " ")
+	if match := heredocRouterConfig.FindStringSubmatch(script); match != nil && deploymentRouterConfigSlot(match[1]) != "" {
+		// The config the start command writes, not the whole script.
+		return match[1], nil
+	}
+	if deploymentRouterConfigSlot(script) != "" {
 		return script, nil
 	}
 	return "", errors.New("router config does not name one deployment slot")

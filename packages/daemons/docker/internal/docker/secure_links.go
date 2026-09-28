@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -52,10 +53,65 @@ type dockerSecureLinkManager struct {
 	attached     map[string]struct{}
 	connectorID  string
 	managementIP string
+	// resolveTargetForDial replaces resolveTarget in dial validation (tests).
+	resolveTargetForDial func(ctx context.Context, containerName, networkName, expectedHost string, allowNetworkReselection bool) (string, string, error)
 
 	recoveryMu sync.Mutex
 	recovery   *dockerSecureLinkRecovery
+
+	// dockerQuietUntil: dockerd did not answer a dial's target validation; until
+	// then dials skip it (see validateDialTarget).
+	dockerQuietMu    sync.Mutex
+	dockerQuietUntil time.Time
+
+	// view is what dials read: a copy of bindings, unbound and managementIP
+	// published after every change. apply holds mu across dockerd calls, and a
+	// dial must not wait for them (B-8, D5).
+	viewMu sync.RWMutex
+	view   *dockerSecureLinkView
+
+	// probeRestoreAt is when a readiness probe last restored bindings (unix ns).
+	probeRestoreAt atomic.Int64
 }
+
+type dockerSecureLinkView struct {
+	bindings     map[string]dockerSecureLinkBinding
+	unbound      map[string]struct{}
+	managementIP string
+}
+
+// publishViewLocked publishes the binding state for dials. Callers hold mu.
+// The maps are replaced, never changed in place, so the view may share them.
+func (m *dockerSecureLinkManager) publishViewLocked() {
+	m.viewMu.Lock()
+	m.view = &dockerSecureLinkView{bindings: m.bindings, unbound: m.unbound, managementIP: m.managementIP}
+	m.viewMu.Unlock()
+}
+
+// dialState returns a link's binding for a dial without waiting for apply.
+func (m *dockerSecureLinkManager) dialState(linkID string) (binding dockerSecureLinkBinding, bound, unbound bool, host string) {
+	m.viewMu.RLock()
+	view := m.view
+	m.viewMu.RUnlock()
+	if view == nil {
+		// Built without newDockerSecureLinkManager (tests): read the fields.
+		m.mu.Lock()
+		view = &dockerSecureLinkView{bindings: m.bindings, unbound: m.unbound, managementIP: m.managementIP}
+		m.mu.Unlock()
+	}
+	binding, bound = view.bindings[linkID]
+	_, unbound = view.unbound[linkID]
+	return binding, bound, unbound, view.managementIP
+}
+
+const (
+	// secureLinkValidateWait bounds the dockerd call a new tunnel makes to
+	// validate its target (B-8, D5).
+	secureLinkValidateWait = time.Second
+	// secureLinkDockerQuiet is how long dials skip that call after dockerd
+	// did not answer it; the first dial after it tries again.
+	secureLinkDockerQuiet = 2 * time.Second
+)
 
 type dockerSecureLinkRecovery struct {
 	done        chan struct{}
@@ -92,10 +148,12 @@ func newDockerSecureLinkManager(plugin *DockerPlugin) (*dockerSecureLinkManager,
 	if err := os.Chown(directory, 65532, 65532); err != nil {
 		return nil, fmt.Errorf("secure-link control directory ownership: %w", err)
 	}
-	return &dockerSecureLinkManager{
+	manager := &dockerSecureLinkManager{
 		plugin: plugin, socketPath: filepath.Join(directory, "secure-link.sock"),
 		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
-	}, nil
+	}
+	manager.publishViewLocked()
+	return manager, nil
 }
 
 // restore re-applies the committed bindings after a daemon or connector
@@ -243,6 +301,7 @@ func (m *dockerSecureLinkManager) apply(
 	}
 	m.bindings = next
 	m.unbound = unbound
+	m.publishViewLocked()
 	for networkName := range m.attached {
 		if _, keep := desiredNetworks[networkName]; keep {
 			continue
@@ -321,6 +380,7 @@ func allowedSecureLinkConnectorImage(image string) bool {
 func (m *dockerSecureLinkManager) failClosed(ctx context.Context) {
 	m.bindings = map[string]dockerSecureLinkBinding{}
 	m.unbound = nil
+	m.publishViewLocked()
 	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, _ = securelink.Sync(cleanupCtx, m.socketPath, nil)
@@ -407,6 +467,7 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 	}
 	m.connectorID = inspect.Container.ID
 	m.managementIP = endpoint.IPAddress.String()
+	m.publishViewLocked()
 	m.attached = map[string]struct{}{}
 	for name := range inspect.Container.NetworkSettings.Networks {
 		if name != secureLinkManagementNetwork {
@@ -628,11 +689,7 @@ func dialWithOneRestore(
 }
 
 func (m *dockerSecureLinkManager) dialCurrent(ctx context.Context, linkID string) (net.Conn, error) {
-	m.mu.Lock()
-	binding, ok := m.bindings[linkID]
-	_, unbound := m.unbound[linkID]
-	host := m.managementIP
-	m.mu.Unlock()
+	binding, ok, unbound, host := m.dialState(linkID)
 	if !ok && unbound && host != "" {
 		// Its target was unavailable at the last restore: a new restore
 		// right away would find the same, so the dial shares a recent one.
@@ -641,16 +698,59 @@ func (m *dockerSecureLinkManager) dialCurrent(ctx context.Context, linkID string
 	if !ok || host == "" || binding.port == 0 {
 		return nil, errors.New("proxy secure-link binding is unavailable")
 	}
-	actualHost, actualNetwork, err := m.resolveTarget(
-		ctx, binding.targetContainer, binding.targetNetwork, binding.targetHost, false,
-	)
+	if err := m.validateDialTarget(ctx, linkID, binding, time.Now()); err != nil {
+		return nil, fmt.Errorf("validate proxy secure-link target: %w", err)
+	}
+	return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", binding.port)))
+}
+
+// validateDialTarget checks through dockerd that the link's target still is
+// the container and address the connector forwards to. A hung dockerd must
+// not hang traffic to running workloads (B-8, D5): the check waits at most
+// secureLinkValidateWait, and when dockerd does not answer, the connector
+// keeps forwarding to the target it was bound to. That binding was validated
+// while dockerd answered, and only dockerd can hand its address to another
+// container. Dials skip the check for secureLinkDockerQuiet after such a
+// timeout, so a frozen dockerd costs one wait per period, not one per tunnel.
+func (m *dockerSecureLinkManager) validateDialTarget(ctx context.Context, linkID string, binding dockerSecureLinkBinding, now time.Time) error {
+	m.dockerQuietMu.Lock()
+	quiet := now.Before(m.dockerQuietUntil)
+	m.dockerQuietMu.Unlock()
+	if quiet {
+		return nil
+	}
+	validateCtx, cancel := context.WithTimeout(ctx, secureLinkValidateWait)
+	defer cancel()
+	resolve := m.resolveTargetForDial
+	if resolve == nil {
+		resolve = m.resolveTarget
+	}
+	actualHost, actualNetwork, err := resolve(validateCtx, binding.targetContainer, binding.targetNetwork, binding.targetHost, false)
+	if err != nil && ctx.Err() == nil && errors.Is(validateCtx.Err(), context.DeadlineExceeded) {
+		m.dockerQuietMu.Lock()
+		first := m.dockerQuietUntil.IsZero()
+		m.dockerQuietUntil = now.Add(secureLinkDockerQuiet)
+		m.dockerQuietMu.Unlock()
+		if first {
+			m.plugin.logger.Warn("dockerd did not answer a secure-link target check; links keep their validated targets until it answers",
+				"link_id", linkID, "wait", secureLinkValidateWait.String())
+		}
+		return nil
+	}
+	m.dockerQuietMu.Lock()
+	recovered := !m.dockerQuietUntil.IsZero()
+	m.dockerQuietUntil = time.Time{}
+	m.dockerQuietMu.Unlock()
+	if recovered {
+		m.plugin.logger.Info("dockerd answers secure-link target checks again")
+	}
 	if err != nil || actualHost != binding.targetHost || actualNetwork != binding.targetNetwork {
 		if err == nil {
 			err = errors.New("target identity changed")
 		}
-		return nil, fmt.Errorf("validate proxy secure-link target: %w", err)
+		return err
 	}
-	return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", binding.port)))
+	return nil
 }
 
 func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
@@ -687,6 +787,7 @@ func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
 	m.managementIP = ""
 	m.bindings = map[string]dockerSecureLinkBinding{}
 	m.unbound = nil
+	m.publishViewLocked()
 	m.attached = map[string]struct{}{}
 	return nil
 }
@@ -699,6 +800,8 @@ func (p *DockerPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksComm
 	if err != nil {
 		return "", err
 	}
+	// New or changed availability members: probe their readiness now (D6).
+	p.memberReadiness.signal()
 	if p.lease != nil {
 		// Lease-gated links may have appeared or changed policy.
 		p.reconcileRelayRegistrations()

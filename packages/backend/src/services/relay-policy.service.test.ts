@@ -625,6 +625,69 @@ describe('RelayPolicyService snapshots', () => {
     // So is unchanged content once the relay no longer reports holding it (restored relay).
     applied = 50;
     await sync(true);
+
+    // N-7: the relay lost its relay.db and reports no policy, while Gateway's stored report still names the
+    // snapshot it held. The live report decides: the snapshot goes out at once.
+    (local as any).appliedPolicyRevision = poolRevision;
+    applied = 0;
+    await sync(true);
+    await sync(false);
+
+    // A forced build (a relay reconnecting) sends even unchanged content.
+    const forced = await (service as any).buildInstanceSnapshot('local', undefined, 0, { force: true });
+    expect(forced.encodedRequest).not.toBeNull();
+    expect(forced.revision).toBe(expected + 1);
+  });
+
+  it('delivers a remote relay its snapshot at once when it reports holding none (N-7)', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-28T11:00:25Z'));
+      const service = createService({}, { applySnapshot: vi.fn() });
+      service.setNodeDispatch({} as never);
+      const sync = vi.spyOn(service, 'syncRemoteInstancePolicy').mockResolvedValue(1);
+      // Holding the revision it held before, or a newer one: nothing to do.
+      service.noteRemoteAppliedRevision('relay-136', 40, 40);
+      service.noteRemoteAppliedRevision('relay-136', 41, 40);
+      expect(sync).not.toHaveBeenCalled();
+      // relay.db renamed: the relay restarted without policy.
+      service.noteRemoteAppliedRevision('relay-136', 0, 41);
+      expect(sync).toHaveBeenCalledExactlyOnceWith('relay-136', 10_000, { force: true });
+      // Its reports repeat until the snapshot lands; the push is not repeated every report.
+      service.noteRemoteAppliedRevision('relay-136', 0, 0);
+      expect(sync).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(5_000);
+      service.noteRemoteAppliedRevision('relay-136', 0, 0);
+      expect(sync).toHaveBeenCalledTimes(2);
+      // Restored from an older copy.
+      service.noteRemoteAppliedRevision('relay-137', 30, 41);
+      expect(sync).toHaveBeenLastCalledWith('relay-137', 10_000, { force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('delivers the local relay its snapshot as soon as it reports needing one (N-7)', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-28T10:59:05Z'));
+      const service = createService({}, { applySnapshot: vi.fn() });
+      const handlers = new Map<string, (payload: unknown) => void>();
+      service.setEventBus({ subscribe: (event: string, handler: any) => handlers.set(event, handler) } as never);
+      const sync = vi.spyOn(service, 'syncSnapshot').mockResolvedValue(1);
+      const health = handlers.get('system.relay.health.changed')!;
+      health({ state: 'suspect', reason: 'unreachable' });
+      expect(sync).not.toHaveBeenCalled();
+      health({ state: 'suspect', reason: 'policy_snapshot_required' });
+      expect(sync).toHaveBeenCalledTimes(1);
+      health({ state: 'critical', reason: 'policy_snapshot_required' });
+      expect(sync).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(2_000);
+      health({ state: 'critical', reason: 'policy_snapshot_required' });
+      expect(sync).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not replace a pool snapshot with legacy policy when Relay health lookup fails', async () => {
@@ -1417,7 +1480,7 @@ describe('RelayPolicyService policy signing trust', () => {
     });
     const build = vi.spyOn(service as any, 'buildInstanceSnapshot');
     await service.syncSnapshot();
-    expect(build).toHaveBeenCalledWith('local', ['active'], 5000);
+    expect(build).toHaveBeenCalledWith('local', ['active'], 5000, { liveAppliedRevision: 5000 });
   });
 
   it('never resets trust for other bootstrap failures', async () => {
@@ -1524,7 +1587,7 @@ describe('RelayPolicyService relay recovery surfaces', () => {
     release();
     await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
     expect(order).toEqual(['first', 'second']);
-    expect(once).toHaveBeenLastCalledWith('node-1', 10_000);
+    expect(once).toHaveBeenLastCalledWith('node-1', 10_000, false);
 
     const db: any = {
       select: () => {

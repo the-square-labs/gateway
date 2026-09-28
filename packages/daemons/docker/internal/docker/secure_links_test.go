@@ -550,3 +550,74 @@ func TestNormalizeTargetBindingsKeepsTheNetworkOfAnUnboundLink(t *testing.T) {
 		t.Fatalf("an unbound router link must keep its managed network, got %+v", got)
 	}
 }
+
+// B-8: every new Secure Link tunnel validated its target through dockerd; a
+// frozen dockerd hung every new connection. The check is bounded and skipped
+// while dockerd does not answer.
+func TestSecureLinkDialValidationDoesNotHangOnAFrozenDockerd(t *testing.T) {
+	calls := 0
+	hung := true
+	manager := &dockerSecureLinkManager{plugin: &DockerPlugin{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	manager.resolveTargetForDial = func(ctx context.Context, _, network, _ string, _ bool) (string, string, error) {
+		calls++
+		if hung {
+			<-ctx.Done()
+			return "", "", errSecureLinkTargetUnavailable
+		}
+		return "10.0.0.5", network, nil
+	}
+	binding := dockerSecureLinkBinding{port: 1, targetContainer: "app", targetNetwork: "net", targetHost: "10.0.0.5"}
+	now := time.Now()
+	started := time.Now()
+	if err := manager.validateDialTarget(context.Background(), "link", binding, now); err != nil {
+		t.Fatalf("a hung dockerd refused the dial: %v", err)
+	}
+	if waited := time.Since(started); waited > secureLinkValidateWait+500*time.Millisecond {
+		t.Fatalf("validation waited %s", waited)
+	}
+	// Further dials skip the check until the quiet period ends.
+	if err := manager.validateDialTarget(context.Background(), "link", binding, now.Add(time.Second)); err != nil || calls != 1 {
+		t.Fatalf("dial inside the quiet period: err %v, dockerd calls %d", err, calls)
+	}
+	// dockerd answers again: the check runs and refuses a changed target.
+	hung = false
+	binding.targetHost = "10.0.0.9"
+	if err := manager.validateDialTarget(context.Background(), "link", binding, now.Add(secureLinkDockerQuiet+time.Second)); err == nil || calls != 2 {
+		t.Fatalf("a changed target was accepted: calls %d", calls)
+	}
+	// A definitive answer (not running) refuses at once, as before.
+	manager.resolveTargetForDial = func(context.Context, string, string, string, bool) (string, string, error) {
+		return "", "", errSecureLinkTargetUnavailable
+	}
+	if err := manager.validateDialTarget(context.Background(), "link", binding, now.Add(time.Minute)); !errors.Is(err, errSecureLinkTargetUnavailable) {
+		t.Fatalf("stopped target = %v", err)
+	}
+}
+
+// B-8: apply holds the manager lock across dockerd calls (inspect, connector
+// sync); a dial reads the published binding state and never waits for it.
+func TestSecureLinkDialStateDoesNotWaitForAnApplyInProgress(t *testing.T) {
+	manager := &dockerSecureLinkManager{
+		bindings: map[string]dockerSecureLinkBinding{"link": {port: 20001, targetHost: "10.0.0.5"}},
+		unbound:  map[string]struct{}{"standby": {}}, managementIP: "172.30.0.2",
+	}
+	manager.publishViewLocked()
+	manager.mu.Lock() // an apply waiting on a frozen dockerd
+	defer manager.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		binding, bound, unbound, host := manager.dialState("link")
+		if !bound || unbound || binding.port != 20001 || host != "172.30.0.2" {
+			t.Errorf("dial state = %+v %v %v %q", binding, bound, unbound, host)
+		}
+		if _, bound, unbound, _ := manager.dialState("standby"); bound || !unbound {
+			t.Errorf("standby dial state bound=%v unbound=%v", bound, unbound)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a dial waited for the apply lock")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -36,11 +37,32 @@ const (
 	deploymentRouterOutputLimit    = 1024 * 1024
 )
 
+// Router config lines only nginx 1.27.3+ understands (upstream servers with
+// "resolve") end with deploymentRouterResolveTag; the per-request resolution
+// lines older nginx needs instead are commented out with
+// deploymentRouterFallbackTag. A router whose nginx rejects the config gets
+// the fallback: those lines are swapped by deploymentRouterFallbackSed.
+const (
+	deploymentRouterResolveTag  = "# gateway:resolve"
+	deploymentRouterFallbackTag = "# gateway:fallback "
+	// deploymentRouterConfigVersion heads every config this daemon renders; a
+	// router serving a config without it is rewritten (repairDeploymentRouter).
+	deploymentRouterConfigVersion = "# wiolett-gateway deployment router config v2"
+	// deploymentRouterSlotAddressPrefix heads the line naming the active slot's
+	// address a config was rendered with.
+	deploymentRouterSlotAddressPrefix = "# gateway:slot-address "
+	deploymentRouterFallbackSed       = "sed -e '/" + deploymentRouterResolveTag + "$/d' -e 's/^\\([[:space:]]*\\)" + deploymentRouterFallbackTag + "/\\1/'"
+)
+
 // deploymentRouterCommand is the router's start command: it writes config only
-// on the very first start, then execs nginx in the foreground.
+// on the very first start (the fallback when nginx rejects it), then execs
+// nginx in the foreground.
 func deploymentRouterCommand(config string) []string {
 	script := "if [ ! -f " + deploymentRouterConfigMarker + " ]; then\n" +
 		"cat > " + deploymentRouterConfigPath + " <<'EOF'\n" + config + "\nEOF\n" +
+		"if grep -q '" + deploymentRouterResolveTag + "$' " + deploymentRouterConfigPath + " && ! nginx -t >/dev/null 2>&1; then\n" +
+		"  " + deploymentRouterFallbackSed + " " + deploymentRouterConfigPath + " > " + deploymentRouterConfigPath + ".fallback && mv " + deploymentRouterConfigPath + ".fallback " + deploymentRouterConfigPath + "\n" +
+		"fi\n" +
 		"touch " + deploymentRouterConfigMarker + "\n" +
 		"fi\n" +
 		"exec nginx -g 'daemon off;'"
@@ -48,8 +70,9 @@ func deploymentRouterCommand(config string) []string {
 }
 
 // deploymentRouterWriteScript replaces the router config and reloads nginx. A
-// config that nginx rejects is rolled back, so the file on disk (which is what
-// a restarted router serves) always matches the config nginx is running.
+// config that nginx rejects is retried as its fallback, then rolled back, so
+// the file on disk (which is what a restarted router serves) always matches
+// the config nginx is running.
 func deploymentRouterWriteScript(config string) string {
 	return "conf=" + deploymentRouterConfigPath + "\n" +
 		"cat > \"$conf.next\" <<'EOF' || exit 1\n" + config + "\nEOF\n" +
@@ -57,7 +80,12 @@ func deploymentRouterWriteScript(config string) string {
 		"mv \"$conf.next\" \"$conf\" || exit 1\n" +
 		"nginx -s reload\n" +
 		"status=$?\n" +
+		"if [ \"$status\" -ne 0 ] && grep -q '" + deploymentRouterResolveTag + "$' \"$conf\"; then\n" +
+		"  " + deploymentRouterFallbackSed + " \"$conf\" > \"$conf.next\" && mv \"$conf.next\" \"$conf\" && nginx -s reload\n" +
+		"  status=$?\n" +
+		"fi\n" +
 		"if [ \"$status\" -ne 0 ]; then\n" +
+		"  rm -f \"$conf.next\"\n" +
 		"  if [ -f \"$conf.prev\" ]; then mv \"$conf.prev\" \"$conf\"; fi\n" +
 		"  exit \"$status\"\n" +
 		"fi\n" +
@@ -117,6 +145,15 @@ func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentC
 	options, err := deploymentRouterCreateOptions(payload, activeSlot)
 	if err != nil {
 		return "", err
+	}
+	// The first start writes this config: give it the slot's address when the
+	// slot already runs, so no nginx version resolves it per request.
+	slotContainer := payload.Slots[activeSlot]
+	if slotContainer == "" {
+		slotContainer = payload.Deployment.slotName(activeSlot)
+	}
+	if slotContainer != "" {
+		options.Config.Cmd = deploymentRouterCommand(c.deploymentRouterConfigFor(ctx, payload.NetworkName, slotContainer, payload.Routes, activeSlot))
 	}
 	applyDefaultWorkloadLogConfig(options.HostConfig, c.defaultWorkloadLogDriver())
 	resp, err := c.cli.ContainerCreate(ctx, options)
@@ -566,28 +603,83 @@ func deploymentBinds(mounts []deploymentMount) []string {
 	return binds
 }
 
+// renderDeploymentNginx renders a router config that does not know the active
+// slot's address yet; see renderDeploymentNginxAt.
 func renderDeploymentNginx(routes []deploymentRouteConfig, activeSlot string) string {
+	return renderDeploymentNginxAt(routes, activeSlot, "")
+}
+
+// renderDeploymentNginxAt renders the router config for the active slot. With
+// the slot container's address known, nginx without upstream re-resolution
+// (the fallback variant) proxies to that address and asks no DNS at all; the
+// daemon re-renders it when the slot's address changes
+// (reconcileDeploymentRouterAddresses). Without it, that variant resolves per
+// request until the address is known.
+func renderDeploymentNginxAt(routes []deploymentRouteConfig, activeSlot, slotAddress string) string {
+	if address, err := netip.ParseAddr(slotAddress); err != nil || !address.IsValid() || address.IsUnspecified() {
+		slotAddress = ""
+	} else {
+		slotAddress = address.String()
+	}
 	var b strings.Builder
+	b.WriteString(deploymentRouterConfigVersion + "\n")
+	if slotAddress != "" {
+		b.WriteString(deploymentRouterSlotAddressPrefix + slotAddress + "\n")
+	}
 	b.WriteString("map $http_upgrade $connection_upgrade {\n  default upgrade;\n  '' close;\n}\n")
+	// The active slot is resolved through Docker's embedded DNS in the
+	// background (upstream servers with "resolve"), never on the request path:
+	// that DNS is served by dockerd, and a hung dockerd must not hang the
+	// traffic of a running slot (B-8, D5). nginx keeps the last addresses while
+	// the resolver does not answer, starts and reloads while the slot is
+	// stopped (it then has no address and answers 502), and picks up a
+	// restarted slot's new address within valid.
+	fmt.Fprintf(&b, "resolver %s valid=2s ipv6=off; %s\n", deploymentRouterResolver, deploymentRouterResolveTag)
+	// nginx before 1.27.3 has no "resolve": it proxies to the slot's address
+	// the daemon rendered, and only while that is unknown resolves the slot per
+	// request, as routers always did.
+	if slotAddress == "" {
+		fmt.Fprintf(&b, "%sresolver %s valid=10s ipv6=off;\n", deploymentRouterFallbackTag, deploymentRouterResolver)
+	}
+	seen := map[string]bool{}
+	for _, route := range routes {
+		name := deploymentRouterUpstreamName(activeSlot, route.ContainerPort)
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		fmt.Fprintf(&b, "upstream %s { %s\n", name, deploymentRouterResolveTag)
+		fmt.Fprintf(&b, "  zone %s 64k; %s\n", name, deploymentRouterResolveTag)
+		fmt.Fprintf(&b, "  server %s:%d resolve; %s\n", activeSlot, route.ContainerPort, deploymentRouterResolveTag)
+		fmt.Fprintf(&b, "} %s\n", deploymentRouterResolveTag)
+		if slotAddress != "" {
+			fmt.Fprintf(&b, "%supstream %s { server %s; }\n", deploymentRouterFallbackTag, name,
+				net.JoinHostPort(slotAddress, fmt.Sprintf("%d", route.ContainerPort)))
+		}
+	}
 	for _, route := range routes {
 		fmt.Fprintf(&b, "server {\n  listen %d;\n", route.HostPort)
-		// The slot is resolved per request through Docker's embedded DNS rather
-		// than once at startup, so nginx starts and reloads even while the
-		// active slot container is stopped or not created yet.
-		fmt.Fprintf(&b, "  resolver %s valid=10s ipv6=off;\n", deploymentRouterResolver)
 		// Body size is the ingress route's decision; the router in front of
 		// the slots must not add nginx's 1 MB default on top of it.
 		b.WriteString("  client_max_body_size 0;\n")
+		// A 502 or 504 the router generates itself (the slot is stopped,
+		// starting or unreachable) is marked, so readiness probes and
+		// operators tell it from an answer of the app (D6).
+		b.WriteString("  error_page 502 504 = @gateway_router_unavailable;\n")
 		b.WriteString("  location / {\n")
 		fmt.Fprintf(&b, "    set $deployment_upstream %s:%d;\n", activeSlot, route.ContainerPort)
+		fmt.Fprintf(&b, "    proxy_pass http://%s; %s\n", deploymentRouterUpstreamName(activeSlot, route.ContainerPort), deploymentRouterResolveTag)
 		// Without a URI part, proxy_pass forwards the original request URI
-		// unchanged, exactly as the static http://slot:port form did. nginx
-		// drops the default proxy_redirect when proxy_pass uses variables, so
-		// it is spelled out to keep rewriting upstream Location headers.
-		b.WriteString("    proxy_pass http://$deployment_upstream;\n")
+		// unchanged, exactly as the static http://slot:port form did.
+		if slotAddress != "" {
+			fmt.Fprintf(&b, "    %sproxy_pass http://%s;\n", deploymentRouterFallbackTag, deploymentRouterUpstreamName(activeSlot, route.ContainerPort))
+		} else {
+			fmt.Fprintf(&b, "    %sproxy_pass http://$deployment_upstream;\n", deploymentRouterFallbackTag)
+		}
+		// Upstream Location headers naming the slot are rewritten as before.
 		b.WriteString("    proxy_redirect http://$deployment_upstream/ /;\n")
-		// A crashed slot keeps its cached address until the resolver entry
-		// expires; fail fast instead of holding requests for the 60 s default.
+		// A crashed slot keeps its address until the next resolution; fail
+		// fast instead of holding requests for the 60 s default.
 		b.WriteString("    proxy_connect_timeout 5s;\n")
 		b.WriteString("    proxy_http_version 1.1;\n")
 		// Stream request bodies to the slot instead of spooling them to disk.
@@ -598,9 +690,50 @@ func renderDeploymentNginx(routes []deploymentRouteConfig, activeSlot string) st
 		b.WriteString("    proxy_set_header X-Forwarded-Proto $scheme;\n")
 		b.WriteString("    proxy_set_header Upgrade $http_upgrade;\n")
 		b.WriteString("    proxy_set_header Connection $connection_upgrade;\n")
+		b.WriteString("  }\n")
+		b.WriteString("  location @gateway_router_unavailable {\n")
+		fmt.Fprintf(&b, "    add_header %s upstream-unavailable always;\n", deploymentRouterUnavailableHeader)
+		b.WriteString("    return 502;\n")
 		b.WriteString("  }\n}\n")
 	}
 	return b.String()
+}
+
+// deploymentRouterUpstreamName names the upstream of one slot port.
+func deploymentRouterUpstreamName(slot string, containerPort uint16) string {
+	return fmt.Sprintf("gateway_deployment_%s_%d", slot, containerPort)
+}
+
+// deploymentRouterConfigCurrent reports whether a router config is one this
+// daemon renders (either variant), not an older daemon's per-request config.
+func deploymentRouterConfigCurrent(config string) bool {
+	return strings.HasPrefix(strings.TrimLeft(config, "\n"), deploymentRouterConfigVersion)
+}
+
+var deploymentRouterSlotAddressLine = regexp.MustCompile(`(?m)^# gateway:slot-address (\S+)$`)
+
+// deploymentRouterConfigAddress is the slot address a rendered config names,
+// or "" when it names none.
+func deploymentRouterConfigAddress(config string) string {
+	if match := deploymentRouterSlotAddressLine.FindStringSubmatch(config); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
+// deploymentRouterConfigFor renders the router config for the active slot
+// with the slot container's current address on the deployment network, when
+// dockerd tells it.
+func (c *Client) deploymentRouterConfigFor(ctx context.Context, networkName, slotContainer string, routes []deploymentRouteConfig, activeSlot string) string {
+	address := ""
+	if networkName != "" && slotContainer != "" {
+		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if ip, err := c.containerIP(lookupCtx, slotContainer, networkName); err == nil {
+			address = ip
+		}
+		cancel()
+	}
+	return renderDeploymentNginxAt(routes, activeSlot, address)
 }
 
 func isNotFoundErr(err error) bool {

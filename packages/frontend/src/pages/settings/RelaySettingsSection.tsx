@@ -805,6 +805,14 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             {blocker}
           </p>
         ))}
+        {status?.warnings?.map((warning) => (
+          <p
+            key={`${warning.code}:${warning.endpointId}`}
+            className="border-t border-border p-3 text-sm text-warning-text"
+          >
+            {warning.message}
+          </p>
+        ))}
         {status?.staging && status.staging.length > 0 && (
           <p className="border-t border-border p-3 text-sm text-warning-text">
             Rebalance is verifying {status.staging.length} staged assignment generation

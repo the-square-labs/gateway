@@ -42,6 +42,13 @@ type leaseIntegration struct {
 
 	mu      sync.Mutex
 	serving map[string]bool
+	// view answers the endpoint gate's lease questions: the runtime, or a
+	// stand-in in tests.
+	view endpointLeaseView
+	// bootstrapServed marks policies whose endpoints serve as the named
+	// bootstrap holder's legacy copy: after that holder acquires, they keep
+	// serving until the runtime's SetServing takes over (see endpointAllowed).
+	bootstrapServed map[string]bool
 }
 
 // initAvailabilityLease starts the lease runtime on a general Docker node.
@@ -147,7 +154,15 @@ func (l *leaseIntegration) watchdogReady() bool {
 func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	l.mu.Lock()
 	l.serving[policyID] = serving
+	delete(l.bootstrapServed, policyID)
 	l.mu.Unlock()
+	if !serving {
+		// A member that stops serving registers dormant at once, and serving
+		// again is probed from scratch (D6, D7). A holder that starts serving
+		// keeps a readiness it already has: the bootstrap holder's copy never
+		// stopped, and the probe re-checks a restarted container anyway.
+		l.plugin.memberReadiness.reset(policyID)
+	}
 	if serving {
 		// The deployment router is not lease-governed (ServeSet), so nothing
 		// starts it with the workload: one that did not come back after a
@@ -161,10 +176,16 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 			l.plugin.logger.Warn("secure-link restore before serving failed", "policy_id", policyID, "error", err)
 		}
 	}
+	// Dormant registrations stay on every relay (D7): stopping to serve renews
+	// them dormant and ends the tunnels this node accepted for the policy.
 	closed := l.plugin.reconcileRelayRegistrations()
 	if serving {
+		// The endpoints serve once the readiness probe finds the workload
+		// ready; probe right away.
+		l.plugin.memberReadiness.signal()
 		return
 	}
+	closed = append(closed, l.plugin.closeMemberTunnels(l.plugin.memberEndpointIDs(policyID))...)
 	timeout := time.NewTimer(endpointCloseWait)
 	defer timeout.Stop()
 	for _, done := range closed {
@@ -177,39 +198,68 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	}
 }
 
-// endpointAllowed is the registration gate (D8, A8): the Secure Link
-// endpoint of an availability member (T3's binding availability_policy_id,
-// set for serving and dormant members alike, deployment routers included)
-// registers only while this node serves the policy's lease. Links of
-// policies outside lease mode keep today's behavior.
+// endpointLeaseView is what the endpoint gate asks the lease runtime.
+type endpointLeaseView interface {
+	LeaseMode(policyID string) bool
+	BootstrapPending(policyID string) bool
+	Holds(policyID string) bool
+}
+
+func (l *leaseIntegration) leaseView() endpointLeaseView {
+	if l.view != nil {
+		return l.view
+	}
+	return l.runtime
+}
+
+// endpointAllowed is the serving gate (D8, A8): the Secure Link endpoint of
+// an availability member (T3's binding availability_policy_id, set for
+// serving and dormant members alike, deployment routers included) serves only
+// while this node serves the policy's lease; otherwise it stays registered
+// dormant (D7). Links of policies outside lease mode serve as before, once
+// their workload is ready (D6).
 func (l *leaseIntegration) endpointAllowed(linkID string) bool {
 	if l == nil || l.runtime == nil {
 		return true
 	}
+	view := l.leaseView()
 	policyID := l.linkPolicy(linkID)
-	if policyID == "" || !l.runtime.LeaseMode(policyID) {
+	if policyID == "" || !view.LeaseMode(policyID) {
 		return true
 	}
 	// The named bootstrap holder keeps its legacy registration until its
 	// first commit; relays admit it the same way (A5, T2).
-	if l.runtime.BootstrapPending(policyID) {
+	if view.BootstrapPending(policyID) {
+		l.mu.Lock()
+		if l.bootstrapServed == nil {
+			l.bootstrapServed = map[string]bool{}
+		}
+		l.bootstrapServed[policyID] = true
+		l.mu.Unlock()
 		return true
 	}
+	// Once it acquired, the runtime opens the endpoints (SetServing) a step or
+	// two later, after its readiness check; the copy that served all along
+	// keeps serving in between instead of going dormant for that gap (an
+	// enable must not produce a 502 window). Only while this node holds the
+	// slot: a lost bootstrap race ends it.
+	holds := view.Holds(policyID)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.serving[policyID]
+	if l.serving[policyID] {
+		return true
+	}
+	if l.bootstrapServed[policyID] {
+		if holds {
+			return true
+		}
+		delete(l.bootstrapServed, policyID)
+	}
+	return false
 }
 
 func (l *leaseIntegration) linkPolicy(linkID string) string {
-	if l.plugin.secureLinkState == nil {
-		return ""
-	}
-	for _, binding := range l.plugin.secureLinkState.Get().GetBindings() {
-		if binding.GetLinkId() == linkID && binding.GetRole() == "target" {
-			return binding.GetAvailabilityPolicyId()
-		}
-	}
-	return ""
+	return l.plugin.availabilityLinkPolicy(linkID)
 }
 
 // Local implements lease.Placements from the persisted availability state.

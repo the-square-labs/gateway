@@ -26,6 +26,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
 	registration := &endpointRegistration{endpointID: claims.EndpointID, generation: claims.EndpointGeneration, assignmentGeneration: claims.AssignmentGeneration, incoming: make(chan *relayv1.IncomingTunnel, 32), stop: make(chan struct{})}
+	registration.state.Store(int32(servingState(register.GetState())))
 	registration.expiresAt.Store(claims.ExpiresAt)
 	registration.maxSessions.Store(claims.MaxConcurrentSessions)
 	b.mu.Lock()
@@ -34,11 +35,16 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 		b.mu.Unlock()
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
-	// A lease-bound placement registers only while this relay's lease gate is
-	// open for it (A2.4, A8, A11).
-	if err := b.endpointLeaseErrorLocked(snapshot.Endpoint(claims.EndpointID, claims.AssignmentGeneration)); err != nil {
-		b.mu.Unlock()
-		return err
+	// An endpoint that does not state whether it serves registers a
+	// lease-bound placement only while this relay's lease gate is open for it
+	// (A2.4, A8, A11). A dormant or serving registration is kept whatever the
+	// gate says: tunnels to it are gated instead, so a successor is already
+	// registered on every relay when it takes over (D7).
+	if !registration.stateful() {
+		if err := b.endpointLeaseErrorLocked(snapshot.Endpoint(claims.EndpointID, claims.AssignmentGeneration)); err != nil {
+			b.mu.Unlock()
+			return err
+		}
 	}
 	registrationKey := policyAssignmentKey(claims.EndpointID, claims.AssignmentGeneration)
 	if previous := b.endpoints[registrationKey]; previous != nil {
@@ -106,9 +112,20 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 				b.mu.Unlock()
 				return status.Error(codes.PermissionDenied, err.Error())
 			}
-			if err := b.endpointLeaseErrorLocked(current.Endpoint(next.EndpointID, next.AssignmentGeneration)); err != nil {
-				b.mu.Unlock()
-				return err
+			state := servingState(renew.GetState())
+			if state == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED {
+				if err := b.endpointLeaseErrorLocked(current.Endpoint(next.EndpointID, next.AssignmentGeneration)); err != nil {
+					b.mu.Unlock()
+					return err
+				}
+			}
+			if previous := registration.servingState(); previous != state {
+				registration.state.Store(int32(state))
+				if state == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+					// The endpoint stopped serving (released, fenced or no longer
+					// ready): no tunnel admitted before stays open.
+					b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
+				}
 			}
 			registration.expiresAt.Store(next.ExpiresAt)
 			registration.maxSessions.Store(next.MaxConcurrentSessions)
@@ -122,6 +139,18 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 			}
 		}
 	}
+}
+
+// servingState maps states this relay does not know to DORMANT: an endpoint
+// that sends a state the relay cannot read never receives traffic by mistake.
+func servingState(state relayv1.EndpointServingState) relayv1.EndpointServingState {
+	switch state {
+	case relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED,
+		relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT,
+		relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING:
+		return state
+	}
+	return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
 }
 
 func sendRegistered(stream relayv1.TunnelBroker_RegisterEndpointServer, registration *endpointRegistration) error {

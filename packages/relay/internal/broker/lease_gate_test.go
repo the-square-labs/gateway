@@ -56,6 +56,8 @@ type registerStream struct {
 	ctx   context.Context
 	first *relayv1.EndpointControl
 	sent  chan *relayv1.EndpointControl
+	// more feeds endpoint control frames after the first (renewals).
+	more chan *relayv1.EndpointControl
 }
 
 func (s *registerStream) Context() context.Context { return s.ctx }
@@ -64,8 +66,12 @@ func (s *registerStream) Recv() (*relayv1.EndpointControl, error) {
 		s.first = nil
 		return first, nil
 	}
-	<-s.ctx.Done()
-	return nil, s.ctx.Err()
+	select {
+	case next := <-s.more:
+		return next, nil
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
 }
 func (s *registerStream) Send(message *relayv1.EndpointControl) error {
 	s.sent <- message
@@ -127,6 +133,11 @@ func newLeaseFixture(t *testing.T) *leaseFixture {
 
 func (f *leaseFixture) register(t *testing.T, endpointID string) (*registerStream, chan error, context.CancelFunc) {
 	t.Helper()
+	return f.registerWithState(t, endpointID, relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED)
+}
+
+func (f *leaseFixture) endpointGrant(t *testing.T, endpointID string) *relayv1.SignedGrant {
+	t.Helper()
 	now := time.Now().Unix()
 	payload, err := json.Marshal(grant.Claims{
 		SchemaVersion: 1, Audience: grant.Audience, GrantID: "grant-" + endpointID, GatewayInstanceID: "gateway-1", Kind: "endpoint",
@@ -136,9 +147,14 @@ func (f *leaseFixture) register(t *testing.T, endpointID string) (*registerStrea
 	if err != nil {
 		t.Fatal(err)
 	}
+	return &relayv1.SignedGrant{KeyId: "grant-key", Payload: payload, Signature: ed25519.Sign(f.grantKey, payload)}
+}
+
+func (f *leaseFixture) registerWithState(t *testing.T, endpointID string, state relayv1.EndpointServingState) (*registerStream, chan error, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(f.ctx)
-	stream := &registerStream{ctx: ctx, sent: make(chan *relayv1.EndpointControl, 8), first: &relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Register{Register: &relayv1.RegisterEndpoint{
-		Grant: &relayv1.SignedGrant{KeyId: "grant-key", Payload: payload, Signature: ed25519.Sign(f.grantKey, payload)},
+	stream := &registerStream{ctx: ctx, sent: make(chan *relayv1.EndpointControl, 8), more: make(chan *relayv1.EndpointControl, 4), first: &relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Register{Register: &relayv1.RegisterEndpoint{
+		Grant: f.endpointGrant(t, endpointID), State: state,
 	}}}}
 	result := make(chan error, 1)
 	go func() { result <- f.broker.RegisterEndpoint(stream) }()
@@ -251,5 +267,148 @@ func TestLeaseGateClosesSourceAndTargetBoundTunnels(t *testing.T) {
 	case <-plain.stop:
 		t.Fatal("plain tunnel was closed by the lease gate")
 	default:
+	}
+}
+
+func (f *leaseFixture) renew(t *testing.T, stream *registerStream, endpointID string, state relayv1.EndpointServingState) {
+	t.Helper()
+	stream.more <- &relayv1.EndpointControl{Payload: &relayv1.EndpointControl_Renew{Renew: &relayv1.RenewEndpoint{Grant: f.endpointGrant(t, endpointID), State: state}}}
+}
+
+// openProxyTunnel opens a tunnel from nginx-1 on proxy-route (to lease-ep) and
+// returns its result; ctx ends a tunnel still waiting for the endpoint.
+func (f *leaseFixture) openProxyTunnel(t *testing.T, ctx context.Context) chan error {
+	t.Helper()
+	now := time.Now().Unix()
+	payload, err := json.Marshal(grant.Claims{
+		SchemaVersion: 1, Audience: grant.Audience, GrantID: "grant-proxy-route", GatewayInstanceID: "gateway-1", Kind: "connect",
+		SubjectKind: "nginx", SubjectID: "nginx-1", CertificateSHA256: f.fingerprint, RouteID: "proxy-route", RouteGeneration: 1,
+		IssuedAt: now - 10, NotBefore: now - 10, ExpiresAt: now + 3600,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, _ := grpcpeer.FromContext(authenticatedContext("nginx-1", []byte("node-a-certificate")))
+	stream := &openStream{ctx: grpcpeer.NewContext(ctx, identity), first: &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{
+		Grant: &relayv1.SignedGrant{KeyId: "grant-key", Payload: payload, Signature: ed25519.Sign(f.grantKey, payload)},
+	}}}}
+	result := make(chan error, 1)
+	go func() { result <- f.broker.OpenTunnel(stream) }()
+	return result
+}
+
+func waitOpenError(t *testing.T, result chan error, code codes.Code, contains string) {
+	t.Helper()
+	select {
+	case err := <-result:
+		if status.Code(err) != code || !strings.Contains(err.Error(), contains) {
+			t.Fatalf("tunnel open ended with %v, want %v containing %q", err, code, contains)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("tunnel open did not end with %v", code)
+	}
+}
+
+// D7: a dormant member registers whatever the lease gate says, so the
+// successor is already reachable through every relay at a takeover; the gate
+// and the serving state still decide every tunnel.
+func TestDormantRegistrationOutlivesTheGateAndTakesNoTraffic(t *testing.T) {
+	f := newLeaseFixture(t)
+	stream, result, _ := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT)
+	waitRegistered(t, stream, result)
+	if registered, _ := f.broker.Counts(); registered != 1 {
+		t.Fatalf("dormant registration was not kept: %d", registered)
+	}
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY {
+		t.Fatalf("dormant holder endpoint = %v", got)
+	}
+	// Closed gate: the registration stays, the tunnel is refused by the gate.
+	f.broker.EnforceLeaseGates()
+	select {
+	case err := <-result:
+		t.Fatalf("dormant registration dropped by a closed gate: %v", err)
+	default:
+	}
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.FailedPrecondition, "availability lease gate closed")
+
+	// The member takes the slot, but its workload is not ready yet.
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.Unavailable, "target endpoint is dormant")
+
+	// Ready: the endpoint serves and receives the next tunnel.
+	f.renew(t, stream, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, stream, result)
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+		t.Fatalf("serving holder endpoint = %v", got)
+	}
+	openCtx, cancelOpen := context.WithCancel(f.ctx)
+	defer cancelOpen()
+	opened := f.openProxyTunnel(t, openCtx)
+	select {
+	case message := <-stream.sent:
+		if message.GetIncoming() == nil {
+			t.Fatalf("serving endpoint got %v instead of an incoming tunnel", message)
+		}
+	case err := <-opened:
+		t.Fatalf("tunnel to a serving holder refused: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("serving endpoint received no incoming tunnel")
+	}
+	cancelOpen()
+	<-opened
+
+	// The gate closes (released or superseded): the serving registration stays
+	// for the next takeover, every tunnel through the gate is refused again.
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Reason: "superseded"})
+	f.broker.EnforceLeaseGates()
+	select {
+	case err := <-result:
+		t.Fatalf("serving registration dropped by a closed gate: %v", err)
+	default:
+	}
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.FailedPrecondition, "availability lease gate closed: superseded")
+}
+
+func TestServingRenewalToDormantClosesTheEndpointTunnels(t *testing.T) {
+	f := newLeaseFixture(t)
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	stream, result, _ := f.registerWithState(t, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING)
+	waitRegistered(t, stream, result)
+	session := &activeTunnel{routeID: "proxy-route", routeGeneration: 1, endpointID: "lease-ep", endpointGeneration: 1, stop: make(chan struct{})}
+	f.broker.mu.Lock()
+	f.broker.active["proxy"] = session
+	f.broker.mu.Unlock()
+	f.renew(t, stream, "lease-ep", relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT)
+	waitRegistered(t, stream, result)
+	select {
+	case <-session.stop:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a tunnel to an endpoint that went dormant stayed open")
+	}
+	waitOpenError(t, f.openProxyTunnel(t, f.ctx), codes.Unavailable, "target endpoint is dormant")
+}
+
+func TestHolderEndpointReadinessFollowsRegistrations(t *testing.T) {
+	f := newLeaseFixture(t)
+	// lease-ep is assigned here but nothing registered it yet.
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_NOT_READY {
+		t.Fatalf("holder endpoint without registrations = %v", got)
+	}
+	// This relay carries no endpoint of the policy for that holder.
+	if got := f.broker.HolderEndpoint("policy-2", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN {
+		t.Fatalf("holder endpoint of a policy not assigned here = %v", got)
+	}
+	// An endpoint built before serving states registers only while it serves.
+	f.gate.set("policy-1", "node-a", LeaseAdmission{LeaseMode: true, Open: true, Remaining: 20 * time.Second})
+	stream, result, _ := f.register(t, "lease-ep")
+	waitRegistered(t, stream, result)
+	if got := f.broker.HolderEndpoint("policy-1", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_READY {
+		t.Fatalf("legacy registered holder endpoint = %v", got)
+	}
+	if got := f.broker.HolderEndpoint("policy-1", "node-b"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN {
+		t.Fatalf("another holder's endpoint = %v", got)
+	}
+	if got := f.broker.HolderEndpoint("", "node-a"); got != relayv1.LeaseHolderEndpoint_LEASE_HOLDER_ENDPOINT_UNKNOWN {
+		t.Fatalf("holder endpoint without a policy = %v", got)
 	}
 }
