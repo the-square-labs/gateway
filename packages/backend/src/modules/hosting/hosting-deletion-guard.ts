@@ -1,5 +1,5 @@
-import { eq, sql } from 'drizzle-orm';
-import type { DrizzleTransaction } from '@/db/client.js';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import {
   hostingNodeBindings,
   hostingOperations,
@@ -22,8 +22,45 @@ export interface HostingDeletionTarget {
   nodeIds: string[];
 }
 
-/** Used inside node/certificate deletion and the final missing-state transaction, never around provider I/O. */
-export async function lockHostingDeletion(tx: DrizzleTransaction, target: HostingDeletionTarget, nodeId?: string) {
+const INSTALL_ACTIONS: Array<HostingOperationRow['action']> = ['create', 'install'];
+
+/**
+ * Nodes reserved by this VM's create or install operations that never enrolled (status pending, no
+ * certificate, no host identity, no binding), for example after a failed installation. They belong
+ * to nothing else and are removed together with the VM instead of staying pending forever.
+ */
+export async function unenrolledHostingNodeIds(
+  executor: DrizzleClient | DrizzleTransaction,
+  resourceId: string
+): Promise<string[]> {
+  const rows = await executor
+    .select({ nodeId: nodes.id })
+    .from(hostingOperations)
+    .innerJoin(nodes, eq(nodes.id, hostingOperations.nodeId))
+    .leftJoin(hostingNodeBindings, eq(hostingNodeBindings.nodeId, nodes.id))
+    .where(
+      and(
+        eq(hostingOperations.resourceId, resourceId),
+        inArray(hostingOperations.action, INSTALL_ACTIONS),
+        eq(nodes.status, 'pending'),
+        isNull(nodes.certificateFingerprint),
+        isNull(nodes.hostIdentityId),
+        isNull(hostingNodeBindings.nodeId)
+      )
+    );
+  return [...new Set(rows.map((row) => row.nodeId))];
+}
+
+/**
+ * Used inside node/certificate deletion and the final missing-state transaction, never around provider I/O.
+ * `unenrolled` removes a node of this VM's installation that never enrolled and so has no binding to verify.
+ */
+export async function lockHostingDeletion(
+  tx: DrizzleTransaction,
+  target: HostingDeletionTarget,
+  nodeId?: string,
+  unenrolled = false
+) {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('hosting-inventory'))`);
   const [connector] = await tx
     .select()
@@ -67,7 +104,27 @@ export async function lockHostingDeletion(tx: DrizzleTransaction, target: Hostin
       .from(hostingNodeBindings)
       .where(eq(hostingNodeBindings.nodeId, nodeId))
       .for('update');
-    if (
+    if (unenrolled) {
+      const owners = await tx
+        .select({ id: hostingOperations.id })
+        .from(hostingOperations)
+        .where(
+          and(
+            eq(hostingOperations.nodeId, nodeId),
+            eq(hostingOperations.resourceId, resource.id),
+            inArray(hostingOperations.action, INSTALL_ACTIONS)
+          )
+        );
+      if (
+        !target.nodeIds.includes(nodeId) ||
+        binding ||
+        !owners.length ||
+        node.status !== 'pending' ||
+        node.certificateFingerprint ||
+        node.hostIdentityId
+      )
+        throw new AppError(409, 'HOSTING_NODE_BINDING_CHANGED', 'A node enrolled or changed during destruction');
+    } else if (
       !target.nodeIds.includes(nodeId) ||
       !binding ||
       binding.resourceId !== resource.id ||

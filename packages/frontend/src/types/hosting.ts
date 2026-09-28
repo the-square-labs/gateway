@@ -322,6 +322,8 @@ export interface HostingNodeProjection {
   connectorName: string | null;
   remoteId: string;
   location: string;
+  /** Catalog name of `location` when the provider uses opaque location IDs. */
+  locationName?: string;
   origin: string;
   kind: "vm" | "ct";
   powerState: HostingResource["powerState"];

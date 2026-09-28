@@ -25,6 +25,7 @@ import type { User } from '@/types.js';
 import type { HostingConnectorRow, HostingConnectorsService } from './hosting-connectors.service.js';
 import { lockHostingFirewalls } from './hosting-firewall-lock.js';
 import { HostingProviderError } from './hosting-http.js';
+import { withKnownLocation } from './hosting-location.js';
 import { type HostingOperationsService, publicHostingOperation } from './hosting-operations.service.js';
 import { assertHostingScope, canViewHostingFinance } from './hosting-permissions.js';
 import type { HostingResourceSnapshot } from './hosting-provider.types.js';
@@ -696,7 +697,11 @@ export class HostingSnapshotsService {
           }
           await this.db
             .update(hostingResources)
-            .set({ snapshot: live, observedAt: new Date(live.observedAt), updatedAt: new Date() })
+            .set({
+              snapshot: withKnownLocation(live, target.resource.snapshot.location),
+              observedAt: new Date(live.observedAt),
+              updatedAt: new Date(),
+            })
             .where(
               and(
                 eq(hostingResources.id, target.resource.id),

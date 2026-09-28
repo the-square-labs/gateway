@@ -129,10 +129,15 @@ function nameCell(resource: HostingResource): ReactNode {
     </div>
   );
 }
-function providerCell(resource: HostingResource): ReactNode {
+/** Providers with numeric location IDs (CloudBlast) are shown by their catalog name. */
+function locationName(location: string | undefined, catalog?: HostingCatalog | null): string {
+  if (!location) return "—";
+  return catalog?.locations.find((item) => item.id === location)?.name ?? location;
+}
+function providerCell(resource: HostingResource, catalog?: HostingCatalog | null): ReactNode {
   return (
     <div className="min-w-0">
-      <span className="block truncate">{resource.location || "—"}</span>
+      <span className="block truncate">{locationName(resource.location, catalog)}</span>
       <code className="block truncate text-xs">{resource.remoteId}</code>
     </div>
   );
@@ -351,7 +356,7 @@ export function HostingResourcesTab({
     {
       id: "provider",
       header: "Host / provider ID",
-      render: providerCell,
+      render: (resource) => providerCell(resource, catalog),
     },
     {
       id: "state",
@@ -510,7 +515,9 @@ export function HostingResourcesTab({
       if (column.id === "provider")
         return (
           <div className="min-w-0">
-            <span className="block truncate">{operation.node?.location || "—"}</span>
+            <span className="block truncate">
+              {locationName(operation.node?.location, catalog)}
+            </span>
             <span className="block text-xs text-muted-foreground">
               {operation.phase === "failed" ? "Creation failed" : "Awaiting provider ID"}
             </span>

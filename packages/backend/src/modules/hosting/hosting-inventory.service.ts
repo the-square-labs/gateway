@@ -25,6 +25,7 @@ import {
   type HostingResourceEvidence,
 } from './hosting-evidence.js';
 import { applyHostingImagePolicy } from './hosting-image-policy.js';
+import { withKnownLocation } from './hosting-location.js';
 import { assertHostingResourceAction, assertHostingScope, canViewHostingFinance } from './hosting-permissions.js';
 import {
   HOSTING_PROVIDERS,
@@ -479,6 +480,12 @@ export class HostingInventoryService {
         return [action, capability];
       })
     );
+    // Numeric provider location IDs (CloudBlast) are shown by the cached catalog name; no provider request.
+    const catalog =
+      connector && snapshot.location
+        ? await this.snapshots?.get<CachedHostingCatalog>(HOSTING_CATALOG_SNAPSHOT, connector.id)
+        : null;
+    const locationName = catalog?.data.catalog.locations.find((item) => item.id === snapshot.location)?.name;
     return {
       resourceId: resource.id,
       connectorId: resource.connectorId,
@@ -486,6 +493,7 @@ export class HostingInventoryService {
       connectorName: connector?.name ?? null,
       remoteId: resource.remoteId,
       location: snapshot.location,
+      ...(locationName ? { locationName } : {}),
       origin: resource.origin,
       kind: resource.kind,
       powerState: snapshot.powerState,
@@ -639,6 +647,24 @@ export class HostingInventoryService {
           .for('update');
         if (!current?.enabled || current.syncStartedAt?.getTime() !== now.getTime())
           throw new AppError(409, 'HOSTING_SYNC_STALE', 'Hosting sync was superseded');
+        // Providers that never report a location keep the one requested when Gateway created the VM,
+        // including rows whose location an older release already overwrote with an empty value.
+        const requestedLocations = new Map<string, string>();
+        if (snapshots.some((snapshot) => !snapshot.location)) {
+          const created = await tx
+            .select({ resourceId: hostingOperations.resourceId, request: hostingOperations.request })
+            .from(hostingOperations)
+            .where(
+              and(
+                eq(hostingOperations.connectorId, connectorId),
+                eq(hostingOperations.action, 'create'),
+                isNotNull(hostingOperations.resourceId)
+              )
+            );
+          for (const operation of created)
+            if (operation.resourceId && typeof operation.request.location === 'string')
+              requestedLocations.set(operation.resourceId, operation.request.location);
+        }
         const seen: string[] = [];
         for (const snapshot of snapshots) {
           let [existing] = await tx
@@ -691,7 +717,10 @@ export class HostingInventoryService {
               .update(hostingResources)
               .set({
                 connectorId,
-                snapshot,
+                snapshot: withKnownLocation(
+                  snapshot,
+                  existing.snapshot.location || requestedLocations.get(existing.id)
+                ),
                 observedAt: new Date(snapshot.observedAt),
                 missingSince: null,
                 // Never transfer ownership through provider ID reuse or an OS rebuild.

@@ -162,3 +162,45 @@ it('retains failed provisioning after VM creation but before node binding', asyn
   const projection = await inventory.nodeProjection('pending', { scopes: ['nodes:details:pending'] } as never);
   expect(projection?.operation).toEqual({ action: 'create', phase: 'failed' });
 });
+
+it('names an opaque provider location from the cached catalog without a provider request', async () => {
+  const connector = { id: 'connector', name: 'CloudBlast', provider: 'cloudblast', enabled: true };
+  const resource = {
+    id: 'vm',
+    connectorId: 'connector',
+    provider: 'cloudblast',
+    remoteId: '0a1b2c3d-1111-4222-8333-444455556666',
+    incarnation: 'original',
+    snapshot: {
+      remoteId: '0a1b2c3d-1111-4222-8333-444455556666',
+      kind: 'vm',
+      location: '5',
+      powerState: 'running',
+      incarnation: 'original',
+      capabilities: {},
+      observedAt: new Date().toISOString(),
+    },
+  };
+  const db = {
+    select: vi
+      .fn()
+      .mockReturnValueOnce({
+        from: () => ({ innerJoin: () => ({ leftJoin: () => ({ where: async () => [{ resource, connector }] }) }) }),
+      })
+      .mockReturnValueOnce({ from: () => ({ where: async () => [{ nodeId: 'node' }] }) })
+      .mockReturnValueOnce({ from: () => ({ where: () => ({ orderBy: () => ({ limit: async () => [] }) }) }) }),
+  };
+  const catalog = { data: { catalog: { locations: [{ id: '5', name: 'Birmingham, UK (uk)' }] } } };
+  const snapshots = { get: vi.fn(async () => catalog) };
+  const inventory = new HostingInventoryService(
+    db as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    snapshots as never
+  );
+  const projection = await inventory.nodeProjection('node', { scopes: ['nodes:details:node'] } as never);
+  expect(projection).toMatchObject({ location: '5', locationName: 'Birmingham, UK (uk)' });
+  expect(snapshots.get).toHaveBeenCalledWith('hosting-catalog', 'connector');
+});

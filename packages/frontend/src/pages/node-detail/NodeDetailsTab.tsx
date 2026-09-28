@@ -395,7 +395,7 @@ export function NodeDetailsTab({
                 label="Resource"
                 value={
                   hosting.resourceId
-                    ? `${hosting.kind.toUpperCase()} ${hosting.remoteId} · ${hosting.location}`
+                    ? `${hosting.kind.toUpperCase()} ${hosting.remoteId} · ${hosting.locationName ?? hosting.location}`
                     : "Waiting for provider VM"
                 }
               />

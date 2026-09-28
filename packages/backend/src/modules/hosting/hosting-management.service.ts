@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { hostingFirewalls, hostingNodeBindings, hostingResources, nodes } from '@/db/schema/index.js';
+import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthService } from '@/modules/auth/auth.service.js';
@@ -13,8 +14,9 @@ import { type HostingActionInput, HostingActionSchema } from './hosting.schemas.
 import { shellArgument } from './hosting-bootstrap.js';
 import type { HostingConnectorsService } from './hosting-connectors.service.js';
 import { compareHostingDecimal } from './hosting-decimal.js';
-import { lockHostingDeletion } from './hosting-deletion-guard.js';
+import { lockHostingDeletion, unenrolledHostingNodeIds } from './hosting-deletion-guard.js';
 import { HostingProviderError } from './hosting-http.js';
+import { withKnownLocation } from './hosting-location.js';
 import { type HostingOperationsService, publicHostingOperation } from './hosting-operations.service.js';
 import { assertHostingResourceAction } from './hosting-permissions.js';
 import type { HostingAction, HostingProviderAdapter, HostingResourceSnapshot } from './hosting-provider.types.js';
@@ -215,7 +217,20 @@ export class HostingManagementService {
             resource.id
           );
         }
-        return input.action === 'delete' ? { result: { destroyNodeIds: bound.map((binding) => binding.nodeId) } } : {};
+        if (input.action !== 'delete') return {};
+        // Nodes of a failed installation never enrolled; remove them with the VM when the actor may.
+        const unenrolled = (await unenrolledHostingNodeIds(tx, resource.id)).filter(
+          (nodeId) =>
+            !bound.some((binding) => binding.nodeId === nodeId) &&
+            hasScope(user.scopes, `nodes:details:${nodeId}`) &&
+            hasScope(user.scopes, `nodes:delete:${nodeId}`)
+        );
+        return {
+          result: {
+            destroyNodeIds: [...bound.map((binding) => binding.nodeId), ...unenrolled],
+            ...(unenrolled.length ? { destroyUnenrolledNodeIds: unenrolled } : {}),
+          },
+        };
       }
     );
     if (reserved.created)
@@ -336,7 +351,33 @@ export class HostingManagementService {
               }
             }
             const target = { operation: { ...row }, connector, resource, nodeIds };
+            const unenrolled = Array.isArray(row.result?.destroyUnenrolledNodeIds)
+              ? row.result.destroyUnenrolledNodeIds.filter((id): id is string => typeof id === 'string')
+              : [];
             for (const nodeId of nodeIds) {
+              if (!current.bound.some((binding) => binding.nodeId === nodeId) && unenrolled.includes(nodeId)) {
+                const [node] = await this.db
+                  .select({
+                    status: nodes.status,
+                    certificateFingerprint: nodes.certificateFingerprint,
+                    hostIdentityId: nodes.hostIdentityId,
+                  })
+                  .from(nodes)
+                  .where(eq(nodes.id, nodeId));
+                // Already removed, or it enrolled after all: then it is no longer a leftover of this VM.
+                if (!node || node.status !== 'pending' || node.certificateFingerprint || node.hostIdentityId) continue;
+                try {
+                  await this.nodeService.remove(nodeId, currentActor.id, {
+                    hostingDelete: {
+                      operationId: row.id,
+                      guard: (tx) => lockHostingDeletion(tx, target, nodeId, true),
+                    },
+                  });
+                } catch (error) {
+                  if (!(error instanceof AppError && error.code === 'NOT_FOUND')) throw error;
+                }
+                continue;
+              }
               if (!current.bound.some((binding) => binding.nodeId === nodeId)) {
                 const [existing] = await this.db.select({ id: nodes.id }).from(nodes).where(eq(nodes.id, nodeId));
                 if (existing)
@@ -418,7 +459,11 @@ export class HostingManagementService {
           if (proxmoxResizeFinished(live, input)) {
             await this.db
               .update(hostingResources)
-              .set({ snapshot: live, observedAt: new Date(live.observedAt), updatedAt: new Date() })
+              .set({
+                snapshot: withKnownLocation(live, resource.snapshot.location),
+                observedAt: new Date(live.observedAt),
+                updatedAt: new Date(),
+              })
               .where(eq(hostingResources.id, resource.id));
             await this.operations.finish(row, 'ready', { resourceId: resource.id });
             continue;
@@ -544,7 +589,11 @@ export class HostingManagementService {
         ) {
           await this.db
             .update(hostingResources)
-            .set({ snapshot: live, observedAt: new Date(live.observedAt), updatedAt: new Date() })
+            .set({
+              snapshot: withKnownLocation(live, resource.snapshot.location),
+              observedAt: new Date(live.observedAt),
+              updatedAt: new Date(),
+            })
             .where(eq(hostingResources.id, resource.id));
           await this.operations.finish(row, 'ready', { resourceId: resource.id });
         } else if (!row.providerOperation?.id && !taskSucceeded) {

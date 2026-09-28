@@ -15,6 +15,7 @@ import {
   HostingConnectorsService,
   type StoredHostingSettings,
 } from './hosting-connectors.service.js';
+import { unenrolledHostingNodeIds } from './hosting-deletion-guard.js';
 import { HostingInventoryService } from './hosting-inventory.service.js';
 import { type HostingOperationRow, HostingOperationsService } from './hosting-operations.service.js';
 import {
@@ -487,6 +488,73 @@ describe.skipIf(!url)('hosting PostgreSQL transaction invariants', () => {
     expect(visible.map((item) => item.id)).toEqual([created.id]);
     expect(visible.some((item) => item.id === unrelated.id)).toBe(false);
     expect(await service.resources(row.id, { ...owner, scopes: ['integrations:hosting:view'] })).toEqual([]);
+  });
+
+  it('keeps the ordered location when the provider reports none and finds never-enrolled installation nodes', async () => {
+    const row = await account('hetzner');
+    const created = await insertResource(row, { location: '' });
+    const discovered = await insertResource(row, { location: '' });
+    await db
+      .update(schema.hostingResources)
+      .set({ origin: 'created' })
+      .where(eq(schema.hostingResources.id, created.id));
+    const pendingNode = randomUUID();
+    const enrolledNode = randomUUID();
+    await db.insert(schema.nodes).values([
+      { id: pendingNode, hostname: 'failed-install', slug: `failed-install-${pendingNode}` },
+      {
+        id: enrolledNode,
+        hostname: 'enrolled',
+        slug: `enrolled-${enrolledNode}`,
+        status: 'online',
+        certificateFingerprint: 'sha256:enrolled',
+        hostIdentityId: randomUUID(),
+      },
+    ]);
+    const operation = (nodeId: string, action: 'create' | 'install', request: Record<string, unknown>) => ({
+      connectorId: row.id,
+      resourceId: created.id,
+      nodeId,
+      actorId,
+      action,
+      phase: 'failed' as const,
+      idempotencyKey: randomUUID(),
+      requestHash: randomUUID(),
+      request,
+    });
+    await db
+      .insert(schema.hostingOperations)
+      .values([operation(pendingNode, 'create', { location: '5' }), operation(enrolledNode, 'install', {})]);
+    const [createdRow, discoveredRow] = [created, discovered].map((resource) => ({
+      ...resource.snapshot,
+      observedAt: new Date(Date.now() + 1000).toISOString(),
+    }));
+    const settings = row.settings as StoredHostingSettings;
+    const adapter = {
+      provider: 'hetzner',
+      test: async () => ({ authority: settings.authority, name: 'test', capabilities: hostingCapabilities({}) }),
+      listResources: async () => ({
+        resources: [createdRow, discoveredRow],
+        complete: true,
+        observedAt: new Date().toISOString(),
+      }),
+      catalog: async () => ({ locations: [], sizes: [], images: [] }),
+    } as unknown as HostingProviderAdapter;
+    const inventory = new HostingInventoryService(
+      db,
+      connectors(adapter),
+      {} as never,
+      { isNodeConnected: () => false } as never,
+      audit as never
+    );
+    await inventory.sync(row.id);
+    const location = async (id: string) =>
+      (await db.select().from(schema.hostingResources).where(eq(schema.hostingResources.id, id)))[0].snapshot.location;
+    // The ordered location survives a sync that reports none; a VM Gateway did not order stays unknown.
+    expect(await location(created.id)).toBe('5');
+    expect(await location(discovered.id)).toBe('');
+    expect(await unenrolledHostingNodeIds(db, created.id)).toEqual([pendingNode]);
+    expect(await unenrolledHostingNodeIds(db, discovered.id)).toEqual([]);
   });
 
   it.each([
