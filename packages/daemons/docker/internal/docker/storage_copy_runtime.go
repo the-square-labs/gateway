@@ -420,17 +420,30 @@ func (r *storageCopyRuntime) start(payload storageCopyPayload) (storageCopyStatu
 		if result.Status == "" || !isTerminalStorageCopyStatus(result.Status) {
 			result = storageCopyFailure(ctx, errors.New("storage copy runner returned no terminal status"), jobID, r.lastProgress(jobID))
 		}
+		if ctx.Err() != nil && r.stopRunner != nil {
+			// A cancel or the deadline can cut a Docker request short after
+			// dockerd acted on it (a runner created without its id reaching the
+			// daemon), so no container of the job may outlive the job.
+			if _, err := r.stopRunner(jobID, ""); err != nil && r.plugin != nil && r.plugin.logger != nil {
+				r.plugin.logger.Warn("storage copy runner cleanup failed", "jobId", jobID, "error", err)
+			}
+		}
 		completed := r.now()
 		result.JobID, result.StartedAt, result.DeadlineAt, result.CompletedAt = jobID, &started, &deadline, &completed
 		if result.ContainerID == "" {
 			result.ContainerID = r.containerID(jobID)
+		}
+		// The final status is on disk before any command can report it: a
+		// cancelled or completed job the control plane has seen must still read
+		// so after a daemon restart, not as interrupted.
+		if err := r.persist(result); err != nil && r.plugin != nil && r.plugin.logger != nil {
+			r.plugin.logger.Warn("storage copy final status was not saved", "jobId", jobID, "status", result.Status, "error", err)
 		}
 		_ = os.RemoveAll(workdir)
 		r.mu.Lock()
 		r.jobs[jobID] = &result
 		delete(r.cancel, jobID)
 		r.mu.Unlock()
-		_ = r.persist(result)
 	}()
 	return *status, nil
 }

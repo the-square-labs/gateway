@@ -239,6 +239,14 @@ func TestStorageCopyCancelStopsTheRunnerAndReportsCancelled(t *testing.T) {
 	runtime := newStorageCopyRuntime(&DockerPlugin{}, t.TempDir())
 	var executions atomic.Int32
 	started := make(chan struct{})
+	var swept atomic.Int32
+	runtime.stopRunner = func(jobID, containerID string) (bool, error) {
+		if jobID != storageCopyTestJobID || containerID != "" {
+			t.Errorf("runner cleanup must look up every container of the job: %s/%s", jobID, containerID)
+		}
+		swept.Add(1)
+		return false, nil
+	}
 	runtime.execute = func(ctx context.Context, jobID string, _ storageCopyPayload, workdir string) (storageCopyStatus, error) {
 		executions.Add(1)
 		if err := os.MkdirAll(filepath.Join(workdir, "work"), 0700); err != nil {
@@ -270,6 +278,9 @@ func TestStorageCopyCancelStopsTheRunnerAndReportsCancelled(t *testing.T) {
 	final := waitForStorageCopyStatus(t, runtime, "cancelled")
 	if final.CompletedAt == nil || executions.Load() != 1 {
 		t.Fatalf("unexpected final status %+v (executions=%d)", final, executions.Load())
+	}
+	if swept.Load() != 1 {
+		t.Fatalf("a cancelled job must remove any runner container left by the job before it reports cancelled, cleanups=%d", swept.Load())
 	}
 	if !strings.Contains(string(final.Progress), `"bytes":42`) {
 		t.Fatalf("final status keeps the last progress: %s", final.Progress)
