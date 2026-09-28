@@ -116,11 +116,11 @@ IMPORTANT: Never use a PKI certificate ID directly as sslCertificateId — you m
 ## Certificate Deployment
 When an enabled TLS route uses an SSL certificate, Gateway:
 1. Keeps the canonical encrypted certificate material in the Gateway control plane
-2. Deploys a node-local replica only to the route's nginx ingress node
+2. Deploys a node-local replica only to the route's nginx ingress node (every member for a route on an ingress group)
 3. Applies the certificate and route config atomically, tests the config (nginx -t), and reloads nginx
 4. Tracks per-node deployment state and removes unused replicas after the cleanup grace period
 
-Certificate issuance itself is not tied to a machine. HTTP-01 validation is served by the registered domain's assigned ingress node; DNS-01 validation does not require HTTP ingress.`,
+Certificate issuance itself is not tied to a machine. HTTP-01 validation is served by the registered domain's assigned ingress node (every online member of an ingress group); DNS-01 validation does not require HTTP ingress, and names on a Cloudflare-managed ingress group domain use it automatically.`,
 
   proxy: `# Ingress Routes
 
@@ -133,6 +133,7 @@ The UI and AI/MCP tools call these resources Routes. Use list_routes, get_route,
 
 ## Key Fields
 - nodeId: the nginx ingress node this route is deployed on. Optional when creating: see Choosing the Ingress Node.
+- ingressGroupId: serve the route from every member of an ingress group instead of one node (topic ingress-groups).
 - domainNames: array of domains this route serves. Registered Gateway domains among them must all be assigned to the route's nginx node.
 - forwardHost/forwardPort/forwardScheme: backend server details (for proxy type).
 - upstreamKind: manual, docker_container, docker_deployment, or pages. Docker upstreams store a standalone container name, a Compose project/service identity, or a deployment ID plus a TCP application port; Pages stores a Page Project and mutable Tag target.
@@ -154,7 +155,8 @@ Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled
 ## Choosing the Ingress Node
 - A registered Gateway domain pins its ingress node. Omit nodeId on create_route and the route uses the node its registered domains are assigned to; registered domains on different nodes cannot share one route.
 - With no registered domain, an omitted nodeId resolves to the only nginx node the caller may create routes on. When several qualify, create_route fails with ROUTE_INGRESS_NODE_REQUIRED and lists them (id, name, hostname, status); retry with one of them as nodeId.
-- list_route_ingress_nodes (REST: GET /api/proxy-hosts/ingress-nodes) lists those nodes up front. It needs any proxy:create grant and no node permission, and returns only id, displayName, hostname, and availability status. Pass folderId to see the nodes allowed for a route in that folder. Nodes locked for new services are omitted.
+- A registered domain on an ingress group places the route on that group.
+- list_route_ingress_nodes (REST: GET /api/proxy-hosts/ingress-nodes) lists those nodes, and in groups the ingress groups whose members are all such nodes, up front. It needs any proxy:create grant and no node permission, and returns only id, displayName, hostname, and availability status. Pass folderId to see the nodes allowed for a route in that folder. Nodes locked for new services are omitted.
 - The node still has to be allowed: proxy:create broadly, on the route folder (pass folderId), or on the node (proxy:create:node/<nodeId>). Folder grants may place routes on every nginx node; folders do not pin nodes.
 
 ## Maintenance Mode
@@ -215,7 +217,8 @@ Domains are registered public hostnames with an explicit nginx ingress assignmen
 - isSystem domains (management domains) cannot be deleted
 - Wildcard domains (*.example.com) can be registered
 - nginxNodeId is optional only when exactly one Nginx node with a detected public address is open to the caller's domains:create grant at the destination; otherwise create_domain fails with DOMAIN_NGINX_NODE_REQUIRED and lists the eligible nodes
-- Registered domains and their routes must use the same nginx node. create_route may omit nodeId for a registered domain: the route uses the domain's ingress node
+- Registered domains and their routes must use the same nginx node or ingress group. create_route may omit nodeId for a registered domain: the route uses the domain's ingress node or group
+- ingressGroupId on create_domain (or manage_domain update) serves the domain and its routes from every member of an ingress group; Cloudflare DNS then lists every active member address (topic ingress-groups)
 - create_domain requires domains:create, and delete_domain requires domains:delete. Those domain permissions include the managed DNS records for the domain
 - For matched_existing domains, pass deleteDns=false to keep DNS and remove only the Gateway mapping, or deleteDns=true to remove the adopted Cloudflare records`,
 

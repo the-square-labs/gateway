@@ -876,7 +876,10 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
     }
 
     async previewDomain(
-      data: Pick<CreateDomainRequest, "domain" | "dnsProvider" | "ttl" | "proxied" | "nginxNodeId">
+      data: Pick<
+        CreateDomainRequest,
+        "domain" | "dnsProvider" | "ttl" | "proxied" | "nginxNodeId" | "ingressGroupId"
+      >
     ): Promise<import("@/types").DomainPreview> {
       return this.unwrapData(
         this.request<{ data: import("@/types").DomainPreview }>("/domains/preview", {

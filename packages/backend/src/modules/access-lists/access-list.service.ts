@@ -8,6 +8,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { resolveIngressNodes, resolveIngressNodesForMany } from '@/modules/ingress-groups/ingress-nodes.js';
 import type { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
 import { accessListLockKey, runOutsideProxyLocks, withProxyLocks } from '@/modules/proxy/proxy-host-lock.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -164,7 +165,7 @@ export class AccessListService {
 
     const affectedHosts = await this.db.query.proxyHosts.findMany({
       where: and(eq(proxyHosts.accessListId, id), eq(proxyHosts.enabled, true)),
-      columns: { id: true, domainNames: true, nodeId: true },
+      columns: { id: true, domainNames: true, nodeId: true, ingressGroupId: true },
     });
     if (affectedHosts.length > 0 && !this.hostRuntime) {
       throw new AppError(503, 'PROXY_SERVICE_UNAVAILABLE', 'Proxy host re-apply is unavailable');
@@ -186,7 +187,7 @@ export class AccessListService {
         // A node that is offline or mid daemon update cannot take the config
         // now; its reconnect resync renders from the committed DB state. Only a
         // connected node rejecting the config rolls the change back.
-        if (!(await this.isNodeReachable(host.nodeId))) {
+        if (!(await this.isAnyServingNodeReachable(host))) {
           logger.warn('Skipping access list re-apply for host on unavailable node', {
             accessListId: id,
             hostId: host.id,
@@ -198,7 +199,7 @@ export class AccessListService {
         try {
           await this.hostRuntime!.reapplyHostConfig(host.id);
         } catch (error) {
-          if (!(await this.isNodeReachable(host.nodeId))) {
+          if (!(await this.isAnyServingNodeReachable(host))) {
             logger.warn('Node became unavailable during access list re-apply; it resyncs on reconnect', {
               accessListId: id,
               hostId: host.id,
@@ -247,6 +248,17 @@ export class AccessListService {
     this.emitAcl(id, 'updated');
 
     return updated;
+  }
+
+  /**
+   * A route on an ingress group is re-applied on its connected members (offline members resync on reconnect), so it
+   * counts as reachable while any member is.
+   */
+  private async isAnyServingNodeReachable(host: { nodeId: string | null; ingressGroupId?: string | null }) {
+    for (const nodeId of await resolveIngressNodes(this.db, host)) {
+      if (await this.isNodeReachable(nodeId)) return true;
+    }
+    return false;
   }
 
   /** Connected and not in a daemon update, so a config apply can be judged. */
@@ -440,11 +452,12 @@ export class AccessListService {
 
     // Deploy htpasswd to all nodes that have hosts using this access list
     const hostsUsingList = await this.db
-      .select({ nodeId: proxyHosts.nodeId })
+      .select({ nodeId: proxyHosts.nodeId, ingressGroupId: proxyHosts.ingressGroupId })
       .from(proxyHosts)
       .where(eq(proxyHosts.accessListId, accessListId));
 
-    const nodeIds = [...new Set(hostsUsingList.map((h) => h.nodeId).filter(Boolean))] as string[];
+    // Every serving node, including every member of a route's ingress group.
+    const nodeIds = [...new Set([...(await resolveIngressNodesForMany(this.db, hostsUsingList)).values()].flat())];
 
     for (const nodeId of nodeIds) {
       const result = await this.nodeDispatch.deployHtpasswd(nodeId, accessListId, content);
@@ -461,7 +474,7 @@ export class AccessListService {
 
   private async removeHtpasswd(accessListId: string): Promise<void> {
     const hostsUsingList = await this.db
-      .select({ nodeId: proxyHosts.nodeId })
+      .select({ nodeId: proxyHosts.nodeId, ingressGroupId: proxyHosts.ingressGroupId })
       .from(proxyHosts)
       .where(eq(proxyHosts.accessListId, accessListId));
 
@@ -475,9 +488,9 @@ export class AccessListService {
       pagesUsingList.flatMap((project) => [project.nodeId, project.migrationTargetNodeId]).filter(Boolean)
     );
 
-    const nodeIds = [...new Set(hostsUsingList.map((h) => h.nodeId).filter(Boolean))].filter(
-      (nodeId) => !pagesNodeIds.has(nodeId)
-    ) as string[];
+    const nodeIds = [
+      ...new Set([...(await resolveIngressNodesForMany(this.db, hostsUsingList)).values()].flat()),
+    ].filter((nodeId) => !pagesNodeIds.has(nodeId));
 
     for (const nodeId of nodeIds) {
       try {

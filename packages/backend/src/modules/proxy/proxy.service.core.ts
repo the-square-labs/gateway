@@ -1,10 +1,12 @@
 import { and, eq, isNull, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { accessLists } from '@/db/schema/access-lists.js';
-import { proxyHosts } from '@/db/schema/index.js';
+import { nodes, proxyHosts } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { INGRESS_GROUP_CAPABILITY, nodeReportsCapability } from '@/modules/ingress-groups/ingress-group-routing.js';
+import { withIngressHealthLocation } from '@/modules/ingress-groups/ingress-health.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { PageRouteService } from '@/modules/pages/routes/page-route.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -70,7 +72,7 @@ export function normalizedHostname(value: string): string {
 // ---------------------------------------------------------------------------
 
 export type ProxyHostRow = typeof proxyHosts.$inferSelect;
-type CertPathOptions = { prepare?: boolean; legacy?: boolean; preserveLegacyOnUnsupported?: boolean };
+export type CertPathOptions = { prepare?: boolean; legacy?: boolean; preserveLegacyOnUnsupported?: boolean };
 export type ProxyHostView = WithDockerUpstreamDisplay<ProxyHostRow>;
 
 export interface ProxyHostTrafficRuntime {
@@ -103,7 +105,10 @@ export interface ProxySecureLinkRuntimeSample {
 
 export interface StatusPageSystemHostInput {
   domain: string;
+  /** The nginx node, or with `ingressGroupId` ignored (the group's first member is recorded). */
   nodeId: string;
+  /** Serve the status page from every member of this ingress group. */
+  ingressGroupId?: string | null;
   sslCertificateId?: string | null;
   nginxTemplateId?: string | null;
   upstreamUrl?: string | null;
@@ -252,23 +257,18 @@ export abstract class ProxyServiceCore {
     });
   }
 
+  /** Renders and applies a route on every node that serves it (see ProxyServiceDelivery.deliverHost). */
+  protected abstract deliverHost(
+    host: ProxyHostRow,
+    options?: { certOptions?: CertPathOptions; pagesRouteIncludePathOverride?: string; nodeIds?: string[] }
+  ): Promise<{ config: string; configOwnership: string; epoch: number; configs: Map<string, string> }>;
+
   protected async renderAndApplyHost(
     host: ProxyHostRow,
-    certOptions: CertPathOptions = {}
-  ): Promise<{ config: string; configOwnership: string; epoch: number }> {
-    const certPaths = await this.resolveCertPaths(host, certOptions);
-    const accessList = await this.resolveAccessList(host.accessListId);
-    const config = await this.buildNginxConfig(host, certPaths, accessList);
-    const configOwnership = this.configOwnershipForHost(host);
-    await this.applyConfigToNode(
-      host.id,
-      config,
-      host.nodeId,
-      certPaths.preparedTls,
-      configOwnership,
-      host.accessListId
-    );
-    return { config, configOwnership, epoch: this.hostConfigEpochs.get(host.id) ?? 0 };
+    certOptions: CertPathOptions = {},
+    nodeIds?: string[]
+  ): Promise<{ config: string; configOwnership: string; epoch: number; configs: Map<string, string> }> {
+    return this.deliverHost(host, { certOptions, nodeIds });
   }
 
   async reconcileTemplateHosts(
@@ -770,11 +770,25 @@ export abstract class ProxyServiceCore {
       host.nginxTemplateId ?? null,
       hideExternalBranding
     );
-    if (!host.maintenanceEnabled) return rendered;
-    const access =
-      this.maintenanceAccess && (await this.maintenanceAccess.isNodeSupported(host.nodeId))
-        ? { hostId: host.id, secret: this.maintenanceAccess.secretForHost(host.id) }
-        : undefined;
-    return this.nginxTemplateService.applyMaintenanceGuard(rendered, access, hideExternalBranding);
+    let result = rendered;
+    if (host.maintenanceEnabled) {
+      const access =
+        this.maintenanceAccess && (await this.maintenanceAccess.isNodeSupported(host.nodeId))
+          ? { hostId: host.id, secret: this.maintenanceAccess.secretForHost(host.id) }
+          : undefined;
+      result = this.nginxTemplateService.applyMaintenanceGuard(rendered, access, hideExternalBranding);
+    }
+    // Every server block on a node with the ingress health responder answers the reserved health path (rendered
+    // per node: an older daemon lacks the generation variable the location uses).
+    return (await this.nodeServesIngressHealth(host.nodeId)) ? withIngressHealthLocation(result) : result;
+  }
+
+  protected async nodeServesIngressHealth(nodeId: string | null): Promise<boolean> {
+    if (!nodeId) return false;
+    const node = await this.db.query?.nodes?.findFirst?.({
+      where: eq(nodes.id, nodeId),
+      columns: { capabilities: true },
+    });
+    return nodeReportsCapability(node?.capabilities, INGRESS_GROUP_CAPABILITY);
   }
 }

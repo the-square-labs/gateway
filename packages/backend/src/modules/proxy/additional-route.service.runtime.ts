@@ -10,7 +10,9 @@ import {
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { resolveIngressNodes } from '@/modules/ingress-groups/ingress-nodes.js';
 import type { PageNodeRuntimeService } from '@/modules/pages/runtime/page-node-runtime.service.js';
+import { PageNodesRuntime } from '@/modules/pages/runtime/page-nodes-runtime.js';
 import type {
   PageRuntimeConfigPublicationRequest,
   PageRuntimeConfigService,
@@ -83,6 +85,65 @@ export abstract class AdditionalRouteServiceRuntime {
   setPageRuntime(runtime: PageNodeRuntimeService, runtimeConfig: PageRuntimeConfigService): void {
     this.pageRuntime = runtime;
     this.pageRuntimeConfig = runtimeConfig;
+  }
+
+  /**
+   * Pages bindings of a host's Additional Routes on every node that serves the host: its node, or each member of
+   * its ingress group (see PageNodesRuntime).
+   */
+  protected pagesNodes(): PageNodesRuntime {
+    if (!this.pageRuntime) throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route runtime is unavailable');
+    return new PageNodesRuntime(this.pageRuntime);
+  }
+
+  protected async pagesNodeIds(
+    target: { nodeId: string | null; ingressGroupId?: string | null } | string | readonly string[] | null
+  ): Promise<string[]> {
+    if (target === null) return [];
+    if (typeof target === 'string') return [target];
+    if (Array.isArray(target)) return [...target];
+    const host = target as { nodeId: string | null; ingressGroupId?: string | null };
+    return resolveIngressNodes(this.db, { nodeId: host.nodeId, ingressGroupId: host.ingressGroupId ?? null });
+  }
+
+  /**
+   * Pages Additional Routes of a host whose serving nodes changed: nodes that start serving the host (a member that
+   * joined or reconnected, a route moved onto an ingress group) get each ready Route's Deployment and runtime config
+   * at its current generation; connected nodes that stop serving it lose the bindings (an offline one loses them
+   * once it reconnects, through the Pages Route reconciliation).
+   */
+  async syncServingNodes(host: ProxyHostRow, addedNodeIds: string[], removedNodeIds: string[]): Promise<void> {
+    if (!this.pageRuntime || !this.pageRuntimeConfig) return;
+    const nodes = this.pagesNodes();
+    const added = addedNodeIds.filter((nodeId) => this.pageRuntime!.isNodeConnected(nodeId));
+    const removed = removedNodeIds.filter((nodeId) => this.pageRuntime!.isNodeConnected(nodeId));
+    if (added.length === 0 && removed.length === 0) return;
+    await this.withHostLock(host.id, async () => {
+      const routes = await this.db.query.proxyAdditionalRoutes.findMany({
+        where: and(eq(proxyAdditionalRoutes.proxyHostId, host.id), eq(proxyAdditionalRoutes.targetKind, 'pages')),
+      });
+      for (const route of routes) {
+        for (const nodeId of removed) {
+          const cleanupError = await nodes.cleanup([nodeId], route.id);
+          if (cleanupError) throw cleanupError;
+        }
+        if (route.status !== 'ready' || !route.activeDeploymentId || !route.pageProjectId || !route.pageTagId) continue;
+        const effective = await this.pageRuntimeConfig!.getEffective(route.pageProjectId, route.pageTagId);
+        for (const nodeId of added) {
+          if (route.runtimeConfigGeneration > 0) {
+            await nodes.publishRuntimeConfig([nodeId], route.id, route.runtimeConfigGeneration, effective.value);
+          }
+          const includePath = await nodes.activateRoute([nodeId], route.id, route.activeDeploymentId);
+          if (route.includePath && includePath !== route.includePath) {
+            throw new AppError(
+              502,
+              'PAGES_ROUTE_INCLUDE_PATH_MISMATCH',
+              'A new ingress node reports a different Pages include path; update its nginx daemon to the same release'
+            );
+          }
+        }
+      }
+    });
   }
 
   /**
@@ -244,7 +305,7 @@ export abstract class AdditionalRouteServiceRuntime {
         const host = await this.requireHost(route.proxyHostId);
         if (route.status === 'cleanup_pending') {
           if (isDockerKind(route.targetKind)) await this.secureLinks?.deleteManagedRoute(host, route.id);
-          if (route.targetKind === 'pages') await this.cleanupPages(route, host.nodeId);
+          if (route.targetKind === 'pages') await this.cleanupPages(route, host);
           await this.db.delete(proxyAdditionalRoutes).where(eq(proxyAdditionalRoutes.id, route.id));
         } else {
           const target = this.normalizeTarget(route as unknown as Input, route);
@@ -372,7 +433,7 @@ export abstract class AdditionalRouteServiceRuntime {
   /** PageTagPublicationAdapter boundary for route-owned Pages consumers. */
   async stageTagPublication(request: PageTagActivationRequest): Promise<Record<string, unknown>> {
     const rows = await this.db
-      .select({ route: proxyAdditionalRoutes, nodeId: proxyHosts.nodeId })
+      .select({ route: proxyAdditionalRoutes, nodeId: proxyHosts.nodeId, ingressGroupId: proxyHosts.ingressGroupId })
       .from(proxyAdditionalRoutes)
       .innerJoin(proxyHosts, eq(proxyAdditionalRoutes.proxyHostId, proxyHosts.id))
       .where(and(eq(proxyAdditionalRoutes.pageTagId, request.tagId), eq(proxyAdditionalRoutes.targetKind, 'pages')));
@@ -382,6 +443,7 @@ export abstract class AdditionalRouteServiceRuntime {
         if (!row.nodeId || !this.pageRuntime || !this.pageRuntimeConfig || !row.route.pageProjectId) {
           throw new AppError(409, 'PAGES_ROUTE_NODE_MISSING', 'Additional Pages Route has no runtime node');
         }
+        const nodeIds = await this.pagesNodeIds(row);
         await this.withHostLock(row.route.proxyHostId, async () => {
           const [current] = await this.db
             .select()
@@ -392,14 +454,14 @@ export abstract class AdditionalRouteServiceRuntime {
           const runtimeGeneration = current.runtimeConfigGeneration + 1;
           const effective = await this.pageRuntimeConfig!.getEffective(current.pageProjectId!, current.pageTagId!);
           try {
-            const runtimeConfigPath = await this.pageRuntime!.publishRuntimeConfig(
-              row.nodeId!,
-              'route',
+            const nodes = this.pagesNodes();
+            const runtimeConfigPath = await nodes.publishRuntimeConfig(
+              nodeIds,
               current.id,
               runtimeGeneration,
               effective.value
             );
-            const includePath = await this.pageRuntime!.activateRoute(row.nodeId!, current.id, request.deploymentId);
+            const includePath = await nodes.activateRoute(nodeIds, current.id, request.deploymentId);
             const [updated] = await this.db
               .update(proxyAdditionalRoutes)
               .set({
@@ -426,6 +488,7 @@ export abstract class AdditionalRouteServiceRuntime {
               routeId: current.id,
               hostId: current.proxyHostId,
               nodeId: row.nodeId,
+              nodeIds,
               fromDeploymentId: current.activeDeploymentId,
               fromIncludePath: current.includePath,
               toDeploymentId: request.deploymentId,
@@ -436,7 +499,7 @@ export abstract class AdditionalRouteServiceRuntime {
           } catch (error) {
             try {
               await this.restorePagesMaterialization(
-                row.nodeId!,
+                nodeIds,
                 current.id,
                 current.activeDeploymentId,
                 current.runtimeConfigGeneration
@@ -472,15 +535,13 @@ export abstract class AdditionalRouteServiceRuntime {
       const routeId = String(item.routeId ?? '');
       const hostId = String(item.hostId ?? '');
       const nodeId = String(item.nodeId ?? '');
+      const nodeIds = Array.isArray(item.nodeIds) ? item.nodeIds.map(String) : nodeId ? [nodeId] : [];
       const fromDeploymentId = typeof item.fromDeploymentId === 'string' ? item.fromDeploymentId : null;
       const fromIncludePath = typeof item.fromIncludePath === 'string' ? item.fromIncludePath : null;
       const fromGeneration = Number(item.fromRuntimeConfigGeneration ?? 0);
-      if (!routeId || !hostId || !nodeId || !this.pageRuntime) continue;
+      if (!routeId || !hostId || nodeIds.length === 0 || !this.pageRuntime) continue;
       try {
-        if (fromDeploymentId) await this.pageRuntime.activateRoute(nodeId, routeId, fromDeploymentId);
-        else await this.pageRuntime.deactivateRoute(nodeId, routeId);
-        if (fromGeneration > 0) await this.pageRuntime.activateRuntimeConfig(nodeId, 'route', routeId, fromGeneration);
-        else await this.pageRuntime.removeRuntimeConfig(nodeId, 'route', routeId);
+        await this.pagesNodes().restoreMaterialization(nodeIds, routeId, fromDeploymentId, fromGeneration);
         await this.db
           .update(proxyAdditionalRoutes)
           .set({
@@ -506,7 +567,7 @@ export abstract class AdditionalRouteServiceRuntime {
   async publishRuntimeConfig(request: PageRuntimeConfigPublicationRequest): Promise<Record<string, unknown>> {
     if (!this.pageRuntime) return {};
     const rows = await this.db
-      .select({ route: proxyAdditionalRoutes, nodeId: proxyHosts.nodeId })
+      .select({ route: proxyAdditionalRoutes, nodeId: proxyHosts.nodeId, ingressGroupId: proxyHosts.ingressGroupId })
       .from(proxyAdditionalRoutes)
       .innerJoin(proxyHosts, eq(proxyAdditionalRoutes.proxyHostId, proxyHosts.id))
       .where(
@@ -530,19 +591,20 @@ export abstract class AdditionalRouteServiceRuntime {
         }
         const from = current.runtimeConfigGeneration;
         const to = from + 1;
+        const nodeIds = await this.pagesNodeIds(row);
         const progress: AdditionalRuntimeConfigProgress = {
           routeId: current.id,
           hostId: current.proxyHostId,
           nodeId: row.nodeId,
+          nodeIds,
           from,
           to,
           fromRouteGeneration: current.generation,
           toRouteGeneration: current.generation + 1,
         };
         try {
-          const runtimeConfigPath = await this.pageRuntime.publishRuntimeConfig(
-            row.nodeId,
-            'route',
+          const runtimeConfigPath = await this.pagesNodes().publishRuntimeConfig(
+            nodeIds,
             current.id,
             to,
             request.value
@@ -616,8 +678,7 @@ export abstract class AdditionalRouteServiceRuntime {
 
   protected async restoreRuntimeConfigProgressItem(item: AdditionalRuntimeConfigProgress): Promise<void> {
     if (!this.pageRuntime) return;
-    if (item.from > 0) await this.pageRuntime.activateRuntimeConfig(item.nodeId, 'route', item.routeId, item.from);
-    else await this.pageRuntime.removeRuntimeConfig(item.nodeId, 'route', item.routeId);
+    await this.pagesNodes().restoreRuntimeConfig(item.nodeIds ?? [item.nodeId], item.routeId, item.from);
 
     const [current] = await this.db
       .select()
@@ -744,15 +805,11 @@ export abstract class AdditionalRouteServiceRuntime {
     }
     const effective = await this.pageRuntimeConfig.getEffective(route.pageProjectId, route.pageTagId);
     const generation = route.runtimeConfigGeneration + 1;
+    const nodeIds = await this.pagesNodeIds(host);
     try {
-      const runtimeConfigPath = await this.pageRuntime.publishRuntimeConfig(
-        host.nodeId,
-        'route',
-        route.id,
-        generation,
-        effective.value
-      );
-      const includePath = await this.pageRuntime.activateRoute(host.nodeId, route.id, deploymentId);
+      const nodes = this.pagesNodes();
+      const runtimeConfigPath = await nodes.publishRuntimeConfig(nodeIds, route.id, generation, effective.value);
+      const includePath = await nodes.activateRoute(nodeIds, route.id, deploymentId);
       const [ready] = await this.db
         .update(proxyAdditionalRoutes)
         .set({
@@ -774,7 +831,7 @@ export abstract class AdditionalRouteServiceRuntime {
     } catch (error) {
       try {
         await this.restorePagesMaterialization(
-          host.nodeId,
+          nodeIds,
           route.id,
           route.activeDeploymentId,
           route.runtimeConfigGeneration
@@ -792,25 +849,26 @@ export abstract class AdditionalRouteServiceRuntime {
     }
   }
 
-  protected async cleanupPages(route: Pick<AdditionalRouteRow, 'id'>, nodeId: string | null): Promise<void> {
-    if (!nodeId || !this.pageRuntime) return;
-    await this.pageRuntime.deactivateRoute(nodeId, route.id);
-    await this.pageRuntime.removeRuntimeConfig(nodeId, 'route', route.id);
+  /** Removes the Route's Pages binding from its node, or from each connected member of the host's ingress group. */
+  protected async cleanupPages(
+    route: Pick<AdditionalRouteRow, 'id'>,
+    target: { nodeId: string | null; ingressGroupId?: string | null } | string | null
+  ): Promise<void> {
+    if (!this.pageRuntime) return;
+    const nodeIds = await this.pagesNodeIds(target);
+    if (nodeIds.length === 0) return;
+    const cleanupError = await this.pagesNodes().cleanup(nodeIds, route.id);
+    if (cleanupError) throw cleanupError;
   }
 
   protected async restorePagesMaterialization(
-    nodeId: string,
+    target: { nodeId: string | null; ingressGroupId?: string | null } | string | readonly string[],
     routeId: string,
     deploymentId: string | null,
     runtimeConfigGeneration: number
   ): Promise<void> {
-    if (deploymentId) await this.pageRuntime!.activateRoute(nodeId, routeId, deploymentId);
-    else await this.pageRuntime!.deactivateRoute(nodeId, routeId);
-    if (runtimeConfigGeneration > 0) {
-      await this.pageRuntime!.activateRuntimeConfig(nodeId, 'route', routeId, runtimeConfigGeneration);
-    } else {
-      await this.pageRuntime!.removeRuntimeConfig(nodeId, 'route', routeId);
-    }
+    const nodeIds = await this.pagesNodeIds(target);
+    await this.pagesNodes().restoreMaterialization(nodeIds, routeId, deploymentId, runtimeConfigGeneration);
   }
 
   protected async restorePagesRouteRow(previous: AdditionalRouteRow, expectedDeploymentId: string): Promise<void> {

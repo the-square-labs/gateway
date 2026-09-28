@@ -7,6 +7,7 @@ import {
   INTERNAL_REGISTRY_INGRESS_ID,
   INTERNAL_REGISTRY_INGRESS_PORT,
 } from '@/modules/docker/docker-registry.constants.js';
+import { requireRoutableIngressGroup } from '@/modules/ingress-groups/ingress-group-routing.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import {
@@ -41,12 +42,16 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
    * Gateway on loopback only when it runs on the Gateway host; any other node
    * uses the Gateway address nodes enroll with.
    */
-  private async resolveStatusPageUpstreamUrl(nodeId: string, upstreamUrl: string | null | undefined) {
+  private async resolveStatusPageUpstreamUrl(nodeId: string | null, upstreamUrl: string | null | undefined) {
     if (upstreamUrl) return upstreamUrl;
-    const node = await this.db.query.nodes.findFirst({
-      where: eq(nodes.id, nodeId),
-      columns: { lastHealthReport: true },
-    });
+    // On an ingress group every member renders the same upstream, so it is the address nodes enroll with
+    // (a member on the Gateway host reaches it there too).
+    const node = nodeId
+      ? await this.db.query.nodes.findFirst({
+          where: eq(nodes.id, nodeId),
+          columns: { lastHealthReport: true },
+        })
+      : null;
     const endpoints = await this.generalSettings?.getGatewayEndpointSettings().catch(() => null);
     const transport = await this.webTransportSettings?.getConfig().catch(() => null);
     const env = getEnv();
@@ -70,41 +75,59 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
    */
   private async withSystemHostLocks<T>(
     kind: 'status_page' | 'docker_registry',
-    targetNodeId: string | null,
+    targetNodeIds: string | readonly string[] | null,
     fn: () => Promise<T>
   ): Promise<T> {
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.systemKind, kind),
       columns: { id: true },
     });
+    const nodeIds = targetNodeIds === null ? [] : typeof targetNodeIds === 'string' ? [targetNodeIds] : targetNodeIds;
     return withProxyLocks(
-      [
-        `proxy-system:${kind}`,
-        existing && proxyHostLockKey(existing.id),
-        targetNodeId && proxyNodeLockKey(targetNodeId),
-      ],
+      [`proxy-system:${kind}`, existing && proxyHostLockKey(existing.id), ...nodeIds.map(proxyNodeLockKey)],
       fn
     );
   }
 
   async upsertStatusPageSystemHost(input: StatusPageSystemHostInput, userId: string): Promise<ProxyHostRow> {
-    return this.withSystemHostLocks('status_page', input.nodeId, () =>
-      this.upsertStatusPageSystemHostLocked(input, userId)
+    const group = input.ingressGroupId ? await requireRoutableIngressGroup(this.db, input.ingressGroupId) : null;
+    return this.withSystemHostLocks('status_page', group ? group.memberNodeIds : input.nodeId, () =>
+      this.upsertStatusPageSystemHostLocked(
+        group
+          ? { ...input, nodeId: group.primaryNodeId, ingressGroupId: group.group.id }
+          : { ...input, ingressGroupId: null },
+        userId,
+        group?.memberNodeIds ?? [input.nodeId]
+      )
     );
   }
 
   private async upsertStatusPageSystemHostLocked(
     input: StatusPageSystemHostInput,
-    userId: string
+    userId: string,
+    servingNodeIds: string[]
   ): Promise<ProxyHostRow> {
-    const existing = await this.db.query.proxyHosts.findFirst({
+    let existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.systemKind, 'status_page'),
     });
-    if (!existing || existing.nodeId !== input.nodeId) {
-      await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
+    const ingressGroupId = input.ingressGroupId ?? null;
+    if (existing && (existing.ingressGroupId ?? null) !== ingressGroupId) {
+      // Between one node and an ingress group without downtime: a node that serves the page keeps serving it.
+      existing = await this.changeRoutePlacementLocked(
+        existing,
+        { ingressGroupId, nodeId: ingressGroupId ? null : input.nodeId },
+        userId,
+        { allowSystemNodeMove: true }
+      );
+    }
+    const previouslyServing = existing ? await this.ingressNodesOf(existing) : [];
+    for (const nodeId of servingNodeIds) {
+      if (!previouslyServing.includes(nodeId)) await assertNodeAllowsServiceCreation(this.db, nodeId, 'nginx');
     }
     const sslEnabled = !!input.sslCertificateId;
-    const upstream = getStatusPageUpstream(await this.resolveStatusPageUpstreamUrl(input.nodeId, input.upstreamUrl));
+    const upstream = getStatusPageUpstream(
+      await this.resolveStatusPageUpstreamUrl(ingressGroupId ? null : input.nodeId, input.upstreamUrl)
+    );
     const data = {
       type: 'proxy' as const,
       domainNames: [input.domain],
@@ -134,6 +157,7 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
       nginxTemplateId: input.nginxTemplateId ?? null,
       templateVariables: {},
       nodeId: input.nodeId,
+      ingressGroupId,
       healthCheckEnabled: false,
       healthCheckUrl: '/',
       healthCheckInterval: 30,
@@ -179,15 +203,7 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
     ).catch((error) => rethrowProxyHostDomainConflict(this.db, error));
 
     try {
-      const certPaths = await this.resolveCertPaths(host);
-      const config = await this.buildNginxConfig(host, certPaths, null);
-      await this.applyConfigToNode(
-        host.id,
-        config,
-        host.nodeId,
-        certPaths.preparedTls,
-        this.configOwnershipForHost(host)
-      );
+      await this.deliverHost(host);
     } catch (error) {
       logger.error('Failed to apply status page system proxy host config', {
         hostId: host.id,
@@ -215,7 +231,7 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
       action: existing ? 'proxy_host.system_update' : 'proxy_host.system_create',
       resourceType: 'proxy_host',
       resourceId: host.id,
-      details: { systemKind: 'status_page', domain: input.domain, nodeId: input.nodeId },
+      details: { systemKind: 'status_page', domain: input.domain, nodeId: input.nodeId, ingressGroupId },
     });
     this.emitHost(host.id, 'updated', input.domain);
     return host;
@@ -232,8 +248,7 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
     if (!existing) return null;
 
     try {
-      await this.removeConfigFromNode(existing.id, existing.nodeId);
-      await this.certificateDistribution.deactivateHost(existing.id, existing.nodeId);
+      await this.withdrawHost(existing);
       await this.db.delete(proxyHosts).where(eq(proxyHosts.id, existing.id));
     } catch (error) {
       logger.error('Failed to remove status page system proxy host config', {

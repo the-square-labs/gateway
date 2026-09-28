@@ -42,6 +42,7 @@ import type {
   SSLCertListQuery,
   UploadCertInput,
 } from './ssl.schemas.js';
+import { namesOnCloudflareIngressGroups } from './ssl-ingress-group-challenge.js';
 
 const logger = createChildLogger('SSLService');
 const CLOUDFLARE_DNS01_PROPAGATION_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 10_000;
@@ -500,7 +501,29 @@ export class SSLService {
     );
   }
 
-  private async requestACMECertOnce(input: RequestACMECertInput, userId: string, contactEmail?: string) {
+  /**
+   * A certificate for names of an ingress group domain managed through Cloudflare uses DNS-01 through the connector:
+   * DNS lists every member, and an HTTP-01 validation reaching a member that is offline would fail. Everything else
+   * keeps the requested challenge (HTTP-01 then publishes the token on every online member).
+   */
+  private async preferCloudflareDns01ForIngressGroups(input: RequestACMECertInput): Promise<RequestACMECertInput> {
+    if (input.challengeType !== 'http-01' || !this.integrationsService) return input;
+    if (!(await namesOnCloudflareIngressGroups(this.db, input.domains))) return input;
+    try {
+      for (const domain of input.domains) await this.integrationsService.resolveCloudflareDnsContext(domain);
+    } catch (error) {
+      logger.warn('Ingress group certificate keeps HTTP-01: not every name is in a Cloudflare zone of the connector', {
+        domains: input.domains,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return input;
+    }
+    logger.info('Issuing an ingress group certificate with DNS-01 through Cloudflare', { domains: input.domains });
+    return { ...input, challengeType: 'dns-01', dnsProvider: 'cloudflare', autoRenew: input.autoRenew ?? true };
+  }
+
+  private async requestACMECertOnce(requested: RequestACMECertInput, userId: string, contactEmail?: string) {
+    const input = await this.preferCloudflareDns01ForIngressGroups(requested);
     const isStaging = input.provider === 'letsencrypt-staging';
     const name = input.domains[0];
 
@@ -1149,6 +1172,8 @@ export class SSLService {
       if (cert.acmeChallengeType !== 'http-01') {
         return await this.startDNS01Renewal(cert, userId, contactEmail);
       }
+      const switched = await this.switchIngressGroupCertificateToCloudflareDns01(cert);
+      if (switched) return await this.startDNS01Renewal(switched, userId, contactEmail);
       const renewIsStaging = cert.acmeProvider === 'letsencrypt-staging';
       result = await this.acmeService.requestCertHTTP01(cert.domainNames, renewIsStaging, contactEmail);
     } catch (error) {
@@ -1253,6 +1278,54 @@ export class SSLService {
     });
 
     return this.sanitizeCert(updated!);
+  }
+
+  /**
+   * An HTTP-01 certificate whose names moved onto a Cloudflare-managed ingress group domain renews with DNS-01
+   * through the connector from now on (see preferCloudflareDns01ForIngressGroups). Returns the updated row, or null
+   * when it keeps HTTP-01.
+   */
+  private async switchIngressGroupCertificateToCloudflareDns01(
+    cert: typeof sslCertificates.$inferSelect
+  ): Promise<typeof sslCertificates.$inferSelect | null> {
+    if (!this.integrationsService || !(await namesOnCloudflareIngressGroups(this.db, cert.domainNames))) return null;
+    let bindings: AutoRenewDnsBinding[];
+    try {
+      bindings = await this.resolveCloudflareAutoRenewBindings({ ...cert, autoRenewProvider: 'cloudflare' });
+    } catch (error) {
+      logger.warn('Ingress group certificate keeps HTTP-01 renewal: its names are not all in one Cloudflare zone', {
+        certId: cert.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+    const [updated] = await this.db
+      .update(sslCertificates)
+      .set({
+        acmeChallengeType: 'dns-01',
+        autoRenewProvider: 'cloudflare',
+        autoRenewDnsBindings: bindings,
+        updatedAt: new Date(),
+      })
+      .where(
+        this.acmeLeaseGuard(and(eq(sslCertificates.id, cert.id), eq(sslCertificates.acmeChallengeType, 'http-01'))!)
+      )
+      .returning();
+    if (!updated) return null;
+    await this.auditService.log({
+      userId: null,
+      action: 'ssl.acme_challenge_switched',
+      resourceType: 'ssl_certificate',
+      resourceId: cert.id,
+      details: {
+        domains: cert.domainNames,
+        from: 'http-01',
+        to: 'dns-01',
+        provider: 'cloudflare',
+        reason: 'ingress_group',
+      },
+    });
+    return updated;
   }
 
   /**

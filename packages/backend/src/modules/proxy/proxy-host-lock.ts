@@ -22,6 +22,11 @@ export function proxyNodeLockKey(nodeId: string): string {
   return `proxy-node:${nodeId}`;
 }
 
+/** Held by ingress group membership changes (add, remove, reorder, drain finalization). */
+export function ingressGroupLockKey(groupId: string): string {
+  return `ingress-group:${groupId}`;
+}
+
 export function accessListLockKey(accessListId: string): string {
   return `access-list:${accessListId}`;
 }

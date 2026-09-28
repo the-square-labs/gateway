@@ -238,14 +238,18 @@ describe('AIService domain tool routing', () => {
       totalNginxNodes: 2,
       unconfiguredNginxNodes: 0,
     };
-    const domainsService = { getNginxNodeOptions: vi.fn().mockResolvedValue(options) };
+    const domainsService = {
+      getNginxNodeOptions: vi.fn().mockResolvedValue(options),
+      getIngressGroupOptions: vi.fn().mockResolvedValue([]),
+    };
     const service = createService(domainsService);
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: [`domains:create:node/${NODE_A}`] }, 'manage_domain', {
         operation: 'list_nginx_nodes',
       })
-    ).resolves.toMatchObject({ result: { eligibleNodes: [{ id: NODE_A }], totalNginxNodes: 1 } });
+    ).resolves.toMatchObject({ result: { eligibleNodes: [{ id: NODE_A }], totalNginxNodes: 1, ingressGroups: [] } });
+    expect(domainsService.getIngressGroupOptions).toHaveBeenCalledWith([`domains:create:node/${NODE_A}`], options);
     await expect(
       service.executeTool(
         { ...BASE_USER, scopes: ['domains:create:folder/22222222-2222-4222-8222-222222222222'] },

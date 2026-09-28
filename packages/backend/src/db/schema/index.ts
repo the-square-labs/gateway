@@ -44,6 +44,7 @@ export * from './inference-models.js';
 export * from './inference-oauth.js';
 export * from './inference-providers.js';
 export * from './inference-usage.js';
+export * from './ingress-groups.js';
 export * from './integration-connectors.js';
 export * from './logging.js';
 export * from './logging-environment-folders.js';

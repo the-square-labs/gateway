@@ -1,6 +1,7 @@
 import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { domains, nodes, proxyAdditionalRoutes, proxyAdditionalSecureLinks, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { proxyHostsServedByNode } from '@/modules/ingress-groups/ingress-nodes.js';
 import { runImmediateProxyHealthCheck } from './proxy-health-check.js';
 import {
   proxyHostLockKey,
@@ -259,23 +260,13 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
           let cutoverHost = updated;
           if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
             if (host.secureLinkGeneration === 0 && host.enabled) {
-              await this.removeConfigFromNode(host.id, host.nodeId);
+              await this.withdrawHost(host);
             }
             cutoverHost = (await this.secureLinks?.commitCutover(updated.id)) ?? updated;
           }
           if (cutoverHost.enabled) {
             try {
-              const certPaths = await this.resolveCertPaths(cutoverHost, { preserveLegacyOnUnsupported: true });
-              const accessList = await this.resolveAccessList(cutoverHost.accessListId);
-              const config = await this.buildNginxConfig(cutoverHost, certPaths, accessList);
-              await this.applyConfigToNode(
-                cutoverHost.id,
-                config,
-                cutoverHost.nodeId,
-                certPaths.preparedTls,
-                this.configOwnershipForHost(cutoverHost),
-                cutoverHost.accessListId
-              );
+              await this.deliverHost(cutoverHost, { certOptions: { preserveLegacyOnUnsupported: true } });
               if (cutoverHost.secureLinkGeneration > 0) {
                 await this.secureLinks?.activate(cutoverHost.id);
                 this.queueSecureLinkRuntimeSample(cutoverHost);
@@ -314,9 +305,9 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
   // -----------------------------------------------------------------------
 
   async resyncAllHostsOnNode(nodeId: string): Promise<void> {
-    // Only resync enabled hosts explicitly assigned to this node
+    // Only resync enabled hosts this node serves: its own routes and the routes of its ingress groups
     const hosts = await this.db.query.proxyHosts.findMany({
-      where: and(eq(proxyHosts.nodeId, nodeId), eq(proxyHosts.enabled, true)),
+      where: and(proxyHostsServedByNode(this.db, nodeId), eq(proxyHosts.enabled, true)),
     });
 
     logger.info('Resyncing all hosts on node', { nodeId, hostCount: hosts.length });
@@ -330,7 +321,7 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
           // Re-read under the host lock so an edit that committed after the
           // batch query is never overwritten with the stale listed row.
           const current = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, storedHost.id) });
-          if (!current?.enabled || current.nodeId !== nodeId) return null;
+          if (!current?.enabled || !(await this.servesOn(current, nodeId))) return null;
           let host = current;
           try {
             host = await this.resolveStoredDockerUpstream(current);
@@ -339,16 +330,33 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
             // render the stale pre-cutover row: it could restore a published-IP
             // upstream after the Secure Link was already committed.
             const latest = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, storedHost.id) });
-            if (!latest?.enabled || latest.nodeId !== nodeId) return null;
+            if (!latest?.enabled || !(await this.servesOn(latest, nodeId))) return null;
             host = latest;
             logger.debug('Using current proxy state after Docker resync resolution failed', {
               hostId: storedHost.id,
               error,
             });
           }
+          // A member of an ingress group may have missed Pages publications of the host's Additional Routes while it
+          // was offline: bring its bindings up to date before the config that includes them is applied.
+          if (host.ingressGroupId) {
+            await this.additionalRoutes?.syncServingNodes(host, [nodeId], []).catch((error) =>
+              logger.warn('Additional Pages Routes of a reconnected ingress member are retried on its next resync', {
+                hostId: host.id,
+                nodeId,
+                error: error instanceof Error ? error.message : String(error),
+              })
+            );
+          }
           // Existing hosts on an old daemon retain their legacy config and
           // certificate paths. A new bundle is never initiated for that fleet.
-          return this.renderAndApplyHost(host, supportsDistribution ? {} : { legacy: true });
+          // A group route is re-applied on this member only.
+          const delivered = await this.renderAndApplyHost(
+            host,
+            supportsDistribution ? {} : { legacy: true },
+            host.ingressGroupId ? [nodeId] : undefined
+          );
+          return { ...delivered, config: delivered.configs.get(nodeId) ?? delivered.config };
         });
         if (result) applied.set(storedHost.id, result);
       } catch (err) {
@@ -362,6 +370,16 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     }
 
     logger.info('Node resync complete', { nodeId, hostCount: hosts.length, failures });
+    try {
+      // The node's full Secure Link source set: listeners of links it no longer sources (a route that left its
+      // ingress group while it was offline) are dropped, new ones (a group it joined) are opened.
+      await this.secureLinks?.reconcileSourceNode(nodeId);
+    } catch (error) {
+      logger.warn('Secure Link source reconciliation after node resync failed; it is retried', {
+        nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     try {
       await this.removeStaleConfigsOnNode(nodeId, applied, failures);
     } catch (error) {
@@ -413,7 +431,7 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
 
     await withProxyLocks([...[...applied.keys()].map(proxyHostLockKey), proxyNodeLockKey(nodeId)], async () => {
       const current = await this.db.query.proxyHosts.findMany({
-        where: and(eq(proxyHosts.nodeId, nodeId), eq(proxyHosts.enabled, true)),
+        where: and(proxyHostsServedByNode(this.db, nodeId), eq(proxyHosts.enabled, true)),
         columns: { id: true },
       });
       const unchanged =
@@ -464,17 +482,8 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
       );
     }
 
-    const certPaths = await this.resolveCertPaths(host);
-    const accessList = await this.resolveAccessList(host.accessListId);
-    const config = await this.buildNginxConfig(host, certPaths, accessList);
-    await this.applyConfigToNode(
-      host.id,
-      config,
-      host.nodeId,
-      certPaths.preparedTls,
-      this.configOwnershipForHost(host),
-      host.accessListId
-    );
+    // Every member of a group route gets the bundle again.
+    await this.deliverHost(host);
     const distribution = await this.certificateDistribution.getStatusForHost(host);
     await this.auditService.log({
       userId,
@@ -490,7 +499,7 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
   async cleanupMigratedHostSource(id: string, sourceNodeId: string): Promise<{ orphanedConfigPossible: boolean }> {
     const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
     if (!host) return { orphanedConfigPossible: false };
-    if (host.nodeId === sourceNodeId) {
+    if (host.nodeId === sourceNodeId || (await this.servesOn(host, sourceNodeId))) {
       throw new AppError(409, 'PROXY_HOST_NOT_MIGRATED', 'Proxy host still belongs to the source Nginx node');
     }
 
@@ -504,6 +513,12 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     }
     await this.secureLinks?.reconcileSourceNode(sourceNodeId);
     return { orphanedConfigPossible: !connected };
+  }
+
+  /** Whether the node serves the route (its node, or a member of its ingress group). */
+  protected async servesOn(host: Pick<ProxyHostRow, 'nodeId' | 'ingressGroupId'>, nodeId: string): Promise<boolean> {
+    if (!host.ingressGroupId) return host.nodeId === nodeId;
+    return (await this.ingressNodesOf(host)).includes(nodeId);
   }
 
   // -----------------------------------------------------------------------

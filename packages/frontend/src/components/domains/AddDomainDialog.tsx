@@ -23,13 +23,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
@@ -39,6 +32,7 @@ import type {
   DomainNginxNodeOptions,
   DomainPreview,
 } from "@/types/domains";
+import { DomainIngressTargetField } from "./DomainIngressTargetField";
 
 const NO_SCOPES: string[] = [];
 
@@ -75,6 +69,8 @@ export function AddDomainDialog({
   const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState<string | null>(null);
   const [nginxNodeId, setNginxNodeId] = useState("");
+  // Served by every member of an ingress group instead of one node.
+  const [ingressGroupId, setIngressGroupId] = useState("");
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const domainFolders = useResourceFolderStore((state) => state.foldersByType.domain);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType.domain);
@@ -88,7 +84,13 @@ export function AddDomainDialog({
   );
   const canCreateInSelectedFolder = isCreateFolderAllowed(folderChoices, folderId);
   const eligibleNodes = nodeOptions?.eligibleNodes ?? [];
-  const selectedNginxNode = eligibleNodes.find((node) => node.id === nginxNodeId);
+  const ingressGroups = nodeOptions?.ingressGroups ?? [];
+  const hasTarget = nginxNodeId !== "" || ingressGroupId !== "";
+  const target = ingressGroupId ? { ingressGroupId } : { nginxNodeId };
+  const chooseTarget = (next: { nginxNodeId: string; ingressGroupId: string }) => {
+    setNginxNodeId(next.nginxNodeId);
+    setIngressGroupId(next.ingressGroupId);
+  };
 
   const resetForm = () => {
     setDomain("");
@@ -103,6 +105,7 @@ export function AddDomainDialog({
     setNodesError(null);
     setNodesLoading(false);
     setNginxNodeId("");
+    setIngressGroupId("");
   };
 
   const scheduleReset = () => {
@@ -169,7 +172,7 @@ export function AddDomainDialog({
       normalizedDomain.length < 4 ||
       !normalizedDomain.includes(".") ||
       nodesLoading ||
-      !nginxNodeId
+      !hasTarget
     ) {
       setPreview(null);
       setPreviewError(null);
@@ -185,7 +188,7 @@ export function AddDomainDialog({
           domain: normalizedDomain,
           dnsProvider,
           ...(dnsProvider === "cloudflare" ? { ttl: ttlValue, proxied } : {}),
-          nginxNodeId,
+          ...(ingressGroupId ? { ingressGroupId } : { nginxNodeId }),
         })
         .then((result) => {
           if (cancelled) return;
@@ -206,7 +209,17 @@ export function AddDomainDialog({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [dnsProvider, domain, nginxNodeId, nodesLoading, open, proxied, ttlValue]);
+  }, [
+    dnsProvider,
+    domain,
+    hasTarget,
+    ingressGroupId,
+    nginxNodeId,
+    nodesLoading,
+    open,
+    proxied,
+    ttlValue,
+  ]);
 
   const create = async (overwriteDns = false) => {
     return api.createDomain({
@@ -215,7 +228,7 @@ export function AddDomainDialog({
       description: description.trim() || undefined,
       folderId: folderId || undefined,
       ...(dnsProvider === "cloudflare" ? { ttl: ttlValue, proxied, overwriteDns } : {}),
-      nginxNodeId,
+      ...target,
     });
   };
 
@@ -224,8 +237,8 @@ export function AddDomainDialog({
       toast.error("Domain is required");
       return;
     }
-    if (!nginxNodeId) {
-      toast.error("Select an ingress node with a public address");
+    if (!hasTarget) {
+      toast.error("Select an ingress node with a public address or an ingress group");
       return;
     }
     setIsSaving(true);
@@ -311,49 +324,15 @@ export function AddDomainDialog({
               loading={foldersLoading}
             />
           </div>
-          <div className="space-y-1.5">
-            <label htmlFor="add-domain-node" className="text-sm font-medium">
-              Ingress node
-            </label>
-            <Select
-              value={nginxNodeId}
-              onValueChange={setNginxNodeId}
-              disabled={nodesLoading || eligibleNodes.length === 0}
-            >
-              <SelectTrigger
-                id="add-domain-node"
-                aria-label="Ingress node"
-                aria-busy={nodesLoading}
-              >
-                <SelectValue
-                  placeholder={
-                    nodesLoading
-                      ? "Loading nodes…"
-                      : eligibleNodes.length > 0
-                        ? "Select a node"
-                        : "Unavailable"
-                  }
-                >
-                  {/* Always defined: the trigger shows the name only, never the option's address. */}
-                  {selectedNginxNode
-                    ? selectedNginxNode.displayName || selectedNginxNode.hostname
-                    : null}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {eligibleNodes.map((node) => (
-                  <SelectItem key={node.id} value={node.id}>
-                    {node.displayName || node.hostname} · {node.effectiveAddress}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              {dnsProvider === "cloudflare"
-                ? "DNS records point at this node's public address."
-                : "The domain must already resolve to this node's public address."}
-            </p>
-          </div>
+          <DomainIngressTargetField
+            nginxNodeId={nginxNodeId}
+            ingressGroupId={ingressGroupId}
+            onChange={chooseTarget}
+            eligibleNodes={eligibleNodes}
+            ingressGroups={ingressGroups}
+            loading={nodesLoading}
+            dnsProvider={dnsProvider}
+          />
           <div className="space-y-1.5">
             <label htmlFor="add-domain-description" className="text-sm font-medium">
               Description
@@ -502,7 +481,7 @@ export function AddDomainDialog({
             pending={isSaving}
             disabled={
               nodesLoading ||
-              !nginxNodeId ||
+              !hasTarget ||
               !canCreateInSelectedFolder ||
               !!nodesError ||
               (dnsProvider === "external" &&

@@ -11,6 +11,7 @@ import { RelativeTime } from "@/components/common/RelativeTime";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable } from "@/components/common/SimpleTable";
 import { SwitchCard } from "@/components/common/SwitchCard";
+import { DomainIngressPlacementSection } from "@/components/ingress-groups/DomainIngressPlacementSection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -538,6 +539,15 @@ export function DomainDetailDialog({
                   </SettingsControlRow>
                 </PanelShell>
               )}
+
+              <DomainIngressPlacementSection
+                domain={domain}
+                canEdit={canEdit}
+                onChanged={() => {
+                  void loadDomain();
+                  onUpdated();
+                }}
+              />
 
               <PanelShell title="Usage" bodyClassName="min-w-0">
                 <SimpleTable<UsageRow>

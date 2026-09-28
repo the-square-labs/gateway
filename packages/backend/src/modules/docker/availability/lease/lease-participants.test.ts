@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   classifyDockerLeaseNode,
   keepsLeaseVoterPlace,
   LeaseCapabilityTracker,
   type LeaseParticipant,
   type LeaseParticipants,
+  leaseIngressNodesOfPlacements,
   leaseProtocolOf,
   manifestCandidateAllowed,
 } from './lease-participants.js';
@@ -168,5 +169,54 @@ describe('2-minute grace for voters and manifest candidates (D3)', () => {
     expect(observe(NOW + 400_000, { incarnation: 2, connectedAt: NOW + 255_000 })).toBe(true);
     expect(observe(NOW + 401_000, { entryReady: false })).toBe(false);
     expect(observe(NOW + 402_000, { incarnation: 2, connectedAt: NOW + 255_000 })).toBe(false);
+  });
+});
+
+describe('leaseIngressNodesOfPlacements', () => {
+  function database(
+    links: Array<{ referenceId: string; sourceNodeId: string; ingressGroupId: string | null }>,
+    members: Array<{ groupId: string; nodeId: string; priority: number }>
+  ) {
+    const linkWhere = vi.fn().mockResolvedValue(links);
+    const memberWhere = vi.fn().mockResolvedValue(members);
+    return {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({ from: () => ({ innerJoin: () => ({ where: linkWhere }) }) })
+        .mockReturnValueOnce({ from: () => ({ where: memberWhere }) }),
+    } as never;
+  }
+
+  it('lists every member of an ingress group route as an ingress node of the placement', async () => {
+    const result = await leaseIngressNodesOfPlacements(
+      database(
+        [
+          { referenceId: 'placement-1', sourceNodeId: 'nginx-a', ingressGroupId: 'group-1' },
+          { referenceId: 'placement-2', sourceNodeId: 'nginx-c', ingressGroupId: null },
+        ],
+        [
+          { groupId: 'group-1', nodeId: 'nginx-b', priority: 1 },
+          { groupId: 'group-1', nodeId: 'nginx-a', priority: 0 },
+        ]
+      ),
+      ['placement-1', 'placement-2']
+    );
+    expect(result).toEqual([
+      { referenceId: 'placement-1', nodeId: 'nginx-a' },
+      { referenceId: 'placement-1', nodeId: 'nginx-b' },
+      { referenceId: 'placement-2', nodeId: 'nginx-c' },
+    ]);
+  });
+
+  it('keeps the recorded source of a single-node route and queries nothing without placements', async () => {
+    const empty = { select: vi.fn() } as never;
+    await expect(leaseIngressNodesOfPlacements(empty, [])).resolves.toEqual([]);
+    expect((empty as { select: ReturnType<typeof vi.fn> }).select).not.toHaveBeenCalled();
+    await expect(
+      leaseIngressNodesOfPlacements(
+        database([{ referenceId: 'placement-1', sourceNodeId: 'nginx-a', ingressGroupId: null }], []),
+        ['placement-1']
+      )
+    ).resolves.toEqual([{ referenceId: 'placement-1', nodeId: 'nginx-a' }]);
   });
 });

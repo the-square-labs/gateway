@@ -12,6 +12,7 @@ import {
   CreateProxyHostSchema,
   ProxyHostListQuerySchema,
   RouteIngressNodeListQuerySchema,
+  RouteIngressPlacementSchema,
   ToggleProxyHostSchema,
   ToggleProxyMaintenanceSchema,
   UpdateProxyHostSchema,
@@ -41,7 +42,7 @@ export const listRouteIngressNodesRoute = appRoute({
   tags: ['Routes'],
   summary: 'List the nginx ingress nodes the caller may create routes on',
   description:
-    'Needs any proxy:create grant (broad, folder or node) and no node permission. Returns id, displayName, hostname and status of each nginx node a new route may use: every node for a broad or folder grant, only granted nodes for node grants; nodes locked for new services are omitted. Pass folderId to limit the list to a route in that folder. A route created without nodeId uses the node of its registered domains, or the only listed node.',
+    'Needs any proxy:create grant (broad, folder or node) and no node permission. Returns id, displayName, hostname and status of each nginx node a new route may use: every node for a broad or folder grant, only granted nodes for node grants; nodes locked for new services are omitted. `groups` lists the ingress groups a new route may use (every member is such a node): id, name, slug, DNS failover mode and the members in site order with their state (joining, active, draining); create the route with ingressGroupId to serve it from every member. Pass folderId to limit both lists to a route in that folder. A route created without nodeId uses the node or group of its registered domains, or the only listed node.',
   request: { query: RouteIngressNodeListQuerySchema },
   responses: okJson(UnknownDataResponseSchema),
 });
@@ -142,5 +143,16 @@ export const validateProxyConfigRoute = appRoute({
   tags: ['Routes'],
   summary: 'Validate advanced nginx config',
   request: jsonBody(ValidateAdvancedConfigSchema),
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const changeRouteIngressPlacementRoute = appRoute({
+  method: 'post',
+  path: '/{id}/ingress-placement',
+  tags: ['Routes'],
+  summary: 'Move a route onto an ingress group or back to one node',
+  description:
+    'A planned operation without downtime. Onto a group (ingressGroupId): the node that serves the route now must be a member and keeps serving while every other member gets the route (config, certificates, Secure Link sources, Pages artifacts). Back to one node (ingressGroupId null, nodeId a current member): the route leaves the other members after the node took it; point DNS of the route’s names at that node first. A route whose names are registered Gateway domains moves with its domain (use the domain’s ingress placement). Onto a group requires proxy:edit on the route, proxy:create for every member and the multi-node availability entitlement.',
+  request: { params: IdParamSchema, ...jsonBody(RouteIngressPlacementSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });

@@ -34,7 +34,7 @@ export const OPERATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_status_page',
     description:
-      'Manage the status page settings, service list and order, incidents, incident updates, proxy template options, and preview. sources.list returns the resources the caller may expose (a service can only expose a source the caller can view). services.reorder takes payload { serviceIds } in the new display order. Operation-specific status-page:* scopes are enforced.',
+      'Manage the status page settings, service list and order, incidents, incident updates, proxy template options, and preview. sources.list returns the resources the caller may expose (a service can only expose a source the caller can view). services.reorder takes payload { serviceIds } in the new display order. settings.update payload nodeId picks the nginx node that serves the public page; payload ingressGroupId serves it from every member of an ingress group instead (multi-node availability license feature; moving between a node and a group works while the page is enabled, ingressGroupId null with nodeId, a current member, moves it back). Operation-specific status-page:* scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {

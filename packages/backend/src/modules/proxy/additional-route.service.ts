@@ -275,7 +275,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
       throw new AppError(409, 'PAGES_TAG_NOT_DEPLOYED', 'Select a Tag with a ready Deployment');
     if (!this.pageRuntime || !this.pageRuntimeConfig)
       throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route runtime is unavailable');
-    await this.pageRuntime.preflight(host.nodeId, 0);
+    await this.pagesNodes().preflight(await this.pagesNodeIds(host), 0);
   }
 
   protected asSecureLinkInput(target: NormalizedTarget): CreateProxyAdditionalSecureLinkInput {
@@ -425,7 +425,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
             await this.secureLinks?.deleteManagedRouteBinding(host, existing.secureLinkId);
           }
           if ((!enabled || (targetChanged && target.targetKind !== 'pages')) && existing.targetKind === 'pages') {
-            await this.cleanupPages(existing, host.nodeId);
+            await this.cleanupPages(existing, host);
           }
         } catch (cleanupError) {
           logger.warn('Additional Route previous target cleanup failed after successful retarget', {
@@ -447,7 +447,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
           try {
             if (existing.targetKind === 'pages' && existing.activeDeploymentId) {
               await this.restorePagesMaterialization(
-                host.nodeId!,
+                host,
                 existing.id,
                 existing.activeDeploymentId,
                 existing.runtimeConfigGeneration
@@ -463,7 +463,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
               await this.secureLinks?.deleteManagedRouteBinding(host, ready.secureLinkId).catch(() => undefined);
             }
             if (target.targetKind === 'pages' && existing.targetKind !== 'pages' && ready) {
-              await this.cleanupPages(ready, host.nodeId).catch(() => undefined);
+              await this.cleanupPages(ready, host).catch(() => undefined);
             }
             logger.warn('Additional Route retarget rolled back to the previous ready target', { routeId, error });
           } catch (rollbackError) {
@@ -571,7 +571,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
       if (!staged) throw new AppError(409, 'ADDITIONAL_ROUTE_CHANGED', 'Additional Route changed concurrently');
       try {
         if (isDockerKind(target.targetKind)) await this.secureLinks?.deleteManagedRoute(host, routeId);
-        if (target.targetKind === 'pages') await this.cleanupPages(existing, host.nodeId);
+        if (target.targetKind === 'pages') await this.cleanupPages(existing, host);
         const ready = await this.provision(staged, host, target);
         if (target.targetKind !== 'pages') await this.hostRuntime?.reconcileAdditionalRouteHost(host.id);
         await this.auditService.log({
@@ -608,7 +608,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
       try {
         await this.hostRuntime?.reconcileAdditionalRouteHost(host.id);
         if (isDockerKind(existing.targetKind)) await this.secureLinks?.deleteManagedRoute(host, routeId);
-        if (existing.targetKind === 'pages') await this.cleanupPages(existing, host.nodeId);
+        if (existing.targetKind === 'pages') await this.cleanupPages(existing, host);
         await this.db.delete(proxyAdditionalRoutes).where(eq(proxyAdditionalRoutes.id, routeId));
       } catch (error) {
         await this.db
@@ -638,7 +638,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
     });
     for (const route of routes) {
       if (route.targetKind === 'pages' && !abandonOfflineNode) {
-        await this.cleanupPages(route, host.nodeId);
+        await this.cleanupPages(route, host);
       }
     }
     // The Secure Link service owns the hidden relay bindings and is called by

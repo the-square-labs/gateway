@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, count, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
 import { domains } from '@/db/schema/domains.js';
+import { ingressGroups } from '@/db/schema/ingress-groups.js';
 import { pageWildcardProfiles } from '@/db/schema/pages.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
@@ -8,6 +9,7 @@ import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissi
 import { isMatchingUniqueConstraintViolation } from '@/lib/resource-slugs.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { ingressGroupMemberRows } from '@/modules/ingress-groups/ingress-nodes.js';
 import type { CloudflareDnsRecordInput } from '@/modules/integrations/cloudflare-client.js';
 import { getRegisteredDomainCandidates } from '@/modules/proxy/proxy-domain-node.js';
 import { assertNoProxyDomainOverlap } from '@/modules/proxy/proxy-domain-overlap.js';
@@ -20,7 +22,7 @@ import type {
   PreviewDomainInput,
   UpdateDomainInput,
 } from './domain.schemas.js';
-import { DomainsServiceRuntime } from './domain.service.runtime.js';
+import { DomainsServiceIngressGroups } from './domain.service.ingress-groups.js';
 import {
   type CloudflareAddressRecord,
   type DomainCloudflarePlan,
@@ -33,7 +35,7 @@ const DOMAIN_UNIQUE_CONSTRAINT = 'domains_domain_unique';
 
 export * from './domain.service.shared.js';
 
-export class DomainsService extends DomainsServiceRuntime {
+export class DomainsService extends DomainsServiceIngressGroups {
   async listDomains(params: DomainListQuery, options?: { allowedIds?: string[] }) {
     const conditions = [];
     if (options?.allowedIds?.length === 0) {
@@ -86,11 +88,43 @@ export class DomainsService extends DomainsServiceRuntime {
   async getDomain(id: string) {
     const [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!row) throw new Error('Domain not found');
-    const [usage, nginxNode] = await Promise.all([
+    const [usage, nginxNode, ingressGroup] = await Promise.all([
       this.getUsage(row.domain),
       row.nginxNodeId ? this.getNginxNodeSummary(row.nginxNodeId) : Promise.resolve(null),
+      row.ingressGroupId ? this.ingressGroupSummary(row.ingressGroupId) : Promise.resolve(null),
     ]);
-    return { ...row, nginxNode, usage };
+    return { ...row, nginxNode, ingressGroup, usage };
+  }
+
+  /** The ingress group of a domain with its members and the addresses DNS publishes for them. */
+  protected async ingressGroupSummary(groupId: string) {
+    const [group] = await this.db
+      .select({
+        id: ingressGroups.id,
+        name: ingressGroups.name,
+        slug: ingressGroups.slug,
+        dnsFailoverMode: ingressGroups.dnsFailoverMode,
+      })
+      .from(ingressGroups)
+      .where(eq(ingressGroups.id, groupId))
+      .limit(1);
+    if (!group) return null;
+    const plan = await this.ingressGroupDnsPlan(groupId);
+    const members = await ingressGroupMemberRows(this.db, groupId);
+    return {
+      ...group,
+      targetIps: plan.targetIps,
+      unpublishedNodeIds: plan.unpublishedNodeIds,
+      members: await Promise.all(
+        members.map(async (member) => ({
+          nodeId: member.nodeId,
+          state: member.state,
+          priority: member.priority,
+          node: await this.getNginxNodeSummary(member.nodeId),
+          addresses: plan.memberAddresses.get(member.nodeId) ?? [],
+        }))
+      ),
+    };
   }
 
   async previewIngressMigration(id: string, input: DomainIngressMigrationInput) {
@@ -383,6 +417,7 @@ export class DomainsService extends DomainsServiceRuntime {
           providerZoneName: context.zone.name,
           providerRecordIds,
           nginxNodeId: plan.nginxNode.id,
+          ingressGroupId: plan.ingressGroupId,
           dnsRecordType: this.recordTypeLabel(targetIps),
           dnsTargetIps: targetIps,
           dnsTtl: ttl,
@@ -425,10 +460,16 @@ export class DomainsService extends DomainsServiceRuntime {
         recordIds: providerRecordIds,
         targetIps,
         nginxNodeId: plan.nginxNode.id,
+        ingressGroupId: plan.ingressGroupId,
         ttl,
         proxied,
       },
     });
+    if (plan.ingressGroupId && !this.sameStringSet(targetIps, plan.placementTargetIps)) {
+      // Matched records cover some members only: publish every active member now.
+      await this.reconcileIngressGroupDomain(row);
+      [row] = await this.db.select().from(domains).where(eq(domains.id, row.id)).limit(1);
+    }
 
     await grantCreatedResourcePermissions(userId, 'domains', row.id, {
       folderId: row.folderId ?? null,
@@ -480,6 +521,7 @@ export class DomainsService extends DomainsServiceRuntime {
         dnsProvider: 'external' as const,
         domain: plan.domainName,
         nginxNode: plan.nginxNode,
+        ingressGroupId: plan.ingressGroupId,
         targetIps: plan.targetIps,
         queryName: plan.queryName,
         dnsRecords: plan.dnsRecords,
@@ -497,6 +539,7 @@ export class DomainsService extends DomainsServiceRuntime {
       zoneName: plan.context.zone.name,
       connectorId: plan.context.connector.id,
       nginxNode: plan.nginxNode,
+      ingressGroupId: plan.ingressGroupId,
       targetIps: plan.targetIps,
       ttl: plan.ttl,
       proxied: plan.proxied,
@@ -555,6 +598,7 @@ export class DomainsService extends DomainsServiceRuntime {
         dnsProvider: 'legacy',
         dnsOwnership: 'legacy',
         nginxNodeId: plan.nginxNode.id,
+        ingressGroupId: plan.ingressGroupId,
         dnsRecordType: this.recordTypeLabel(plan.targetIps),
         dnsTargetIps: plan.targetIps,
         dnsTtl: null,
@@ -580,6 +624,7 @@ export class DomainsService extends DomainsServiceRuntime {
         targetIps: plan.targetIps,
         queryName: plan.queryName,
         nginxNodeId: plan.nginxNode.id,
+        ingressGroupId: plan.ingressGroupId,
       },
     });
     await grantCreatedResourcePermissions(userId, 'domains', row.id, {
@@ -591,8 +636,17 @@ export class DomainsService extends DomainsServiceRuntime {
   }
 
   async updateDomain(id: string, input: UpdateDomainInput, userId: string) {
-    const [existing] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
+    let [existing] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!existing) throw new AppError(404, 'NOT_FOUND', 'Domain not found');
+    if (input.ingressGroupId !== undefined && input.ingressGroupId !== existing.ingressGroupId) {
+      await this.changeDomainIngressPlacement(
+        id,
+        { ingressGroupId: input.ingressGroupId, nginxNodeId: input.nginxNodeId },
+        userId
+      );
+      [existing] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
+      if (!existing) throw new AppError(404, 'NOT_FOUND', 'Domain not found');
+    }
 
     if (input.proxied !== undefined && input.proxied !== existing.dnsProxied) {
       if (
@@ -738,11 +792,18 @@ export class DomainsService extends DomainsServiceRuntime {
     // drift repair for the last committed target. It never invents approval
     // from a newly detected node address.
     let reconciliationTarget: string | string[] | undefined = row.pendingDnsTargetIp ?? row.dnsTargetIps;
-    if (row.pendingDnsTargetIp && row.nginxNodeId) {
+    if (row.pendingDnsTargetIp && row.nginxNodeId && !row.ingressGroupId) {
       const node = await this.getNginxNodeSummary(row.nginxNodeId);
       if (!node || !this.getAllowedIngressAddresses(node).includes(row.pendingDnsTargetIp)) {
         reconciliationTarget = undefined;
       }
+    }
+    if (row.ingressGroupId) {
+      // The group's members decide the target; drift is repaired towards their current union.
+      await this.reconcileIngressGroupDomain(row);
+      [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
+      if (!row) throw new Error('Domain not found');
+      reconciliationTarget = undefined;
     }
     if (
       row.dnsProvider === 'cloudflare' &&
@@ -812,6 +873,7 @@ export class DomainsService extends DomainsServiceRuntime {
           domainNames: proxyHosts.domainNames,
           enabled: proxyHosts.enabled,
           nodeId: proxyHosts.nodeId,
+          ingressGroupId: proxyHosts.ingressGroupId,
           folderId: proxyHosts.folderId,
         })
         .from(proxyHosts)
@@ -849,6 +911,14 @@ export class DomainsService extends DomainsServiceRuntime {
   protected async buildIngressMigrationImpact(id: string, targetNodeId: string) {
     const [root] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!root) throw new AppError(404, 'NOT_FOUND', 'Domain not found');
+    if (root.ingressGroupId) {
+      throw new AppError(
+        409,
+        'DOMAIN_ON_INGRESS_GROUP',
+        'This domain is served by an ingress group: change the group members (add the new node, then remove the old one) instead of migrating it',
+        { ingressGroupId: root.ingressGroupId }
+      );
+    }
     const targetNode = await this.resolveRequestedNginxNode(targetNodeId);
 
     if (root.ingressMigrationId) {

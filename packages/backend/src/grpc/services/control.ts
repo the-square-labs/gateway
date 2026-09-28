@@ -9,6 +9,7 @@ import { isMinorCompatible } from '@/lib/semver.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { DockerRuntimeStatusSchema } from '@/modules/docker/docker.schemas.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
+import { ingressHealthFromProto } from '@/modules/ingress-groups/ingress-health.js';
 import { daemonLogRelay } from '@/modules/monitoring/log-relay.service.js';
 import { validateRegisteredDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
@@ -1167,6 +1168,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                   : {}),
                 gpuDevices: mapGpuHealthDevices(msg.healthReport.gpuDevices),
                 ...relayLatencyHealth(msg.healthReport.relayLatencies),
+                ...ingressHealthFromProto((msg.healthReport as { ingressHealth?: unknown }).ingressHealth),
               };
 
               const connectedNode = deps.registry.getNode(activeNodeId);

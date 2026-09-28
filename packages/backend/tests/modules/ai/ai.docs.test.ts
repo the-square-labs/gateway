@@ -35,6 +35,7 @@ const EXPECTED_TOPICS = [
   'gateway-settings',
   'licensing-updates',
   'inference',
+  'ingress-groups',
   'ai-settings',
   'gitlab',
   'notifications',
@@ -73,6 +74,8 @@ describe('AI internal docs registry', () => {
     ['gateway-settings', ['settings:gateway:view']],
     ['licensing-updates', ['license:view']],
     ['inference', ['feat:ai:use']],
+    ['ingress-groups', ['nodes:details']],
+    ['ingress-groups', ['proxy:view']],
     ['gitlab', ['integrations:gitlab:view']],
     ['notifications', ['audit:siem:view']],
   ])('allows topic %s with an accepted scope', (topic, scopes) => {
@@ -86,6 +89,7 @@ describe('AI internal docs registry', () => {
     ['docker', ['ai:workspace:use']],
     ['proxy', ['pages:view']],
     ['inference', ['databases:view']],
+    ['ingress-groups', ['pages:view']],
     ['siem', ['notifications:alerts:view', 'notifications:webhooks:view']],
   ])('denies topic %s without a matching scope', (topic, scopes) => {
     expect(getInternalDocumentation(topic, scopes)).toEqual({

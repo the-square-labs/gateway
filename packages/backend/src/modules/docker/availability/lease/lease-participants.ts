@@ -1,6 +1,7 @@
-import { eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { nodes, relayInstances } from '@/db/schema/index.js';
+import { nodes, proxyAdditionalSecureLinks, proxyHosts, relayInstances } from '@/db/schema/index.js';
+import { ingressGroupMembersByGroup } from '@/modules/ingress-groups/ingress-nodes.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import {
   AVAILABILITY_LEASE_CAPABILITY,
@@ -423,4 +424,41 @@ export function leaseWitnessPool(
         participant.kind === 'relay' ? participants.relayRtt(candidateId, participant.id) : undefined,
     })
   );
+}
+
+/**
+ * The ingress nginx nodes of a policy's routes: for each Availability placement, every node that sources its member
+ * Secure Link. A route on an ingress group has a source on every member (each opens the member's socket while the
+ * placement's candidate holds the lease), so every member takes part in the policy; a single-node route keeps its
+ * one node. Returned as (placement id, node id) pairs.
+ */
+export async function leaseIngressNodesOfPlacements(
+  db: DrizzleClient,
+  placementIds: readonly string[]
+): Promise<Array<{ referenceId: string; nodeId: string }>> {
+  if (placementIds.length === 0) return [];
+  const rows = await db
+    .select({
+      referenceId: proxyAdditionalSecureLinks.referenceId,
+      sourceNodeId: proxyAdditionalSecureLinks.sourceNodeId,
+      ingressGroupId: proxyHosts.ingressGroupId,
+    })
+    .from(proxyAdditionalSecureLinks)
+    .innerJoin(proxyHosts, eq(proxyHosts.id, proxyAdditionalSecureLinks.proxyHostId))
+    .where(
+      and(
+        eq(proxyAdditionalSecureLinks.purpose, 'availability_member'),
+        inArray(proxyAdditionalSecureLinks.referenceId, [...placementIds])
+      )
+    );
+  const groups = await ingressGroupMembersByGroup(
+    db,
+    rows.flatMap((row) => (row.ingressGroupId ? [row.ingressGroupId] : []))
+  );
+  return rows.flatMap((row) => {
+    if (!row.referenceId) return [];
+    const members = row.ingressGroupId ? (groups.get(row.ingressGroupId) ?? []) : [];
+    const sources = members.length > 0 ? members : [row.sourceNodeId];
+    return sources.map((nodeId) => ({ referenceId: row.referenceId!, nodeId }));
+  });
 }

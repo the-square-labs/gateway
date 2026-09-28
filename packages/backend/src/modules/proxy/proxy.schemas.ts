@@ -61,9 +61,11 @@ const RelaySpreadModeSchema = z.enum(['inherit', 'fixed', 'all']);
 export const CreateProxyHostSchema = z
   .object({
     type: z.enum(['proxy', 'redirect', '404', 'raw']).default('proxy'),
-    // Optional: omitted, the route uses the ingress node its registered Gateway domains are assigned
+    // Optional: omitted, the route uses the ingress node or group its registered Gateway domains are assigned
     // to, or the only nginx node the caller may create routes on (see route-ingress-nodes.ts).
     nodeId: z.string().uuid('A node must be selected').optional(),
+    // Serve the route from every member of this ingress group instead of one node.
+    ingressGroupId: z.string().uuid().optional(),
     domainNames: z.array(DomainNameSchema).min(1, 'At least one domain name is required'),
 
     // Upstream — proxy type
@@ -267,6 +269,8 @@ export const CreateProxyHostSchema = z
 export const UpdateProxyHostSchema = z.object({
   type: z.enum(['proxy', 'redirect', '404', 'raw']).optional(),
   nodeId: z.string().uuid().optional(),
+  // A group id moves the route onto that ingress group; null serves it from `nodeId` (a current member) again.
+  ingressGroupId: z.string().uuid().nullable().optional(),
   domainNames: z.array(DomainNameSchema).min(1, 'At least one domain name is required').optional(),
 
   upstreamKind: z.enum(['manual', 'docker_container', 'docker_deployment', 'pages']).optional(),
@@ -400,7 +404,9 @@ export const ProxyHostListQuerySchema = z.object({
   enabled: z.coerce.boolean().optional(),
   healthStatus: z.enum(['online', 'offline', 'degraded', 'unknown', 'disabled']).optional(),
   search: z.string().max(255).optional(),
+  /** Routes served by this nginx node, including the routes of its ingress groups. */
   nodeId: z.string().uuid().optional(),
+  ingressGroupId: z.string().uuid().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -418,6 +424,17 @@ export const ToggleProxyMaintenanceSchema = z.object({
 // ---------------------------------------------------------------------------
 // Validate advanced config
 // ---------------------------------------------------------------------------
+
+/** Serve a route from every member of an ingress group, or with null from one member node again. */
+export const RouteIngressPlacementSchema = z
+  .object({
+    ingressGroupId: z.string().uuid().nullable(),
+    nodeId: z.string().uuid().optional(),
+  })
+  .refine((value) => value.ingressGroupId !== null || !!value.nodeId, {
+    message: 'Pass nodeId (a current group member) to serve the route from one node',
+    path: ['nodeId'],
+  });
 
 export const RouteIngressNodeListQuerySchema = z.object({
   /** Limit the list to the nodes a new route in this folder may use. */
@@ -446,3 +463,4 @@ export type ProxyHostListQuery = z.infer<typeof ProxyHostListQuerySchema>;
 export type ToggleProxyHostInput = z.infer<typeof ToggleProxyHostSchema>;
 export type ToggleProxyMaintenanceInput = z.infer<typeof ToggleProxyMaintenanceSchema>;
 export type ValidateAdvancedConfigInput = z.infer<typeof ValidateAdvancedConfigSchema>;
+export type RouteIngressPlacementInput = z.infer<typeof RouteIngressPlacementSchema>;

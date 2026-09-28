@@ -19,6 +19,7 @@ import { accessLists } from './access-lists.js';
 import { certificates } from './certificates.js';
 import { dockerComposeProjects } from './docker-compose.js';
 import { dockerDeployments } from './docker-deployments.js';
+import { ingressGroups } from './ingress-groups.js';
 import { nginxTemplates } from './nginx-templates.js';
 import { nodes } from './nodes.js';
 import { proxyHostTypeEnum } from './proxy-enums.js';
@@ -156,8 +157,10 @@ export const proxyHosts = pgTable(
     // Access list
     accessListId: uuid('access_list_id').references(() => accessLists.id, { onDelete: 'set null' }),
 
-    // Node assignment
+    // Node assignment. A route served by an ingress group keeps its group's first member here (kept in sync by the
+    // ingress group service); resolveIngressNodes() is the only source of the full member set.
     nodeId: uuid('node_id').references(() => nodes.id, { onDelete: 'set null' }),
+    ingressGroupId: uuid('ingress_group_id').references(() => ingressGroups.id, { onDelete: 'restrict' }),
 
     // Health check
     healthCheckEnabled: boolean('health_check_enabled').notNull().default(false),
@@ -192,6 +195,7 @@ export const proxyHosts = pgTable(
     folderIdx: index('proxy_host_folder_idx').on(table.folderId),
     createdByIdx: index('proxy_host_created_by_idx').on(table.createdById),
     nodeIdx: index('proxy_host_node_idx').on(table.nodeId),
+    ingressGroupIdx: index('proxy_host_ingress_group_idx').on(table.ingressGroupId),
     dockerNodeIdx: index('proxy_host_docker_node_idx').on(table.dockerNodeId),
     dockerComposeProjectIdx: index('proxy_host_docker_compose_project_idx').on(table.dockerComposeProjectId),
     dockerDeploymentIdx: index('proxy_host_docker_deployment_idx').on(table.dockerDeploymentId),
@@ -209,12 +213,14 @@ export const proxyHosts = pgTable(
 );
 
 /**
- * The names each proxy host serves, one row per lowercased domain, kept in sync
- * with `proxy_hosts` (domains, enabled, node) by a trigger (migration 0207).
- * The partial unique index is the guarantee that two enabled hosts on one node
- * never serve the same name. `legacy_conflict` marks duplicates that existed
- * before the index; they stay outside it until their host's domains, node or
- * enabled state change, and the service's overlap check still reports them.
+ * The names each proxy host serves, one row per lowercased domain and serving
+ * node, kept in sync with `proxy_hosts` (domains, enabled, node, ingress group)
+ * and `ingress_group_members` by triggers (migrations 0207, 0209 and the ingress
+ * group migration). A host on an ingress group has one row per member, so the
+ * partial unique index guarantees that two enabled hosts never serve the same
+ * name on any node. `legacy_conflict` marks duplicates that existed before the
+ * index; they stay outside it until their host's domains, node or enabled state
+ * change, and the service's overlap check still reports them.
  */
 export const proxyHostDomains = pgTable(
   'proxy_host_domains',
@@ -230,7 +236,7 @@ export const proxyHostDomains = pgTable(
     legacyConflict: boolean('legacy_conflict').notNull().default(false),
   },
   (table) => [
-    primaryKey({ columns: [table.proxyHostId, table.domain], name: 'proxy_host_domains_pkey' }),
+    primaryKey({ columns: [table.proxyHostId, table.nodeId, table.domain], name: 'proxy_host_domains_pkey' }),
     uniqueIndex('proxy_host_domains_node_domain_unique')
       .on(table.nodeId, table.domain)
       .where(sql`${table.enabled} = true AND ${table.legacyConflict} = false`),

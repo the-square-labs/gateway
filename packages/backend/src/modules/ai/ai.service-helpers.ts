@@ -227,6 +227,14 @@ function compactProxyHostForAgent(host: Record<string, any>) {
     domainNames: safeHost.domainNames,
     enabled: safeHost.enabled,
     nodeId: safeHost.nodeId,
+    ...(safeHost.ingressGroupId ? { ingressGroupId: safeHost.ingressGroupId } : {}),
+    ...(safeHost.ingressGroup ? { ingressGroup: safeHost.ingressGroup } : {}),
+    ...(Array.isArray(safeHost.servingNodeIds) && safeHost.ingressGroupId
+      ? { servingNodeIds: safeHost.servingNodeIds }
+      : {}),
+    ...(Array.isArray(safeHost.ingressDelivery) && safeHost.ingressDelivery.length > 0
+      ? { ingressDelivery: safeHost.ingressDelivery }
+      : {}),
     ...managedTarget,
     forwardScheme: safeHost.forwardScheme,
     forwardHost: safeHost.forwardHost,

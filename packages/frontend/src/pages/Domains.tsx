@@ -161,7 +161,7 @@ export function Domains() {
   );
   const [routeCreateDomain, setRouteCreateDomain] = useState<Pick<
     Domain,
-    "domain" | "nginxNodeId"
+    "domain" | "nginxNodeId" | "ingressGroupId"
   > | null>(null);
   const cloudflareConfigured = cloudflareReady ?? hasCloudflareIntegration;
   const creationBlockerCopy = creationBlocker
@@ -483,7 +483,8 @@ export function Domains() {
                     Check DNS
                   </DropdownMenuItem>
                 )}
-                {canCheckDns && (
+                {/* A domain on an ingress group moves from its detail view (Ingress panel). */}
+                {canCheckDns && !d.ingressGroupId && (
                   <DropdownMenuItem onClick={() => openDetail(d.id, "ingress-migration")}>
                     <Truck className="h-4 w-4" />
                     {d.ingressMigrationId ? "Complete migration" : "Move ingress"}
@@ -713,7 +714,12 @@ export function Domains() {
             if (!open) setRouteCreateDomain(null);
           }}
           initialDomainName={routeCreateDomain?.domain}
-          initialNodeId={routeCreateDomain?.nginxNodeId ?? undefined}
+          initialNodeId={
+            routeCreateDomain?.ingressGroupId
+              ? undefined
+              : (routeCreateDomain?.nginxNodeId ?? undefined)
+          }
+          initialIngressGroupId={routeCreateDomain?.ingressGroupId ?? undefined}
           onSuccess={() => {
             setRouteCreateDomain(null);
             void loadDomains();

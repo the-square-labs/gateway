@@ -20,6 +20,7 @@ import { executeGitLabTool, GITLAB_TOOL_NAMES } from './ai.gitlab-tools.js';
 import { executeGroupTool, GROUP_TOOL_NAMES } from './ai.group-tools.js';
 import { executeHostingTool, HOSTING_TOOL_NAMES } from './ai.hosting-tools.js';
 import { executeInferenceTool, INFERENCE_TOOL_NAMES } from './ai.inference-tools.js';
+import { executeIngressGroupTool, INGRESS_GROUP_TOOL_NAMES } from './ai.ingress-group-tools.js';
 import { executeIntegrationTool, INTEGRATION_TOOL_NAMES } from './ai.integration-tools.js';
 import { executeNodeTool, NODE_TOOL_NAMES } from './ai.node-tools.js';
 import {
@@ -545,6 +546,9 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
         toolName,
         args
       );
+    }
+    if (INGRESS_GROUP_TOOL_NAMES.has(toolName)) {
+      return executeIngressGroupTool(user, args);
     }
     if (ACCESS_LIST_TOOL_NAMES.has(toolName)) {
       return executeAccessListTool(

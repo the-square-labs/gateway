@@ -19,6 +19,7 @@ function mapDomains(domains: Domain[]): DomainSearchResult[] {
       dnsStatus: domain.dnsStatus,
       dnsProvider: domain.dnsProvider,
       nginxNodeId: domain.nginxNodeId,
+      ingressGroupId: domain.ingressGroupId ?? null,
     }));
 }
 

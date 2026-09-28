@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/config"
+	"github.com/wiolett-industries/gateway/nginx-daemon/internal/nginx"
 )
 
 const (
@@ -50,6 +51,11 @@ func writeConfigTreeFingerprint(digest hash.Hash, name, root string) {
 	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			fmt.Fprintf(digest, "error\x00%s\x00%s\n", path, walkErr)
+			return nil
+		}
+		// The config generation file changes with every reload by design; it is not a configuration change to
+		// validate again.
+		if entry.Name() == nginx.IngressGenerationFilename() {
 			return nil
 		}
 		info, err := entry.Info()

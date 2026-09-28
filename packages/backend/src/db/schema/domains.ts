@@ -12,6 +12,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 import { domainFolders } from './domain-folders.js';
+import { ingressGroups } from './ingress-groups.js';
 import { integrationConnectors } from './integration-connectors.js';
 import { nodes } from './nodes.js';
 import { users } from './users.js';
@@ -66,6 +67,9 @@ export const domains = pgTable(
     dnsTtl: integer('dns_ttl'),
     dnsProxied: boolean('dns_proxied'),
     nginxNodeId: uuid('nginx_node_id').references(() => nodes.id, { onDelete: 'restrict' }),
+    // A domain served by an ingress group keeps the group's first member in nginx_node_id (kept in sync by the
+    // ingress group service); its DNS targets and ACME challenges cover every member.
+    ingressGroupId: uuid('ingress_group_id').references(() => ingressGroups.id, { onDelete: 'restrict' }),
     pendingDnsTargetIp: varchar('pending_dns_target_ip', { length: 45 }),
     ingressMigrationId: uuid('ingress_migration_id'),
     ingressMigrationSourceNodeId: uuid('ingress_migration_source_node_id').references(() => nodes.id, {
@@ -94,6 +98,7 @@ export const domains = pgTable(
     index('domain_dns_provider_idx').on(table.dnsProvider),
     index('domain_integration_connector_idx').on(table.integrationConnectorId),
     index('domain_nginx_node_idx').on(table.nginxNodeId),
+    index('domain_ingress_group_idx').on(table.ingressGroupId),
     index('domain_created_by_idx').on(table.createdById),
     index('domain_folder_idx').on(table.folderId),
   ]

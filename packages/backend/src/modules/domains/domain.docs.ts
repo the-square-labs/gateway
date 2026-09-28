@@ -19,6 +19,7 @@ import {
   CreateDomainSchema,
   DeleteDomainSchema,
   DomainIngressMigrationSchema,
+  DomainIngressPlacementSchema,
   DomainListQuerySchema,
   PreviewDomainSchema,
   ResolveCloudflareMigrationSchema,
@@ -118,6 +119,8 @@ export const listDomainNginxNodesRoute = appRoute({
   path: '/nginx-nodes',
   tags: ['Domains'],
   summary: 'List eligible Nginx ingress nodes for domains',
+  description:
+    'Needs any domains:create grant (broad, folder or node). eligibleNodes are nginx nodes with a public ingress address the caller may create domains on, unconfiguredNodes those without one. ingressGroups lists the ingress groups a new domain may use: every member is an eligible node open to the caller, and at least one member is active; members are listed in site order with their state. Create the domain with ingressGroupId to serve it (and its routes) from every member; Cloudflare DNS then lists every active member address (round robin, no health checks in DNS failover mode none).',
   responses: okJson(UnknownDataResponseSchema),
 });
 
@@ -212,4 +215,15 @@ export const issueDomainCertificateRoute = appRoute({
     'Optional JSON body `{ "folderId": "<ssl certificate folder id>" }` creates the certificate in that SSL certificate folder; requires ssl:cert:issue on the destination.',
   request: { params: IdParamSchema },
   responses: createdJson(UnknownDataResponseSchema),
+});
+
+export const changeDomainIngressPlacementRoute = appRoute({
+  method: 'post',
+  path: '/{id}/ingress-placement',
+  tags: ['Domains'],
+  summary: 'Move a domain onto an ingress group or back to one node',
+  description:
+    'Moves the domain, every route on it and every related registered domain. Onto a group (ingressGroupId): the domain’s current node must be a member and keeps serving; config and certificates reach the other members first, then Cloudflare-managed DNS records become the union of the active members’ addresses (round robin, no health checks: DNS failover mode none). External DNS stays the operator’s: list the members’ addresses there. Back to one node (ingressGroupId null, nginxNodeId a current member): DNS first, then the routes leave the other members. A domain that backs the Pages wildcard profile stays on one node. Onto a group requires domains:create for every member and the multi-node availability entitlement.',
+  request: { params: IdParamSchema, ...jsonBody(DomainIngressPlacementSchema) },
+  responses: okJson(UnknownDataResponseSchema),
 });

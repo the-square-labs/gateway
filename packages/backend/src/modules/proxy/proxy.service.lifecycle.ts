@@ -1,17 +1,19 @@
 import { eq } from 'drizzle-orm';
 import { accessLists } from '@/db/schema/access-lists.js';
 import { certificates } from '@/db/schema/certificates.js';
-import { proxyHosts } from '@/db/schema/index.js';
+import { ingressGroups, proxyHosts } from '@/db/schema/index.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { ingressGroupMemberRows } from '@/modules/ingress-groups/ingress-nodes.js';
 import { stripProxyHealthHistory } from './proxy.service-helpers.js';
 import { withProxyHostLock } from './proxy-host-lock.js';
+import { forgetIngressMemberDeliveries, listIngressMemberDeliveries } from './proxy-ingress-delivery.js';
 import type { CreateProxyAdditionalSecureLinkInput } from './proxy-secure-link.service.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 
-import { logger } from './proxy.service.core.js';
+import { logger, type ProxyHostRow } from './proxy.service.core.js';
 import { ProxyServiceMutations } from './proxy.service.mutations.js';
 
 export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
@@ -35,7 +37,9 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
     // Capture child keys before cleanup removes the bindings from persistence.
     const additionalLinks = (await this.secureLinks?.listAdditional?.(id)) ?? [];
 
-    const abandoningOfflineNode = options.abandonOfflineNode === true;
+    // A route on an ingress group is removed from its connected members; an offline member drops the stale config
+    // in the full sync that follows its reconnect resync, so a group route never needs the abandon path.
+    const abandoningOfflineNode = options.abandonOfflineNode === true && !existing.ingressGroupId;
     if (abandoningOfflineNode) {
       if (this.nodeDispatch.isNodeConnected(existing.nodeId)) {
         throw new AppError(409, 'NGINX_NODE_CONNECTED', 'Connected Nginx nodes require confirmed config cleanup');
@@ -48,8 +52,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
       // Preserve the currently active deployment until Nginx has confirmed
       // the config removal. This avoids GCing a certificate for a still-serving host.
       try {
-        await this.removeConfigFromNode(id, existing.nodeId);
-        await this.certificateDistribution.deactivateHost(id, existing.nodeId);
+        await this.withdrawHost(existing);
       } catch (error) {
         throw new AppError(
           500,
@@ -65,7 +68,11 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
       await this.secureLinks?.cleanup(existing);
     }
     if (existing.upstreamKind === 'pages') {
-      await this.pageRoutes?.removeHost(id, existing.nodeId, abandoningOfflineNode);
+      await this.pageRoutes?.removeHost(
+        id,
+        existing.ingressGroupId ? await this.ingressNodesOf(existing) : existing.nodeId,
+        abandoningOfflineNode
+      );
     }
     await this.additionalRoutes?.cleanupForHost(existing, abandoningOfflineNode);
     try {
@@ -77,6 +84,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
       throw error;
     }
 
+    if (existing.ingressGroupId) await forgetIngressMemberDeliveries(this.db, id);
     this.forgetSecureLinkRuntime(id);
     this.hostConfigEpochs.delete(id);
     for (const binding of additionalLinks) this.forgetSecureLinkRuntime(`additional:${binding.id}`);
@@ -129,6 +137,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
         })
       : null;
     const tlsDistribution = await this.certificateDistribution.getStatusForHost(host);
+    const ingress = await this.ingressPlacementView(host);
     const [displayHost] = await attachDockerUpstreamDisplay(this.db, [host]);
     return {
       ...stripProxyHealthHistory(displayHost!),
@@ -157,7 +166,51 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
           }
         : null,
       tlsDistribution,
+      ...ingress,
       pageTarget: displayHost?.pageTarget ?? null,
+    };
+  }
+
+  /**
+   * Where a route is served: the nodes, and for a route on an ingress group the group, its members and the
+   * per-member delivery (config and certificate version each member confirmed, pending or failed with the reason).
+   */
+  protected async ingressPlacementView(host: ProxyHostRow) {
+    const servingNodeIds = await this.ingressNodesOf(host);
+    if (!host.ingressGroupId) return { servingNodeIds, ingressGroup: null, ingressDelivery: [] };
+    const [group, members, deliveries] = await Promise.all([
+      this.db.query.ingressGroups.findFirst({
+        where: eq(ingressGroups.id, host.ingressGroupId),
+        columns: { id: true, name: true, slug: true, dnsFailoverMode: true },
+      }),
+      ingressGroupMemberRows(this.db, host.ingressGroupId),
+      listIngressMemberDeliveries(this.db, [host.id]),
+    ]);
+    return {
+      servingNodeIds,
+      ingressGroup: group
+        ? {
+            ...group,
+            members: members.map((member) => ({
+              nodeId: member.nodeId,
+              state: member.state,
+              priority: member.priority,
+            })),
+          }
+        : null,
+      ingressDelivery: members.map((member) => {
+        const delivery = deliveries.find((candidate) => candidate.nodeId === member.nodeId);
+        return {
+          nodeId: member.nodeId,
+          status: !host.enabled ? 'disabled' : (delivery?.status ?? 'pending'),
+          appliedConfigHash: delivery?.appliedConfigHash ?? null,
+          desiredConfigHash: delivery?.desiredConfigHash ?? null,
+          appliedCertificateVersion: delivery?.appliedCertificateVersion ?? null,
+          desiredCertificateVersion: delivery?.desiredCertificateVersion ?? null,
+          lastError: delivery?.lastError ?? null,
+          appliedAt: delivery?.appliedAt ?? null,
+        };
+      }),
     };
   }
 

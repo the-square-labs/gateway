@@ -13,11 +13,15 @@ import {
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
 import {
-  canPickDomainNginxNode,
   domainNginxNodeOptionsForScopes,
   resolveDomainCreationNginxNodeId,
 } from '@/modules/domains/domain-creation-access.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
+import {
+  assertCanPreviewDomainDestination,
+  assertDomainCreationOnGroup,
+  assertDomainPlacementAccess,
+} from '@/modules/ingress-groups/ingress-group-operations.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -30,6 +34,7 @@ import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import type { AppEnv } from '@/types.js';
 import {
+  changeDomainIngressPlacementRoute,
   checkDomainDnsRoute,
   createDomainFolderRoute,
   createDomainRoute,
@@ -56,6 +61,7 @@ import {
   CreateDomainSchema,
   DeleteDomainSchema,
   DomainIngressMigrationSchema,
+  DomainIngressPlacementSchema,
   DomainListQuerySchema,
   IssueDomainCertificateSchema,
   PreviewDomainSchema,
@@ -188,21 +194,23 @@ domainRoutes.openapi({ ...searchDomainsRoute, middleware: requireScopeBase('doma
 // the create call itself checks the chosen destination.
 domainRoutes.openapi({ ...listDomainNginxNodesRoute, middleware: requireScopeBase('domains:create') }, async (c) => {
   const domainsService = container.resolve(DomainsService);
+  const scopes = c.get('effectiveScopes') || [];
   const options = await domainsService.getNginxNodeOptions();
-  return c.json({ data: domainNginxNodeOptionsForScopes(options, c.get('effectiveScopes') || []) });
+  return c.json({
+    data: {
+      ...domainNginxNodeOptionsForScopes(options, scopes),
+      ingressGroups: await domainsService.getIngressGroupOptions(scopes, options),
+    },
+  });
 });
 
 // Preview domain DNS (must be before /:id)
 domainRoutes.openapi({ ...previewDomainRoute, middleware: requireScopeBase('domains:create') }, async (c) => {
   const body = await c.req.json();
   const input = PreviewDomainSchema.parse(body);
-  // The preview returns the node's hostname and addresses: node-only creators may
-  // preview only on a node of their grant (and must name it).
-  if (!canPickDomainNginxNode(c.get('effectiveScopes') || [], input.nginxNodeId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected Nginx node', {
-      requiredScope: input.nginxNodeId ? `domains:create:node/${input.nginxNodeId}` : 'domains:create',
-    });
-  }
+  // The preview returns node hostnames and addresses: node-only creators may preview only on nodes of
+  // their grant (and must name them; every member for an ingress group).
+  await assertCanPreviewDomainDestination(c.get('effectiveScopes') || [], input);
   const domainsService = container.resolve(DomainsService);
   try {
     const preview = await domainsService.previewDomain(input);
@@ -237,8 +245,11 @@ domainRoutes.openapi(createDomainRoute, async (c) => {
   const nginxNodeId = await resolveDomainCreationNginxNodeId(scopes, request, () =>
     domainsService.getNginxNodeOptions()
   );
-  const input = nginxNodeId ? { ...request, nginxNodeId } : request;
-  if (!hasScopeForCreation(scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
+  const input = nginxNodeId && !request.ingressGroupId ? { ...request, nginxNodeId } : request;
+  if (input.ingressGroupId) {
+    // A domain on an ingress group is served by every member.
+    await assertDomainCreationOnGroup(scopes, input.ingressGroupId, input.folderId);
+  } else if (!hasScopeForCreation(scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
     throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');
   }
   await container.resolve(DomainFolderService).assertFolderExists(input.folderId);
@@ -263,6 +274,8 @@ domainRoutes.openapi({ ...updateDomainRoute, middleware: requireScopeForResource
   const body = await c.req.json();
   const input = UpdateDomainSchema.parse(body);
   const domainsService = container.resolve(DomainsService);
+  if (input.ingressGroupId !== undefined)
+    await assertDomainPlacementAccess(c.get('effectiveScopes') || [], c.req.param('id')!, input);
   try {
     const domain = await domainsService.updateDomain(c.req.param('id')!, input, user.id);
     return c.json({ data: domain });
@@ -373,6 +386,17 @@ domainRoutes.openapi(
       }
       return c.json({ code: 'ERROR', message: err instanceof Error ? err.message : 'Failed to migrate ingress' }, 400);
     }
+  }
+);
+
+domainRoutes.openapi(
+  { ...changeDomainIngressPlacementRoute, middleware: requireScopeForResource('domains:edit', 'id') },
+  async (c) => {
+    const id = c.req.param('id')!;
+    const input = DomainIngressPlacementSchema.parse(await c.req.json());
+    await assertDomainPlacementAccess(c.get('effectiveScopes') || [], id, input);
+    const data = await container.resolve(DomainsService).changeDomainIngressPlacement(id, input, c.get('user')!.id);
+    return c.json({ data });
   }
 );
 

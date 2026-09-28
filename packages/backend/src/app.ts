@@ -79,6 +79,7 @@ import { inferenceAuthMiddleware } from '@/modules/inference/inference-auth.midd
 import { inferenceDataPlaneRoutes } from '@/modules/inference/inference-data-plane.routes.js';
 import { inferenceDiscoveryRoutes } from '@/modules/inference/inference-discovery.routes.js';
 import { inferenceSetupRoutes } from '@/modules/inference/inference-setup.routes.js';
+import { ingressGroupRoutes } from '@/modules/ingress-groups/ingress-group.routes.js';
 import { integrationsRoutes } from '@/modules/integrations/integrations.routes.js';
 import { licenseRoutes } from '@/modules/license/license.routes.js';
 import { loggingRouteRuntime } from '@/modules/logging/logging-route-runtime.js';
@@ -779,6 +780,7 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/nginx-templates', nginxTemplateRoutes);
   app.route('/api/ssl-certificates', sslRoutes);
   app.route('/api/domains', domainRoutes);
+  app.route('/api/ingress-groups', ingressGroupRoutes);
   app.route('/api/access-lists', accessListRoutes);
   app.route('/api/monitoring', monitoringRoutes);
   app.route('/api/setup', setupRoutes);

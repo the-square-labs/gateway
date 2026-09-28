@@ -42,8 +42,8 @@ describe('AI tool registry characterization', () => {
     };
 
     expect(summary).toEqual({
-      count: 259,
-      digest: '1ff2fad7752a4e86968c1c6b06ff3025e092d8ad3c2fb8c9e6b6dc460ab4dcdf',
+      count: 260,
+      digest: '747cd498bcf6d4e56c8c0afea92724ae94ab664cad7a4f5f1e9bb07eab7304ce',
       categoryCounts: {
         Discovery: 7,
         Artifact: 2,
@@ -54,7 +54,7 @@ describe('AI tool registry characterization', () => {
         'PKI - Certificates': 5,
         'PKI - Templates': 4,
         Folders: 2,
-        Ingress: 18,
+        Ingress: 19,
         'SSL Certificates': 4,
         Domains: 4,
         'Access Lists': 4,
@@ -89,10 +89,10 @@ describe('AI tool registry characterization', () => {
         'Web Search': 1,
       },
       destructive: {
-        count: 151,
-        digest: 'a5b9f9ee31006b5e12f805fd64820fa359a1e52f2bfe2dc8e24dadbadf4b2ff1',
+        count: 152,
+        digest: '678fc458e252c1ff56d5e5761bcb187e62def0a66a7b51335e6a0385333637c2',
       },
-      invalidationMapDigest: '34356f6f7784946e7ce4ee6555f660a544a55a8bfe8a3a1fb5039d6595cdd3a1',
+      invalidationMapDigest: '131c227323252d3008143963bed5d3a1ff68e0c1517a6be8b8c6761b2a91ef26',
     });
     expect(new Set(AI_TOOLS.map((tool) => tool.name)).size).toBe(AI_TOOLS.length);
   });
@@ -114,20 +114,20 @@ describe('AI tool registry characterization', () => {
       )
     ).toEqual({
       allDefault: {
-        count: 253,
-        digest: 'eb29dbe632dbe83f0e8e71fd1f95a9663012aac0d6d7ee6847d4f6e902180161',
+        count: 254,
+        digest: '162b234f1c8c609f1b33e06dd3f44a1b653dbcae494073eb141acf93a90c197d',
       },
       allCapabilities: {
-        count: 254,
-        digest: 'af77941a089e7f11eed524680f5962557308d5632df3b1ad0f7444b926d3fd6b',
+        count: 255,
+        digest: '585497abbaf432400637ef35a9bbb36303aa49635a6f34b2ba8cc707cffb8b85',
       },
       discoveredIngressDocker: {
-        count: 81,
-        digest: 'c82d3678904eef7394c53217c27dcb6d30c3b2e07f983d1ee9a27422bcc59e5f',
+        count: 82,
+        digest: '9db4483deaea4b01e3deae2f06c88699f0ac91f9bca7f9bead66837e0714bf61',
       },
       planningMode: {
-        count: 148,
-        digest: '92b4321eddafb73879491b9d24b38cff4712418624a7092d9f830bd5096847af',
+        count: 149,
+        digest: '3b0e53d152d3e705b74105f96b7ee89ba7cbd240d870dc427628b38269afa3b3',
       },
     });
     expect(matrix.allDefault).not.toContain('web_search');

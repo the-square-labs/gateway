@@ -65,6 +65,7 @@ describe("CreateProxyHostDialog", () => {
       } as never,
     });
     vi.spyOn(api, "listFolders").mockResolvedValue([]);
+    vi.spyOn(api, "listRouteIngressGroups").mockResolvedValue([]);
   });
 
   it("shows a cached nginx node while the refresh is still pending", async () => {

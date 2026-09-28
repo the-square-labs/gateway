@@ -29,6 +29,8 @@ export interface StatusPageConfig {
   description: string;
   domain: string;
   nodeId: string | null;
+  /** Serve the public page from every member of this ingress group (nodeId then shows its first active member). */
+  ingressGroupId?: string | null;
   sslCertificateId: string | null;
   proxyTemplateId: string | null;
   upstreamUrl: string | null;

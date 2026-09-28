@@ -41,7 +41,13 @@ export class PageRouteService {
   }> {
     return commercialModuleUnavailable();
   }
-  async activateNewHost(_proxyHostId: string, _nodeId: string, _projectId: string, _tagId: string): Promise<void> {
+  /** Materialises a new Pages route on its node, or on every member of its ingress group (a node list). */
+  async activateNewHost(
+    _proxyHostId: string,
+    _nodes: string | readonly string[],
+    _projectId: string,
+    _tagId: string
+  ): Promise<void> {
     return commercialModuleUnavailable();
   }
   async getRenderConfig(_proxyHostId: string): Promise<{
@@ -65,7 +71,11 @@ export class PageRouteService {
     return commercialModuleUnavailable();
   }
   async reconcile(): Promise<void> {}
-  async removeHost(_proxyHostId: string, _nodeId: string | null, _abandonOfflineNode?: boolean): Promise<void> {
+  async removeHost(
+    _proxyHostId: string,
+    _nodes: string | readonly string[] | null,
+    _abandonOfflineNode?: boolean
+  ): Promise<void> {
     return commercialModuleUnavailable();
   }
   async publishRuntimeConfig(_request: PageRuntimeConfigPublicationRequest): Promise<void> {
@@ -88,6 +98,13 @@ export class PageRouteService {
     return commercialModuleUnavailable();
   }
   async cleanupMigratedSource(_proxyHostId: string, _sourceNodeId: string, _connected: boolean): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  /**
+   * A Pages route on an ingress group: materialises its active deployment and runtime config on nodes that start
+   * serving it and removes them from nodes that stop serving it.
+   */
+  async syncServingNodes(_proxyHostId: string, _addedNodeIds: string[], _removedNodeIds: string[]): Promise<void> {
     return commercialModuleUnavailable();
   }
   async retarget(_proxyHostId: string, _projectId: string, _tagId: string, _userId: string): Promise<void> {

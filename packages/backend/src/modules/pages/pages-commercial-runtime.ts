@@ -7,6 +7,7 @@ import { PageMaintenanceService } from './retention/page-maintenance.service.js'
 import { PageRetentionService } from './retention/page-retention.service.js';
 import { PageRouteService } from './routes/page-route.service.js';
 import { PageNodeRuntimeService } from './runtime/page-node-runtime.service.js';
+import { PageNodesRuntime } from './runtime/page-nodes-runtime.js';
 import { PageRuntimeConfigService } from './runtime-config/page-runtime-config.service.js';
 import { PagePublicationService } from './tags/page-publication.service.js';
 import { PageTagService } from './tags/page-tag.service.js';
@@ -61,6 +62,7 @@ import { hasScopeForResource } from '@/lib/permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { resolveIngressNodes } from '@/modules/ingress-groups/ingress-nodes.js';
 import { resolvePageDeploymentExpiry } from '@/modules/pages/deployments/page-deployment-expiry.js';
 import { PAGE_EVENT_CHANNELS, pageProjectEvent } from '@/modules/pages/page-events.js';
 import {
@@ -124,4 +126,6 @@ export const pagesCommercialRuntime = {
   createChildLogger,
   accessLists,
   resolvePageDeploymentExpiry,
+  resolveIngressNodes,
+  PageNodesRuntime,
 };

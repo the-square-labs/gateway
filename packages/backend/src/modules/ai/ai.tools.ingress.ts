@@ -41,7 +41,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_route',
     description:
-      'Create an ingress route on an nginx ingress node. nodeId is optional: omitted, the route uses the ingress node its registered Gateway domains are assigned to, or the only node you may create routes on; when several qualify the call fails and lists them (list_route_ingress_nodes shows them up front, no node permission needed). Needs proxy:create broadly, on the route folder (pass folderId), or on the ingress node.',
+      'Create an ingress route on an nginx ingress node or an ingress group. nodeId is optional: omitted, the route uses the ingress node or group its registered Gateway domains are assigned to, or the only node you may create routes on; when several qualify the call fails and lists them (list_route_ingress_nodes shows nodes and groups up front, no node permission needed). Pass ingressGroupId instead of nodeId to serve the route from every member of an ingress group (config and certificates on each member; needs the multi-node availability license feature). Needs proxy:create broadly, on the route folder (pass folderId), or on the ingress node (on every member for a group).',
     parameters: {
       type: 'object',
       properties: {
@@ -51,11 +51,16 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
           description:
             'Nginx ingress node UUID. Omit it when a domain is a registered Gateway domain (its ingress node is used) or when list_route_ingress_nodes returns one node.',
         },
+        ingressGroupId: {
+          type: 'string',
+          description:
+            'Ingress group UUID (from list_route_ingress_nodes groups): serve the route from every member instead of one node. Do not pass nodeId with it.',
+        },
         domainNames: {
           type: 'array',
           items: { type: 'string' },
           description:
-            'Domain names for this route; all registered Gateway domains among them must share one ingress node',
+            'Domain names for this route; all registered Gateway domains among them must share one ingress node or group',
         },
         upstreamKind: {
           type: 'string',
@@ -159,7 +164,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_route_ingress_nodes',
     description:
-      'List the nginx ingress nodes you may create routes on: id, displayName, hostname, and availability status only, with no node permission needed. A broad or folder proxy:create grant covers every node, a node grant only that node; nodes locked for new services are omitted. Pass folderId to see the nodes allowed for a route in that folder. Use an id as create_route nodeId when the route has no registered Gateway domain and more than one node is listed.',
+      'List the nginx ingress nodes and ingress groups you may create routes on: data has id, displayName, hostname, and availability status of each node, with no node permission needed; groups has id, name, slug, dnsFailoverMode and the members (same node fields plus state joining, active or draining) in site order. A broad or folder proxy:create grant covers every node, a node grant only that node; nodes locked for new services are omitted, and a group is listed only when every member is. Pass folderId to see what a route in that folder may use. Use a node id as create_route nodeId, or a group id as create_route ingressGroupId to serve the route from every member.',
     parameters: {
       type: 'object',
       properties: {
@@ -183,7 +188,16 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
           enum: ['proxy', 'redirect', '404'],
           description: 'Host type; raw is handled by raw tools',
         },
-        nodeId: { type: 'string', description: 'Nginx ingress node UUID to deploy this route on' },
+        nodeId: {
+          type: 'string',
+          description:
+            'Nginx ingress node UUID to deploy this route on. For a route on an ingress group, pass ingressGroupId null with nodeId (a current member) to serve it from that node only.',
+        },
+        ingressGroupId: {
+          type: ['string', 'null'],
+          description:
+            'Move the route onto this ingress group (config and certificates reach every new member before the old node stops serving it; needs proxy:create on every member and the multi-node availability license feature), or null with nodeId to move it back to one member node.',
+        },
         domainNames: { type: 'array', items: { type: 'string' }, description: 'Domain names' },
         upstreamKind: {
           type: 'string',
@@ -548,7 +562,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_domain',
     description:
-      'Create a Gateway domain on an eligible Nginx ingress node. dnsProvider cloudflare (default) manages A/AAAA records through a synced Cloudflare zone; external only records the domain and expects DNS to be managed elsewhere. If Cloudflare already has different A/AAAA records, the tool returns conflict metadata; retry with overwriteDns only after explicit user approval. Use manage_domain preview first to see the DNS plan.',
+      'Create a Gateway domain on an eligible Nginx ingress node or an ingress group. dnsProvider cloudflare (default) manages A/AAAA records through a synced Cloudflare zone; external only records the domain and expects DNS to be managed elsewhere. With ingressGroupId the domain and its routes are served by every member, and Cloudflare DNS lists every active member address (round robin: DNS failover mode none does not health-check, so an unreachable member keeps receiving its share of clients). If Cloudflare already has different A/AAAA records, the tool returns conflict metadata; retry with overwriteDns only after explicit user approval. Use manage_domain preview first to see the DNS plan.',
     parameters: {
       type: 'object',
       properties: {
@@ -561,6 +575,11 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
           type: 'string',
           description:
             'Nginx ingress node UUID. Omit it when exactly one node with a public address is open to your domains:create grant at this destination; otherwise the call fails and lists them. manage_domain list_nginx_nodes lists them without node permissions.',
+        },
+        ingressGroupId: {
+          type: 'string',
+          description:
+            'Ingress group UUID (manage_domain list_nginx_nodes ingressGroups): serve the domain from every member instead of one node. Needs domains:create covering every member and the multi-node availability license feature.',
         },
         overwriteDns: {
           type: 'boolean',
@@ -598,7 +617,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_domain',
     description:
-      'Inspect and manage domains. Operations without domainId (any domains:create grant, broad, on a folder or on a node): list_nginx_nodes (ingress nodes the caller may create domains on), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying), check_dns, resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain, placed in certificateFolderId; also needs ssl:cert:issue on that SSL certificate folder, or broadly for the root), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
+      'Inspect and manage domains. Operations without domainId (any domains:create grant, broad, on a folder or on a node): list_nginx_nodes (ingress nodes and ingress groups the caller may create domains on), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId or ingressGroupId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying; ingressGroupId moves the domain and all its routes onto an ingress group, members first and DNS last, or null with nginxNodeId, a current member, moves them back to that node, DNS first), check_dns, resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain, placed in certificateFolderId; also needs ssl:cert:issue on that SSL certificate folder, or broadly for the root), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
     parameters: {
       type: 'object',
       properties: {
@@ -629,7 +648,13 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         },
         nginxNodeId: {
           type: 'string',
-          description: 'Nginx node UUID for preview, or for resolve_cloudflare_migration with action update_dns.',
+          description:
+            'Nginx node UUID for preview, for resolve_cloudflare_migration with action update_dns, or for update with ingressGroupId null.',
+        },
+        ingressGroupId: {
+          type: ['string', 'null'],
+          description:
+            'Ingress group UUID for preview, or for update to move the domain onto the group (null with nginxNodeId moves it back to one member node).',
         },
         targetNodeId: {
           type: 'string',

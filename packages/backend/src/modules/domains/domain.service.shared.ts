@@ -10,6 +10,7 @@ export interface DomainUsage {
     domainNames: string[];
     enabled: boolean;
     nodeId: string | null;
+    ingressGroupId?: string | null;
     folderId?: string | null;
   }>;
   sslCertificates: Array<{ id: string; domainNames: string[]; status: string; notAfter: Date | null }>;
@@ -59,9 +60,22 @@ export type CloudflareAddressRecord = {
   comment?: string | null;
 };
 
+/** Where a domain is served: one node, or an ingress group (nginxNode = its first active member). */
+export type DomainIngressPlacement = {
+  nginxNode: EligibleNginxNode;
+  ingressGroupId: string | null;
+  /** Addresses Gateway publishes: the node's first effective address, or one per active group member. */
+  targetIps: string[];
+  /** Addresses existing records may already use: every ingress address of the node or of each serving member. */
+  allowedIps: string[];
+};
+
 export type DomainCloudflarePlan = {
   domainName: string;
   nginxNode: EligibleNginxNode;
+  ingressGroupId: string | null;
+  /** The placement's publication target (the full member union for a group), which targetIps may be a subset of. */
+  placementTargetIps: string[];
   targetIps: string[];
   ttl: number;
   proxied: boolean;
@@ -82,6 +96,7 @@ export type DomainCloudflarePlan = {
 export type DomainExternalPlan = {
   domainName: string;
   nginxNode: EligibleNginxNode;
+  ingressGroupId: string | null;
   targetIps: string[];
   queryName: string;
   dnsRecords: DnsRecords;

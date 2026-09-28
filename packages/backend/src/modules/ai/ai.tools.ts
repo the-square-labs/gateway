@@ -9,6 +9,7 @@ import { GITLAB_AI_TOOLS } from './ai.tools.gitlab.js';
 import { HOSTING_AI_TOOLS } from './ai.tools.hosting.js';
 import { INFERENCE_AI_TOOLS } from './ai.tools.inference.js';
 import { INGRESS_AI_TOOLS } from './ai.tools.ingress.js';
+import { INGRESS_GROUP_AI_TOOLS } from './ai.tools.ingress-groups.js';
 import { INTEGRATION_AI_TOOLS } from './ai.tools.integrations.js';
 import { NOTIFICATION_AI_TOOLS, WEB_SEARCH_AI_TOOL } from './ai.tools.notifications.js';
 import { OPERATION_AI_TOOLS } from './ai.tools.operations.js';
@@ -27,6 +28,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   ...PKI_AI_TOOLS,
   ...FOLDER_AI_TOOLS,
   ...INGRESS_AI_TOOLS,
+  ...INGRESS_GROUP_AI_TOOLS,
   ...PLATFORM_AI_TOOLS,
   ...CONTROL_AI_TOOLS,
   ...DOCKER_AI_TOOLS,

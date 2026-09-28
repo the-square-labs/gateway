@@ -29,6 +29,10 @@ type Manager struct {
 	// (replaceable in tests).
 	resolvePIDFile func() (string, error)
 	readPID        func(pidFile string) (int, error)
+	// Config generation (ingress health): bumped with every successful reload, see ingress_health.go.
+	reloadMu     sync.Mutex
+	generationMu sync.Mutex
+	generation   uint64
 }
 
 var effectivePIDDirectivePattern = regexp.MustCompile(`(?m)^\s*pid\s+(?:"([^"]+)"|'([^']+)'|([^;\s]+))\s*;`)
@@ -112,7 +116,14 @@ func (m *Manager) CachedConfigValidity() (valid bool, checkedAt time.Time, check
 	return m.configOK, m.checkedAt, !m.checkedAt.IsZero()
 }
 
+// Reload asks nginx to load the configuration on disk. Every reload carries the next config generation (a
+// managed http-level variable), so the ingress health responder can tell whether nginx really runs the
+// configuration of the last successful reload: a reload signal nginx accepts but fails to apply leaves the old
+// generation in service.
 func (m *Manager) Reload() error {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	commit := m.stageNextGeneration()
 	args := []string{"-s", "reload"}
 	if m.globalCfg != "" {
 		args = append(args, "-c", m.globalCfg)
@@ -122,8 +133,10 @@ func (m *Manager) Reload() error {
 	// A reload may load a pid directive the cached path does not know.
 	m.pids.invalidatePath()
 	if err != nil {
+		commit(false)
 		return fmt.Errorf("nginx reload failed: %s: %w", string(output), err)
 	}
+	commit(true)
 	return nil
 }
 
