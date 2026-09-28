@@ -238,27 +238,3 @@ func TestLeaseServeSetStartsOneSlotWithoutARecordedActiveSlot(t *testing.T) {
 		t.Fatalf("a container placement keeps its container: %+v", serve)
 	}
 }
-
-// Stand run c2: the deployment router of a lease holder was never started after
-// a host reboot, and the placement's Secure Link member targets it.
-func TestLeaseDeploymentRoutersToStartPicksTheHoldersStoppedRouter(t *testing.T) {
-	owned := func(role, deployment string) map[string]string {
-		return map[string]string{deploymentManagedLabel: "true", deploymentIDLabel: deployment, deploymentRoleLabel: role}
-	}
-	withPolicy := func(labels map[string]string, policy string) map[string]string {
-		labels[availabilityPolicyLabel] = policy
-		return labels
-	}
-	containers := []ContainerInfo{
-		{ID: "app-blue", State: "running", Labels: withPolicy(owned("app", "dep-1"), "policy-1")},
-		{ID: "router-1", State: "exited", Labels: owned("router", "dep-1")},
-		{ID: "router-running", State: "running", Labels: owned("router", "dep-3")},
-		{ID: "app-other", State: "exited", Labels: withPolicy(owned("app", "dep-2"), "policy-2")},
-		{ID: "router-2", State: "exited", Labels: owned("router", "dep-2")},
-		{ID: "app-3", State: "running", Labels: withPolicy(owned("app", "dep-3"), "policy-1")},
-	}
-	got := leaseDeploymentRoutersToStart("policy-1", containers)
-	if len(got) != 1 || got[0] != "router-1" {
-		t.Fatalf("routers to start = %v, want only the stopped router of this policy's deployment", got)
-	}
-}

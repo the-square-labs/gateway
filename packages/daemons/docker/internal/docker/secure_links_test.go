@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,6 +22,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	mobyclient "github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
 
 func secureLinkConnectorInspect(id, image, controlDirectory string) container.InspectResponse {
@@ -315,8 +319,8 @@ func TestDormantMemberWithStoppedStandbyDoesNotFailTheSync(t *testing.T) {
 		}
 		return "10.0.0.2", binding.TargetNetwork, nil
 	}
-	resolved, networks, err := resolveSecureLinkTargets(bindings, resolve, false)
-	if err != nil || len(resolved) != 1 || len(networks) != 1 {
+	resolved, networks, skipped, err := resolveSecureLinkTargets(bindings, resolve, false)
+	if err != nil || len(resolved) != 1 || len(networks) != 1 || len(skipped) != 1 {
 		t.Fatalf("dormant standby must be skipped, resolved=%d networks=%v err=%v", len(resolved), networks, err)
 	}
 	normalized := normalizeResolvedTargetBindings(&pb.SyncProxySecureLinksCommand{Bindings: bindings}, resolved)
@@ -325,7 +329,7 @@ func TestDormantMemberWithStoppedStandbyDoesNotFailTheSync(t *testing.T) {
 	}
 	bindings[1].AvailabilityPolicyId = ""
 	bindings[1].Dormant = false
-	if _, _, err := resolveSecureLinkTargets(bindings, resolve, false); err == nil {
+	if _, _, _, err := resolveSecureLinkTargets(bindings, resolve, false); err == nil {
 		t.Fatal("a link outside lease mode with a stopped target must still fail a Gateway sync")
 	}
 }
@@ -345,8 +349,9 @@ func TestLeaseModeMemberWithStoppedContainerStaysCommitted(t *testing.T) {
 		}
 		return "10.0.0.2", binding.TargetNetwork, nil
 	}
-	resolved, _, err := resolveSecureLinkTargets(bindings, resolve, false)
-	if err != nil || len(resolved) != 1 || resolved[0].binding.LinkId != bindings[0].LinkId {
+	resolved, _, skipped, err := resolveSecureLinkTargets(bindings, resolve, false)
+	if err != nil || len(resolved) != 1 || resolved[0].binding.LinkId != bindings[0].LinkId ||
+		len(skipped) != 1 || skipped[0].binding.LinkId != bindings[1].LinkId {
 		t.Fatalf("a live lease-mode member with a stopped container must not fail the sync: resolved=%d err=%v", len(resolved), err)
 	}
 	normalized := normalizeResolvedTargetBindings(&pb.SyncProxySecureLinksCommand{Bindings: bindings}, resolved)
@@ -368,11 +373,11 @@ func TestRestoreSkipsStoppedTargetsAndKeepsTheirNetworks(t *testing.T) {
 		}
 		return "10.0.0.3", binding.TargetNetwork, nil
 	}
-	if _, _, err := resolveSecureLinkTargets(bindings, resolve, false); err == nil {
+	if _, _, _, err := resolveSecureLinkTargets(bindings, resolve, false); err == nil {
 		t.Fatal("a Gateway sync must still report the stopped target")
 	}
-	resolved, networks, err := resolveSecureLinkTargets(bindings, resolve, true)
-	if err != nil || len(resolved) != 1 || len(networks) != 1 {
+	resolved, networks, skipped, err := resolveSecureLinkTargets(bindings, resolve, true)
+	if err != nil || len(resolved) != 1 || len(networks) != 1 || len(skipped) != 1 {
 		t.Fatalf("a restore must bind the running target: resolved=%d err=%v", len(resolved), err)
 	}
 	committed := normalizeTargetBindings(&pb.SyncProxySecureLinksCommand{Bindings: bindings}, []dockerSecureLinkStatus{{
@@ -380,5 +385,168 @@ func TestRestoreSkipsStoppedTargetsAndKeepsTheirNetworks(t *testing.T) {
 	}})
 	if committed.Bindings[0].TargetNetwork != "net-a" || committed.Bindings[1].TargetNetwork != "net-b" {
 		t.Fatalf("the skipped link must keep its network: %+v", committed.Bindings)
+	}
+}
+
+// TestSecureLinkRestoreBindsTheOtherLinksWhenOneTargetIsDown reproduces a node
+// reboot where one link's target (a deployment router) did not come back: the
+// restore binds every other link of the node instead of none.
+func TestSecureLinkRestoreBindsTheOtherLinksWhenOneTargetIsDown(t *testing.T) {
+	directory, err := os.MkdirTemp("", "sl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	socketPath := filepath.Join(directory, "secure-link.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	var syncMu sync.Mutex
+	var synced [][]securelink.BindingConfig
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			var request securelink.SyncRequest
+			if securelink.ReadJSON(connection, &request) == nil {
+				syncMu.Lock()
+				synced = append(synced, request.Bindings)
+				syncMu.Unlock()
+				response := securelink.SyncResponse{Version: securelink.ProtocolVersion}
+				for i, binding := range request.Bindings {
+					response.Bindings = append(response.Bindings, securelink.BindingStatus{ID: binding.ID, Generation: binding.Generation, Port: uint16(20000 + i)})
+				}
+				_ = securelink.WriteJSON(connection, response)
+			}
+			_ = connection.Close()
+		}
+	}()
+
+	connector := secureLinkConnectorInspect("connector-id", developmentSecureLinkImage, directory)
+	connector.State = &container.State{Running: true}
+	connector.NetworkSettings = &container.NetworkSettings{Ports: network.PortMap{}, Networks: map[string]*network.EndpointSettings{
+		secureLinkManagementNetwork: {IPAddress: netip.MustParseAddr("172.31.0.2")},
+	}}
+	targets := map[string]container.InspectResponse{
+		"router-a": {
+			ID: "router-a-id", State: &container.State{Running: true}, HostConfig: &container.HostConfig{NetworkMode: "net-a"},
+			NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{"net-a": {IPAddress: netip.MustParseAddr("10.0.1.2")}}},
+		},
+		// Exited (255) after the reboot: restart policy "no".
+		"router-b": {
+			ID: "router-b-id", State: &container.State{Running: false, ExitCode: 255}, HostConfig: &container.HostConfig{NetworkMode: "net-b"},
+			NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}},
+		},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks/"+secureLinkManagementNetwork):
+			_ = json.NewEncoder(w).Encode(network.Inspect{Network: network.Network{
+				ID: "management-network-id", Driver: "bridge", Internal: true,
+				Labels: map[string]string{"wiolett.gateway.managed": "secure-link"},
+			}})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/"+secureLinkConnectorName+"/json"):
+			_ = json.NewEncoder(w).Encode(connector)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/networks/net-a/connect"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/"):
+			name := strings.TrimSuffix(r.URL.Path[strings.LastIndex(r.URL.Path, "/containers/")+len("/containers/"):], "/json")
+			if target, ok := targets[name]; ok {
+				_ = json.NewEncoder(w).Encode(target)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "No such container: " + name})
+		default:
+			t.Errorf("unexpected Docker request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotImplemented)
+		}
+	}))
+	defer server.Close()
+	cli, err := mobyclient.NewClientWithOpts(mobyclient.WithHost(server.URL), mobyclient.WithVersion("1.43"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+
+	serving := "11111111-1111-4111-8111-111111111111"
+	down := "22222222-2222-4222-8222-222222222222"
+	store, err := securelink.NewStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Commit(&pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{
+		{LinkId: serving, Role: "target", Generation: 1, TargetContainer: "router-a", TargetNetwork: "net-a", TargetPort: 8080, ConnectorImage: developmentSecureLinkImage},
+		{LinkId: down, Role: "target", Generation: 1, TargetContainer: "router-b", TargetNetwork: "net-b", TargetPort: 8080, ConnectorImage: developmentSecureLinkImage},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	manager := &dockerSecureLinkManager{
+		plugin: &DockerPlugin{
+			client: &Client{cli: cli}, secureLinkState: store,
+			logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		},
+		socketPath: socketPath, bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
+	}
+
+	if err := manager.restoreBindings(); err != nil {
+		t.Fatalf("one stopped target must not fail the restore of the others: %v", err)
+	}
+	if binding, ok := manager.bindings[serving]; !ok || binding.port != 20000 || binding.targetHost != "10.0.1.2" {
+		t.Fatalf("the running target's link must be bound, bindings = %+v", manager.bindings)
+	}
+	if _, ok := manager.bindings[down]; ok {
+		t.Fatal("the stopped target's link must stay unbound")
+	}
+	syncMu.Lock()
+	if len(synced) != 1 || len(synced[0]) != 1 || synced[0][0].ID != serving {
+		t.Fatalf("connector syncs = %+v, want the running target's link only", synced)
+	}
+	syncMu.Unlock()
+	if _, err := manager.dialCurrent(context.Background(), down); !errors.Is(err, errSecureLinkTargetUnavailable) {
+		t.Fatalf("dial of the unbound link = %v, want target unavailable so recoveries coalesce", err)
+	}
+}
+
+func TestSecureLinkRestoreResolvesPerBinding(t *testing.T) {
+	bindings := []*pb.ProxySecureLinkBinding{
+		{LinkId: "11111111-1111-4111-8111-111111111111", TargetContainer: "serving", TargetNetwork: "net-a"},
+		{LinkId: "22222222-2222-4222-8222-222222222222", TargetContainer: "stopped-router", TargetNetwork: "net-b"},
+		{LinkId: "33333333-3333-4333-8333-333333333333", TargetContainer: "detached", TargetNetwork: "net-c"},
+	}
+	resolve := func(binding *pb.ProxySecureLinkBinding) (string, string, error) {
+		switch binding.TargetContainer {
+		case "stopped-router":
+			return "", "", errSecureLinkTargetUnavailable
+		case "detached":
+			return "", "", errors.New("target container is not attached to the selected network")
+		}
+		return "10.0.0.2", binding.TargetNetwork, nil
+	}
+	resolved, networks, skipped, err := resolveSecureLinkTargets(bindings, resolve, true)
+	if err != nil || len(resolved) != 1 || len(skipped) != 2 || len(networks) != 1 {
+		t.Fatalf("restore must bind the resolvable link and skip the others: resolved=%d skipped=%d networks=%v err=%v", len(resolved), len(skipped), networks, err)
+	}
+	if _, _, _, err := resolveSecureLinkTargets(bindings, resolve, false); err == nil {
+		t.Fatal("a Gateway sync keeps refusing an incomplete target set")
+	}
+}
+
+func TestNormalizeTargetBindingsKeepsTheNetworkOfAnUnboundLink(t *testing.T) {
+	restored := &pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{
+		{LinkId: "11111111-1111-4111-8111-111111111111", TargetContainer: "app", TargetNetwork: "old-net", TargetHost: "10.0.0.2"},
+		{LinkId: "22222222-2222-4222-8222-222222222222", TargetContainer: "router", TargetNetwork: "gwdep-dep-1", TargetHost: "10.0.0.3"},
+	}}
+	normalized := normalizeTargetBindings(restored, []dockerSecureLinkStatus{{LinkID: "11111111-1111-4111-8111-111111111111", TargetNetwork: "new-net"}})
+	if got := normalized.Bindings[0]; got.TargetNetwork != "new-net" || got.TargetHost != "" {
+		t.Fatalf("bound link = %+v", got)
+	}
+	if got := normalized.Bindings[1]; got.TargetNetwork != "gwdep-dep-1" || got.TargetHost != "" {
+		t.Fatalf("an unbound router link must keep its managed network, got %+v", got)
 	}
 }

@@ -142,7 +142,10 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	l.serving[policyID] = serving
 	l.mu.Unlock()
 	if serving {
-		l.plugin.startLeaseDeploymentRouters(policyID)
+		// The deployment router is not lease-governed (ServeSet), so nothing
+		// starts it with the workload: one that did not come back after a
+		// reboot (restart policy "no") would leave the links without target.
+		l.plugin.repairDeploymentRouters(policyID, deploymentRouterRepairLeaseTimeout)
 	}
 	if serving && l.plugin.secureLinks != nil {
 		// A dormant target binding could not be prepared while its standby
@@ -165,53 +168,6 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 			return
 		}
 	}
-}
-
-// startLeaseDeploymentRouters starts the stopped routers of this node's
-// deployment placements of a policy before its holder serves. A router is not
-// lease-governed: it only forwards to the active slot, which the holder alone
-// runs. After a host reboot nothing else starts it, while the placement's
-// Secure Link member targets it (stand run c2).
-func (p *DockerPlugin) startLeaseDeploymentRouters(policyID string) {
-	if p.client == nil || p.client.cli == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	containers, err := p.client.ListContainers(ctx)
-	if err != nil {
-		p.logger.Warn("could not list the deployment routers of a lease holder", "policy_id", policyID, "error", err)
-		return
-	}
-	for _, id := range leaseDeploymentRoutersToStart(policyID, containers) {
-		if err := p.client.StartContainer(ctx, id); err != nil {
-			p.logger.Warn("could not start the deployment router of a lease holder", "policy_id", policyID, "container_id", id, "error", err)
-			continue
-		}
-		p.logger.Info("started the deployment router of a lease holder", "policy_id", policyID, "container_id", id)
-	}
-}
-
-// leaseDeploymentRoutersToStart lists the stopped routers owned by the
-// deployments whose app containers belong to the policy on this node.
-func leaseDeploymentRoutersToStart(policyID string, containers []ContainerInfo) []string {
-	deployments := map[string]bool{}
-	for _, c := range containers {
-		if c.Labels[availabilityPolicyLabel] == policyID && c.Labels[deploymentRoleLabel] == "app" {
-			if id := c.Labels[deploymentIDLabel]; deploymentContainerLabelsOwned(c.Labels, id) {
-				deployments[id] = true
-			}
-		}
-	}
-	var out []string
-	for _, c := range containers {
-		id := c.Labels[deploymentIDLabel]
-		if c.State == "running" || c.Labels[deploymentRoleLabel] != "router" || !deployments[id] || !deploymentContainerLabelsOwned(c.Labels, id) {
-			continue
-		}
-		out = append(out, c.ID)
-	}
-	return out
 }
 
 // endpointAllowed is the registration gate (D8, A8): the Secure Link

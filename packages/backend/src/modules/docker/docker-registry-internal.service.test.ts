@@ -204,7 +204,10 @@ describe('DockerInternalRegistryService', () => {
     const { service } = createService(store, createExecutor(store), tokenService);
     await service.reportHealth({ healthy: true, writable: true, usedBytes: 95, capacityBytes: 100 });
     expect(store.state).toMatchObject({ status: 'degraded', writable: false });
-    await expect(service.assertBuildAdmission()).rejects.toMatchObject({ code: 'INTERNAL_REGISTRY_NOT_WRITABLE' });
+    await expect(service.assertBuildAdmission()).rejects.toMatchObject({
+      code: 'INTERNAL_REGISTRY_NOT_WRITABLE',
+      details: { retryable: true },
+    });
     await expect(
       service.issueToken({
         subject: 'builder:node-1:build-1',

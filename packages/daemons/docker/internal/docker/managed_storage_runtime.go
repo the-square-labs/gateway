@@ -276,18 +276,24 @@ func (m *managedStorageManager) reconcile(ctx context.Context) error {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		record, err := m.loadRecord(strings.TrimSuffix(entry.Name(), ".json"))
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		// One broken storage (container removed, volume missing, unreadable record) must not keep the whole node
+		// offline: the node comes up with the others, and Gateway sees this one as not running and can repair it.
+		record, err := m.loadRecord(id)
 		if err != nil {
-			return err
+			m.logger.Warn("managed storage record could not be read at startup", "id", id, "error", err)
+			continue
 		}
 		if record.Removed || !record.DesiredRunning {
 			continue
 		}
 		if err := m.ensureMounted(ctx, &record); err != nil {
-			return err
+			m.logger.Warn("managed storage could not be mounted at startup", "id", id, "error", err)
+			continue
 		}
 		if err := m.startContainer(ctx, record.ContainerID); err != nil {
-			return err
+			m.logger.Warn("managed storage could not be started at startup", "id", id, "error", err)
+			continue
 		}
 		if err := m.saveRecord(record); err != nil {
 			return err

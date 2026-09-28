@@ -558,7 +558,8 @@ describe("EnvironmentTab managed database links", () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByRole("button", { name: "Add" })).toBeEnabled();
+    // The button renders before the databases and nodes load and enables once they have; wait for that state.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add" })).toBeEnabled());
     expect(screen.getByTitle("Add variable")).toBeDisabled();
   });
 
