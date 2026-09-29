@@ -105,7 +105,7 @@ describe('AuditService MCP context', () => {
       },
       () =>
         service.log({
-          userId: 'user-1',
+          userId: '11111111-1111-4111-8111-111111111111',
           action: 'proxy_host.update',
           resourceType: 'proxy_host',
           resourceId: 'proxy-1',
@@ -137,15 +137,15 @@ describe('AuditService MCP context', () => {
     await runWithAuditRequestContext(
       {
         impersonation: {
-          actorUserId: 'actor-1',
-          subjectUserId: 'subject-1',
+          actorUserId: '22222222-2222-4222-8222-222222222222',
+          subjectUserId: '33333333-3333-4333-8333-333333333333',
           subjectEmail: 'subject@example.com',
           subjectName: 'Subject',
         },
       },
       () =>
         service.log({
-          userId: 'subject-1',
+          userId: '33333333-3333-4333-8333-333333333333',
           action: 'proxy_host.update',
           resourceType: 'proxy_host',
           details: { domain: 'example.com' },
@@ -154,10 +154,10 @@ describe('AuditService MCP context', () => {
 
     expect(values).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: 'actor-1',
+        userId: '22222222-2222-4222-8222-222222222222',
         details: {
           domain: 'example.com',
-          impersonatedUserId: 'subject-1',
+          impersonatedUserId: '33333333-3333-4333-8333-333333333333',
           impersonatedUserEmail: 'subject@example.com',
           impersonatedUserName: 'Subject',
         },

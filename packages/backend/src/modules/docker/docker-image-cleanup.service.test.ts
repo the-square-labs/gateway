@@ -65,10 +65,10 @@ describe('DockerImageCleanupService', () => {
       await vi.advanceTimersByTimeAsync(5000);
       await cleanup;
 
-      expect(docker.removeImage).toHaveBeenCalledWith('node-1', 'sha-old', false, 'system');
-      expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-previous', false, 'system');
-      expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-new', false, 'system');
-      expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-in-use', false, 'system');
+      expect(docker.removeImage).toHaveBeenCalledWith('node-1', 'sha-old', false, null);
+      expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-previous', false, null);
+      expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-new', false, null);
+      expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-in-use', false, null);
     } finally {
       vi.useRealTimers();
     }
