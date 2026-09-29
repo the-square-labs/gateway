@@ -205,10 +205,16 @@ import { CertService } from '@/modules/pki/cert.service.js';
 import { CRLService } from '@/modules/pki/crl.service.js';
 import { ExportService } from '@/modules/pki/export.service.js';
 import { OCSPService } from '@/modules/pki/ocsp.service.js';
+import {
+  CAFolderService,
+  CertificateFolderService,
+  PkiTemplateFolderService,
+} from '@/modules/pki/pki-folders.service.js';
 import { TemplatesService } from '@/modules/pki/templates.service.js';
 import { AdditionalRouteService } from '@/modules/proxy/additional-route.service.js';
 import { FolderService } from '@/modules/proxy/folder.service.js';
 import { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
+import { NginxTemplateFolderService } from '@/modules/proxy/nginx-template-folders.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { ProxyDockerUpstreamService } from '@/modules/proxy/proxy-docker-upstream.service.js';
 import { ProxyMaintenanceAccessService } from '@/modules/proxy/proxy-maintenance-access.service.js';
@@ -1623,6 +1629,18 @@ export async function initializeContainer(): Promise<void> {
   const sslCertificateFolderService = new SSLCertificateFolderService(db, auditService);
   sslCertificateFolderService.setEventBus(eventBus);
   container.registerInstance(SSLCertificateFolderService, sslCertificateFolderService);
+  const caFolderService = new CAFolderService(db, auditService);
+  caFolderService.setEventBus(eventBus);
+  container.registerInstance(CAFolderService, caFolderService);
+  const certificateFolderService = new CertificateFolderService(db, auditService);
+  certificateFolderService.setEventBus(eventBus);
+  container.registerInstance(CertificateFolderService, certificateFolderService);
+  const pkiTemplateFolderService = new PkiTemplateFolderService(db, auditService);
+  pkiTemplateFolderService.setEventBus(eventBus);
+  container.registerInstance(PkiTemplateFolderService, pkiTemplateFolderService);
+  const nginxTemplateFolderService = new NginxTemplateFolderService(db, auditService);
+  nginxTemplateFolderService.setEventBus(eventBus);
+  container.registerInstance(NginxTemplateFolderService, nginxTemplateFolderService);
 
   // Monitoring services
   const monitoringService = new MonitoringService(db);

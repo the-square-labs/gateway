@@ -5,6 +5,7 @@ import {
   accessLists,
   adminUserFolders,
   certificateAuthorities,
+  certificates,
   databaseConnectionFolders,
   databaseConnections,
   dockerAccessResources,
@@ -19,6 +20,7 @@ import {
   loggingEnvironments,
   loggingSchemaFolders,
   loggingSchemas,
+  nginxTemplateFolders,
   nodeFolders,
   nodes,
   objectStorageConnections,
@@ -27,6 +29,9 @@ import {
   pageProjects,
   permissionGroupFolders,
   permissionGroups,
+  pkiCaFolders,
+  pkiCertificateFolders,
+  pkiTemplateFolders,
   proxyHostFolders,
   proxyHosts,
   sslCertificateFolders,
@@ -220,6 +225,10 @@ const FOLDER_TABLES: Record<AccessFolderResourceType, any> = {
   storage: objectStorageFolders,
   domains: domainFolders,
   ssl_certificates: sslCertificateFolders,
+  pki_cas: pkiCaFolders,
+  pki_certificates: pkiCertificateFolders,
+  pki_templates: pkiTemplateFolders,
+  nginx_templates: nginxTemplateFolders,
   logging_environments: loggingEnvironmentFolders,
   logging_schemas: loggingSchemaFolders,
   admin_users: adminUserFolders,
@@ -315,7 +324,15 @@ async function resourceNames(db: Db, areaId: string, targets: GrantTargetSummary
         ids,
         (row) => row.name
       );
-    case 'pki':
+    case 'pki_certificates':
+      return namesById(
+        db,
+        certificates,
+        { id: certificates.id, commonName: certificates.commonName },
+        ids,
+        (row) => row.commonName
+      );
+    case 'pki_cas':
       return namesById(
         db,
         certificateAuthorities,

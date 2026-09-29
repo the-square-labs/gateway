@@ -14,6 +14,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | pki:ca:export | Export a CA private key as PKCS#12 (resource-scopable) |
 | pki:ca:revoke:root | Revoke root CAs |
 | pki:ca:revoke:intermediate | Revoke intermediate CAs |
+| pki:ca:folders:manage | Manage internal CA folders and the placement of root CAs (intermediates follow their root) |
 
 ### PKI: Certificates
 | Scope | Description |
@@ -23,6 +24,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | pki:cert:issue | Issue certificates from a CA (resource-scopable) |
 | pki:cert:revoke | Revoke certificates |
 | pki:cert:export | Download certificate files and private keys |
+| pki:cert:folders:manage | Manage internal PKI certificate folders and placement |
 
 ### PKI: Certificate Templates
 | Scope | Description |
@@ -32,6 +34,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | pki:templates:create | Create templates |
 | pki:templates:edit | Edit templates |
 | pki:templates:delete | Delete templates |
+| pki:templates:folders:manage | Manage certificate template folders and placement of custom templates |
 
 ### Ingress Routes
 | Scope | Description |
@@ -48,6 +51,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | proxy:unrestricted | Bypass the dangerous advanced snippet and raw directive restrictions (resource-scopable) |
 | proxy:templates:view | List and view nginx proxy templates (resource-scopable) |
 | proxy:templates:manage | Create, edit, test, clone, and delete nginx proxy templates (resource-scopable) |
+| proxy:templates:folders:manage | Manage nginx template folders and placement of custom templates |
 
 ### SSL Certificates
 | Scope | Description |

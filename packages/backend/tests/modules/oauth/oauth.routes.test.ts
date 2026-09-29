@@ -561,7 +561,7 @@ describe('OAuth consent routes', () => {
         'Content-Type': 'application/json',
         'X-CSRF-Token': 'csrf-token',
       },
-      body: JSON.stringify({ scopes: ['pki:cert:view:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e'] }),
+      body: JSON.stringify({ scopes: ['pki:cert:issue:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e'] }),
     });
 
     expect(response.status).toBe(400);

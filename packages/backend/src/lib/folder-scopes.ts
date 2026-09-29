@@ -2,6 +2,8 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   adminUserFolders,
+  certificateAuthorities,
+  certificates,
   databaseConnectionFolders,
   databaseConnections,
   dockerAccessResources,
@@ -20,6 +22,8 @@ import {
   loggingSchemas,
   managedDatabaseInstances,
   managedStorageClusters,
+  nginxTemplateFolders,
+  nginxTemplates,
   nodeFolders,
   nodes,
   objectStorageConnections,
@@ -28,6 +32,8 @@ import {
   pageProjects,
   permissionGroupFolders,
   permissionGroups,
+  pkiCaFolders,
+  pkiCertificateFolders,
   proxyHostFolders,
   proxyHosts,
   sslCertificateFolders,
@@ -263,6 +269,39 @@ async function expandDockerFamily(db: DrizzleClient, grants: FolderScopedGrant[]
   });
 }
 
+/** CA folders hold root CAs; a grant on a folder also covers the intermediates below each root. */
+async function expandPkiCaFamily(db: DrizzleClient, grants: FolderScopedGrant[]): Promise<string[]> {
+  const expanded = await expandSimpleFamily(db, grants, pkiCaFolders, certificateAuthorities);
+  if (expanded.length === 0) return expanded;
+  const cas = await db
+    .select({ id: certificateAuthorities.id, parentId: certificateAuthorities.parentId })
+    .from(certificateAuthorities);
+  const children = new Map<string, string[]>();
+  for (const ca of cas) {
+    if (ca.parentId) children.set(ca.parentId, [...(children.get(ca.parentId) ?? []), ca.id]);
+  }
+  const descendants = (rootId: string): string[] => {
+    const found: string[] = [];
+    const queue = [rootId];
+    const seen = new Set(queue);
+    while (queue.length > 0) {
+      for (const child of children.get(queue.shift()!) ?? []) {
+        if (seen.has(child)) continue;
+        seen.add(child);
+        found.push(child);
+        queue.push(child);
+      }
+    }
+    return found;
+  };
+  return expanded.flatMap((scope) => {
+    const grant = grants.find((candidate) => scope.startsWith(`${candidate.baseScope}:`));
+    const target = grant ? scope.slice(grant.baseScope.length + 1) : '';
+    if (!grant || target.startsWith(FOLDER_SCOPE_TARGET_PREFIX)) return [scope];
+    return [scope, ...descendants(target).map((id) => `${grant.baseScope}:${id}`)];
+  });
+}
+
 function dockerFolderType(baseScope: string): string {
   if (baseScope.startsWith('docker:compose:')) return 'compose';
   if (baseScope.startsWith('docker:networks:')) return 'network';
@@ -275,7 +314,10 @@ function familyForBaseScope(baseScope: string) {
   if (baseScope === 'admin:groups') return 'groups';
   if (baseScope === 'admin:users' || baseScope === 'admin:users:impersonate') return 'users';
   if (baseScope.startsWith('domains:')) return 'domains';
+  if (baseScope.startsWith('proxy:templates:')) return 'nginx-templates';
   if (baseScope.startsWith('proxy:')) return 'proxy';
+  if (baseScope.startsWith('pki:ca:')) return 'pki-cas';
+  if (baseScope.startsWith('pki:cert:')) return 'pki-certificates';
   if (baseScope.startsWith('pages:')) return 'pages';
   if (baseScope.startsWith('ssl:cert:')) return 'ssl';
   if (baseScope.startsWith('nodes:')) return 'nodes';
@@ -425,6 +467,9 @@ export async function expandFolderScopes(db: DrizzleClient, scopes: readonly str
     expandSimpleFamily(db, byFamily.get('proxy') ?? [], proxyHostFolders, proxyHosts),
     expandSimpleFamily(db, byFamily.get('pages') ?? [], pageProjectFolders, pageProjects),
     expandSimpleFamily(db, byFamily.get('ssl') ?? [], sslCertificateFolders, sslCertificates),
+    expandPkiCaFamily(db, byFamily.get('pki-cas') ?? []),
+    expandSimpleFamily(db, byFamily.get('pki-certificates') ?? [], pkiCertificateFolders, certificates),
+    expandSimpleFamily(db, byFamily.get('nginx-templates') ?? [], nginxTemplateFolders, nginxTemplates),
     expandSimpleFamily(db, byFamily.get('nodes') ?? [], nodeFolders, nodes),
     expandDockerFamily(db, byFamily.get('docker') ?? []),
     expandSimpleFamily(db, byFamily.get('storage') ?? [], objectStorageFolders, objectStorageConnections),

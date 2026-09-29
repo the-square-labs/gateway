@@ -12,6 +12,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { CreateIntermediateCAInput, CreateRootCAInput } from './ca.schemas.js';
+import { rootFolderId, withRootFolders } from './ca-folder-placement.js';
 
 const logger = createChildLogger('CAService');
 
@@ -280,10 +281,12 @@ export class CAService {
 
     const countMap = new Map(certCounts.map((c) => [c.caId, Number(c.count)]));
 
-    return allCAs.map((ca) => ({
-      ...sanitizeCA(ca),
-      certCount: countMap.get(ca.id) || 0,
-    }));
+    return withRootFolders(
+      allCAs.map((ca) => ({
+        ...sanitizeCA(ca),
+        certCount: countMap.get(ca.id) || 0,
+      }))
+    );
   }
 
   async getCA(id: string, options?: { includeSystem?: boolean }) {
@@ -303,6 +306,7 @@ export class CAService {
 
     return {
       ...sanitizeCA(ca),
+      folderId: await rootFolderId(this.db, ca),
       certCount: Number(certCount),
     };
   }

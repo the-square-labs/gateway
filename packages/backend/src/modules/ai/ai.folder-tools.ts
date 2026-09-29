@@ -10,8 +10,6 @@ import {
   scopeMatcher,
 } from '@/lib/permissions.js';
 import { FOLDER_SCOPABLE } from '@/lib/scopes.js';
-import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
-import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import {
   DockerAccessResourceService,
   hasDockerResourceScope,
@@ -26,15 +24,7 @@ import {
 } from '@/modules/docker/docker-folder.schemas.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
 import { DockerNetworkAccessResourceService } from '@/modules/docker/docker-network-access-resource.service.js';
-import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
-import { PermissionGroupFolderService } from '@/modules/groups/permission-group-folders.service.js';
-import { type LicenseFeature, LicensePolicyService } from '@/modules/license/license-policy.service.js';
-import { LoggingEnvironmentFolderService } from '@/modules/logging/logging-environment-folders.service.js';
-import { LoggingSchemaFolderService } from '@/modules/logging/logging-schema-folders.service.js';
-import { NodeFolderService } from '@/modules/nodes/node-folders.service.js';
-import { ObjectStorageFolderService } from '@/modules/object-storage/object-storage-folders.service.js';
-import { visiblePageProjectIds } from '@/modules/pages/page-project-access.js';
-import { PageProjectFolderService } from '@/modules/pages/page-project-folder.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { MoveHostsToFolderSchema, ReorderHostsSchema } from '@/modules/proxy/folder.schemas.js';
 import { FolderService } from '@/modules/proxy/folder.service.js';
@@ -48,41 +38,17 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
-import type { FolderedResourceService } from '@/modules/resource-folders/resource-folder.service.js';
-import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import type { User } from '@/types.js';
+import { folderLicenseFeature, type GenericFolderConfig, genericFolderConfig } from './ai.folder-tool-configs.js';
+import {
+  FOLDER_TOOL_RESOURCE_TYPES,
+  type FolderToolResourceType,
+  type GenericFolderResourceType,
+} from './ai.folder-tool-types.js';
 
 export const FOLDER_TOOL_NAMES = new Set(['list_resource_folders', 'manage_resource_folder']);
 
-type ResourceType =
-  | 'nodes'
-  | 'databases'
-  | 'storage'
-  | 'domains'
-  | 'ssl_certificates'
-  | 'logging_environments'
-  | 'logging_schemas'
-  | 'admin_users'
-  | 'permission_groups'
-  | 'routes'
-  | 'docker'
-  | 'pages';
-
-type GenericFolderConfig = {
-  service: FolderedResourceService;
-  viewScope: string;
-  manageScope: string;
-  /** Per-resource scope a whole-folder move must hold for every moved resource and the destination. */
-  moveEditScope?: string;
-  /** Scope the HTTP move-resources route requires on every moved resource and on the destination. */
-  resourceMoveScope: string;
-  /** Creation scope that also lets the HTTP folder list route show every folder. */
-  createScope?: string;
-  /** Per-resource scope the HTTP reorder route requires on every reordered resource. */
-  reorderItemScope?: string;
-  /** Resource ids visible to a caller without broad view access; defaults to viewScope grants. */
-  visibleResourceIds?: (scopes: string[]) => string[] | undefined;
-};
+type ResourceType = FolderToolResourceType;
 
 /** Per-resource scope the HTTP Docker folder routes require to move or reorder a resource. */
 const DOCKER_MOVE_SCOPE_BY_RESOURCE_TYPE = {
@@ -138,22 +104,7 @@ async function ensureDockerResourceMoveScopes(
 }
 
 function resourceTypeArg(value: unknown): ResourceType {
-  if (
-    value === 'nodes' ||
-    value === 'databases' ||
-    value === 'storage' ||
-    value === 'domains' ||
-    value === 'ssl_certificates' ||
-    value === 'logging_environments' ||
-    value === 'logging_schemas' ||
-    value === 'admin_users' ||
-    value === 'permission_groups' ||
-    value === 'routes' ||
-    value === 'docker' ||
-    value === 'pages'
-  ) {
-    return value;
-  }
+  if ((FOLDER_TOOL_RESOURCE_TYPES as readonly unknown[]).includes(value)) return value as ResourceType;
   throw new Error(`Unsupported folder resourceType: ${String(value)}`);
 }
 
@@ -237,120 +188,27 @@ function annotateFolderAccess(
   return tree.map(visit);
 }
 
-function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>): GenericFolderConfig {
-  switch (resourceType) {
-    case 'nodes':
-      return {
-        service: container.resolve(NodeFolderService),
-        viewScope: 'nodes:details',
-        manageScope: 'nodes:folders:manage',
-        moveEditScope: 'nodes:rename',
-        resourceMoveScope: 'nodes:rename',
-        createScope: 'nodes:create',
-      };
-    case 'databases':
-      return {
-        service: container.resolve(DatabaseFolderService),
-        viewScope: 'databases:view',
-        manageScope: 'databases:folders:manage',
-        moveEditScope: 'databases:edit',
-        resourceMoveScope: 'databases:edit',
-        createScope: 'databases:create',
-      };
-    case 'storage':
-      return {
-        service: container.resolve(ObjectStorageFolderService),
-        viewScope: 'storage:view',
-        manageScope: 'storage:folders:manage',
-        moveEditScope: 'storage:edit',
-        resourceMoveScope: 'storage:edit',
-        createScope: 'storage:create',
-      };
-    case 'domains':
-      return {
-        service: container.resolve(DomainFolderService),
-        viewScope: 'domains:view',
-        manageScope: 'domains:folders:manage',
-        moveEditScope: 'domains:edit',
-        resourceMoveScope: 'domains:edit',
-        createScope: 'domains:create',
-      };
-    case 'ssl_certificates':
-      return {
-        service: container.resolve(SSLCertificateFolderService),
-        viewScope: 'ssl:cert:view',
-        manageScope: 'ssl:cert:folders:manage',
-        moveEditScope: 'ssl:cert:issue',
-        resourceMoveScope: 'ssl:cert:issue',
-        createScope: 'ssl:cert:issue',
-      };
-    case 'logging_environments':
-      return {
-        service: container.resolve(LoggingEnvironmentFolderService),
-        viewScope: 'logs:environments:view',
-        manageScope: 'logs:environments:folders:manage',
-        moveEditScope: 'logs:environments:edit',
-        resourceMoveScope: 'logs:environments:edit',
-        createScope: 'logs:environments:create',
-      };
-    case 'logging_schemas':
-      return {
-        service: container.resolve(LoggingSchemaFolderService),
-        viewScope: 'logs:schemas:view',
-        manageScope: 'logs:schemas:folders:manage',
-        moveEditScope: 'logs:schemas:edit',
-        resourceMoveScope: 'logs:schemas:edit',
-        createScope: 'logs:schemas:create',
-      };
-    case 'admin_users':
-      return {
-        service: container.resolve(AdminUserFolderService),
-        viewScope: 'admin:users',
-        manageScope: 'admin:users:folders:manage',
-        resourceMoveScope: 'admin:users',
-        reorderItemScope: 'admin:users',
-      };
-    case 'permission_groups':
-      return {
-        service: container.resolve(PermissionGroupFolderService),
-        viewScope: 'admin:groups',
-        manageScope: 'admin:groups:folders:manage',
-        resourceMoveScope: 'admin:groups',
-        reorderItemScope: 'admin:groups',
-      };
-    case 'pages':
-      return {
-        service: container.resolve(PageProjectFolderService),
-        viewScope: 'pages:view',
-        manageScope: 'pages:folders:manage',
-        moveEditScope: 'pages:edit',
-        resourceMoveScope: 'pages:edit',
-        createScope: 'pages:create',
-        reorderItemScope: 'pages:edit',
-        visibleResourceIds: (scopes) => visiblePageProjectIds(scopes) ?? [],
-      };
-  }
-}
-
 /**
  * Mirrors each module's GET .../folders route: who may list, and which folders a scoped caller sees. A
  * folder grant of any of the family's scopes counts, so a folder-limited caller always sees its folders.
  */
-function genericListOptions(
-  user: User,
-  config: GenericFolderConfig,
-  resourceType: Exclude<ResourceType, 'routes' | 'docker'>
-) {
+function genericListOptions(user: User, config: GenericFolderConfig, resourceType: GenericFolderResourceType) {
   const scopes = user.scopes;
   const canManageFolders = hasScope(scopes, config.manageScope);
   const hasGlobalView = hasScope(scopes, config.viewScope);
   const hasGlobalCreate = !!config.createScope && hasScope(scopes, config.createScope);
-  const listScopes = [config.viewScope, config.manageScope, ...(config.createScope ? [config.createScope] : [])];
+  const listScopes = [
+    config.viewScope,
+    config.manageScope,
+    ...(config.createScope ? [config.createScope] : []),
+    ...(config.listScopes ?? []),
+  ];
+  const listsAll = (config.listScopes ?? []).some((scope) => hasScope(scopes, scope));
   const grantedFolderIds = getFolderScopedIds(scopes, folderFamilyBases(resourceType));
   if (!canManageFolders && grantedFolderIds.length === 0 && !listScopes.some((scope) => hasScopeBase(scopes, scope))) {
     throw new Error(`PERMISSION_DENIED: Missing one of required scopes: ${listScopes.join(', ')}`);
   }
-  if (canManageFolders || hasGlobalView || hasGlobalCreate) return { includeAllFolders: true };
+  if (canManageFolders || hasGlobalView || hasGlobalCreate || listsAll) return { includeAllFolders: true };
   return {
     allowedResourceIds: config.visibleResourceIds?.(scopes) ?? getResourceScopedIds(scopes, config.viewScope),
     allowedFolderIds: grantedFolderIds,
@@ -359,20 +217,11 @@ function genericListOptions(
 
 async function executeGenericFolderTool(
   user: User,
-  resourceType: Exclude<ResourceType, 'routes' | 'docker'>,
+  resourceType: GenericFolderResourceType,
   args: Record<string, unknown>
 ) {
   const operation = operationArg(args.operation);
-  const feature: LicenseFeature | null =
-    resourceType === 'logging_environments' || resourceType === 'logging_schemas'
-      ? 'structured-logging'
-      : resourceType === 'databases'
-        ? 'external-database-connections'
-        : resourceType === 'storage'
-          ? 'storage-connections'
-          : resourceType === 'pages'
-            ? 'pages'
-            : null;
+  const feature = folderLicenseFeature(resourceType);
   if (feature) {
     // LICENSE ENFORCEMENT: Same classes as the folder routes. Listing and deleting folders
     // keep working after the license grace period; creating or changing them does not.
@@ -380,7 +229,7 @@ async function executeGenericFolderTool(
     if (operation === 'list' || operation === 'delete') await policy.requireFeatureForExistingRuntime(feature);
     else await policy.requireFeature(feature);
   }
-  const config = genericConfig(resourceType);
+  const config = genericFolderConfig(resourceType);
   if (operation === 'list') {
     return annotateFolderAccess(
       await config.service.getFolderTree(genericListOptions(user, config, resourceType)),
@@ -413,13 +262,19 @@ async function executeGenericFolderTool(
       return { success: true };
     case 'move_resources': {
       const input = MoveResourcesToFolderSchema.parse({ ids: args.resourceIds, folderId: args.folderId });
-      ensureResourceMoveAccess(user, config.resourceMoveScope, input.ids, input.folderId);
+      if (config.authorizePlacement) await config.authorizePlacement(user.scopes, input.ids);
+      else ensureResourceMoveAccess(user, config.resourceMoveScope, input.ids, input.folderId);
       await config.service.moveResourcesToFolder(input, user.id);
       return { success: true };
     }
     case 'reorder_resources': {
       const input = ReorderResourcesSchema.parse(args);
-      if (config.reorderItemScope) {
+      if (config.authorizePlacement) {
+        await config.authorizePlacement(
+          user.scopes,
+          input.items.map((item) => item.id)
+        );
+      } else if (config.reorderItemScope) {
         for (const item of input.items) ensureScopeForResource(user, config.reorderItemScope, item.id);
       }
       await config.service.reorderResources(input);

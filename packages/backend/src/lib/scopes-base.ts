@@ -32,16 +32,19 @@ export const ALL_SCOPES = [
   'pki:ca:export',
   'pki:ca:revoke:root',
   'pki:ca:revoke:intermediate',
+  'pki:ca:folders:manage',
   // ── PKI: Certificates ────────────────────────────────────────────
   'pki:cert:view',
   'pki:cert:issue',
   'pki:cert:revoke',
   'pki:cert:export',
+  'pki:cert:folders:manage',
   // ── PKI: Certificate Templates ───────────────────────────────────
   'pki:templates:view',
   'pki:templates:create',
   'pki:templates:edit',
   'pki:templates:delete',
+  'pki:templates:folders:manage',
   // ── Domains ──────────────────────────────────────────────────────
   'domains:view',
   'domains:create',
@@ -74,6 +77,7 @@ export const ALL_SCOPES = [
   // ── Proxy Templates ──────────────────────────────────────────────
   'proxy:templates:view',
   'proxy:templates:manage',
+  'proxy:templates:folders:manage',
   // ── SSL Certificates ─────────────────────────────────────────────
   'ssl:cert:view',
   'ssl:cert:issue',

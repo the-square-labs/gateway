@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   boolean,
   index,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -13,6 +15,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { certificateAuthorities, keyAlgorithmEnum } from './certificate-authorities.js';
 import { certificateTemplates } from './certificate-templates.js';
+import { pkiCertificateFolders } from './pki-folders.js';
 import { users } from './users.js';
 
 export const certStatusEnum = pgEnum('cert_status', ['active', 'revoked', 'expired']);
@@ -95,6 +98,8 @@ export const certificates = pgTable(
     issuedById: uuid('issued_by_id')
       .notNull()
       .references(() => users.id),
+    folderId: uuid('folder_id').references((): AnyPgColumn => pkiCertificateFolders.id, { onDelete: 'set null' }),
+    sortOrder: integer('sort_order').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -106,6 +111,7 @@ export const certificates = pgTable(
     typeIdx: index('cert_type_idx').on(table.type),
     notAfterIdx: index('cert_not_after_idx').on(table.notAfter),
     issuedByIdx: index('cert_issued_by_idx').on(table.issuedById),
+    folderIdx: index('cert_folder_idx').on(table.folderId),
     systemLifecycleIdx: index('cert_system_lifecycle_idx').on(table.systemLifecycleState, table.systemRetiredAt),
     currentSystemOwnerUnique: uniqueIndex('cert_system_current_owner_unique')
       .on(table.systemOwnerType, table.systemOwnerId)

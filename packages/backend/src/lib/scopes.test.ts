@@ -170,10 +170,10 @@ describe('canonical scope definitions', () => {
     expect(RESOURCE_SCOPABLE).toContain('nodes:manage');
     expect(FOLDER_SCOPABLE).toContain('nodes:manage');
     expect(MANUAL_APPROVAL_SCOPES).toContain('nodes:manage');
-    // F: CA scopes qualifiable by CA ID; key export needs manual approval.
+    // F: CA scopes qualifiable by CA ID or CA folder; key export needs manual approval.
     for (const scope of ['pki:ca:view', 'pki:ca:edit', 'pki:ca:export']) {
       expect(RESOURCE_SCOPABLE, scope).toContain(scope);
-      expect(FOLDER_SCOPABLE, scope).not.toContain(scope);
+      expect(FOLDER_SCOPABLE, scope).toContain(scope);
       expect(isApiTokenScope(`${scope}:ca-1`), scope).toBe(true);
     }
     expect(MANUAL_APPROVAL_SCOPES).toContain('pki:ca:export');
@@ -186,6 +186,7 @@ describe('canonical scope definitions', () => {
     expect(ALL_SCOPES.filter((scope) => scope.startsWith('proxy:templates:'))).toEqual([
       'proxy:templates:view',
       'proxy:templates:manage',
+      'proxy:templates:folders:manage',
     ]);
     // K, L: logging tokens and availability grants can target folders.
     for (const scope of [

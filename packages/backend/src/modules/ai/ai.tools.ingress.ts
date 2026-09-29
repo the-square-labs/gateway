@@ -403,7 +403,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_proxy_template',
     description:
-      'Manage custom nginx proxy templates. Operations: list, get, create, update, delete, clone, preview (render content with sample data, or with a stored route when routeId is set), test (render with sample data and run nginx -t on an nginx node). Reads need proxy:templates:view; create, update, delete, clone and test need proxy:templates:manage (broad to create or test new content, on templateId to change that template).',
+      'Manage custom nginx proxy templates. Operations: list, get, create, update, delete, clone, preview (render content with sample data, or with a stored route when routeId is set), test (render with sample data and run nginx -t on an nginx node). Templates carry folderId and sortOrder (built-ins never have a folder; list_resource_folders with nginx_templates names the folders). Reads need proxy:templates:view; create, update, delete, clone and test need proxy:templates:manage (broad to create or test new content, on templateId to change that template).',
     parameters: {
       type: 'object',
       properties: {

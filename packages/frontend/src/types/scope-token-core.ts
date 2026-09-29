@@ -42,6 +42,12 @@ export const CORE_TOKEN_SCOPES = [
     desc: "Revoke intermediate certificate authorities",
     group: "PKI: Certificate Authorities",
   },
+  {
+    value: "pki:ca:folders:manage",
+    label: "Manage CA Folders",
+    desc: "Organize certificate authority hierarchies into folders",
+    group: "PKI: Certificate Authorities",
+  },
   // PKI: Certificates
   {
     value: "pki:cert:view",
@@ -67,6 +73,12 @@ export const CORE_TOKEN_SCOPES = [
     desc: "Export certificates and keys",
     group: "PKI: Certificates",
   },
+  {
+    value: "pki:cert:folders:manage",
+    label: "Manage Certificate Folders",
+    desc: "Organize issued certificates into folders",
+    group: "PKI: Certificates",
+  },
   // PKI: Templates
   {
     value: "pki:templates:view",
@@ -90,6 +102,12 @@ export const CORE_TOKEN_SCOPES = [
     value: "pki:templates:delete",
     label: "Delete Templates",
     desc: "Delete certificate templates",
+    group: "PKI: Templates",
+  },
+  {
+    value: "pki:templates:folders:manage",
+    label: "Manage Template Folders",
+    desc: "Organize custom certificate templates into folders",
     group: "PKI: Templates",
   },
   // Domains
@@ -252,6 +270,12 @@ export const CORE_TOKEN_SCOPES = [
     value: "proxy:templates:manage",
     label: "Manage Nginx Templates",
     desc: "Create, edit, and delete nginx templates, including template content",
+    group: "Proxy Templates",
+  },
+  {
+    value: "proxy:templates:folders:manage",
+    label: "Manage Nginx Template Folders",
+    desc: "Organize custom nginx templates into folders",
     group: "Proxy Templates",
   },
   // SSL Certificates

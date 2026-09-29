@@ -188,6 +188,17 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'docker:images:delete',
   'ssl:cert:view',
   'ssl:cert:delete',
+  // PKI: a CA folder grant covers each root CA in the folder and its intermediates; a certificate
+  // folder grant covers the certificates in the folder.
+  'pki:ca:view',
+  'pki:ca:edit',
+  'pki:ca:export',
+  'pki:cert:view',
+  'pki:cert:revoke',
+  'pki:cert:export',
+  // Nginx templates
+  'proxy:templates:view',
+  'proxy:templates:manage',
   // Domains
   'domains:view',
   'domains:edit',

@@ -1,3 +1,4 @@
+import { FOLDER_TOOL_RESOURCE_TYPES } from './ai.folder-tool-types.js';
 import type { AIToolDefinition } from './ai.types.js';
 
 export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
@@ -10,20 +11,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
       properties: {
         resourceType: {
           type: 'string',
-          enum: [
-            'nodes',
-            'databases',
-            'storage',
-            'domains',
-            'ssl_certificates',
-            'logging_environments',
-            'logging_schemas',
-            'admin_users',
-            'permission_groups',
-            'routes',
-            'docker',
-            'pages',
-          ],
+          enum: [...FOLDER_TOOL_RESOURCE_TYPES],
           description: 'Foldered resource type to inspect.',
         },
         dockerResourceType: {
@@ -43,26 +31,13 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_resource_folder',
     description:
-      'Create, update, move, delete, reorder, or assign foldered Gateway resources. Use the resource-specific ids and resourceType (pages = Page Projects, storage = storage connections).',
+      'Create, update, move, delete, reorder, or assign foldered Gateway resources. Use the resource-specific ids and resourceType (pages = Page Projects, storage = storage connections, pki_cas = internal CAs: only root CAs move and their intermediates follow, pki_certificates = internal PKI certificates, pki_templates and nginx_templates = custom templates; built-ins never move).',
     parameters: {
       type: 'object',
       properties: {
         resourceType: {
           type: 'string',
-          enum: [
-            'nodes',
-            'databases',
-            'storage',
-            'domains',
-            'ssl_certificates',
-            'logging_environments',
-            'logging_schemas',
-            'admin_users',
-            'permission_groups',
-            'routes',
-            'docker',
-            'pages',
-          ],
+          enum: [...FOLDER_TOOL_RESOURCE_TYPES],
         },
         operation: {
           type: 'string',

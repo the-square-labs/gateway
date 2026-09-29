@@ -9,6 +9,8 @@ import {
   requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
+import { nginxTemplateFolderRouteDocs } from '@/modules/resource-folders/resource-folder.docs.js';
+import { registerResourceFolderRoutes } from '@/modules/resource-folders/resource-folder.routes.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -27,11 +29,24 @@ import {
   UpdateNginxTemplateSchema,
 } from './nginx-template.schemas.js';
 import { NginxTemplateService } from './nginx-template.service.js';
+import { NginxTemplateFolderService } from './nginx-template-folders.service.js';
 import { renderTemplatePreviewForHost, testTemplateContent } from './nginx-template-preview.js';
 
 export const nginxTemplateRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 nginxTemplateRoutes.use('*', authMiddleware);
+
+// Folders of custom templates, registered before the `/{id}` routes. Placing a template needs
+// proxy:templates:manage on it and on the destination (broadly or as a folder grant).
+registerResourceFolderRoutes(nginxTemplateRoutes, {
+  docs: nginxTemplateFolderRouteDocs,
+  service: () => container.resolve(NginxTemplateFolderService),
+  manageScope: 'proxy:templates:folders:manage',
+  viewScope: 'proxy:templates:view',
+  listScopes: ['proxy:templates:manage'],
+  folderGrantScopes: ['proxy:templates:view', 'proxy:templates:manage'],
+  placementScope: 'proxy:templates:manage',
+});
 
 // Template content is written under proxy:templates:manage (manual approval for
 // programmatic callers). Broad manage creates templates; `manage:<id>` edits,

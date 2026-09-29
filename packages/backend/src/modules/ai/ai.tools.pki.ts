@@ -17,7 +17,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_cas',
     description:
-      'List all Certificate Authorities with their status, type, and hierarchy. Returns id, commonName, type (root/intermediate), status, notBefore, notAfter, parentId. CAs are listed for pki:ca:view (broad or on that CA) or a per-CA pki:cert:issue grant.',
+      'List all Certificate Authorities with their status, type, and hierarchy. Returns id, commonName, type (root/intermediate), status, notBefore, notAfter, parentId, folderId and sortOrder (an intermediate reports the folder of its root CA; list_resource_folders with pki_cas names the folders). CAs are listed for pki:ca:view (broad or on that CA) or a per-CA pki:cert:issue grant.',
     parameters: {
       type: 'object',
       properties: {
@@ -140,7 +140,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_certificates',
     description:
-      'List PKI certificates with optional filters. Returns paginated results with id, commonName, status, type, caId, notBefore, notAfter.',
+      'List PKI certificates with optional filters. Returns paginated results with id, commonName, status, type, caId, notBefore, notAfter, folderId, sortOrder (list_resource_folders with pki_certificates names the folders).',
     parameters: {
       type: 'object',
       properties: {
@@ -293,7 +293,8 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'list_templates',
-    description: 'List all certificate templates.',
+    description:
+      'List all certificate templates with folderId and sortOrder (built-in templates never have a folder; list_resource_folders with pki_templates names the folders).',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'PKI - Templates',

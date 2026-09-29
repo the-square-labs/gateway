@@ -40,8 +40,9 @@ export function requiredScopeFor(channel: string): string | null {
   if (channel === 'system.license.changed') return null;
   if (channel === 'system.config.changed') return null;
   if (channel === 'status-page.changed') return 'status-page:view';
-  if (channel === 'pki.template.changed') return 'pki:templates:view';
-  if (channel === 'nginx.template.changed') return 'proxy:templates:view';
+  if (channel === 'pki.template.changed' || channel === 'pki.template.folder.changed') return 'pki:templates:view';
+  if (channel === 'nginx.template.changed' || channel === 'nginx.template.folder.changed')
+    return 'proxy:templates:view';
   if (channel === 'docker.folder.changed') return 'docker:containers:view';
   if (channel === 'docker.image-cleanup.changed') return 'docker:containers:edit';
   if (channel === 'docker.registry.changed') return 'docker:registries:view';
@@ -68,8 +69,8 @@ export function requiredScopeFor(channel: string): string | null {
   if (channel.startsWith('pages.')) return 'pages:view';
   if (channel.startsWith('proxy.host')) return 'proxy:view';
   if (channel.startsWith('ssl.cert')) return 'ssl:cert:view';
-  if (channel === 'cert.changed') return 'pki:cert:view';
-  if (channel === 'ca.changed') return 'pki:ca:view';
+  if (channel === 'cert.changed' || channel === 'cert.folder.changed') return 'pki:cert:view';
+  if (channel === 'ca.changed' || channel === 'ca.folder.changed') return 'pki:ca:view';
   if (channel === 'access-list.changed') return 'acl:view';
   if (channel === 'node.slug.changed') return 'nodes:details';
   if (channel === 'node.changed' || channel === 'node.folder.changed') return 'nodes:details';
@@ -295,6 +296,19 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
   }
   if (channel === 'ca.changed') {
     return hasScopeBase(scopes, 'pki:ca:view');
+  }
+  // Folder layout events carry only the action and folder id; lists apply the grants.
+  if (channel === 'ca.folder.changed') {
+    return hasScopeBase(scopes, 'pki:ca:view') || hasScope(scopes, 'pki:ca:folders:manage');
+  }
+  if (channel === 'cert.folder.changed') {
+    return hasScopeBase(scopes, 'pki:cert:view') || hasScope(scopes, 'pki:cert:folders:manage');
+  }
+  if (channel === 'pki.template.folder.changed') {
+    return hasScope(scopes, 'pki:templates:view') || hasScope(scopes, 'pki:templates:folders:manage');
+  }
+  if (channel === 'nginx.template.folder.changed') {
+    return hasScopeBase(scopes, 'proxy:templates:view') || hasScope(scopes, 'proxy:templates:folders:manage');
   }
 
   return hasScopeBase(scopes, required);

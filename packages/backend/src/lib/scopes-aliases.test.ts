@@ -96,7 +96,8 @@ describe('retired scope aliases', () => {
     expect(isValidBaseScope('nodes:config:edit')).toBe(false);
     expect(isValidBaseScope('notifications:manage')).toBe(false);
     expect(delegatedScopeIssue('nodes:config:edit:node-1')).toBeNull();
-    expect(delegatedScopeIssue(`proxy:templates:edit:${FOLDER}`)).toContain('cannot be restricted to a folder');
+    // Retired names keep their folder qualifier when the new scope takes folders (nginx template folders).
+    expect(delegatedScopeIssue(`proxy:templates:edit:${FOLDER}`)).toBeNull();
   });
 
   it('leaves unknown scopes for validation to reject', () => {
@@ -150,7 +151,7 @@ describe('delegated scope targets', () => {
   });
 
   it('rejects targets a base cannot resolve', () => {
-    expect(delegatedScopeIssue('pki:ca:export:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e')).toContain('folder');
+    expect(delegatedScopeIssue('pki:cert:issue:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e')).toContain('folder');
     expect(delegatedScopeIssue('pages:settings:view:x')).toContain('cannot be restricted to a resource');
     expect(delegatedScopeIssue('hosting:resources:create:node/node-1')).toContain('node');
     expect(delegatedScopeIssue('admin:users:node/node-1')).toContain('node');

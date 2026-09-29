@@ -5,6 +5,7 @@ import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
 import { sanitizeFilename } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireGatewayFeature } from '@/middleware/feature-flags.js';
+import { requireUuidParam } from '@/middleware/uuid-param.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import {
   authMiddleware,
@@ -14,6 +15,8 @@ import {
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
 import { requireLicenseFeature, requireLicenseFeatureForRequest } from '@/modules/license/license-policy.middleware.js';
+import { caFolderRouteDocs } from '@/modules/resource-folders/resource-folder.docs.js';
+import { registerResourceFolderRoutes } from '@/modules/resource-folders/resource-folder.routes.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import {
   createIntermediateCARoute,
@@ -35,6 +38,7 @@ import {
 } from './ca.schemas.js';
 import { CAService } from './ca.service.js';
 import { ExportService } from './export.service.js';
+import { CAFolderService } from './pki-folders.service.js';
 export const caRouteRuntime = {
   OpenAPIHono,
   container,
@@ -69,4 +73,10 @@ export const caRouteRuntime = {
   UpdateCASchema,
   CAService,
   ExportService,
+  // Folders: a folder holds whole CA hierarchies (only root CAs move).
+  CAFolderService,
+  caFolderRouteDocs,
+  registerResourceFolderRoutes,
+  /** 404 for a non-UUID `/{id}` (a literal segment would otherwise reach the uuid column). */
+  requireUuidParam,
 };

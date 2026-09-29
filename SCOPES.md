@@ -59,7 +59,7 @@ Gateway evaluates scopes with exact, broad, resource-scoped, and implied-scope r
 - Docker container scopes accept either `<nodeId>` for every container and deployment on a node or `<nodeId>/<stableResourceId>` for exactly one standalone container or blue/green deployment. Node grants cover their child resources; child grants do not cover siblings.
 - Recreate and in-place update workflows preserve a standalone container's stable resource ID. Cross-node migration rewrites child grants to the target node. Explicit container or deployment deletion removes child grants, so a later same-name resource does not inherit access.
 - When an API/OAuth token asks for a broad scope but the owning user has only resource-scoped access, Gateway narrows the effective token scope to the resource-scoped variant.
-- Folder-scopable scopes accept `<scope>:folder/<folderId>`; the grant covers the folder, its subfolders, and every resource currently inside them. Node-bound families (routes, Pages, storage, databases, Docker, hosted VM snapshots and resources) and every creation scope accept `<scope>:node/<nodeId>`. Logging token scopes resolve folder grants through logging environment folders; `docker:availability:manage` through the granted container or Compose folder.
+- Folder-scopable scopes accept `<scope>:folder/<folderId>`; the grant covers the folder, its subfolders, and every resource currently inside them. Node-bound families (routes, Pages, storage, databases, Docker, hosted VM snapshots and resources) and every creation scope accept `<scope>:node/<nodeId>`. Logging token scopes resolve folder grants through logging environment folders; `docker:availability:manage` through the granted container or Compose folder. `pki:ca:view`, `pki:ca:edit` and `pki:ca:export` folder grants cover each root CA in the folder and its intermediates; `pki:cert:view`, `pki:cert:revoke` and `pki:cert:export` folder grants the certificates in a PKI certificate folder; `proxy:templates:view` and `proxy:templates:manage` folder grants the nginx templates in the folder. Certificate templates are not resource-scopable, so their folders only organize the list.
 - With "assign created resource permissions" enabled, the creator of a resource keeps only the per-resource scopes they already hold for it (broadly, on the destination folder or node, or through an existing grant), and always view of the created resource itself, so the grant survives a later move without adding capabilities. The destination is read from the created resource when the caller does not pass it.
 
 ## Git Integration Restrictions
@@ -140,14 +140,17 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `pki:ca:export` | Yes. Export a CA private key; restrictable to CA ID. Requires manual OAuth approval. |
 | `pki:ca:revoke:root` |  |
 | `pki:ca:revoke:intermediate` |  |
+| `pki:ca:folders:manage` | Manage CA folders. A folder holds whole CA hierarchies: only root CAs move, their intermediates follow. Moving a root CA also needs `pki:ca:edit` on it and on the destination. |
 | `pki:cert:view` | Yes |
 | `pki:cert:issue` | Yes |
 | `pki:cert:revoke` | Yes |
 | `pki:cert:export` | Yes |
+| `pki:cert:folders:manage` | Manage PKI certificate folders. Moving a certificate also needs `pki:cert:issue` on its issuing CA. |
 | `pki:templates:view` |  |
 | `pki:templates:create` |  |
 | `pki:templates:edit` |  |
 | `pki:templates:delete` |  |
+| `pki:templates:folders:manage` | Manage certificate template folders. Moving a custom template also needs `pki:templates:edit`; built-in templates never move. |
 | `domains:view` |  |
 | `domains:create` |  |
 | `domains:edit` |  |
@@ -176,6 +179,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `pages:settings:edit` |  |
 | `proxy:templates:view` | Yes |
 | `proxy:templates:manage` | Yes. Create, edit, and delete nginx templates, including template content. Replaces `proxy:templates:create`, `:edit`, and `:delete`. |
+| `proxy:templates:folders:manage` | Manage nginx template folders. Moving a custom template also needs `proxy:templates:manage` on it and on the destination; built-in templates never move. |
 | `ssl:cert:view` | Yes |
 | `ssl:cert:issue` |  |
 | `ssl:cert:folders:manage` | Yes |

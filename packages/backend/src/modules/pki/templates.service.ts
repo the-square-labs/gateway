@@ -14,6 +14,8 @@ export class TemplatesService {
       description: string | null;
       createdAt: Date;
       updatedAt: Date;
+      folderId: string | null;
+      sortOrder: number;
       createdById: string | null;
       keyAlgorithm: 'ecdsa-p256' | 'rsa-2048' | 'rsa-4096' | 'ecdsa-p384';
       isBuiltin: boolean;
@@ -60,6 +62,8 @@ export class TemplatesService {
         description: string | null;
         createdAt: Date;
         updatedAt: Date;
+        folderId: string | null;
+        sortOrder: number;
         createdById: string | null;
         keyAlgorithm: 'ecdsa-p256' | 'rsa-2048' | 'rsa-4096' | 'ecdsa-p384';
         isBuiltin: boolean;
@@ -109,6 +113,8 @@ export class TemplatesService {
     description: string | null;
     createdAt: Date;
     updatedAt: Date;
+    folderId: string | null;
+    sortOrder: number;
     createdById: string | null;
     keyAlgorithm: 'ecdsa-p256' | 'rsa-2048' | 'rsa-4096' | 'ecdsa-p384';
     isBuiltin: boolean;
@@ -191,6 +197,8 @@ export class TemplatesService {
     createdById: string | null;
     createdAt: Date;
     updatedAt: Date;
+    folderId: string | null;
+    sortOrder: number;
   }> {
     return commercialModuleUnavailable();
   }

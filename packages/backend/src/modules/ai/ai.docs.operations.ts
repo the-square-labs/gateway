@@ -13,6 +13,10 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - storage
 - domains
 - ssl_certificates
+- pki_cas (internal CAs; a folder holds whole hierarchies)
+- pki_certificates (internal PKI certificates)
+- pki_templates (custom certificate templates)
+- nginx_templates (custom nginx templates)
 - logging_environments
 - logging_schemas
 - admin_users
@@ -37,6 +41,10 @@ Folder-limited access is normal: when a root-level list is empty or a create at 
 - storage: list with storage:view, storage:create, or storage:folders:manage; mutate with storage:folders:manage; moving connections also checks storage:edit for each connection and the destination.
 - domains: list with domains:view or domains:create; mutate with domains:folders:manage.
 - ssl_certificates: list with ssl:cert:view or ssl:cert:issue; mutate with ssl:cert:folders:manage.
+- pki_cas: list with pki:ca:view, pki:cert:issue, or pki:ca:folders:manage; mutate with pki:ca:folders:manage. Only root CAs move (an intermediate answers 400) and their intermediates follow; moving checks pki:ca:edit for each root CA and the destination. reorder_resources also orders intermediates under their parent. System CAs never move.
+- pki_certificates: list with pki:cert:view or pki:cert:folders:manage; mutate with pki:cert:folders:manage. Moving or reordering a certificate checks pki:cert:issue on its issuing CA. Certificates of system CAs never move.
+- pki_templates: list with pki:templates:view or pki:templates:folders:manage; mutate with pki:templates:folders:manage; moving templates also checks pki:templates:edit. Built-in templates never move (400).
+- nginx_templates: list with proxy:templates:view, proxy:templates:manage, or proxy:templates:folders:manage; mutate with proxy:templates:folders:manage; moving templates also checks proxy:templates:manage for each template and the destination. Built-in templates never move (400).
 - logging_environments: list with logs:environments:view, logs:environments:create, or logs:environments:folders:manage; mutate with logs:environments:folders:manage.
 - logging_schemas: list with logs:schemas:view, logs:schemas:create, or logs:schemas:folders:manage; mutate with logs:schemas:folders:manage.
 - admin_users: list with admin:users or admin:users:folders:manage; mutate with admin:users:folders:manage.

@@ -24,6 +24,8 @@ export const FOLDER_ACCESS_LIST_TOOLS: ReadonlySet<string> = new Set([
   'list_routes',
   'list_domains',
   'list_ssl_certificates',
+  'list_cas',
+  'list_certificates',
   'list_databases',
   'list_storage_connections',
   'list_nodes',

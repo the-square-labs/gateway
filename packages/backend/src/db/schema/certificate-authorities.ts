@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   boolean,
   index,
   integer,
@@ -10,6 +11,7 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { pkiCaFolders } from './pki-folders.js';
 import { users } from './users.js';
 
 export const caTypeEnum = pgEnum('ca_type', ['root', 'intermediate']);
@@ -81,6 +83,11 @@ export const certificateAuthorities = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     revocationReason: varchar('revocation_reason', { length: 50 }),
+
+    // Folder placement is stored on root CAs; an intermediate is listed with its root.
+    folderId: uuid('folder_id').references((): AnyPgColumn => pkiCaFolders.id, { onDelete: 'set null' }),
+    // Orders roots within a folder and intermediates under their parent.
+    sortOrder: integer('sort_order').notNull().default(0),
   },
   (table) => ({
     parentIdx: index('ca_parent_idx').on(table.parentId),
@@ -88,5 +95,6 @@ export const certificateAuthorities = pgTable(
     serialIdx: uniqueIndex('ca_serial_idx').on(table.serialNumber),
     createdByIdx: index('ca_created_by_idx').on(table.createdById),
     systemPurposeUnique: uniqueIndex('ca_system_purpose_unique').on(table.systemPurpose),
+    folderIdx: index('ca_folder_idx').on(table.folderId),
   })
 );
