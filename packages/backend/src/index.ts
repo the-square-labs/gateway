@@ -61,6 +61,7 @@ import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { ShutdownCoordinator, waitForShutdownTasks } from '@/services/shutdown-coordinator.service.js';
+import { markShuttingDown } from '@/services/shutdown-state.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
 import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
@@ -393,8 +394,13 @@ async function main() {
       exit: (code) => process.exit(code),
     });
 
-    process.on('SIGTERM', (signal) => void shutdown.request(signal));
-    process.on('SIGINT', (signal) => void shutdown.request(signal));
+    const requestShutdown = (signal: NodeJS.Signals) => {
+      // From here on, losing postgres or redis is an expected shutdown condition (N-19).
+      markShuttingDown();
+      void shutdown.request(signal);
+    };
+    process.on('SIGTERM', requestShutdown);
+    process.on('SIGINT', requestShutdown);
   } catch (error) {
     logger.error('Failed to start server', {
       error,
