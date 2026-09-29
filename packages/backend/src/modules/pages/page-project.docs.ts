@@ -168,6 +168,17 @@ export const rotatePageProjectPreviewHashRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const syncPageProjectSourceRoute = appRoute({
+  method: 'post',
+  path: '/projects/{id}/source/sync',
+  tags,
+  summary: 'Sync the Git source of a Page Project now',
+  description:
+    'Checks the source branch for a new commit now instead of waiting for the next poll or webhook: one poll iteration for this source, also when automatic builds are off. The head is resolved with the connector credentials and recorded as the desired commit; a `poll` build is queued only when the source builds automatically and the head changed or has no build yet. Returns `{ source, changed, build }` (`build` is null when nothing was queued). Within about 10 seconds of the previous poll or sync the current state is returned without asking the Git provider. A Git provider failure answers 502 SOURCE_SYNC_FAILED and is kept as the last poll error. Requires pages:deploy on the Project, like a manual build; no integrations:<provider>:use is needed.',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const deletePageProjectRoute = appRoute({
   method: 'delete',
   path: '/{id}',

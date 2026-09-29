@@ -1375,7 +1375,7 @@ async function manageDockerSource(
     const requiredScope =
       operation === 'get' || operation === 'secret_list'
         ? 'docker:containers:view'
-        : operation === 'build'
+        : operation === 'build' || operation === 'sync'
           ? 'docker:containers:manage'
           : 'docker:containers:edit';
     ensureDockerDeploymentScope(context, user, requiredScope, nodeId, deploymentId);
@@ -1387,7 +1387,7 @@ async function manageDockerSource(
     const requiredScope =
       operation === 'get' || operation === 'secret_list' || operation === 'pending'
         ? 'docker:containers:view'
-        : operation === 'build'
+        : operation === 'build' || operation === 'sync'
           ? 'docker:containers:manage'
           : 'docker:containers:edit';
     await ensureDockerSourceContainerScope(context.dockerService, user, requiredScope, nodeId, containerName);
@@ -1408,6 +1408,8 @@ async function manageDockerSource(
       return { success: true, removed: await sourceService.remove(target, user.id) };
     case 'resolve':
       return sourceService.resolveCurrent(target, user);
+    case 'sync':
+      return sourceService.sync(target, user);
     case 'build':
       return sourceService.createBuild(
         target,

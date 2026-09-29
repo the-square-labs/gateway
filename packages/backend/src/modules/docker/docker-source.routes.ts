@@ -37,6 +37,11 @@ import {
   createComposeProjectFromSource,
   createDockerSourceResource,
 } from './docker-source-resource-creation.js';
+import {
+  syncComposeSourceRoute,
+  syncContainerSourceRoute,
+  syncDeploymentSourceRoute,
+} from './docker-source-sync.docs.js';
 
 export { assertDockerSourceTargetNode, initialDockerSourceBuildError } from './docker-source-resource-creation.js';
 
@@ -196,6 +201,16 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
       return c.json({ data }, data.created ? 201 : 200);
     }
   );
+  // Sync now can queue the automatic build and its rollout, so it needs the build scope, not edit.
+  router.openapi(
+    {
+      ...syncContainerSourceRoute,
+      middleware: requireDockerContainerScope('docker:containers:manage', 'containerName', {
+        allowPendingSource: true,
+      }),
+    },
+    async (c) => c.json({ data: await container.resolve(DockerSourceService).sync(containerTarget(c), actorFor(c)) })
+  );
   router.get(
     '/nodes/:nodeId/containers/:containerName/source/build-secrets',
     requireDockerContainerScope('docker:containers:view', 'containerName', { allowPendingSource: true }),
@@ -263,6 +278,10 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
       const data = await container.resolve(DockerSourceService).createBuild(deploymentTarget(c), input, actorFor(c));
       return c.json({ data }, data.created ? 201 : 200);
     }
+  );
+  router.openapi(
+    { ...syncDeploymentSourceRoute, middleware: requireDeploymentSourceScope('docker:containers:manage') },
+    async (c) => c.json({ data: await container.resolve(DockerSourceService).sync(deploymentTarget(c), actorFor(c)) })
   );
   router.get(
     '/nodes/:nodeId/deployments/:deploymentId/source/build-secrets',
@@ -339,6 +358,10 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
       const data = await container.resolve(DockerSourceService).createBuild(composeTarget(c), input, actorFor(c));
       return c.json({ data }, data.created ? 201 : 200);
     }
+  );
+  router.openapi(
+    { ...syncComposeSourceRoute, middleware: requireComposeSourceScope('docker:compose:manage') },
+    async (c) => c.json({ data: await container.resolve(DockerSourceService).sync(composeTarget(c), actorFor(c)) })
   );
   router.get(
     '/nodes/:nodeId/compose-projects/:projectId/source/build-secrets',

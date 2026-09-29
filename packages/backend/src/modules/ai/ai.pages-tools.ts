@@ -427,6 +427,10 @@ async function manageProjectSource(
       user
     );
   }
+  if (operation === 'source_sync') {
+    ensureResourceScope(user, 'pages:deploy', projectId);
+    return sources().sync(sourceTarget, user);
+  }
   if (operation === 'source_secret_list') {
     ensureResourceScope(user, 'pages:view', projectId);
     return sources().listBuildSecrets(sourceTarget);

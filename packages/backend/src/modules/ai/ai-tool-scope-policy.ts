@@ -219,6 +219,8 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'pages:create',
     'pages:edit',
     'pages:delete',
+    // source_build and source_sync (Sync now) need only pages:deploy on the Project, like their REST routes.
+    'pages:deploy',
     'pages:deployments:manage',
     'pages:tags:manage',
     'pages:tokens:manage',

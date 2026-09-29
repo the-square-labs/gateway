@@ -45,6 +45,7 @@ import {
   reorderPageProjectFoldersRoute,
   reorderPageProjectsRoute,
   rotatePageProjectPreviewHashRoute,
+  syncPageProjectSourceRoute,
   updatePageProjectFolderRoute,
   updatePageProjectRoute,
 } from './page-project.docs.js';
@@ -107,6 +108,7 @@ export const pageProjectRouteRuntime = {
   reorderPageProjectFoldersRoute,
   reorderPageProjectsRoute,
   rotatePageProjectPreviewHashRoute,
+  syncPageProjectSourceRoute,
   updatePageProjectFolderRoute,
   updatePageProjectRoute,
   CreatePageProjectSchema,

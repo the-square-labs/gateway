@@ -171,7 +171,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     update: ['upsert', 'secret_upsert'],
     delete: ['remove', 'secret_delete'],
     external: ['resolve'],
-    execute: ['build'],
+    execute: ['build', 'sync'],
   }),
   manage_docker_build: operationPolicies({
     read: ['get', 'logs'],
@@ -296,7 +296,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
       'source_upsert',
     ],
     external: ['source_discover'],
-    execute: ['project_migrate', 'project_rotate_preview_hash', 'source_build'],
+    execute: ['project_migrate', 'project_rotate_preview_hash', 'source_build', 'source_sync'],
     delete: [
       'project_delete',
       'deployment_delete',

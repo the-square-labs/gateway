@@ -305,6 +305,16 @@ export class DockerSourceService {
   }> {
     return commercialModuleUnavailable();
   }
+  async sync(
+    _target: DockerSourceTarget,
+    _user: User
+  ): Promise<{
+    source: NonNullable<Awaited<ReturnType<DockerSourceService['get']>>>;
+    changed: boolean;
+    build: Awaited<ReturnType<DockerBuildService['enqueue']>>['build'] | null;
+  }> {
+    return commercialModuleUnavailable();
+  }
   async pollDue(
     _now?: Date,
     _limit?: number
