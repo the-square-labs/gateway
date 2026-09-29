@@ -1,6 +1,8 @@
 import type {
   InferenceDiscoveredModel,
   InferenceModel,
+  InferenceModelMetadataField,
+  InferenceModelMetadataSource,
   InferenceProviderCatalogItem,
   InferenceProviderConnection,
   InferenceProviderModelPricing,
@@ -56,7 +58,38 @@ export interface ProviderModelOption {
   capabilities: Record<string, boolean>;
   capabilityLimitations: Record<string, string[]>;
   reasoningEfforts: string[];
+  metadataSources: Partial<Record<InferenceModelMetadataField, InferenceModelMetadataSource>>;
   pricing: InferenceProviderModelPricing | null;
+}
+
+const METADATA_FIELDS: InferenceModelMetadataField[] = [
+  "displayName",
+  "contextWindow",
+  "maxInputTokens",
+  "maxOutputTokens",
+  "autoCompactTokenLimit",
+  "reasoningEfforts",
+  "modalities",
+  "capabilities",
+];
+
+/**
+ * A field is provider-reported only when every account's value came from the provider. Any
+ * catalog value wins over a calculation, and any calculation wins over a live answer.
+ */
+function commonMetadataSources(bindings: ProviderModelBinding[]) {
+  const sources: Partial<Record<InferenceModelMetadataField, InferenceModelMetadataSource>> = {};
+  for (const field of METADATA_FIELDS) {
+    const values = bindings.map(({ model }) => model.metadataSources?.[field]);
+    if (values.includes("fallback")) sources[field] = "fallback";
+    else if (
+      values.length &&
+      values.every((value) => value === "provider" || value === "derived")
+    ) {
+      sources[field] = values.includes("derived") ? "derived" : "provider";
+    }
+  }
+  return sources;
 }
 
 export const EMPTY_MODEL_FORM: ModelForm = {
@@ -79,6 +112,29 @@ export const EMPTY_MODEL_PRICING: ModelPricingForm = {
 
 export function providerModelKey(providerId: string, remoteModelId: string) {
   return `${providerId}:${remoteModelId}`;
+}
+
+/** Subscription providers whose live model roster reports each model's reasoning effort levels. */
+const PROVIDERS_WITH_LIVE_REASONING_EFFORTS = new Set(["openai", "anthropic"]);
+
+/**
+ * A model can be offered for publishing only when every account reports the limits Gateway
+ * needs to route and compact requests. On subscriptions whose live roster reports effort
+ * levels, a reasoning model that only has built-in catalog levels is not offered either:
+ * the provider no longer lists it with reasoning support. Other providers publish ids only,
+ * so their catalog levels remain valid.
+ */
+export function hasRequiredModelMetadata(option: ProviderModelOption) {
+  return (
+    option.contextWindow != null &&
+    option.maxInputTokens != null &&
+    option.autoCompactTokenLimit != null &&
+    !(
+      PROVIDERS_WITH_LIVE_REASONING_EFFORTS.has(option.providerId) &&
+      option.reasoningEfforts.length > 0 &&
+      option.metadataSources.reasoningEfforts === "fallback"
+    )
+  );
 }
 
 export function providerModelLabels(options: ProviderModelOption[]) {
@@ -167,6 +223,7 @@ export function buildProviderModelOptions(
         capabilities,
         capabilityLimitations,
         reasoningEfforts,
+        metadataSources: commonMetadataSources(bindings),
         pricing,
       } satisfies ProviderModelOption;
     })

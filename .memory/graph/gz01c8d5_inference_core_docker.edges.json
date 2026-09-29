@@ -3,13 +3,43 @@
   "edges": [
     {
       "from_id": "gz01c8d5",
-      "to_id": "ifp3c48s",
+      "to_id": "nr9hvzr3",
       "relation": "same_workflow",
-      "weight": 0.9,
-      "reason": "Both define the managed inference-core integration workflow, including Gateway control-plane ownership and internal runtime connectivity.",
+      "weight": 0.84,
+      "reason": "Both document the local Gateway Compose environment, container reuse, and troubleshooting of daemon-backed development services.",
       "source": "auto",
-      "created_at": 1790155294108,
-      "updated_at": 1790155294108
+      "created_at": 1790634437725,
+      "updated_at": 1790634437725
+    },
+    {
+      "from_id": "gz01c8d5",
+      "to_id": "ifp3c48s",
+      "relation": "same_area",
+      "weight": 0.78,
+      "reason": "Both define the managed inference-core architecture, including its internal service-network runtime role and Gateway integration.",
+      "source": "auto",
+      "created_at": 1790634437725,
+      "updated_at": 1790634437725
+    },
+    {
+      "from_id": "gz01c8d5",
+      "to_id": "j6oni2tm",
+      "relation": "same_area",
+      "weight": 0.72,
+      "reason": "Both establish Docker Compose boundaries and distinguish Gateway-managed runtime behavior from broader orchestration.",
+      "source": "auto",
+      "created_at": 1790634437725,
+      "updated_at": 1790634437725
+    },
+    {
+      "from_id": "gz01c8d5",
+      "to_id": "lvklfxgs",
+      "relation": "same_workflow",
+      "weight": 0.63,
+      "reason": "Both use disposable or local Compose-managed Gateway environments to verify core and Gateway behavior.",
+      "source": "auto",
+      "created_at": 1790634437725,
+      "updated_at": 1790634437725
     }
   ]
 }

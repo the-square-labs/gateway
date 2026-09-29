@@ -131,12 +131,12 @@ export function serializeConnection(connection: typeof inferenceProviderConnecti
 
 export function serializeModel(model: typeof inferenceDiscoveredModels.$inferSelect, providerId?: string) {
   const known = providerId ? knownProviderModel(providerId, model.remoteModelId) : undefined;
-  const maxInputTokens = model.maxInputTokens ?? known?.maxInputTokens ?? null;
-  const detectedAutoCompactTokenLimit = model.autoCompactTokenLimit ?? known?.autoCompactTokenLimit ?? null;
-  const autoCompactTokenLimit =
-    detectedAutoCompactTokenLimit !== null && maxInputTokens !== null
-      ? Math.min(detectedAutoCompactTokenLimit, maxInputTokens)
-      : detectedAutoCompactTokenLimit;
+  const limits = consistentTokenLimits({
+    contextWindow: model.contextWindow ?? known?.contextWindow,
+    maxInputTokens: model.maxInputTokens ?? known?.maxInputTokens,
+    autoCompactTokenLimit: model.autoCompactTokenLimit ?? known?.autoCompactTokenLimit,
+  });
+  const { maxInputTokens, autoCompactTokenLimit } = limits;
   const reportedModalities = hasAny(model.metadata, [
     'input_modalities',
     'architecture',
@@ -153,16 +153,48 @@ export function serializeModel(model: typeof inferenceDiscoveredModels.$inferSel
     'architecture',
     'supports_image_in',
   ]);
+  const storedSources = storedFieldSources(model.metadata);
+  const valueSource = (field: string, stored: unknown, fallback: unknown) =>
+    stored !== null && stored !== undefined
+      ? storedSources[field]
+      : fallback !== null && fallback !== undefined
+        ? 'fallback'
+        : undefined;
+  const usesKnownModalities = Boolean(known && !reportedModalities);
+  const usesKnownCapabilities = Boolean(known && !reportedCapabilities);
+  const contextWindowSource = valueSource('contextWindow', model.contextWindow, known?.contextWindow);
+  const maxInputSource = limits.maxInputFromContextWindow
+    ? derivedSource(contextWindowSource)
+    : valueSource('maxInputTokens', model.maxInputTokens, known?.maxInputTokens);
+  const metadataSources = Object.fromEntries(
+    Object.entries({
+      displayName: valueSource('displayName', model.displayName, known?.displayName),
+      contextWindow: contextWindowSource,
+      maxInputTokens: maxInputSource,
+      maxOutputTokens: valueSource('maxOutputTokens', model.maxOutputTokens, known?.maxOutputTokens),
+      autoCompactTokenLimit: limits.autoCompactFromMaxInput
+        ? derivedSource(maxInputSource)
+        : valueSource('autoCompactTokenLimit', model.autoCompactTokenLimit, known?.autoCompactTokenLimit),
+      reasoningEfforts: model.reasoningEfforts.length
+        ? storedSources.reasoningEfforts
+        : known?.reasoningEfforts.length
+          ? 'fallback'
+          : undefined,
+      modalities: usesKnownModalities ? 'fallback' : storedSources.modalities,
+      capabilities: usesKnownCapabilities ? 'fallback' : storedSources.capabilities,
+    }).filter((entry): entry is [string, InferenceModelMetadataSource] => entry[1] !== undefined)
+  );
   return {
     ...model,
     displayName: model.displayName ?? known?.displayName ?? null,
-    contextWindow: model.contextWindow ?? known?.contextWindow ?? null,
+    contextWindow: limits.contextWindow,
     maxInputTokens,
     maxOutputTokens: model.maxOutputTokens ?? known?.maxOutputTokens ?? null,
     autoCompactTokenLimit,
-    modalities: known && !reportedModalities ? known.modalities : model.modalities,
-    capabilities: known && !reportedCapabilities ? known.capabilities : model.capabilities,
+    modalities: usesKnownModalities && known ? known.modalities : model.modalities,
+    capabilities: usesKnownCapabilities && known ? known.capabilities : model.capabilities,
     reasoningEfforts: model.reasoningEfforts.length ? model.reasoningEfforts : (known?.reasoningEfforts ?? []),
+    metadataSources,
     pricing: pricingFromDiscoveredMetadata(model.metadata) ?? known?.pricing ?? null,
     lastSeenAt: model.lastSeenAt.toISOString(),
     createdAt: model.createdAt.toISOString(),
@@ -172,6 +204,54 @@ export function serializeModel(model: typeof inferenceDiscoveredModels.$inferSel
 
 function hasAny(metadata: Record<string, unknown>, keys: string[]): boolean {
   return keys.some((key) => metadata[key] !== undefined);
+}
+
+/**
+ * Make one model's token limits agree with each other. Values can come from different places
+ * (a live context window next to a built-in long-context input ceiling), so the input limit
+ * never exceeds the window and the compaction threshold is recomputed when it no longer fits.
+ */
+export function consistentTokenLimits(input: {
+  contextWindow?: number | null;
+  maxInputTokens?: number | null;
+  autoCompactTokenLimit?: number | null;
+}) {
+  const contextWindow = input.contextWindow ?? null;
+  let maxInputTokens = input.maxInputTokens ?? null;
+  const maxInputFromContextWindow =
+    contextWindow !== null && (maxInputTokens === null || maxInputTokens > contextWindow);
+  if (maxInputFromContextWindow) maxInputTokens = contextWindow;
+  let autoCompactTokenLimit = input.autoCompactTokenLimit ?? null;
+  const autoCompactFromMaxInput =
+    maxInputTokens !== null && (autoCompactTokenLimit === null || autoCompactTokenLimit > maxInputTokens);
+  if (autoCompactFromMaxInput && maxInputTokens !== null) {
+    autoCompactTokenLimit = Math.floor(maxInputTokens * 0.9);
+  }
+  return { contextWindow, maxInputTokens, autoCompactTokenLimit, maxInputFromContextWindow, autoCompactFromMaxInput };
+}
+
+/**
+ * Where a model's technical value came from: the provider's live API, the built-in catalog,
+ * or a Gateway calculation from provider-reported limits (for example 90% of the input limit).
+ */
+export type InferenceModelMetadataSource = 'provider' | 'fallback' | 'derived';
+
+/** A value calculated from provider data is `derived`; one calculated from catalog data stays `fallback`. */
+export function derivedSource(
+  base: InferenceModelMetadataSource | undefined
+): InferenceModelMetadataSource | undefined {
+  return base === 'fallback' ? 'fallback' : base === undefined ? undefined : 'derived';
+}
+
+function storedFieldSources(metadata: Record<string, unknown>): Partial<Record<string, InferenceModelMetadataSource>> {
+  const value = metadata.field_sources;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, InferenceModelMetadataSource] =>
+        entry[1] === 'provider' || entry[1] === 'fallback' || entry[1] === 'derived'
+    )
+  );
 }
 
 export function serializeQuota(quota: typeof inferenceQuotaSnapshots.$inferSelect) {

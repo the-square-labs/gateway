@@ -272,6 +272,10 @@ describe('known inference provider model catalog', () => {
     expect(knownProviderModel('anthropic-apikey', 'claude-opus-5-5')?.autoCompactTokenLimit).toBeGreaterThan(0);
   });
 
+  it('does not invent metadata for a newly discovered Claude model', () => {
+    expect(knownProviderModel('anthropic', 'claude-sonnet-5-5')).toBeUndefined();
+  });
+
   it('maps dated OpenAI snapshots to the audited family defaults', () => {
     expect(knownProviderModel('openai-apikey', 'gpt-4o-2024-11-20')).toEqual(
       knownProviderModel('openai-apikey', 'gpt-4o')

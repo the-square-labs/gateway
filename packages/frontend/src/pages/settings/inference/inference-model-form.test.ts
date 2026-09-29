@@ -8,6 +8,7 @@ import {
   formWithProviderModel,
   hasCompletePricing,
   hasCompleteTechnicalLimits,
+  hasRequiredModelMetadata,
   manualMetadataForProviderModel,
   modelTechnicalLimits,
   normalizeReasoningMap,
@@ -17,6 +18,44 @@ import {
 } from "./inference-model-form";
 
 describe("inference model form helpers", () => {
+  it("combines metadata sources across accounts with catalog values taking precedence", () => {
+    const reasoning = (sources: Record<string, "provider" | "fallback" | "derived">) => ({
+      ...model("gpt-5.6", 200_000),
+      reasoningEfforts: ["low", "high"],
+      metadataSources: sources,
+    });
+    const [option] = buildProviderModelOptions(
+      [
+        connection("openai", "team-a", [
+          reasoning({
+            contextWindow: "provider",
+            maxInputTokens: "provider",
+            reasoningEfforts: "provider",
+          }),
+        ]),
+        connection("openai", "team-b", [
+          reasoning({
+            contextWindow: "provider",
+            maxInputTokens: "derived",
+            reasoningEfforts: "fallback",
+          }),
+        ]),
+      ],
+      [provider("openai", "ChatGPT subscription", true)]
+    );
+
+    expect(option?.metadataSources).toMatchObject({
+      contextWindow: "provider",
+      maxInputTokens: "derived",
+      reasoningEfforts: "fallback",
+    });
+    // One account without live effort levels is enough to hide the pooled subscription model.
+    expect(option && hasRequiredModelMetadata(option)).toBe(false);
+    expect(option && hasRequiredModelMetadata({ ...option, providerId: "openai-apikey" })).toBe(
+      true
+    );
+  });
+
   it("groups account bindings only within one provider and upstream model", () => {
     const options = buildProviderModelOptions(
       [
