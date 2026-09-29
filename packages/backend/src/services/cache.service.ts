@@ -2,6 +2,7 @@ import { Redis } from 'ioredis';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { firstShutdownReport, isShuttingDown } from '@/services/shutdown-state.js';
 
 const logger = createChildLogger('CacheService');
 
@@ -29,10 +30,17 @@ export function createRedisClient(url: string): RedisClient {
   });
 
   redis.on('error', (error: Error) => {
+    if (isShuttingDown()) {
+      // Redis stops with the app at a host shutdown (N-19): expected, logged once.
+      if (firstShutdownReport('redis'))
+        logger.info('Redis connection closed while Gateway shuts down', { error: error.message });
+      return;
+    }
     logger.error('Redis connection error', { error: error.message });
   });
 
   redis.on('close', () => {
+    if (isShuttingDown()) return;
     logger.warn('Redis connection closed');
   });
 
