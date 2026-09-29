@@ -763,7 +763,16 @@ export class DomainsService extends DomainsServiceIngressGroups {
       }
     }
 
-    await this.db.delete(domains).where(eq(domains.id, id));
+    await this.db.transaction(async (tx) => {
+      // A disabled Pages profile keeps its last wildcard domain only as a form
+      // default, but its foreign key still refuses the delete. An enabled one
+      // was rejected above and keeps blocking through the foreign key.
+      await tx
+        .update(pageWildcardProfiles)
+        .set({ domainId: null, updatedAt: new Date() })
+        .where(and(eq(pageWildcardProfiles.domainId, id), eq(pageWildcardProfiles.enabled, false)));
+      await tx.delete(domains).where(eq(domains.id, id));
+    });
 
     await this.auditService.log({
       userId,
