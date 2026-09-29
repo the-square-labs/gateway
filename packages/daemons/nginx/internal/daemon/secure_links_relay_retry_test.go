@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -392,38 +393,48 @@ func TestPlainLinkHoldsForARestartingTargetBeyondTheTransientWait(t *testing.T) 
 	}
 }
 
-// restartingRelay serves broker on address from the moment start closes, like a relay that is being recreated: until
-// then every dial of the lane is refused.
-func restartingRelay(t *testing.T, address string, broker *scriptedBroker, start <-chan struct{}) {
+// relayDialer is how a lane reaches its relay: every dial is refused until the relay listens, as while a relay is
+// being recreated or its host is down. Lanes dial through it rather than a port that was closed to be listened on
+// again later: another socket can take that port meanwhile.
+type relayDialer struct {
+	address atomic.Pointer[string]
+}
+
+func (d *relayDialer) dial(ctx context.Context, _ string) (net.Conn, error) {
+	address := d.address.Load()
+	if address == nil {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	}
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, "tcp", *address)
+}
+
+// restartingRelay serves broker from the moment start closes, like a relay that is being recreated: until then every
+// dial of a lane to it is refused.
+func restartingRelay(t *testing.T, broker *scriptedBroker, start <-chan struct{}) *relayDialer {
 	t.Helper()
+	relay := &relayDialer{}
 	server := grpc.NewServer()
 	relayv1.RegisterTunnelBrokerServer(server, broker)
 	t.Cleanup(server.Stop)
 	go func() {
 		<-start
-		listener, err := net.Listen("tcp", address)
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Error(err)
 			return
 		}
+		address := listener.Addr().String()
+		relay.address.Store(&address)
 		_ = server.Serve(listener)
 	}()
+	return relay
 }
 
-func unusedAddress(t *testing.T) string {
+func laneTo(t *testing.T, relay *relayDialer, targetID string) *nginxRelayTunnel {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	_ = listener.Close()
-	return address
-}
-
-func laneTo(t *testing.T, address, targetID string) *nginxRelayTunnel {
-	t.Helper()
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()),
+	conn, err := grpc.NewClient("passthrough:///"+targetID, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(relay.dial),
 		grpc.WithConnectParams(grpc.ConnectParams{Backoff: backoff.Config{BaseDelay: 50 * time.Millisecond, Multiplier: 1.2, MaxDelay: 200 * time.Millisecond}, MinConnectTimeout: time.Second}))
 	if err != nil {
 		t.Fatal(err)
@@ -437,12 +448,11 @@ func laneTo(t *testing.T, address, targetID string) *nginxRelayTunnel {
 // known to serve, and is served once the relay listens again.
 func TestAvailabilityMemberLinkHoldsThroughASingleRelayRestart(t *testing.T) {
 	broker := &scriptedBroker{}
-	address := unusedAddress(t)
 	start := make(chan struct{})
-	restartingRelay(t, address, broker, start)
+	relay := restartingRelay(t, broker, start)
 	plugin := relayOpenPlugin(t, &scriptedBroker{}, true)
 	withServingAlternative(t, plugin)
-	plugin.relayTunnels = []*nginxRelayTunnel{laneTo(t, address, relaybridge.LegacyTargetID)}
+	plugin.relayTunnels = []*nginxRelayTunnel{laneTo(t, relay, relaybridge.LegacyTargetID)}
 	time.AfterFunc(600*time.Millisecond, func() { close(start) })
 
 	elapsed := openThroughRelay(plugin)
@@ -459,12 +469,11 @@ func TestAvailabilityMemberLinkHoldsThroughASingleRelayRestart(t *testing.T) {
 // back, bounded by the transient wait.
 func TestAvailabilityMemberLinkHoldsWhileEveryRelayIsDown(t *testing.T) {
 	broker := &scriptedBroker{}
-	first, second := unusedAddress(t), unusedAddress(t)
 	start := make(chan struct{})
-	restartingRelay(t, second, broker, start)
+	second := restartingRelay(t, broker, start)
 	plugin, _ := blackHoledMemberPlugin(t, true)
 	withServingAlternative(t, plugin)
-	plugin.relayTunnels = []*nginxRelayTunnel{laneTo(t, first, "relay-130"), laneTo(t, second, "relay-136")}
+	plugin.relayTunnels = []*nginxRelayTunnel{laneTo(t, &relayDialer{}, "relay-130"), laneTo(t, second, "relay-136")}
 	time.AfterFunc(600*time.Millisecond, func() { close(start) })
 
 	elapsed := openThroughRelay(plugin)
@@ -481,7 +490,7 @@ func TestAvailabilityMemberLinkHoldsWhileEveryRelayIsDown(t *testing.T) {
 	secureLinkTransientWait = 400 * time.Millisecond
 	t.Cleanup(func() { secureLinkTransientWait = previous })
 	dead, _ := blackHoledMemberPlugin(t, true)
-	dead.relayTunnels = []*nginxRelayTunnel{laneTo(t, unusedAddress(t), "relay-130"), laneTo(t, unusedAddress(t), "relay-136")}
+	dead.relayTunnels = []*nginxRelayTunnel{laneTo(t, &relayDialer{}, "relay-130"), laneTo(t, &relayDialer{}, "relay-136")}
 	elapsed = openThroughRelay(dead)
 	if elapsed < 300*time.Millisecond || elapsed > 2*time.Second {
 		t.Fatalf("with every relay down the link gave up after %s", elapsed)
