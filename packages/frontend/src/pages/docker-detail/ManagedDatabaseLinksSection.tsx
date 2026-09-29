@@ -322,28 +322,39 @@ export const ManagedDatabaseLinksSection = forwardRef<
         addition.replacesBindingId ? [addition.replacesBindingId] : []
       )
     );
+    const kept = bindings.filter((binding) => !replacedBindingIds.has(binding.id));
+    // While a save runs, the server row of a new link arrives before the draft is cleared;
+    // the saved row replaces its draft instead of showing twice.
+    const savedTargets = new Set(
+      kept
+        .filter((binding) => !changes.removals.includes(binding.id))
+        .map((binding) => `${binding.managedDatabaseId}:${binding.targetResourceId}`)
+    );
     return [
-      ...bindings
-        .filter((binding) => !replacedBindingIds.has(binding.id))
-        .map((binding) => ({
-          binding,
-          pending: changes.removals.includes(binding.id) ? ("remove" as const) : null,
-        })),
-      ...changes.additions.map((addition) => ({
-        binding: {
-          id: addition.id,
-          managedDatabaseId: addition.managedDatabaseId,
-          targetNodeId: nodeId,
-          targetType,
-          targetResourceId: addition.targetResourceId,
-          environment: addition.environment,
-          status: "creating" as const,
-          lastError: null,
-          createdAt: "",
-          updatedAt: "",
-        },
-        pending: "add" as const,
+      ...kept.map((binding) => ({
+        binding,
+        pending: changes.removals.includes(binding.id) ? ("remove" as const) : null,
       })),
+      ...changes.additions
+        .filter(
+          (addition) =>
+            !savedTargets.has(`${addition.managedDatabaseId}:${addition.targetResourceId}`)
+        )
+        .map((addition) => ({
+          binding: {
+            id: addition.id,
+            managedDatabaseId: addition.managedDatabaseId,
+            targetNodeId: nodeId,
+            targetType,
+            targetResourceId: addition.targetResourceId,
+            environment: addition.environment,
+            status: "creating" as const,
+            lastError: null,
+            createdAt: "",
+            updatedAt: "",
+          },
+          pending: "add" as const,
+        })),
     ];
   }, [bindings, changes, nodeId, targetType]);
   const linkedTargets = useMemo(
