@@ -63,8 +63,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
   );
   // A folder holds whole hierarchies: an intermediate CA is listed in the folder of its root CA
   // (the CA list reports that folder on every CA), so its picker only shows where it will land.
-  const parentFolderId =
-    (cas || []).find((ca) => ca.id === resolvedParentId)?.folderId ?? "";
+  const parentFolderId = (cas || []).find((ca) => ca.id === resolvedParentId)?.folderId ?? "";
   const folderChoices = useMemo(() => {
     const folders = flattenCreationFolders(caFolders ?? []);
     return isIntermediate

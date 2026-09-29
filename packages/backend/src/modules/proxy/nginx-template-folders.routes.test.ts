@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+// The schema barrel first: loading the template service alone enters the schema import cycle mid-way.
+import '@/db/schema/index.js';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';

@@ -22,8 +22,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
-import { api } from "@/services/api";
 import { hasCreationDestination } from "@/lib/creation-folders";
+import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { NginxTemplate } from "@/types";
 

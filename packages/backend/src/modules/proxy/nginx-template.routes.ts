@@ -3,11 +3,7 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import {
-  authMiddleware,
-  requireScopeBase,
-  requireScopeForResource,
-} from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import { nginxTemplateFolderRouteDocs } from '@/modules/resource-folders/resource-folder.docs.js';
 import { registerResourceFolderRoutes } from '@/modules/resource-folders/resource-folder.routes.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -86,7 +82,9 @@ nginxTemplateRoutes.openapi(
     const body = await c.req.json();
     const input = CreateNginxTemplateSchema.parse(body);
     // Broad manage creates anywhere; `manage:folder/<id>` creates in that folder only.
-    await container.resolve(NginxTemplateFolderService).assertCreateFolder(c.get('effectiveScopes') ?? [], input.folderId);
+    await container
+      .resolve(NginxTemplateFolderService)
+      .assertCreateFolder(c.get('effectiveScopes') ?? [], input.folderId);
     const template = await service.createTemplate(input, user.id);
     return c.json({ data: template }, 201);
   }

@@ -16,9 +16,9 @@ import { RequireScope } from "@/components/common/RequireScope";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Button } from "@/components/ui/button";
-import { hasCreationDestination } from "@/lib/creation-folders";
 import { hasDashboardContent } from "@/lib/app-navigation";
 import { getLoginRedirectUrl } from "@/lib/auth-return-to";
+import { hasCreationDestination } from "@/lib/creation-folders";
 import { resolveMigrationTarget } from "@/lib/docker-migration-navigation";
 import {
   hasLowInferenceUsage,
