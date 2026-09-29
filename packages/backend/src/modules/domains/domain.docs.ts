@@ -1,3 +1,4 @@
+import { z } from '@hono/zod-openapi';
 import {
   appRoute,
   createdJson,
@@ -174,7 +175,17 @@ export const checkDomainDnsRoute = appRoute({
   path: '/{id}/check-dns',
   tags: ['Domains'],
   summary: 'Run a DNS check for a domain',
-  request: { params: IdParamSchema },
+  description:
+    'Re-probes the domain DNS. By default the check also repairs drift: it reconciles an ingress group domain and rewrites a drifted Cloudflare record towards the approved target. With `repair=false` it only reads the resolver and the provider records and stores the observed status.',
+  request: {
+    params: IdParamSchema,
+    query: z.object({
+      repair: z
+        .enum(['true', 'false'])
+        .optional()
+        .openapi({ description: '`false` makes the check read-only: no provider writes and no reconciliation.' }),
+    }),
+  },
   responses: okJson(UnknownDataResponseSchema),
 });
 

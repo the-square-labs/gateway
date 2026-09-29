@@ -794,9 +794,14 @@ export class DomainsService extends DomainsServiceIngressGroups {
     this.emitDomain(id, 'deleted', row.domain);
   }
 
-  async checkDns(id: string) {
+  /**
+   * Re-probes a domain's DNS. With `repair: false` the check only reads (resolver and provider records) and stores
+   * what it observed; it never reconciles an ingress group, rewrites a Cloudflare record or adopts a new target.
+   */
+  async checkDns(id: string, options: { repair?: boolean } = {}) {
     let [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!row) throw new Error('Domain not found');
+    if (options.repair === false) return this.observeDns(row);
 
     // A manual check retries a durable approved target before falling back to
     // drift repair for the last committed target. It never invents approval
@@ -825,20 +830,27 @@ export class DomainsService extends DomainsServiceIngressGroups {
       if (!row) throw new Error('Domain not found');
     }
 
+    return this.observeDns(row, { adoptExternalTarget: true });
+  }
+
+  /** Resolves and reads the provider, then records the observed status. The only write is the domain's own snapshot. */
+  private async observeDns(row: typeof domains.$inferSelect, options: { adoptExternalTarget?: boolean } = {}) {
     const probe = await probeDnsRecords(row.domain);
     const providerRecords = await this.getManagedCloudflareDnsRecords(row);
     const dnsRecords = this.dnsRecordsForSnapshot(row, probe.records, providerRecords);
     const dnsStatus = await this.computeDomainDnsStatus(row, probe.records, probe.addressResolution, providerRecords);
-    const targetUpdate = await this.externalTargetSnapshotUpdate(row, dnsStatus, dnsRecords);
+    const targetUpdate = options.adoptExternalTarget
+      ? await this.externalTargetSnapshotUpdate(row, dnsStatus, dnsRecords)
+      : {};
 
     const [updated] = await this.db
       .update(domains)
       .set({ dnsStatus, dnsRecords, ...targetUpdate, lastDnsCheckAt: new Date(), updatedAt: new Date() })
-      .where(eq(domains.id, id))
+      .where(eq(domains.id, row.id))
       .returning();
 
     logger.debug('DNS check complete', { domain: row.domain, status: dnsStatus });
-    this.emitDomain(id, 'updated', row.domain);
+    this.emitDomain(row.id, 'updated', row.domain);
     return updated;
   }
 

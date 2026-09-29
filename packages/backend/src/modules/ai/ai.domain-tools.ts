@@ -142,7 +142,7 @@ async function manageDomain(context: DomainToolContext, user: User, a: Record<st
   }
   if (a.operation === 'check_dns') {
     context.ensureToolScopeForResource(user, 'domains:edit', domainId);
-    return context.domainsService.checkDns(domainId);
+    return context.domainsService.checkDns(domainId, { repair: a.repair !== false });
   }
   if (a.operation === 'resolve_cloudflare_migration') {
     context.ensureToolScopeForResource(user, 'domains:edit', domainId);

@@ -316,7 +316,9 @@ domainRoutes.openapi(
   async (c) => {
     const domainsService = container.resolve(DomainsService);
     try {
-      const domain = await domainsService.checkDns(c.req.param('id')!);
+      // `repair=false` (the detail dialog's check on open) is read-only: it never rewrites provider records.
+      const repair = c.req.query('repair') !== 'false';
+      const domain = await domainsService.checkDns(c.req.param('id')!, { repair });
       return c.json({ data: domain });
     } catch {
       return c.json({ code: 'NOT_FOUND', message: 'Domain not found' }, 404);

@@ -617,7 +617,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_domain',
     description:
-      'Inspect and manage domains. Operations without domainId (any domains:create grant, broad, on a folder or on a node): list_nginx_nodes (ingress nodes and ingress groups the caller may create domains on), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId or ingressGroupId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying; ingressGroupId moves the domain and all its routes onto an ingress group, members first and DNS last, or null with nginxNodeId, a current member, moves them back to that node, DNS first), check_dns, resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain, placed in certificateFolderId; also needs ssl:cert:issue on that SSL certificate folder, or broadly for the root), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
+      'Inspect and manage domains. Operations without domainId (any domains:create grant, broad, on a folder or on a node): list_nginx_nodes (ingress nodes and ingress groups the caller may create domains on), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId or ingressGroupId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying; ingressGroupId moves the domain and all its routes onto an ingress group, members first and DNS last, or null with nginxNodeId, a current member, moves them back to that node, DNS first), check_dns (re-probes DNS and repairs drift towards the approved target; repair false only reads the resolver and provider records), resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain, placed in certificateFolderId; also needs ssl:cert:issue on that SSL certificate folder, or broadly for the root), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
     parameters: {
       type: 'object',
       properties: {
@@ -641,6 +641,11 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         ttl: { type: 'number', description: 'Cloudflare DNS TTL override for preview.' },
         description: { type: ['string', 'null'] },
         proxied: { type: 'boolean', description: 'Cloudflare proxy flag for update or preview.' },
+        repair: {
+          type: 'boolean',
+          description:
+            'check_dns: false makes the check read-only (no Cloudflare record writes, no reconciliation). Defaults to true.',
+        },
         action: {
           type: 'string',
           enum: ['retry', 'keep_external', 'update_dns'],

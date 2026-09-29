@@ -204,7 +204,7 @@ Domains are registered public hostnames with an explicit nginx ingress assignmen
 3. Without Cloudflare, the operator points external DNS to that address and Gateway validates the resolved records
 4. With Cloudflare, Gateway resolves the matching zone; it creates missing records or adopts existing matching A/AAAA records as matched_existing
 5. If Cloudflare has different A/AAAA records, create_domain returns conflict metadata; overwrite or adopt only after explicit user approval
-6. Use manage_domain({ operation: "check_dns", domainId }) to manually re-check resolved DNS
+6. Use manage_domain({ operation: "check_dns", domainId }) to manually re-check resolved DNS and repair drift; pass repair: false for a read-only check that never rewrites a Cloudflare record
 7. Moving ingress is an explicit migration: the domain and its routes move together. Cloudflare-managed DNS is updated during cutover; external DNS must be changed by the operator before completion.
 
 ## DNS Records Tracked
