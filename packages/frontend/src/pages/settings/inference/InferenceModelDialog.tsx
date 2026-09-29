@@ -126,6 +126,7 @@ export function InferenceModelDialog({
   const changeProvider = (nextProviderId: string) => {
     setProviderId(nextProviderId);
     setRemoteModelId("");
+    if (!editing) setForm(EMPTY_MODEL_FORM);
     setMapping({});
     setDefaultEffort("");
     setPricing(EMPTY_MODEL_PRICING);
@@ -245,6 +246,11 @@ export function InferenceModelDialog({
                 options={options}
                 providerId={providerId}
                 remoteModelId={remoteModelId}
+                editingModelKey={
+                  editing?.sources[0]
+                    ? providerModelKey(editing.sources[0].providerId, editing.sources[0].upstreamModelId)
+                    : null
+                }
                 selected={selected}
                 onProviderChange={changeProvider}
                 onModelChange={changeModel}

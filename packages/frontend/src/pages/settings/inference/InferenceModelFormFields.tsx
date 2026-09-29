@@ -15,8 +15,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { PermissionGroup, User } from "@/types";
-import type { InferenceAccessSubject } from "@/types/inference";
+import type { InferenceAccessSubject, InferenceModelMetadataSource } from "@/types/inference";
 import {
+  hasRequiredModelMetadata,
   type ModelForm,
   type ProviderModelOption,
   providerModelLabels,
@@ -38,6 +39,7 @@ export function ModelGeneralFields({
   options,
   providerId,
   remoteModelId,
+  editingModelKey = null,
   selected,
   onProviderChange,
   onModelChange,
@@ -47,20 +49,33 @@ export function ModelGeneralFields({
   options: ProviderModelOption[];
   providerId: string;
   remoteModelId: string;
+  /** The model being edited stays selectable even when its metadata is incomplete. */
+  editingModelKey?: string | null;
   selected: ProviderModelOption | null;
   onProviderChange: (providerId: string) => void;
   onModelChange: (remoteModelId: string) => void;
 }) {
+  // Keep the edited and the currently selected model visible so an existing model stays editable.
+  const pickable = useMemo(
+    () =>
+      options.filter(
+        (option) =>
+          hasRequiredModelMetadata(option) ||
+          option.key === editingModelKey ||
+          (option.providerId === providerId && option.remoteModelId === remoteModelId)
+      ),
+    [options, providerId, remoteModelId, editingModelKey]
+  );
   const providers = useMemo(
     () =>
-      [
-        ...new Map(options.map((option) => [option.providerId, option.providerLabel])).entries(),
-      ].map(([id, label]) => ({ id, label })),
+      [...new Map(options.map((option) => [option.providerId, option.providerLabel])).entries()].map(
+        ([id, label]) => ({ id, label })
+      ),
     [options]
   );
   const models = useMemo(
-    () => options.filter((option) => option.providerId === providerId),
-    [options, providerId]
+    () => pickable.filter((option) => option.providerId === providerId),
+    [pickable, providerId]
   );
   const modelLabels = useMemo(() => providerModelLabels(models), [models]);
   const setFormValue = <K extends keyof ModelForm>(key: K, value: ModelForm[K]) =>
@@ -124,7 +139,11 @@ export function ModelGeneralFields({
             onValueChange={onModelChange}
             placeholder="Select model"
             searchPlaceholder="Search discovered models..."
-            emptyMessage="No discovered models"
+            emptyMessage={
+              options.some((option) => option.providerId === providerId)
+                ? "No models with complete provider metadata"
+                : "No discovered models"
+            }
             disabled={!providerId}
           />
         </label>
@@ -195,9 +214,7 @@ export function ModelGeneralFields({
                         ? field.optional
                           ? "Optional; not reported by the provider"
                           : "Not reported by the provider; enter a value to continue"
-                        : field.editableWhenDetected
-                          ? "Detected from provider metadata; may be overridden"
-                          : "Detected from provider metadata"
+                        : detectedDescription(selected.metadataSources[field.key], field.editableWhenDetected)
                   }
                   help={
                     field.key === "autoCompactTokenLimit"
@@ -218,7 +235,16 @@ export function ModelGeneralFields({
                   />
                 </SettingsControlRow>
               ))}
-              <SettingsControlRow title="Modalities" description="Detected input modalities">
+              <SettingsControlRow
+                title="Modalities"
+                description={
+                  selected.metadataSources.modalities === "fallback"
+                    ? "Not reported by the provider; built-in catalog value"
+                    : selected.metadataSources.modalities === "provider"
+                      ? "Reported by the provider API"
+                      : "Detected input modalities"
+                }
+              >
                 <Input
                   readOnly
                   value={selected.modalities.join(", ")}
@@ -232,6 +258,14 @@ export function ModelGeneralFields({
       </AnimatePresence>
     </div>
   );
+}
+
+function detectedDescription(source: InferenceModelMetadataSource | undefined, editable: boolean) {
+  const suffix = editable ? "; may be overridden" : "";
+  if (source === "provider") return `Reported by the provider API${suffix}`;
+  if (source === "derived") return `Calculated from limits reported by the provider${suffix}`;
+  if (source === "fallback") return `Not reported by the provider; built-in catalog value${suffix}`;
+  return `Detected from provider metadata${suffix}`;
 }
 
 function exceedsDetectedLimit(value: string, detected: number | null) {

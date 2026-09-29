@@ -19,6 +19,29 @@ export interface CoreProviderRow {
   discovery?: unknown;
 }
 
+export interface CoreLiveModel {
+  id: string;
+  displayName?: string;
+  contextWindow?: number;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  reasoningEfforts?: string[];
+  inputModalities?: string[];
+  capabilities?: string[];
+}
+
+function unnamespaceCoreModelId(providerName: string, modelId: string): string {
+  const prefix = `${providerName}/`;
+  return modelId.startsWith(prefix) ? modelId.slice(prefix.length) : modelId;
+}
+
+function normalizeCoreModelDisplayName(providerName: string, displayName: string, modelId: string): string {
+  const normalizedModelId = unnamespaceCoreModelId(providerName, modelId);
+  return displayName === modelId || displayName === `${providerName}/${normalizedModelId}`
+    ? normalizedModelId
+    : displayName;
+}
+
 export class InferenceCoreClientError extends Error {
   constructor(
     message: string,
@@ -104,8 +127,8 @@ export class InferenceCoreClient {
     return response.body as unknown[];
   }
 
-  /** Exact model ids returned by one provider's live upstream discovery. */
-  async coreProviderLiveModelIds(name: string): Promise<string[] | null> {
+  /** Model ids and metadata returned by one provider's live upstream discovery. */
+  async coreProviderLiveModels(name: string): Promise<CoreLiveModel[] | null> {
     const response = await this.request(
       'POST',
       `/api/providers/test?name=${encodeURIComponent(name)}`,
@@ -118,6 +141,7 @@ export class InferenceCoreClient {
     const body = response.body as {
       ok?: unknown;
       modelIds?: unknown;
+      modelDetails?: unknown;
       applicable?: unknown;
       reason?: unknown;
       message?: unknown;
@@ -131,7 +155,41 @@ export class InferenceCoreClient {
       return null;
     if (body.ok !== true || !Array.isArray(body.modelIds))
       throw new InferenceCoreClientError('Core live model discovery did not succeed');
-    return body.modelIds.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+    const ids = body.modelIds
+      .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+      .map((id) => unnamespaceCoreModelId(name, id));
+    if (!Array.isArray(body.modelDetails)) return ids.map((id) => ({ id }));
+    const details = body.modelDetails.filter((entry): entry is Record<string, unknown> => {
+      return Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry);
+    });
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const entry of details) {
+      if (typeof entry.id !== 'string' || !entry.id) continue;
+      byId.set(entry.id, entry);
+      byId.set(unnamespaceCoreModelId(name, entry.id), entry);
+    }
+    return ids.map((id) => {
+      const detail = byId.get(id);
+      const detailId = typeof detail?.id === 'string' ? detail.id : id;
+      return {
+        id,
+        ...(typeof detail?.displayName === 'string'
+          ? { displayName: normalizeCoreModelDisplayName(name, detail.displayName, detailId) }
+          : {}),
+        ...(typeof detail?.contextWindow === 'number' ? { contextWindow: detail.contextWindow } : {}),
+        ...(typeof detail?.maxInputTokens === 'number' ? { maxInputTokens: detail.maxInputTokens } : {}),
+        ...(typeof detail?.maxOutputTokens === 'number' ? { maxOutputTokens: detail.maxOutputTokens } : {}),
+        ...(Array.isArray(detail?.reasoningEfforts)
+          ? { reasoningEfforts: detail.reasoningEfforts.filter((value): value is string => typeof value === 'string') }
+          : {}),
+        ...(Array.isArray(detail?.inputModalities)
+          ? { inputModalities: detail.inputModalities.filter((value): value is string => typeof value === 'string') }
+          : {}),
+        ...(Array.isArray(detail?.capabilities)
+          ? { capabilities: detail.capabilities.filter((value): value is string => typeof value === 'string') }
+          : {}),
+      } satisfies CoreLiveModel;
+    });
   }
 
   /** Quota reports per provider/account as the core measures them. */
