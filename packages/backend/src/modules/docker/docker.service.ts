@@ -1727,7 +1727,7 @@ export class DockerManagementService {
     return data;
   }
 
-  async removeImage(nodeId: string, imageId: string, force: boolean, userId: string) {
+  async removeImage(nodeId: string, imageId: string, force: boolean, userId: string | null) {
     await this.validateDockerNode(nodeId);
     const images = await listAllDockerImages(this.imageOperationContext(), nodeId);
     const imageList = Array.isArray(images) ? images : [];
@@ -1756,7 +1756,7 @@ export class DockerManagementService {
     if (!canonicalImageId) {
       throw new AppError(404, 'GATEWAY_INTERNAL_IMAGE_NOT_FOUND', 'Gateway-owned image was not found');
     }
-    await removeDockerImage(this.imageOperationContext(), nodeId, canonicalImageId, false, 'system');
+    await removeDockerImage(this.imageOperationContext(), nodeId, canonicalImageId, false, null);
   }
 
   async pruneImages(nodeId: string, userId: string) {

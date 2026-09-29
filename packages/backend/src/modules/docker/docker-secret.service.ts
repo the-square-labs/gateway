@@ -224,7 +224,7 @@ export class DockerSecretService {
     nodeId: string,
     containerName: string,
     secrets: Record<string, string>,
-    userId: string
+    userId: string | null
   ): Promise<void> {
     await this.db.transaction(async (tx) => {
       await tx

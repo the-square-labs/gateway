@@ -271,7 +271,8 @@ export class DockerImageCleanupService {
           logger.debug('Skipping cleanup of in-use image', { imageId: img.id, tag: img.tag });
           continue;
         }
-        await this.docker.removeImage(nodeId, img.id, false, 'system').catch((err) => {
+        // A system action: audited without a user (N-26).
+        await this.docker.removeImage(nodeId, img.id, false, null).catch((err) => {
           logger.warn('Failed to remove old image', {
             nodeId,
             imageId: img.id,

@@ -121,7 +121,7 @@ export async function removeImage(
   nodeId: string,
   imageId: string,
   force: boolean,
-  userId: string
+  userId: string | null
 ) {
   const result = await context.nodeDispatch.sendDockerImageCommand(nodeId, 'remove', { imageRef: imageId, force });
   context.parseResult(result);

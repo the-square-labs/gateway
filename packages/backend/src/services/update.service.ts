@@ -1288,7 +1288,8 @@ chmod 700 "$backup"
   async performRelayUpdate(
     targetVersion: string,
     artifact: TrustedRelayUpdateArtifact,
-    userId = 'system'
+    // An update Gateway starts on its own is a system action: audited without a user (N-26).
+    userId: string | null = null
   ): Promise<void> {
     if (!this.relayPoolRuntime) {
       await this.performLocalRelayUpdate(targetVersion, artifact, true);
@@ -1308,7 +1309,7 @@ chmod 700 "$backup"
     runtime: RelayPoolUpdateRuntime,
     targetVersion: string,
     artifact: TrustedRelayUpdateArtifact,
-    userId: string,
+    userId: string | null,
     signal: AbortSignal
   ): Promise<void> {
     const run = await this.ensureRelayPoolUpdateRun(targetVersion, artifact);
