@@ -419,7 +419,8 @@ func TestRouterFollowsItsActiveSlotsAddress(t *testing.T) {
 	plugin.reconcileDeploymentRouterAddresses(context.Background())
 	written := configs[added.ID]
 	if len(*writes) != 1 || deploymentRouterConfigAddress(written) != "172.21.0.9" || deploymentRouterConfigSlot(written) != "green" ||
-		!strings.Contains(written, "# gateway:fallback upstream gateway_deployment_green_3000 { server 172.21.0.9:3000; }") {
+		!strings.Contains(written, "upstream gateway_deployment_green_3000 { server 172.21.0.9:3000; }") ||
+		strings.Contains(written, "resolver ") {
 		t.Fatalf("config after the slot moved = %q (%d writes)", written, len(*writes))
 	}
 
