@@ -19,6 +19,11 @@
       "command": "pnpm --filter status-page dev",
       "cache": false
     },
+    "typecheck": {
+      "command": "pnpm --filter status-page typecheck",
+      "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/tsconfig.json", "{projectRoot}/package.json"],
+      "cache": true
+    },
     "preview": {
       "command": "pnpm --filter status-page preview",
       "cache": false

@@ -37,7 +37,7 @@
     "test:watch": "vitest",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsgo --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@clack/prompts": "1.7.0",
@@ -50,6 +50,7 @@
     "@biomejs/biome": "^2.4.9",
     "@types/node": "^22.10.5",
     "@types/ws": "^8.18.1",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "esbuild": "0.25.12",
     "typescript": "^5.7.2",
     "vite": "7.3.5",

@@ -8,6 +8,7 @@
       "inputs": [
         "{projectRoot}/src/**/*",
         "{projectRoot}/tsconfig.json",
+        "{projectRoot}/tsconfig.alias.json",
         "{projectRoot}/package.json",
         "{workspaceRoot}/config/update-trust/**/*",
         "{workspaceRoot}/scripts/sync-update-trust-anchor.sh"

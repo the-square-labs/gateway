@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "vite build",
+    "typecheck": "tsgo --noEmit -p tsconfig.json",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -13,11 +14,11 @@
     "lucide-react": "^0.500.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "typescript": "~5.9.3",
-    "vite": "^7.3.2"
+    "vite": "^8.3.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.5",
-    "@types/react-dom": "^19.2.3"
+    "@types/react-dom": "^19.2.3",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2"
   }
 }

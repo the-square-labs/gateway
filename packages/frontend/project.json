@@ -40,6 +40,11 @@
       ],
       "cache": true
     },
+    "typecheck": {
+      "command": "pnpm --filter frontend typecheck",
+      "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/tsconfig.json", "{projectRoot}/package.json"],
+      "cache": true
+    },
     "preview": {
       "command": "pnpm --filter frontend preview",
       "cache": false

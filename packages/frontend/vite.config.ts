@@ -6,7 +6,7 @@ import { defineConfig, loadEnv } from "vite";
 const LOGIN_ENTRY_PATHS = new Set(["/login", "/reset-password", "/callback"]);
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, __dirname, "");
+  const env = loadEnv(mode, import.meta.dirname, "");
   const backendTarget = env.GATEWAY_DEV_PROXY_TARGET || "http://localhost:3000";
 
   return {
@@ -29,7 +29,7 @@ export default defineConfig(({ mode }) => {
     ],
     resolve: {
       alias: {
-        "@": path.resolve(__dirname, "./src"),
+        "@": path.resolve(import.meta.dirname, "./src"),
       },
     },
     server: {
@@ -66,8 +66,8 @@ export default defineConfig(({ mode }) => {
     build: {
       rollupOptions: {
         input: {
-          app: path.resolve(__dirname, "index.html"),
-          login: path.resolve(__dirname, "login.html"),
+          app: path.resolve(import.meta.dirname, "index.html"),
+          login: path.resolve(import.meta.dirname, "login.html"),
         },
       },
     },

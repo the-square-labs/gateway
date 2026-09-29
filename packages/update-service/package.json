@@ -9,14 +9,16 @@
 		"dev": "wrangler dev",
 		"lint": "biome check src package.json tsconfig.json wrangler.jsonc",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsgo --noEmit -p tsconfig.json",
 		"types": "wrangler types --include-runtime=false",
 		"types:check": "wrangler types --include-runtime=false --check"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.9",
 		"@cloudflare/workers-types": "5.20260827.1",
+		"@typescript/native-preview": "7.0.0-dev.20260707.2",
 		"typescript": "^5.7.2",
+		"vite": "7.3.5",
 		"vitest": "^4.1.5",
 		"wrangler": "4.127.0"
 	}

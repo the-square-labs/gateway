@@ -48,7 +48,7 @@ RUN pnpm --filter status-page build
 FROM base AS backend-builder
 
 COPY packages/backend/ packages/backend/
-RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter backend build
+RUN pnpm --filter backend build
 
 # ── Production image ────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS production
