@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerComposeProjects, dockerComposeRevisions, dockerContainerFolderAssignments } from '@/db/schema/index.js';
+import {
+  dockerAvailabilityPolicies,
+  dockerComposeOperations,
+  dockerComposeProjects,
+  dockerComposeRevisions,
+  dockerContainerFolderAssignments,
+} from '@/db/schema/index.js';
 
 const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
 const COMPOSE_SERVICE_LABEL = 'com.docker.compose.service';
@@ -10,6 +16,7 @@ const COMPOSE_VOLUME_LABEL = 'com.docker.compose.volume';
 const COMPOSE_NETWORK_LABEL = 'com.docker.compose.network';
 const COMPOSE_SIDECAR_LABEL = 'wiolett.gateway.compose.sidecar';
 const GATEWAY_COMPOSE_MANAGED_LABEL = 'wiolett.gateway.compose.managed';
+const COMPOSE_ONEOFF_LABEL = 'com.docker.compose.oneoff';
 
 type DockerResource = Record<string, unknown>;
 type ComposeResourceKind = 'container' | 'volume' | 'network';
@@ -30,6 +37,7 @@ type ExistingComposeProject = {
   id: string;
   name: string;
   managementState: 'external' | 'managed';
+  desiredState?: string;
   observedFingerprint?: string | null;
   status?: string;
   availability?: string;
@@ -130,6 +138,38 @@ export function observeComposeProjects(input: {
     }));
 }
 
+/**
+ * N-25: per Compose project, the services its containers belong to and those with a running container (sidecars and
+ * one-off `run` containers aside).
+ */
+export function observeComposeServiceStates(
+  containers: DockerResource[] = []
+): Map<string, { services: Set<string>; running: Set<string> }> {
+  const states = new Map<string, { services: Set<string>; running: Set<string> }>();
+  for (const container of containers) {
+    const labels = labelsFor(container);
+    const project = labelValue(labels, COMPOSE_PROJECT_LABEL);
+    const service = labelValue(labels, COMPOSE_SERVICE_LABEL);
+    if (!project || !service || labels[COMPOSE_SIDECAR_LABEL] === 'true') continue;
+    if (String(labels[COMPOSE_ONEOFF_LABEL] ?? '').toLowerCase() === 'true') continue;
+    const entry = states.get(project) ?? { services: new Set<string>(), running: new Set<string>() };
+    entry.services.add(service);
+    if (String(container.state ?? container.State ?? '').toLowerCase() === 'running') entry.running.add(service);
+    states.set(project, entry);
+  }
+  return states;
+}
+
+/**
+ * The status a managed project that should run shows for what its containers do: every service running, some of
+ * them (degraded: partially running), or none (stopped while it should run, which the status page reports as an
+ * outage, unlike a stop through Gateway).
+ */
+export function observedComposeRunStatus(state: { services: Set<string>; running: Set<string> }) {
+  if (state.running.size === 0) return 'stopped' as const;
+  return state.running.size < state.services.size ? ('degraded' as const) : ('running' as const);
+}
+
 export function filterDiscoverableComposeProjects(
   observed: ComposeProjectObservation[],
   existing: ExistingComposeProject[]
@@ -176,6 +216,7 @@ export async function reconcileExternalComposeProjects(
       id: dockerComposeProjects.id,
       name: dockerComposeProjects.name,
       managementState: dockerComposeProjects.managementState,
+      desiredState: dockerComposeProjects.desiredState,
       observedFingerprint: dockerComposeProjects.observedFingerprint,
       status: dockerComposeProjects.status,
       availability: dockerComposeProjects.availability,
@@ -200,6 +241,7 @@ export async function reconcileExternalComposeProjects(
     id: project.id,
     name: project.name,
     managementState: project.managementState,
+    desiredState: project.desiredState,
     observedFingerprint: project.observedFingerprint,
     status: project.status,
     availability: project.availability,
@@ -247,6 +289,8 @@ export async function reconcileExternalComposeProjects(
       onChange?.({ action: 'observed', projectId: current.id, projectName: project.name });
     }
   }
+
+  await reconcileManagedComposeRunStatus(db, nodeId, plan.observed, input.containers, observedAt, onChange);
 
   if (plan.missingExternal.length > 0) {
     await db
@@ -313,4 +357,67 @@ export async function reconcileExternalComposeProjects(
   }
 
   return observed;
+}
+
+/** Project statuses the container observation may move between; any other one belongs to an operation. */
+const OBSERVED_RUN_STATUSES = ['running', 'degraded', 'stopped'] as const;
+
+/**
+ * N-25: a managed project that should run follows what its containers do. A service stopped outside Gateway left the
+ * project "running" (and the status page operational) although the route answered 502. Projects with a Compose
+ * operation in flight (it sets the status itself) and projects Availability runs (their copies move between nodes)
+ * are left alone.
+ */
+async function reconcileManagedComposeRunStatus(
+  db: DrizzleClient,
+  nodeId: string,
+  observed: Array<{ project: ComposeProjectObservation; existing?: ExistingComposeProject }>,
+  containers: DockerResource[] | undefined,
+  observedAt: Date,
+  onChange?: (change: ComposeDiscoveryChange) => void
+): Promise<void> {
+  const states = observeComposeServiceStates(containers);
+  const candidates = observed.flatMap(({ project, existing }) => {
+    const state = states.get(project.name);
+    if (!existing || !state || existing.managementState !== 'managed' || existing.desiredState !== 'running') return [];
+    if (!(OBSERVED_RUN_STATUSES as readonly string[]).includes(existing.status ?? '')) return [];
+    const next = observedComposeRunStatus(state);
+    return next === existing.status ? [] : [{ existing, next }];
+  });
+  if (candidates.length === 0) return;
+  const ids = candidates.map(({ existing }) => existing.id);
+  const [operations, policies] = await Promise.all([
+    db
+      .select({ projectId: dockerComposeOperations.projectId })
+      .from(dockerComposeOperations)
+      .where(
+        and(
+          inArray(dockerComposeOperations.projectId, ids),
+          inArray(dockerComposeOperations.status, ['pending', 'running', 'cancelling', 'reconciling'])
+        )
+      ),
+    db
+      .select({ projectId: dockerAvailabilityPolicies.composeProjectId })
+      .from(dockerAvailabilityPolicies)
+      .where(
+        and(inArray(dockerAvailabilityPolicies.composeProjectId, ids), ne(dockerAvailabilityPolicies.mode, 'single'))
+      ),
+  ]);
+  const skip = new Set([...operations, ...policies].map(({ projectId }) => projectId));
+  for (const { existing, next } of candidates) {
+    if (skip.has(existing.id)) continue;
+    const [updated] = await db
+      .update(dockerComposeProjects)
+      .set({ status: next, updatedAt: observedAt })
+      .where(
+        and(
+          eq(dockerComposeProjects.id, existing.id),
+          eq(dockerComposeProjects.nodeId, nodeId),
+          eq(dockerComposeProjects.desiredState, 'running'),
+          inArray(dockerComposeProjects.status, [...OBSERVED_RUN_STATUSES])
+        )
+      )
+      .returning({ id: dockerComposeProjects.id });
+    if (updated) onChange?.({ action: 'observed', projectId: existing.id, projectName: existing.name });
+  }
 }
