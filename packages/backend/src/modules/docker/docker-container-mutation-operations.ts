@@ -1,6 +1,12 @@
 import { and, eq } from 'drizzle-orm';
+import { container } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerWebhooks, managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
+import {
+  dockerSourceBindings,
+  dockerWebhooks,
+  managedDatabaseBindings,
+  managedStorageBindings,
+} from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -28,6 +34,7 @@ import {
 } from './docker-runtime-operations.js';
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
 import type { DockerSecretService } from './docker-secret.service.js';
+import { DockerSourceService } from './docker-source.service.js';
 import {
   assertDockerMountChangeAllowed,
   containerRecreateChangesWorkload,
@@ -307,6 +314,61 @@ async function renameContainerWebhooks(
         eq(dockerWebhooks.nodeId, nodeId),
         eq(dockerWebhooks.containerName, oldName),
         eq(dockerWebhooks.targetType, 'container')
+      )
+    );
+}
+
+/**
+ * Detach the Git source of a removed container. The commercial source service
+ * also removes the provider webhook; without it the binding row is deleted
+ * directly. A failure here never fails the removal that already happened.
+ */
+async function detachContainerSource(
+  db: DrizzleClient,
+  nodeId: string,
+  containerName: string,
+  userId: string
+): Promise<void> {
+  try {
+    if (container.isRegistered(DockerSourceService)) {
+      await container
+        .resolve(DockerSourceService)
+        .remove({ kind: 'container', nodeId, containerName }, userId);
+      return;
+    }
+    await db
+      .delete(dockerSourceBindings)
+      .where(
+        and(
+          eq(dockerSourceBindings.targetKind, 'container'),
+          eq(dockerSourceBindings.nodeId, nodeId),
+          eq(dockerSourceBindings.containerName, containerName)
+        )
+      );
+  } catch (error) {
+    logger.warn('Failed to detach the Git source of a removed container', {
+      nodeId,
+      containerName,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function renameContainerSourceBinding(
+  db: DrizzleClient,
+  nodeId: string,
+  oldName: string,
+  newName: string
+): Promise<void> {
+  if (oldName === newName) return;
+  await db
+    .update(dockerSourceBindings)
+    .set({ containerName: newName, updatedAt: new Date() })
+    .where(
+      and(
+        eq(dockerSourceBindings.targetKind, 'container'),
+        eq(dockerSourceBindings.nodeId, nodeId),
+        eq(dockerSourceBindings.containerName, oldName)
       )
     );
 }
@@ -826,6 +888,8 @@ export async function removeContainer(
     ctx.accessResourceService?.removeContainer(nodeId, name),
     // A later container with the same name must not inherit the webhook token.
     deleteContainerWebhooks(ctx.db, nodeId, name),
+    // Nor may it inherit the Git source (and its auto-build polling).
+    detachContainerSource(ctx.db, nodeId, name, userId),
   ]);
   const removedScopeResourceId = accessResult;
   ctx.emitContainer(nodeId, name, containerId, 'removed', {
@@ -920,6 +984,8 @@ export async function renameContainer(
       metadataRollbacks.unshift(() => renameManagedBindingTargets(ctx.db, nodeId, newName, oldName));
       await renameContainerWebhooks(ctx.db, nodeId, oldName, newName);
       metadataRollbacks.unshift(() => renameContainerWebhooks(ctx.db, nodeId, newName, oldName));
+      await renameContainerSourceBinding(ctx.db, nodeId, oldName, newName);
+      metadataRollbacks.unshift(() => renameContainerSourceBinding(ctx.db, nodeId, newName, oldName));
       if (ctx.accessResourceService) {
         await ctx.accessResourceService.renameContainer(nodeId, oldName, newName);
         metadataRollbacks.unshift(() => ctx.accessResourceService!.renameContainer(nodeId, newName, oldName));
