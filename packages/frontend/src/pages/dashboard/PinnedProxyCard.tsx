@@ -4,6 +4,7 @@ import { proxyHealthTone } from "@/components/common/resource-status";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { proxyHostRoute } from "@/lib/resource-routes";
+import { HEALTH_LABEL } from "@/pages/proxy-detail/helpers";
 import type { ProxyHost } from "@/types";
 
 interface PinnedProxyCardProps {
@@ -12,7 +13,7 @@ interface PinnedProxyCardProps {
 
 export function PinnedProxyCard({ proxy }: PinnedProxyCardProps) {
   const eff = proxy.effectiveHealthStatus ?? proxy.healthStatus;
-  const statusLabel = eff === "online" ? "healthy" : eff;
+  const statusLabel = HEALTH_LABEL[eff] ?? eff;
 
   return (
     <Link

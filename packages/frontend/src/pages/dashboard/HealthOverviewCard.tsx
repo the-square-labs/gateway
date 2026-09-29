@@ -4,6 +4,7 @@ import { proxyHealthTone } from "@/components/common/resource-status";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { proxyHostRoute } from "@/lib/resource-routes";
+import { HEALTH_LABEL } from "@/pages/proxy-detail/helpers";
 import type { ProxyHost } from "@/types";
 
 interface HealthOverviewCardProps {
@@ -62,9 +63,9 @@ export function HealthOverviewCard({ healthHosts, hasScope }: HealthOverviewCard
                 variant={proxyHealthTone(host.effectiveHealthStatus ?? host.healthStatus)}
                 size="inline"
               >
-                {(host.effectiveHealthStatus ?? host.healthStatus) === "online"
-                  ? "healthy"
-                  : (host.effectiveHealthStatus ?? host.healthStatus)}
+                {HEALTH_LABEL[host.effectiveHealthStatus ?? host.healthStatus] ??
+                  host.effectiveHealthStatus ??
+                  host.healthStatus}
               </Badge>
             </Link>
           ))}
