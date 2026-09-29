@@ -67,14 +67,13 @@ Configure the canonical URL, authentication, and structured logging through the 
 | `pnpm build` | Build backend, frontend, status page, logging SDK, inference companion, and update service. |
 | `pnpm build:all` | Build app packages and daemon binaries. |
 | `pnpm build:daemon` | Build all Go daemon binaries. |
-| `pnpm test` | Run backend, frontend, logging SDK, inference companion, update service, daemon, and relay tests. |
+| `pnpm test` | Run the light suite: the backend, frontend, inference companion, update service, daemon, and Relay tests that guard authorization, authentication, update trust, data integrity, untrusted input, and lease safety. Behaviour is covered by the end-to-end run on a stand before a stable release. |
 | `pnpm test:backend` | Run backend tests. |
-| `pnpm test:logging-sdk` | Run logging SDK tests. |
 | `pnpm test:gateway-inference` | Run inference companion tests. |
-| `pnpm test:daemon` | Run Go daemon tests. |
+| `pnpm test:daemon` | Run the Go daemon tests of the light suite. |
 | `pnpm test:relay` | Run local Relay tests. |
 | `pnpm test:release-upgrade` | Rehearse an upgrade from the immutable release baseline with disposable infrastructure. |
-| `pnpm lint` | Run frontend/backend/package lint and Go vet for daemons and Relay. |
+| `pnpm lint` | Run frontend/backend/package lint (the frontend also runs its UI rules, `pnpm --filter frontend lint:ui-rules`) and Go vet for daemons and Relay. |
 | `pnpm lint:daemon` | Run Go vet for daemons. |
 | `pnpm typecheck` | Type-check backend, logging SDK, inference companion, and update service. |
 | `pnpm proto` | Regenerate protobuf stubs. |

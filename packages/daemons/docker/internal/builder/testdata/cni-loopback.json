@@ -1,5 +1,0 @@
-{
-  "cniVersion": "1.0.0",
-  "name": "gateway-builder-deny-egress",
-  "type": "loopback"
-}

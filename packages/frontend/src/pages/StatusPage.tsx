@@ -584,12 +584,7 @@ export function StatusPage() {
               Enable it and configure the domain in Settings before publishing services or
               incidents.
             </p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              onClick={() => navigate("/settings")}
-            >
+            <Button variant="outline" className="mt-3" onClick={() => navigate("/settings")}>
               Open Settings
             </Button>
           </div>

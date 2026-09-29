@@ -38,7 +38,7 @@ export function DomainIngressPlacementSection({
         }
         actions={
           canEdit && !domain.isSystem ? (
-            <Button size="sm" variant="outline" onClick={() => setMoving(true)}>
+            <Button variant="outline" onClick={() => setMoving(true)}>
               {group ? "Serve From One Node" : "Serve From a Group"}
             </Button>
           ) : null

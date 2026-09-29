@@ -206,7 +206,7 @@ export function IngressGroupMembersPanel({
       description="Site-preference order: the first active member is recorded as the node of the group's routes and domains."
       actions={
         canManage ? (
-          <Button size="sm" onClick={() => setAdding(true)}>
+          <Button onClick={() => setAdding(true)}>
             <Plus className="h-4 w-4" />
             Add Member
           </Button>

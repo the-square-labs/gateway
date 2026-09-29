@@ -1,0 +1,228 @@
+// Frontend UI rules, checked statically over every non-test src/**/*.tsx.
+// Each rule receives one parsed file and reports violations through `report(node, message)`.
+import ts from "typescript";
+
+const RETIRED_COMPONENTS = new Map([
+  ["ToggleField", "SwitchCard or CheckboxCard"],
+  ["InlineFolderEditor", "FolderRenameDialog"],
+  ["OneTimeTokenDialog", "OneTimeSecretDialog"],
+]);
+
+const SPLIT_FOOTER_CLASS_RE =
+  /(?:^|\s)(?:[^\s:]+:)*(?:justify-(?:between|around|evenly|start)|mr-auto|ml-auto)(?=\s|$)/;
+const FOOTER_SPACER_CLASS_RE = /^\s*(?:flex-1|grow)\s*$/;
+// Same pattern as the runtime guard in components/ui/dialog.tsx.
+const NESTED_VERTICAL_SCROLL_CLASS_RE = /(?:^|\s)(?:[^\s:]+:)*overflow-y-(?:auto|scroll)(?=\s|$)/;
+const DATE_LOCALE_METHODS = new Set(["toLocaleDateString", "toLocaleTimeString"]);
+
+export function tagName(opening) {
+  return opening.tagName.getText();
+}
+
+function openingOf(node) {
+  if (ts.isJsxElement(node)) return node.openingElement;
+  if (ts.isJsxSelfClosingElement(node)) return node;
+  return undefined;
+}
+
+function attribute(opening, name) {
+  return opening.attributes.properties.find(
+    (property) => ts.isJsxAttribute(property) && property.name.getText() === name
+  );
+}
+
+/** Raw text of an attribute initializer, or "" when absent. */
+function attributeText(opening, name) {
+  return attribute(opening, name)?.initializer?.getText() ?? "";
+}
+
+/** Every string literal inside a className attribute (conditionals and cn() calls included). */
+function classNameStrings(opening) {
+  const initializer = attribute(opening, "className")?.initializer;
+  if (!initializer) return [];
+  const texts = [];
+  const visit = (node) => {
+    if (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) texts.push(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(initializer);
+  return texts;
+}
+
+function meaningfulChildren(element) {
+  return element.children.filter((child) => !ts.isJsxText(child) || child.getText().trim() !== "");
+}
+
+function isNamed(node, name) {
+  const opening = openingOf(node);
+  return opening !== undefined && tagName(opening) === name;
+}
+
+function isRenderable(child) {
+  if (ts.isJsxText(child)) return child.getText().trim().length > 0;
+  if (ts.isJsxExpression(child)) return child.expression !== undefined;
+  if (ts.isJsxFragment(child)) return child.children.some(isRenderable);
+  return true;
+}
+
+function contains(node, predicate) {
+  let found = false;
+  const visit = (current) => {
+    if (found) return;
+    if (predicate(current)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(current, visit);
+  };
+  ts.forEachChild(node, visit);
+  return found;
+}
+
+export const RULES = [
+  {
+    id: "form-label-spacing",
+    source: "formerly src/test/form-field-spacing.test.ts",
+    description: "A label stacked above its control sits in a space-y-1.5 wrapper.",
+    visit(node, report) {
+      if (!ts.isJsxElement(node) || tagName(node.openingElement) !== "label") return;
+      const own = attributeText(node.openingElement, "className");
+      if (own.includes("flex") && !own.includes("flex-col")) return;
+      if (own.includes("space-y-")) {
+        if (!own.includes("space-y-1.5")) report(node, `label spacing ${own} is not space-y-1.5`);
+        return;
+      }
+      const parent = node.parent;
+      if (!ts.isJsxElement(parent) || tagName(parent.openingElement) !== "div") return;
+      const parentClass = attributeText(parent.openingElement, "className");
+      if (parentClass.includes("flex") && !parentClass.includes("flex-col")) return;
+      const children = meaningfulChildren(parent);
+      if (children[0] !== node || children.length < 2) return;
+      if (!parentClass.includes("space-y-1.5")) {
+        report(node, `label and control wrapper ${parentClass || "has no class"}; use space-y-1.5`);
+      }
+    },
+  },
+  {
+    id: "dialog-payload-retention",
+    source: "formerly src/components/ui/dialog-payload-retention.structure.test.ts",
+    description:
+      "A Dialog that clears the state it renders on close keeps it through the exit animation with useRetainedDialogValue.",
+    visit(node, report, file) {
+      if (!ts.isJsxElement(node) || tagName(node.openingElement) !== "Dialog") return;
+      const handler = attributeText(node.openingElement, "onOpenChange");
+      const body = node.getText();
+      for (const match of handler.matchAll(/set([A-Z][A-Za-z0-9_]*)\((?:null|undefined)\)/g)) {
+        const suffix = match[1];
+        const state = suffix[0].toLowerCase() + suffix.slice(1);
+        const retained = new RegExp(`useRetainedDialogValue\\(\\s*${state}\\s*,`);
+        if (body.includes(state) && !retained.test(file.text)) {
+          report(node, `clears ${state} on close without useRetainedDialogValue(${state}, …)`);
+        }
+      }
+    },
+  },
+  {
+    id: "dialog-footer-right",
+    source: "formerly src/components/ui/dialog.test.ts; design corrections #31",
+    description: "Every DialogFooter keeps all of its buttons together on the right.",
+    visit(node, report) {
+      if (!ts.isJsxElement(node) || tagName(node.openingElement) !== "DialogFooter") return;
+      const visit = (current) => {
+        const opening = openingOf(current);
+        if (opening) {
+          const texts = classNameStrings(opening);
+          if (
+            texts.some((text) => SPLIT_FOOTER_CLASS_RE.test(text)) ||
+            (ts.isJsxSelfClosingElement(current) &&
+              texts.some((text) => FOOTER_SPACER_CLASS_RE.test(text)))
+          ) {
+            report(current, "splits the footer; keep every button in one right-aligned group");
+          }
+        }
+        ts.forEachChild(current, visit);
+      };
+      visit(node);
+    },
+  },
+  {
+    id: "dialog-description-in-body",
+    source: "formerly src/components/ui/dialog.test.ts; ConfirmDialog body description convention",
+    description:
+      "A DialogHeader subtitle is not the dialog's body: a DialogContent with a DialogDescription in its header also renders a body.",
+    visit(node, report) {
+      if (!ts.isJsxElement(node) || tagName(node.openingElement) !== "DialogContent") return;
+      const children = meaningfulChildren(node);
+      const header = children.find((child) => isNamed(child, "DialogHeader"));
+      if (!header || !ts.isJsxElement(header)) return;
+      if (!contains(header, (current) => isNamed(current, "DialogDescription"))) return;
+      const body = children.filter(
+        (child) => !isNamed(child, "DialogHeader") && !isNamed(child, "DialogFooter")
+      );
+      if (!body.some(isRenderable)) {
+        report(node, "puts the dialog's text in the header subtitle; move it into the body");
+      }
+    },
+  },
+  {
+    id: "dialog-single-scroll",
+    source: "runtime guard in src/components/ui/dialog.tsx",
+    description: "DialogContent owns vertical scrolling; its body children do not scroll on their own.",
+    visit(node, report) {
+      if (!ts.isJsxElement(node) || tagName(node.openingElement) !== "DialogContent") return;
+      for (const child of meaningfulChildren(node)) {
+        const opening = openingOf(child);
+        if (!opening || ["DialogHeader", "DialogFooter"].includes(tagName(opening))) continue;
+        if (classNameStrings(opening).some((text) => NESTED_VERTICAL_SCROLL_CLASS_RE.test(text))) {
+          report(child, "adds a second vertical scroll inside DialogContent");
+        }
+      }
+    },
+  },
+  {
+    id: "button-default-size",
+    source:
+      "formerly the DockerGitDelivery, DockerComposeUi and hosting UI contract tests",
+    description: 'Buttons use the default size; size="sm" is not used.',
+    visit(node, report) {
+      const opening = openingOf(node);
+      if (!opening || tagName(opening) !== "Button") return;
+      const size = attribute(opening, "size")?.initializer;
+      if (size && ts.isStringLiteral(size) && size.text === "sm") {
+        report(node, 'uses size="sm"; buttons keep the default size');
+      }
+    },
+  },
+  {
+    id: "retired-component",
+    source: "design corrections #32, #37, #40",
+    description: "Retired one-off components stay gone; the shared replacement is used.",
+    visit(node, report) {
+      let name;
+      if (ts.isImportSpecifier(node)) name = node.name.text;
+      else {
+        const opening = openingOf(node);
+        if (opening) name = tagName(opening);
+      }
+      if (name && RETIRED_COMPONENTS.has(name)) {
+        report(node, `${name} was retired; use ${RETIRED_COMPONENTS.get(name)}`);
+      }
+    },
+  },
+  {
+    id: "shared-date-format",
+    source: "design corrections #19 (one date language)",
+    description:
+      "Dates render through RelativeTime / formatRelativeDate / formatDate / formatDateTime, not ad-hoc toLocale* calls.",
+    visit(node, report) {
+      if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
+      const method = node.expression.name.text;
+      const receiver = node.expression.expression;
+      const dateReceiver =
+        ts.isNewExpression(receiver) && receiver.expression.getText() === "Date";
+      if (DATE_LOCALE_METHODS.has(method) || (method === "toLocaleString" && dateReceiver)) {
+        report(node, `formats a date with ${method}(); use the shared date helpers`);
+      }
+    },
+  },
+];

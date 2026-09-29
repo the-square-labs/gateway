@@ -746,7 +746,6 @@ export function DockerVolumeDetail({
               {composeOwnerProjectId && (
                 <Button
                   variant="outline"
-                  size="sm"
                   onClick={() => navigate(dockerComposeProjectRoute(composeOwnerProjectId))}
                 >
                   Open Compose project

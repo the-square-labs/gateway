@@ -828,7 +828,6 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             {canAbandonRelayUpdate && UNFINISHED_RELAY_UPDATE_STATES.has(status.update.state) && (
               <Button
                 variant="outline"
-                size="sm"
                 onClick={() => void handleAbandonUpdate()}
                 pending={abandoningUpdate}
               >

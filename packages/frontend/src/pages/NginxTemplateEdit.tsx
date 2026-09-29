@@ -445,7 +445,7 @@ export function NginxTemplateEdit() {
                 </>
               }
               actions={
-                <Button variant="outline" size="sm" onClick={addVariable}>
+                <Button variant="outline" onClick={addVariable}>
                   <Plus />
                   Add
                 </Button>

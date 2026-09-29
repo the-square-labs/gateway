@@ -29,7 +29,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsgo -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

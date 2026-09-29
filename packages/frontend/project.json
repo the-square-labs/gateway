@@ -26,6 +26,7 @@
         "{projectRoot}/tests/**/*",
         "{projectRoot}/biome.json",
         "{projectRoot}/package.json",
+        "{projectRoot}/scripts/ui-rules/**/*",
         "{projectRoot}/vite.config.*",
         "{projectRoot}/vitest.config.*"
       ],
