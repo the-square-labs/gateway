@@ -822,6 +822,8 @@ export class AIRunExecutor extends AIRunExecutorRuntime {
             error: error instanceof Error ? error.message : String(error),
           });
         }
+        // The plan hook can finish or pause the plan after the snapshot above went out.
+        this.publishConversationChanged(user.id, run.conversationId);
       }
       if (!handledByPlan) this.startPendingInputExecution(user, run.conversationId);
       return { assistantContent, assistantMessageWritten, done: true };

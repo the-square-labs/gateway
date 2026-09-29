@@ -27,6 +27,7 @@ function createExecutorHarness(
   options: {
     messageRows?: Array<{ id?: string; uiMessage: Record<string, unknown> }>;
     clientCommandId?: string;
+    handleCompletedRun?: (user: User, run: unknown) => Promise<boolean>;
   } = {}
 ) {
   const streamChat = vi.fn((_user: User, _messages: ChatMessage[]) => streamEvents(events));
@@ -120,7 +121,7 @@ function createExecutorHarness(
     undefined,
     publishCredentialChallenge,
     publishClientAction,
-    undefined,
+    options.handleCompletedRun as never,
     handleFailedRun
   );
 
@@ -498,6 +499,33 @@ describe('AIRunExecutor live assistant draft streaming', () => {
       ['assistant', 'recent assistant'],
       ['user', 'new user'],
     ]);
+  });
+
+  it('publishes the conversation again after the plan hook finishes a completed run', async () => {
+    const order: string[] = [];
+    const handleCompletedRun = vi.fn(async () => {
+      order.push('hook');
+      return true;
+    });
+    const harness = createExecutorHarness([], { handleCompletedRun });
+    harness.publishConversationChanged.mockImplementation(() => order.push('publish'));
+    const run = { id: 'run-1', conversationId: 'conversation-1', userId: USER.id } as never;
+
+    const result = await (
+      harness.executor as unknown as {
+        applyRuntimeEvent(input: Record<string, unknown>): Promise<{ done: boolean }>;
+      }
+    ).applyRuntimeEvent({
+      user: USER,
+      run,
+      event: { type: 'done', requestId: 'request-1' },
+      assistantContent: 'Verified.',
+      assistantMessageWritten: true,
+    });
+
+    expect(result.done).toBe(true);
+    expect(handleCompletedRun).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['publish', 'hook', 'publish']);
   });
 
   it('flushes accumulated text to an assistant message on done', async () => {
