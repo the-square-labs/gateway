@@ -186,7 +186,9 @@ describe('InternalCertificateRenewalService', () => {
   });
 
   it('does not reissue when the CA ends before a replacement could outlive the leaf', async () => {
-    const old = source({ notAfter: new Date(Date.now() + 20 * DAY_MS) });
+    // One instant for both ends: two Date.now() calls a millisecond apart let the CA outlive the leaf.
+    const caEnd = new Date(Date.now() + 20 * DAY_MS);
+    const old = source({ notAfter: caEnd });
     const { db } = queuedDb([
       [old],
       [
@@ -196,7 +198,7 @@ describe('InternalCertificateRenewalService', () => {
           isSystem: false,
           maxValidityDays: 825,
           commonName: 'Ending CA',
-          notAfter: new Date(Date.now() + 20 * DAY_MS),
+          notAfter: caEnd,
         },
       ],
     ]);
