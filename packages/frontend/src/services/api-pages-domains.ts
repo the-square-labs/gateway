@@ -274,31 +274,42 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
       );
       const chunkSize = 8 * 1024 * 1024;
       let offset = created.upload.offset;
-      while (offset < archive.size) {
-        const chunk = archive.slice(offset, Math.min(offset + chunkSize, archive.size));
-        const response = await this.unwrapData(
-          this.request<{ data: { offset: number } }>(
-            `/pages-deploy/uploads/${created.upload.id}/chunks`,
-            {
-              method: "PUT",
-              headers: {
-                "Content-Type": "application/octet-stream",
-                "Upload-Offset": String(offset),
-              },
-              body: chunk,
-            }
+      let finalized: { deployment: PageDeployment };
+      try {
+        while (offset < archive.size) {
+          const chunk = archive.slice(offset, Math.min(offset + chunkSize, archive.size));
+          const response = await this.unwrapData(
+            this.request<{ data: { offset: number } }>(
+              `/pages-deploy/uploads/${created.upload.id}/chunks`,
+              {
+                method: "PUT",
+                headers: {
+                  "Content-Type": "application/octet-stream",
+                  "Upload-Offset": String(offset),
+                },
+                body: chunk,
+              }
+            )
+          );
+          offset = response.offset;
+          onProgress?.(Math.min(100, Math.round((offset / archive.size) * 100)), "uploading");
+        }
+        onProgress?.(100, "finalizing");
+        finalized = await this.unwrapData(
+          this.request<{ data: { deployment: PageDeployment } }>(
+            `/pages-deploy/uploads/${created.upload.id}/finalize`,
+            { method: "POST" }
           )
         );
-        offset = response.offset;
-        onProgress?.(Math.min(100, Math.round((offset / archive.size) * 100)), "uploading");
+      } catch (error) {
+        // An upload that never finalized would otherwise stay pending until it expires.
+        // A finalize that already failed validation keeps its failed Deployment and reason.
+        await this.request(`/pages-deploy/uploads/${created.upload.id}`, {
+          method: "DELETE",
+        }).catch(() => undefined);
+        this.invalidateCache("pages:");
+        throw error;
       }
-      onProgress?.(100, "finalizing");
-      const finalized = await this.unwrapData(
-        this.request<{ data: { deployment: PageDeployment } }>(
-          `/pages-deploy/uploads/${created.upload.id}/finalize`,
-          { method: "POST" }
-        )
-      );
       this.invalidateCache("pages:");
       return finalized.deployment;
     }

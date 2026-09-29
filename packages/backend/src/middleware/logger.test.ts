@@ -13,6 +13,10 @@ describe('redactRequestPath', () => {
     );
   });
 
+  it('redacts the one-time Pages upload link token', () => {
+    expect(redactRequestPath('/api/pages-upload/gwpu_secret')).toBe('/api/pages-upload/[REDACTED]');
+  });
+
   it('preserves non-webhook request paths', () => {
     expect(redactRequestPath('/api/docker/nodes/node-1/containers')).toBe('/api/docker/nodes/node-1/containers');
     expect(redactRequestPath('/api/webhooks/dockerish/sensitive-token')).toBe(

@@ -1,6 +1,6 @@
 # Pages upload protocol
 
-`upload_pages_artifact` is the MCP-only, resumable upload for Pages. It needs `pages:deploy` on the Project, a Pages entitlement, and an enabled Pages profile. Authentication comes from the MCP connection: never pass a deploy token, API token, or `Authorization` value as an argument.
+`upload_pages_artifact` is the MCP-only upload for Pages: a one-time upload link for a shell, or a resumable begin/chunk/finalize session. It needs `pages:deploy` on the Project, a Pages entitlement, and an enabled Pages profile. Authentication comes from the MCP connection: never pass a deploy token, API token, or `Authorization` value as an argument.
 
 ## Accepted artifacts
 
@@ -8,6 +8,23 @@
 - **A `.tar.gz` archive** with `index.html` (or `index.htm`) at its root. Declare `format: "tar.gz"` or let Gateway detect the gzip magic bytes. Archives are validated: regular files and directories only (no links or special files), bounded file count and expanded size, no absolute or `..` paths.
 
 Anything else fails with `PAGES_ARTIFACT_FORMAT_UNKNOWN`. A gzip body declared as `html` fails with `PAGES_ARTIFACT_NOT_HTML`.
+
+## link
+
+```json
+{ "operation": "link", "projectId": "<Page Project UUID>", "tag": "weekly-report", "expiresInHours": 72 }
+```
+
+- Only `projectId` is required; `tag`, `format`, `expiresAt` or `expiresInHours`, and `source` work as for `begin`. An optional `sha256` makes Gateway reject bytes that do not match it.
+- The result has `uploadUrl`, `expiresAt` (15 minutes ahead), `maxBytes` (the Gateway file-upload limit), and `commands` for an archive, a folder, and an HTML file:
+
+```bash
+curl -sS --fail-with-body -X PUT --data-binary @site.tar.gz '<uploadUrl>'
+COPYFILE_DISABLE=1 tar czf - -C dist . | curl -sS --fail-with-body -X PUT --data-binary @- '<uploadUrl>'
+```
+
+- The link works once. Gateway measures and hashes the body, creates the Deployment, validates and publishes it, and the curl response is `{ "data": <the finalize result below> }`. An interrupted or rejected transfer creates nothing; an archive that fails validation leaves a failed Deployment with the reason. Either way, create a new link to retry.
+- The URL is a credential for that one upload: run the command yourself and never show it to the user.
 
 ## begin
 
@@ -31,7 +48,7 @@ Anything else fails with `PAGES_ARTIFACT_FORMAT_UNKNOWN`. A gzip body declared a
 - `source`: optional safe provenance (`provider`, `repository`, `commitSha`, `ref`, `mergeRequest`, `actor`). Never put credentials in it.
 - `idempotencyKey`: repeating `begin` with the same key returns the same upload and its current offset, which makes a retry after a timeout safe. Reusing the key with a different Tag, size, or hash fails with `PAGES_IDEMPOTENCY_CONFLICT`.
 
-The result is `{ deployment, upload: { id, offset, expiresAt } }`. Upload sessions expire after 24 hours.
+The result is `{ deployment, upload: { id, offset, expiresAt } }`. An upload session expires 30 minutes after its last chunk; maintenance then fails it and frees its quota reservation.
 
 `begin` can also fail on Project limits: `PAGES_ARTIFACT_TOO_LARGE` (the Gateway file-upload limit), `PAGES_STORAGE_QUOTA_EXCEEDED`, or `PAGES_RETENTION_PROTECTED_LIMIT` (pinned, tagged, or routed Deployments already fill `maxDeployments`). Report these; do not delete Deployments to make room without the user's approval.
 
@@ -52,6 +69,14 @@ python3 <skill-dir>/scripts/pages-artifact.py chunk <artifact> --offset <offset>
 ```
 
 Its `nextOffset` must equal the `offset` Gateway returns.
+
+## cancel
+
+```json
+{ "operation": "cancel", "uploadId": "<upload.id>" }
+```
+
+Stops an upload you have not finalized, removes the bytes received so far, and deletes its Deployment. Returns `{ cancelled: true, deployment }`. A finalized Deployment is removed with `manage_pages({ operation: "deployment_delete", projectId, deploymentId })` instead, which also cancels an upload still in progress (it needs `pages:deployments:manage`).
 
 ## finalize
 

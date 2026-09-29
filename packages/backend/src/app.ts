@@ -96,6 +96,8 @@ import { storageRouteRuntime } from '@/modules/object-storage/storage-route-runt
 import { finalizeSetupRoutes } from '@/modules/onboarding/finalize-setup.routes.js';
 import { PAGE_UPLOAD_CHUNK_MAX_BYTES } from '@/modules/pages/deployments/page-deployment.service.js';
 import { pagesRouteRuntime } from '@/modules/pages/pages-route-runtime.js';
+import { PAGE_UPLOAD_LINK_PATH } from '@/modules/pages/uploads/page-upload-link.js';
+import { pageUploadLinkRoutes } from '@/modules/pages/uploads/page-upload-link.routes.js';
 import { pkiRouteRuntime } from '@/modules/pki/pki-route-runtime.js';
 import { folderRoutes } from '@/modules/proxy/folder.routes.js';
 import { nginxTemplateRoutes } from '@/modules/proxy/nginx-template.routes.js';
@@ -134,6 +136,8 @@ const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
 const NODE_FILE_BODY_LIMIT_PATH = /^\/api\/nodes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)$/;
 const PAGES_UPLOAD_CHUNK_PATH = /^\/api\/pages-deploy\/uploads\/[^/]+\/chunks$/;
+// One-time upload links stream a whole artifact; the handler enforces the file-upload limit.
+const PAGES_UPLOAD_LINK_TOKEN_PATH = /^\/api\/pages-upload\/[^/]+$/;
 const DOCKER_ARCHIVE_IMPORT_PATH = /^\/api\/docker\/nodes\/[^/]+\/containers\/archive$/;
 const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:(?:anthropic|codex)\/v1|v1)(?:\/|$)/;
 
@@ -623,6 +627,7 @@ export function createApp(): GatewayAppRuntime {
         DOCKER_FILE_BODY_LIMIT_PATH.test(path) ||
         NODE_FILE_BODY_LIMIT_PATH.test(path) ||
         PAGES_UPLOAD_CHUNK_PATH.test(path) ||
+        PAGES_UPLOAD_LINK_TOKEN_PATH.test(path) ||
         DOCKER_ARCHIVE_IMPORT_PATH.test(path) ||
         isInferenceDataPlanePath(path)
     )
@@ -796,6 +801,7 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/notifications', notificationRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/mcp', mcpRoutes);
+  app.route(PAGE_UPLOAD_LINK_PATH, pageUploadLinkRoutes);
 
   if (container.isRegistered(TOKENS.CommercialEdition)) {
     container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).registerRoutes({

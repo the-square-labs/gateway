@@ -91,6 +91,29 @@ describe('Pages MCP upload options', () => {
     ).rejects.toMatchObject({ code: 'PAGES_DEPLOYMENT_EXPIRY_INVALID' });
     expect(finalize).not.toHaveBeenCalled();
   });
+
+  it('cancels an unfinished upload for its uploader', async () => {
+    registerPages();
+    const cancelUpload = vi.fn().mockResolvedValue({ cancelled: true, deployment: { id: 'deployment-1' } });
+    container.registerInstance(PageDeploymentService, { cancelUpload } as unknown as PageDeploymentService);
+    const user = { id: 'user-1', scopes: [`pages:deploy:${PROJECT_ID}`] } as User;
+
+    await expect(uploadPagesArtifact(user, { operation: 'cancel', uploadId: 'upload-1' })).resolves.toMatchObject({
+      cancelled: true,
+    });
+    expect(cancelUpload).toHaveBeenCalledWith('upload-1', expect.objectContaining({ kind: 'user', userId: 'user-1' }));
+  });
+
+  it('names the upload link when a chunk is too large for MCP', async () => {
+    registerPages();
+    container.registerInstance(PageDeploymentService, { appendChunk: vi.fn() } as unknown as PageDeploymentService);
+    const user = { id: 'user-1', scopes: [`pages:deploy:${PROJECT_ID}`] } as User;
+    const contentBase64 = Buffer.alloc(1024 * 1024 + 3).toString('base64');
+
+    await expect(
+      uploadPagesArtifact(user, { operation: 'chunk', uploadId: 'upload-1', offset: 0, contentBase64 })
+    ).rejects.toMatchObject({ code: 'PAGES_UPLOAD_CHUNK_TOO_LARGE', message: expect.stringContaining('"link"') });
+  });
 });
 
 describe('Pages MCP project preview settings', () => {

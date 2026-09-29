@@ -89,7 +89,7 @@ export function resolveToolStoreInvalidations(
       stores.add('proxy-hosts');
     }
   } else if (toolName === 'upload_pages_artifact') {
-    if (operation === 'begin' || operation === 'finalize') stores.add('pages');
+    if (operation === 'begin' || operation === 'finalize' || operation === 'cancel') stores.add('pages');
     if (operation === 'finalize') stores.add('proxy-hosts');
   } else if (toolName === 'manage_logging') {
     let resource = typeof args.resource === 'string' ? args.resource : '';

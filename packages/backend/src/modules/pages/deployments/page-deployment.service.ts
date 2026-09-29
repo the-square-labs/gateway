@@ -139,6 +139,15 @@ export class PageDeploymentService {
   async abortUpload(_uploadId: string, _principal: PageDeployPrincipal, _failureCode?: string): Promise<void> {
     return commercialModuleUnavailable();
   }
+  async cancelUpload(
+    _uploadId: string,
+    _principal: PageDeployPrincipal
+  ): Promise<{
+    cancelled: boolean;
+    deployment: Awaited<ReturnType<PageDeploymentService['get']>>;
+  }> {
+    return commercialModuleUnavailable();
+  }
   async list(
     _projectId: string,
     _query: PageDeploymentListQuery

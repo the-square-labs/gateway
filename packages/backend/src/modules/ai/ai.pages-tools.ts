@@ -48,6 +48,7 @@ import { MovePageTagSchema, PageTagParamSchema } from '@/modules/pages/tags/page
 import { PageTagService } from '@/modules/pages/tags/page-tag.service.js';
 import { CreatePageDeployTokenSchema } from '@/modules/pages/tokens/page-deploy-token.schemas.js';
 import { PageDeployTokenService } from '@/modules/pages/tokens/page-deploy-token.service.js';
+import { createPageUploadLink, publishStoredDeployment } from '@/modules/pages/uploads/page-upload-link.js';
 import type { User } from '@/types.js';
 import {
   ensureAnyScopeBase,
@@ -61,17 +62,24 @@ import {
   requiredValue,
 } from './ai.resource-setup-args.js';
 
+/**
+ * A base64 chunk plus its JSON-RPC envelope must stay under the default 2 MiB
+ * API request body limit. Larger artifacts go through a one-time upload link.
+ */
 const MCP_PAGE_UPLOAD_CHUNK_MAX_BYTES = 1024 * 1024;
-/** Finalize waits at most this long for the preview links to be served before returning `pending`. */
-export const PAGE_LINK_WAIT_MS = 15_000;
+const USE_UPLOAD_LINK = 'to send a file from disk, use operation "link" and stream it with curl';
 
 export async function uploadPagesArtifact(user: User, args: Record<string, unknown>) {
-  const operation = requiredEnum(args.operation, ['begin', 'chunk', 'finalize'] as const);
+  const operation = requiredEnum(args.operation, ['link', 'begin', 'chunk', 'finalize', 'cancel'] as const);
   await container.resolve(LicensePolicyService).requireFeature('pages');
   await container.resolve(PageProfileService).requireEnabled();
 
   const deployments = container.resolve(PageDeploymentService);
   const principal: PageDeployPrincipal = { kind: 'user', userId: user.id, scopes: user.scopes };
+  if (operation === 'link') {
+    ensureResourceScope(user, 'pages:deploy', requiredString(args.projectId));
+    return createPageUploadLink(user, args);
+  }
   if (operation === 'begin') {
     const input = CreatePageDeploymentSchema.parse(args);
     ensureResourceScope(user, 'pages:deploy', input.projectId);
@@ -79,6 +87,7 @@ export async function uploadPagesArtifact(user: User, args: Record<string, unkno
   }
 
   const uploadId = requiredString(args.uploadId);
+  if (operation === 'cancel') return deployments.cancelUpload(uploadId, principal);
   if (operation === 'chunk') {
     const offset = requiredNumber(args.offset);
     if (!Number.isInteger(offset) || offset < 0) {
@@ -94,24 +103,34 @@ export async function uploadPagesArtifact(user: User, args: Record<string, unkno
 
   const expiresAt = resolvePageDeploymentExpiry(FinalizePageUploadSchema.parse(args));
   const stored = await deployments.finalize(uploadId, principal, expiresAt === undefined ? undefined : { expiresAt });
-  await container.resolve(PagePublicationService).markDeploymentReady(stored.deployment.id);
-  const links = await deployments.publicationLinks(stored.deployment.id, { waitMs: PAGE_LINK_WAIT_MS });
-  return { deployment: await deployments.get(stored.deployment.id), links };
+  return publishStoredDeployment(stored.deployment.id);
 }
 
 function decodeMcpPageUploadChunk(value: string): Uint8Array {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    throw new AppError(400, 'PAGES_UPLOAD_CHUNK_INVALID', 'Upload chunk must use canonical base64 encoding');
+    throw new AppError(
+      400,
+      'PAGES_UPLOAD_CHUNK_INVALID',
+      `Upload chunk must use canonical base64 encoding; ${USE_UPLOAD_LINK}`
+    );
   }
   const bytes = Buffer.from(value, 'base64');
   if (bytes.byteLength === 0) {
     throw new AppError(400, 'PAGES_UPLOAD_CHUNK_EMPTY', 'Upload chunk cannot be empty');
   }
   if (bytes.byteLength > MCP_PAGE_UPLOAD_CHUNK_MAX_BYTES) {
-    throw new AppError(413, 'PAGES_UPLOAD_CHUNK_TOO_LARGE', 'MCP upload chunks cannot exceed 1 MiB');
+    throw new AppError(
+      413,
+      'PAGES_UPLOAD_CHUNK_TOO_LARGE',
+      `MCP upload chunks cannot exceed 1 MiB decoded; send smaller ordered chunks, or ${USE_UPLOAD_LINK}`
+    );
   }
   if (bytes.toString('base64') !== value) {
-    throw new AppError(400, 'PAGES_UPLOAD_CHUNK_INVALID', 'Upload chunk must use canonical base64 encoding');
+    throw new AppError(
+      400,
+      'PAGES_UPLOAD_CHUNK_INVALID',
+      `Upload chunk must use canonical base64 encoding; ${USE_UPLOAD_LINK}`
+    );
   }
   return bytes;
 }

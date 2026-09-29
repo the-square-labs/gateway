@@ -307,9 +307,10 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     ],
   }),
   upload_pages_artifact: operationPolicies({
-    create: ['begin'],
+    create: ['link', 'begin'],
     update: ['chunk'],
     execute: ['finalize'],
+    delete: ['cancel'],
   }),
   upload_storage_object: operationPolicies({
     create: ['begin'],

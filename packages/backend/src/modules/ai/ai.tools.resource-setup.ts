@@ -4,36 +4,39 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'upload_pages_artifact',
     description:
-      'Publish a static site to a Page Project through authenticated MCP with a resumable begin/chunk/finalize workflow. Upload either a .tar.gz archive with index.html at its root or one HTML file (format "html", or detected from content), which becomes index.html. Declare the exact byte size and lowercase SHA-256 at begin, send ordered chunks of at most 1 MiB decoded base64, then finalize. Finalize returns the Deployment, its preview URL and, when a Tag was requested, the stable Tag preview URL (`<project hash>-<tag>`); a link still being published is returned with status "pending" after about 15 seconds instead of null. Optional expiresAt or expiresInHours makes maintenance delete the Deployment, its previews and files later. Needs pages:deploy. Authentication comes from the MCP connection; never pass a token or Authorization value.',
+      'Publish a static site to a Page Project through authenticated MCP. Upload either a .tar.gz archive with index.html at its root or one HTML file (format "html", or detected from content), which becomes index.html. Preferred: operation "link" returns a one-time upload URL (valid 15 minutes) with ready curl commands, so a shell streams the archive, a build folder packed on the fly (`tar czf - -C dist . | curl ... --data-binary @- <url>`) or the HTML file; the curl response is the finalized Deployment with its links, and an interrupted transfer leaves nothing behind. Without a shell, use begin/chunk/finalize: declare the exact byte size and lowercase SHA-256 at begin, send ordered chunks of at most 1 MiB decoded base64, then finalize; cancel stops an unfinished upload and deletes its Deployment. Finalize returns the Deployment, its preview URL and, when a Tag was requested, the stable Tag preview URL (`<project hash>-<tag>`); a link still being published is returned with status "pending" after about 15 seconds instead of null. Optional expiresAt or expiresInHours makes maintenance delete the Deployment, its previews and files later. Needs pages:deploy. Authentication comes from the MCP connection; never pass a token or Authorization value.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['begin', 'chunk', 'finalize'] },
-        projectId: { type: 'string', description: 'Page Project UUID for begin.' },
+        operation: { type: 'string', enum: ['link', 'begin', 'chunk', 'finalize', 'cancel'] },
+        projectId: { type: 'string', description: 'Page Project UUID for link or begin.' },
         declaredSizeBytes: {
           type: 'number',
           description: 'Exact uploaded size in bytes (archive or HTML file) for begin.',
         },
-        sha256: { type: 'string', description: 'Lowercase SHA-256 of the complete uploaded bytes for begin.' },
+        sha256: {
+          type: 'string',
+          description: 'Lowercase SHA-256 of the complete uploaded bytes; required for begin, optional check for link.',
+        },
         idempotencyKey: { type: 'string' },
         tag: {
           type: 'string',
           description:
-            'Optional mutable Tag to publish after finalize, for a stable preview link. Lowercase DNS label; new Tags are at most 50 characters so `<hash>-<tag>` fits one DNS label.',
+            'link or begin: optional mutable Tag to publish after finalize, for a stable preview link. Lowercase DNS label other than the reserved `latest`; new Tags are at most 50 characters so `<hash>-<tag>` fits one DNS label.',
         },
         format: {
           type: 'string',
           enum: ['tar.gz', 'html'],
-          description: 'begin only: artifact format. Omit to detect from content (gzip archive or HTML).',
+          description: 'link or begin: artifact format. Omit to detect from content (gzip archive or HTML).',
         },
         expiresAt: {
           type: 'string',
           description:
-            'begin or finalize: optional ISO 8601 expiry (5 minutes to 1 year ahead). null at finalize clears it.',
+            'link, begin or finalize: optional ISO 8601 expiry (5 minutes to 1 year ahead). null at finalize clears it.',
         },
         expiresInHours: {
           type: 'number',
-          description: 'begin or finalize: optional lifetime in whole hours (1-8760) instead of expiresAt.',
+          description: 'link, begin or finalize: optional lifetime in whole hours (1-8760) instead of expiresAt.',
         },
         source: {
           type: 'object',
@@ -47,7 +50,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
           },
           additionalProperties: false,
         },
-        uploadId: { type: 'string', description: 'Upload UUID returned by begin.' },
+        uploadId: { type: 'string', description: 'Upload UUID returned by begin, for chunk, finalize or cancel.' },
         offset: { type: 'number', description: 'Current byte offset for chunk.' },
         contentBase64: {
           type: 'string',
@@ -68,7 +71,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_pages',
     description:
-      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, runtime configuration, and Git sources. project_placement_options lists nodes a Project can be created on or migrated to; project_migrate also needs pages:create for the target node, and source_upsert needs pages:edit and pages:deploy. source_repositories lists only repositories the Git scopes of the caller cover; source_discover and source_upsert also need integrations:<provider>:use on the repository (unqualified or limited to its connector, GitLab group, GitHub owner, or the project/repository itself). project_update with accessListId protects every preview host of the Project (needs pages:edit and acl:view on the list; null removes it). project_rotate_preview_hash (pages:edit) gives the Project a new preview hash and Deployment slugs and revokes every old preview link at once. deployment_links returns the preview and Tag preview URLs of one Deployment; tag_list includes each Tag preview link. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes use the MCP-only upload_pages_artifact tool or the REST resumable deploy API, not this metadata tool.',
+      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, runtime configuration, and Git sources. project_placement_options lists nodes a Project can be created on or migrated to; project_migrate also needs pages:create for the target node, and source_upsert needs pages:edit and pages:deploy. source_repositories lists only repositories the Git scopes of the caller cover; source_discover and source_upsert also need integrations:<provider>:use on the repository (unqualified or limited to its connector, GitLab group, GitHub owner, or the project/repository itself). project_update with accessListId protects every preview host of the Project (needs pages:edit and acl:view on the list; null removes it). project_rotate_preview_hash (pages:edit) gives the Project a new preview hash and Deployment slugs and revokes every old preview link at once. deployment_delete also cancels a Deployment whose upload was never finalized. deployment_links returns the preview and Tag preview URLs of one Deployment; tag_list includes each Tag preview link. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes use the MCP-only upload_pages_artifact tool or the REST resumable deploy API, not this metadata tool.',
     parameters: {
       type: 'object',
       properties: {

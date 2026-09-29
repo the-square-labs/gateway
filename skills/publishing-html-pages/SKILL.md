@@ -16,12 +16,12 @@ Start with `using-gateway` for connection, discovery, and safety rules. Before a
 1. **Resolve the Project.** Use `find_resource({ types: ["page_project"], query })` or `manage_pages({ operation: "project_list" })` and reuse the Project that already represents this site or report stream. Create one only when none fits: check `profile_get` (Pages licensed and enabled), pick a node from `project_placement_options`, then `project_create({ name, nodeId, folderId? })`.
 2. **Build the output** with the repository's own tooling, or write the report.
    - One self-contained HTML file (inline CSS and JS, images as data URIs or absolute URLs): upload it as is with `format: "html"`. Gateway stores it as `index.html`.
-   - Several files: pack a `.tar.gz` with `index.html` at the archive root.
+   - Several files: a build folder (for example `dist/`) with `index.html` at its root, or a `.tar.gz` of one.
 
    The bundled helper gives exact values: `python3 <skill-dir>/scripts/pages-artifact.py inspect report.html` returns size, SHA-256, detected format, and `localReferences` that a single-file upload would break (pack a directory when that list is not empty). `pages-artifact.py prepare ./dist --output <tmp>/site.tar.gz` packs a directory deterministically and refuses one without `index.html`.
-3. **Decide the link before `begin`:** Tag or not, expiry or not, Access List or not (sections below). The Tag and expiry are upload arguments; attach an Access List to the Project first, so the new link is never public.
-4. **Upload** with the MCP-only `upload_pages_artifact`. `begin` takes `projectId`, `declaredSizeBytes`, `sha256`, `format`, an `idempotencyKey`, and the optional `tag`, `expiresInHours` or `expiresAt`, and `source`; keep the returned `upload.id`. Send `chunk` calls in order, at most 1 MiB decoded each, continuing from the `offset` each chunk returns. Then call `finalize` with the `uploadId`. Exact arguments, errors, and a fallback without the helper are in [Upload protocol](references/upload-protocol.md).
-5. **Read the links.** `finalize` returns `{ deployment, links }`. `links.preview` is the immutable Deployment link, `links.tag` the requested Tag (null without one), and `links.latest` the system `latest` Tag when it now points at this Deployment. Each link has `url`, `status` (`ready`, `pending`, or `unavailable`), and `reason`. Share a `ready` URL. For `pending`, re-read with `manage_pages({ operation: "deployment_links", projectId, deploymentId })` or `tag_list`. For `unavailable`, report the reason; see [link statuses](references/upload-protocol.md#link-statuses).
+3. **Decide the link before uploading:** Tag or not, expiry or not, Access List or not (sections below). The Tag and expiry are upload arguments; attach an Access List to the Project first, so the new link is never public.
+4. **Upload** with the MCP-only `upload_pages_artifact`. With a shell, call `link` with `projectId` and the optional `tag`, `format`, `expiresInHours` or `expiresAt`, and `source`, then run one of the returned `commands` right away: `archive` or `html` sends a file with `curl --data-binary @<file>`, `folder` packs and streams a build folder (`tar czf - -C dist . | curl --data-binary @- <url>`). The link works once, for 15 minutes; its curl response is the finalize result, and a failed or interrupted transfer leaves nothing behind. Without a shell, `begin` takes `projectId`, `declaredSizeBytes`, `sha256`, `format`, an `idempotencyKey`, and the same options; keep the returned `upload.id`, send `chunk` calls in order, at most 1 MiB decoded each, continuing from the `offset` each chunk returns, then call `finalize` with the `uploadId`, or `cancel` to abandon it. Exact arguments, errors, and a fallback without the helper are in [Upload protocol](references/upload-protocol.md).
+5. **Read the links.** The finalize result is `{ deployment, links }`. `links.preview` is the immutable Deployment link, `links.tag` the requested Tag (null without one), and `links.latest` the system `latest` Tag when it now points at this Deployment. Each link has `url`, `status` (`ready`, `pending`, or `unavailable`), and `reason`. Share a `ready` URL. For `pending`, re-read with `manage_pages({ operation: "deployment_links", projectId, deploymentId })` or `tag_list`. For `unavailable`, report the reason; see [link statuses](references/upload-protocol.md#link-statuses).
 6. **Verify** by requesting the URL yourself: HTTP 200 and recognizable content. Behind an Access List, a 401 or 403 is the expected proof that protection applies; say that the content itself was not fetched.
 7. **Tell the user** what they received (template below).
 
@@ -30,7 +30,7 @@ Start with `using-gateway` for connection, discovery, and safety rules. Before a
 | The user needs | Share | Say |
 | --- | --- | --- |
 | This exact version: a one-off report, review evidence, anything that must not change | `links.preview` | "This link always shows exactly this version. A new upload gets a new link." |
-| One URL to bookmark or embed that shows the current version | `links.tag` from a named Tag set at `begin` | "The link stays the same. Each upload with Tag `<tag>` replaces what it shows, and a rollback moves it back." |
+| One URL to bookmark or embed that shows the current version | `links.tag` from a named Tag set at `link` or `begin` | "The link stays the same. Each upload with Tag `<tag>` replaces what it shows, and a rollback moves it back." |
 
 - Tag names are lowercase DNS labels (`a-z`, `0-9`, inner `-`), never `latest`, and at most 50 characters for a new Tag, so the host `<projectHash>-<tag>.<Pages wildcard domain>` fits one DNS label. Use the URL Gateway returns; never assemble a preview hostname yourself.
 - Prefer a dedicated Tag to the `latest` link. `latest` follows every successful upload to the Project, whatever it contains.
@@ -38,7 +38,7 @@ Start with `using-gateway` for connection, discovery, and safety rules. Before a
 
 ## Expiry
 
-Set an expiry only when the user wants the link to stop working: a review window, a temporary demo, time-boxed data. Pass `expiresInHours` (1 to 8760) or `expiresAt` (ISO 8601 with offset, 5 minutes to 1 year ahead), never both, at `begin` or `finalize`. A value at `finalize` overrides the one from `begin`, and `expiresAt: null` there clears it.
+Set an expiry only when the user wants the link to stop working: a review window, a temporary demo, time-boxed data. Pass `expiresInHours` (1 to 8760) or `expiresAt` (ISO 8601 with offset, 5 minutes to 1 year ahead), never both, at `link`, `begin` or `finalize`. A value at `finalize` overrides the one from `begin`, and `expiresAt: null` there clears it.
 
 After the expiry, maintenance deletes the Deployment with its previews and files and clears every Tag still pointing at it, so that Tag's link is unavailable until the next upload to it. A pinned Deployment, or one a custom-domain Route still serves, is not expired. Report the exact expiry time; pinning is the only way to keep the Deployment after finalize.
 
@@ -72,8 +72,8 @@ Git-backed builds, custom domains, Tag operations, runtime configuration, deploy
 
 ## Pitfalls
 
-- The Tag is an argument of `begin`, not `finalize`. A new Tag longer than 50 characters is rejected at `begin`, before anything is uploaded; existing longer Tags keep working.
+- The Tag is an argument of `link` or `begin`, not `finalize`. A new Tag longer than 50 characters is rejected there, before anything is uploaded; existing longer Tags keep working.
 - `declaredSizeBytes` and `sha256` describe the exact bytes you send: the HTML file itself for `format: "html"`, the archive otherwise.
-- Every uploaded byte passes through your context as base64. For output larger than a few MiB, prefer a Git source or the REST resumable deploy API from CI.
+- With `begin`/`chunk`, every uploaded byte passes through your context as base64, which fails for anything but small files. Use `link` whenever you have a shell; the upload link is a one-time credential, so do not repeat it to the user.
 - Deployments are immutable. To change a page, upload again; never expect an old Deployment link to show new content.
 - Runtime configuration (`window.runtime.config`) and frontend build variables are public browser data. Never put secrets in them.
