@@ -181,8 +181,9 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		return fmt.Errorf("initialize proxy secure-link state: %w", err)
 	}
 	// Units installed before the template carried it get a file descriptor
-	// store, so Secure Link sockets also survive a restart of the whole unit
-	// (effective from its next start).
+	// store, so Secure Link sockets also survive a restart of the whole unit.
+	// It applies to the running unit: under a launcher without a keeper, the
+	// sockets created below are stored on the launcher's behalf at once.
 	if installed, storeErr := listenerkeep.EnsureSystemdStore(); storeErr != nil {
 		logger.Warn("could not give the daemon unit a file descriptor store; a unit restart refuses Secure Link connections briefly", "error", storeErr)
 	} else if installed {
