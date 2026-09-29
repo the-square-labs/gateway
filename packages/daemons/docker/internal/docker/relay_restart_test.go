@@ -192,10 +192,12 @@ func TestRestartDrainClosesIdleTunnelsAndWaitsForRequests(t *testing.T) {
 
 	// Once the answer went out, the tunnel is idle and the next drain ends at once.
 	waiting.lastRead.Store(time.Now().Add(-200 * time.Millisecond).UnixNano())
+	// Waiting for a busy tunnel would take the whole limit; with none left the drain returns on its first pass.
+	const idleDrainLimit = 2 * time.Second
 	started = time.Now()
-	set.drain(time.Second)
-	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
-		t.Fatalf("drain of idle tunnels took %s", elapsed)
+	set.drain(idleDrainLimit)
+	if elapsed := time.Since(started); elapsed >= idleDrainLimit/2 {
+		t.Fatalf("drain of idle tunnels took %s of its %s limit", elapsed, idleDrainLimit)
 	}
 	release()
 

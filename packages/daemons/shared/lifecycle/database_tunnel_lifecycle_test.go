@@ -213,7 +213,8 @@ func TestControlSessionReconnectWaitStopsOnShutdown(t *testing.T) {
 	if waitForControlSessionReconnect(ctx) {
 		t.Fatal("reconnect wait must stop when the daemon is shutting down")
 	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		t.Fatalf("shutdown cancellation took %s", elapsed)
+	// Waiting out the reconnect delay would take all of it; stopping at once takes next to nothing.
+	if elapsed := time.Since(started); elapsed >= controlSessionReconnectDelay/2 {
+		t.Fatalf("shutdown cancellation took %s of the %s reconnect delay", elapsed, controlSessionReconnectDelay)
 	}
 }

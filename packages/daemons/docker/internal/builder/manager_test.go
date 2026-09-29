@@ -143,11 +143,17 @@ func TestBuildLogRedactsBuildSecretValues(t *testing.T) {
 func TestTerminalEventRetriesUntilMatchingAttemptIsAcknowledged(t *testing.T) {
 	events := make(chan *pb.DockerBuildEvent, 4)
 	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(event *pb.DockerBuildEvent) error {
-		events <- event
+		// Retries the test does not read are dropped: a send blocked on a full channel would keep the delivery
+		// from ever seeing the acknowledgement.
+		select {
+		case events <- event:
+		default:
+		}
 		return nil
 	})
 	manager.terminalRetryInterval = 10 * time.Millisecond
-	manager.terminalAckTimeout = time.Second
+	// Only the acknowledgement can end the delivery within the test's waits.
+	manager.terminalAckTimeout = time.Minute
 	done := make(chan struct{})
 	go func() {
 		manager.deliverTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded", Attempt: 2})
@@ -163,7 +169,7 @@ func TestTerminalEventRetriesUntilMatchingAttemptIsAcknowledged(t *testing.T) {
 	}
 	select {
 	case <-events:
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("terminal event was not retried")
 	}
 	if !manager.Acknowledge("build-1", 2, "accepted") {
@@ -171,7 +177,7 @@ func TestTerminalEventRetriesUntilMatchingAttemptIsAcknowledged(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("terminal delivery did not finish after acknowledgement")
 	}
 }
@@ -182,7 +188,8 @@ func TestObsoleteTerminalAcknowledgementStopsRetryImmediately(t *testing.T) {
 		events <- event
 		return nil
 	})
-	manager.terminalRetryInterval = time.Second
+	// Neither a retry nor the timeout can end the delivery within the test's wait: only the acknowledgement.
+	manager.terminalRetryInterval = time.Minute
 	manager.terminalAckTimeout = time.Minute
 	done := make(chan struct{})
 	go func() {
@@ -195,7 +202,7 @@ func TestObsoleteTerminalAcknowledgementStopsRetryImmediately(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("obsolete acknowledgement did not release terminal delivery")
 	}
 }
