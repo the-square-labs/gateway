@@ -16,6 +16,25 @@ export function normalizeGatewayUpdateVersion(version: string | null | undefined
   return (version ?? "").trim().replace(/^v/i, "");
 }
 
+const RELEASE_VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$/;
+
+/** True when `currentVersion` is a later release than `targetVersion` (a stable release is later than its RCs). */
+export function isGatewayVersionNewer(
+  currentVersion: string | null | undefined,
+  targetVersion: string
+): boolean {
+  const current = RELEASE_VERSION.exec(normalizeGatewayUpdateVersion(currentVersion));
+  const target = RELEASE_VERSION.exec(normalizeGatewayUpdateVersion(targetVersion));
+  if (!current || !target) return false;
+  for (let part = 1; part <= 3; part++) {
+    const diff = Number(current[part]) - Number(target[part]);
+    if (diff !== 0) return diff > 0;
+  }
+  const currentRc = current[4] === undefined ? Number.POSITIVE_INFINITY : Number(current[4]);
+  const targetRc = target[4] === undefined ? Number.POSITIVE_INFINITY : Number(target[4]);
+  return currentRc > targetRc;
+}
+
 export function isGatewayUpdateTargetVersion(
   currentVersion: string | null | undefined,
   targetVersion: string

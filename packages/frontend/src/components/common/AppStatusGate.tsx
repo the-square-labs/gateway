@@ -3,6 +3,7 @@ import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   isGatewayUpdateTargetVersion,
+  isGatewayVersionNewer,
   normalizeGatewayUpdateVersion,
   publishGatewayReload,
   reloadGatewayClient,
@@ -440,6 +441,14 @@ function GatewayOperationScreen() {
         if (targetVersion) {
           if (isGatewayUpdateTargetVersion(health.version, targetVersion)) {
             completeSameOriginRestart(health.version ?? null, "gateway-update-target-ready");
+            return;
+          }
+          // A later release is running: this browser kept the flag of an update that finished
+          // long ago (the tab closed mid-update) and was superseded since. Nothing failed.
+          if (isGatewayVersionNewer(health.version, targetVersion)) {
+            navigating = true;
+            useUpdateStore.getState().clearUpdating();
+            clearGatewayUpdating();
             return;
           }
           if (updatingActive) await checkUpdateOutcome(health.version ?? null);
