@@ -329,6 +329,31 @@ command_exists() { command -v "$1" &>/dev/null; }
 has_existing_nginx_config() {
     [[ -s /etc/nginx/nginx.conf || -s /usr/local/etc/nginx/nginx.conf || -s /usr/local/nginx/conf/nginx.conf ]]
 }
+
+# Whether an nginx config file has the directive line (leading and trailing
+# blanks ignored; a commented-out line does not count).
+nginx_conf_has_line() {
+    local conf="$1"
+    local line="$2"
+    [[ -f "$conf" ]] || return 1
+    awk -v line="$line" '
+        { trimmed = $0; sub(/^[[:space:]]+/, "", trimmed); sub(/[[:space:]]+$/, "", trimmed) }
+        trimmed == line { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$conf"
+}
+
+# The nginx mode of an earlier Gateway install on this host, or nothing: a
+# managed install writes nginx.conf with a direct include of the Gateway sites
+# directory, an integrated one adds the include of sites.include.conf.
+detect_installed_nginx_mode() {
+    local global_conf="/etc/nginx/nginx.conf"
+    if nginx_conf_has_line "$global_conf" "include /etc/nginx/gateway/sites.include.conf;"; then
+        echo "integrate"
+    elif nginx_conf_has_line "$global_conf" "include ${NGINX_SITES_DIR}/*.conf;"; then
+        echo "managed"
+    fi
+}
 has_systemd() { command_exists systemctl && [[ -d /run/systemd/system ]]; }
 has_openrc() { command_exists rc-service && command_exists rc-update; }
 
@@ -756,6 +781,15 @@ if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
     fi
 fi
 
+# A host that already runs a Gateway nginx node keeps its nginx mode when
+# --nginx-mode is not given. Re-running the enroll command without it on a
+# managed host picked integrate, which added a second include of the Gateway
+# sites directory ("duplicate default server"). Only a host without an
+# earlier install gets the default.
+if [[ -z "$NGINX_MODE" ]]; then
+    NGINX_MODE="$(detect_installed_nginx_mode)"
+fi
+
 # ── Header ───────────────────────────────────────────────────────────
 if [[ "$NO_LOGO" -eq 0 ]]; then
     if [ -t 1 ] && command -v clear &>/dev/null; then
@@ -1143,7 +1177,7 @@ ensure_http_include() {
     local global_conf="/etc/nginx/nginx.conf"
     local tmp_file
 
-    if grep -Fq "$include_line" "$global_conf"; then
+    if nginx_conf_has_line "$global_conf" "$include_line"; then
         return 0
     fi
 
@@ -1182,6 +1216,29 @@ remove_legacy_gateway_sites_include() {
     backup_if_exists "$legacy_file"
     rm -f "$legacy_file"
     log "Removed legacy duplicate Gateway sites include"
+}
+
+# A host switched from managed to integrate mode still has the managed direct
+# include of the Gateway sites directory in nginx.conf; the integrate include
+# replaces it, so the directory is included once.
+remove_direct_gateway_sites_include() {
+    local global_conf="/etc/nginx/nginx.conf"
+    local line="include ${NGINX_SITES_DIR}/*.conf;"
+    local tmp_file
+
+    nginx_conf_has_line "$global_conf" "$line" || return 0
+    backup_if_exists "$global_conf"
+    tmp_file=$(mktemp /tmp/nginx-conf-XXXXXX)
+    if ! awk -v line="$line" '
+        { trimmed = $0; sub(/^[[:space:]]+/, "", trimmed); sub(/[[:space:]]+$/, "", trimmed) }
+        trimmed == line { next }
+        { print }
+    ' "$global_conf" > "$tmp_file"; then
+        rm -f "$tmp_file"
+        die "Failed to remove the direct Gateway sites include from $global_conf"
+    fi
+    mv "$tmp_file" "$global_conf"
+    log "Replaced the direct Gateway sites include with the integrate include"
 }
 
 ensure_nginx_worker_limits() {
@@ -1449,6 +1506,8 @@ verify_nginx_server_tokens() {
 
 configure_nginx_managed() {
     log "Configuring nginx in managed mode..."
+    # nginx.conf below includes the Gateway sites directory itself.
+    remove_legacy_gateway_sites_include
     backup_if_exists "/etc/nginx/nginx.conf"
     backup_if_exists "/etc/nginx/conf.d/default.conf"
     backup_if_exists "/etc/nginx/http.d/default.conf"
@@ -1547,6 +1606,7 @@ configure_nginx_integrated() {
     log "Configuring nginx in integrate mode..."
 
     remove_legacy_gateway_sites_include
+    remove_direct_gateway_sites_include
 
     cat > "$include_file" << 'EOF'
 include __GATEWAY_SITES_DIR__/*.conf;
