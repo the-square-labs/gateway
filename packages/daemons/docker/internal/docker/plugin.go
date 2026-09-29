@@ -343,6 +343,9 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if availability != nil && p.lease == nil {
 		p.initAvailabilityLease()
 	}
+	if p.lease == nil {
+		go alignInstalledWatchdogChannel(p.logger, p.cfg.Docker.LeaseWatchdogReleasesURL, p.cfg.Docker.LeaseWatchdogArtifactBaseURL)
+	}
 
 	return nil
 }

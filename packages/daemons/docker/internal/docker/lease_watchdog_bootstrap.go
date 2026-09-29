@@ -298,6 +298,19 @@ func orDefaultURL(value, fallback string) string {
 	return value
 }
 
+// alignInstalledWatchdogChannel aligns the release channel of a watchdog on a
+// node whose lease runtime does not run (storage and database nodes, or a
+// runtime that could not start): the installer may have put a watchdog there
+// too, and it still updates itself (rc.20 M-8).
+func alignInstalledWatchdogChannel(logger *slog.Logger, releasesURL, artifactBaseURL string) {
+	b := newWatchdogBootstrap(logger, func() bool { return false }, releasesURL, artifactBaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := b.alignChannel(ctx); err != nil {
+		logger.Warn("could not align the lease watchdog's release channel with this daemon's", "channel", b.channel, "error", err)
+	}
+}
+
 // alignChannel makes an installed watchdog's self-update follow the release
 // channel this daemon updates on. The node installer writes the service
 // without --channel, i.e. stable, so on a preview-channel node the watchdog
