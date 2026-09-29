@@ -10,6 +10,7 @@ import { ImageReference } from "@/components/docker/ImageReference";
 import { Badge } from "@/components/ui/badge";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
+import { normalizeDockerRuntimeProfile } from "@/lib/docker-runtime-profile";
 import { api } from "@/services/api";
 import type { DockerAvailabilityPolicy } from "@/types";
 import { copyToClipboard, type InspectData, STATUS_BADGE } from "./helpers";
@@ -51,6 +52,8 @@ export function OverviewTab({
   const restartPolicy = data.HostConfig?.RestartPolicy?.Name ?? "no";
   const platform = data.Platform ?? "";
   const hostname = (data.Config?.Hostname ?? "") as string;
+  const runtimeName = (data.HostConfig?.Runtime ?? "") as string;
+  const runtimeProfile = normalizeDockerRuntimeProfile(runtimeName);
   const entrypoint = (data.Config?.Entrypoint ?? []) as string[];
   const cmd = (data.Config?.Cmd ?? []) as string[];
   const workingDir = (data.Config?.WorkingDir ?? "") as string;
@@ -216,6 +219,18 @@ export function OverviewTab({
           <DetailRow
             label="Hostname"
             value={<span className="font-mono">{hostname || "-"}</span>}
+          />
+          <DetailRow
+            label="Runtime"
+            value={
+              runtimeProfile === "secure" ? (
+                <Badge variant="success">Secure · gVisor</Badge>
+              ) : runtimeProfile === "default" ? (
+                "Default"
+              ) : (
+                <span className="font-mono">{runtimeName}</span>
+              )
+            }
           />
         </PanelShell>
       </div>
