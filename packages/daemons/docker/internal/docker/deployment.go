@@ -202,6 +202,12 @@ func (p *DockerPlugin) lockDeployment(ctx context.Context, deploymentID string) 
 	}
 	select {
 	case lock.slot <- struct{}{}:
+		// The slot can free up in the same instant an emergency kill cancels
+		// this waiter; select then picks either. Cancellation wins.
+		if err := ctx.Err(); err != nil {
+			release(true)
+			return nil, err
+		}
 		return func() { release(true) }, nil
 	case <-ctx.Done():
 		release(false)

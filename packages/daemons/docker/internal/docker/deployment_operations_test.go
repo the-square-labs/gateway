@@ -68,6 +68,25 @@ func awaitDeploymentResult(t *testing.T, done <-chan *pb.CommandResult) *pb.Comm
 	}
 }
 
+// waitForDeploymentOperations waits until count operations are registered on
+// the deployment, running or waiting for its lock.
+func waitForDeploymentOperations(t *testing.T, plugin *DockerPlugin, deploymentID string, count int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		plugin.deploymentOpMu.Lock()
+		registered := len(plugin.deploymentOps[deploymentID])
+		plugin.deploymentOpMu.Unlock()
+		if registered == count {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deployment operations registered = %d, want %d", registered, count)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // blockFirstStop makes the first stop of name hang in the engine until release
 // is closed, and reports on entered when it is reached.
 func blockFirstStop(engine *fakeDockerEngine, name string) (entered chan struct{}, release chan struct{}) {
@@ -150,7 +169,7 @@ func TestDeploymentKillCancelsQueuedOperations(t *testing.T) {
 	running := runDeploymentCommand(plugin, deploymentCommand(t, "stop", dep))
 	<-entered
 	queued := runDeploymentCommand(plugin, deploymentCommand(t, "restart", dep))
-	time.Sleep(50 * time.Millisecond)
+	waitForDeploymentOperations(t, plugin, dep.ID, 2)
 
 	if result := awaitDeploymentResult(t, runDeploymentCommand(plugin, deploymentCommand(t, "kill", dep))); !result.Success {
 		t.Fatalf("kill failed: %s", result.Error)
