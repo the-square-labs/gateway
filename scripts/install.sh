@@ -997,6 +997,10 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # A host shutdown stops every container at once. Smart shutdown (SIGTERM) lets the app finish its shutdown drain
+    # on its open connections before postgres exits; the image's default (SIGINT) cuts them at once.
+    stop_signal: SIGTERM
+    stop_grace_period: 75s
     environment:
       POSTGRES_DB: gateway
       POSTGRES_USER: gateway
