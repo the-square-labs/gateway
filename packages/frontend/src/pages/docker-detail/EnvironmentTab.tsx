@@ -548,7 +548,9 @@ export function EnvironmentTab({
       confirmLabel: onSaveServiceEnv
         ? resolvedServiceSaveLabel === "Save & Recreate"
           ? "Recreate"
-          : "Save"
+          : resolvedServiceSaveLabel === "Save & Deploy"
+            ? "Deploy"
+            : "Save"
         : savingManagedLinks || recreatesRunningContainer
           ? "Recreate"
           : "Save",

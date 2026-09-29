@@ -397,14 +397,18 @@ describe("DockerDeploymentDetail", () => {
       vi.mocked(api.getDockerDeployment).mockResolvedValue(refreshed);
       return refreshed;
     });
+    vi.spyOn(api, "deployDockerDeployment").mockResolvedValue(refreshed);
     renderWithRouter(<DockerDeploymentDetail />, {
       path: "/docker/deployments/:nodeId/:deploymentId/:tab",
       route: "/docker/deployments/node-1/deployment-1/settings",
     });
     fireEvent.click(await screen.findByRole("button", { name: "Attach volume" }));
     expect(screen.getByTestId("mounts-dirty")).toHaveTextContent("true");
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^save & deploy$/i }));
     await waitFor(() => expect(api.updateDockerDeployment).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(api.deployDockerDeployment).toHaveBeenCalledWith("node-1", "deployment-1", {})
+    );
     await waitFor(() => expect(screen.getByTestId("mounts-dirty")).toHaveTextContent("false"));
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
   });
@@ -425,6 +429,7 @@ describe("DockerDeploymentDetail", () => {
         drainSeconds: 45,
       })
     );
+    const deploy = vi.spyOn(api, "deployDockerDeployment").mockResolvedValue(deployment);
 
     renderWithRouter(<DockerDeploymentDetail />, {
       path: "/docker/deployments/:nodeId/:deploymentId/:tab",
@@ -440,7 +445,7 @@ describe("DockerDeploymentDetail", () => {
     fireEvent.change(screen.getByDisplayValue("server.js"), {
       target: { value: "node worker.js" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^save & deploy$/i }));
 
     await waitFor(() => {
       expect(api.updateDockerDeployment).toHaveBeenCalledWith("node-1", "deployment-1", {
@@ -457,6 +462,34 @@ describe("DockerDeploymentDetail", () => {
         drainSeconds: 45,
       });
     });
+    // The saved workload change rolls out after the configuration is stored.
+    await waitFor(() => expect(deploy).toHaveBeenCalledWith("node-1", "deployment-1", {}));
+    expect(vi.mocked(api.updateDockerDeployment).mock.invocationCallOrder[0]).toBeLessThan(
+      deploy.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("saves a drain-only change without rolling the deployment out", async () => {
+    const deployment = makeDeployment();
+    vi.spyOn(api, "getDockerDeployment").mockResolvedValue(deployment);
+    vi.spyOn(api, "inspectContainer").mockResolvedValue({
+      State: { Status: "running", Running: true },
+    } as never);
+    vi.spyOn(api, "updateDockerDeployment").mockResolvedValue(deployment);
+    const deploy = vi.spyOn(api, "deployDockerDeployment");
+
+    renderWithRouter(<DockerDeploymentDetail />, {
+      path: "/docker/deployments/:nodeId/:deploymentId/:tab",
+      route: "/docker/deployments/node-1/deployment-1/settings",
+    });
+
+    expect(await screen.findByText("Execution")).toBeInTheDocument();
+    await waitForReveal();
+    fireEvent.change(screen.getByLabelText("Drain Seconds"), { target: { value: "45" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(api.updateDockerDeployment).toHaveBeenCalled());
+    expect(deploy).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -486,7 +519,7 @@ describe("DockerDeploymentDetail", () => {
     fireEvent.change(screen.getByDisplayValue("server.js"), {
       target: { value: "node worker.js" },
     });
-    const save = screen.getByRole("button", { name: /^save$/i });
+    const save = screen.getByRole("button", { name: /^save & deploy$/i });
     expect(save).toBeDisabled();
     expect(save).toHaveAttribute("title", expect.stringMatching(reason));
     expect(screen.getByText(/wait for it to finish/)).toBeInTheDocument();

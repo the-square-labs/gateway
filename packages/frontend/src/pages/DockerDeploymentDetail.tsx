@@ -979,6 +979,11 @@ export function DockerDeploymentDetail({
     }
   };
 
+  // Saved variables reach the slots only through a rollout, so a serving
+  // deployment deploys them; a stopped one picks them up when it starts.
+  const environmentRollsOut =
+    (environmentWorkloadState === "running" || environmentWorkloadState === "restarting") &&
+    deployment?.status !== "creating";
   const saveServiceEnv = useCallback(
     async (env: Record<string, string>) => {
       const next = await api.updateDockerDeployment(nodeId, deploymentId, {
@@ -986,8 +991,15 @@ export function DockerDeploymentDetail({
       });
       setDeployment(next);
       setWebhook(next.webhook ?? null);
+      if (!environmentRollsOut) return;
+      setDeployment((current) => (current ? { ...current, _transition: "deploying" } : current));
+      try {
+        await api.deployDockerDeployment(nodeId, deploymentId, {});
+      } finally {
+        await load();
+      }
     },
-    [deploymentId, nodeId]
+    [deploymentId, environmentRollsOut, load, nodeId]
   );
 
   const removeDeployment = async () => {
@@ -1417,6 +1429,12 @@ export function DockerDeploymentDetail({
                 containerState={environmentWorkloadState}
                 serviceEnv={serviceEnv}
                 onSaveServiceEnv={saveServiceEnv}
+                serviceSaveLabel={environmentRollsOut ? "Save & Deploy" : "Save"}
+                serviceSaveDescription={
+                  environmentRollsOut
+                    ? "Environment changes deploy to the standby slot, and traffic switches once it is healthy. Continue?"
+                    : undefined
+                }
                 databaseTargetType="deployment"
                 databaseTargetResourceId={deploymentId}
               />

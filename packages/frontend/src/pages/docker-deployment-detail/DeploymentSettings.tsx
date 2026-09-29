@@ -429,6 +429,15 @@ export function DeploymentSettings({
     effectiveGpuChanged ||
     runtimeProfileChanged;
   const executionCardChanged = executionChanged || drainChanged || runtimeProfileChanged;
+  // A saved workload change reaches the slots only through a rollout; routes and
+  // drain apply to the router. A pending source deployment waits for its first build.
+  const saveRollsOut =
+    (executionChanged ||
+      mountsChanged ||
+      labelsChanged ||
+      effectiveGpuChanged ||
+      runtimeProfileChanged) &&
+    deployment.status !== "creating";
   const runtimeChanged =
     restartPolicy !== (deployment.desiredConfig.restartPolicy ?? "unless-stopped") ||
     maxRetries !== String(runtime.maxRetries ?? 0) ||
@@ -592,13 +601,18 @@ export function DeploymentSettings({
 
         <PanelShell
           title="Execution"
-          description={busyReason ?? "Saved to deployment configuration"}
+          description={
+            busyReason ??
+            (deployment.status === "creating"
+              ? "Saved to deployment configuration"
+              : "Workload changes deploy to the standby slot")
+          }
           dirty={executionCardChanged}
           bodyClassName="divide-y divide-border"
           actions={
             <Button
               variant="warning"
-              pending={action === "update-execution"}
+              pending={action === "update-execution" || action === "deploy"}
               disabled={!!action || !!busyReason || !settingsChanged || !nextImage.trim()}
               title={busyReason ?? undefined}
               onClick={() => {
@@ -608,7 +622,7 @@ export function DeploymentSettings({
                   !requireLicenseFeature("secure-runtime", "Secure Runtime")
                 )
                   return;
-                void runAction("update-execution", async () => {
+                void runAction(saveRollsOut ? "deploy" : "update-execution", async () => {
                   const labelMap: Record<string, string> = {};
                   for (const label of labels) {
                     if (label.key.trim()) labelMap[label.key.trim()] = label.value;
@@ -642,12 +656,19 @@ export function DeploymentSettings({
                       })),
                     drainSeconds: Number(drainSeconds),
                   });
-                  toast.success("Service configuration updated");
+                  if (saveRollsOut) {
+                    await api.deployDockerDeployment(nodeId, deployment.id, {});
+                    toast.success("New configuration deployed");
+                  } else {
+                    toast.success("Service configuration updated");
+                  }
                 });
               }}
             >
-              {action !== "update-execution" && <RotateCcw className="h-3.5 w-3.5" />}
-              Save
+              {action !== "update-execution" && action !== "deploy" && (
+                <RotateCcw className="h-3.5 w-3.5" />
+              )}
+              {saveRollsOut ? "Save & Deploy" : "Save"}
             </Button>
           }
         >
