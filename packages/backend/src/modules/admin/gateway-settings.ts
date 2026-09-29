@@ -264,10 +264,10 @@ export async function updateGatewaySettings(
       ? await container.resolve(LoggingRuntimeService).update(input.logging)
       : await loggingSettingsService.getPublicConfig();
     const mayRefreshGrpcIdentity = touchesGrpcEndpointSettings(input.generalSettings);
-    const shouldRefreshWebIdentity = input.generalSettings?.publicUrl !== undefined;
+    const mayRefreshWebIdentity = input.generalSettings?.publicUrl !== undefined;
     const nextTlsEnabled = input.webTlsEnabled ?? previousWebTransport.tlsEnabled;
     const previousGeneralSettings =
-      mayRefreshGrpcIdentity || shouldRefreshWebIdentity ? await generalSettingsService.getConfig() : null;
+      mayRefreshGrpcIdentity || mayRefreshWebIdentity ? await generalSettingsService.getConfig() : null;
     const [updated, smtp, oidc, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] =
       await Promise.all([
         authSettingsService.updateConfig(input),
@@ -288,6 +288,13 @@ export async function updateGatewaySettings(
           : outboundWebhookPolicyService.getConfig(),
       ]);
 
+    // The settings form sends the Public URL with every save. Only a changed URL
+    // refreshes the web identity, which restarts Gateway.
+    const shouldRefreshWebIdentity = Boolean(
+      mayRefreshWebIdentity &&
+        previousGeneralSettings &&
+        previousGeneralSettings.publicUrl !== generalSettings.publicUrl
+    );
     const shouldRefreshGrpcIdentity = Boolean(
       mayRefreshGrpcIdentity &&
         previousGeneralSettings &&
