@@ -52,6 +52,26 @@ export class AppError extends Error {
   }
 }
 
+/**
+ * PostgreSQL invalid_text_representation (22P02) for a uuid column, e.g. a
+ * non-UUID path id reaching `WHERE id = $1`. Drizzle wraps the driver error,
+ * so the SQLSTATE lives on `cause`; the message must sit on the same error
+ * as the code (the wrapper's own message embeds the query text).
+ */
+function isInvalidUuidError(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const { code, message, cause } = current as { code?: unknown; message?: unknown; cause?: unknown };
+    if (code === '22P02' && typeof message === 'string' && /invalid input syntax for type uuid/i.test(message)) {
+      return true;
+    }
+    current = cause;
+  }
+  return false;
+}
+
 export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
   const requestId = c.get('requestId');
 
@@ -129,6 +149,14 @@ export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
       },
       400
     );
+  }
+
+  if (isInvalidUuidError(err)) {
+    logger.warn('Invalid uuid in request', {
+      requestId,
+      path: c.req.path,
+    });
+    return c.json<ApiError>({ code: 'NOT_FOUND', message: 'Resource not found' }, 404);
   }
 
   logger.error('Unhandled error', {
