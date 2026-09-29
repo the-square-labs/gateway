@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { CreateFolderSelect } from "@/components/common/CreateFolderSelect";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,11 +18,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { flattenCreationFolders, placementFolderChoices } from "@/lib/creation-folders";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { handleLicenseApiError } from "@/stores/license-paywall";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { KeyAlgorithm } from "@/types";
+
+const NO_SCOPES: string[] = [];
 
 interface CACreateDialogProps {
   open: boolean;
@@ -41,6 +47,11 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
   const [pathLengthConstraint, setPathLengthConstraint] = useState<number | undefined>(undefined);
   const [maxValidityDays, setMaxValidityDays] = useState(365);
   const [isSaving, setIsSaving] = useState(false);
+  const [folderId, setFolderId] = useState("");
+  const scopes = useAuthStore((s) => s.user?.scopes ?? NO_SCOPES);
+  const caFolders = useResourceFolderStore((state) => state.foldersByType["pki-ca"]);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType["pki-ca"]);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
 
   const needsParentPicker = parentId === "pick";
   const resolvedParentId = needsParentPicker ? selectedParentId : parentId;
@@ -50,6 +61,25 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
     (ca) =>
       ca.status === "active" && !ca.isSystem && hasScope(`pki:ca:create:intermediate:${ca.id}`)
   );
+  // A folder holds whole hierarchies: an intermediate CA is listed in the folder of its root CA
+  // (the CA list reports that folder on every CA), so its picker only shows where it will land.
+  const parentFolderId =
+    (cas || []).find((ca) => ca.id === resolvedParentId)?.folderId ?? "";
+  const folderChoices = useMemo(() => {
+    const folders = flattenCreationFolders(caFolders ?? []);
+    return isIntermediate
+      ? placementFolderChoices(folders, (id) => id === parentFolderId)
+      : // A root CA lands where the caller may move a root CA: pki:ca:edit on the folder.
+        placementFolderChoices(folders, (id) => canCreateInFolder(scopes, "pki:ca:edit", id));
+  }, [caFolders, isIntermediate, parentFolderId, scopes]);
+
+  useEffect(() => {
+    if (open) void fetchFolders("pki-ca");
+  }, [fetchFolders, open]);
+
+  useEffect(() => {
+    if (isIntermediate) setFolderId(parentFolderId);
+  }, [isIntermediate, parentFolderId]);
 
   const handleCreate = async () => {
     if (!commonName.trim()) {
@@ -74,7 +104,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
       if (isIntermediate) {
         await api.createIntermediateCA(resolvedParentId!, data);
       } else {
-        await api.createRootCA(data);
+        await api.createRootCA({ ...data, folderId: folderId || null });
       }
 
       toast.success(`${isIntermediate ? "Intermediate" : "Root"} CA created`);
@@ -86,6 +116,7 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
         setValidityYears(10);
         setPathLengthConstraint(undefined);
         setMaxValidityDays(365);
+        setFolderId("");
       }, 200);
     } catch (err) {
       if (!handleLicenseApiError(err, "Internal PKI")) {
@@ -132,6 +163,25 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
               </Select>
             </div>
           )}
+
+          <div className="space-y-1.5">
+            <label htmlFor="ca-create-folder" className="text-sm font-medium">
+              Folder
+            </label>
+            <CreateFolderSelect
+              id="ca-create-folder"
+              choices={folderChoices}
+              value={folderId}
+              onChange={setFolderId}
+              loading={foldersLoading}
+              disabled={isIntermediate}
+            />
+            {isIntermediate && (
+              <p className="text-xs text-muted-foreground">
+                An intermediate CA stays in the folder of its root CA.
+              </p>
+            )}
+          </div>
 
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Common Name (CN)</label>

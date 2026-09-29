@@ -141,7 +141,9 @@ export const ACCESS_AREAS: readonly AccessAreaDefinition[] = [
     title: 'Route templates',
     action: prefixed('proxy:templates:'),
     viewScope: 'proxy:templates:view',
+    createScope: 'proxy:templates:manage',
     folderResourceType: 'nginx_templates',
+    createHint: 'pass folderId to the create operation of manage_proxy_template',
   },
   {
     id: 'routes',

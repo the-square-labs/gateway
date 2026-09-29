@@ -158,6 +158,8 @@ export interface CreateRootCARequest {
   validityYears: number;
   pathLengthConstraint?: number;
   maxValidityDays?: number;
+  /** Destination CA folder; needs pki:ca:edit there. */
+  folderId?: string | null;
 }
 
 export interface CreateIntermediateCARequest {
@@ -179,6 +181,8 @@ export interface IssueCertificateRequest {
   /** End the certificate with the CA instead of failing when it would outlive the CA. */
   clampToCaValidity?: boolean;
   subjectDnFields?: SubjectDnFields;
+  /** Destination certificate folder; needs pki:cert:folders:manage. */
+  folderId?: string | null;
 }
 
 export interface IssueCertFromCSRRequest {
@@ -188,6 +192,7 @@ export interface IssueCertFromCSRRequest {
   csrPem: string;
   validityDays: number;
   overrideSans?: string[];
+  folderId?: string | null;
 }
 
 /**

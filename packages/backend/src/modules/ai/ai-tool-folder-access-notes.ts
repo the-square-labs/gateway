@@ -58,6 +58,7 @@ export const FOLDER_ACCESS_CREATE_TOOLS: ReadonlySet<string> = new Set([
   'manage_pages',
   'manage_logging',
   'create_node',
+  'manage_proxy_template',
 ]);
 
 function withFolderIdParameterNote(parameters: Record<string, unknown>): Record<string, unknown> {

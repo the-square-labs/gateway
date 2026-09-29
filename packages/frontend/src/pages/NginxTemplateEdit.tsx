@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ContentLoading } from "@/components/common/ContentLoading";
+import { CreateFolderSelect, getCreateFolderChoices } from "@/components/common/CreateFolderSelect";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
@@ -32,6 +33,8 @@ import {
 import { useRealtime } from "@/hooks/use-realtime";
 import { analyzeTemplateContent } from "@/lib/nginx-template-analysis";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { ProxyHostType, TemplateVariableDef } from "@/types";
 
 const CHEATSHEET_VARIABLES: ReferenceTableRow[] = [
@@ -89,6 +92,20 @@ export function NginxTemplateEdit() {
   const [type, setType] = useState<ProxyHostType>("proxy");
   const [content, setContent] = useState("");
   const [variables, setVariables] = useState<TemplateVariableDef[]>([]);
+  const [folderId, setFolderId] = useState("");
+  const scopes = useAuthStore((s) => s.user?.scopes);
+  const templateFolders = useResourceFolderStore((state) => state.foldersByType["nginx-template"]);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType["nginx-template"]);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  // Same destinations the create route accepts: proxy:templates:manage broadly or on the folder.
+  const folderChoices = useMemo(
+    () => getCreateFolderChoices(scopes ?? [], "proxy:templates:manage", templateFolders ?? []),
+    [scopes, templateFolders]
+  );
+
+  useEffect(() => {
+    if (isNew) void fetchFolders("nginx-template");
+  }, [fetchFolders, isNew]);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewResult, setPreviewResult] = useState("");
@@ -162,6 +179,7 @@ export function NginxTemplateEdit() {
           type,
           content,
           variables: validVars,
+          folderId: folderId || null,
         });
         toast.success("Template created");
         navigate(`/nginx-templates/${t.id}`, { replace: true });
@@ -342,7 +360,13 @@ export function NginxTemplateEdit() {
           }
         />
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem] shrink-0">
+        <div
+          className={
+            isNew
+              ? "grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem_12rem] shrink-0"
+              : "grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem] shrink-0"
+          }
+        >
           <div className="space-y-1.5">
             <label className="text-xs text-muted-foreground">Name</label>
             <Input
@@ -378,6 +402,20 @@ export function NginxTemplateEdit() {
               </SelectContent>
             </Select>
           </div>
+          {isNew && (
+            <div className="space-y-1.5">
+              <label htmlFor="nginx-template-folder" className="text-xs text-muted-foreground">
+                Folder
+              </label>
+              <CreateFolderSelect
+                id="nginx-template-folder"
+                choices={folderChoices}
+                value={folderId}
+                onChange={setFolderId}
+                loading={foldersLoading}
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 flex flex-col relative">

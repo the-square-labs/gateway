@@ -179,7 +179,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `pages:settings:edit` |  |
 | `proxy:templates:view` | Yes |
 | `proxy:templates:manage` | Yes. Create, edit, and delete nginx templates, including template content. Replaces `proxy:templates:create`, `:edit`, and `:delete`. |
-| `proxy:templates:folders:manage` | Manage nginx template folders. Moving a custom template also needs `proxy:templates:manage` on it and on the destination; built-in templates never move. |
+| `proxy:templates:folders:manage` | Manage nginx template folders. Moving a custom template also needs `proxy:templates:manage` on it and on the destination; built-in templates never move. `proxy:templates:manage:folder/<id>` also creates templates in that folder. |
 | `ssl:cert:view` | Yes |
 | `ssl:cert:issue` |  |
 | `ssl:cert:folders:manage` | Yes |

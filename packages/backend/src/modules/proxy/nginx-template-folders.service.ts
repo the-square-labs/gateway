@@ -1,6 +1,7 @@
 import { inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nginxTemplateFolders, nginxTemplates } from '@/db/schema/index.js';
+import { hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type {
@@ -23,6 +24,14 @@ export class NginxTemplateFolderService extends FolderedResourceService {
       auditResourceType: 'nginx_template_folder',
       eventName: 'nginx.template.folder.changed',
     });
+  }
+
+  /** Creating in a folder needs proxy:templates:manage there (broadly or as a folder grant), like a move. */
+  async assertCreateFolder(scopes: readonly string[], folderId: string | null | undefined) {
+    if (!hasScopeForCreation(scopes, 'proxy:templates:manage', folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing proxy:templates:manage for the destination folder');
+    }
+    await this.assertFolderExists(folderId);
   }
 
   override async moveResourcesToFolder(input: MoveResourcesToFolderInput, userId: string) {

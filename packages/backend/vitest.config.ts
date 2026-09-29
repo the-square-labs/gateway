@@ -18,7 +18,7 @@ function testFiles(directory: string): string[] {
 // Tests that neither mock nor touch shared state run without per-file isolation, so each worker
 // evaluates the schema and scope catalog once instead of once per file.
 const sharedGraphTests = TEST_ROOTS.flatMap(testFiles).filter(
-  (file) => !file.includes('.database.') && !STATEFUL_TEST.test(readFileSync(path.resolve(__dirname, file), 'utf8')),
+  (file) => !file.includes('.database.') && !STATEFUL_TEST.test(readFileSync(path.resolve(__dirname, file), 'utf8'))
 );
 
 export default defineConfig({

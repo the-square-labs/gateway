@@ -403,7 +403,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_proxy_template',
     description:
-      'Manage custom nginx proxy templates. Operations: list, get, create, update, delete, clone, preview (render content with sample data, or with a stored route when routeId is set), test (render with sample data and run nginx -t on an nginx node). Templates carry folderId and sortOrder (built-ins never have a folder; list_resource_folders with nginx_templates names the folders). Reads need proxy:templates:view; create, update, delete, clone and test need proxy:templates:manage (broad to create or test new content, on templateId to change that template).',
+      'Manage custom nginx proxy templates. Operations: list, get, create, update, delete, clone, preview (render content with sample data, or with a stored route when routeId is set), test (render with sample data and run nginx -t on an nginx node). Templates carry folderId and sortOrder (built-ins never have a folder; list_resource_folders with nginx_templates names the folders). Reads need proxy:templates:view; create, update, delete, clone and test need proxy:templates:manage (broad to test new content or clone, broad or on the destination folder to create, on templateId to change that template).',
     parameters: {
       type: 'object',
       properties: {
@@ -418,6 +418,10 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         type: { type: 'string', enum: ['proxy', 'redirect', '404'] },
         content: { type: 'string' },
         variables: { type: 'array', items: { type: 'object' } },
+        folderId: {
+          type: ['string', 'null'],
+          description: 'create only. Destination nginx template folder UUID (list_resource_folders nginx_templates).',
+        },
       },
       required: ['operation'],
     },

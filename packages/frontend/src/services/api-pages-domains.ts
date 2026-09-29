@@ -480,6 +480,7 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
       type: string;
       content: string;
       variables?: TemplateVariableDef[];
+      folderId?: string | null;
     }): Promise<NginxTemplate> {
       return this.unwrapData(
         this.request<{ data: NginxTemplate }>("/nginx-templates", {

@@ -65,9 +65,12 @@ export const CreateTemplateSchema = z.object({
   authorityInfoAccess: AuthorityInfoAccessSchema.optional(),
   certificatePolicies: z.array(CertificatePolicySchema).default([]),
   customExtensions: z.array(CustomExtensionSchema).default([]),
+  /** Destination template folder; needs pki:templates:folders:manage, like moving the template there. */
+  folderId: z.string().uuid().nullable().optional(),
 });
 
-export const UpdateTemplateSchema = CreateTemplateSchema.partial();
+// Placement changes go through the folder routes, which check the move rules.
+export const UpdateTemplateSchema = CreateTemplateSchema.omit({ folderId: true }).partial();
 
 export type CreateTemplateInput = z.infer<typeof CreateTemplateSchema>;
 export type UpdateTemplateInput = z.infer<typeof UpdateTemplateSchema>;

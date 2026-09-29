@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
+import { NginxTemplateService } from './nginx-template.service.js';
 import { NginxTemplateFolderService } from './nginx-template-folders.service.js';
 
 const scopes = vi.hoisted(() => ({ current: [] as string[] }));
@@ -33,8 +34,13 @@ function setup(granted: string[]) {
     reorderFolders: vi.fn().mockResolvedValue(undefined),
     moveResourcesToFolder: vi.fn().mockResolvedValue(undefined),
     reorderResources: vi.fn().mockResolvedValue(undefined),
+    // The real create rule, with the folder lookup stubbed.
+    assertFolderExists: vi.fn().mockResolvedValue(undefined),
+    assertCreateFolder: NginxTemplateFolderService.prototype.assertCreateFolder,
   };
+  const templates = { createTemplate: vi.fn().mockResolvedValue({ id: TEMPLATE }) };
   container.registerInstance(NginxTemplateFolderService, service as unknown as NginxTemplateFolderService);
+  container.registerInstance(NginxTemplateService, templates as unknown as NginxTemplateService);
   const app = new OpenAPIHono<AppEnv>();
   app.onError(errorHandler);
   app.route('/api/nginx-templates', nginxTemplateRoutes);
@@ -44,7 +50,7 @@ function setup(granted: string[]) {
       headers: { 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-  return { service, call };
+  return { service, templates, call };
 }
 
 afterEach(() => {
@@ -93,5 +99,16 @@ describe('nginx template folder routes', () => {
       editScope: 'proxy:templates:manage',
     });
     expect(service.deleteFolder).toHaveBeenCalledWith(FOLDER, 'user-1');
+  });
+
+  it('creates a template in a folder with proxy:templates:manage on that folder only', async () => {
+    const template = { name: 'Geo', type: 'proxy', content: 'server {}' };
+    const { templates, call } = setup([`proxy:templates:manage:folder/${FOLDER}`]);
+
+    expect((await call('', 'POST', template)).status).toBe(403);
+    expect((await call('', 'POST', { ...template, folderId: TEMPLATE })).status).toBe(403);
+    expect(templates.createTemplate).not.toHaveBeenCalled();
+    expect((await call('', 'POST', { ...template, folderId: FOLDER })).status).toBe(201);
+    expect(templates.createTemplate).toHaveBeenCalledWith(expect.objectContaining({ folderId: FOLDER }), 'user-1');
   });
 });

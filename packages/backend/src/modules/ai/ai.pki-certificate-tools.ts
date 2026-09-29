@@ -13,6 +13,7 @@ import {
 } from '@/modules/pki/cert.schemas.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
 import { ExportService } from '@/modules/pki/export.service.js';
+import { CertificateFolderService } from '@/modules/pki/pki-folders.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import type { User } from '@/types.js';
 import { agentPage, agentPageLimit, allowedResourceIdsForScopes } from './ai.service-helpers.js';
@@ -75,6 +76,7 @@ export async function executePkiCertificateTool(
     case 'issue_certificate': {
       const certInput = IssueCertificateSchema.parse(args);
       requireIssueScope(user, certInput.caId);
+      await container.resolve(CertificateFolderService).assertCreateFolder(user.scopes, certInput.folderId);
       const result = await context.certService.issueCertificate(certInput, user.id);
       return {
         certificate: result.certificate,
@@ -92,6 +94,7 @@ export async function executePkiCertificateTool(
       if (a.operation === 'issue_from_csr') {
         const input = IssueCertFromCSRSchema.parse(args);
         requireIssueScope(user, input.caId);
+        await container.resolve(CertificateFolderService).assertCreateFolder(user.scopes, input.folderId);
         return context.certService.issueCertificateFromCSR(input, user.id);
       }
       if (a.operation === 'chain') {

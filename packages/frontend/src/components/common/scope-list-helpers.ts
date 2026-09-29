@@ -117,6 +117,9 @@ const folderLookupPermissions: Partial<Record<FolderFamily, string>> = {
   storage: "storage:view",
   pages: "pages:view",
   ssl: "ssl:cert:view",
+  "pki-cas": "pki:ca:view",
+  "pki-certificates": "pki:cert:view",
+  "nginx-templates": "proxy:templates:view",
   "logging-environments": "logs:environments:view",
   "logging-schemas": "logs:schemas:view",
   docker: "docker:containers:view",
@@ -227,6 +230,23 @@ export async function loadScopeResourceCatalog(
         reportScopeLoadError("Pages projects", error);
         catalog.pages = [];
       })
+    );
+  if (families.has("nginx-templates"))
+    loads.push(
+      api
+        .listNginxTemplates()
+        .then((templates) => {
+          // Built-in templates are never in a folder, but can still be granted one by one.
+          catalog["nginx-templates"] = templates.map((template) => ({
+            id: template.id,
+            label: template.name,
+            folderId: template.folderId,
+          }));
+        })
+        .catch((error) => {
+          reportScopeLoadError("nginx templates", error);
+          catalog["nginx-templates"] = [];
+        })
     );
   if (families.has("ssl"))
     loads.push(
@@ -362,6 +382,9 @@ export type FolderFamily =
   | "docker-compose"
   | "pages"
   | "ssl"
+  | "pki-cas"
+  | "pki-certificates"
+  | "nginx-templates"
   | "databases"
   | "storage"
   | "logging-environments"
@@ -404,7 +427,10 @@ export function folderFamilyForScope(scope: string): FolderFamily | null {
   if (scope === "admin:groups") return "groups";
   if (scope === "admin:users" || scope === "admin:users:impersonate") return "users";
   if (scope.startsWith("domains:")) return "domains";
+  if (scope.startsWith("proxy:templates:")) return "nginx-templates";
   if (scope.startsWith("proxy:")) return "proxy";
+  if (scope.startsWith("pki:ca:")) return "pki-cas";
+  if (scope.startsWith("pki:cert:")) return "pki-certificates";
   if (scope.startsWith("pages:")) return "pages";
   if (scope.startsWith("ssl:cert:")) return "ssl";
   if (scope.startsWith("nodes:")) return "nodes";
@@ -507,6 +533,12 @@ export async function loadFolderFamily(family: FolderFamily): Promise<FolderOpti
       return flattenFolderTree(await load(api.listPageProjectFolders()), family);
     case "ssl":
       return flattenFolderTree(await load(api.listSSLCertificateFolders()), family);
+    case "pki-cas":
+      return flattenFolderTree(await load(api.listCAFolders()), family);
+    case "pki-certificates":
+      return flattenFolderTree(await load(api.listCertificateFolders()), family);
+    case "nginx-templates":
+      return flattenFolderTree(await load(api.listNginxTemplateFolders()), family);
   }
 }
 
@@ -606,6 +638,8 @@ export function getResourceOptions(
     return [];
   }
   if (family && catalog[family]) return catalog[family]!;
+  // Template grants name templates, never routes; the list comes from the catalog above.
+  if (scope.startsWith("proxy:templates:")) return [];
   if (scope.startsWith("logs:schemas:")) {
     return (loggingSchemas ?? []).map((schema) => ({
       id: schema.id,
@@ -691,7 +725,11 @@ export function getResourceOptions(
       })),
     ];
   }
-  if (scope.startsWith("pki:cert:") || scope.startsWith("pki:ca:")) {
+  if (scope.startsWith("pki:ca:")) {
+    // An intermediate CA reports the folder of its root, so it is listed in that folder.
+    return (cas ?? []).map((ca) => ({ id: ca.id, label: ca.commonName, folderId: ca.folderId }));
+  }
+  if (scope.startsWith("pki:cert:")) {
     return (cas ?? []).map((ca) => ({ id: ca.id, label: ca.commonName }));
   }
   return [];
@@ -741,11 +779,17 @@ export function getResourceLabel(scope: string): string {
   if (scope.startsWith("nodes:")) return "Restrict to specific nodes (leave unchecked for all):";
   if (scope === "proxy:create")
     return "Restrict to specific Ingress nodes (leave unchecked for all):";
+  if (scope.startsWith("proxy:templates:"))
+    return "Restrict to template folders or individual nginx templates (leave unchecked for all):";
   if (scope.startsWith("proxy:"))
     return "Restrict to route folders or individual routes (leave unchecked for all):";
   if (scope.startsWith("logs:schemas:"))
     return "Restrict to schema folders or individual logging schemas (leave unchecked for all):";
   if (isLoggingEnvironmentScope(scope))
     return "Restrict to environment folders or individual logging environments (leave unchecked for all):";
+  if (scope.startsWith("pki:ca:"))
+    return "Restrict to CA folders or individual CAs (leave unchecked for all):";
+  if (folderFamilyForScope(scope) === "pki-certificates")
+    return "Restrict to certificate folders or specific CAs (leave unchecked for all):";
   return "Restrict to specific CAs (leave unchecked for all):";
 }

@@ -166,4 +166,58 @@ describe.skipIf(!url)('PKI and template folders on disposable PostgreSQL', () =>
       new NginxTemplateFolderService(db, audit).reorderResources({ items: [{ id: nginxBuiltin, sortOrder: 0 }] })
     ).rejects.toMatchObject({ statusCode: 400, code: 'BUILTIN_TEMPLATE_FOLDER_LOCKED' });
   });
+
+  it('places a new resource in a folder only with the right that moving it there needs', async () => {
+    const cas = new CAFolderService(db, audit);
+    const caFolder = await cas.createFolder({ name: 'Roots' }, userId);
+    const certificates = new CertificateFolderService(db, audit);
+    const certFolder = await certificates.createFolder({ name: 'Leaves' }, userId);
+
+    // Root CA: pki:ca:edit on the destination, and the folder must be a CA folder.
+    await expect(cas.assertRootCreateFolder(['pki:ca:create:root'], caFolder.id)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await cas.assertRootCreateFolder(['pki:ca:create:root', `pki:ca:edit:folder/${caFolder.id}`], caFolder.id);
+    await expect(cas.assertRootCreateFolder(['pki:ca:edit'], certFolder.id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await cas.assertRootCreateFolder([], null);
+
+    // Intermediate CA: only the folder of its root.
+    await cas.moveResourcesToFolder({ ids: [rootId], folderId: caFolder.id }, userId);
+    await cas.assertIntermediateCreateFolder(intermediateId, caFolder.id);
+    await cas.assertIntermediateCreateFolder(intermediateId, undefined);
+    for (const folderId of [null, certFolder.id]) {
+      await expect(cas.assertIntermediateCreateFolder(intermediateId, folderId)).rejects.toMatchObject({
+        statusCode: 400,
+        code: 'PKI_CA_NOT_ROOT',
+      });
+    }
+
+    // Certificates and certificate templates: the family's folder scope, and a folder of that family.
+    await expect(certificates.assertCreateFolder(['pki:cert:issue'], certFolder.id)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await certificates.assertCreateFolder(['pki:cert:folders:manage'], certFolder.id);
+    await expect(certificates.assertCreateFolder(['pki:cert:folders:manage'], caFolder.id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    const templates = new PkiTemplateFolderService(db, audit);
+    const templateFolder = await templates.createFolder({ name: 'Services' }, userId);
+    await expect(templates.assertCreateFolder(['pki:templates:create'], templateFolder.id)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await templates.assertCreateFolder(['pki:templates:folders:manage'], templateFolder.id);
+
+    // Nginx templates: proxy:templates:manage broadly, or on the destination folder only.
+    const nginx = new NginxTemplateFolderService(db, audit);
+    const nginxFolder = await nginx.createFolder({ name: 'Security' }, userId);
+    const folderGrant = [`proxy:templates:manage:folder/${nginxFolder.id}`];
+    await nginx.assertCreateFolder(folderGrant, nginxFolder.id);
+    await expect(nginx.assertCreateFolder(folderGrant, null)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(nginx.assertCreateFolder(['proxy:templates:manage'], caFolder.id)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await nginx.assertCreateFolder(['proxy:templates:manage'], null);
+  });
 });

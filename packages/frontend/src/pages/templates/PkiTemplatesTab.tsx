@@ -1,7 +1,8 @@
 import { FileText, FolderPlus, MoreVertical, Pencil, Plus, Trash2 } from "lucide-react";
-import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { CreateFolderSelect } from "@/components/common/CreateFolderSelect";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -25,9 +26,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useRealtime } from "@/hooks/use-realtime";
+import { flattenCreationFolders, placementFolderChoices } from "@/lib/creation-folders";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError } from "@/stores/license-paywall";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import type {
   CertificatePolicy,
   CertificateType,
@@ -67,6 +70,15 @@ export function PkiTemplatesTab({
   const canEditTemplates = hasScope("pki:templates:edit");
   const canDeleteTemplates = hasScope("pki:templates:delete");
   const canManageFolders = hasScope("pki:templates:folders:manage");
+  const [folderId, setFolderId] = useState("");
+  const templateFolders = useResourceFolderStore((state) => state.foldersByType["pki-template"]);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType["pki-template"]);
+  // Templates are not folder-scopable: placing a new one needs the folder scope, like a move.
+  const folderChoices = useMemo(
+    () =>
+      placementFolderChoices(flattenCreationFolders(templateFolders ?? []), () => canManageFolders),
+    [canManageFolders, templateFolders]
+  );
   const cachedTemplates = canListTemplates
     ? api.getCached<Template[]>("templates:list")
     : undefined;
@@ -151,6 +163,7 @@ export function PkiTemplatesTab({
     setCaIssuersUrl("");
     setCertificatePolicies([]);
     setCustomExtensions([]);
+    setFolderId("");
     setStep(0);
   };
 
@@ -230,7 +243,7 @@ export function PkiTemplatesTab({
         await api.updateTemplate(editing.id, payload);
         toast.success("Template updated");
       } else {
-        await api.createTemplate(payload);
+        await api.createTemplate({ ...payload, folderId: folderId || null });
         toast.success("Template created");
       }
       setDialogOpen(false);
@@ -494,6 +507,20 @@ export function PkiTemplatesTab({
                   validityDays={validityDays}
                   setValidityDays={setValidityDays}
                 />
+              )}
+              {step === 0 && !editing && (
+                <div className="space-y-1.5">
+                  <label htmlFor="pki-template-folder" className="text-sm font-medium">
+                    Folder
+                  </label>
+                  <CreateFolderSelect
+                    id="pki-template-folder"
+                    choices={folderChoices}
+                    value={folderId}
+                    onChange={setFolderId}
+                    loading={foldersLoading}
+                  />
+                </div>
               )}
               {step === 1 && <StepKeyUsage keyUsage={keyUsage} setKeyUsage={setKeyUsage} />}
               {step === 2 && (

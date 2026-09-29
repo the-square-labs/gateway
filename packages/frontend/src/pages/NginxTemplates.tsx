@@ -23,6 +23,7 @@ import {
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
+import { hasCreationDestination } from "@/lib/creation-folders";
 import { useAuthStore } from "@/stores/auth";
 import type { NginxTemplate } from "@/types";
 
@@ -47,7 +48,7 @@ export function NginxTemplates({
   onCreateFolderRef?: (fn: () => void) => void;
 }) {
   const navigate = useNavigate();
-  const { hasScope, hasScopedAccess } = useAuthStore();
+  const { hasScope, hasScopedAccess, user } = useAuthStore();
   const canViewTemplates = hasScopedAccess("proxy:templates:view");
   const cachedTemplates = canViewTemplates
     ? api.getCached<NginxTemplate[]>("nginx-templates:list")
@@ -141,6 +142,8 @@ export function NginxTemplates({
   };
 
   const canManageTemplates = hasScope("proxy:templates:manage");
+  // Creating needs proxy:templates:manage broadly or on a destination folder.
+  const canCreateTemplates = hasCreationDestination(user?.scopes ?? [], "proxy:templates:manage");
   const canManageFolders = hasScope("proxy:templates:folders:manage");
   // Mirrors the template routes: manage:<id> edits and deletes, clone reads the
   // source and creates a new template (broad manage).
@@ -269,7 +272,7 @@ export function NginxTemplates({
                         },
                       ]
                     : []),
-                  ...(canManageTemplates
+                  ...(canCreateTemplates
                     ? [
                         {
                           label: "Create Template",
@@ -286,7 +289,7 @@ export function NginxTemplates({
                     Add Folder
                   </Button>
                 )}
-                {canManageTemplates && (
+                {canCreateTemplates && (
                   <Button onClick={() => navigate("/nginx-templates/new")}>
                     <Plus className="h-4 w-4" />
                     Create Template
@@ -315,8 +318,8 @@ export function NginxTemplates({
           emptyState={
             <EmptyState
               message="No config templates."
-              actionLabel={canManageTemplates ? "Create one" : undefined}
-              actionHref={canManageTemplates ? "/nginx-templates/new" : undefined}
+              actionLabel={canCreateTemplates ? "Create one" : undefined}
+              actionHref={canCreateTemplates ? "/nginx-templates/new" : undefined}
               hasActiveFilters={search !== ""}
               onReset={() => setSearch("")}
             />

@@ -6,6 +6,8 @@ export const CreateRootCASchema = z.object({
   validityYears: z.number().int().min(1).max(30),
   pathLengthConstraint: z.number().int().min(0).optional(),
   maxValidityDays: z.number().int().min(1).max(3650).default(365),
+  /** Destination CA folder; needs pki:ca:edit there, like moving the root CA into it. */
+  folderId: z.string().uuid().nullable().optional(),
 });
 
 export const CreateIntermediateCASchema = z.object({
@@ -14,6 +16,8 @@ export const CreateIntermediateCASchema = z.object({
   validityYears: z.number().int().min(1).max(20),
   pathLengthConstraint: z.number().int().min(0).optional(),
   maxValidityDays: z.number().int().min(1).max(3650).default(365),
+  /** An intermediate CA is listed in the folder of its root CA; when given, it must be that folder. */
+  folderId: z.string().uuid().nullable().optional(),
 });
 
 export const RevokeCASchema = z.object({

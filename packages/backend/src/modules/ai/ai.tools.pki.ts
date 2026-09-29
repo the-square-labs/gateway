@@ -63,6 +63,11 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
             'Max depth of CA chain below this CA. 0 = can only issue end-entity certs, 1 = one level of intermediates, etc. Omit for unlimited.',
         },
         maxValidityDays: { type: 'number', description: 'Max validity for issued certs in days (default: 825)' },
+        folderId: {
+          type: ['string', 'null'],
+          description:
+            'Destination CA folder UUID (list_resource_folders pki_cas); needs pki:ca:edit on that folder, like moving the root CA there.',
+        },
       },
       required: ['commonName', 'keyAlgorithm', 'validityYears'],
     },
@@ -91,6 +96,11 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
             'Max depth of CA chain below this CA. 0 = can only issue end-entity certs. Omit to auto-derive from parent.',
         },
         maxValidityDays: { type: 'number', description: 'Max validity for issued certs in days' },
+        folderId: {
+          type: ['string', 'null'],
+          description:
+            'Optional. An intermediate CA is listed in the folder of its root CA; when given, it must be that folder (move the root CA to change it).',
+        },
       },
       required: ['parentCaId', 'commonName', 'keyAlgorithm', 'validityYears'],
     },
@@ -210,6 +220,11 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
             'Subject Alternative Names as plain values WITHOUT type prefix. Examples: "example.com", "*.example.com", "10.0.0.1". Do NOT use "DNS:" or "IP:" prefixes.',
         },
         templateId: { type: 'string', description: 'Optional template UUID to use' },
+        folderId: {
+          type: ['string', 'null'],
+          description:
+            'Destination certificate folder UUID (list_resource_folders pki_certificates); needs pki:cert:folders:manage.',
+        },
         subjectDnFields: {
           type: 'object',
           properties: {
@@ -307,7 +322,14 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
       'Create a new certificate template with predefined settings. Fields match the template API: certType (alias type), keyUsage, extKeyUsage (alias extendedKeyUsage), SAN requirements, subject DN defaults, CRL distribution points, AIA, certificate policies, and custom extensions.',
     parameters: {
       type: 'object',
-      properties: templateProperties(),
+      properties: {
+        ...templateProperties(),
+        folderId: {
+          type: ['string', 'null'],
+          description:
+            'Destination template folder UUID (list_resource_folders pki_templates); needs pki:templates:folders:manage.',
+        },
+      },
       required: ['name', 'keyAlgorithm', 'validityDays'],
     },
     destructive: true,

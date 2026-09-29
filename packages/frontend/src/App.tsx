@@ -16,6 +16,7 @@ import { RequireScope } from "@/components/common/RequireScope";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { Button } from "@/components/ui/button";
+import { hasCreationDestination } from "@/lib/creation-folders";
 import { hasDashboardContent } from "@/lib/app-navigation";
 import { getLoginRedirectUrl } from "@/lib/auth-return-to";
 import { resolveMigrationTarget } from "@/lib/docker-migration-navigation";
@@ -619,12 +620,13 @@ function NginxTemplateEditGuard() {
   const { id } = useParams<{ id?: string }>();
   const hasScope = useAuthStore((s) => s.hasScope);
 
-  // Same grants as the template write routes: broad manage creates, manage:<id> edits.
+  const scopes = useAuthStore((s) => s.user?.scopes);
+  // Same grants as the template write routes: manage broadly or on a folder creates, manage:<id> edits.
   if (id) {
     if (!hasScope(`proxy:templates:manage:${id}`)) {
       return <Navigate to="/" replace />;
     }
-  } else if (!hasScope("proxy:templates:manage")) {
+  } else if (!hasCreationDestination(scopes ?? [], "proxy:templates:manage")) {
     return <Navigate to="/" replace />;
   }
 

@@ -1,9 +1,10 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { ContentLoading } from "@/components/common/ContentLoading";
+import { CreateFolderSelect } from "@/components/common/CreateFolderSelect";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
@@ -25,11 +26,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { flattenCreationFolders, placementFolderChoices } from "@/lib/creation-folders";
 import { formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { handleLicenseApiError } from "@/stores/license-paywall";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { CertificateType, KeyAlgorithm, Template } from "@/types";
 
 const STEP_ANIMATION = {
@@ -71,6 +74,23 @@ export function CertificateIssueDialog({
   const [dnO, setDnO] = useState("");
   const [dnOu, setDnOu] = useState("");
   const [dnC, setDnC] = useState("");
+  const [folderId, setFolderId] = useState("");
+  const certificateFolders = useResourceFolderStore(
+    (state) => state.foldersByType["pki-certificate"]
+  );
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType["pki-certificate"]);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  // Issuing needs pki:cert:issue on the CA; placing the certificate in a folder needs what moving
+  // it there needs, pki:cert:folders:manage.
+  const canPlaceInFolder = hasScope("pki:cert:folders:manage");
+  const folderChoices = useMemo(
+    () =>
+      placementFolderChoices(
+        flattenCreationFolders(certificateFolders ?? []),
+        () => canPlaceInFolder
+      ),
+    [canPlaceInFolder, certificateFolders]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -84,6 +104,8 @@ export function CertificateIssueDialog({
         if (!cancelled) setTemplates((current) => current ?? []);
       });
     setStep(1);
+    setFolderId("");
+    void fetchFolders("pki-certificate");
     setSelectedCAId(caId || "");
     setSelectedTemplateId("");
     setCommonName("");
@@ -93,7 +115,7 @@ export function CertificateIssueDialog({
       cancelled = true;
       setTemplates(null);
     };
-  }, [open, caId]);
+  }, [open, caId, fetchFolders]);
 
   // The CA select needs the CA list; load it when nothing has loaded it yet.
   useEffect(() => {
@@ -148,6 +170,7 @@ export function CertificateIssueDialog({
         keyAlgorithm,
         ...(validityOutlivesCA ? { clampToCaValidity: true } : {}),
         ...(Object.keys(subjectDnFields).length > 0 ? { subjectDnFields } : {}),
+        folderId: folderId || null,
       });
       toast.success(`Certificate issued for ${commonName}`);
       onOpenChange(false);
@@ -217,6 +240,19 @@ export function CertificateIssueDialog({
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="certificate-issue-folder" className="text-sm font-medium">
+                    Folder
+                  </label>
+                  <CreateFolderSelect
+                    id="certificate-issue-folder"
+                    choices={folderChoices}
+                    value={folderId}
+                    onChange={setFolderId}
+                    loading={foldersLoading}
+                  />
                 </div>
 
                 {templates && templates.length > 0 && (

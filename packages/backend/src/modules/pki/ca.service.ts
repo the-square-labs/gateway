@@ -145,6 +145,7 @@ export class CAService {
         notBefore,
         notAfter,
         createdById: userId,
+        folderId: input.folderId ?? null,
       })
       .returning();
 

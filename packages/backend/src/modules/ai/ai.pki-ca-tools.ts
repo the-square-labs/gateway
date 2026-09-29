@@ -12,6 +12,7 @@ import {
 } from '@/modules/pki/ca.schemas.js';
 import type { CAService } from '@/modules/pki/ca.service.js';
 import { ExportService } from '@/modules/pki/export.service.js';
+import { CAFolderService } from '@/modules/pki/pki-folders.service.js';
 import type { User } from '@/types.js';
 import { caTypeRevokeScope, caViewScope } from './ai.service-helpers.js';
 
@@ -60,10 +61,12 @@ export async function executePkiCaTool(
     }
     case 'create_root_ca': {
       const rootCaInput = CreateRootCASchema.parse(args);
+      await container.resolve(CAFolderService).assertRootCreateFolder(user.scopes, rootCaInput.folderId);
       return context.caService.createRootCA(rootCaInput, user.id);
     }
     case 'create_intermediate_ca': {
       const intCaInput = CreateIntermediateCASchema.parse(args);
+      await container.resolve(CAFolderService).assertIntermediateCreateFolder(a.parentCaId, intCaInput.folderId);
       return context.caService.createIntermediateCA(a.parentCaId, intCaInput, user.id);
     }
     case 'delete_ca': {

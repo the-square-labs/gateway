@@ -19,6 +19,8 @@ export const IssueCertificateSchema = z.object({
       c: z.string().max(2).optional(),
     })
     .optional(),
+  /** Destination certificate folder; needs pki:cert:folders:manage, like moving the certificate there. */
+  folderId: z.string().uuid().nullable().optional(),
 });
 
 export const IssueCertFromCSRSchema = z.object({
@@ -30,6 +32,8 @@ export const IssueCertFromCSRSchema = z.object({
   overrideSans: z.array(z.string()).optional(),
   /** End the certificate with its CA when the requested validity would outlive it (instead of failing). */
   clampToCaValidity: z.boolean().optional(),
+  /** Destination certificate folder; needs pki:cert:folders:manage, like moving the certificate there. */
+  folderId: z.string().uuid().nullable().optional(),
 });
 
 export const RevokeCertificateSchema = z.object({

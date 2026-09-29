@@ -1,4 +1,6 @@
+import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { PkiTemplateFolderService } from '@/modules/pki/pki-folders.service.js';
 import { CreateTemplateSchema, UpdateTemplateSchema } from '@/modules/pki/templates.schemas.js';
 import type { TemplatesService } from '@/modules/pki/templates.service.js';
 import type { User } from '@/types.js';
@@ -53,12 +55,17 @@ export async function executePkiTemplateTool(
     case 'list_templates':
       context.ensureToolScope(user, 'pki:templates:view');
       return context.templatesService.listTemplates();
-    case 'create_template':
+    case 'create_template': {
       context.ensureToolScope(user, 'pki:templates:create');
-      return context.templatesService.createTemplate(
-        CreateTemplateSchema.parse({ keyUsage: [], extKeyUsage: [], ...definedFields(templateFields(a)) }),
-        user.id
-      );
+      const input = CreateTemplateSchema.parse({
+        keyUsage: [],
+        extKeyUsage: [],
+        ...definedFields(templateFields(a)),
+        ...(a.folderId !== undefined ? { folderId: a.folderId } : {}),
+      });
+      await container.resolve(PkiTemplateFolderService).assertCreateFolder(user.scopes, input.folderId);
+      return context.templatesService.createTemplate(input, user.id);
+    }
     case 'delete_template':
       context.ensureToolScope(user, 'pki:templates:delete');
       await context.templatesService.deleteTemplate(a.templateId);

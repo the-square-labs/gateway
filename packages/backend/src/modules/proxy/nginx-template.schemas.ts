@@ -17,6 +17,8 @@ export const CreateNginxTemplateSchema = z.object({
   type: z.enum(['proxy', 'redirect', '404']),
   content: z.string().min(1).max(100000),
   variables: z.array(TemplateVariableDefSchema).default([]),
+  /** Destination folder; needs proxy:templates:manage there (broadly or as a folder grant). */
+  folderId: z.string().uuid().nullable().optional(),
 });
 
 export const UpdateNginxTemplateSchema = z.object({

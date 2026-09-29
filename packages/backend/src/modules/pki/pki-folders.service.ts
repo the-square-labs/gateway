@@ -8,7 +8,7 @@ import {
   pkiCertificateFolders,
   pkiTemplateFolders,
 } from '@/db/schema/index.js';
-import { hasScopeForResource } from '@/lib/permissions.js';
+import { hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type {
@@ -17,7 +17,7 @@ import type {
   ReorderResourcesInput,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import { FolderedResourceService, type FolderMoveAccess } from '@/modules/resource-folders/resource-folder.service.js';
-import { rootCaIds } from './ca-folder-placement.js';
+import { rootCaIds, rootFolderId } from './ca-folder-placement.js';
 
 type FolderTreeOptions = Parameters<FolderedResourceService['getFolderTree']>[0];
 
@@ -39,6 +39,41 @@ export class CAFolderService extends FolderedResourceService {
       auditResourceType: 'pki_ca_folder',
       eventName: 'ca.folder.changed',
     });
+  }
+
+  /**
+   * A new root CA in a folder needs what moving a root CA there needs: pki:ca:edit on the destination
+   * (broadly or as a folder grant). The folder must be a CA folder.
+   */
+  async assertRootCreateFolder(scopes: readonly string[], folderId: string | null | undefined) {
+    if (!folderId) return;
+    if (!hasScopeForCreation(scopes, 'pki:ca:edit', folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing pki:ca:edit for the destination folder');
+    }
+    await this.assertFolderExists(folderId);
+  }
+
+  /** An intermediate CA follows its root: a folder given on create must be the folder of that root. */
+  async assertIntermediateCreateFolder(parentId: string, folderId: string | null | undefined) {
+    if (folderId === undefined) return;
+    const [parent] = await this.database
+      .select({
+        id: certificateAuthorities.id,
+        parentId: certificateAuthorities.parentId,
+        folderId: certificateAuthorities.folderId,
+      })
+      .from(certificateAuthorities)
+      .where(eq(certificateAuthorities.id, parentId))
+      .limit(1);
+    // A missing parent is answered by the create itself.
+    if (!parent) return;
+    if ((await rootFolderId(this.database, parent)) !== (folderId ?? null)) {
+      throw new AppError(
+        400,
+        'PKI_CA_NOT_ROOT',
+        'An intermediate CA is placed in the folder of its root CA; move the root CA instead'
+      );
+    }
   }
 
   override async moveResourcesToFolder(input: MoveResourcesToFolderInput, userId: string) {
@@ -104,6 +139,18 @@ export class CertificateFolderService extends FolderedResourceService {
       auditResourceType: 'pki_certificate_folder',
       eventName: 'cert.folder.changed',
     });
+  }
+
+  /**
+   * PKI certificates have no folder-qualified issue grant, so placing a new certificate in a folder needs
+   * what moving it there needs: pki:cert:folders:manage (issuing from the CA is checked by the issue route).
+   */
+  async assertCreateFolder(scopes: readonly string[], folderId: string | null | undefined) {
+    if (!folderId) return;
+    if (!hasScope([...scopes], 'pki:cert:folders:manage')) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: pki:cert:folders:manage');
+    }
+    await this.assertFolderExists(folderId);
   }
 
   /** Issuing CA of each certificate; 404 when one does not exist. */
@@ -195,6 +242,15 @@ export class PkiTemplateFolderService extends FolderedResourceService {
       auditResourceType: 'pki_template_folder',
       eventName: 'pki.template.folder.changed',
     });
+  }
+
+  /** Templates are not folder-scopable: placing a new one needs pki:templates:folders:manage, like a move. */
+  async assertCreateFolder(scopes: readonly string[], folderId: string | null | undefined) {
+    if (!folderId) return;
+    if (!hasScope([...scopes], 'pki:templates:folders:manage')) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: pki:templates:folders:manage');
+    }
+    await this.assertFolderExists(folderId);
   }
 
   override async moveResourcesToFolder(input: MoveResourcesToFolderInput, userId: string) {

@@ -5,7 +5,6 @@ import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
-  requireScope,
   requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
@@ -49,7 +48,8 @@ registerResourceFolderRoutes(nginxTemplateRoutes, {
 });
 
 // Template content is written under proxy:templates:manage (manual approval for
-// programmatic callers). Broad manage creates templates; `manage:<id>` edits,
+// programmatic callers). Broad manage creates templates anywhere, `manage:folder/<id>` in that
+// folder; `manage:<id>` edits,
 // tests and deletes that template.
 // List all nginx templates
 nginxTemplateRoutes.openapi(
@@ -79,12 +79,14 @@ nginxTemplateRoutes.openapi(
 
 // Create template
 nginxTemplateRoutes.openapi(
-  { ...createNginxTemplateRoute, middleware: requireScope('proxy:templates:manage') },
+  { ...createNginxTemplateRoute, middleware: requireScopeBase('proxy:templates:manage') },
   async (c) => {
     const service = container.resolve(NginxTemplateService);
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = CreateNginxTemplateSchema.parse(body);
+    // Broad manage creates anywhere; `manage:folder/<id>` creates in that folder only.
+    await container.resolve(NginxTemplateFolderService).assertCreateFolder(c.get('effectiveScopes') ?? [], input.folderId);
     const template = await service.createTemplate(input, user.id);
     return c.json({ data: template }, 201);
   }

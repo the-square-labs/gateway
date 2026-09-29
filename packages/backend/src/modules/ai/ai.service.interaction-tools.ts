@@ -196,10 +196,13 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           this.ensureToolScopeForResource(user, 'proxy:templates:view', String(a.templateId));
           return templateService.getTemplate(a.templateId);
         }
-        // Template content writes need proxy:templates:manage: broad to create, on the template to change it.
+        // Template content writes need proxy:templates:manage: on the destination to create, on the template to change it.
         if (a.operation === 'create') {
-          this.ensureToolScope(user, 'proxy:templates:manage');
-          return templateService.createTemplate(CreateNginxTemplateSchema.parse(args), user.id);
+          // Mirrors POST /nginx-templates: broad manage, or manage on the destination folder.
+          const input = CreateNginxTemplateSchema.parse(args);
+          const { NginxTemplateFolderService } = await import('@/modules/proxy/nginx-template-folders.service.js');
+          await container.resolve(NginxTemplateFolderService).assertCreateFolder(user.scopes, input.folderId);
+          return templateService.createTemplate(input, user.id);
         }
         if (a.operation === 'update') {
           this.ensureToolScopeForResource(user, 'proxy:templates:manage', String(a.templateId));

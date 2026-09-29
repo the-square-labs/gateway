@@ -220,6 +220,7 @@ export class CertService {
       .values({
         caId: input.caId,
         templateId: input.templateId,
+        folderId: input.folderId ?? null,
         type: input.type,
         commonName: input.commonName,
         sans: input.sans,
@@ -373,6 +374,7 @@ export class CertService {
       .values({
         caId: input.caId,
         templateId: input.templateId,
+        folderId: input.folderId ?? null,
         type: input.type,
         commonName,
         sans,

@@ -72,3 +72,19 @@ export function hasCreationDestination(scopes: readonly string[], baseScope: str
     )
   );
 }
+
+/**
+ * Destinations for resources whose creation needs no folder right (the create scope is broad or names
+ * another resource) while placing them in a folder needs the move rule of their folder family:
+ * the root is always offered, a folder only when `canPlace` allows it.
+ */
+export function placementFolderChoices(
+  folders: readonly CreationFolderOption[],
+  canPlace: (folderId: string) => boolean
+): CreationFolderChoices {
+  return {
+    allowRoot: true,
+    folders: folders.filter((folder) => canPlace(folder.id)),
+    defaultFolderId: "",
+  };
+}
