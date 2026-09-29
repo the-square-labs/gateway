@@ -232,7 +232,7 @@ export function UserAdditionalPermissionsDialog({
         <DialogHeader>
           <DialogTitle>Additional Permissions</DialogTitle>
           <p className="text-sm text-muted-foreground">
-            {displayedUser?.name || displayedUser?.email} receives these permissions in addition to
+            {displayedUser?.name || displayedUser?.email} receives these permissions in addition to{" "}
             {displayedUser?.groupIds && displayedUser.groupIds.length > 1
               ? `${displayedUser.groupIds.length} groups`
               : `the ${displayedUser?.groupName} group`}
