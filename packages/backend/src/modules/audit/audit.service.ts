@@ -45,6 +45,8 @@ import type { SiemAuditOutboxService } from './siem-outbox.service.js';
 
 const logger = createChildLogger('AuditService');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** Any value Postgres accepts for the uuid actor column. */
+const ACTOR_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface AuditEntry {
   userId: string | null;
@@ -120,7 +122,14 @@ export class AuditService {
     try {
       const requestContext = getAuditRequestContext();
       const impersonation = requestContext?.impersonation;
-      const actorUserId = impersonation?.actorUserId ?? entry.userId;
+      const requestedActorId = impersonation?.actorUserId ?? entry.userId;
+      // System actions are rows without a user (userId null). One that names its actor instead ('system', a job
+      // name) must not lose its row to the uuid column (22P02, N-26): it is stored as a system action and the name
+      // kept in details.
+      const invalidActorId =
+        typeof requestedActorId === 'string' && !ACTOR_ID_RE.test(requestedActorId) ? requestedActorId : null;
+      const actorUserId = invalidActorId === null ? requestedActorId : null;
+      const entryDetails = invalidActorId === null ? entry.details : { ...entry.details, actor: invalidActorId };
       const id = randomUUID();
       const now = new Date();
       const createdAt =
@@ -151,7 +160,7 @@ export class AuditService {
         details:
           mcpDetails || impersonation
             ? {
-                ...entry.details,
+                ...entryDetails,
                 ...mcpDetails,
                 ...(impersonation
                   ? {
@@ -161,7 +170,7 @@ export class AuditService {
                     }
                   : {}),
               }
-            : entry.details,
+            : entryDetails,
         ipAddress,
         userAgent: entry.userAgent ?? requestContext?.userAgent,
         createdAt,
