@@ -2,29 +2,63 @@ package connector
 
 import (
 	"context"
+	"math"
 	"net"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// relayRestartFailedAttempts is how many reconnect attempts fail while the relay is away before it listens again.
+const relayRestartFailedAttempts = 3
+
 // TestReconnectParamsBringALaneBackRightAfterARelayRestart is C-3: a relay restart (an update recreates the local
 // relay) drops every lane's transport; the lanes keep their ClientConn and grpc reconnects them on its own. The relay
-// is back 1.5 s later on the same address; the lane must be ready again within a few hundred ms of that, where grpc's
-// default backoff (1 s growing by 1.6) would next try about 1 s later.
+// comes back after a few failed reconnect attempts; grpc then waits out its current backoff before trying again. With
+// grpc's default backoff (1 s growing by 1.6) that wait is already more than 2 s after the third failure; the lane
+// must be ready well before the earliest moment the default backoff could even try again.
+//
+// The relay is counted down in failed attempts rather than a fixed outage: after a wall-clock outage the lane could
+// have failed just before the relay came back and be anywhere inside its current backoff, which made the time to
+// ready depend on that phase instead of the backoff configured here.
 func TestReconnectParamsBringALaneBackRightAfterARelayRestart(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	var relayAddress atomic.Pointer[string]
+	failedAttempts := make(chan time.Time, 64)
+	dialRelay := func(ctx context.Context, _ string) (net.Conn, error) {
+		address := relayAddress.Load()
+		if address == nil {
+			select {
+			case failedAttempts <- time.Now():
+			default:
+			}
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+		}
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "tcp", *address)
 	}
-	address := listener.Addr().String()
-	relay := grpc.NewServer()
-	go func() { _ = relay.Serve(listener) }()
+	listenRelay := func() *grpc.Server {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		relay := grpc.NewServer()
+		go func() { _ = relay.Serve(listener) }()
+		address := listener.Addr().String()
+		relayAddress.Store(&address)
+		return relay
+	}
 
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithConnectParams(ReconnectParams))
+	relay := listenRelay()
+	conn, err := grpc.NewClient("passthrough:///relay",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(dialRelay),
+		grpc.WithConnectParams(ReconnectParams))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,33 +69,51 @@ func TestReconnectParamsBringALaneBackRightAfterARelayRestart(t *testing.T) {
 		t.Fatalf("first connect: %v", err)
 	}
 
+	relayAddress.Store(nil)
 	relay.Stop()
 	// The lane's registrations keep retrying while the relay is away, which keeps grpc connecting.
-	deadline := time.Now().Add(1500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if conn.GetState() == connectivity.Idle {
-			conn.Connect()
+	laneCtx, stopLane := context.WithCancel(ctx)
+	defer stopLane()
+	go func() {
+		for state := conn.GetState(); ; state = conn.GetState() {
+			if state == connectivity.Idle {
+				conn.Connect()
+			}
+			if !conn.WaitForStateChange(laneCtx, state) {
+				return
+			}
 		}
-		time.Sleep(20 * time.Millisecond)
+	}()
+	var lastFailure time.Time
+	for failures := 0; failures < relayRestartFailedAttempts; failures++ {
+		select {
+		case lastFailure = <-failedAttempts:
+		case <-ctx.Done():
+			t.Fatalf("grpc made %d reconnect attempts while the relay was away, want %d", failures, relayRestartFailedAttempts)
+		}
 	}
-	restarted, err := net.Listen("tcp", address)
-	if err != nil {
-		t.Skipf("the relay address was taken meanwhile: %v", err)
-	}
-	next := grpc.NewServer()
-	go func() { _ = next.Serve(restarted) }()
-	defer next.Stop()
-	back := time.Now()
 
-	for state := conn.GetState(); state != connectivity.Ready; state = conn.GetState() {
-		if state == connectivity.Idle {
-			conn.Connect()
-		}
-		if !conn.WaitForStateChange(ctx, state) {
-			t.Fatalf("the lane did not reconnect: %v", ctx.Err())
-		}
+	next := listenRelay()
+	defer next.Stop()
+	if err := waitUntilReady(ctx, conn); err != nil {
+		t.Fatalf("the lane did not reconnect: %v", err)
 	}
-	if elapsed := time.Since(back); elapsed > time.Second {
-		t.Fatalf("lane ready %s after the relay listened again, want a few hundred ms", elapsed)
+	elapsed := time.Since(lastFailure)
+	// grpc starts the backoff timer only after an attempt failed, so with its defaults the next attempt cannot come
+	// before this bound, however fast the machine is; the configured backoff is several times shorter.
+	defaultEarliest := backoffLowerBound(backoff.DefaultConfig, relayRestartFailedAttempts-1)
+	if elapsed >= defaultEarliest {
+		t.Fatalf("lane ready %s after its last failed attempt, want within the configured backoff (at most %s), well before grpc's default backoff could retry (%s)",
+			elapsed, backoffUpperBound(ReconnectParams.Backoff, relayRestartFailedAttempts-1), defaultEarliest)
 	}
+}
+
+// backoffLowerBound and backoffUpperBound bound grpc's wait before the reconnect attempt that follows retries+1
+// consecutive failures.
+func backoffLowerBound(config backoff.Config, retries int) time.Duration {
+	return time.Duration(float64(config.BaseDelay) * math.Pow(config.Multiplier, float64(retries)) * (1 - config.Jitter))
+}
+
+func backoffUpperBound(config backoff.Config, retries int) time.Duration {
+	return time.Duration(float64(config.BaseDelay) * math.Pow(config.Multiplier, float64(retries)) * (1 + config.Jitter))
 }
