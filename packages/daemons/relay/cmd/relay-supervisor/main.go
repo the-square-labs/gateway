@@ -109,7 +109,7 @@ func main() {
 		}
 	}
 	if err != nil {
-		logger.Error("relay supervisor stopped", "error", err)
+		lifecycle.LogDaemonExit(logger, "relay supervisor stopped", err)
 		os.Exit(lifecycle.DaemonExitCode(err))
 	}
 }
