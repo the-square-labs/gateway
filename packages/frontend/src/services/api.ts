@@ -17,6 +17,7 @@ import type {
   PaginatedResponse,
   PermissionGroup,
   ResourceSearchResponse,
+  SystemConfig,
   UIBootstrapShell,
   User,
 } from "@/types";
@@ -214,13 +215,19 @@ class ApiClient extends withIngressGroupsApi(
         this.listDatabases({ limit: 200 }).then((result) => result.data)
       )
     );
+    // Without a logging backend the lists answer 503; the Logging pages load them on demand.
+    const loggingEnabled =
+      this.getCached<SystemConfig>("system:config", Number.POSITIVE_INFINITY)?.features
+        ?.loggingEnabled === true;
     add(
-      licensed("structured-logging") && auth.hasScopedAccess("logs:environments:view"),
+      loggingEnabled &&
+        licensed("structured-logging") &&
+        auth.hasScopedAccess("logs:environments:view"),
       "logging-environments",
       cache("logging:environments", () => this.listLoggingEnvironments())
     );
     add(
-      licensed("structured-logging") && auth.hasScopedAccess("logs:schemas:view"),
+      loggingEnabled && licensed("structured-logging") && auth.hasScopedAccess("logs:schemas:view"),
       "logging-schemas",
       cache("logging:schemas", () => this.listLoggingSchemas())
     );
