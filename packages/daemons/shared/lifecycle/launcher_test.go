@@ -434,7 +434,7 @@ func writeControlAwareLauncherTestExecutable(t *testing.T, path, version string,
 		"esac\n" +
 		`printf '%s\n' '{"type":"local_ready","version":"` + version + `","awaitControl":true}' >"/dev/fd/$GATEWAY_DAEMON_LAUNCHER_READY_FD"` + "\n" +
 		controlLine +
-		"trap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n"
+		"trap 'exit 0' TERM INT\n" + launcherTestIdleLoop
 	if err := os.WriteFile(path, []byte(contents), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -541,6 +541,11 @@ func useFastLauncherTimings() func() {
 	}
 }
 
+// launcherTestIdleLoop keeps a test daemon running. Like a real daemon, which marks the ready pipe (fd 3) and the owner
+// lock (fd 4) close-on-exec before it spawns anything, it keeps both out of its workers: a sleep that inherited the lock
+// could outlive a SIGKILLed shell and hold the lock after the launcher already saw the child exit.
+const launcherTestIdleLoop = "while :; do sleep 1 3>&- 4>&-; done\n"
+
 func writeLauncherTestExecutable(t *testing.T, path, version string, ready bool) {
 	t.Helper()
 	writeLauncherTestExecutableWithMarker(t, path, version, ready, "")
@@ -568,7 +573,7 @@ func writeLauncherTestExecutableWithMarker(t *testing.T, path, version string, r
 		}
 		return "exit 2"
 	}() + " ;;\n" +
-		"esac\n" + readyLine + "\n" + trapLine + "\nwhile :; do sleep 1; done\n"
+		"esac\n" + readyLine + "\n" + trapLine + "\n" + launcherTestIdleLoop
 	if err := os.WriteFile(path, []byte(contents), 0755); err != nil {
 		t.Fatal(err)
 	}
