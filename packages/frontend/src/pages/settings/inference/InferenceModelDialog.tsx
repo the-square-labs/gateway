@@ -248,7 +248,10 @@ export function InferenceModelDialog({
                 remoteModelId={remoteModelId}
                 editingModelKey={
                   editing?.sources[0]
-                    ? providerModelKey(editing.sources[0].providerId, editing.sources[0].upstreamModelId)
+                    ? providerModelKey(
+                        editing.sources[0].providerId,
+                        editing.sources[0].upstreamModelId
+                      )
                     : null
                 }
                 selected={selected}

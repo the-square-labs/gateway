@@ -68,9 +68,9 @@ export function ModelGeneralFields({
   );
   const providers = useMemo(
     () =>
-      [...new Map(options.map((option) => [option.providerId, option.providerLabel])).entries()].map(
-        ([id, label]) => ({ id, label })
-      ),
+      [
+        ...new Map(options.map((option) => [option.providerId, option.providerLabel])).entries(),
+      ].map(([id, label]) => ({ id, label })),
     [options]
   );
   const models = useMemo(
@@ -214,7 +214,10 @@ export function ModelGeneralFields({
                         ? field.optional
                           ? "Optional; not reported by the provider"
                           : "Not reported by the provider; enter a value to continue"
-                        : detectedDescription(selected.metadataSources[field.key], field.editableWhenDetected)
+                        : detectedDescription(
+                            selected.metadataSources[field.key],
+                            field.editableWhenDetected
+                          )
                   }
                   help={
                     field.key === "autoCompactTokenLimit"

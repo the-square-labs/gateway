@@ -516,7 +516,9 @@ describe("InferenceModelDialog", () => {
     expect(screen.getByRole("spinbutton", { name: "Maximum output tokens" })).toHaveValue(128_000);
     expect(screen.getByRole("spinbutton", { name: "Auto-compaction limit" })).toHaveValue(244_800);
     expect(screen.getByText("Reported by the provider API; may be overridden")).toBeInTheDocument();
-    expect(screen.getByText("Not reported by the provider; built-in catalog value")).toBeInTheDocument();
+    expect(
+      screen.getByText("Not reported by the provider; built-in catalog value")
+    ).toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: "Context window" })).not.toHaveAttribute(
       "readonly"
     );
@@ -666,7 +668,9 @@ describe("InferenceModelDialog", () => {
     await user.click(screen.getByRole("combobox", { name: "Upstream model" }));
     expect(screen.queryByRole("button", { name: "Claude Sonnet 4.5" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Claude Sonnet 5.5" }));
-    expect(screen.getAllByText("Calculated from limits reported by the provider; may be overridden")).toHaveLength(2);
+    expect(
+      screen.getAllByText("Calculated from limits reported by the provider; may be overridden")
+    ).toHaveLength(2);
     expect(screen.getByText("Reported by the provider API; may be overridden")).toBeInTheDocument();
 
     const editing = {

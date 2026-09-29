@@ -233,7 +233,9 @@ export function parseCoreModelRows(body: unknown): CoreModelRow[] {
       ...(row.disabled === true ? { disabled: true } : {}),
       ...(typeof row.contextWindow === 'number' ? { contextWindow: row.contextWindow } : {}),
       ...(typeof row.maxInputTokens === 'number' ? { maxInputTokens: row.maxInputTokens } : {}),
-      ...(typeof row.autoCompactTokenLimit === 'number' && Number.isSafeInteger(row.autoCompactTokenLimit) && row.autoCompactTokenLimit > 0
+      ...(typeof row.autoCompactTokenLimit === 'number' &&
+      Number.isSafeInteger(row.autoCompactTokenLimit) &&
+      row.autoCompactTokenLimit > 0
         ? { autoCompactTokenLimit: row.autoCompactTokenLimit }
         : {}),
       ...(typeof row.maxOutputTokens === 'number' ? { maxOutputTokens: row.maxOutputTokens } : {}),

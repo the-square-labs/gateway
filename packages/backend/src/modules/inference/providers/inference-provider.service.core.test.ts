@@ -408,9 +408,11 @@ describe('inference provider service — core-managed delegation', () => {
     const { service, db } = createService({
       client: {
         listCoreProviders: vi.fn().mockResolvedValue([{ name: 'anthropic', hasApiKey: false }]),
-        listCoreModels: vi.fn().mockResolvedValue([
-          { provider: 'anthropic', id: 'claude-sonnet-5-5', namespaced: 'anthropic/claude-sonnet-5-5' },
-        ]),
+        listCoreModels: vi
+          .fn()
+          .mockResolvedValue([
+            { provider: 'anthropic', id: 'claude-sonnet-5-5', namespaced: 'anthropic/claude-sonnet-5-5' },
+          ]),
         coreProviderLiveModels: vi.fn().mockResolvedValue([
           {
             id: 'claude-sonnet-5-5',
@@ -455,13 +457,23 @@ describe('inference provider service — core-managed delegation', () => {
   });
 
   it('keeps core limits over live values and namespaces live-only subscription models', async () => {
-    const connection = { ...CORE_CONNECTION, providerId: 'anthropic', authType: 'oauth', baseUrl: 'https://api.anthropic.com' };
+    const connection = {
+      ...CORE_CONNECTION,
+      providerId: 'anthropic',
+      authType: 'oauth',
+      baseUrl: 'https://api.anthropic.com',
+    };
     const { service, db } = createService({
       client: {
         listCoreProviders: vi.fn().mockResolvedValue([{ name: 'anthropic', hasApiKey: false }]),
         // An operator context cap narrowed core's window below the provider's answer.
         listCoreModels: vi.fn().mockResolvedValue([
-          { provider: 'anthropic', id: 'claude-sonnet-5-5', namespaced: 'anthropic/claude-sonnet-5-5', contextWindow: 400_000 },
+          {
+            provider: 'anthropic',
+            id: 'claude-sonnet-5-5',
+            namespaced: 'anthropic/claude-sonnet-5-5',
+            contextWindow: 400_000,
+          },
         ]),
         coreProviderLiveModels: vi.fn().mockResolvedValue([
           { id: 'claude-sonnet-5-5', contextWindow: 1_000_000, maxOutputTokens: 128_000 },
@@ -493,13 +505,14 @@ describe('inference provider service — core-managed delegation', () => {
   it('does not publish live-only models on an API-key connection', async () => {
     const { service, db } = createService({
       client: {
-        listCoreModels: vi.fn().mockResolvedValue([
-          { provider: 'core-conn-1', id: 'gpt-5.5', namespaced: 'core-conn-1/gpt-5.5', contextWindow: 272_000 },
-        ]),
-        coreProviderLiveModels: vi.fn().mockResolvedValue([
-          { id: 'gpt-5.5', maxOutputTokens: 128_000 },
-          { id: 'text-embedding-3-large' },
-        ]),
+        listCoreModels: vi
+          .fn()
+          .mockResolvedValue([
+            { provider: 'core-conn-1', id: 'gpt-5.5', namespaced: 'core-conn-1/gpt-5.5', contextWindow: 272_000 },
+          ]),
+        coreProviderLiveModels: vi
+          .fn()
+          .mockResolvedValue([{ id: 'gpt-5.5', maxOutputTokens: 128_000 }, { id: 'text-embedding-3-large' }]),
       },
     });
     db.query.inferenceProviderConnections.findFirst.mockResolvedValue(CORE_CONNECTION);
@@ -510,7 +523,11 @@ describe('inference provider service — core-managed delegation', () => {
 
     await service.syncConnection('conn-1', true);
 
-    const persisted = persistModels.mock.calls[0]?.[1] as Array<{ id: string; maxOutputTokens?: number; metadata: Record<string, unknown> }>;
+    const persisted = persistModels.mock.calls[0]?.[1] as Array<{
+      id: string;
+      maxOutputTokens?: number;
+      metadata: Record<string, unknown>;
+    }>;
     expect(persisted.map((model) => model.id)).toEqual(['gpt-5.5']);
     expect(persisted[0]).toMatchObject({ maxOutputTokens: 128_000, metadata: { coreModelId: 'core-conn-1/gpt-5.5' } });
   });

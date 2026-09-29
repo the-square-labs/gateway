@@ -39,8 +39,8 @@ import {
   assertApiMonthlyLimitAllowed,
   assertMinimumRemainingAllowed,
   classifyStatus,
-  consistentTokenLimits,
   connectionDisableBlockers,
+  consistentTokenLimits,
   derivedSource,
   type InferenceModelMetadataSource,
   latestQuota,
@@ -602,7 +602,9 @@ export class InferenceProviderService {
               capabilities: sourceOf('capabilities', live?.capabilities, row.capabilities, known?.capabilities),
             }).filter((entry): entry is [string, InferenceModelMetadataSource] => entry[1] !== undefined)
           );
-          const displayName = isIdLike(row.displayName) ? known?.displayName ?? row.id : row.displayName ?? known?.displayName;
+          const displayName = isIdLike(row.displayName)
+            ? (known?.displayName ?? row.id)
+            : (row.displayName ?? known?.displayName);
           const modalities = row.inputModalities ?? known?.modalities ?? ['text'];
           const reportedCapabilities = coreModelCapabilities(row);
           const capabilities = {

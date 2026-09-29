@@ -82,7 +82,10 @@ function commonMetadataSources(bindings: ProviderModelBinding[]) {
   for (const field of METADATA_FIELDS) {
     const values = bindings.map(({ model }) => model.metadataSources?.[field]);
     if (values.includes("fallback")) sources[field] = "fallback";
-    else if (values.length && values.every((value) => value === "provider" || value === "derived")) {
+    else if (
+      values.length &&
+      values.every((value) => value === "provider" || value === "derived")
+    ) {
       sources[field] = values.includes("derived") ? "derived" : "provider";
     }
   }

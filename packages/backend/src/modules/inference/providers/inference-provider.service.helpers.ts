@@ -237,7 +237,9 @@ export function consistentTokenLimits(input: {
 export type InferenceModelMetadataSource = 'provider' | 'fallback' | 'derived';
 
 /** A value calculated from provider data is `derived`; one calculated from catalog data stays `fallback`. */
-export function derivedSource(base: InferenceModelMetadataSource | undefined): InferenceModelMetadataSource | undefined {
+export function derivedSource(
+  base: InferenceModelMetadataSource | undefined
+): InferenceModelMetadataSource | undefined {
   return base === 'fallback' ? 'fallback' : base === undefined ? undefined : 'derived';
 }
 

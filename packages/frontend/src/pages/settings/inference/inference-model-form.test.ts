@@ -27,10 +27,18 @@ describe("inference model form helpers", () => {
     const [option] = buildProviderModelOptions(
       [
         connection("openai", "team-a", [
-          reasoning({ contextWindow: "provider", maxInputTokens: "provider", reasoningEfforts: "provider" }),
+          reasoning({
+            contextWindow: "provider",
+            maxInputTokens: "provider",
+            reasoningEfforts: "provider",
+          }),
         ]),
         connection("openai", "team-b", [
-          reasoning({ contextWindow: "provider", maxInputTokens: "derived", reasoningEfforts: "fallback" }),
+          reasoning({
+            contextWindow: "provider",
+            maxInputTokens: "derived",
+            reasoningEfforts: "fallback",
+          }),
         ]),
       ],
       [provider("openai", "ChatGPT subscription", true)]
@@ -43,7 +51,9 @@ describe("inference model form helpers", () => {
     });
     // One account without live effort levels is enough to hide the pooled subscription model.
     expect(option && hasRequiredModelMetadata(option)).toBe(false);
-    expect(option && hasRequiredModelMetadata({ ...option, providerId: "openai-apikey" })).toBe(true);
+    expect(option && hasRequiredModelMetadata({ ...option, providerId: "openai-apikey" })).toBe(
+      true
+    );
   });
 
   it("groups account bindings only within one provider and upstream model", () => {
