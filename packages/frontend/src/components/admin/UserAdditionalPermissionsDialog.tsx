@@ -2,6 +2,7 @@ import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ContentLoading } from "@/components/common/ContentLoading";
+import { EmptyState } from "@/components/common/EmptyState";
 import { ScopeList } from "@/components/common/ScopeList";
 import { ScopePicker } from "@/components/common/ScopePicker";
 import {
@@ -278,39 +279,49 @@ export function UserAdditionalPermissionsDialog({
           </TabsContent>
 
           <TabsContent value="group" className="border border-border">
-            <ScopeList
-              scopes={TOKEN_SCOPES}
-              search=""
-              selected={groupParsed.baseScopes}
-              onToggle={() => {}}
-              resources={groupParsed.resources}
-              cas={cas}
-              nodes={nodes}
-              proxyHosts={proxyHosts}
-              databases={databases}
-              loggingSchemas={loggingSchemas}
-              restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-              readOnly
-              viewportClassName="max-h-[min(25rem,48dvh)] overflow-y-auto overscroll-contain"
-            />
+            {groupScopes.length === 0 ? (
+              <EmptyState message="No permissions from groups" embedded />
+            ) : (
+              <ScopeList
+                scopes={TOKEN_SCOPES}
+                search=""
+                selectionFilter="selected"
+                selected={groupParsed.baseScopes}
+                onToggle={() => {}}
+                resources={groupParsed.resources}
+                cas={cas}
+                nodes={nodes}
+                proxyHosts={proxyHosts}
+                databases={databases}
+                loggingSchemas={loggingSchemas}
+                restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
+                readOnly
+                viewportClassName="max-h-[min(25rem,48dvh)] overflow-y-auto overscroll-contain"
+              />
+            )}
           </TabsContent>
 
           <TabsContent value="effective" className="border border-border">
-            <ScopeList
-              scopes={TOKEN_SCOPES}
-              search=""
-              selected={effectiveParsed.baseScopes}
-              onToggle={() => {}}
-              resources={effectiveParsed.resources}
-              cas={cas}
-              nodes={nodes}
-              proxyHosts={proxyHosts}
-              databases={databases}
-              loggingSchemas={loggingSchemas}
-              restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-              readOnly
-              viewportClassName="max-h-[min(25rem,48dvh)] overflow-y-auto overscroll-contain"
-            />
+            {effectiveScopes.length === 0 ? (
+              <EmptyState message="This user has no permissions" embedded />
+            ) : (
+              <ScopeList
+                scopes={TOKEN_SCOPES}
+                search=""
+                selectionFilter="selected"
+                selected={effectiveParsed.baseScopes}
+                onToggle={() => {}}
+                resources={effectiveParsed.resources}
+                cas={cas}
+                nodes={nodes}
+                proxyHosts={proxyHosts}
+                databases={databases}
+                loggingSchemas={loggingSchemas}
+                restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
+                readOnly
+                viewportClassName="max-h-[min(25rem,48dvh)] overflow-y-auto overscroll-contain"
+              />
+            )}
           </TabsContent>
         </Tabs>
 
