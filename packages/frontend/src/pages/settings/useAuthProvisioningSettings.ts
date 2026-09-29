@@ -256,11 +256,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
         ?.hideExternalBranding ?? false
   );
-  const [autoAssignCreatedResourcePermissions, setAutoAssignCreatedResourcePermissions] = useState(
-    () =>
-      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
-        .autoAssignCreatedResourcePermissions ?? true
-  );
   const [updateChannel, setUpdateChannel] = useState<"stable" | "preview">(
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
@@ -322,12 +317,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
         ?.relayGrantTtlHours ?? 4
     )
   );
-  const [relayPolicyLeaseHours, setRelayPolicyLeaseHours] = useState(() =>
-    String(
-      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
-        ?.relayPolicyLeaseHours ?? 72
-    )
-  );
   const [pkiEnabled, setPkiEnabled] = useState(
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
@@ -363,9 +352,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       setLoggingDraft(loggingDraftFrom(settingsData));
       setPublicUrl(settingsData.generalSettings.publicUrl ?? "");
       setHideExternalBranding(settingsData.generalSettings.hideExternalBranding ?? false);
-      setAutoAssignCreatedResourcePermissions(
-        settingsData.generalSettings.autoAssignCreatedResourcePermissions ?? true
-      );
       setUpdateChannel(settingsData.generalSettings.updateChannel ?? "stable");
       setTrustedProxyCidrs(settingsData.networkSecurity.trustedProxyCidrs.join(", "));
       setWebhookPrivateCidrs(settingsData.outboundWebhookPolicy.allowedPrivateCidrs.join(", "));
@@ -376,7 +362,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       setGatewayGrpcPublicTarget(settingsData.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(settingsData.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(settingsData.generalSettings.relayGrantTtlHours));
-      setRelayPolicyLeaseHours(String(settingsData.generalSettings.relayPolicyLeaseHours));
       setPkiEnabled(settingsData.generalSettings.features?.pkiEnabled ?? true);
       setSiemEnabled(settingsData.generalSettings.features?.siemEnabled ?? true);
       setInferenceEnabled(settingsData.generalSettings.features?.inferenceEnabled ?? false);
@@ -578,7 +563,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       setGatewayGrpcPublicTarget(updated.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(updated.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(updated.generalSettings.relayGrantTtlHours));
-      setRelayPolicyLeaseHours(String(updated.generalSettings.relayPolicyLeaseHours));
       setPublicUrl(updated.generalSettings.publicUrl ?? "");
       setHideExternalBranding(updated.generalSettings.hideExternalBranding ?? false);
       setUpdateChannel(nextSettings.generalSettings.updateChannel);
@@ -605,7 +589,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       setGatewayGrpcPublicTarget(previous.generalSettings.gatewayGrpcPublicTarget ?? "");
       setGatewayGrpcLocalIp(previous.generalSettings.gatewayGrpcLocalIp ?? "");
       setRelayGrantTtlHours(String(previous.generalSettings.relayGrantTtlHours));
-      setRelayPolicyLeaseHours(String(previous.generalSettings.relayPolicyLeaseHours));
       setPublicUrl(previous.generalSettings.publicUrl ?? "");
       setHideExternalBranding(previous.generalSettings.hideExternalBranding ?? false);
       setUpdateChannel(previous.generalSettings.updateChannel);
@@ -645,7 +628,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
   const draftGatewayGrpcLocalIp = gatewayGrpcLocalIp.trim() || null;
   const draftPublicUrl = publicUrl.trim().replace(/\/$/, "");
   const draftRelayGrantTtlHours = Number(relayGrantTtlHours);
-  const draftRelayPolicyLeaseHours = Number(relayPolicyLeaseHours);
   const accessSettingsHaveChanges =
     draftPublicUrl !== (settings?.generalSettings.publicUrl ?? "") ||
     (draftFileUploadLimitBytes != null &&
@@ -655,9 +637,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     draftGatewayGrpcPublicTarget !== settings?.generalSettings.gatewayGrpcPublicTarget ||
     draftGatewayGrpcLocalIp !== settings?.generalSettings.gatewayGrpcLocalIp ||
     (Number.isInteger(draftRelayGrantTtlHours) &&
-      draftRelayGrantTtlHours !== settings?.generalSettings.relayGrantTtlHours) ||
-    (Number.isInteger(draftRelayPolicyLeaseHours) &&
-      draftRelayPolicyLeaseHours !== settings?.generalSettings.relayPolicyLeaseHours);
+      draftRelayGrantTtlHours !== settings?.generalSettings.relayGrantTtlHours);
   const featureSettingsHaveChanges =
     hideExternalBranding !== (settings?.generalSettings.hideExternalBranding ?? false) ||
     updateChannel !== (settings?.generalSettings.updateChannel ?? "stable") ||
@@ -693,14 +673,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       toast.error("Relay grant lifetime must be between 1 and 224 hours");
       return;
     }
-    if (
-      !Number.isInteger(draftRelayPolicyLeaseHours) ||
-      draftRelayPolicyLeaseHours < 1 ||
-      draftRelayPolicyLeaseHours > 168
-    ) {
-      toast.error("Relay policy lease must be between 1 and 168 hours");
-      return;
-    }
     if (!/^https?:\/\/[^/]+$/i.test(draftPublicUrl)) {
       toast.error("Public URL must be an HTTP(S) origin without a path");
       return;
@@ -711,8 +683,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       nextOpenBytes === settings.generalSettings.fileOpenMaxBytes &&
       draftGatewayGrpcPublicTarget === settings.generalSettings.gatewayGrpcPublicTarget &&
       draftGatewayGrpcLocalIp === settings.generalSettings.gatewayGrpcLocalIp &&
-      draftRelayGrantTtlHours === settings.generalSettings.relayGrantTtlHours &&
-      draftRelayPolicyLeaseHours === settings.generalSettings.relayPolicyLeaseHours
+      draftRelayGrantTtlHours === settings.generalSettings.relayGrantTtlHours
     ) {
       return;
     }
@@ -736,7 +707,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       gatewayGrpcPublicTarget: draftGatewayGrpcPublicTarget,
       gatewayGrpcLocalIp: draftGatewayGrpcLocalIp,
       relayGrantTtlHours: draftRelayGrantTtlHours,
-      relayPolicyLeaseHours: draftRelayPolicyLeaseHours,
     });
   };
 
@@ -748,13 +718,8 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       features: { ...settings.generalSettings.features, pkiEnabled, siemEnabled, inferenceEnabled },
     });
   };
-  const advancedSettingsHaveChanges =
-    autoAssignCreatedResourcePermissions !==
-    (settings?.generalSettings.autoAssignCreatedResourcePermissions ?? true);
-  const saveAdvancedSettings = async () => {
-    if (!advancedSettingsHaveChanges) return;
-    await updateGeneralSettings({ autoAssignCreatedResourcePermissions });
-  };
+  const handleToggleAutoAssignCreatedResourcePermissions = (checked: boolean) =>
+    updateGeneralSettings({ autoAssignCreatedResourcePermissions: checked });
 
   const handleToggleInvitationOnCreate = (checked: boolean) =>
     updateGeneralSettings({ sendInvitationOnUserCreate: checked });
@@ -1102,10 +1067,7 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     setPublicUrl,
     hideExternalBranding,
     setHideExternalBranding,
-    autoAssignCreatedResourcePermissions,
-    setAutoAssignCreatedResourcePermissions,
-    advancedSettingsHaveChanges,
-    saveAdvancedSettings,
+    handleToggleAutoAssignCreatedResourcePermissions,
     updateChannel,
     setUpdateChannel,
     smtpDraft,
@@ -1132,8 +1094,6 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     setGatewayGrpcLocalIp,
     relayGrantTtlHours,
     setRelayGrantTtlHours,
-    relayPolicyLeaseHours,
-    setRelayPolicyLeaseHours,
     pkiEnabled,
     setPkiEnabled,
     siemEnabled,

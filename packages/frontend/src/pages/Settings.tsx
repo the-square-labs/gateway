@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   Braces,
+  KeyRound,
   Network,
   Plug,
   ServerCog,
@@ -35,6 +36,7 @@ import { UpdateSection } from "./settings/UpdateSection";
 
 const SETTINGS_TABS = [
   "general",
+  "authentication",
   "advanced",
   "environment",
   "relay",
@@ -96,6 +98,7 @@ export function Settings() {
   const availableTabs = useMemo<SettingsTab[]>(() => {
     const tabs: SettingsTab[] = [];
     if (canAccessGeneralTab) tabs.push("general");
+    if (canViewGatewaySettings) tabs.push("authentication");
     if (canAccessAdvancedTab) tabs.push("advanced");
     if (canViewGatewaySettings) tabs.push("environment");
     if (canViewGatewaySettings) tabs.push("relay");
@@ -155,6 +158,12 @@ export function Settings() {
               <TabsTrigger value="general" className="gap-1.5">
                 <ServerCog className="h-3.5 w-3.5" />
                 General
+              </TabsTrigger>
+            )}
+            {canViewGatewaySettings && (
+              <TabsTrigger value="authentication" className="gap-1.5">
+                <KeyRound className="h-3.5 w-3.5" />
+                Authentication
               </TabsTrigger>
             )}
             {canAccessAdvancedTab && (
@@ -220,6 +229,17 @@ export function Settings() {
             </TabsContent>
           )}
 
+          {canViewGatewaySettings && (
+            <TabsContent value="authentication" className="pb-0">
+              <div className="space-y-4">
+                <AuthProvisioningSection
+                  canEdit={canEditGatewaySettings}
+                  section="authentication"
+                />
+                <PoweredByFooter />
+              </div>
+            </TabsContent>
+          )}
           {canAccessAdvancedTab && (
             <TabsContent value="advanced" className="pb-0">
               <div className="space-y-4">

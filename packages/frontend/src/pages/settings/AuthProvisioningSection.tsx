@@ -47,7 +47,7 @@ import {
 
 interface AuthProvisioningSectionProps {
   canEdit: boolean;
-  section?: "all" | "general" | "advanced" | "features";
+  section?: "all" | "general" | "authentication" | "advanced" | "features";
 }
 
 export function AuthProvisioningSection({
@@ -83,10 +83,7 @@ export function AuthProvisioningSection({
     setPublicUrl,
     hideExternalBranding,
     setHideExternalBranding,
-    autoAssignCreatedResourcePermissions,
-    setAutoAssignCreatedResourcePermissions,
-    advancedSettingsHaveChanges,
-    saveAdvancedSettings,
+    handleToggleAutoAssignCreatedResourcePermissions,
     updateChannel,
     setUpdateChannel,
     smtpDraft,
@@ -113,8 +110,6 @@ export function AuthProvisioningSection({
     setGatewayGrpcLocalIp,
     relayGrantTtlHours,
     setRelayGrantTtlHours,
-    relayPolicyLeaseHours,
-    setRelayPolicyLeaseHours,
     pkiEnabled,
     setPkiEnabled,
     siemEnabled,
@@ -169,33 +164,6 @@ export function AuthProvisioningSection({
 
   return (
     <div className="space-y-4">
-      <PanelShell
-        hidden={section !== "all" && section !== "advanced"}
-        icon={<SlidersHorizontal className="h-4 w-4" />}
-        title="Advanced configuration"
-        dirty={advancedSettingsHaveChanges}
-        actions={
-          <Button
-            onClick={saveAdvancedSettings}
-            disabled={!canEdit || isSavingGeneral || !advancedSettingsHaveChanges}
-          >
-            <Save className="h-4 w-4" />
-            Save
-          </Button>
-        }
-      >
-        <SettingsControlRow
-          title="Auto-assign permissions for created resources"
-          help="Automatically adds resource-specific permissions to the creator's additional permissions. They can be edited or reset in Assign permissions. Turning this off affects new resources only; existing grants are retained."
-        >
-          <Switch
-            ariaLabel="Auto-assign permissions for created resources"
-            checked={autoAssignCreatedResourcePermissions}
-            disabled={!canEdit || isSavingGeneral}
-            onChange={setAutoAssignCreatedResourcePermissions}
-          />
-        </SettingsControlRow>
-      </PanelShell>
       <div
         className="grid gap-4 xl:grid-cols-2"
         hidden={section !== "all" && section !== "general"}
@@ -262,33 +230,6 @@ export function AuthProvisioningSection({
                 disabled={!canEdit || isSavingGeneral}
                 aria-label="Relay grant lifetime hours"
                 onChange={(event) => setRelayGrantTtlHours(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void saveAccessSettings();
-                }}
-              />
-            </div>
-            <div className="flex items-center justify-between gap-4 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium">
-                  <SettingsHelpTitle
-                    label="Relay policy lease"
-                    help="A relay keeps admitting on its last known policy until this lease expires, so it can keep serving through a Gateway outage."
-                  />
-                </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Lifetime of the signed policy pushed to a relay, in hours (1–168)
-                </p>
-              </div>
-              <Input
-                className="w-28 shrink-0"
-                type="number"
-                min={1}
-                max={168}
-                step={1}
-                value={relayPolicyLeaseHours}
-                disabled={!canEdit || isSavingGeneral}
-                aria-label="Relay policy lease hours"
-                onChange={(event) => setRelayPolicyLeaseHours(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void saveAccessSettings();
                 }}
@@ -538,114 +479,6 @@ export function AuthProvisioningSection({
       />
 
       <PanelShell
-        icon={<ShieldCheck className="h-4 w-4" />}
-        hidden={section !== "all" && section !== "advanced"}
-        title="OIDC provider"
-        description={
-          identityTrustLocked ? (
-            <IdentityTrustHint />
-          ) : settings.oidc?.configured ? (
-            "Client secret is stored encrypted"
-          ) : (
-            "Configure the identity provider used for OIDC sign-in"
-          )
-        }
-        actions={
-          <Button
-            aria-label="Save OIDC provider"
-            onClick={saveOidc}
-            pending={isSavingOidc}
-            disabled={!canEditIdentityTrust || !oidcHasChanges}
-          >
-            <Save className="h-4 w-4" />
-            Save
-          </Button>
-        }
-        dirty={oidcHasChanges}
-      >
-        <div className="divide-y divide-border">
-          <SettingsControlRow
-            title="Issuer URL"
-            description="OpenID Connect issuer used for discovery."
-            help="The issuer is the identity provider's canonical URL. Gateway reads its discovery document from this address to find authorization, token, and key endpoints."
-          >
-            <Input
-              type="url"
-              value={oidcDraft.issuer}
-              placeholder="https://id.example.com/application/o/gateway/"
-              disabled={!canEditIdentityTrust || isSavingOidc}
-              onChange={(event) =>
-                setOidcDraft((current) => ({ ...current, issuer: event.target.value }))
-              }
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Client ID"
-            description="OAuth client identifier registered at the provider."
-            help="Public identifier assigned to the Gateway application by the identity provider. It is not a secret."
-          >
-            <Input
-              value={oidcDraft.clientId}
-              placeholder="gateway"
-              disabled={!canEditIdentityTrust || isSavingOidc}
-              onChange={(event) =>
-                setOidcDraft((current) => ({ ...current, clientId: event.target.value }))
-              }
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Client secret"
-            description={
-              settings.oidc?.clientSecretLast4
-                ? `Stored secret ends in ${settings.oidc.clientSecretLast4}`
-                : "Required for the initial configuration."
-            }
-            help="Secret assigned to the Gateway application by the identity provider. Leave the field empty when editing to keep the encrypted value already stored."
-          >
-            <Input
-              type="password"
-              value={oidcDraft.clientSecret}
-              placeholder={
-                settings.oidc?.configured ? "Leave blank to keep current secret" : "Client secret"
-              }
-              disabled={!canEditIdentityTrust || isSavingOidc}
-              onChange={(event) =>
-                setOidcDraft((current) => ({ ...current, clientSecret: event.target.value }))
-              }
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Redirect URI"
-            description="Must exactly match the callback registered at the provider."
-            help="After sign-in, the identity provider sends the browser back to this URL. Scheme, hostname, port, and path must exactly match the provider configuration."
-          >
-            <Input
-              type="url"
-              value={oidcDraft.redirectUri}
-              placeholder="https://gateway.example.com/auth/callback"
-              disabled={!canEditIdentityTrust || isSavingOidc}
-              onChange={(event) =>
-                setOidcDraft((current) => ({ ...current, redirectUri: event.target.value }))
-              }
-            />
-          </SettingsControlRow>
-          <SettingsControlRow
-            title="Scopes"
-            description="Space-separated scopes; openid is required."
-            help="Scopes request identity claims from the provider. openid enables OIDC; profile and email commonly provide the user's name and email address."
-          >
-            <Input
-              value={oidcDraft.scopes}
-              disabled={!canEditIdentityTrust || isSavingOidc}
-              onChange={(event) =>
-                setOidcDraft((current) => ({ ...current, scopes: event.target.value }))
-              }
-            />
-          </SettingsControlRow>
-        </div>
-      </PanelShell>
-
-      <PanelShell
         icon={<Database className="h-4 w-4" />}
         hidden={section !== "all" && section !== "features"}
         title="Structured logging storage"
@@ -797,10 +630,202 @@ export function AuthProvisioningSection({
       </PanelShell>
 
       <PanelShell
+        icon={<KeyRound className="h-4 w-4" />}
+        hidden={section !== "all" && section !== "authentication"}
+        title="Sign-in methods"
+        description="Enable the primary methods available to Gateway accounts"
+      >
+        <div className="divide-y divide-border">
+          {[
+            ["oidc", "OIDC", "Redirect users to the configured identity provider"],
+            [
+              "password",
+              "Email and password",
+              "Password setup and recovery links are sent over verified SMTP",
+            ],
+            ["emailOtp", "Email sign-in code", "A one-time code is sent over verified SMTP"],
+            [
+              "passkeyLogin",
+              "Passkey",
+              "Optional local-account passkeys can sign users in directly",
+            ],
+          ].map(([key, title, description]) => (
+            <div key={key} className="flex items-center justify-between gap-4 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium">{title}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+              </div>
+              <Switch
+                checked={settings.methods?.[key as keyof typeof DEFAULT_AUTH_METHODS] ?? false}
+                disabled={!canEdit || isSavingLocalAuth}
+                onChange={(checked) =>
+                  updateLocalAuth({
+                    methods: { [key]: checked } as Partial<
+                      NonNullable<AuthProvisioningSettings["methods"]>
+                    >,
+                  })
+                }
+              />
+            </div>
+          ))}
+        </div>
+      </PanelShell>
+
+      <PanelShell
+        icon={<ShieldCheck className="h-4 w-4" />}
+        hidden={section !== "all" && section !== "authentication"}
+        title="Multi-factor authentication"
+        description="Controls how Gateway enforces MFA for local browser sessions"
+        actions={
+          <Button
+            aria-label="Save MFA grace period"
+            onClick={saveMfaGracePeriod}
+            pending={isSavingMfaGracePeriod}
+            disabled={!canEdit || !mfaHasChanges || !mfaGracePeriodIsValid}
+          >
+            <Save className="h-4 w-4" />
+            Save
+          </Button>
+        }
+        dirty={mfaHasChanges}
+      >
+        <SettingsControlRow
+          title="Existing-session MFA grace period"
+          description="Days existing local browser sessions may continue after group MFA is enabled. New sign-ins require MFA immediately. 0 applies immediately."
+          help="This affects sessions that were already signed in when MFA became required. It does not delay MFA for new sign-ins, and zero revokes the grace period immediately."
+        >
+          <div className="flex w-full items-center gap-2 sm:w-40">
+            <NumericInput
+              key={mfaGracePeriodInputKey}
+              aria-label="Existing-session MFA grace period in days"
+              value={mfaGracePeriodDays}
+              min={0}
+              max={7}
+              step={1}
+              disabled={!canEdit || isSavingMfaGracePeriod}
+              onChange={(value, raw) => {
+                setMfaGracePeriodDays(value);
+                setMfaGracePeriodRaw(raw);
+              }}
+            />
+            <span className="text-sm text-muted-foreground">days</span>
+          </div>
+        </SettingsControlRow>
+      </PanelShell>
+
+      <PanelShell
+        icon={<ShieldCheck className="h-4 w-4" />}
+        hidden={section !== "all" && section !== "authentication"}
+        title="OIDC provider"
+        description={
+          identityTrustLocked ? (
+            <IdentityTrustHint />
+          ) : settings.oidc?.configured ? (
+            "Client secret is stored encrypted"
+          ) : (
+            "Configure the identity provider used for OIDC sign-in"
+          )
+        }
+        actions={
+          <Button
+            aria-label="Save OIDC provider"
+            onClick={saveOidc}
+            pending={isSavingOidc}
+            disabled={!canEditIdentityTrust || !oidcHasChanges}
+          >
+            <Save className="h-4 w-4" />
+            Save
+          </Button>
+        }
+        dirty={oidcHasChanges}
+      >
+        <div className="divide-y divide-border">
+          <SettingsControlRow
+            title="Issuer URL"
+            description="OpenID Connect issuer used for discovery."
+            help="The issuer is the identity provider's canonical URL. Gateway reads its discovery document from this address to find authorization, token, and key endpoints."
+          >
+            <Input
+              type="url"
+              value={oidcDraft.issuer}
+              placeholder="https://id.example.com/application/o/gateway/"
+              disabled={!canEditIdentityTrust || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, issuer: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Client ID"
+            description="OAuth client identifier registered at the provider."
+            help="Public identifier assigned to the Gateway application by the identity provider. It is not a secret."
+          >
+            <Input
+              value={oidcDraft.clientId}
+              placeholder="gateway"
+              disabled={!canEditIdentityTrust || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, clientId: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Client secret"
+            description={
+              settings.oidc?.clientSecretLast4
+                ? `Stored secret ends in ${settings.oidc.clientSecretLast4}`
+                : "Required for the initial configuration."
+            }
+            help="Secret assigned to the Gateway application by the identity provider. Leave the field empty when editing to keep the encrypted value already stored."
+          >
+            <Input
+              type="password"
+              value={oidcDraft.clientSecret}
+              placeholder={
+                settings.oidc?.configured ? "Leave blank to keep current secret" : "Client secret"
+              }
+              disabled={!canEditIdentityTrust || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, clientSecret: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Redirect URI"
+            description="Must exactly match the callback registered at the provider."
+            help="After sign-in, the identity provider sends the browser back to this URL. Scheme, hostname, port, and path must exactly match the provider configuration."
+          >
+            <Input
+              type="url"
+              value={oidcDraft.redirectUri}
+              placeholder="https://gateway.example.com/auth/callback"
+              disabled={!canEditIdentityTrust || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, redirectUri: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Scopes"
+            description="Space-separated scopes; openid is required."
+            help="Scopes request identity claims from the provider. openid enables OIDC; profile and email commonly provide the user's name and email address."
+          >
+            <Input
+              value={oidcDraft.scopes}
+              disabled={!canEditIdentityTrust || isSavingOidc}
+              onChange={(event) =>
+                setOidcDraft((current) => ({ ...current, scopes: event.target.value }))
+              }
+            />
+          </SettingsControlRow>
+        </div>
+      </PanelShell>
+
+      <PanelShell
         icon={<UserCog className="h-4 w-4" />}
-        hidden={section !== "all" && section !== "advanced"}
+        hidden={section !== "all" && section !== "authentication"}
         title="Identity provisioning"
-        description="Account creation and OIDC sign-in behavior for Gateway users"
+        description="Account creation, OIDC sign-in, and permissions for what users create"
       >
         <div className="divide-y divide-border">
           <div className="flex items-center justify-between gap-4 px-4 py-3">
@@ -896,97 +921,25 @@ export function AuthProvisioningSection({
               onChange={(checked) => void handleToggleInvitationOnCreate(checked)}
             />
           </SettingsControlRow>
-        </div>
-      </PanelShell>
-
-      <PanelShell
-        icon={<KeyRound className="h-4 w-4" />}
-        hidden={section !== "all" && section !== "advanced"}
-        title="Sign-in methods"
-        description="Enable the primary methods available to Gateway accounts"
-      >
-        <div className="divide-y divide-border">
-          {[
-            ["oidc", "OIDC", "Redirect users to the configured identity provider"],
-            [
-              "password",
-              "Email and password",
-              "Password setup and recovery links are sent over verified SMTP",
-            ],
-            ["emailOtp", "Email sign-in code", "A one-time code is sent over verified SMTP"],
-            [
-              "passkeyLogin",
-              "Passkey",
-              "Optional local-account passkeys can sign users in directly",
-            ],
-          ].map(([key, title, description]) => (
-            <div key={key} className="flex items-center justify-between gap-4 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium">{title}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
-              </div>
-              <Switch
-                checked={settings.methods?.[key as keyof typeof DEFAULT_AUTH_METHODS] ?? false}
-                disabled={!canEdit || isSavingLocalAuth}
-                onChange={(checked) =>
-                  updateLocalAuth({
-                    methods: { [key]: checked } as Partial<
-                      NonNullable<AuthProvisioningSettings["methods"]>
-                    >,
-                  })
-                }
-              />
-            </div>
-          ))}
-        </div>
-      </PanelShell>
-
-      <PanelShell
-        icon={<ShieldCheck className="h-4 w-4" />}
-        hidden={section !== "all" && section !== "advanced"}
-        title="Multi-factor authentication"
-        description="Controls how Gateway enforces MFA for local browser sessions"
-        actions={
-          <Button
-            aria-label="Save MFA grace period"
-            onClick={saveMfaGracePeriod}
-            pending={isSavingMfaGracePeriod}
-            disabled={!canEdit || !mfaHasChanges || !mfaGracePeriodIsValid}
+          <SettingsControlRow
+            title="Auto-assign permissions for created resources"
+            help="Automatically adds resource-specific permissions to the creator's additional permissions. They can be edited or reset in Assign permissions. Turning this off affects new resources only; existing grants are retained."
+            description="The creator of a container, route, database or other resource gets permissions on it"
           >
-            <Save className="h-4 w-4" />
-            Save
-          </Button>
-        }
-        dirty={mfaHasChanges}
-      >
-        <SettingsControlRow
-          title="Existing-session MFA grace period"
-          description="Days existing local browser sessions may continue after group MFA is enabled. New sign-ins require MFA immediately. 0 applies immediately."
-          help="This affects sessions that were already signed in when MFA became required. It does not delay MFA for new sign-ins, and zero revokes the grace period immediately."
-        >
-          <div className="flex w-full items-center gap-2 sm:w-40">
-            <NumericInput
-              key={mfaGracePeriodInputKey}
-              aria-label="Existing-session MFA grace period in days"
-              value={mfaGracePeriodDays}
-              min={0}
-              max={7}
-              step={1}
-              disabled={!canEdit || isSavingMfaGracePeriod}
-              onChange={(value, raw) => {
-                setMfaGracePeriodDays(value);
-                setMfaGracePeriodRaw(raw);
-              }}
+            <Switch
+              ariaLabel="Auto-assign permissions for created resources"
+              checked={settings.generalSettings.autoAssignCreatedResourcePermissions ?? true}
+              disabled={!canEdit || isSavingGeneral}
+              onChange={(checked) => void handleToggleAutoAssignCreatedResourcePermissions(checked)}
             />
-            <span className="text-sm text-muted-foreground">days</span>
-          </div>
-        </SettingsControlRow>
+          </SettingsControlRow>
+        </div>
       </PanelShell>
 
       <PanelShell
         icon={<Mail className="h-4 w-4" />}
         hidden={section !== "all" && section !== "advanced"}
-        title="Authentication email (SMTP)"
+        title="SMTP configuration"
         description={
           identityTrustLocked ? (
             <IdentityTrustHint />

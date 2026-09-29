@@ -840,63 +840,6 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         )}
       </PanelShell>
 
-      <PanelShell
-        icon={<RefreshCw className="h-4 w-4" />}
-        title="Rebalance attempts"
-        description="Latest 20 attempts, newest first. Failed attempts leave the previous assignments in place."
-      >
-        <SimpleTable
-          rows={status?.attempts ?? []}
-          getRowKey={(row) => row.id}
-          emptyMessage="No rebalance attempts recorded"
-          columns={[
-            {
-              id: "time",
-              header: "Started",
-              render: (row) => <RelativeTime value={row.createdAt} />,
-            },
-            {
-              id: "workload",
-              header: "Workload",
-              render: (row) => <span title={row.endpointId}>{row.workload}</span>,
-            },
-            { id: "generation", header: "Generation", render: (row) => row.generation },
-            {
-              id: "state",
-              header: "State",
-              render: (row) => (
-                <Badge
-                  variant={
-                    row.state === "failed"
-                      ? "destructive"
-                      : row.state === "active"
-                        ? "success"
-                        : row.state === "staging"
-                          ? "warning"
-                          : "secondary"
-                  }
-                >
-                  {row.state}
-                </Badge>
-              ),
-            },
-            {
-              id: "reason",
-              header: "Details",
-              render: (row) =>
-                row.activationError ??
-                (row.state === "staging"
-                  ? "Verifying routes"
-                  : row.state === "draining"
-                    ? "Existing connections draining"
-                    : row.state === "retired"
-                      ? "Replaced by a newer assignment"
-                      : "Routes verified"),
-            },
-          ]}
-        />
-      </PanelShell>
-
       <div>
         <h3 className="mb-2 text-sm font-semibold text-muted-foreground">Tunnel activity</h3>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1181,6 +1124,63 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         >
           <Switch checked={autoRecovery} onChange={setAutoRecovery} disabled={!canEdit || saving} />
         </SettingsControlRow>
+      </PanelShell>
+
+      <PanelShell
+        icon={<RefreshCw className="h-4 w-4" />}
+        title="Rebalance attempts"
+        description="Latest 10 attempts, newest first. Failed attempts leave the previous assignments in place."
+      >
+        <SimpleTable
+          rows={(status?.attempts ?? []).slice(0, 10)}
+          getRowKey={(row) => row.id}
+          emptyMessage="No rebalance attempts recorded"
+          columns={[
+            {
+              id: "time",
+              header: "Started",
+              render: (row) => <RelativeTime value={row.createdAt} />,
+            },
+            {
+              id: "workload",
+              header: "Workload",
+              render: (row) => <span title={row.endpointId}>{row.workload}</span>,
+            },
+            { id: "generation", header: "Generation", render: (row) => row.generation },
+            {
+              id: "state",
+              header: "State",
+              render: (row) => (
+                <Badge
+                  variant={
+                    row.state === "failed"
+                      ? "destructive"
+                      : row.state === "active"
+                        ? "success"
+                        : row.state === "staging"
+                          ? "warning"
+                          : "secondary"
+                  }
+                >
+                  {row.state}
+                </Badge>
+              ),
+            },
+            {
+              id: "reason",
+              header: "Details",
+              render: (row) =>
+                row.activationError ??
+                (row.state === "staging"
+                  ? "Verifying routes"
+                  : row.state === "draining"
+                    ? "Existing connections draining"
+                    : row.state === "retired"
+                      ? "Replaced by a newer assignment"
+                      : "Routes verified"),
+            },
+          ]}
+        />
       </PanelShell>
 
       <OneTimeSecretDialog

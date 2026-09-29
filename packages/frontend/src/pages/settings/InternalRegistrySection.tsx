@@ -354,9 +354,9 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
           </SettingsControlRow>
         </>
       )}
-      <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
-        <span className="flex items-center gap-2 text-sm text-muted-foreground">
-          <ShieldCheck className="h-4 w-4" />
+      <div className="flex items-center gap-2 px-4 py-3 text-xs text-muted-foreground">
+        <span className="flex items-center gap-2">
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
           Repository-scoped pull/push tokens remain authoritative for external access.
         </span>
       </div>

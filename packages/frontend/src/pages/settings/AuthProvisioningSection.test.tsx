@@ -261,9 +261,7 @@ describe("AuthProvisioningSection inference setting", () => {
     const mfaPanel = screen
       .getByText("Multi-factor authentication")
       .closest("div.border") as HTMLElement;
-    const smtpPanel = screen
-      .getByText("Authentication email (SMTP)")
-      .closest("div.border") as HTMLElement;
+    const smtpPanel = screen.getByText("SMTP configuration").closest("div.border") as HTMLElement;
 
     expect(oidcSave).toBeDisabled();
     expect(loggingSave).toBeDisabled();
@@ -619,9 +617,7 @@ describe("AuthProvisioningSection inference setting", () => {
     const oidcPanel = (await screen.findByText("OIDC provider")).closest(
       "div.border"
     ) as HTMLElement;
-    const smtpPanel = screen
-      .getByText("Authentication email (SMTP)")
-      .closest("div.border") as HTMLElement;
+    const smtpPanel = screen.getByText("SMTP configuration").closest("div.border") as HTMLElement;
     expect(screen.getByDisplayValue("https://gateway.example.com")).toBeDisabled();
     expect(within(oidcPanel).getByPlaceholderText(/id\.example\.com/)).toBeDisabled();
     expect(within(smtpPanel).getByLabelText("Sender email")).toBeDisabled();

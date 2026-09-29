@@ -554,6 +554,14 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         ),
       },
       {
+        id: "settings-authentication",
+        label: "Authentication settings",
+        href: "/settings/authentication",
+        icon: Settings,
+        parentId: "settings",
+        visible: hasAnyScope("settings:gateway:view", "settings:gateway:edit"),
+      },
+      {
         id: "settings-advanced",
         label: "Advanced settings",
         href: "/settings/advanced",
