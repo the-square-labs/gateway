@@ -105,23 +105,35 @@ func (m *managedDatabaseManager) dialRecord(ctx context.Context, managedDatabase
 	if err != nil || record.ID != managedDatabaseID {
 		return nil, managedDatabaseRecord{}, errors.New("managed database record not found")
 	}
-	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
-	if err != nil || inspect.Container.Config == nil || inspect.Container.State == nil || !inspect.Container.State.Running {
-		return nil, managedDatabaseRecord{}, errors.New("managed database container is unavailable")
-	}
-	labels := inspect.Container.Config.Labels
-	if labels[managedDatabaseLabel] != record.ID || labels[managedDatabaseTypeTag] != record.Type || inspect.Container.NetworkSettings == nil {
-		return nil, managedDatabaseRecord{}, errors.New("managed database container identity is invalid")
-	}
-	endpoint := inspect.Container.NetworkSettings.Networks[record.NetworkName]
-	if endpoint == nil || !endpoint.IPAddress.IsValid() {
-		return nil, managedDatabaseRecord{}, errors.New("managed database private network is unavailable")
+	// dockerd names the container's address; while it does not answer, the
+	// last address it named is used (B-26).
+	key := record.ContainerID + "\x00" + record.NetworkName + "\x00" + record.ID + "\x00" + record.Type
+	address, err := m.dialTargets.get(ctx, key, func(ctx context.Context) (string, error) {
+		inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+		if err != nil && !isNotFoundErr(err) {
+			return "", dockerUnansweredError{message: "managed database container is unavailable", cause: err}
+		}
+		if err != nil || inspect.Container.Config == nil || inspect.Container.State == nil || !inspect.Container.State.Running {
+			return "", errors.New("managed database container is unavailable")
+		}
+		labels := inspect.Container.Config.Labels
+		if labels[managedDatabaseLabel] != record.ID || labels[managedDatabaseTypeTag] != record.Type || inspect.Container.NetworkSettings == nil {
+			return "", errors.New("managed database container identity is invalid")
+		}
+		endpoint := inspect.Container.NetworkSettings.Networks[record.NetworkName]
+		if endpoint == nil || !endpoint.IPAddress.IsValid() {
+			return "", errors.New("managed database private network is unavailable")
+		}
+		return endpoint.IPAddress.String(), nil
+	})
+	if err != nil {
+		return nil, managedDatabaseRecord{}, err
 	}
 	port, err := managedDatabaseEnginePort(record.Type)
 	if err != nil {
 		return nil, managedDatabaseRecord{}, err
 	}
-	connection, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(endpoint.IPAddress.String(), port))
+	connection, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(address, port))
 	if err != nil {
 		return nil, managedDatabaseRecord{}, err
 	}

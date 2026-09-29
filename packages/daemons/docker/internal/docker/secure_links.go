@@ -132,8 +132,9 @@ func (m *dockerSecureLinkManager) dialState(linkID string) (binding dockerSecure
 
 const (
 	// secureLinkValidateWait bounds the dockerd call a new tunnel makes to
-	// validate its target (B-8, D5).
-	secureLinkValidateWait = time.Second
+	// validate its target (B-8, D5): a dial waits at most this long before it
+	// uses the target the link is bound to (B-26).
+	secureLinkValidateWait = 300 * time.Millisecond
 	// secureLinkDockerQuiet is how long dials skip that call after dockerd
 	// did not answer it; the first dial after it tries again.
 	secureLinkDockerQuiet = 2 * time.Second
@@ -845,7 +846,10 @@ func (m *dockerSecureLinkManager) validateDialTargetNow(ctx context.Context, lin
 		resolve = m.resolveTarget
 	}
 	actualHost, actualNetwork, err := resolve(validateCtx, binding.targetContainer, binding.targetNetwork, binding.targetHost, false)
-	if err != nil && ctx.Err() == nil && errors.Is(validateCtx.Err(), context.DeadlineExceeded) {
+	// No answer in time, or no answer at all (dockerd restarting, a transport
+	// error): no evidence the target changed.
+	var unanswered secureLinkTargetUnknownError
+	if err != nil && ctx.Err() == nil && (errors.Is(validateCtx.Err(), context.DeadlineExceeded) || errors.As(err, &unanswered)) {
 		m.dockerQuietMu.Lock()
 		first := m.dockerQuietUntil.IsZero()
 		m.dockerQuietUntil = now.Add(secureLinkDockerQuiet)

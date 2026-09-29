@@ -26,7 +26,9 @@ import (
 const managedStorageRootFilesystem = "gateway-managed-storage-root"
 
 type managedStorageManager struct {
-	client         *Client
+	client *Client
+	// dialTargets answers relay dials while dockerd does not (B-26).
+	dialTargets    dialTargetLookups
 	logger         *slog.Logger
 	root           string
 	reserve        int64

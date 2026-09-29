@@ -128,6 +128,9 @@ func updateMinIOServiceAccountPolicy(ctx context.Context, client minioServiceAcc
 
 func (m *managedStorageManager) privateEndpoint(ctx context.Context, record managedStorageRecord) (string, error) {
 	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+	if err != nil && !isNotFoundErr(err) {
+		return "", dockerUnansweredError{message: "managed storage container is unavailable", cause: err}
+	}
 	if err != nil || inspect.Container.Config == nil || inspect.Container.State == nil || !inspect.Container.State.Running {
 		return "", errors.New("managed storage container is unavailable")
 	}
@@ -152,7 +155,12 @@ func (m *managedStorageManager) dial(ctx context.Context, storageID string) (net
 	if err != nil || record.Removed {
 		return nil, errors.New("managed storage record not found")
 	}
-	endpoint, err := m.privateEndpoint(ctx, record)
+	// dockerd names the container's address; while it does not answer, the
+	// last address it named is used (B-26).
+	key := record.ContainerID + "\x00" + record.NetworkName + "\x00" + record.ID + "\x00" + strconv.Itoa(record.MemberIndex)
+	endpoint, err := m.dialTargets.get(ctx, key, func(ctx context.Context) (string, error) {
+		return m.privateEndpoint(ctx, record)
+	})
 	if err != nil {
 		return nil, err
 	}
