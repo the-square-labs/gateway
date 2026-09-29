@@ -1335,9 +1335,7 @@ export class RelayPolicyService {
     await this.ensureLegacyCompatibleAssignment(endpointId);
     await this.syncSnapshot();
     await Promise.all([
-      ...[...new Set([...proxyLinkSources(sourceNodeIds), ...removedSourceIds])].map((nodeId) =>
-        this.syncNodeGrants(nodeId, ROUTINE_GRANT_SYNC)
-      ),
+      this.syncProxyLinkSourceGrants(sourceNodeIds, removedSourceIds),
       this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
     ]);
     return routeIds[0]!;
@@ -1353,12 +1351,36 @@ export class RelayPolicyService {
     const { routeIds, removedSourceIds } = await this.ensureProxyLinkSourceRoutes(linkId, sourceNodeIds, endpointId);
     await this.syncSnapshot();
     await Promise.all([
-      ...[...new Set([...proxyLinkSources(sourceNodeIds), ...removedSourceIds])].map((nodeId) =>
-        this.syncNodeGrants(nodeId, ROUTINE_GRANT_SYNC)
-      ),
+      this.syncProxyLinkSourceGrants(sourceNodeIds, removedSourceIds),
       this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
     ]);
     return routeIds[0]!;
+  }
+
+  /**
+   * The grants of a link's sources. A member of an ingress group that is not connected, and a former source that is
+   * not, get their grant bundle in their reconnect sync: they must not fail the link's change on the members that are
+   * online (IG-1). The one source of a single-node link fails as before.
+   */
+  private async syncProxyLinkSourceGrants(
+    sourceNodeIds: string | readonly string[],
+    removedSourceIds: readonly string[]
+  ): Promise<void> {
+    const sources = proxyLinkSources(sourceNodeIds);
+    const group = sources.length > 1;
+    await Promise.all(
+      [...new Set([...sources, ...removedSourceIds])].map(async (nodeId) => {
+        try {
+          await this.syncNodeGrants(nodeId, ROUTINE_GRANT_SYNC);
+        } catch (error) {
+          if ((group || !sources.includes(nodeId)) && isNodeNotConnectedError(error)) {
+            logger.debug('Relay grants of a Secure Link source wait for its reconnect', { nodeId });
+            return;
+          }
+          throw error;
+        }
+      })
+    );
   }
 
   /**

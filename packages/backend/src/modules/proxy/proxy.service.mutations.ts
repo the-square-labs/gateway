@@ -638,6 +638,9 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
         ? existing.dockerNodeId
         : null;
     let appliedOnTargetNode = false;
+    // The nodes that took the new config: a later step that fails rolls the database back, and these nodes must
+    // serve the restored route again (IG-1), not the rejected one.
+    let deliveredNodeIds: string[] = [];
 
     // 3. Regenerate nginx config
     try {
@@ -672,10 +675,11 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
       }
       if (updated.enabled) {
         // 4. Apply config (on every member of a group route) with rollback on failure
-        await this.deliverHost(updated, {
+        const delivery = await this.deliverHost(updated, {
           certOptions: { preserveLegacyOnUnsupported: existing.sslEnabled && !tlsReferenceChanged },
           pagesRouteIncludePathOverride: pageNodeMigration?.targetIncludePath,
         });
+        deliveredNodeIds = [...delivery.configs.keys()].filter(Boolean);
         if (isDockerUpstream(updated.upstreamKind) && !updatedUsesRawMode) {
           await this.secureLinks?.activate(id);
           this.queueSecureLinkRuntimeSample(updated);
@@ -841,20 +845,24 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
           rollbackError,
         });
       }
-      if (failure instanceof IngressDeliveryError && failure.appliedNodeIds.length > 0 && existing.enabled) {
-        // Members that already took the new config serve the restored row again.
+      // Nodes that already took the new config serve the restored row again: a group member the delivery reached
+      // before another member failed, and every node that took it when a later step failed (the Secure Link
+      // activation, IG-1). Re-delivering also records what each member serves, so the delivery state is true.
+      const appliedNodeIds =
+        failure instanceof IngressDeliveryError ? failure.appliedNodeIds : nodeChanged ? [] : deliveredNodeIds;
+      if (appliedNodeIds.length > 0 && existing.enabled) {
         try {
           const restored = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
           if (restored?.enabled) {
             await this.deliverHost(restored, {
               certOptions: { preserveLegacyOnUnsupported: true },
-              nodeIds: failure.appliedNodeIds,
+              ...(restored.ingressGroupId ? { nodeIds: appliedNodeIds } : {}),
             });
           }
         } catch (restoreError) {
-          logger.error('Failed to restore ingress group members after a failed route update', {
+          logger.error('Failed to restore the route on the nodes that took the rejected config', {
             hostId: id,
-            nodeIds: failure.appliedNodeIds,
+            nodeIds: appliedNodeIds,
             restoreError,
           });
         }
