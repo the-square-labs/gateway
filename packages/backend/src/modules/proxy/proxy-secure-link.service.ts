@@ -20,6 +20,7 @@ import {
   secureLinksSourcedByNode,
 } from '@/modules/ingress-groups/ingress-secure-link-sources.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 import type { ProxyDockerUpstreamService } from './proxy-docker-upstream.service.js';
@@ -2235,10 +2236,24 @@ export class ProxySecureLinkService {
         : rotateLinkId !== undefined
           ? [rotateLinkId]
           : [];
+    const sources = [...new Set(nodeIds)];
+    // A member of an ingress group that is not connected takes its source bindings in its reconnect resync, as
+    // probeSources assumes: it must not fail a change of the group's route on the members that are online (IG-1).
+    // One source (a single-node route) fails as before.
+    const group = sources.length > 1;
     await Promise.all(
-      [...new Set(nodeIds)].map((nodeId) =>
-        (this.syncSourceNode as (nodeId: string, ...rest: Array<string | undefined>) => Promise<void>)(nodeId, ...extra)
-      )
+      sources.map(async (nodeId) => {
+        if (group && !this.dispatch.isNodeConnected(nodeId)) return;
+        try {
+          await (this.syncSourceNode as (nodeId: string, ...rest: Array<string | undefined>) => Promise<void>)(
+            nodeId,
+            ...extra
+          );
+        } catch (error) {
+          if (group && isNodeNotConnectedError(error)) return;
+          throw error;
+        }
+      })
     );
   }
 
