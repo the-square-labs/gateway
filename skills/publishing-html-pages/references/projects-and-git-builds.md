@@ -46,7 +46,7 @@ Git source builds require the applicable entitlement (Business or Enterprise for
 3. `source_discover` with `sourceConnectorId`, `repositoryProjectId`, `branch`, and `applicationRoot` inspects the repository and `package.json`.
 4. `source_upsert` configures `applicationRoot`, `packageManager` (`npm`, `pnpm`, or `yarn`), `packageManagerVersion`, `nodeVersion` (`20`, `22`, or `24`), `buildScript`, `artifactDirectory`, `publishTag`, `autoBuild` and `autoDeploy` (both default true), public `buildArgs`, `buildSecretNames`, and the vulnerability `policy`. It needs `pages:edit` and `pages:deploy`.
 5. Store Build Secret values only through `source_secret_upsert` (`secretName`, write-only `secretValue`). Never ask for the value in chat: let the user enter it in the Gateway Console, or pass it from a local source the user named without echoing it. `source_secret_list` shows names only.
-6. Start a build with `source_build` (optional `commitSha`, `force`) when one is not queued automatically.
+6. Start a build with `source_build` (optional `commitSha`, `force`) when one is not queued automatically. `source_sync` instead polls the branch once right away and returns `{ source, changed, build }`; it builds only when the head changed and automatic builds are on. Both need `pages:deploy`.
 7. Follow it with `list_docker_builds` and `manage_docker_build` until the immutable artifact is approved and the Pages Deployment is ready.
 8. Confirm that the publication Tag points at the new ready Deployment and verify its link or Route.
 

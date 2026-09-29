@@ -4,7 +4,7 @@
 
 - `create_domain({ domain, nginxNodeId })` needs `domains:create`. `nginxNodeId` may be omitted only when exactly one nginx Node with a detected public address is open to your grant; otherwise the call fails and lists the eligible Nodes. `manage_domain({ operation: "list_nginx_nodes" })` lists them without Node permissions.
 - With a Cloudflare connector, `create_domain` returns conflict metadata when different A/AAAA records already exist. Overwrite or adopt only after explicit user approval.
-- `manage_domain({ operation: "check_dns", domainId })` re-checks resolution.
+- `manage_domain({ operation: "check_dns", domainId, repair: false })` re-checks resolution without writing. Omitting `repair: false` also repairs drifted provider records.
 - A Domain used by a Route cannot be deleted until it is removed from those Routes; `isSystem` Domains cannot be deleted.
 
 ## create_route fields

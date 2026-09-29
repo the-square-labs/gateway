@@ -27,7 +27,8 @@ Start, stop, restart, apply, pull and apply, `down`, cancellation, project delet
 
 ## Git sources in detail
 
-- `manage_docker_source` operations: `get`, `pending` (a Container that exists only as a queued first build), `create`, `upsert`, `remove`, `resolve`, `build`, `admission`, `connectors`, `repositories`, `secret_list`, `secret_upsert`, `secret_delete`.
+- `manage_docker_source` operations: `get`, `pending` (a Container that exists only as a queued first build), `create`, `upsert`, `remove`, `resolve`, `build`, `sync`, `admission`, `connectors`, `repositories`, `secret_list`, `secret_upsert`, `secret_delete`.
+- `sync` polls the source's branch once right away, also when automatic builds are off, and returns `{ source, changed, build }`. It queues a build only when the branch head changed and automatic builds are on; otherwise `build` is null. It needs the same scope as `build`, and a repeat within about 10 seconds returns the current state without polling.
 - Source fields: `connectorId`, `projectId` (the allowlisted repository), `branch`, `dockerfilePath`, `contextPath`, `autoBuild`, `autoDeploy`, non-secret `buildArgs`, and `buildSecretNames`. `create` also takes the new resource's name, folder, restart policy, runtime profile, routes, and health settings.
 - Build Secrets are encrypted, source-scoped, and write-only. Never pass them as build arguments or copy them into the build context.
 - A successful build produces a digest-pinned artifact in the internal registry. Automatic deployment recreates from that digest; the source branch is never the runtime identity.
