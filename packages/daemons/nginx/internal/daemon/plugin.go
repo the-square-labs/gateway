@@ -201,6 +201,12 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		logger.Warn("Gateway Pages storage is unavailable; Pages capability is disabled", "error", err)
 		p.pagesRuntime = nil
 	} else {
+		// nginx workers must reach the releases through the daemon's state
+		// directory, which state writes create owner-only (N-22).
+		p.pagesRuntime.SetReaderAccess(baseCfg.StateDir, p.secureLinks.socketOwnerUID)
+		if err := p.pagesRuntime.RepairTraversal(); err != nil {
+			logger.Warn("nginx workers may not reach Gateway Pages releases; Pages deliveries stay not ready until they can", "error", err)
+		}
 		// Set this only after every v1 runtime dependency has initialized and the
 		// confined storage root has passed a real filesystem preflight. This is
 		// deliberately a capability gate, not a daemon-version heuristic.
