@@ -438,7 +438,7 @@ export class NodesService {
   }
 
   async announceCreated(
-    node: { id: string; hostname: string; type: string; folderId?: string | null },
+    node: { id: string; hostname: string; type: string; folderId?: string | null; displayName?: string | null },
     userId: string
   ) {
     // Without a folder in hand, the destination is read from the node row.
@@ -453,7 +453,12 @@ export class NodesService {
       action: 'node.create',
       resourceType: 'node',
       resourceId: node.id,
-      details: { hostname: node.hostname, type: node.type },
+      // A pending node's hostname is a placeholder until it enrolls; the name keeps the entry readable after removal.
+      details: {
+        ...(node.displayName ? { displayName: node.displayName } : {}),
+        hostname: node.hostname,
+        type: node.type,
+      },
     });
 
     logger.info('Node created', { nodeId: node.id, hostname: node.hostname });
@@ -962,7 +967,11 @@ export class NodesService {
       action: 'node.remove',
       resourceType: 'node',
       resourceId: id,
-      details: { hostname: node.hostname, cascadedProxyHostCount: cascadeOfflineProxyHosts ? assignedHosts.length : 0 },
+      details: {
+        ...(node.displayName ? { displayName: node.displayName } : {}),
+        hostname: node.hostname,
+        cascadedProxyHostCount: cascadeOfflineProxyHosts ? assignedHosts.length : 0,
+      },
     });
 
     logger.info('Node removed', { nodeId: id, hostname: node.hostname });
