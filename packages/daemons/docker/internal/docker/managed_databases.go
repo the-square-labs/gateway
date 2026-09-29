@@ -267,6 +267,8 @@ type managedDatabaseManager struct {
 	logger  *slog.Logger
 	root    string
 	reserve int64
+	// dialTargets answers relay dials while dockerd does not (B-26).
+	dialTargets dialTargetLookups
 	// probeServed overrides the served-certificate probe (tests).
 	probeServed func(ctx context.Context, address, protocol string) (servedCertificate, error)
 	mu          sync.Mutex

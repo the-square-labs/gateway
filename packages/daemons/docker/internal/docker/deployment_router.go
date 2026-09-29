@@ -50,7 +50,8 @@ const (
 	// deploymentRouterConfigVersion heads every config this daemon renders; a
 	// router serving a config without it is rewritten (repairDeploymentRouter).
 	// v3: a known slot address is proxied to on every nginx version (B-26).
-	deploymentRouterConfigVersion = "# wiolett-gateway deployment router config v3"
+	// v4: no access log on the container's stdout (B-26).
+	deploymentRouterConfigVersion = "# wiolett-gateway deployment router config v4"
 	// deploymentRouterSlotAddressPrefix heads the line naming the active slot's
 	// address a config was rendered with.
 	deploymentRouterSlotAddressPrefix = "# gateway:slot-address "
@@ -665,6 +666,12 @@ func renderDeploymentNginxAt(routes []deploymentRouteConfig, activeSlot, slotAdd
 		// Body size is the ingress route's decision; the router in front of
 		// the slots must not add nginx's 1 MB default on top of it.
 		b.WriteString("  client_max_body_size 0;\n")
+		// No access log: the image writes it to the container's stdout, which
+		// dockerd drains. While dockerd is frozen that pipe fills (about 50 s
+		// at 30 requests/s) and every nginx worker then blocks writing a log
+		// line, holding all requests through the router (B-26). The ingress
+		// logs each request already.
+		b.WriteString("  access_log off;\n")
 		// A 502 or 504 the router generates itself (the slot is stopped,
 		// starting or unreachable) is marked, so readiness probes and
 		// operators tell it from an answer of the app (D6).
