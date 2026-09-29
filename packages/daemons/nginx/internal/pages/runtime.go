@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -45,6 +46,9 @@ type Runtime struct {
 	certsDir    string
 	htpasswdDir string
 	nginx       Nginx
+	// traversableBase and workerUID: see SetReaderAccess (N-22).
+	traversableBase string
+	workerUID       func() (int, error)
 }
 
 type uploadMeta struct {
@@ -299,7 +303,17 @@ func (r *Runtime) VerifyRelease(deploymentID, digest string) (releaseManifest, e
 	if digest != "" && manifest.SHA256 != digest {
 		return releaseManifest{}, errors.New("release checksum does not match")
 	}
+	// A release nginx cannot read is not ready: it would answer 404 (N-22).
+	if err := r.checkReaderAccess(r.releaseContentDir(deploymentID)); err != nil {
+		return releaseManifest{}, err
+	}
 	return manifest, nil
+}
+
+// IsReleaseNotStored reports a verification error that means the release is
+// not stored on this node (yet): Gateway then uploads it (N-23).
+func IsReleaseNotStored(err error) bool {
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 func (r *Runtime) MaterializePreview(profileID, deploymentID, hostname, certificateID, certificateVersion string, fallbackOptions ...PreviewFallback) error {
