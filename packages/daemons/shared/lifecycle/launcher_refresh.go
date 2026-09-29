@@ -47,7 +47,11 @@ const (
 var (
 	launcherRefreshCommitWait   = 5 * time.Minute
 	launcherRefreshPollInterval = 5 * time.Second
-	launcherRefreshLockTimeout  = 10 * time.Second
+	// launcherRefreshTrialWait bounds how long a daemon waits for a launcher
+	// trial in progress to end before it stages itself (the trial confirms
+	// after the child ran stable, well under a minute).
+	launcherRefreshTrialWait   = 3 * time.Minute
+	launcherRefreshLockTimeout = 10 * time.Second
 
 	// Overridable in tests: the resolved path of the running executable and
 	// the exec used to fall back from a failed trial launcher.
@@ -172,6 +176,14 @@ func regularFileExists(path string) (bool, error) {
 // stageLauncherRefresh stages source, the running committed daemon binary, as
 // the next launcher. It never modifies the launcher copy and does nothing
 // while a daemon update is pending.
+// errLauncherTrialInProgress: a launcher started from the staged copy and has
+// not confirmed or abandoned it yet. Every update restarts the launcher, and
+// that start tries the launcher the previous daemon staged, while the updated
+// daemon starts under it and would stage itself at once. Replacing the journal
+// then left the trial nothing to promote, so no update ever installed a new
+// launcher (N-20). The daemon waits for the trial to end instead.
+var errLauncherTrialInProgress = errors.New("a launcher trial is in progress")
+
 func stageLauncherRefresh(stateDir, launcherPath, source, version string, now time.Time) (bool, error) {
 	staged := false
 	err := withLauncherRefreshLock(stateDir, func() error {
@@ -199,6 +211,12 @@ func stageLauncherRefresh(stateDir, launcherPath, source, version string, now ti
 		}
 		next := stagedLauncherPath(launcherPath)
 		current, readErr := readLauncherRefreshState(stateDir)
+		if readErr == nil && current != nil && current.Phase == launcherRefreshPhaseTrial && current.Attempts > 0 &&
+			current.TargetSHA256 != sourceSum && filepath.Clean(current.LauncherPath) == filepath.Clean(launcherPath) {
+			// A launcher runs this trial (attempts are counted when it starts
+			// one); it promotes or abandons it shortly.
+			return errLauncherTrialInProgress
+		}
 		if readErr == nil && current != nil && current.TargetSHA256 == sourceSum && filepath.Clean(current.LauncherPath) == filepath.Clean(launcherPath) {
 			if current.Phase == launcherRefreshPhaseAbandoned {
 				// This binary already failed a launcher trial on this node.
@@ -432,6 +450,21 @@ func scheduleLauncherRefresh(version string, logger *slog.Logger) {
 			time.Sleep(launcherRefreshPollInterval)
 		}
 		staged, err := stageLauncherRefresh(stateDir, launcherPath, executable, version, time.Now())
+		if errors.Is(err, errLauncherTrialInProgress) {
+			// The launcher that started this daemon tries the launcher the
+			// previous daemon staged: let it confirm first, then stage this one
+			// for the next launcher start.
+			logger.Info("launcher refresh waits for the launcher trial in progress", "version", version)
+			trialDeadline := time.Now().Add(launcherRefreshTrialWait)
+			for errors.Is(err, errLauncherTrialInProgress) && time.Now().Before(trialDeadline) {
+				time.Sleep(launcherRefreshPollInterval)
+				staged, err = stageLauncherRefresh(stateDir, launcherPath, executable, version, time.Now())
+			}
+			if errors.Is(err, errLauncherTrialInProgress) {
+				logger.Info("launcher refresh skipped; the launcher trial did not end in time, the next daemon start stages it", "version", version)
+				return
+			}
+		}
 		if err != nil {
 			logger.Warn("launcher refresh was not staged", "error", err, "version", version)
 			return
