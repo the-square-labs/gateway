@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerComposeProjects, dockerComposeRevisions, dockerContainerFolderAssignments } from '@/db/schema/index.js';
+import {
+  dockerAvailabilityPolicies,
+  dockerComposeOperations,
+  dockerComposeProjects,
+  dockerComposeRevisions,
+  dockerContainerFolderAssignments,
+  proxyHosts,
+} from '@/db/schema/index.js';
 
 const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
 const COMPOSE_SERVICE_LABEL = 'com.docker.compose.service';
@@ -10,6 +17,7 @@ const COMPOSE_VOLUME_LABEL = 'com.docker.compose.volume';
 const COMPOSE_NETWORK_LABEL = 'com.docker.compose.network';
 const COMPOSE_SIDECAR_LABEL = 'wiolett.gateway.compose.sidecar';
 const GATEWAY_COMPOSE_MANAGED_LABEL = 'wiolett.gateway.compose.managed';
+const COMPOSE_ONEOFF_LABEL = 'com.docker.compose.oneoff';
 
 type DockerResource = Record<string, unknown>;
 type ComposeResourceKind = 'container' | 'volume' | 'network';
@@ -30,6 +38,7 @@ type ExistingComposeProject = {
   id: string;
   name: string;
   managementState: 'external' | 'managed';
+  desiredState?: string;
   observedFingerprint?: string | null;
   status?: string;
   availability?: string;
@@ -130,6 +139,74 @@ export function observeComposeProjects(input: {
     }));
 }
 
+/** What a Compose revision says about a service's lifetime (a subset of the normalized model). */
+export interface ComposeServiceLifetime {
+  restart?: string;
+  dependsOn?: Record<string, { condition?: string }>;
+}
+
+/** A container's exit code from its inventory status ("Exited (0) 2 minutes ago"); null while it did not exit. */
+function containerExitCode(container: DockerResource): number | null {
+  const match = /^exited\s*\((-?\d+)\)/i.exec(String(container.status ?? container.Status ?? '').trim());
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * N-25: the run state of a Compose project that should run, from its containers (sidecars and one-off `run`
+ * containers aside). A service is up while one of its containers runs. A service that is not meant to stay up and
+ * finished cleanly is complete, not down: every container exited with code 0 and it restarts never or only on failure
+ * (and no route serves it), or another service waits for it to complete successfully (an init or migration job).
+ * Any other service that does not run is down: a non-zero exit, an exit of a service that restarts always or unless
+ * stopped, a routed service that exited, a container that never started, or a declared service without a container.
+ * All services down -> stopped; some -> degraded (partially running); none -> running. Null without any container.
+ */
+export function composeProjectRunState(input: {
+  projectName: string;
+  containers: DockerResource[];
+  /** The active revision's services; without it, the services the containers belong to. */
+  services?: Record<string, ComposeServiceLifetime>;
+  /** Services a route (proxy host) serves: meant to stay up whatever their restart policy says. */
+  routedServices?: ReadonlySet<string>;
+}): 'running' | 'degraded' | 'stopped' | null {
+  const byService = new Map<string, DockerResource[]>();
+  for (const container of input.containers) {
+    const labels = labelsFor(container);
+    if (labelValue(labels, COMPOSE_PROJECT_LABEL) !== input.projectName) continue;
+    const service = labelValue(labels, COMPOSE_SERVICE_LABEL);
+    if (!service || labels[COMPOSE_SIDECAR_LABEL] === 'true') continue;
+    if (String(labels[COMPOSE_ONEOFF_LABEL] ?? '').toLowerCase() === 'true') continue;
+    byService.set(service, [...(byService.get(service) ?? []), container]);
+  }
+  if (byService.size === 0) return null;
+  const declared = input.services ?? {};
+  const serviceNames = new Set([...Object.keys(declared), ...byService.keys()]);
+  const awaitedCompletion = new Set(
+    Object.values(declared).flatMap((service) =>
+      Object.entries(service.dependsOn ?? {})
+        .filter(([, dependency]) => dependency.condition === 'service_completed_successfully')
+        .map(([name]) => name)
+    )
+  );
+  let up = 0;
+  let down = 0;
+  for (const name of serviceNames) {
+    const rows = byService.get(name) ?? [];
+    if (rows.some((row) => String(row.state ?? row.State ?? '').toLowerCase() === 'running')) {
+      up += 1;
+      continue;
+    }
+    const restart = String(declared[name]?.restart ?? 'no').toLowerCase();
+    const cleanExit = rows.length > 0 && rows.every((row) => containerExitCode(row) === 0);
+    const finishes =
+      awaitedCompletion.has(name) ||
+      ((restart === 'no' || restart.startsWith('on-failure')) && !input.routedServices?.has(name));
+    if (cleanExit && finishes) continue;
+    down += 1;
+  }
+  if (down === 0) return 'running';
+  return up === 0 ? 'stopped' : 'degraded';
+}
+
 export function filterDiscoverableComposeProjects(
   observed: ComposeProjectObservation[],
   existing: ExistingComposeProject[]
@@ -176,6 +253,7 @@ export async function reconcileExternalComposeProjects(
       id: dockerComposeProjects.id,
       name: dockerComposeProjects.name,
       managementState: dockerComposeProjects.managementState,
+      desiredState: dockerComposeProjects.desiredState,
       observedFingerprint: dockerComposeProjects.observedFingerprint,
       status: dockerComposeProjects.status,
       availability: dockerComposeProjects.availability,
@@ -200,6 +278,7 @@ export async function reconcileExternalComposeProjects(
     id: project.id,
     name: project.name,
     managementState: project.managementState,
+    desiredState: project.desiredState,
     observedFingerprint: project.observedFingerprint,
     status: project.status,
     availability: project.availability,
@@ -247,6 +326,8 @@ export async function reconcileExternalComposeProjects(
       onChange?.({ action: 'observed', projectId: current.id, projectName: project.name });
     }
   }
+
+  await reconcileManagedComposeRunStatus(db, nodeId, plan.observed, input.containers, observedAt, onChange);
 
   if (plan.missingExternal.length > 0) {
     await db
@@ -313,4 +394,89 @@ export async function reconcileExternalComposeProjects(
   }
 
   return observed;
+}
+
+/** Project statuses the container observation may move between; any other one belongs to an operation. */
+const OBSERVED_RUN_STATUSES = ['running', 'degraded', 'stopped'] as const;
+
+/**
+ * N-25: a managed project that should run follows what its containers do. A service stopped outside Gateway left the
+ * project "running" (and the status page operational) although the route answered 502. Projects with a Compose
+ * operation in flight (it sets the status itself) and projects Availability runs (their copies move between nodes)
+ * are left alone.
+ */
+async function reconcileManagedComposeRunStatus(
+  db: DrizzleClient,
+  nodeId: string,
+  observed: Array<{ project: ComposeProjectObservation; existing?: ExistingComposeProject }>,
+  containers: DockerResource[] | undefined,
+  observedAt: Date,
+  onChange?: (change: ComposeDiscoveryChange) => void
+): Promise<void> {
+  const managed = observed.flatMap(({ existing }) =>
+    existing &&
+    existing.managementState === 'managed' &&
+    existing.desiredState === 'running' &&
+    (OBSERVED_RUN_STATUSES as readonly string[]).includes(existing.status ?? '')
+      ? [existing]
+      : []
+  );
+  if (managed.length === 0) return;
+  const ids = managed.map((project) => project.id);
+  const [operations, policies, revisions, routes] = await Promise.all([
+    db
+      .select({ projectId: dockerComposeOperations.projectId })
+      .from(dockerComposeOperations)
+      .where(
+        and(
+          inArray(dockerComposeOperations.projectId, ids),
+          inArray(dockerComposeOperations.status, ['pending', 'running', 'cancelling', 'reconciling'])
+        )
+      ),
+    db
+      .select({ projectId: dockerAvailabilityPolicies.composeProjectId })
+      .from(dockerAvailabilityPolicies)
+      .where(
+        and(inArray(dockerAvailabilityPolicies.composeProjectId, ids), ne(dockerAvailabilityPolicies.mode, 'single'))
+      ),
+    db
+      .select({ projectId: dockerComposeRevisions.projectId, model: dockerComposeRevisions.normalizedModel })
+      .from(dockerComposeRevisions)
+      .innerJoin(dockerComposeProjects, eq(dockerComposeProjects.activeRevisionId, dockerComposeRevisions.id))
+      .where(inArray(dockerComposeRevisions.projectId, ids)),
+    db
+      .select({ projectId: proxyHosts.dockerComposeProjectId, service: proxyHosts.dockerComposeServiceName })
+      .from(proxyHosts)
+      .where(inArray(proxyHosts.dockerComposeProjectId, ids)),
+  ]);
+  const skip = new Set([...operations, ...policies].map(({ projectId }) => projectId));
+  const modelByProject = new Map(revisions.map(({ projectId, model }) => [projectId, model]));
+  const routedByProject = new Map<string, Set<string>>();
+  for (const { projectId, service } of routes) {
+    if (!projectId || !service) continue;
+    routedByProject.set(projectId, (routedByProject.get(projectId) ?? new Set<string>()).add(service));
+  }
+  for (const project of managed) {
+    if (skip.has(project.id)) continue;
+    const next = composeProjectRunState({
+      projectName: project.name,
+      containers: containers ?? [],
+      services: modelByProject.get(project.id)?.services,
+      routedServices: routedByProject.get(project.id),
+    });
+    if (!next || next === project.status) continue;
+    const [updated] = await db
+      .update(dockerComposeProjects)
+      .set({ status: next, updatedAt: observedAt })
+      .where(
+        and(
+          eq(dockerComposeProjects.id, project.id),
+          eq(dockerComposeProjects.nodeId, nodeId),
+          eq(dockerComposeProjects.desiredState, 'running'),
+          inArray(dockerComposeProjects.status, [...OBSERVED_RUN_STATUSES])
+        )
+      )
+      .returning({ id: dockerComposeProjects.id });
+    if (updated) onChange?.({ action: 'observed', projectId: project.id, projectName: project.name });
+  }
 }
