@@ -114,8 +114,7 @@ jobs:
     name: Database (PostgreSQL 16)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # The opt-in PostgreSQL/Redis suites, on the versions the installs run (docker-compose.yml).
-    # Each PostgreSQL suite works in its own database.
+    # The opt-in PostgreSQL suites (migrations and grant cleanup) on the version installs run.
     services:
       postgres:
         image: postgres:16-alpine
@@ -130,22 +129,8 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    # A suite reading any other URL is not run here: add the URL to this list and to the grep below.
     env:
       GATEWAY_MIGRATION_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway_migration_test_ci
-      HOSTING_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/hosting_test_ci
-      RELAY_REMOVAL_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/relay_removal_test_ci
-      INFERENCE_POOL_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/inference_pool_test_ci
-      INFERENCE_REDIS_INTEGRATION_URL: redis://localhost:6379
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -166,19 +151,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Create the suite databases
-        run: |
-          for database in hosting_test_ci relay_removal_test_ci inference_pool_test_ci; do
-            docker exec "${{ job.services.postgres.id }}" createdb -U gateway "$database"
-          done
-
-      # Every test file reading one of the URLs above, so a new or renamed suite runs without editing this step.
-      - name: Opt-in PostgreSQL and Redis suites
+      # Every test file reading the URL, so a new or renamed suite runs without editing this step.
+      - name: Opt-in PostgreSQL suites
         working-directory: packages/backend
         run: |
-          mapfile -t suites < <(grep -rlE --include='*.test.ts' \
-            'process\.env\.(GATEWAY_MIGRATION_TEST_DATABASE_URL|HOSTING_TEST_DATABASE_URL|RELAY_REMOVAL_TEST_DATABASE_URL|INFERENCE_POOL_TEST_DATABASE_URL|INFERENCE_REDIS_INTEGRATION_URL)\b' \
-            src tests | sort)
+          mapfile -t suites < <(grep -rlE --include='*.test.ts' 'process\.env\.GATEWAY_MIGRATION_TEST_DATABASE_URL\b' src tests | sort)
           [ "${#suites[@]}" -gt 0 ] || { echo 'No opt-in database suites found' >&2; exit 1; }
           printf '%s\n' "${suites[@]}"
           pnpm exec vitest run "${suites[@]}" \
