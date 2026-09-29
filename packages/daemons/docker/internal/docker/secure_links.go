@@ -41,6 +41,26 @@ var officialConnectorReleaseTagPattern = regexp.MustCompile(`^ghcr\.io/the-squar
 var proxySecureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 var errSecureLinkTargetUnavailable = errors.New("target container is unavailable")
 
+// secureLinkTargetUnknownError is a target check dockerd did not answer: the
+// target may run or not. Every caller reads it as errSecureLinkTargetUnavailable
+// (the same text, which Gateway parses); apply keeps a link bound to that same
+// target instead (B-24).
+type secureLinkTargetUnknownError struct{ cause error }
+
+func (e secureLinkTargetUnknownError) Error() string { return errSecureLinkTargetUnavailable.Error() }
+func (e secureLinkTargetUnknownError) Unwrap() error { return e.cause }
+func (e secureLinkTargetUnknownError) Is(target error) bool {
+	return target == errSecureLinkTargetUnavailable
+}
+
+// secureLinkConnectorUnchangedError is an ensureConnector failure before it
+// changed anything (dockerd did not answer its first checks): the connector
+// and its bindings are as they were, and apply leaves them serving (B-24).
+type secureLinkConnectorUnchangedError struct{ err error }
+
+func (e secureLinkConnectorUnchangedError) Error() string { return e.err.Error() }
+func (e secureLinkConnectorUnchangedError) Unwrap() error { return e.err }
+
 type dockerSecureLinkManager struct {
 	mu         sync.Mutex
 	plugin     *DockerPlugin
@@ -246,11 +266,23 @@ func (m *dockerSecureLinkManager) apply(
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	kept := 0
 	resolved, desiredNetworks, skipped, err := resolveSecureLinkTargets(bindings, func(binding *pb.ProxySecureLinkBinding) (string, string, error) {
-		return m.resolveTarget(ctx, binding.TargetContainer, binding.TargetNetwork, binding.TargetHost, binding.AllowNetworkReselection)
+		host, network, err := m.resolveTarget(ctx, binding.TargetContainer, binding.TargetNetwork, binding.TargetHost, binding.AllowNetworkReselection)
+		var unknown secureLinkTargetUnknownError
+		if err != nil && errors.As(err, &unknown) {
+			if current, ok := m.boundTargetLocked(binding); ok {
+				kept++
+				return current.targetHost, current.targetNetwork, nil
+			}
+		}
+		return host, network, err
 	}, perBinding)
 	if err != nil {
 		return nil, err
+	}
+	if kept > 0 && m.plugin != nil && m.plugin.logger != nil {
+		m.plugin.logger.Warn("dockerd did not answer secure-link target checks; bound links keep their targets", "links", kept)
 	}
 	unbound := make(map[string]struct{}, len(skipped))
 	for _, skip := range skipped {
@@ -269,7 +301,10 @@ func (m *dockerSecureLinkManager) apply(
 		}
 	}
 	if err := m.ensureConnector(ctx, image); err != nil {
-		m.failClosed(context.Background())
+		var unchanged secureLinkConnectorUnchangedError
+		if !errors.As(err, &unchanged) {
+			m.failClosed(context.Background())
+		}
 		return nil, err
 	}
 	for networkName := range desiredNetworks {
@@ -343,6 +378,26 @@ func (m *dockerSecureLinkManager) apply(
 	return statuses, nil
 }
 
+// boundTargetLocked returns the target a link is bound to when the command
+// keeps it there: the same container, address and network. dockerd not
+// answering a check is no evidence that the target stopped, and only dockerd
+// can hand its address to another container (B-8, D5): a sync or restore that
+// runs while dockerd is frozen or overloaded must not unbind a serving link
+// (B-24). Callers hold mu.
+func (m *dockerSecureLinkManager) boundTargetLocked(binding *pb.ProxySecureLinkBinding) (dockerSecureLinkBinding, bool) {
+	current, ok := m.bindings[binding.LinkId]
+	if !ok || current.targetHost == "" || current.targetContainer != binding.TargetContainer {
+		return dockerSecureLinkBinding{}, false
+	}
+	if binding.TargetHost != "" && binding.TargetHost != current.targetHost {
+		return dockerSecureLinkBinding{}, false
+	}
+	if binding.TargetNetwork != "" && binding.TargetNetwork != current.targetNetwork {
+		return dockerSecureLinkBinding{}, false
+	}
+	return current, true
+}
+
 // skippedSecureLinkTarget is a binding left out of the connector.
 type skippedSecureLinkTarget struct {
 	binding *pb.ProxySecureLinkBinding
@@ -411,7 +466,7 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 	}
 	if err != nil {
 		if !isNotFoundErr(err) {
-			return fmt.Errorf("inspect secure-link management network: %w", err)
+			return secureLinkConnectorUnchangedError{fmt.Errorf("inspect secure-link management network: %w", err)}
 		}
 		if _, err := m.plugin.client.cli.NetworkCreate(ctx, secureLinkManagementNetwork, mobyclient.NetworkCreateOptions{
 			Driver: "bridge", Internal: true, Labels: map[string]string{"wiolett.gateway.managed": "secure-link"},
@@ -433,7 +488,7 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 	}
 	if err != nil {
 		if !isNotFoundErr(err) && err.Error() != "connector configuration changed" {
-			return fmt.Errorf("inspect secure-link connector: %w", err)
+			return secureLinkConnectorUnchangedError{fmt.Errorf("inspect secure-link connector: %w", err)}
 		}
 		if image != developmentSecureLinkImage {
 			if err := m.plugin.client.EnsureImage(ctx, image, ""); err != nil {
@@ -582,6 +637,9 @@ func (m *dockerSecureLinkManager) resolveTarget(
 	allowNetworkReselection bool,
 ) (string, string, error) {
 	inspect, err := m.plugin.client.cli.ContainerInspect(ctx, containerName, mobyclient.ContainerInspectOptions{})
+	if err != nil && !isNotFoundErr(err) {
+		return "", "", secureLinkTargetUnknownError{cause: err}
+	}
 	if err != nil || inspect.Container.State == nil || !inspect.Container.State.Running || inspect.Container.NetworkSettings == nil {
 		return "", "", errSecureLinkTargetUnavailable
 	}

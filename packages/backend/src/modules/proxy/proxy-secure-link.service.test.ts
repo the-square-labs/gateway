@@ -1527,8 +1527,16 @@ describe('ProxySecureLinkService migration rollback', () => {
 
     await service.releaseTargetNetwork('docker-node', 'database-network');
 
+    // Only the released network's link leaves; a reselectable link is pinned to its own network (B-24).
+    expect(dispatch.sendProxySecureLinks).toHaveBeenCalledTimes(1);
     expect(dispatch.sendProxySecureLinks).toHaveBeenCalledWith('docker-node', [
       expect.objectContaining({ linkId: retained.id, targetNetwork: 'application-network' }),
+      expect.objectContaining({
+        linkId: staleReselectable.id,
+        targetNetwork: 'stale-network',
+        allowNetworkReselection: false,
+      }),
+      expect.objectContaining({ linkId: emptyReselectable.id, targetNetwork: '', allowNetworkReselection: true }),
     ]);
   });
 
