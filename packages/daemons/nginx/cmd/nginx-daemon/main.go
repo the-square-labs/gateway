@@ -93,7 +93,7 @@ func main() {
 	}()
 
 	if err := d.Run(ctx); err != nil {
-		logger.Error("daemon exited with error", "error", err)
+		lifecycle.LogDaemonExit(logger, "daemon exited with error", err)
 		os.Exit(lifecycle.DaemonExitCode(err))
 	}
 }

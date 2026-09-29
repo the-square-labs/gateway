@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -33,10 +35,12 @@ const (
 // watchdogBootstrap installs a missing lease watchdog on nodes installed
 // before the watchdog existed (existing nodes update only the daemon binary).
 // It bootstraps only when there is no heartbeat, no binary and no service
-// file; it never updates, restarts or stops an existing watchdog, which stays
-// independent of the daemon afterwards (A12.5). Release resolution, signed
-// manifest verification and the service files are the installer's and the
-// watchdog self-update's (daemon-shared/leasewatchdog).
+// file; it never updates or stops an existing watchdog, which stays
+// independent of the daemon afterwards (A12.5). The one thing it keeps in
+// line on an existing watchdog is the release channel of its self-update
+// (alignChannel). Release resolution, signed manifest verification and the
+// service files are the installer's and the watchdog self-update's
+// (daemon-shared/leasewatchdog).
 type watchdogBootstrap struct {
 	logger          *slog.Logger
 	heartbeatFresh  func() bool
@@ -47,9 +51,11 @@ type watchdogBootstrap struct {
 	releasesURL     string
 	artifactBaseURL string
 	channel         string
+	release         bool
 	fetch           func(ctx context.Context) (string, *updateauth.DaemonManifestPayload, error)
 	replace         func(downloadURL, version, sha256, manifest, daemonType, destination string, logger *slog.Logger) error
 	selfTest        func(ctx context.Context, path string) error
+	readFile        func(path string) ([]byte, error)
 	writeFile       func(path string, data []byte, mode os.FileMode) error
 	rename          func(from, to string) error
 	remove          func(path string) error
@@ -69,6 +75,9 @@ func newWatchdogBootstrap(logger *slog.Logger, heartbeatFresh func() bool, relea
 	}
 	b := &watchdogBootstrap{
 		logger: logger, heartbeatFresh: heartbeatFresh, releasesURL: releasesURL, artifactBaseURL: artifactBaseURL, channel: channel,
+		// The channel this daemon updates on; a development build never
+		// changes the watchdog's.
+		release:        strings.HasPrefix(lifecycle.Version, "v"),
 		exists:         func(path string) bool { _, err := os.Stat(path); return err == nil },
 		euid:           os.Geteuid,
 		serviceManager: detectServiceManager,
@@ -80,6 +89,7 @@ func newWatchdogBootstrap(logger *slog.Logger, heartbeatFresh func() bool, relea
 		},
 		replace:   lifecycle.ReplaceBinaryAtPath,
 		selfTest:  func(ctx context.Context, path string) error { return exec.CommandContext(ctx, path, "self-test").Run() },
+		readFile:  os.ReadFile,
 		writeFile: os.WriteFile,
 		rename:    os.Rename,
 		remove:    os.Remove,
@@ -168,6 +178,9 @@ func (b *watchdogBootstrap) Run(ctx context.Context) {
 	// Only a watchdog that appears while this process runs changes the
 	// capabilities it registered with.
 	startedFresh := b.heartbeatFresh()
+	if err := b.alignChannel(ctx); err != nil {
+		b.logger.Warn("could not align the lease watchdog's release channel with this daemon's", "channel", b.channel, "error", err)
+	}
 	for ctx.Err() == nil {
 		missing, reason := b.evaluate()
 		if !missing {
@@ -249,6 +262,9 @@ func (b *watchdogBootstrap) install(ctx context.Context) error {
 
 func (b *watchdogBootstrap) installService(ctx context.Context) error {
 	args := leasewatchdog.RunArgs(b.recordsOwner(), orDefaultURL(b.releasesURL, leasewatchdog.DefaultReleasesURL), orDefaultURL(b.artifactBaseURL, leasewatchdog.DefaultArtifactBaseURL))
+	if b.release {
+		args, _ = argsWithChannel(args, b.channel)
+	}
 	switch b.serviceManager() {
 	case "systemd":
 		if err := b.writeFile(leasewatchdog.SystemdUnitPath, []byte(leasewatchdog.SystemdUnit(leasewatchdog.BinaryPath, args)), 0o644); err != nil {
@@ -280,4 +296,128 @@ func orDefaultURL(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// alignChannel makes an installed watchdog's self-update follow the release
+// channel this daemon updates on. The node installer writes the service
+// without --channel, i.e. stable, so on a preview-channel node the watchdog
+// never took a release candidate while the daemons moved on (rc.20 M-8). Only
+// the channel flag of the auto-updating watchdog service the installer (or
+// this bootstrap) wrote is changed, never another flag or a service an
+// operator rewrote; when the file changed, the service manager reloads it and
+// restarts the watchdog if it runs. Deadline records stay on tmpfs and the
+// next process enforces them at once, as after the watchdog's own
+// self-update.
+func (b *watchdogBootstrap) alignChannel(ctx context.Context) error {
+	if !b.release || b.euid() != 0 {
+		return nil
+	}
+	var path, prefix, suffix string
+	var mode os.FileMode
+	manager := b.serviceManager()
+	switch manager {
+	case "systemd":
+		path, prefix, mode = leasewatchdog.SystemdUnitPath, "ExecStart="+leasewatchdog.BinaryPath+" ", 0o644
+	case "openrc":
+		path, prefix, suffix, mode = leasewatchdog.OpenRCPath, `command_args="`, `"`, 0o755
+	default:
+		return nil
+	}
+	data, err := b.readFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	updated, changed := serviceWithChannel(string(data), prefix, suffix, b.channel)
+	if !changed {
+		return nil
+	}
+	// A dot name: neither systemd nor OpenRC takes it for a service while
+	// it is staged.
+	staged := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".next")
+	if err := b.writeFile(staged, []byte(updated), mode); err != nil {
+		return fmt.Errorf("write lease watchdog service: %w", err)
+	}
+	if err := b.rename(staged, path); err != nil {
+		_ = b.remove(staged)
+		return fmt.Errorf("install lease watchdog service: %w", err)
+	}
+	b.logger.Info("lease watchdog now follows this daemon's release channel; restarting it", "channel", b.channel, "service", path)
+	if manager == "systemd" {
+		for _, command := range [][]string{{"daemon-reload"}, {"try-restart", leasewatchdog.UnitName}} {
+			if err := b.run(ctx, "systemctl", command...); err != nil {
+				return fmt.Errorf("systemctl %s: %w", strings.Join(command, " "), err)
+			}
+		}
+		return nil
+	}
+	if err := b.run(ctx, "rc-service", "--ifstarted", leasewatchdog.UnitName, "restart"); err != nil {
+		return fmt.Errorf("rc-service restart: %w", err)
+	}
+	return nil
+}
+
+// serviceWithChannel sets the channel in the watchdog command line of a
+// service file: the line that starts with prefix and ends with suffix and
+// runs the watchdog with --auto-update. It reports whether anything changed.
+func serviceWithChannel(content, prefix, suffix, channel string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, suffix) || len(line) < len(prefix)+len(suffix) {
+			continue
+		}
+		args := line[len(prefix) : len(line)-len(suffix)]
+		fields := strings.Fields(args)
+		if len(fields) == 0 || fields[0] != "run" || !autoUpdates(fields) {
+			return content, false
+		}
+		updated, changed := argsWithChannel(args, channel)
+		if !changed {
+			return content, false
+		}
+		lines[i] = prefix + updated + suffix
+		return strings.Join(lines, "\n"), true
+	}
+	return content, false
+}
+
+// autoUpdates reports whether the watchdog flags enable its self-update.
+func autoUpdates(fields []string) bool {
+	for _, field := range fields {
+		switch strings.TrimLeft(field, "-") {
+		case "auto-update", "auto-update=true", "auto-update=1":
+			return strings.HasPrefix(field, "-")
+		}
+	}
+	return false
+}
+
+// argsWithChannel returns the watchdog run arguments with channel selected:
+// the --channel flag is dropped for stable (the watchdog's default) and set
+// for any other channel. It reports whether the effective channel changed.
+func argsWithChannel(args, channel string) (string, bool) {
+	fields := strings.Fields(args)
+	current := "stable"
+	kept := make([]string, 0, len(fields)+2)
+	for i := 0; i < len(fields); i++ {
+		name, value, inline := strings.Cut(strings.TrimLeft(fields[i], "-"), "=")
+		if !strings.HasPrefix(fields[i], "-") || name != "channel" {
+			kept = append(kept, fields[i])
+			continue
+		}
+		if !inline && i+1 < len(fields) {
+			i++
+			value = fields[i]
+		}
+		current = value
+	}
+	if current == channel {
+		return args, false
+	}
+	if channel != "stable" {
+		kept = append(kept, "--channel", channel)
+	}
+	return strings.Join(kept, " "), true
 }

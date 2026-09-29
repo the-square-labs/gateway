@@ -33,11 +33,27 @@ func (e *RestartRequestedError) Error() string {
 // while preserving the ordinary non-zero failure contract for every other
 // daemon error.
 func DaemonExitCode(err error) int {
-	var restart *RestartRequestedError
-	if errors.As(err, &restart) {
+	if RestartRequested(err) {
 		return LauncherUpdateExitCode
 	}
 	return 1
+}
+
+// RestartRequested reports whether err is the intentional exit for a restart
+// (a staged self-update): a normal exit, not a failure.
+func RestartRequested(err error) bool {
+	var restart *RestartRequestedError
+	return errors.As(err, &restart)
+}
+
+// LogDaemonExit logs why Run returned: at info for a requested restart (a
+// staged self-update is a normal exit), at error for anything else.
+func LogDaemonExit(logger *slog.Logger, message string, err error) {
+	if RestartRequested(err) {
+		logger.Info("daemon exiting for its supervisor to restart it", "reason", err.Error())
+		return
+	}
+	logger.Error(message, "error", err)
 }
 
 // DaemonPlugin defines the interface that daemon-specific logic must implement.
