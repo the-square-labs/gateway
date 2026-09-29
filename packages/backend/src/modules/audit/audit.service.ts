@@ -33,6 +33,14 @@ import { INTERNAL_DOCKER_REGISTRY_ID } from '@/modules/docker/docker-registry-in
 import { backgroundWrites } from '@/services/background-writes.js';
 import type { PaginatedResponse } from '@/types.js';
 import { getAuditRequestContext, markAuditEmitted } from './audit-request-context.js';
+import {
+  finishSpooledAuditBatch,
+  isAuditDatabaseUnavailable,
+  type SpooledAuditBatch,
+  type SpooledAuditRow,
+  spoolAuditRow,
+  takeSpooledAuditBatches,
+} from './audit-spool.js';
 import type { SiemAuditOutboxService } from './siem-outbox.service.js';
 
 const logger = createChildLogger('AuditService');
@@ -108,6 +116,7 @@ export class AuditService {
   }
 
   private async writeEntry(entry: AuditEntry, options: AuditLogOptions): Promise<boolean> {
+    let unstored: SpooledAuditRow | null = null;
     try {
       const requestContext = getAuditRequestContext();
       const impersonation = requestContext?.impersonation;
@@ -133,69 +142,85 @@ export class AuditService {
             clientId: requestContext.mcp.clientId,
           }
         : undefined;
-      const siemEnabled = this.siemOutboxService ? await this.siemOutboxService.isEnabled() : false;
-      const actorEmail = siemEnabled ? await this.getActorEmail(actorUserId) : null;
-      const siemEvent =
-        siemEnabled && this.siemOutboxService
-          ? await this.siemOutboxService.buildEvent({
-              auditLogId: id,
-              createdAt,
-              action: entry.action,
-              actorId: actorUserId,
-              actorEmail,
-              resourceType: entry.resourceType,
-              resourceId: entry.resourceId ?? null,
-              sourceIp: ipAddress,
-            })
-          : null;
-      const persist = async (writer: Pick<DrizzleClient, 'insert'> & { select?: DrizzleClient['select'] }) => {
-        await writer.insert(auditLog).values({
-          id,
-          userId: actorUserId,
-          action: entry.action,
-          resourceType: entry.resourceType,
-          resourceId: entry.resourceId,
-          details:
-            mcpDetails || impersonation
-              ? {
-                  ...entry.details,
-                  ...mcpDetails,
-                  ...(impersonation
-                    ? {
-                        impersonatedUserId: impersonation.subjectUserId,
-                        impersonatedUserEmail: impersonation.subjectEmail,
-                        impersonatedUserName: impersonation.subjectName,
-                      }
-                    : {}),
-                }
-              : entry.details,
-          ipAddress,
-          userAgent: entry.userAgent ?? requestContext?.userAgent,
-          createdAt,
-        });
+      const values = {
+        id,
+        userId: actorUserId,
+        action: entry.action,
+        resourceType: entry.resourceType,
+        resourceId: entry.resourceId,
+        details:
+          mcpDetails || impersonation
+            ? {
+                ...entry.details,
+                ...mcpDetails,
+                ...(impersonation
+                  ? {
+                      impersonatedUserId: impersonation.subjectUserId,
+                      impersonatedUserEmail: impersonation.subjectEmail,
+                      impersonatedUserName: impersonation.subjectName,
+                    }
+                  : {}),
+              }
+            : entry.details,
+        ipAddress,
+        userAgent: entry.userAgent ?? requestContext?.userAgent,
+        createdAt,
+      };
+      unstored = {
+        id,
+        userId: actorUserId,
+        action: entry.action,
+        resourceType: entry.resourceType,
+        resourceId: entry.resourceId ?? null,
+        details: values.details ?? null,
+        ipAddress,
+        userAgent: values.userAgent ?? null,
+        createdAt: createdAt.toISOString(),
+      };
+      const siemEvent = await this.buildSiemEvent(
+        id,
+        createdAt,
+        actorUserId,
+        entry.action,
+        entry.resourceType,
+        entry.resourceId ?? null,
+        ipAddress
+      );
+      await this.inTransaction(async (writer) => {
+        await writer.insert(auditLog).values(values);
         if (siemEvent && this.siemOutboxService) {
-          await this.siemOutboxService.enqueue(
-            writer as Pick<DrizzleClient, 'select' | 'insert'>,
-            id,
-            siemEvent,
-            createdAt
-          );
+          await this.siemOutboxService.enqueue(writer, id, siemEvent, createdAt);
         }
-      };
-      const transactionalDb = this.db as DrizzleClient & {
-        transaction?: (callback: (tx: Pick<DrizzleClient, 'select' | 'insert'>) => Promise<void>) => Promise<void>;
-      };
-      if (transactionalDb.transaction) {
-        await transactionalDb.transaction((tx) => persist(tx));
-      } else {
-        await persist(this.db);
-      }
+      });
       this.eventBus?.publish('audit.changed', {});
       if (options.markRequest ?? true) {
         markAuditEmitted();
       }
       return true;
     } catch (error) {
+      // The database is already gone (a host shutdown stops postgres with the app, M-7): keep the row locally and
+      // store it at the next start instead of losing it.
+      if (unstored && isAuditDatabaseUnavailable(error)) {
+        const spooled = await spoolAuditRow(unstored).then(
+          () => true,
+          (spoolError: unknown) => {
+            logger.warn('Audit row could not be kept locally either', { error: spoolError });
+            return false;
+          }
+        );
+        if (spooled) {
+          logger.warn('Audit log kept locally until the database is back', {
+            action: entry.action,
+            resourceType: entry.resourceType,
+            resourceId: entry.resourceId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          if (options.markRequest ?? true) {
+            markAuditEmitted();
+          }
+          return true;
+        }
+      }
       logger.error('Failed to write audit log', {
         error,
         action: entry.action,
@@ -204,6 +229,111 @@ export class AuditService {
       });
       return false;
     }
+  }
+
+  private async buildSiemEvent(
+    auditLogId: string,
+    createdAt: Date,
+    actorId: string | null,
+    action: string,
+    resourceType: string,
+    resourceId: string | null,
+    sourceIp: string | null
+  ) {
+    const siemEnabled = this.siemOutboxService ? await this.siemOutboxService.isEnabled() : false;
+    if (!siemEnabled || !this.siemOutboxService) return null;
+    const actorEmail = await this.getActorEmail(actorId);
+    return this.siemOutboxService.buildEvent({
+      auditLogId,
+      createdAt,
+      action,
+      actorId,
+      actorEmail,
+      resourceType,
+      resourceId,
+      sourceIp,
+    });
+  }
+
+  private async inTransaction(
+    work: (writer: Pick<DrizzleClient, 'select' | 'insert'>) => Promise<void>
+  ): Promise<void> {
+    const transactionalDb = this.db as DrizzleClient & {
+      transaction?: (callback: (tx: Pick<DrizzleClient, 'select' | 'insert'>) => Promise<void>) => Promise<void>;
+    };
+    if (transactionalDb.transaction) {
+      await transactionalDb.transaction((tx) => work(tx));
+    } else {
+      await work(this.db);
+    }
+  }
+
+  /**
+   * Stores the audit rows kept locally while the database was gone (M-7). Runs once at start; a row stored before
+   * (a start that stopped halfway) is not added twice. Rows that still cannot be stored wait for the next start.
+   */
+  async replaySpooledRows(): Promise<void> {
+    let batches: SpooledAuditBatch[];
+    try {
+      batches = await takeSpooledAuditBatches();
+    } catch (error) {
+      logger.warn('Audit rows kept locally could not be read', { error });
+      return;
+    }
+    let stored = 0;
+    for (const batch of batches) {
+      for (const row of batch.rows) {
+        try {
+          if (await this.storeSpooledRow(row)) stored += 1;
+        } catch (error) {
+          logger.warn('Audit rows kept locally wait for the next start', { error, file: batch.file });
+          return;
+        }
+      }
+      if (batch.malformed)
+        logger.warn('Dropped audit rows cut by a crash', { count: batch.malformed, file: batch.file });
+      await finishSpooledAuditBatch(batch);
+    }
+    if (stored) {
+      logger.info('Stored the audit rows kept while the database was gone', { count: stored });
+      this.eventBus?.publish('audit.changed', {});
+    }
+  }
+
+  private async storeSpooledRow(row: SpooledAuditRow): Promise<boolean> {
+    const createdAt = new Date(row.createdAt);
+    const siemEvent = await this.buildSiemEvent(
+      row.id,
+      createdAt,
+      row.userId,
+      row.action,
+      row.resourceType,
+      row.resourceId,
+      row.ipAddress
+    );
+    let inserted = false;
+    await this.inTransaction(async (writer) => {
+      const written = await writer
+        .insert(auditLog)
+        .values({
+          id: row.id,
+          userId: row.userId,
+          action: row.action,
+          resourceType: row.resourceType,
+          resourceId: row.resourceId ?? undefined,
+          details: row.details ?? undefined,
+          ipAddress: row.ipAddress,
+          userAgent: row.userAgent ?? undefined,
+          createdAt,
+        })
+        .onConflictDoNothing({ target: auditLog.id })
+        .returning({ id: auditLog.id });
+      inserted = written.length > 0;
+      if (inserted && siemEvent && this.siemOutboxService) {
+        await this.siemOutboxService.enqueue(writer, row.id, siemEvent, createdAt);
+      }
+    });
+    return inserted;
   }
 
   private async getActorEmail(userId: string | null): Promise<string | null> {

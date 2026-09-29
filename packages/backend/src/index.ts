@@ -196,6 +196,8 @@ async function main() {
     const registry = container.resolve(NodeRegistryService);
     const dispatch = container.resolve(NodeDispatchService);
     const auditService = container.resolve(AuditService);
+    // Audit rows the previous process kept locally because postgres stopped before its drain (host shutdown, M-7).
+    void auditService.replaySpooledRows().catch((error) => logger.warn('Replaying kept audit rows failed', { error }));
     const caService = container.resolve(CAService);
     const cryptoService = container.resolve(CryptoService);
     const db = container.resolve(TOKENS.DrizzleClient) as any;
