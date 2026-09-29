@@ -247,6 +247,12 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 		confirmed := trial
 		trial = nil
 		if err := promoteLauncherRefresh(spec.StateDir, confirmed); err != nil {
+			if errors.Is(err, errLauncherTrialSuperseded) {
+				// A daemon update during the trial staged a newer launcher: that one
+				// is tried on the next launcher start instead of this one.
+				logger.Info("launcher trial superseded by a newer staged launcher; the installed launcher stays until that one is tried", "launcher", confirmed.launcherPath)
+				return
+			}
 			logger.Error("staged launcher was stable but could not replace the installed launcher", "error", err)
 			return
 		}

@@ -343,6 +343,13 @@ func detectLauncherRefreshTrial(stateDir string) *launcherRefreshTrial {
 	}
 }
 
+// errLauncherTrialSuperseded: while this launcher was on trial, its journal
+// was replaced. A newer daemon (an update during the trial) staged itself as
+// the next launcher, or the trial was retired. Nothing is promoted; the
+// installed launcher stays, and a newer staged one is tried on the next
+// launcher start. Expected after an update that lands during a trial.
+var errLauncherTrialSuperseded = errors.New("launcher refresh journal changed during the trial")
+
 // promoteLauncherRefresh replaces the launcher copy with the proven trial
 // launcher and keeps the replaced copy as <launcher>.previous.
 func promoteLauncherRefresh(stateDir string, trial *launcherRefreshTrial) error {
@@ -352,7 +359,7 @@ func promoteLauncherRefresh(stateDir string, trial *launcherRefreshTrial) error 
 			return err
 		}
 		if state == nil || state.Phase != launcherRefreshPhaseTrial || state.TargetSHA256 != trial.targetSHA256 || filepath.Clean(state.LauncherPath) != filepath.Clean(trial.launcherPath) {
-			return errors.New("launcher refresh journal changed during the trial")
+			return errLauncherTrialSuperseded
 		}
 		if sum, err := executableChecksum(trial.stagedPath); err != nil {
 			return err
