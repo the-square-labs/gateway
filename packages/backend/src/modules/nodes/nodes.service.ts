@@ -21,6 +21,7 @@ import {
 } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -863,8 +864,9 @@ export class NodesService {
     let cancelledHostingConnectors: { connectorId: string | null }[] = [];
 
     // Retire certificates and delete their owner in one transaction: a failed
-    // owner deletion cannot leave a still-active node with a revoked leaf.
-    await this.db.transaction(async (tx) => {
+    // owner deletion cannot leave a still-active node with a revoked leaf. Grants naming the node (and the
+    // Docker resources removed with it) go in the same transaction.
+    await transactionWithScopeCleanup(this.db, async (tx) => {
       await options.hostingDelete?.guard(tx);
       const [lockedNode] = await tx
         .select({ id: nodes.id, status: nodes.status })

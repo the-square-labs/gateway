@@ -5,6 +5,7 @@ import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { certificateAuthorities, certificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { x509 } from '@/lib/x509.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -422,7 +423,9 @@ export class CAService {
       throw new AppError(400, 'CA_HAS_CHILDREN', 'Cannot delete CA that has child CAs');
     }
 
-    await this.db.delete(certificateAuthorities).where(eq(certificateAuthorities.id, id));
+    await transactionWithScopeCleanup(this.db, (tx) =>
+      tx.delete(certificateAuthorities).where(eq(certificateAuthorities.id, id))
+    );
 
     await this.auditService.log({
       userId,

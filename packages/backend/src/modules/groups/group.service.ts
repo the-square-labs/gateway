@@ -6,6 +6,7 @@ import { permissionGroups, users } from '@/db/schema/index.js';
 import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, isScopeSubset } from '@/lib/permissions.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
@@ -113,6 +114,14 @@ export class GroupService {
       await this.sandboxService?.revokeUserAccess(u.id, scopes, 'permissions_changed').catch((error) => {
         logger.warn('Failed to revoke sandbox jobs after group permission cascade', { userId: u.id, groupId, error });
       });
+    }
+  }
+
+  /** Refresh dashboards and member sessions after a group's stored scopes changed outside this service. */
+  async announceScopesChanged(groupIds: readonly string[]): Promise<void> {
+    for (const groupId of new Set(groupIds)) {
+      this.emitGroup(groupId, 'updated');
+      await this.cascadePermissions(groupId);
     }
   }
 
@@ -484,7 +493,7 @@ export class GroupService {
       throw new AppError(403, 'BUILTIN_GROUP', 'Cannot delete a built-in group');
     }
 
-    const childGroupIds = await this.db.transaction(async (tx) => {
+    const childGroupIds = await transactionWithScopeCleanup(this.db, async (tx) => {
       // Serialize deletion with primary and secondary membership assignment.
       await tx
         .select({ id: permissionGroups.id })

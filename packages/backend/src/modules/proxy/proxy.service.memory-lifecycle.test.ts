@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ProxyService } from './proxy.service.js';
 
+// Grant cleanup on delete is covered against PostgreSQL in resource-scope-cleanup.database.test.ts.
+vi.mock('@/lib/resource-scope-cleanup.js', () => ({
+  transactionWithScopeCleanup: (db: any, work: (tx: any) => unknown) =>
+    db.transaction ? db.transaction(work) : work(db),
+}));
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {

@@ -249,6 +249,17 @@ export class AuthService {
     this.emitPermissions(userId, mapped.isBlocked ? [] : mapped.scopes, mapped.groupId, 'resource_created');
   }
 
+  /** Tell the live sessions of these users that their stored grants were changed outside this service. */
+  async announcePermissionsChanged(userIds: readonly string[], reason: string): Promise<void> {
+    for (const userId of new Set(userIds)) {
+      const row = await this.db.query.users.findFirst({ where: and(eq(users.id, userId), isNull(users.deletedAt)) });
+      if (!row) continue;
+      const mapped = await this.mapDbUserToUser(row);
+      this.emitUser(userId, 'updated');
+      this.emitPermissions(userId, mapped.isBlocked ? [] : mapped.scopes, mapped.groupId, reason);
+    }
+  }
+
   /**
    * Where a created resource lives, read from its row, so creator grants do not depend on every
    * caller passing the destination. Docker resources carry their node in the ID; their folder must be

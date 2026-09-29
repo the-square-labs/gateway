@@ -19,6 +19,7 @@ import {
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScopeForResource } from '@/lib/permissions.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { buildWhere, escapeLike, sleep } from '@/lib/utils.js';
 import { x509 } from '@/lib/x509.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -1832,7 +1833,7 @@ export class SSLService {
   }
 
   async deleteCert(certId: string, userId: string) {
-    const cert = await this.db.transaction(async (tx) => {
+    const cert = await transactionWithScopeCleanup(this.db, async (tx) => {
       // Lock the row before looking for references. A proxy host write that
       // names this certificate waits on this lock (its foreign-key check) and
       // fails once the delete commits; one that committed first is seen below.

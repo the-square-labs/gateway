@@ -12,6 +12,7 @@ export type { SQL } from 'drizzle-orm';
 import { managedStorageClusters, objectStorageConnections } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { storageWritesFrozenError } from '@/modules/storage/storage-write-freeze.js';
@@ -39,6 +40,7 @@ export const storageCommercialRuntime = {
   managedStorageClusters,
   objectStorageConnections,
   grantCreatedResourcePermissions,
+  transactionWithScopeCleanup,
   compactHealthHistory,
   writeWithAllocatedSlug,
   buildWhere,

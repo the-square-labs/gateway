@@ -59,6 +59,7 @@ import {
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScopeForResource } from '@/lib/permissions.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -97,6 +98,7 @@ export const pagesCommercialRuntime = {
   proxyAdditionalRoutes,
   proxyHosts,
   grantCreatedResourcePermissions,
+  transactionWithScopeCleanup,
   writeWithAllocatedSlug,
   buildWhere,
   AppError,

@@ -23,6 +23,7 @@ import {
 } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { webhookDeployMountsRefusal } from '@/modules/docker/automatic-deploy-authority.js';
 import {
@@ -56,6 +57,7 @@ export const dockerDeploymentCommercialRuntime = {
   dockerWebhooks,
   nodes,
   grantCreatedResourcePermissions,
+  transactionWithScopeCleanup,
   AppError,
   requireConfiguredLicensePolicy,
   assertNodeAllowsServiceCreation,

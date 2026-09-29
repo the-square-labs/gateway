@@ -7,6 +7,12 @@ import { NginxCertificateDistributionService } from '@/services/nginx-certificat
 import { RequestACMECertSchema } from './ssl.schemas.js';
 import { SSLService } from './ssl.service.js';
 
+// Grant cleanup on delete is covered against PostgreSQL in resource-scope-cleanup.database.test.ts.
+vi.mock('@/lib/resource-scope-cleanup.js', () => ({
+  transactionWithScopeCleanup: (db: any, work: (tx: any) => unknown) =>
+    db.transaction ? db.transaction(work) : work(db),
+}));
+
 afterEach(() => {
   vi.useRealTimers();
 });

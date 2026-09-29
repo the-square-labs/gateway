@@ -4,6 +4,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { hostingOperations, hostingResources, integrationConnectors } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { hasScope } from '@/lib/permissions.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthService } from '@/modules/auth/auth.service.js';
@@ -566,7 +567,7 @@ export class HostingConnectorsService {
     assertHostingScope(user.scopes, 'integrations:hosting:manage', id);
     await this.get(id, user);
     let removedResourceIds: string[] = [];
-    await this.db.transaction(async (tx) => {
+    await transactionWithScopeCleanup(this.db, async (tx) => {
       await tx
         .select({ id: integrationConnectors.id })
         .from(integrationConnectors)

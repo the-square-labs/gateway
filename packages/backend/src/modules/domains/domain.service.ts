@@ -6,6 +6,7 @@ import { pageWildcardProfiles } from '@/db/schema/pages.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { isMatchingUniqueConstraintViolation } from '@/lib/resource-slugs.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -763,7 +764,7 @@ export class DomainsService extends DomainsServiceIngressGroups {
       }
     }
 
-    await this.db.transaction(async (tx) => {
+    await transactionWithScopeCleanup(this.db, async (tx) => {
       // A disabled Pages profile keeps its last wildcard domain only as a form
       // default, but its foreign key still refuses the delete. An enabled one
       // was rejected above and keeps blocking through the foreign key.

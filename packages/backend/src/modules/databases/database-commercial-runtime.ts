@@ -6,6 +6,7 @@ import { databaseConnections, managedDatabaseInstances, nodes } from '@/db/schem
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { getEffectiveNodeServiceAddress, getEffectivePublishedNodeIP } from '@/modules/nodes/node-service-address.js';
@@ -27,6 +28,7 @@ export const databaseCommercialRuntime = {
   or,
   databaseConnections,
   grantCreatedResourcePermissions,
+  transactionWithScopeCleanup,
   writeWithAllocatedSlug,
   buildWhere,
   createClient,

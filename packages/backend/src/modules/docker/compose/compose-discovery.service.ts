@@ -9,6 +9,7 @@ import {
   dockerContainerFolderAssignments,
   proxyHosts,
 } from '@/db/schema/index.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 
 const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
 const COMPOSE_SERVICE_LABEL = 'com.docker.compose.service';
@@ -347,16 +348,18 @@ export async function reconcileExternalComposeProjects(
 
   if (plan.removeMissingExternal.length > 0) {
     const removedIds = plan.removeMissingExternal.map((project) => project.id);
-    await db
-      .delete(dockerContainerFolderAssignments)
-      .where(
-        and(
-          eq(dockerContainerFolderAssignments.nodeId, nodeId),
-          eq(dockerContainerFolderAssignments.resourceType, 'compose'),
-          inArray(dockerContainerFolderAssignments.resourceKey, removedIds)
-        )
-      );
-    await db.delete(dockerComposeProjects).where(inArray(dockerComposeProjects.id, removedIds));
+    await transactionWithScopeCleanup(db, async (tx) => {
+      await tx
+        .delete(dockerContainerFolderAssignments)
+        .where(
+          and(
+            eq(dockerContainerFolderAssignments.nodeId, nodeId),
+            eq(dockerContainerFolderAssignments.resourceType, 'compose'),
+            inArray(dockerContainerFolderAssignments.resourceKey, removedIds)
+          )
+        );
+      await tx.delete(dockerComposeProjects).where(inArray(dockerComposeProjects.id, removedIds));
+    });
     for (const project of plan.removeMissingExternal) {
       onChange?.({ action: 'removed', projectId: project.id, projectName: project.name });
     }

@@ -15,6 +15,11 @@ import { assertNoProxyDomainOverlap } from '@/modules/proxy/proxy-domain-overlap
 import { probeDnsRecords } from './dns.utils.js';
 import { DomainsService, selectBackfillNginxNode } from './domain.service.js';
 
+// Grant cleanup on delete is covered against PostgreSQL in resource-scope-cleanup.database.test.ts.
+vi.mock('@/lib/resource-scope-cleanup.js', () => ({
+  transactionWithScopeCleanup: (db: any, work: (tx: any) => unknown) =>
+    db.transaction ? db.transaction(work) : work(db),
+}));
 vi.mock('@/db/schema/proxy-hosts.js', () => ({
   proxyHosts: {
     id: 'proxyHosts.id',

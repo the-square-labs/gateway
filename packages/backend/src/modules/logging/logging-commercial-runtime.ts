@@ -33,6 +33,7 @@ import { loggingEnvironments, loggingIngestTokens, loggingMetadata, loggingSchem
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger, logger } from '@/lib/logger.js';
 import { RATE_LIMIT_REDIS_TIMEOUT_MS, withRateLimitRedisTimeout } from '@/lib/rate-limit-timeout.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
@@ -67,6 +68,7 @@ export const loggingCommercialRuntime = {
   loggingEnvironments,
   loggingSchemas,
   grantCreatedResourcePermissions,
+  transactionWithScopeCleanup,
   writeWithAllocatedSlug,
   getEnvironmentSettingsSnapshot,
   desc,

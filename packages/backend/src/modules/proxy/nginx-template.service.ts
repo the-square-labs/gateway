@@ -14,6 +14,7 @@ import {
 } from '@/lib/gateway-error-pages.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { formatHostPort } from '@/lib/network-endpoint.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { getDnsResolverServers } from '@/modules/domains/dns.utils.js';
@@ -967,7 +968,7 @@ export class NginxTemplateService {
       throw new AppError(400, 'TEMPLATE_IN_USE', `Template is used by ${usageCount} proxy host(s)`);
     }
 
-    await this.db.delete(nginxTemplates).where(eq(nginxTemplates.id, id));
+    await transactionWithScopeCleanup(this.db, (tx) => tx.delete(nginxTemplates).where(eq(nginxTemplates.id, id)));
 
     await this.auditService.log({
       userId,

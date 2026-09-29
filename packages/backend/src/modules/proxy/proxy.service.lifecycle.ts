@@ -3,6 +3,7 @@ import { accessLists } from '@/db/schema/access-lists.js';
 import { certificates } from '@/db/schema/certificates.js';
 import { ingressGroups, proxyHosts } from '@/db/schema/index.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { ingressGroupMemberRows } from '@/modules/ingress-groups/ingress-nodes.js';
 import { stripProxyHealthHistory } from './proxy.service-helpers.js';
@@ -76,7 +77,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
     }
     await this.additionalRoutes?.cleanupForHost(existing, abandoningOfflineNode);
     try {
-      await this.db.delete(proxyHosts).where(eq(proxyHosts.id, id));
+      await transactionWithScopeCleanup(this.db, (tx) => tx.delete(proxyHosts).where(eq(proxyHosts.id, id)));
     } catch (error) {
       if (existing.upstreamKind === 'pages') {
         await this.disablePageHostForDeferredCleanup(id, error);

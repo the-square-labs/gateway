@@ -13,6 +13,7 @@ import { NotificationRetryJob } from '@/jobs/notification-retry.job.js';
 import { SiemDeliveryJob } from '@/jobs/siem-delivery.job.js';
 import { UpdateCheckJob } from '@/jobs/update-check.job.js';
 import { logger } from '@/lib/logger.js';
+import { repairDanglingResourceScopes } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
 import { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
@@ -173,6 +174,14 @@ export async function initializeBackgroundServices(): Promise<void> {
   container
     .resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition)
     .initializeBackups(scheduler, backupRuntime, relayPolicyService);
+  // Grants naming deleted resources: left behind by older releases, repaired at every start (idempotent), then
+  // swept hourly as a safety net for any deletion path that misses the in-transaction cleanup.
+  await repairDanglingResourceScopes(db).catch((error) =>
+    logger.warn('Failed to remove permissions naming deleted resources', { error })
+  );
+  scheduler.registerInterval('dangling-resource-permissions', 60 * 60 * 1000, async () => {
+    await repairDanglingResourceScopes(db);
+  });
   scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
     await systemCertificateLifecycleService.retryPendingCRLs();
   });

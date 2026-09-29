@@ -1,6 +1,12 @@
 import bcrypt from 'bcryptjs';
 import { describe, expect, it, vi } from 'vitest';
 
+// Grant cleanup on delete is covered against PostgreSQL in resource-scope-cleanup.database.test.ts.
+vi.mock('@/lib/resource-scope-cleanup.js', () => ({
+  transactionWithScopeCleanup: (db: any, work: (tx: any) => unknown) =>
+    db.transaction ? db.transaction(work) : work(db),
+}));
+
 vi.mock('@/lib/created-resource-permissions.js', () => ({
   grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
 }));

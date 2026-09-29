@@ -3,6 +3,12 @@ import type { DrizzleClient } from '@/db/client.js';
 import type { ConnectorRow } from './integrations.service.core.js';
 import { IntegrationsService } from './integrations.service.js';
 
+// Grant cleanup on delete is covered against PostgreSQL in resource-scope-cleanup.database.test.ts.
+vi.mock('@/lib/resource-scope-cleanup.js', () => ({
+  transactionWithScopeCleanup: (db: any, work: (tx: any) => unknown) =>
+    db.transaction ? db.transaction(work) : work(db),
+}));
+
 vi.mock('@/config/env.js', () => ({
   getEnv: () => ({ GITHUB_OAUTH_CLIENT_ID: 'github-client-id' }),
 }));

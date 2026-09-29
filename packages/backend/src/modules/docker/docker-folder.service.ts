@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerContainerFolderAssignments, dockerContainerFolders } from '@/db/schema/index.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -189,7 +190,9 @@ export class DockerFolderService {
     this.assertFolderMutable(folder);
 
     const nodeIds = await this.getAffectedNodeIdsForFolders([id]);
-    await this.db.delete(dockerContainerFolders).where(eq(dockerContainerFolders.id, id));
+    await transactionWithScopeCleanup(this.db, (tx) =>
+      tx.delete(dockerContainerFolders).where(eq(dockerContainerFolders.id, id))
+    );
 
     await this.auditService.log({
       userId,

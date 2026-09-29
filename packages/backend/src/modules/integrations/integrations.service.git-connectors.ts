@@ -6,6 +6,7 @@ import {
   integrationConnectors,
   integrationGitHubOAuthSessions,
 } from '@/db/schema/index.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type {
   GitConnectorCreateInput,
@@ -232,9 +233,11 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
       );
     }
     try {
-      await this.db
-        .delete(integrationConnectors)
-        .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, provider)));
+      await transactionWithScopeCleanup(this.db, (tx) =>
+        tx
+          .delete(integrationConnectors)
+          .where(and(eq(integrationConnectors.id, id), eq(integrationConnectors.provider, provider)))
+      );
     } catch (error) {
       if (isForeignKeyViolation(error)) {
         throw new AppError(

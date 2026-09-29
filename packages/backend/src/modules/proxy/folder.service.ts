@@ -3,6 +3,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { proxyHostFolders } from '@/db/schema/proxy-host-folders.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -311,7 +312,7 @@ export class FolderService {
       .where(inArray(proxyHosts.folderId, allFolderIds));
 
     // CASCADE deletes subfolders, SET NULL ungroups hosts
-    await this.db.delete(proxyHostFolders).where(eq(proxyHostFolders.id, id));
+    await transactionWithScopeCleanup(this.db, (tx) => tx.delete(proxyHostFolders).where(eq(proxyHostFolders.id, id)));
 
     await this.auditService.log({
       userId,

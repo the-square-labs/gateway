@@ -5,6 +5,7 @@ import type { BasicAuthUser } from '@/db/schema/access-lists.js';
 import { accessLists, pageProjects } from '@/db/schema/index.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -347,7 +348,7 @@ export class AccessListService {
     await this.removeHtpasswd(id);
 
     // 4. Delete from DB
-    await this.db.delete(accessLists).where(eq(accessLists.id, id));
+    await transactionWithScopeCleanup(this.db, (tx) => tx.delete(accessLists).where(eq(accessLists.id, id)));
 
     // 5. Audit log
     await this.auditService.log({

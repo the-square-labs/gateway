@@ -21,6 +21,7 @@ import {
   principalHasGitRepositoryScope,
 } from '@/lib/git-scopes.js';
 import { hasScope } from '@/lib/permissions.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { LookupBudget, LookupBudgetExceededError, TtlCache } from '@/lib/ttl-cache.js';
 import { buildWhere } from '@/lib/utils.js';
 import {
@@ -53,6 +54,7 @@ export const integrationCommercialRuntime = {
   eq,
   integrationConnectorProjects,
   integrationConnectors,
+  transactionWithScopeCleanup,
   hasScope,
   GITLAB_AUDIT_ACTIONS,
   redactGitLabAuditDetails,

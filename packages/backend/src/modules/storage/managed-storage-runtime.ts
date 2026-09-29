@@ -11,6 +11,7 @@ import { objectStorageConnections } from '@/db/schema/object-storage.js';
 import { proxyAdditionalSecureLinks } from '@/db/schema/proxy-additional-secure-links.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { isGatewayInternalContainer } from '@/modules/docker/docker-internal-containers.js';
 import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
@@ -74,6 +75,7 @@ export const managedStorageRuntime = {
   isGatewayInternalContainer,
   loggerManagedStorageBindings,
   grantCreatedResourcePermissions,
+  transactionWithScopeCleanup,
   isNotNull,
   inArray,
   rehomeStorageBackupHistory,

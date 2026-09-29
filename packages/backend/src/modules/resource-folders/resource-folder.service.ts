@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor, DrizzleTransaction } from '@/db/client.js';
 import { hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { announceResourceScopeChanges, removeDanglingResourceScopes } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -268,7 +269,7 @@ export class FolderedResourceService {
   }
 
   async deleteFolder(id: string, userId: string) {
-    const { folder, descendantIds, affected } = await this.withTreeLock(async (tx) => {
+    const { folder, descendantIds, affected, scopeChanges } = await this.withTreeLock(async (tx) => {
       const folder = await this.getFolderOrThrow(id, tx);
       const descendantIds = await this.getDescendantIds(id, tx);
       const folderIds = [id, ...descendantIds];
@@ -278,8 +279,10 @@ export class FolderedResourceService {
         .where(and(this.config.resourceScope, inArray(this.config.resourceTable.folderId, folderIds)));
 
       await tx.delete(this.config.folderTable).where(and(this.config.folderScope, eq(this.config.folderTable.id, id)));
-      return { folder, descendantIds, affected };
+      // Grants on the folder and its cascaded subfolders go with them.
+      return { folder, descendantIds, affected, scopeChanges: await removeDanglingResourceScopes(tx) };
     });
+    await announceResourceScopeChanges(scopeChanges);
     await this.auditService.log({
       userId,
       action: `${this.config.auditResourceType}.delete`,
