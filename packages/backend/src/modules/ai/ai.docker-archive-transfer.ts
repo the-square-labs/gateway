@@ -9,35 +9,35 @@ import { z } from 'zod';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { hasScopeBase } from '@/lib/permissions.js';
-import { sanitizeFilename } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
-  ContainerArchiveExportQuerySchema,
   ContainerArchiveImportQuerySchema,
   ContainerArchiveResolutionSchema,
 } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
-import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
-import {
-  assertDockerContainerArchiveExportAllowed,
-  importDockerContainerArchive,
-  openDockerContainerArchiveExport,
-} from '@/modules/docker/docker-container-archive-operations.js';
+import { importDockerContainerArchive } from '@/modules/docker/docker-container-archive-operations.js';
 import { assertDockerCreationAccess } from '@/modules/docker/docker-creation-access.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { User } from '@/types.js';
-import { ensureDockerContainerScopes, requiredToolString } from './ai.docker-tool-access.js';
+import {
+  type DockerArchiveExportAccess,
+  holdsDockerArchiveExportAccess,
+  type OpenedDockerArchive,
+  prepareDockerArchiveExport,
+} from './ai.docker-archive-export.js';
+import { requiredToolString } from './ai.docker-tool-access.js';
 
 /**
  * MCP carries container and volume archives in bounded base64 chunks. Bytes
  * are spooled privately on the Gateway; only a verified spool reaches the
- * shared import/export operations the REST routes use.
+ * shared import/export operations the REST routes use. Files larger than a
+ * few chunks go through one-time links instead (ai.docker-archive-link.ts).
  */
 
 export const DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES = 1024 * 1024;
 const SESSION_TTL_MS = 60 * 60 * 1000;
-const ARCHIVE_MAX_BYTES = 32 * 1024 ** 3;
+export const ARCHIVE_MAX_BYTES = 32 * 1024 ** 3;
 /** Disk budget shared by upload reservations and bytes already spooled for downloads. */
 const SPOOL_BYTES_MAX = 64 * 1024 ** 3;
 const ACTIVE_SESSIONS_MAX = 16;
@@ -45,8 +45,9 @@ const ACTIVE_SESSIONS_PER_USER_MAX = 4;
 const RESOLUTION_JSON_MAX_BYTES = 32 * 1024;
 const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const SPOOL_FILE = 'archive';
+const USE_LINK = 'to send a file from disk, use operation "link" and stream it with curl';
 
-const UploadBeginSchema = z.object({
+export const UploadBeginSchema = z.object({
   nodeId: z.string().uuid(),
   name: ContainerArchiveImportQuerySchema.shape.name,
   folderId: ContainerArchiveImportQuerySchema.shape.folderId,
@@ -74,14 +75,10 @@ interface UploadSession {
   result?: { containerId: string; containerName: string; imageId: string };
 }
 
-type DownloadAccess =
-  | { kind: 'container'; nodeId: string; resourceId: string; scopes: string[] }
-  | { kind: 'volume'; nodeId: string; volumeName: string };
-
 interface DownloadSession {
   id: string;
   userId: string;
-  access: DownloadAccess;
+  access: DockerArchiveExportAccess;
   filename: string;
   directory: string;
   state: DownloadState;
@@ -99,11 +96,11 @@ function transferNotFound(): AppError {
 
 function decodeChunk(value: unknown): Buffer {
   if (typeof value !== 'string' || !CANONICAL_BASE64.test(value)) {
-    throw new AppError(400, 'DOCKER_ARCHIVE_CHUNK_INVALID', 'Chunk must use canonical base64 encoding');
+    throw new AppError(400, 'DOCKER_ARCHIVE_CHUNK_INVALID', `Chunk must use canonical base64 encoding; ${USE_LINK}`);
   }
   const bytes = Buffer.from(value, 'base64');
   if (bytes.byteLength === 0 || bytes.byteLength > DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES) {
-    throw new AppError(400, 'DOCKER_ARCHIVE_CHUNK_INVALID', 'Chunk must contain 1 byte to 1 MiB');
+    throw new AppError(400, 'DOCKER_ARCHIVE_CHUNK_INVALID', `Chunk must contain 1 byte to 1 MiB; ${USE_LINK}`);
   }
   return bytes;
 }
@@ -115,8 +112,14 @@ function nonNegativeInteger(value: unknown, name: string): number {
   return value;
 }
 
+export function assertArchiveResolutionSize(resolution: z.infer<typeof ContainerArchiveResolutionSchema>) {
+  if (Buffer.byteLength(JSON.stringify(resolution), 'utf8') > RESOLUTION_JSON_MAX_BYTES) {
+    throw new AppError(400, 'GWCA_RESOLUTION_INVALID', 'Archive import resolution is invalid');
+  }
+}
+
 /** POST /containers/archive entry checks: create scope, license, destination access and node creation lock. */
-async function assertArchiveImportAccess(user: User, nodeId: string, folderId: string | undefined) {
+export async function assertArchiveImportAccess(user: User, nodeId: string, folderId: string | undefined) {
   if (!hasScopeBase(user.scopes, 'docker:containers:create')) {
     throw new AppError(403, 'FORBIDDEN', 'Missing required scope: docker:containers:create');
   }
@@ -125,14 +128,6 @@ async function assertArchiveImportAccess(user: User, nodeId: string, folderId: s
   const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
   await assertDockerCreationAccess(db, user.scopes, 'docker:containers:create', nodeId, folderId);
   await assertNodeAllowsServiceCreation(db, nodeId, 'docker');
-}
-
-function assertDownloadAccess(user: User, access: DownloadAccess) {
-  const allowed =
-    access.kind === 'container'
-      ? access.scopes.every((scope) => hasDockerResourceScope(user.scopes, scope, access.nodeId, access.resourceId))
-      : hasDockerResourceScope(user.scopes, 'docker:volumes:export', access.nodeId, access.volumeName);
-  if (!allowed) throw transferNotFound();
 }
 
 export class DockerArchiveTransferStore {
@@ -180,7 +175,7 @@ export class DockerArchiveTransferStore {
     if (operation === 'begin') return this.beginDownload(dockerService, user, args);
     const session = this.downloads.get(requiredToolString(args.downloadId, 'downloadId'));
     if (!session || session.userId !== user.id) throw transferNotFound();
-    assertDownloadAccess(user, session.access);
+    if (!holdsDockerArchiveExportAccess(user, session.access)) throw transferNotFound();
     return this.withSession(session.id, async () => {
       if (operation === 'status') return this.downloadView(session);
       if (operation === 'close') {
@@ -259,9 +254,7 @@ export class DockerArchiveTransferStore {
   }
 
   private async beginUpload(user: User, input: z.infer<typeof UploadBeginSchema>) {
-    if (Buffer.byteLength(JSON.stringify(input.resolution), 'utf8') > RESOLUTION_JSON_MAX_BYTES) {
-      throw new AppError(400, 'GWCA_RESOLUTION_INVALID', 'Archive import resolution is invalid');
-    }
+    assertArchiveResolutionSize(input.resolution);
     await assertArchiveImportAccess(user, input.nodeId, input.folderId);
     this.reserveSlot(user.id, input.declaredSizeBytes);
     const session: UploadSession = {
@@ -360,64 +353,7 @@ export class DockerArchiveTransferStore {
   }
 
   private async beginDownload(dockerService: DockerManagementService, user: User, args: Record<string, unknown>) {
-    const kind = z.enum(['container', 'volume']).parse(args.kind);
-    const nodeId = requiredToolString(args.nodeId, 'nodeId');
-    let access: DownloadAccess;
-    let openArchive: () => Promise<{ filename: string; source: () => Promise<ReadableStream<Uint8Array> | Buffer> }>;
-    if (kind === 'container') {
-      const containerId = requiredToolString(args.containerId, 'containerId');
-      // GET /containers/:id/archive holds docker:containers:export for the container.
-      const inspected = await ensureDockerContainerScopes(
-        dockerService,
-        user,
-        ['docker:containers:export'],
-        nodeId,
-        containerId
-      );
-      // LICENSE ENFORCEMENT: Archive operations are Personal entitlements under the project license/TOS.
-      await container.resolve(LicensePolicyService).requireFeature('container-export');
-      const query = ContainerArchiveExportQuerySchema.parse({
-        imageMode: args.imageMode,
-        includeWritableLayer: args.includeWritableLayer,
-        includeEnvironment: args.includeEnvironment,
-        includeSecrets: args.includeSecrets,
-      });
-      // Refused before a transfer slot or spool directory exists; the shared export re-checks it.
-      assertDockerContainerArchiveExportAllowed(nodeId, containerId, inspected);
-      access = {
-        kind: 'container',
-        nodeId,
-        resourceId: String(inspected?.scopeResourceId ?? ''),
-        scopes: [
-          'docker:containers:export',
-          ...(query.imageMode === 'portable' ? ['docker:containers:files:read'] : []),
-          ...(query.includeEnvironment ? ['docker:containers:environment'] : []),
-          ...(query.includeSecrets ? ['docker:containers:secrets'] : []),
-        ],
-      };
-      openArchive = async () => {
-        const archive = await openDockerContainerArchiveExport({
-          nodeId,
-          containerId,
-          query,
-          actorScopes: user.scopes,
-          userId: user.id,
-        });
-        return { filename: archive.filename, source: async () => archive.stream };
-      };
-    } else {
-      const volumeName = requiredToolString(args.volumeName, 'volumeName');
-      // GET /volumes/:name/export holds docker:volumes:export and requires a user-visible volume.
-      if (!hasDockerResourceScope(user.scopes, 'docker:volumes:export', nodeId, volumeName)) {
-        throw new AppError(403, 'FORBIDDEN', `Missing required scope: docker:volumes:export:${nodeId}/${volumeName}`);
-      }
-      await dockerService.assertUserVolumeVisible(nodeId, volumeName);
-      access = { kind: 'volume', nodeId, volumeName };
-      openArchive = async () => ({
-        filename: `${sanitizeFilename(volumeName)}.tar.gz`,
-        source: () => dockerService.exportVolume(nodeId, volumeName),
-      });
-    }
+    const { access, open: openArchive } = await prepareDockerArchiveExport(dockerService, user, args);
     this.reserveSlot(user.id);
     const session: DownloadSession = {
       id: randomUUID(),
@@ -433,7 +369,7 @@ export class DockerArchiveTransferStore {
       abort: new AbortController(),
     };
     this.downloads.set(session.id, session);
-    let opened: Awaited<ReturnType<typeof openArchive>>;
+    let opened: OpenedDockerArchive;
     try {
       session.directory = await this.createSpoolDirectory();
       opened = await openArchive();
@@ -447,10 +383,7 @@ export class DockerArchiveTransferStore {
     return this.downloadView(session);
   }
 
-  private async spoolDownload(
-    session: DownloadSession,
-    source: () => Promise<ReadableStream<Uint8Array> | Buffer>
-  ): Promise<void> {
+  private async spoolDownload(session: DownloadSession, source: OpenedDockerArchive['source']): Promise<void> {
     const path = join(session.directory, SPOOL_FILE);
     const hash = createHash('sha256');
     let size = 0;

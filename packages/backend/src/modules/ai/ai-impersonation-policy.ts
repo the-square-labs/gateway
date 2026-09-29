@@ -47,7 +47,8 @@ const CREDENTIAL_TOOL_CALLS: Readonly<Record<string, (args: ToolArgs) => boolean
     args.operation === 'regenerate_webhook_token' ||
     (args.operation === 'list_secrets' && Boolean(args.reveal)),
   // An exported container archive with includeSecrets carries the secret values.
-  download_docker_archive: (args) => args.operation === 'begin' && args.includeSecrets === true,
+  download_docker_archive: (args) =>
+    (args.operation === 'begin' || args.operation === 'link') && args.includeSecrets === true,
   gitlab_create_deploy_token: () => true,
   // Issuance generates the certificate's private key.
   issue_certificate: () => true,

@@ -1,12 +1,12 @@
 import type { MiddlewareHandler } from 'hono';
 import { logger } from '@/lib/logger.js';
+import { ONE_TIME_LINK_TOKEN_PATH } from '@/lib/one-time-link-path.js';
 import type { AppEnv } from '@/types.js';
 
 const DOCKER_WEBHOOK_TOKEN_PATH = /^(\/api\/webhooks\/docker\/)[^/]+(?=\/|$)/;
-const PAGES_UPLOAD_LINK_TOKEN_PATH = /^(\/api\/pages-upload\/)[^/]+(?=\/|$)/;
 
 export function redactRequestPath(path: string): string {
-  return path.replace(DOCKER_WEBHOOK_TOKEN_PATH, '$1[REDACTED]').replace(PAGES_UPLOAD_LINK_TOKEN_PATH, '$1[REDACTED]');
+  return path.replace(DOCKER_WEBHOOK_TOKEN_PATH, '$1[REDACTED]').replace(ONE_TIME_LINK_TOKEN_PATH, '$1[REDACTED]');
 }
 
 export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {

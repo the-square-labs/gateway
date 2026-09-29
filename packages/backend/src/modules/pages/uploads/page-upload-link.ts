@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdtemp, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,12 +7,12 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { z } from 'zod';
 import { container } from '@/container.js';
+import { issueOneTimeLink, type OneTimeLinkKind, shellQuote, takeOneTimeLink } from '@/lib/one-time-link.js';
 import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuthService } from '@/modules/auth/auth.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
-import { CacheService } from '@/services/cache.service.js';
 import type { User } from '@/types.js';
 import { CreatePageDeploymentSchema } from '../deployments/page-deployment.schemas.js';
 import {
@@ -34,10 +34,13 @@ import { PagePublicationService } from '../tags/page-publication.service.js';
  */
 
 export const PAGE_UPLOAD_LINK_PATH = '/api/pages-upload';
-const LINK_TTL_SECONDS = 15 * 60;
-const LINK_PREFIX = 'gwpu_';
-const LINK_TOKEN = /^gwpu_[A-Za-z0-9_-]{43}$/;
-const CACHE_PREFIX = 'pages:upload-link:';
+const UPLOAD_LINK: OneTimeLinkKind = {
+  path: PAGE_UPLOAD_LINK_PATH,
+  tokenPrefix: 'gwpu_',
+  cachePrefix: 'pages:upload-link:',
+  ttlSeconds: 15 * 60,
+  label: 'Pages upload links',
+};
 /** Finalize waits at most this long for the preview links to be served before returning `pending`. */
 export const PAGE_LINK_WAIT_MS = 15_000;
 
@@ -57,34 +60,19 @@ interface PageUploadLinkGrant {
   input: PageUploadLinkInput;
 }
 
-function cacheKey(token: string): string {
-  return `${CACHE_PREFIX}${createHash('sha256').update(token).digest('hex')}`;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
 /** Issues a one-time upload URL for `user`; the caller has checked pages:deploy on the Project. */
 export async function createPageUploadLink(user: User, args: Record<string, unknown>) {
   const input = CreatePageUploadLinkSchema.parse(args);
   resolvePageDeploymentExpiry(input);
   await container.resolve(PageProjectService).get(input.projectId);
-  const settings = container.resolve(GeneralSettingsService);
-  const publicUrl = await settings.getPublicUrl();
-  if (!publicUrl) {
-    throw new AppError(409, 'PUBLIC_URL_REQUIRED', 'Set the Gateway public URL before creating Pages upload links');
-  }
-  const token = `${LINK_PREFIX}${randomBytes(32).toString('base64url')}`;
   const grant: PageUploadLinkGrant = { userId: user.id, scopes: user.scopes, input };
-  await container.resolve(CacheService).set(cacheKey(token), grant, LINK_TTL_SECONDS);
-  const uploadUrl = new URL(`${PAGE_UPLOAD_LINK_PATH}/${token}`, publicUrl).href;
+  const { url: uploadUrl, expiresAt } = await issueOneTimeLink(UPLOAD_LINK, grant);
   const curl = `curl -sS --fail-with-body -X PUT --data-binary`;
   return {
     uploadUrl,
     method: 'PUT',
-    expiresAt: new Date(Date.now() + LINK_TTL_SECONDS * 1000).toISOString(),
-    maxBytes: (await settings.getConfig()).fileUploadMaxBytes,
+    expiresAt,
+    maxBytes: (await container.resolve(GeneralSettingsService).getConfig()).fileUploadMaxBytes,
     commands: {
       archive: `${curl} @site.tar.gz ${shellQuote(uploadUrl)}`,
       folder: `COPYFILE_DISABLE=1 tar czf - -C dist . | ${curl} @- ${shellQuote(uploadUrl)}`,
@@ -97,9 +85,7 @@ export async function createPageUploadLink(user: User, args: Record<string, unkn
 
 /** Streams the body of a one-time upload link into a new Deployment, then publishes it. */
 export async function publishPageUploadLink(token: string, body: ReadableStream<Uint8Array> | null) {
-  const grant = LINK_TOKEN.test(token)
-    ? await container.resolve(CacheService).take<PageUploadLinkGrant>(cacheKey(token))
-    : null;
+  const grant = await takeOneTimeLink<PageUploadLinkGrant>(UPLOAD_LINK, token);
   if (!grant) {
     throw new AppError(404, 'PAGES_UPLOAD_LINK_INVALID', 'Upload link is invalid, expired or already used');
   }

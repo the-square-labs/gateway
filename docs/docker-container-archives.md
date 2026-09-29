@@ -68,6 +68,10 @@ Example resolution:
 }
 ```
 
+## MCP agents
+
+Remote MCP clients use the MCP-only `download_docker_archive` (container or volume export) and `upload_docker_container_archive` (import) tools. With a shell, operation `link` runs the same checks as the API above and returns a one-time URL, valid for 15 minutes and usable once, with a ready curl command: `curl -fsS -o <file> <url>` streams an export from the node, and `curl -T container.gwca <url>` streams a `.gwca` archive into the import, whose response is the new stopped container. Using a link repeats the permission, license and node checks with the MCP token's scopes bounded by the owner's current grants. An interrupted upload imports nothing; an interrupted download makes curl exit non-zero and leaves an incomplete file. Without a shell, the tools keep a base64 `begin`/`chunk` workflow of at most 1 MiB per call.
+
 ## Wire format and integrity
 
 GWCA v1 starts with the eight-byte magic `GWCA\r\n\x1a\n`, followed by length-delimited frames:

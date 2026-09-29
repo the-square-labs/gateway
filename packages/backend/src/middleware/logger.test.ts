@@ -17,6 +17,10 @@ describe('redactRequestPath', () => {
     expect(redactRequestPath('/api/pages-upload/gwpu_secret')).toBe('/api/pages-upload/[REDACTED]');
   });
 
+  it('redacts the one-time Docker archive link token', () => {
+    expect(redactRequestPath('/api/docker-archive-link/gwad_secret')).toBe('/api/docker-archive-link/[REDACTED]');
+  });
+
   it('preserves non-webhook request paths', () => {
     expect(redactRequestPath('/api/docker/nodes/node-1/containers')).toBe('/api/docker/nodes/node-1/containers');
     expect(redactRequestPath('/api/webhooks/dockerish/sensitive-token')).toBe(

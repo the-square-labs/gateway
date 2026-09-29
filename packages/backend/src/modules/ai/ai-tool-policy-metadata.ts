@@ -215,7 +215,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   }),
   manage_docker_runtime: operationPolicies({ read: ['preflight'], execute: ['install'] }),
   upload_docker_container_archive: operationPolicies({
-    create: ['begin'],
+    create: ['link', 'begin'],
     update: ['chunk'],
     read: ['status'],
     execute: ['finalize'],
@@ -223,7 +223,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   }),
   download_docker_archive: operationPolicies({
     read: ['status', 'chunk'],
-    execute: ['begin'],
+    execute: ['link', 'begin'],
     delete: ['close'],
   }),
   manage_database_connection: operationPolicies({

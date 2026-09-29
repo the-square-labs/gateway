@@ -17,6 +17,7 @@ import { container, TOKENS } from '@/container.js';
 import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { GATEWAY_RESTARTING_HTML, GATEWAY_RESTARTING_SCRIPT, gatewayNotFoundHtml } from '@/lib/gateway-error-pages.js';
 import { injectLoginAuthMethods } from '@/lib/login-page.js';
+import { ONE_TIME_LINK_TOKEN_PATH } from '@/lib/one-time-link-path.js';
 import { tags as openApiTags, openApiValidationHook, securitySchemes } from '@/lib/openapi.js';
 import { IDEMPOTENCY_API_DESCRIPTION, withIdempotencyKeyDocumentation } from '@/lib/openapi-idempotency.js';
 import { auditContextMiddleware } from '@/middleware/audit-context.js';
@@ -38,6 +39,8 @@ import {
 import { SCALAR_API_REFERENCE_CDN, securityHeadersMiddleware } from '@/middleware/security-headers.js';
 import { accessListRoutes } from '@/modules/access-lists/access-list.routes.js';
 import { adminRoutes } from '@/modules/admin/admin.routes.js';
+import { DOCKER_ARCHIVE_LINK_PATH } from '@/modules/ai/ai.docker-archive-link.js';
+import { dockerArchiveLinkRoutes } from '@/modules/ai/ai.docker-archive-link.routes.js';
 import { aiRoutes } from '@/modules/ai/ai.routes.js';
 import { authenticateWSConnection, createWSHandlers } from '@/modules/ai/ai.ws.js';
 import { alertRoutes } from '@/modules/audit/alert.routes.js';
@@ -136,8 +139,6 @@ const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
 const NODE_FILE_BODY_LIMIT_PATH = /^\/api\/nodes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)$/;
 const PAGES_UPLOAD_CHUNK_PATH = /^\/api\/pages-deploy\/uploads\/[^/]+\/chunks$/;
-// One-time upload links stream a whole artifact; the handler enforces the file-upload limit.
-const PAGES_UPLOAD_LINK_TOKEN_PATH = /^\/api\/pages-upload\/[^/]+$/;
 const DOCKER_ARCHIVE_IMPORT_PATH = /^\/api\/docker\/nodes\/[^/]+\/containers\/archive$/;
 const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:(?:anthropic|codex)\/v1|v1)(?:\/|$)/;
 
@@ -627,7 +628,8 @@ export function createApp(): GatewayAppRuntime {
         DOCKER_FILE_BODY_LIMIT_PATH.test(path) ||
         NODE_FILE_BODY_LIMIT_PATH.test(path) ||
         PAGES_UPLOAD_CHUNK_PATH.test(path) ||
-        PAGES_UPLOAD_LINK_TOKEN_PATH.test(path) ||
+        // One-time transfer links stream a whole file; their handlers enforce their own size limits.
+        ONE_TIME_LINK_TOKEN_PATH.test(path) ||
         DOCKER_ARCHIVE_IMPORT_PATH.test(path) ||
         isInferenceDataPlanePath(path)
     )
@@ -802,6 +804,7 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/ai', aiRoutes);
   app.route('/api/mcp', mcpRoutes);
   app.route(PAGE_UPLOAD_LINK_PATH, pageUploadLinkRoutes);
+  app.route(DOCKER_ARCHIVE_LINK_PATH, dockerArchiveLinkRoutes);
 
   if (container.isRegistered(TOKENS.CommercialEdition)) {
     container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).registerRoutes({

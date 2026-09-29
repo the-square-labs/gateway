@@ -1330,18 +1330,21 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'upload_docker_container_archive',
     description:
-      'Import a Gateway container archive (.gwca) as a new container on a Docker node through authenticated MCP, using a resumable begin/chunk/status/finalize/abort workflow. begin takes nodeId, the new container name, optional folderId, the resolution returned by manage_docker_container archive_plan_import, the exact archive size, and its lowercase SHA-256; send ordered chunks of at most 1 MiB decoded base64 at the returned offset, then finalize. Requires docker:containers:create for the node or folder and the container archive entitlement; archive environment, secrets, networks, and volumes need the matching node scopes. Authentication comes from the MCP connection; never pass a token.',
+      'Import a Gateway container archive (.gwca) as a new container on a Docker node through authenticated MCP. Preferred: operation "link" takes nodeId, the new container name, optional folderId and the resolution returned by manage_docker_container archive_plan_import, and returns a one-time upload URL (valid 15 minutes, single use) with a ready `curl -T container.gwca <url>` command; the archive streams from the shell into the import, the curl response is the new stopped container, and a failed or interrupted transfer imports nothing. Without a shell, use the resumable begin/chunk/status/finalize/abort workflow: begin takes the same arguments plus the exact archive size and its lowercase SHA-256; send ordered chunks of at most 1 MiB decoded base64 at the returned offset, then finalize. Requires docker:containers:create for the node or folder and the container archive entitlement; archive environment, secrets, networks, and volumes need the matching node scopes. Authentication comes from the MCP connection; never pass a token.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['begin', 'chunk', 'status', 'finalize', 'abort'] },
-        nodeId: { type: 'string', description: 'begin: destination Docker node UUID.' },
-        name: { type: 'string', description: 'begin: new container name.' },
-        folderId: { type: 'string', description: 'begin: optional authorized destination container folder UUID.' },
+        operation: { type: 'string', enum: ['link', 'begin', 'chunk', 'status', 'finalize', 'abort'] },
+        nodeId: { type: 'string', description: 'link or begin: destination Docker node UUID.' },
+        name: { type: 'string', description: 'link or begin: new container name.' },
+        folderId: {
+          type: 'string',
+          description: 'link or begin: optional authorized destination container folder UUID.',
+        },
         resolution: {
           type: 'object',
           description:
-            'begin: network, volume, and port mappings { networks?, createNetworks?, volumes?, createVolumes?, ports? } from archive_plan_import.',
+            'link or begin: network, volume, and port mappings { networks?, createNetworks?, volumes?, createVolumes?, ports? } from archive_plan_import.',
         },
         declaredSizeBytes: { type: 'integer', minimum: 1, description: 'begin: exact archive size in bytes.' },
         sha256: { type: 'string', description: 'begin: lowercase SHA-256 of the complete archive.' },
@@ -1366,25 +1369,35 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'download_docker_archive',
     description:
-      'Export a container archive (.gwca, kind container) or a volume archive (.tar.gz, kind volume) through authenticated MCP. begin prepares the archive on the Gateway and returns a downloadId; poll status until ready (it reports sizeBytes and sha256); read chunk at increasing offsets (at most 1 MiB per call, base64) until eof; then close. Container export needs docker:containers:export, plus files read for the portable image mode, environment access when includeEnvironment (default true), and secrets access when includeSecrets. Volume export needs docker:volumes:export. Prepared archives expire after an hour of inactivity.',
+      'Export a container archive (.gwca, kind container) or a volume archive (.tar.gz, kind volume) through authenticated MCP. Preferred: operation "link" takes the begin arguments and returns a one-time download URL (valid 15 minutes, single use) with a ready `curl -fsS -o <file> <url>` command that streams the archive from the node; a non-zero curl exit means the file is incomplete. Without a shell, begin prepares the archive on the Gateway and returns a downloadId; poll status until ready (it reports sizeBytes and sha256); read chunk at increasing offsets (at most 1 MiB per call, base64) until eof; then close. Container export needs docker:containers:export, plus files read for the portable image mode, environment access when includeEnvironment (default true), and secrets access when includeSecrets. Volume export needs docker:volumes:export. Prepared archives expire after an hour of inactivity.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['begin', 'status', 'chunk', 'close'] },
-        kind: { type: 'string', enum: ['container', 'volume'], description: 'begin: what to export.' },
-        nodeId: { type: 'string', description: 'begin: Docker node ID.' },
-        containerId: { type: 'string', description: `begin (container): ${STABLE_CONTAINER_REFERENCE_DESCRIPTION}` },
-        volumeName: { type: 'string', description: 'begin (volume): volume name.' },
+        operation: { type: 'string', enum: ['link', 'begin', 'status', 'chunk', 'close'] },
+        kind: { type: 'string', enum: ['container', 'volume'], description: 'link or begin: what to export.' },
+        nodeId: { type: 'string', description: 'link or begin: Docker node ID.' },
+        containerId: {
+          type: 'string',
+          description: `link or begin (container): ${STABLE_CONTAINER_REFERENCE_DESCRIPTION}`,
+        },
+        volumeName: { type: 'string', description: 'link or begin (volume): volume name.' },
         imageMode: {
           type: 'string',
           enum: ['portable', 'registry'],
-          description: 'begin (container): embed the image (portable, default) or reference its registry digest.',
+          description:
+            'link or begin (container): embed the image (portable, default) or reference its registry digest.',
         },
-        includeWritableLayer: { type: 'boolean', description: 'begin (container): include filesystem changes.' },
-        includeEnvironment: { type: 'boolean', description: 'begin (container): include environment. Default: true' },
+        includeWritableLayer: {
+          type: 'boolean',
+          description: 'link or begin (container): include filesystem changes.',
+        },
+        includeEnvironment: {
+          type: 'boolean',
+          description: 'link or begin (container): include environment. Default: true',
+        },
         includeSecrets: {
           type: 'boolean',
-          description: 'begin (container): include secret values; requires includeEnvironment. Default: false',
+          description: 'link or begin (container): include secret values; requires includeEnvironment. Default: false',
         },
         downloadId: { type: 'string', description: 'Download UUID returned by begin.' },
         offset: { type: 'integer', minimum: 0, description: 'chunk: byte offset. Default: 0' },

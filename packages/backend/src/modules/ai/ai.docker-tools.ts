@@ -90,6 +90,7 @@ import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
 import { inspectConsoleCommand, parseConsoleCommandResult } from './ai.console-safety.js';
+import { createDockerArchiveDownloadLink, createDockerArchiveUploadLink } from './ai.docker-archive-link.js';
 import { dockerArchiveTransferStore } from './ai.docker-archive-transfer.js';
 import { manageDockerAvailabilityTool } from './ai.docker-availability-tools.js';
 import { assertDockerContainerRecreateAccess, manageDockerContainerTool } from './ai.docker-container-tools.js';
@@ -618,9 +619,13 @@ export async function executeDockerTool(
     case 'manage_docker_runtime':
       return manageDockerRuntime(context, user, args);
     case 'upload_docker_container_archive':
-      return dockerArchiveTransferStore().upload(user, args);
+      return args.operation === 'link'
+        ? createDockerArchiveUploadLink(user, args)
+        : dockerArchiveTransferStore().upload(user, args);
     case 'download_docker_archive':
-      return dockerArchiveTransferStore().download(context.dockerService, user, args);
+      return args.operation === 'link'
+        ? createDockerArchiveDownloadLink(context.dockerService, user, args)
+        : dockerArchiveTransferStore().download(context.dockerService, user, args);
     default:
       throw new Error(`Unsupported Docker tool: ${toolName}`);
   }
