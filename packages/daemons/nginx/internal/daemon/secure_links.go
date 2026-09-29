@@ -560,6 +560,9 @@ func (m *sourceLinkManager) adoptKeptUnixSocket(socketPath string) (net.Listener
 	}
 	file, ok := listenerkeep.Take(name)
 	if !ok {
+		// Not handed over (a launcher without a keeper passes nothing): a
+		// copy systemd may still keep of the socket about to be replaced goes.
+		_ = listenerkeep.DropStale(name)
 		return nil, ""
 	}
 	defer file.Close()

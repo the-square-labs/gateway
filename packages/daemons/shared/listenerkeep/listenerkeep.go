@@ -51,6 +51,9 @@ const (
 	// listener is then simply not kept.
 	sendTimeout = time.Second
 	maxMessage  = 8192
+
+	// systemdNotifySocket is where systemd receives service notifications.
+	systemdNotifySocket = "/run/systemd/notify"
 )
 
 type keptDescriptor struct {
@@ -86,7 +89,9 @@ func NamePath(name string) string {
 type client struct {
 	mu        sync.Mutex
 	inherited map[string]*os.File
-	send      func(message string, file *os.File) error
+	// own names the listeners this process kept or took over.
+	own  map[string]bool
+	send func(message string, file *os.File) error
 }
 
 var (
@@ -144,6 +149,11 @@ func Keep(name string, file *os.File) error { return current().keep(name, file) 
 // Drop tells the keeper to close its copy kept under name.
 func Drop(name string) error { return current().drop(name) }
 
+// DropStale drops a copy kept under name by an earlier process that was not
+// handed to this one (a launcher without a keeper hands nothing over, while
+// systemd's store may still hold it). A listener this process kept stays.
+func DropStale(name string) error { return current().dropStale(name) }
+
 // ReleaseUnclaimed closes every inherited descriptor under prefix that no
 // Take claimed, here and in the keeper, and returns their names.
 func ReleaseUnclaimed(prefix string) []string { return current().releaseUnclaimed(prefix) }
@@ -160,6 +170,11 @@ func (c *client) take(name string) (*os.File, bool) {
 	file, ok := c.inherited[name]
 	if ok {
 		delete(c.inherited, name)
+		// The keeper's copy is this process's now.
+		if c.own == nil {
+			c.own = map[string]bool{}
+		}
+		c.own[name] = true
 	}
 	return file, ok
 }
@@ -186,12 +201,33 @@ func (c *client) keep(name string, file *os.File) error {
 	if file == nil {
 		return errors.New("no listener to keep")
 	}
-	return send(messageKeep+"\n"+name, file)
+	if err := send(messageKeep+"\n"+name, file); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if c.own == nil {
+		c.own = map[string]bool{}
+	}
+	c.own[name] = true
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *client) dropStale(name string) error {
+	c.mu.Lock()
+	_, inherited := c.inherited[name]
+	own := c.own[name]
+	c.mu.Unlock()
+	if inherited || own {
+		return nil
+	}
+	return c.drop(name)
 }
 
 func (c *client) drop(name string) error {
 	c.mu.Lock()
 	send := c.send
+	delete(c.own, name)
 	c.mu.Unlock()
 	if send == nil || name == "" {
 		return nil
@@ -236,17 +272,29 @@ func newClientFromEnvironment() *client {
 				current.inherited[descriptor.Name] = os.NewFile(uintptr(descriptor.FD), descriptor.Name)
 			}
 		}
-		// An older launcher sets neither: nothing is kept, and this process is
-		// not the unit's main process, so systemd would refuse it anyway.
-		if fd, err := strconv.Atoi(channel); err == nil && fd >= 3 {
-			syscall.CloseOnExec(fd)
-			file := os.NewFile(uintptr(fd), "listener-keep")
-			connection, err := net.FileConn(file)
-			_ = file.Close()
-			if unixConnection, ok := connection.(*net.UnixConn); err == nil && ok {
+		fd, err := strconv.Atoi(channel)
+		if err != nil || fd < 3 {
+			// A launcher without a keeper (installed before it had one; the
+			// launcher refresh replaces it on the unit's next start) hands
+			// nothing over and stores nothing. The listeners then go to
+			// systemd's store directly, on behalf of the launcher, which is
+			// the unit's main process (NotifyAccess=main): the next start of
+			// the unit, the refresh's trial included, takes them over instead
+			// of dropping them.
+			if notify := dialNotifySocketFor(os.Getppid()); notify != nil {
 				current.send = func(message string, file *os.File) error {
-					return sendMessage(unixConnection, message, file)
+					return forwardToSystemd(notify, message, file)
 				}
+			}
+			return current
+		}
+		syscall.CloseOnExec(fd)
+		file := os.NewFile(uintptr(fd), "listener-keep")
+		connection, err := net.FileConn(file)
+		_ = file.Close()
+		if unixConnection, ok := connection.(*net.UnixConn); err == nil && ok {
+			current.send = func(message string, file *os.File) error {
+				return sendMessage(unixConnection, message, file)
 			}
 		}
 		return current
@@ -345,10 +393,31 @@ func takeListenFDs(first int) map[string]*os.File {
 type notifySocket struct {
 	fd      int
 	address *syscall.SockaddrUnix
+	// pid is the process the messages are sent on behalf of; 0 for this one.
+	pid int
 }
 
 func dialNotifySocket() *notifySocket {
+	return dialNotifySocketFor(0)
+}
+
+// dialNotifySocketFor opens the unit's notification socket for messages sent
+// on behalf of pid (0: this process). Sending as another process takes
+// privileges (CAP_SYS_ADMIN, as root has): without them a send fails and the
+// listener is simply not kept.
+func dialNotifySocketFor(pid int) *notifySocket {
+	if pid == 1 || pid < 0 || (pid > 0 && !notifyOnBehalfSupported) {
+		return nil
+	}
 	path := os.Getenv("NOTIFY_SOCKET")
+	if path == "" && pid > 0 && os.Getenv("INVOCATION_ID") != "" {
+		// A unit started before it had a store and NotifyAccess (the drop-in
+		// EnsureSystemdStore installs applies to the running unit, but its
+		// processes got no NOTIFY_SOCKET): systemd's own socket.
+		if info, err := os.Stat(systemdNotifySocket); err == nil && info.Mode()&os.ModeSocket != 0 {
+			path = systemdNotifySocket
+		}
+	}
 	if path == "" || (!strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "@")) {
 		return nil
 	}
@@ -361,12 +430,16 @@ func dialNotifySocket() *notifySocket {
 	if err != nil {
 		return nil
 	}
-	return &notifySocket{fd: fd, address: &syscall.SockaddrUnix{Name: path}}
+	return &notifySocket{fd: fd, address: &syscall.SockaddrUnix{Name: path}, pid: pid}
 }
 
 func (n *notifySocket) send(message string, file *os.File) error {
 	return withDescriptor(file, func(rights []byte) error {
-		return syscall.Sendmsg(n.fd, []byte(message), rights, n.address, 0)
+		control := rights
+		if n.pid > 0 {
+			control = append(notifyCredentials(n.pid), rights...)
+		}
+		return syscall.Sendmsg(n.fd, []byte(message), control, n.address, 0)
 	})
 }
 
