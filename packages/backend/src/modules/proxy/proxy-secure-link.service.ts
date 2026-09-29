@@ -109,6 +109,23 @@ function firstReference(text: string | null | undefined, patterns: RegExp[]): st
   return null;
 }
 
+/**
+ * A target binding in the sync that releases `excludedNetwork` from the connector (B-24): only the links bound to that
+ * network leave. A link that may pick another network is pinned to the one it is bound to, so the daemon cannot move it
+ * onto the released network; one without a recorded network stays as it is (the sync drops it if the daemon reports it
+ * on the released network). Every other link keeps its connector binding: dropping every Docker-container link here
+ * took a serving Availability holder off its node until the reconcile that follows bound it again.
+ */
+function releasedNetworkBinding<T extends { targetNetwork: string; allowNetworkReselection: boolean }>(
+  binding: T,
+  excludedNetwork: string | undefined
+): T[] {
+  if (!excludedNetwork) return [binding];
+  if (binding.targetNetwork === excludedNetwork) return [];
+  if (!binding.allowNetworkReselection || !binding.targetNetwork) return [binding];
+  return [{ ...binding, allowNetworkReselection: false }];
+}
+
 /** True when `after` differs from `before` only by the target network the daemon picked during target sync. */
 function isNetworkReselection(before: ProxyAdditionalSecureLinkRow, after: ProxyAdditionalSecureLinkRow): boolean {
   return (
@@ -2194,20 +2211,34 @@ export class ProxySecureLinkService {
             allowNetworkReselection: binding.upstreamKind === 'docker_container',
             ...availabilityMemberBindingFields(binding, members),
           })),
-      ].filter(
-        (binding) => !excludedNetwork || (binding.targetNetwork !== excludedNetwork && !binding.allowNetworkReselection)
-      );
+      ].flatMap((binding) => releasedNetworkBinding(binding, excludedNetwork));
       const additionalIds = new Set(additional.map((binding: ProxyAdditionalSecureLinkRow) => binding.id));
       let appliedBindings = targetBindings;
       let result = await this.dispatch.sendProxySecureLinks(nodeId, appliedBindings);
       const unavailable = new Map<string, string>();
-      while (!result.success) {
-        const message = result.error || 'Docker daemon rejected secure-link bindings';
-        const unavailableLinkId = this.parseUnavailableTargetLinkId(message);
-        if (!unavailableLinkId || unavailableLinkId === requiredLinkId) throw new Error(message);
-        const nextBindings = appliedBindings.filter((binding) => binding.linkId !== unavailableLinkId);
-        if (nextBindings.length === appliedBindings.length) throw new Error(message);
-        unavailable.set(unavailableLinkId, message);
+      for (;;) {
+        while (!result.success) {
+          const message = result.error || 'Docker daemon rejected secure-link bindings';
+          const unavailableLinkId = this.parseUnavailableTargetLinkId(message);
+          // A link pinned for a network release whose container left its network: it serves nothing there.
+          const detachedLinkId = excludedNetwork ? this.parseDetachedTargetLinkId(message) : null;
+          const droppedLinkId = unavailableLinkId ?? detachedLinkId;
+          if (!droppedLinkId || droppedLinkId === requiredLinkId) throw new Error(message);
+          const nextBindings = appliedBindings.filter((binding) => binding.linkId !== droppedLinkId);
+          if (nextBindings.length === appliedBindings.length) throw new Error(message);
+          if (unavailableLinkId) unavailable.set(unavailableLinkId, message);
+          appliedBindings = nextBindings;
+          result = await this.dispatch.sendProxySecureLinks(nodeId, appliedBindings);
+        }
+        if (!excludedNetwork) break;
+        // A link without a recorded network may resolve onto the released network: only those leave as well.
+        const onReleased = new Set(
+          this.parseBindings(result.detail)
+            .filter((status) => status.targetNetwork === excludedNetwork)
+            .map((status) => status.linkId)
+        );
+        const nextBindings = appliedBindings.filter((binding) => !onReleased.has(binding.linkId));
+        if (nextBindings.length === appliedBindings.length) break;
         appliedBindings = nextBindings;
         result = await this.dispatch.sendProxySecureLinks(nodeId, appliedBindings);
       }
@@ -2297,6 +2328,13 @@ export class ProxySecureLinkService {
   private parseUnavailableTargetLinkId(message: string): string | null {
     const match = message.match(
       /resolve secure-link ([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}): target container is unavailable/i
+    );
+    return match?.[1] ?? null;
+  }
+
+  private parseDetachedTargetLinkId(message: string): string | null {
+    const match = message.match(
+      /resolve secure-link ([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}): target container is not attached to the selected network/i
     );
     return match?.[1] ?? null;
   }
