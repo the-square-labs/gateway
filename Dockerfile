@@ -12,8 +12,8 @@ WORKDIR /src
 COPY packages/daemons/shared ./packages/daemons/shared
 COPY packages/relay ./packages/relay
 WORKDIR /src/packages/relay
-ARG APP_VERSION
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.buildVersion=${APP_VERSION}-relay" -o /gateway-relay ./cmd/gateway-relay
+# The bundled relay reports the image's APP_VERSION, so one build serves every tag of a commit.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /gateway-relay ./cmd/gateway-relay
 
 FROM ${NODE_IMAGE} AS base
 

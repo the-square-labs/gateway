@@ -1,5 +1,8 @@
 name: Release
 
+# A Gateway tag only promotes the image built for its commit on main (workflow Image): it
+# stamps the version and the backup runner, signs the digest and publishes the release.
+# Main CI already ran the light suite on the commit; stable tags add the backup-runner smoke.
 on:
   push:
     tags:
@@ -20,152 +23,50 @@ env:
   GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/gateway
 
 jobs:
-  verify:
-    name: Require successful main CI
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      release_kind: ${{ steps.release-tag.outputs.kind }}
-      prerelease: ${{ steps.release-tag.outputs.prerelease }}
-    steps:
-      - name: Check out tagged revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-
-      - name: Classify release tag
-        id: release-tag
-        run: scripts/release-tag.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-
-      - name: Verify product continuity grant
-        if: ${{ steps.release-tag.outputs.kind == 'gateway' }}
-        run: node scripts/verify-continuity-grant.mjs
-
-      - name: Find successful main CI for tagged commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          commit_sha=$(git rev-parse "${GITHUB_REF_NAME}^{}")
-          successful_run=$(
-            gh api \
-              "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${commit_sha}&status=completed&per_page=100" \
-              --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .conclusion == "success")][0].id // empty'
-          )
-          if [[ -n "$successful_run" ]]; then
-            echo "Reusing successful main CI run ${successful_run} for ${commit_sha}"
-          else
-            echo "::error::No successful main CI run exists for ${commit_sha}; refusing to run duplicate release verification" >&2
-            exit 1
-          fi
-
-  mirror:
-    name: Mirror third-party images
-    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
-    needs: verify
-    runs-on: ubuntu-latest
-    # The first run copies every listed image; later runs only confirm the mirror tags on GHCR.
-    timeout-minutes: 90
-    env:
-      CRANE_VERSION: v0.22.1
-      CRANE_LINUX_AMD64_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
-    steps:
-      - name: Check out tagged revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Install crane
-        run: |
-          archive="${RUNNER_TEMP}/go-containerregistry.tar.gz"
-          curl -fsSL --retry 3 -o "$archive" \
-            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
-          echo "${CRANE_LINUX_AMD64_SHA256}  ${archive}" | sha256sum --check --strict
-          mkdir -p "${RUNNER_TEMP}/crane"
-          tar -xzf "$archive" -C "${RUNNER_TEMP}/crane" crane
-          echo "${RUNNER_TEMP}/crane" >> "$GITHUB_PATH"
-
-      - name: Mirror digest-pinned third-party images to GHCR
-        env:
-          MIRROR_REPOSITORY: ${{ env.GATEWAY_IMAGE }}
-        run: node scripts/mirror-third-party-images.mjs
-
-  build:
-    name: Build
-    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
-    needs: [verify, mirror]
+  gateway:
+    name: Gateway release
+    if: >-
+      ${{ !(endsWith(github.ref_name, '-relay') || endsWith(github.ref_name, '-nginx') ||
+      endsWith(github.ref_name, '-docker') || endsWith(github.ref_name, '-monitoring') ||
+      endsWith(github.ref_name, '-watchdog')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    steps:
-      - name: Check out tagged revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Set up runner emulation
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
-        with:
-          platforms: arm64
-
-      - name: Set up runner builder
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-
-      - name: Build and publish bundled backup runner
-        run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --file packages/daemons/backup-runner/Dockerfile \
-            --tag "${GATEWAY_IMAGE}/backup-runner:${GITHUB_REF_NAME}" \
-            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            --metadata-file backup-runner.metadata.json \
-            --push packages/daemons/backup-runner
-
-      - name: Build and push immutable image
-        run: |
-          ./scripts/sync-update-trust-anchor.sh
-          runner_digest=$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' backup-runner.metadata.json)
-          docker build \
-            --load \
-            --tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" \
-            --build-arg "APP_VERSION=${GITHUB_REF_NAME}" \
-            --build-arg "BACKUP_RUNNER_IMAGE=${GATEWAY_IMAGE}/backup-runner@${runner_digest}" \
-            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-            .
-          node scripts/test-backup-runner-release.mjs "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" "${GATEWAY_IMAGE}/backup-runner@${runner_digest}"
-          sh scripts/push-image-with-digest.sh \
-            "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" \
-            gateway-image.digest \
-            "gateway image"
-
-      - name: Upload image digest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: gateway-image-digest
-          path: gateway-image.digest
-          if-no-files-found: error
-          retention-days: 1
-
-  sign:
-    name: Sign
-    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
-    needs: [verify, build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
     env:
-      UPDATE_SIGNING_PRIVATE_KEY_PEM_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out tagged revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          # The annotated tag carries the release notes.
+          git fetch --no-tags --depth=1 origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          scripts/release-tag.sh "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" >> "$GITHUB_OUTPUT"
+          echo "runner_tree=$(git rev-parse "${GITHUB_REF_NAME}^{commit}:packages/daemons/backup-runner")" >> "$GITHUB_OUTPUT"
+
+      - name: Require a Gateway tag
+        env:
+          RELEASE_KIND: ${{ steps.tag.outputs.kind }}
+        run: test "$RELEASE_KIND" = gateway
+
+      - name: Verify product continuity grant
+        run: node scripts/verify-continuity-grant.mjs
+
+      - name: Require successful main CI
+        env:
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          run_id=$(
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&status=completed&per_page=100" \
+              --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .conclusion == "success")][0].id // empty'
+          )
+          if [[ -z "$run_id" ]]; then
+            echo "::error::No successful main CI run exists for ${SHA}" >&2
+            exit 1
+          fi
+          echo "Main CI run ${run_id} passed for ${SHA}"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -173,60 +74,6 @@ jobs:
           go-version: '1.24.4'
           cache-dependency-path: packages/daemons/go.work.sum
 
-      - name: Download image digest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: gateway-image-digest
-
-      - name: Sign update manifest
-        run: |
-          test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || {
-            echo 'UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 is required' >&2
-            exit 1
-          }
-          ./scripts/sync-update-trust-anchor.sh
-          digest=$(cat gateway-image.digest)
-          echo "$digest" | grep -Eq '^sha256:[a-f0-9]{64}$'
-          (
-            cd packages/daemons
-            go run ./shared/cmd/update-trust sign \
-              --kind gateway-image \
-              --version "$GITHUB_REF_NAME" \
-              --tag "$GITHUB_REF_NAME" \
-              --image "$GATEWAY_IMAGE" \
-              --digest "$digest" \
-              --git-commit-sha "$GITHUB_SHA" \
-              --git-pipeline-id "$GITHUB_RUN_ID" \
-              --out ../../gateway-image.update.json
-          )
-
-      - name: Upload signed manifest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: gateway-update-manifest
-          path: gateway-image.update.json
-          if-no-files-found: error
-          retention-days: 1
-
-  publish:
-    name: Publish
-    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
-    needs: [verify, sign]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Check out tagged revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-
-      - name: Download signed manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: gateway-update-manifest
-
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
@@ -234,21 +81,106 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Publish image aliases
-        env:
-          RELEASE_PRERELEASE: ${{ needs.verify.outputs.prerelease }}
-        run: |
-          docker pull "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}"
-          docker tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}"
-          docker push "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}"
-          if [[ "$RELEASE_PRERELEASE" != "true" ]]; then
-            docker tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" "${GATEWAY_IMAGE}:latest"
-            docker push "${GATEWAY_IMAGE}:latest"
-          fi
+      - name: Set up builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
-      - name: Upload release asset to draft
+      - name: Wait for the commit's images
+        id: images
         env:
-          RELEASE_PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          SHA: ${{ steps.tag.outputs.sha }}
+          RUNNER_TREE: ${{ steps.tag.outputs.runner_tree }}
+        run: |
+          digest_of() {
+            docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest'
+          }
+          base="${GATEWAY_IMAGE}:main-${SHA}"
+          runner="${GATEWAY_IMAGE}/backup-runner:tree-${RUNNER_TREE}"
+          for attempt in $(seq 1 120); do
+            if base_digest=$(digest_of "$base") && runner_digest=$(digest_of "$runner"); then
+              echo "base=${GATEWAY_IMAGE}@${base_digest}" >> "$GITHUB_OUTPUT"
+              echo "runner=${GATEWAY_IMAGE}/backup-runner@${runner_digest}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            failed=$(
+              gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/image.yml/runs?head_sha=${SHA}&per_page=20" \
+                --jq '[.workflow_runs[] | select(.status == "completed" and .conclusion != "success")] | length'
+            )
+            ongoing=$(
+              gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/image.yml/runs?head_sha=${SHA}&per_page=20" \
+                --jq '[.workflow_runs[] | select(.status != "completed" or .conclusion == "success")] | length'
+            )
+            if [[ "$failed" != 0 && "$ongoing" == 0 ]]; then
+              echo "::error::Workflow Image failed for ${SHA}; rerun it, then this release" >&2
+              exit 1
+            fi
+            echo "Waiting for ${base} and ${runner} (${attempt})"
+            sleep 10
+          done
+          echo "::error::Images for ${SHA} did not appear within 20 minutes" >&2
+          exit 1
+
+      - name: Stamp and push the release image
+        id: image
+        env:
+          BASE_IMAGE: ${{ steps.images.outputs.base }}
+          RUNNER_IMAGE: ${{ steps.images.outputs.runner }}
+          RELEASE_PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          context="${RUNNER_TEMP}/stamp"
+          mkdir -p "$context"
+          node scripts/bundle-backup-runner.mjs "$GITHUB_REF_NAME" "$RUNNER_IMAGE" "${context}/backup-runner-image.json"
+          tags=(--tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" --tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}")
+          if [[ "$RELEASE_PRERELEASE" != "true" ]]; then
+            tags+=(--tag "${GATEWAY_IMAGE}:latest")
+          fi
+          docker buildx build \
+            --file docker/release.Dockerfile \
+            --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+            --build-arg "APP_VERSION=${GITHUB_REF_NAME}" \
+            "${tags[@]}" \
+            --provenance=false \
+            --sbom=false \
+            --metadata-file "${RUNNER_TEMP}/image.metadata.json" \
+            --push "$context"
+          digest=$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "${RUNNER_TEMP}/image.metadata.json")
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          docker buildx imagetools create --tag "${GATEWAY_IMAGE}/backup-runner:${GITHUB_REF_NAME}" "$RUNNER_IMAGE"
+          echo "Published ${GATEWAY_IMAGE}@${digest}"
+
+      - name: Smoke-test the bundled backup runner
+        if: ${{ steps.tag.outputs.prerelease != 'true' }}
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          RUNNER_IMAGE: ${{ steps.images.outputs.runner }}
+        run: node scripts/test-backup-runner-release.mjs "${GATEWAY_IMAGE}@${DIGEST}" "$RUNNER_IMAGE"
+
+      - name: Sign update manifest
+        env:
+          UPDATE_SIGNING_PRIVATE_KEY_PEM_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          test -n "${UPDATE_SIGNING_PRIVATE_KEY_PEM_B64}" || {
+            echo 'UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 is required' >&2
+            exit 1
+          }
+          ./scripts/sync-update-trust-anchor.sh
+          (
+            cd packages/daemons
+            go run ./shared/cmd/update-trust sign \
+              --kind gateway-image \
+              --version "$GITHUB_REF_NAME" \
+              --tag "$GITHUB_REF_NAME" \
+              --image "$GATEWAY_IMAGE" \
+              --digest "$DIGEST" \
+              --git-commit-sha "$SHA" \
+              --git-pipeline-id "$GITHUB_RUN_ID" \
+              --out ../../gateway-image.update.json
+          )
+
+      - name: Publish GitHub release
+        env:
+          RELEASE_PRERELEASE: ${{ steps.tag.outputs.prerelease }}
         run: |
           git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)' > release-notes.md
           if ! grep -q '[^[:space:]]' release-notes.md; then
@@ -270,56 +202,45 @@ jobs:
             fi
             gh release create "$GITHUB_REF_NAME" "${args[@]}"
           fi
-          (
-            cd scripts
-            sha256sum setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-storage-node.sh setup-monitoring-node.sh > ../gateway-daemon-installers.sha256
-          )
-          gh release upload "$GITHUB_REF_NAME" \
-            CONTINUITY-MIT-GRANT.md \
-            gateway-image.update.json \
-            gateway-daemon-installers.sha256 \
-            scripts/setup-daemon.sh \
-            scripts/setup-node.sh \
-            scripts/setup-docker-node.sh \
-            scripts/setup-database-node.sh \
-            scripts/setup-storage-node.sh \
-            scripts/setup-monitoring-node.sh \
-            --clobber
+          installers=(setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-storage-node.sh setup-monitoring-node.sh)
+          (cd scripts && sha256sum "${installers[@]}") > gateway-daemon-installers.sha256
+          assets=(CONTINUITY-MIT-GRANT.md gateway-image.update.json gateway-daemon-installers.sha256)
+          for installer in "${installers[@]}"; do
+            assets+=("scripts/${installer}")
+          done
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          uploaded=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
+          for asset in "${assets[@]}"; do
+            grep -Fxq "$(basename "$asset")" <<<"$uploaded"
+          done
+          gh release edit "$GITHUB_REF_NAME" --draft=false
 
-  release:
-    name: Release
-    if: ${{ needs.verify.outputs.release_kind == 'gateway' }}
-    needs: [verify, publish]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Verify and publish release
+      # Packages the commercial core against this exact release; the license server installs it
+      # once packaged. Needs COMMERCIAL_CI_TOKEN (actions:write on the commercial repository).
+      - name: Package the commercial core
+        if: ${{ steps.tag.outputs.prerelease == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.COMMERCIAL_CI_TOKEN }}
         run: |
-          assets=$(gh release view "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json assets \
-            --jq '.assets[].name')
-          grep -Fxq gateway-image.update.json <<<"$assets"
-          grep -Fxq CONTINUITY-MIT-GRANT.md <<<"$assets"
-          grep -Fxq gateway-daemon-installers.sha256 <<<"$assets"
-          grep -Fxq setup-daemon.sh <<<"$assets"
-          grep -Fxq setup-node.sh <<<"$assets"
-          grep -Fxq setup-docker-node.sh <<<"$assets"
-          grep -Fxq setup-database-node.sh <<<"$assets"
-          grep -Fxq setup-storage-node.sh <<<"$assets"
-          grep -Fxq setup-monitoring-node.sh <<<"$assets"
-          gh release edit "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft=false
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::warning::COMMERCIAL_CI_TOKEN is not set; dispatch the commercial release by hand"
+            exit 0
+          fi
+          gh workflow run release.yml \
+            --repo "${GITHUB_REPOSITORY_OWNER}/gateway-commercial" \
+            --ref main \
+            -f "host_ref=${GITHUB_REF_NAME}" \
+            -f "host_version=${GITHUB_REF_NAME}" \
+            -f publish=true
 
   component-release:
     name: Component release
-    if: ${{ needs.verify.outputs.release_kind == 'component' }}
-    needs: verify
+    if: >-
+      ${{ endsWith(github.ref_name, '-relay') || endsWith(github.ref_name, '-nginx') ||
+      endsWith(github.ref_name, '-docker') || endsWith(github.ref_name, '-monitoring') ||
+      endsWith(github.ref_name, '-watchdog') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
       UPDATE_SIGNING_PRIVATE_KEY_PEM_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_PEM_B64 }}
@@ -329,18 +250,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
-        with:
-          version: 9.15.0
-          run_install: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: '24'
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+      - name: Require successful main CI
+        run: |
+          sha=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
+          run_id=$(
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&status=completed&per_page=100" \
+              --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .conclusion == "success")][0].id // empty'
+          )
+          if [[ -z "$run_id" ]]; then
+            echo "::error::No successful main CI run exists for ${sha}" >&2
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -349,9 +269,6 @@ jobs:
           cache-dependency-path: |
             packages/daemons/go.work.sum
             packages/relay/go.sum
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
 
       - name: Build, sign, publish, and release component
         run: scripts/github-release.sh

@@ -1,0 +1,157 @@
+name: Image
+
+# Builds the Gateway image once per main commit, next to CI and without gating it. A release
+# tag only stamps this image with its version (release.yml), so tagging never waits on a build.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit to build (defaults to the dispatched ref)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ inputs.ref || github.sha }}
+  cancel-in-progress: false
+
+env:
+  GATEWAY_IMAGE: ghcr.io/${{ github.repository_owner }}/gateway
+
+jobs:
+  gateway:
+    name: Gateway image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Resolve commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build and push
+        env:
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          ./scripts/sync-update-trust-anchor.sh
+          docker buildx build \
+            --cache-from type=gha,scope=gateway \
+            --cache-to type=gha,scope=gateway,mode=max \
+            --tag "${GATEWAY_IMAGE}:main-${SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${SHA}" \
+            --provenance=false \
+            --sbom=false \
+            --push .
+
+  # The runner changes rarely; it is rebuilt (under emulation for arm64) only when its source
+  # tree changes, and releases pin the build of the tree they carry.
+  backup-runner:
+    name: Backup runner image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Resolve source tree
+        id: tree
+        run: echo "hash=$(git rev-parse HEAD:packages/daemons/backup-runner)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Check for an existing build
+        id: existing
+        env:
+          TREE: ${{ steps.tree.outputs.hash }}
+        run: |
+          if docker buildx imagetools inspect "${GATEWAY_IMAGE}/backup-runner:tree-${TREE}" >/dev/null 2>&1; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up emulation
+        if: ${{ steps.existing.outputs.built != 'true' }}
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        with:
+          platforms: arm64
+
+      - name: Set up builder
+        if: ${{ steps.existing.outputs.built != 'true' }}
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build and push
+        if: ${{ steps.existing.outputs.built != 'true' }}
+        env:
+          TREE: ${{ steps.tree.outputs.hash }}
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --file packages/daemons/backup-runner/Dockerfile \
+            --tag "${GATEWAY_IMAGE}/backup-runner:tree-${TREE}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --push packages/daemons/backup-runner
+
+  mirror:
+    name: Mirror third-party images
+    runs-on: ubuntu-latest
+    # The first run copies every listed image; later runs only confirm the mirror tags on GHCR.
+    timeout-minutes: 90
+    env:
+      CRANE_VERSION: v0.22.1
+      CRANE_LINUX_AMD64_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Install crane
+        run: |
+          archive="${RUNNER_TEMP}/go-containerregistry.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_LINUX_AMD64_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "${RUNNER_TEMP}/crane"
+          tar -xzf "$archive" -C "${RUNNER_TEMP}/crane" crane
+          echo "${RUNNER_TEMP}/crane" >> "$GITHUB_PATH"
+
+      - name: Mirror digest-pinned third-party images to GHCR
+        env:
+          MIRROR_REPOSITORY: ${{ env.GATEWAY_IMAGE }}
+        run: node scripts/mirror-third-party-images.mjs

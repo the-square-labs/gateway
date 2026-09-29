@@ -1,5 +1,8 @@
 name: CI
 
+# The light gate for main: lint, typecheck, the light suite, the database suites and the
+# commercial core against this commit, all in parallel. Workflow Image builds the image for the
+# same commit; the full end-to-end run belongs to stable releases.
 on:
   push:
     branches:
@@ -19,55 +22,10 @@ env:
   NX_SKIP_NX_CACHE: '1'
 
 jobs:
-  changes:
-    name: Detect application changes
+  check:
+    name: Lint and typecheck
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      application: ${{ steps.changes.outputs.application }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-
-      - name: Detect application changes
-        id: changes
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            echo "application=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          base_sha="$BEFORE_SHA"
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            base_sha="$BASE_SHA"
-          elif [[ -z "$base_sha" || "$base_sha" =~ ^0+$ ]]; then
-            base_sha=$(git rev-list --max-parents=0 "$HEAD_SHA")
-          fi
-
-          application=false
-          while IFS= read -r path; do
-            case "$path" in
-              .github/*|.workflow/*|docs/*|*.md|*.mdx|LICENSE*|scripts/github-release.sh|scripts/release-tag.sh|scripts/push-image-with-digest.sh)
-                ;;
-              *)
-                application=true
-                break
-                ;;
-            esac
-          done < <(git diff --name-only "$base_sha" "$HEAD_SHA")
-
-          echo "application=$application" >> "$GITHUB_OUTPUT"
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -96,42 +54,31 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm lint
-
-  typecheck:
-    name: Typecheck
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
-        with:
-          version: 9.15.0
-          run_install: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: '24'
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck
-        run: pnpm typecheck
+      - name: Lint, typecheck and check the edition boundary
+        run: |
+          run() {
+            local name=$1
+            shift
+            "$@" > "${RUNNER_TEMP}/${name}.log" 2>&1
+          }
+          run lint pnpm lint & lint=$!
+          run typecheck pnpm typecheck & typecheck=$!
+          run edition node scripts/verify-edition-artifacts.mjs --require-complete & edition=$!
+          failed=0
+          for name in lint typecheck edition; do
+            pid=${!name}
+            if wait "$pid"; then status=passed; else status=failed; failed=1; fi
+            echo "::group::${name} ${status}"
+            cat "${RUNNER_TEMP}/${name}.log"
+            echo "::endgroup::"
+            [[ "$status" == passed ]] || echo "::error::${name} failed"
+          done
+          exit "$failed"
 
   test:
-    name: Test
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.application == 'true' }}
+    name: Light suite
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -163,18 +110,12 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Alpine OpenRC nginx lifecycle regression
-        run: bash scripts/test-nginx-openrc.sh
-
   database:
     name: Database (PostgreSQL 16)
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.application == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    # Every opt-in PostgreSQL/Redis suite, on the versions the installs run (docker-compose.yml): the migrations and
-    # the triggers behind every deployment, storage, database and proxy write, leases, relay revocation and removal,
-    # hosting, and inference budgets. Each PostgreSQL suite works in its own database.
+    timeout-minutes: 15
+    # The opt-in PostgreSQL/Redis suites, on the versions the installs run (docker-compose.yml).
+    # Each PostgreSQL suite works in its own database.
     services:
       postgres:
         image: postgres:16-alpine
@@ -255,42 +196,33 @@ jobs:
             console.log(`${report.numPassedTests} database tests ran`);
           ' "$RUNNER_TEMP/database-tests.json"
 
-  build:
-    name: Build
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.application == 'true' }}
+  # The private core checks run in its own repository, so their logs stay private; this job
+  # dispatches them against this exact commit and fails when they fail.
+  commercial:
+    name: Commercial core
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ secrets.COMMERCIAL_CI_TOKEN }}
+      COMMERCIAL_REPOSITORY: ${{ github.repository_owner }}/gateway-commercial
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
-        with:
-          version: 9.15.0
-          run_install: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: '24'
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: '1.24.4'
-          cache-dependency-path: |
-            packages/daemons/go.work.sum
-            packages/relay/go.sum
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build
-        run: pnpm build:all
-
-      - name: Verify Community backend boundary
-        run: node scripts/verify-edition-artifacts.mjs --require-complete
+      - name: Verify the commercial core against this commit
+        run: |
+          test -n "$GH_TOKEN" || { echo '::error::COMMERCIAL_CI_TOKEN is not set' >&2; exit 1; }
+          title="Verify against host ${GITHUB_SHA}"
+          since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run ci.yml --repo "$COMMERCIAL_REPOSITORY" --ref main -f "host_ref=${GITHUB_SHA}"
+          run_id=
+          for attempt in $(seq 1 30); do
+            run_id=$(
+              gh run list --repo "$COMMERCIAL_REPOSITORY" --workflow ci.yml --event workflow_dispatch -L 20 \
+                --json databaseId,displayTitle,createdAt \
+                --jq "[.[] | select(.displayTitle == \"${title}\" and .createdAt >= \"${since}\")][0].databaseId // empty"
+            )
+            [[ -n "$run_id" ]] && break
+            sleep 2
+          done
+          test -n "$run_id" || { echo '::error::The commercial CI run did not start' >&2; exit 1; }
+          echo "Commercial CI run ${run_id} (private)"
+          gh run watch "$run_id" --repo "$COMMERCIAL_REPOSITORY" --interval 5 --exit-status > /dev/null

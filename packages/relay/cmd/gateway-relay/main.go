@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +23,19 @@ import (
 
 var buildVersion = "dev"
 
+// relayVersion is the version stamped at build time. The relay bundled in the Gateway image is
+// built once per commit and released under the tag's version, which the image carries as
+// APP_VERSION.
+func relayVersion() string {
+	if buildVersion != "dev" {
+		return buildVersion
+	}
+	if version := strings.TrimSpace(os.Getenv("APP_VERSION")); version != "" && version != "dev" {
+		return version + "-relay"
+	}
+	return buildVersion
+}
+
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		if err := healthcheck(); err != nil {
@@ -34,8 +48,9 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	version := relayVersion()
 	runtime, err := retryIdentityStart(
-		func() (*server.Runtime, error) { return server.Start(cfg, buildVersion) },
+		func() (*server.Runtime, error) { return server.Start(cfg, version) },
 		30,
 		time.Second,
 		time.Sleep,
@@ -43,7 +58,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	slog.Info("generic Gateway relay listening", "port", cfg.Port, "mode", cfg.Mode, "pool_id", cfg.PoolID, "relay_instance_id", cfg.InstanceID, "build_version", buildVersion, "protocol_major", 1)
+	slog.Info("generic Gateway relay listening", "port", cfg.Port, "mode", cfg.Mode, "pool_id", cfg.PoolID, "relay_instance_id", cfg.InstanceID, "build_version", version, "protocol_major", 1)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	<-ctx.Done()
