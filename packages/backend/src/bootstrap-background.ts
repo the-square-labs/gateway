@@ -29,6 +29,7 @@ import { DockerInternalRegistryService } from '@/modules/docker/docker-registry-
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-reconciler.service.js';
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
+import { repairOrphanedContainerSourceBindings } from '@/modules/docker/docker-source-orphan-repair.js';
 import { detectPublicIP, initDnsResolver } from '@/modules/domains/dns.utils.js';
 import { DomainsService } from '@/modules/domains/domain.service.js';
 import { HostingConnectorsService } from '@/modules/hosting/hosting-connectors.service.js';
@@ -181,6 +182,27 @@ export async function initializeBackgroundServices(): Promise<void> {
   );
   scheduler.registerInterval('dangling-resource-permissions', 60 * 60 * 1000, async () => {
     await repairDanglingResourceScopes(db);
+  });
+  // Container Git sources left behind by containers removed under older releases: repaired at start (nodes
+  // that already reconnected), again once the daemons are back, then hourly. Offline nodes are never touched.
+  const repairOrphanedSourceBindings = () =>
+    repairOrphanedContainerSourceBindings(db, {
+      isNodeOnline: (nodeId) => !!nodeRegistry.getNode(nodeId),
+      listContainers: (nodeId) => nodeDispatch.sendDockerContainerCommand(nodeId, 'list'),
+    });
+  await repairOrphanedSourceBindings().catch((error) =>
+    logger.warn('Failed to remove orphaned container source bindings', { error })
+  );
+  setTimeout(
+    () => {
+      repairOrphanedSourceBindings().catch((error) =>
+        logger.warn('Failed to remove orphaned container source bindings', { error })
+      );
+    },
+    2 * 60 * 1000
+  ).unref?.();
+  scheduler.registerInterval('orphaned-container-source-bindings', 60 * 60 * 1000, async () => {
+    await repairOrphanedSourceBindings();
   });
   scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
     await systemCertificateLifecycleService.retryPendingCRLs();
