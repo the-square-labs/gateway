@@ -163,14 +163,23 @@ export function isProxyUpstreamValid(selection: ProxyUpstreamSelection): boolean
   return !!selection.containerPort;
 }
 
+/**
+ * Ports to offer for a container: the declared TCP ports it also listens on, else the ports it
+ * listens on (an image may declare none, or the wrong one), else the declared ports.
+ */
 function applicationTcpPorts(container: DockerContainer): ApplicationPort[] {
-  const seen = new Set<number>();
-  return (container.ports ?? []).flatMap((port) => {
-    if (port.type.toLowerCase() !== "tcp" || !port.privatePort || seen.has(port.privatePort))
-      return [];
-    seen.add(port.privatePort);
-    return [{ containerPort: port.privatePort }];
-  });
+  const declared = [
+    ...new Set(
+      (container.ports ?? [])
+        .filter((port) => port.type.toLowerCase() === "tcp" && port.privatePort)
+        .map((port) => port.privatePort)
+    ),
+  ];
+  const listening = container.listeningPorts ?? [];
+  const declaredListening = declared.filter((port) => listening.includes(port));
+  const ports =
+    declaredListening.length > 0 ? declaredListening : listening.length > 0 ? listening : declared;
+  return ports.map((containerPort) => ({ containerPort }));
 }
 
 function targetKey(container: DockerContainer): string {
@@ -633,7 +642,7 @@ export function ProxyUpstreamFields({
               layout={layout}
               id={`${fieldId}-container-port`}
               title="Application Port"
-              description="Declared TCP port or a manually entered container port"
+              description="TCP port the container listens on or declares, or one entered manually"
               controlsClassName="sm:w-full"
             >
               <Input

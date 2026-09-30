@@ -21,6 +21,7 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 		}
 		// Filter by allowlist
 		containers = p.allowlist.Filter(containers)
+		p.client.AttachListeningPorts(ctx, containers)
 		data, err := json.Marshal(containers)
 		if err != nil {
 			result.Success = false

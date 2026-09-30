@@ -45,6 +45,7 @@ type Client struct {
 	// defaultLogDriver caches the Docker daemon's default logging driver,
 	// detected once at startup; nil means unknown (treated as json-file).
 	defaultLogDriver atomic.Pointer[string]
+	listeningPorts   listeningPortCache
 }
 
 func (c *Client) SetRunscHealthy(healthy bool) {
@@ -87,6 +88,8 @@ type ContainerInfo struct {
 	Created int64             `json:"created"`
 	Ports   []PortInfo        `json:"ports"`
 	Labels  map[string]string `json:"labels,omitempty"`
+	// ListeningPorts are the TCP ports the running container listens on; null when unknown.
+	ListeningPorts []uint16 `json:"listeningPorts"`
 }
 
 // PortInfo describes a port mapping on a container.

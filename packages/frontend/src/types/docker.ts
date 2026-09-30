@@ -77,6 +77,8 @@ export interface DockerContainer {
   ports: DockerPort[];
   portsCount?: number;
   portsTruncated?: boolean;
+  /** TCP ports the running container listens on, detected by the node; null when unknown. */
+  listeningPorts?: number[] | null;
   labels?: Record<string, string>;
   kind?: "container" | "deployment";
   deploymentId?: string;

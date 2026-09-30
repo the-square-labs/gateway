@@ -266,6 +266,7 @@ function compactDockerContainerForAgent(container: Record<string, any>) {
     ports: Array.isArray(ports) ? ports.slice(0, 64) : ports,
     portsCount: Array.isArray(ports) ? ports.length : undefined,
     portsTruncated: Array.isArray(ports) && ports.length > 64,
+    listeningPorts: Array.isArray(container.listeningPorts) ? container.listeningPorts : null,
     kind: container.kind ?? 'container',
     deploymentId: container.deploymentId,
     activeSlot: container.activeSlot,

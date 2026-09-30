@@ -172,6 +172,8 @@ export function compactContainerListItem(container: Record<string, any>) {
     ports: Array.isArray(ports) ? ports.slice(0, DOCKER_CONTAINER_PORT_PREVIEW_MAX) : ports,
     portsCount: Array.isArray(ports) ? ports.length : undefined,
     portsTruncated: Array.isArray(ports) && ports.length > DOCKER_CONTAINER_PORT_PREVIEW_MAX,
+    // TCP ports the running container listens on; null when the node did not report them.
+    listeningPorts: Array.isArray(container.listeningPorts) ? container.listeningPorts : null,
     kind: container.kind ?? 'container',
     deploymentId: container.deploymentId,
     activeSlot: container.activeSlot,
