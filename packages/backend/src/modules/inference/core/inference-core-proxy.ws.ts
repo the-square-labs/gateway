@@ -71,6 +71,8 @@ interface ActiveTurn {
   finalized: boolean;
   disposeUpstream?: () => void;
   firstTransportError?: Error;
+  /** Provider answer of the latest attempt that failed over before output. */
+  lastProviderError?: InferenceProtocolError;
   refreshAffinity?: () => Promise<void>;
   /** Per-user concurrency lease; released exactly once when the turn ends. */
   release: () => Promise<void>;
@@ -490,19 +492,20 @@ async function connectTurnAttempt(input: {
         excludedConnectionIds: [...input.excludedConnectionIds, resolved.selected.connection.id],
       };
       dispose();
-      void connectTurnAttempt(next).catch((retryError) =>
+      void connectTurnAttempt(next).catch((retryError) => {
+        // With no alternative left, report why the last attempt failed instead of the
+        // capacity error, which would hide the provider's answer (auth, quota, dispatch).
+        const cause = input.turn.lastProviderError ?? input.turn.firstTransportError;
         failTurn(
           input.state,
           input.ws,
           input.accounting,
           input.turn,
-          input.turn.firstTransportError &&
-            retryError instanceof InferenceProtocolError &&
-            retryError.code === 'provider_capacity_unavailable'
-            ? input.turn.firstTransportError
+          cause && retryError instanceof InferenceProtocolError && retryError.code === 'provider_capacity_unavailable'
+            ? cause
             : retryError
-        )
-      );
+        );
+      });
       return;
     }
     failTurn(input.state, input.ws, input.accounting, input.turn, error);
@@ -553,12 +556,12 @@ async function connectTurnAttempt(input: {
     const text = String(data);
     const parsed = asObject(safeParse(text));
     const terminal = parsed !== null && typeof parsed.type === 'string' && TERMINAL_EVENTS.has(parsed.type);
-    if (
-      terminal &&
-      !input.turn.emittedOutput &&
-      resolved.candidateConnectionIds.length > 1 &&
-      shouldFailOverWsEvent(parsed)
-    ) {
+    const providerError =
+      terminal && !input.turn.emittedOutput && resolved.candidateConnectionIds.length > 1
+        ? wsEventProviderError(parsed)
+        : null;
+    if (providerError && canFailOver(providerError, false)) {
+      input.turn.lastProviderError = providerError;
       retryOnceClosed();
       return;
     }
@@ -691,9 +694,15 @@ function failTurn(
 ): void {
   if (state.active === turn) state.active = null;
   if (!turn.terminalSent) {
-    const message =
-      error instanceof CoreWebSocketUpgradeError ? error.message : 'The inference core connection ended before output';
-    sendError(ws, 502, 'inference_core_unavailable', message);
+    if (error instanceof InferenceProtocolError && error === turn.lastProviderError) {
+      sendError(ws, error.status, error.code, error.message);
+    } else {
+      const message =
+        error instanceof CoreWebSocketUpgradeError
+          ? error.message
+          : 'The inference core connection ended before output';
+      sendError(ws, 502, 'inference_core_unavailable', message);
+    }
     turn.terminalSent = true;
   }
   finalizeTurn(accounting, turn, 'failed', error);
@@ -711,6 +720,7 @@ function finalizeTurn(
   turn.disposeUpstream = undefined;
   turn.pendingPreludeFrames = [];
   turn.firstTransportError = undefined;
+  turn.lastProviderError = undefined;
   void turn.release().catch(() => undefined);
   if (turn.refreshAffinity) void turn.refreshAffinity().catch(() => undefined);
   const finalized = error
@@ -906,7 +916,8 @@ function clientBackpressured(ws: WSContext): boolean {
   return true;
 }
 
-function shouldFailOverWsEvent(event: Record<string, unknown>): boolean {
+/** The provider failure a terminal core event describes, keeping the core's code and message. */
+function wsEventProviderError(event: Record<string, unknown>): InferenceProtocolError {
   const error = asObject(event.error) ?? asObject(asObject(event.response)?.error);
   const code =
     (typeof error?.code === 'string' && error.code) ||
@@ -914,11 +925,14 @@ function shouldFailOverWsEvent(event: Record<string, unknown>): boolean {
     'provider_unavailable';
   const rawStatus = event.status ?? error?.status;
   const status =
-    typeof rawStatus === 'number' && [401, 408, 409, 429, 502, 503, 504].includes(rawStatus) ? rawStatus : 503;
-  return canFailOver(
-    new InferenceProtocolError(status as 401 | 409 | 429 | 502 | 503, code, 'The selected provider attempt failed'),
-    false
-  );
+    typeof rawStatus === 'number' && [401, 409, 429, 502].includes(rawStatus)
+      ? (rawStatus as 401 | 409 | 429 | 502)
+      : 503;
+  const message =
+    typeof error?.message === 'string' && error.message.trim()
+      ? error.message.trim().slice(0, 500)
+      : 'The selected provider attempt failed';
+  return new InferenceProtocolError(status, code, message);
 }
 
 function payloadBytes(value: unknown): number {

@@ -326,16 +326,16 @@ export class InferenceCoreProxyService {
     });
     const excludedConnectionIds: string[] = [];
     let firstTransportError: InferenceProtocolError | undefined;
+    let lastProviderError: InferenceProtocolError | undefined;
     try {
       for (;;) {
         if (excludedConnectionIds.length > 0) {
           resolved = await resolveOperationTarget(excludedConnectionIds).catch((error: unknown) => {
-            if (
-              firstTransportError &&
-              error instanceof InferenceProtocolError &&
-              error.code === 'provider_capacity_unavailable'
-            ) {
-              throw firstTransportError;
+            // Once every alternative is gone, report why the last attempt failed. "No usable
+            // capacity" would hide the provider's real answer (auth, quota, dispatch refusal).
+            const cause = lastProviderError ?? firstTransportError;
+            if (cause && error instanceof InferenceProtocolError && error.code === 'provider_capacity_unavailable') {
+              throw cause;
             }
             throw error;
           });
@@ -380,6 +380,7 @@ export class InferenceCoreProxyService {
         );
         if (forwarded.kind === 'response') return forwarded.response;
         firstTransportError ??= forwarded.transportError;
+        if (forwarded.providerError) lastProviderError = forwarded.providerError;
         excludedConnectionIds.push(resolved.selected.connection.id);
       }
     } catch (error) {
@@ -414,7 +415,10 @@ export class InferenceCoreProxyService {
     nonRetryableDispatch = false,
     finalizeRequest: (outcome: 'completed' | 'failed' | 'cancelled', error?: unknown) => Promise<void> = async () =>
       undefined
-  ): Promise<{ kind: 'response'; response: Response } | { kind: 'retry'; transportError?: InferenceProtocolError }> {
+  ): Promise<
+    | { kind: 'response'; response: Response }
+    | { kind: 'retry'; transportError?: InferenceProtocolError; providerError?: InferenceProtocolError }
+  > {
     const controller = new AbortController();
     let clientGone = false;
     const signal = c.req.raw.signal;
@@ -462,8 +466,9 @@ export class InferenceCoreProxyService {
     const status = upstream.status;
     if (allowFailover && (await shouldFailOverCoreResponse(upstream))) {
       cleanup();
+      const providerError = await coreResponseProviderError(upstream);
       await upstream.body?.cancel().catch(() => undefined);
-      return { kind: 'retry' };
+      return { kind: 'retry', providerError };
     }
     if (nonRetryableDispatch) {
       const headers = publicResponseHeaders(upstream.headers);
@@ -944,26 +949,28 @@ function exactCoreAccountId(selected: SourceCandidate): string {
 
 export async function shouldFailOverCoreResponse(response: Response): Promise<boolean> {
   if (![401, 408, 409, 429, 502, 503, 504].includes(response.status)) return false;
+  return canFailOver(await coreResponseProviderError(response), false);
+}
+
+/** The provider failure a core error response describes, keeping the core's code and message. */
+async function coreResponseProviderError(response: Response): Promise<InferenceProtocolError> {
   let code = 'provider_unavailable';
+  let message = 'The selected provider attempt failed';
   try {
     const body = (await response.clone().json()) as {
       code?: unknown;
-      error?: { code?: unknown; type?: unknown };
+      message?: unknown;
+      error?: { code?: unknown; type?: unknown; message?: unknown };
     };
     const candidate = body.error?.code ?? body.error?.type ?? body.code;
     if (typeof candidate === 'string' && candidate) code = candidate;
+    const text = body.error?.message ?? body.message;
+    if (typeof text === 'string' && text.trim()) message = text.trim().slice(0, 500);
   } catch {
     // Status remains sufficient for transport/upstream failures with a non-JSON body.
   }
-  const protocolStatus = response.status === 408 || response.status === 504 ? 503 : response.status;
-  return canFailOver(
-    new InferenceProtocolError(
-      protocolStatus as 401 | 409 | 429 | 502 | 503,
-      code,
-      'The selected provider attempt failed'
-    ),
-    false
-  );
+  const status = [401, 409, 429, 502].includes(response.status) ? (response.status as 401 | 409 | 429 | 502) : 503;
+  return new InferenceProtocolError(status, code, message);
 }
 
 function contextOperation(operation: CoreProxyOperation): string {
