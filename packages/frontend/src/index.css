@@ -5,6 +5,133 @@
 @plugin "@tailwindcss/typography";
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Breakpoints follow the width the page actually gets. Inside page content (data-page-content)
+   sm…2xl and max-sm…max-2xl ask the "page" container, which is the window without the docked AI
+   panel: with the panel closed nothing changes, with it open a page lays out as it would in a
+   window that much narrower. Everything else (sidebar, panels, dialogs rendered into the body)
+   keeps the viewport media queries. Values are Tailwind's default breakpoints. */
+@custom-variant sm {
+  &:where([data-page-content] *) {
+    @container page (width >= 40rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width >= 40rem) {
+      @slot;
+    }
+  }
+}
+@custom-variant md {
+  &:where([data-page-content] *) {
+    @container page (width >= 48rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width >= 48rem) {
+      @slot;
+    }
+  }
+}
+@custom-variant lg {
+  &:where([data-page-content] *) {
+    @container page (width >= 64rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width >= 64rem) {
+      @slot;
+    }
+  }
+}
+@custom-variant xl {
+  &:where([data-page-content] *) {
+    @container page (width >= 80rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width >= 80rem) {
+      @slot;
+    }
+  }
+}
+@custom-variant 2xl {
+  &:where([data-page-content] *) {
+    @container page (width >= 96rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width >= 96rem) {
+      @slot;
+    }
+  }
+}
+/* Widest first, as Tailwind orders max-*, so the narrower one wins when both apply. */
+@custom-variant max-2xl {
+  &:where([data-page-content] *) {
+    @container page (width < 96rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width < 96rem) {
+      @slot;
+    }
+  }
+}
+@custom-variant max-xl {
+  &:where([data-page-content] *) {
+    @container page (width < 80rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width < 80rem) {
+      @slot;
+    }
+  }
+}
+@custom-variant max-lg {
+  &:where([data-page-content] *) {
+    @container page (width < 64rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width < 64rem) {
+      @slot;
+    }
+  }
+}
+@custom-variant max-md {
+  &:where([data-page-content] *) {
+    @container page (width < 48rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width < 48rem) {
+      @slot;
+    }
+  }
+}
+@custom-variant max-sm {
+  &:where([data-page-content] *) {
+    @container page (width < 40rem) {
+      @slot;
+    }
+  }
+  &:not(:where([data-page-content] *)) {
+    @media (width < 40rem) {
+      @slot;
+    }
+  }
+}
+
 @theme {
   /* Colors */
   --color-background: #f5f5f5;

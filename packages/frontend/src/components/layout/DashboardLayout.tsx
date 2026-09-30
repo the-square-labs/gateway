@@ -642,7 +642,7 @@ export function DashboardLayout() {
   if (isMobile) {
     return (
       <TooltipProvider>
-        <div className="fixed inset-0 flex flex-col overflow-hidden bg-background">
+        <div className="@container/page fixed inset-0 flex flex-col overflow-hidden bg-background">
           <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-2">
             <div className="flex items-center">
               <Button
@@ -663,7 +663,7 @@ export function DashboardLayout() {
             </div>
           </header>
 
-          <div className="flex-1 overflow-hidden">
+          <div data-page-content className="flex-1 overflow-hidden">
             <Outlet key={contentAccessKey} />
           </div>
 
@@ -693,7 +693,7 @@ export function DashboardLayout() {
   if (useLiteMode) {
     return (
       <TooltipProvider>
-        <div className="fixed inset-0 flex overflow-hidden bg-background dashboard-scrollbar">
+        <div className="@container/page fixed inset-0 flex overflow-hidden bg-background dashboard-scrollbar">
           <div className="ai-chat-content-fade-in flex h-full shrink-0">
             <AILiteSidebar
               sidebarWidth={sidebarWidth}
@@ -703,7 +703,7 @@ export function DashboardLayout() {
               onResizeEnd={handleResizeEnd}
             />
           </div>
-          <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+          <main data-page-content className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
             {isAIHome ? (
               <PageTransition>
                 <AILitePanel key={contentAccessKey} />
@@ -724,17 +724,21 @@ export function DashboardLayout() {
   return (
     <TooltipProvider>
       <div className="fixed inset-0 flex min-w-0 overflow-hidden bg-background dashboard-scrollbar">
-        <SidebarContent
-          sidebarWidth={sidebarWidth}
-          onSidebarWidthChange={handleSidebarResize}
-          isResizing={isResizing}
-          onResizeStart={handleResizeStart}
-          onResizeEnd={handleResizeEnd}
-          hasNginxNodes={hasNginxNodes}
-        />
-        <main className="h-full flex-1 overflow-hidden">
-          <Outlet key={contentAccessKey} />
-        </main>
+        {/* The page's breakpoints measure this box, the window without the docked AI panel, so a
+            page lays out for the width it really gets (see index.css). */}
+        <div className="@container/page flex h-full min-w-0 flex-1">
+          <SidebarContent
+            sidebarWidth={sidebarWidth}
+            onSidebarWidthChange={handleSidebarResize}
+            isResizing={isResizing}
+            onResizeStart={handleResizeStart}
+            onResizeEnd={handleResizeEnd}
+            hasNginxNodes={hasNginxNodes}
+          />
+          <main data-page-content className="h-full min-w-0 flex-1 overflow-hidden">
+            <Outlet key={contentAccessKey} />
+          </main>
+        </div>
         <AISidePanel />
         <Toaster position="bottom-right" />
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
