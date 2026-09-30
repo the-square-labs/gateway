@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, max, sql } from 'drizzle-orm';
 import type { Env } from '@/config/env.js';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import { nodes, relayInstances, relayPoolUpdateRuns, relayPoolUpdateSteps } from '@/db/schema/index.js';
@@ -138,6 +138,8 @@ export interface RelayUpdateOperation {
   abandonable?: boolean;
   /** The durable Relay Pool run state, when the operation is a pool run. */
   runState?: string;
+  /** When the run or one of its steps last moved; a run that stops moving is stuck. */
+  lastProgressAt?: string;
 }
 
 export interface RelayUpdateStatus {
@@ -1927,6 +1929,17 @@ exit 1`,
       .limit(1);
     const run = latestRun?.state === 'complete' ? undefined : latestRun;
     if (!run) return null;
+    const [lastStep] = await this.db
+      .select({ updatedAt: max(relayPoolUpdateSteps.updatedAt) })
+      .from(relayPoolUpdateSteps)
+      .where(eq(relayPoolUpdateSteps.runId, run.id));
+    const lastProgressAt = new Date(
+      Math.max(
+        ...[run.startedAt, run.updatedAt, lastStep?.updatedAt]
+          .filter((value): value is Date => value instanceof Date)
+          .map((value) => value.getTime())
+      )
+    );
     return {
       status: run.state === 'failed' || run.state === 'paused' ? 'failed' : 'updating',
       targetVersion: run.targetArtifact.version,
@@ -1934,6 +1947,7 @@ exit 1`,
       error: run.terminalError,
       abandonable: (UNFINISHED_RELAY_POOL_RUN_STATES as readonly string[]).includes(run.state),
       runState: run.state,
+      lastProgressAt: lastProgressAt.toISOString(),
     };
   }
 

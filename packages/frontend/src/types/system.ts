@@ -41,6 +41,8 @@ export interface RelayUpdateStatus {
     abandonable?: boolean;
     /** Durable Relay Pool run state, e.g. "paused". */
     runState?: string;
+    /** When the run or one of its steps last moved. */
+    lastProgressAt?: string;
   } | null;
 }
 

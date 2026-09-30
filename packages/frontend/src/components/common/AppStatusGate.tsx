@@ -14,7 +14,7 @@ import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useUpdateStore } from "@/stores/update";
-import type { GatewayUpdateOperation } from "@/types";
+import type { GatewayUpdateOperation, RelayUpdateStatus } from "@/types";
 
 export { isGatewayUpdateTargetVersion, normalizeGatewayUpdateVersion };
 
@@ -518,6 +518,19 @@ function GatewayOperationScreen() {
   );
 }
 
+/** A Relay Pool update that has not moved for this long counts as stuck and can be abandoned. */
+const RELAY_UPDATE_STUCK_AFTER_MS = 5 * 60_000;
+
+function relayUpdateStuck(
+  operation: RelayUpdateStatus["operation"] | undefined,
+  now: number
+): boolean {
+  if (!operation) return false;
+  if (operation.runState === "paused" || operation.status === "failed") return true;
+  const lastProgress = Date.parse(operation.lastProgressAt ?? operation.startedAt);
+  return Number.isFinite(lastProgress) && now - lastProgress >= RELAY_UPDATE_STUCK_AFTER_MS;
+}
+
 function RelayOperationScreen() {
   const status = useUpdateStore((state) => state.status);
   const optimisticTargetVersion = useUpdateStore((state) => state.updatingTargetVersion);
@@ -526,8 +539,20 @@ function RelayOperationScreen() {
   const [confirming, setConfirming] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    // The run's progress is re-read here too, so a moving update never looks stuck.
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      void useUpdateStore.getState().fetchStatus();
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, []);
+  const operation = status?.relay.operation;
+  // Abandoning is for an update that stopped moving, not an escape from a normal one.
+  const stuck = relayUpdateStuck(operation, now) && operation?.abandonable !== false;
   const targetVersion =
-    status?.relay.operation?.targetVersion ??
+    operation?.targetVersion ??
     optimisticTargetVersion ??
     status?.relay.latestVersion ??
     "the latest version";
@@ -550,7 +575,7 @@ function RelayOperationScreen() {
       title="Updating Relay"
       description={`Relay is updating to ${targetVersion}. Active Secure Links may be briefly interrupted.`}
     >
-      {canUpdate && (
+      {canUpdate && (stuck || confirming) && (
         <div className="mt-5 space-y-2">
           {confirming ? (
             <>
@@ -578,9 +603,16 @@ function RelayOperationScreen() {
               </div>
             </>
           ) : (
-            <Button variant="secondary" className="w-full" onClick={() => setConfirming(true)}>
-              Abandon update
-            </Button>
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                variant="link"
+                className="h-auto p-0"
+                onClick={() => setConfirming(true)}
+              >
+                Abandon update
+              </Button>
+            </div>
           )}
           {error && (
             <p role="alert" className="text-xs text-[color:var(--restart-page-error)]">
