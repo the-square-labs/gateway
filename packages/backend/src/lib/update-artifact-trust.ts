@@ -293,7 +293,7 @@ export function verifyOpenCodexImageManifest(
   }
   if (payload.image !== expected.image) throw new UpdateArtifactTrustError('OpenCodex update image mismatch');
   if (!/^\d+\.\d+\.\d+-(?:wiolett|thesqlabs)\.\d+$/.test(payload.version)) {
-    throw new UpdateArtifactTrustError('OpenCodex update version is not a Square Labs release');
+    throw new UpdateArtifactTrustError('OpenCodex update version is not a Good Gateway release');
   }
   if (!DIGEST_RE.test(payload.digest)) throw new UpdateArtifactTrustError('OpenCodex update digest is invalid');
   if (payload.imageRef !== `${payload.image}@${payload.digest}`) {

@@ -3,12 +3,12 @@ export function PoweredByFooter() {
     <p className="text-center text-xs text-muted-foreground">
       Powered by{" "}
       <a
-        href="https://thesquarelabs.com"
+        href="https://goodgateway.dev"
         target="_blank"
         rel="noopener noreferrer"
         className="text-foreground hover:underline"
       >
-        Square Labs
+        Good Gateway
       </a>
     </p>
   );

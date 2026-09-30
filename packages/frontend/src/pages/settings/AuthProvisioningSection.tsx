@@ -346,7 +346,7 @@ export function AuthProvisioningSection({
           <div className="divide-y divide-border">
             <SettingsControlRow
               title="Hide external branding"
-              description="Hide Square Labs branding on public system pages"
+              description="Hide Good Gateway branding on public system pages"
             >
               <Switch
                 checked={hideExternalBranding}

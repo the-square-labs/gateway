@@ -314,8 +314,8 @@ function StatusPage({ data }: { data: PublicStatusPageDto }) {
         <footer>
           <span>
             Powered by{" "}
-            <a href="https://thesquarelabs.com" target="_blank" rel="noopener noreferrer">
-              Square Labs
+            <a href="https://goodgateway.dev" target="_blank" rel="noopener noreferrer">
+              Good Gateway
             </a>
           </span>
         </footer>

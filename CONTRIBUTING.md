@@ -21,7 +21,7 @@ Please include:
 
 ## Security reports
 
-Do not disclose a suspected vulnerability publicly before Square Labs has had a reasonable opportunity to investigate it. Send security reports to [contact@thesqlabs.com](mailto:contact@thesqlabs.com).
+Do not disclose a suspected vulnerability publicly before the Good Gateway team has had a reasonable opportunity to investigate it. Send security reports to [contact@thesqlabs.com](mailto:contact@thesqlabs.com).
 
 ## Rights holder and license
 

@@ -130,7 +130,7 @@ AI Workspace includes guided operational Scenarios and Plan Mode. Plan Mode rese
 | Business | $189 | $1,890 |
 | Enterprise | On request | On request |
 
-Contact [contact@thesqlabs.com](mailto:contact@thesqlabs.com) or [Square Labs on Telegram](https://t.me/WiolettIndustries) for Enterprise terms.
+Contact [contact@thesqlabs.com](mailto:contact@thesqlabs.com) or [Good Gateway on Telegram](https://t.me/WiolettIndustries) for Enterprise terms.
 
 ## Product License Verification
 

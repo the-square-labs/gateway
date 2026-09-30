@@ -117,12 +117,12 @@ function StatusScreen({
           <div className="mt-7 text-xs text-[color:var(--restart-page-subtle)]">
             Powered by{" "}
             <a
-              href="https://thesquarelabs.com"
+              href="https://goodgateway.dev"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[color:var(--restart-page-muted)] hover:underline"
             >
-              Square Labs
+              Good Gateway
             </a>
           </div>
         ) : null}

@@ -478,7 +478,7 @@ describe('update artifact trust', () => {
     ).toThrow('OpenCodex update image mismatch');
   });
 
-  it('rejects an OpenCodex manifest whose version is not a Square Labs release', () => {
+  it('rejects an OpenCodex manifest whose version is not a Good Gateway release', () => {
     const payload = Buffer.from(
       JSON.stringify({
         kind: 'opencodex-image',
@@ -510,6 +510,6 @@ describe('update artifact trust', () => {
         },
         gatewayPublicKey
       )
-    ).toThrow('OpenCodex update version is not a Square Labs release');
+    ).toThrow('OpenCodex update version is not a Good Gateway release');
   });
 });

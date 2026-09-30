@@ -55,12 +55,12 @@ export function AuthShell({
           <p>
             Powered by{" "}
             <a
-              href="https://thesquarelabs.com"
+              href="https://goodgateway.dev"
               target="_blank"
               rel="noreferrer"
               className="text-foreground hover:underline"
             >
-              Square Labs
+              Good Gateway
             </a>
           </p>
         </div>
