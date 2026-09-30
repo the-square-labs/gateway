@@ -291,7 +291,7 @@ export function InferenceCoreSetupFooterAction({
         onClick={() =>
           void run(async () => {
             const target =
-              status.latest?.version ?? (await api.checkInferenceCoreUpdates()).latest?.version;
+              (await api.checkInferenceCoreUpdates()).latest?.version ?? status.latest?.version;
             if (!target) throw new Error("No compatible inference core release is available");
             return api.updateInferenceCore(target);
           })
@@ -379,19 +379,18 @@ export function InferenceCoreLifecyclePanel({
   const install = () => run("install", () => api.installInferenceCore());
 
   const update = async () => {
-    let version = status.latest?.version ?? null;
-    if (!version) {
-      setActing("check");
-      try {
-        const result = await api.checkInferenceCoreUpdates();
-        version = result.latest?.version ?? null;
-        await onRefresh();
-      } catch (cause) {
-        toast.error(cause instanceof Error ? cause.message : "Failed to check for updates");
-        return;
-      } finally {
-        setActing(null);
-      }
+    // The release found earlier may have been superseded; update straight to the newest one.
+    let version: string | null;
+    setActing("check");
+    try {
+      const result = await api.checkInferenceCoreUpdates();
+      version = result.latest?.version ?? status.latest?.version ?? null;
+      await onRefresh();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "Failed to check for updates");
+      return;
+    } finally {
+      setActing(null);
     }
     if (!version) {
       toast.info("No newer inference core release is available");
@@ -467,7 +466,7 @@ export function InferenceCoreLifecyclePanel({
             <Wrench /> {status.installed ? "Repair" : "Retry install"}
           </Button>
         )}
-        {status.state === "ready" && !incompatible && (
+        {(status.state === "ready" || status.state === "update_available" || incompatible) && (
           <Button
             variant="outline"
             onClick={() => void checkUpdates()}
