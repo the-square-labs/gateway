@@ -20,6 +20,8 @@ function hasUpdateInProgress(metadata: unknown): boolean {
   if (!metadata || typeof metadata !== 'object') return false;
   const value = metadata as Record<string, unknown>;
   if (value.updateInProgress !== true) return false;
+  // A queued update of a lease member has restarted nothing yet: the node's connection problems are real ones.
+  if (value.updatePhase === 'waiting_for_lease_peers') return false;
   if (typeof value.updateDeadlineAt !== 'string') return true;
   const deadlineAt = Date.parse(value.updateDeadlineAt);
   return !Number.isFinite(deadlineAt) || Date.now() < deadlineAt;
@@ -403,6 +405,22 @@ export class NodeRegistryService {
 
   getNode(nodeId: string): ConnectedNode | undefined {
     return this.nodes.get(nodeId);
+  }
+
+  /** The node's stream closed moments ago and it is still inside the reconnect grace before it counts as offline. */
+  isReconnecting(nodeId: string): boolean {
+    return !this.nodes.has(nodeId) && this.offlineDebounce.isPending(nodeId);
+  }
+
+  /**
+   * Marks a node that is still disconnected offline once its daemon update stopped covering it, with the health
+   * history entry, event and alert of an ordinary disconnect.
+   */
+  async markOfflineAfterUpdate(nodeId: string): Promise<void> {
+    if (this.nodes.has(nodeId)) return;
+    const [row] = await this.db.select({ hostname: nodes.hostname }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!row) return;
+    await this.markDisconnectedOffline(nodeId, row.hostname);
   }
 
   hasCapability(nodeId: string, capability: string): boolean {

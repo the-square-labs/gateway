@@ -40,11 +40,14 @@ export type {
 } from "./nodes";
 export {
   effectiveNodeStatus,
+  getNodeUpdateLastError,
   getNodeUpdateTargetVersion,
+  getNodeUpdateWaitingFor,
   gpuDeviceLabel,
   hasGpuMetric,
   hasGpuMonitoringMetrics,
   isNodeIncompatible,
+  isNodeUpdateQueued,
   isNodeUpdating,
 } from "./nodes";
 export type * from "./notifications";

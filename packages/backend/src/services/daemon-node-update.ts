@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes as nodesTable } from '@/db/schema/nodes.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { isNewerVersion, parseSemver } from '@/lib/semver.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { type DaemonUpdateService, daemonTypeForNodeType } from './daemon-update.service.js';
 import type { DaemonUpdateRollout } from './daemon-update-rollout.service.js';
@@ -12,7 +13,7 @@ const logger = createChildLogger('DaemonNodeUpdate');
 export interface NodeDaemonUpdateDeps {
   db: Pick<DrizzleClient, 'select'>;
   daemonUpdateService: DaemonUpdateService;
-  dispatch: Pick<NodeDispatchService, 'sendUpdateDaemonCommand'>;
+  dispatch: Pick<NodeDispatchService, 'sendUpdateDaemonCommand' | 'isNodeConnected'>;
   /** Sequences restarts of lease members; without it every update is sent at once. */
   rollout?: Pick<DaemonUpdateRollout, 'isLeaseMember' | 'enqueue'>;
 }
@@ -42,8 +43,27 @@ export async function dispatchNodeDaemonUpdate(
 
   const daemonType = daemonTypeForNodeType(node.type);
   if (!daemonType) throw new AppError(400, 'UNSUPPORTED_NODE_TYPE', 'This node does not run an updatable daemon');
+  if (daemonType === 'relay') {
+    // A relay restart drops every control stream it carries; only the Relay Pool update drains and orders relays.
+    throw new AppError(
+      409,
+      'RELAY_POOL_UPDATE_REQUIRED',
+      'Relay nodes update together with the Relay Pool from the Updates settings'
+    );
+  }
+  if (!dispatch.isNodeConnected(nodeId)) {
+    throw new AppError(409, 'NODE_NOT_CONNECTED', 'Node is not connected');
+  }
   const release = await daemonUpdateService.getLatestRelease(daemonType);
   if (!release) throw new AppError(404, 'RELEASE_NOT_FOUND', 'No release found for this daemon type');
+  // Never a downgrade or a reinstall: the cached release is the next target of the oldest node of this type.
+  if (parseSemver(node.daemonVersion ?? '') !== null && !isNewerVersion(release.version, node.daemonVersion!)) {
+    throw new AppError(
+      409,
+      'NO_UPDATE_AVAILABLE',
+      `The node already runs ${node.daemonVersion}, which is not older than ${release.version}`
+    );
+  }
 
   const arch = (((node.capabilities ?? {}) as Record<string, unknown>).architecture as string) ?? 'amd64';
   const artifact = await daemonUpdateService.prepareTrustedDaemonUpdate(
@@ -114,10 +134,11 @@ const QUEUED_UPDATE_RESUME_DELAY_MS = 60_000;
  */
 export function scheduleQueuedDaemonUpdateResume(
   deps: NodeDaemonUpdateDeps,
-  delayMs = QUEUED_UPDATE_RESUME_DELAY_MS
+  delayMs = QUEUED_UPDATE_RESUME_DELAY_MS,
+  processStartedAt = new Date()
 ): void {
   const timer = setTimeout(() => {
-    void resumeQueuedDaemonUpdates(deps).catch((error) =>
+    void resumeQueuedDaemonUpdates(deps, processStartedAt).catch((error) =>
       logger.error('Queued daemon updates could not be resumed', {
         error: error instanceof Error ? error.message : String(error),
       })
@@ -126,18 +147,25 @@ export function scheduleQueuedDaemonUpdateResume(
   timer.unref?.();
 }
 
-export async function resumeQueuedDaemonUpdates(deps: NodeDaemonUpdateDeps): Promise<number> {
-  const queued = await deps.daemonUpdateService.listQueuedNodeUpdates();
+export async function resumeQueuedDaemonUpdates(
+  deps: NodeDaemonUpdateDeps,
+  processStartedAt = new Date()
+): Promise<number> {
+  // Updates queued by this process are still in its rollout queue; only the ones from before the restart are orphaned.
+  const queued = (await deps.daemonUpdateService.listQueuedNodeUpdates()).filter(
+    (update) => update.startedAt === null || update.startedAt < processStartedAt
+  );
   for (const { nodeId, operationId } of queued) {
     if (!(await deps.daemonUpdateService.clearNodeUpdateInProgress(nodeId, operationId))) continue;
     try {
       await dispatchNodeDaemonUpdate(nodeId, deps);
       logger.info('Queued daemon update taken up again after a Gateway restart', { nodeId });
     } catch (error) {
-      logger.error('Queued daemon update could not be taken up again', {
-        nodeId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Queued daemon update could not be taken up again', { nodeId, error: message });
+      await deps.daemonUpdateService
+        .recordNodeUpdateError(nodeId, `The queued update could not resume after a Gateway restart: ${message}`)
+        .catch(() => undefined);
     }
   }
   return queued.length;

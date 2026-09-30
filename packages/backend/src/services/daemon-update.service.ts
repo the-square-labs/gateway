@@ -358,14 +358,21 @@ export class DaemonUpdateService {
   }
 
   /** Queued updates of lease members, for a Gateway restart to take up again. */
-  async listQueuedNodeUpdates(): Promise<Array<{ nodeId: string; operationId: string }>> {
+  async listQueuedNodeUpdates(): Promise<Array<{ nodeId: string; operationId: string; startedAt: Date | null }>> {
     const rows = await this.db.select({ id: nodes.id, metadata: nodes.metadata }).from(nodes);
     return rows.flatMap((row) => {
       const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      const startedAt = typeof metadata.updateStartedAt === 'string' ? new Date(metadata.updateStartedAt) : null;
       return metadata.updateInProgress === true &&
         metadata.updatePhase === NODE_UPDATE_WAITING_PHASE &&
         typeof metadata.updateOperationId === 'string'
-        ? [{ nodeId: row.id, operationId: metadata.updateOperationId }]
+        ? [
+            {
+              nodeId: row.id,
+              operationId: metadata.updateOperationId,
+              startedAt: startedAt && Number.isFinite(startedAt.getTime()) ? startedAt : null,
+            },
+          ]
         : [];
     });
   }
@@ -420,35 +427,23 @@ export class DaemonUpdateService {
   private async expireNodeUpdate(nodeId: string, operationId: string): Promise<boolean> {
     const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) return false;
-    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    const metadata = (node.metadata ?? {}) as Record<string, unknown>;
     if (metadata.updateInProgress !== true || metadata.updateOperationId !== operationId) return false;
     const deadlineAt =
       typeof metadata.updateDeadlineAt === 'string' ? Date.parse(metadata.updateDeadlineAt) : Number.NaN;
     if (!Number.isFinite(deadlineAt) || Date.now() < deadlineAt) return false;
 
-    delete metadata.updateInProgress;
-    delete metadata.updateTargetVersion;
-    delete metadata.updateStartedAt;
-    delete metadata.updateOperationId;
-    delete metadata.updatePhase;
-    delete metadata.updateDeadlineAt;
-    delete metadata.updateReconnectStartedAt;
-    delete metadata.updateWaitingFor;
-    const update =
-      this.nodeRegistry && !this.nodeRegistry.getNode(nodeId)
-        ? { metadata, updatedAt: new Date(), status: 'offline' as const }
-        : { metadata, updatedAt: new Date() };
-
-    const updated = await this.db
-      .update(nodes)
-      .set(update)
-      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->>'updateOperationId' = ${operationId}`))
-      .returning({ id: nodes.id });
-    if (updated.length === 0) return false;
-
-    this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
-    this.emitNodeUpdated(nodeId);
-    logger.error('Daemon did not reconnect before the update deadline', { nodeId, operationId });
+    const target = typeof metadata.updateTargetVersion === 'string' ? metadata.updateTargetVersion : 'the new version';
+    const reason =
+      metadata.updatePhase === NODE_UPDATE_WAITING_PHASE
+        ? 'The update waited too long for the other members of its availability lease'
+        : metadata.updatePhase === 'reconnecting'
+          ? `The daemon did not come back on ${target} in time`
+          : `The update to ${target} did not finish in time`;
+    if (!(await this.failNodeUpdate(nodeId, operationId, reason))) return false;
+    // A node that is still away is offline now that its update no longer covers it.
+    await this.nodeRegistry?.markOfflineAfterUpdate(nodeId);
+    logger.error('Daemon update did not complete before its deadline', { nodeId, operationId, reason });
     return true;
   }
 
@@ -496,6 +491,7 @@ export class DaemonUpdateService {
       .returning({ id: nodes.id });
     if (updated.length === 0) return false;
     this.scheduleNodeUpdateExpiry(nodeId, operationId, NODE_UPDATE_RECONNECT_TIMEOUT_MS);
+    this.emitNodeUpdated(nodeId);
     return true;
   }
 
@@ -512,12 +508,10 @@ export class DaemonUpdateService {
           });
           return;
         }
-        logger.error('Daemon update failed after dispatch', {
-          nodeId,
-          error: result.error || result.detail || 'Daemon rejected the update',
-        });
-        await this.clearNodeUpdateInProgress(nodeId, operationId).catch((error) => {
-          logger.error('Failed to clear daemon update lock after rejection', {
+        const reason = result.error || result.detail || 'The daemon rejected the update';
+        logger.error('Daemon update failed after dispatch', { nodeId, error: reason });
+        await this.failNodeUpdate(nodeId, operationId, reason).catch((error) => {
+          logger.error('Failed to record the rejected daemon update', {
             nodeId,
             error: error instanceof Error ? error.message : String(error),
           });
@@ -537,16 +531,21 @@ export class DaemonUpdateService {
           return;
         }
         logger.error('Daemon update did not complete', { nodeId, error: message });
-        await this.clearNodeUpdateInProgress(nodeId, operationId).catch((clearError) => {
-          logger.error('Failed to clear incomplete daemon update lock', {
+        await this.failNodeUpdate(nodeId, operationId, message).catch((failError) => {
+          logger.error('Failed to record the incomplete daemon update', {
             nodeId,
-            error: clearError instanceof Error ? clearError.message : String(clearError),
+            error: failError instanceof Error ? failError.message : String(failError),
           });
         });
       }
     );
   }
 
+  /**
+   * Reconciles a running update with a daemon registration. A registration on the target version (or later) after the
+   * update started ends it, whether or not its result arrived. A registration below the target after the daemon was
+   * told to restart means the update was rolled back or never installed, and fails it with that reason.
+   */
   async clearNodeUpdateInProgressOnReconnect(
     nodeId: string,
     reportedVersion: string,
@@ -559,29 +558,38 @@ export class DaemonUpdateService {
     if (metadata.updateInProgress !== true) return false;
     const operationId = metadata.updateOperationId;
     if (typeof operationId !== 'string') return false;
-    if (metadata.updatePhase !== 'reconnecting') return false;
+    if (metadata.updatePhase !== 'executing' && metadata.updatePhase !== 'reconnecting') return false;
+
+    const observedAt = registrationObservedAt.getTime();
+    const startedAt = typeof metadata.updateStartedAt === 'string' ? Date.parse(metadata.updateStartedAt) : Number.NaN;
     const reconnectStartedAt =
       typeof metadata.updateReconnectStartedAt === 'string'
         ? Date.parse(metadata.updateReconnectStartedAt)
         : Number.NaN;
-    if (!Number.isFinite(reconnectStartedAt) || registrationObservedAt.getTime() < reconnectStartedAt) return false;
+    const targetVersion = typeof metadata.updateTargetVersion === 'string' ? metadata.updateTargetVersion : '';
+    const onTarget =
+      !targetVersion ||
+      (parseSemver(reportedVersion) !== null &&
+        parseSemver(targetVersion) !== null &&
+        compareSemver(reportedVersion, targetVersion) >= 0);
 
-    const targetVersion = metadata.updateTargetVersion;
-    if (typeof targetVersion === 'string' && targetVersion.length > 0) {
-      const reported = parseSemver(reportedVersion);
-      const target = parseSemver(targetVersion);
-      if (!reported || !target || compareSemver(reportedVersion, targetVersion) < 0) return false;
+    if (!onTarget) {
+      if (
+        metadata.updatePhase !== 'reconnecting' ||
+        !Number.isFinite(reconnectStartedAt) ||
+        observedAt < reconnectStartedAt
+      ) {
+        return false;
+      }
+      return this.failNodeUpdate(
+        nodeId,
+        operationId,
+        `The daemon came back on ${reportedVersion} instead of ${targetVersion}: the update was rolled back or not installed`
+      );
     }
+    if (Number.isFinite(startedAt) && observedAt < startedAt) return false;
 
-    delete metadata.updateInProgress;
-    delete metadata.updateTargetVersion;
-    delete metadata.updateStartedAt;
-    delete metadata.updateOperationId;
-    delete metadata.updatePhase;
-    delete metadata.updateDeadlineAt;
-    delete metadata.updateReconnectStartedAt;
-    delete metadata.updateWaitingFor;
-
+    for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
     const updated = await this.db
       .update(nodes)
       .set({ metadata, updatedAt: new Date() })
@@ -592,6 +600,52 @@ export class DaemonUpdateService {
     this.nodeRegistry?.setNodeUpdateInProgress(nodeId, false);
     this.emitNodeUpdated(nodeId);
     return true;
+  }
+
+  /**
+   * Expiry timers live in memory, so a Gateway restart loses them and no command result can arrive any more. Updates
+   * that were sent before the restart wait for the daemon to register again: they move to `reconnecting` (a
+   * registration from now on decides them) and get their timers back; the ones already past their deadline expire.
+   */
+  async resumeNodeUpdateDeadlines(processStartedAt: Date): Promise<number> {
+    const rows = await this.db.select({ id: nodes.id, metadata: nodes.metadata }).from(nodes);
+    let resumed = 0;
+    for (const row of rows) {
+      const metadata = { ...((row.metadata ?? {}) as Record<string, unknown>) };
+      const operationId = metadata.updateOperationId;
+      if (metadata.updateInProgress !== true || typeof operationId !== 'string') continue;
+      if (metadata.updatePhase !== 'executing' && metadata.updatePhase !== 'reconnecting') continue;
+      const deadlineAt =
+        typeof metadata.updateDeadlineAt === 'string' ? Date.parse(metadata.updateDeadlineAt) : Number.NaN;
+      if (!Number.isFinite(deadlineAt) || Date.now() >= deadlineAt) {
+        if (await this.expireNodeUpdate(row.id, operationId)) resumed += 1;
+        continue;
+      }
+      const remainingMs = Math.max(deadlineAt - Date.now(), NODE_UPDATE_RECONNECT_TIMEOUT_MS);
+      metadata.updatePhase = 'reconnecting';
+      metadata.updateReconnectStartedAt = processStartedAt.toISOString();
+      metadata.updateDeadlineAt = new Date(Date.now() + remainingMs).toISOString();
+      if (!(await this.writeUpdateMetadata(row.id, operationId, metadata))) continue;
+      this.nodeRegistry?.setNodeUpdateInProgress(row.id, true);
+      this.scheduleNodeUpdateExpiry(row.id, operationId, remainingMs);
+      resumed += 1;
+    }
+    return resumed;
+  }
+
+  /** Keeps why an update that is no longer running could not start again (for example after a Gateway restart). */
+  async recordNodeUpdateError(nodeId: string, error: string): Promise<void> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return;
+    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    if (metadata.updateInProgress === true) return;
+    metadata.updateLastError = error;
+    metadata.updateLastErrorAt = new Date().toISOString();
+    await this.db
+      .update(nodes)
+      .set({ metadata, updatedAt: new Date() })
+      .where(and(eq(nodes.id, nodeId), sql`COALESCE(${nodes.metadata}->>'updateInProgress', 'false') <> 'true'`));
+    this.emitNodeUpdated(nodeId);
   }
 
   getDownloadUrl(daemonType: DaemonType, tag: string, arch: string): string {

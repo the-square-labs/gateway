@@ -250,7 +250,9 @@ export class NodesService {
         ...row,
         publicServiceAddresses: row.type === 'nginx' ? getReportedPublicNodeAddresses(row) : undefined,
         effectiveServiceAddress: getEffectiveServiceAddressForNode(row),
-        status: row.status === 'online' && !isConnected ? 'offline' : row.status,
+        // A stream that closed moments ago keeps its status through the reconnect grace, as the DB does.
+        status:
+          row.status === 'online' && !isConnected && !this.registry.isReconnecting(row.id) ? 'offline' : row.status,
         isConnected,
       };
     });
@@ -287,7 +289,8 @@ export class NodesService {
         ...node,
         lastHealthReport: connectedNode?.lastHealthReport ?? node.lastHealthReport,
       }),
-      status: node.status === 'online' && !isConnected ? 'offline' : node.status,
+      status:
+        node.status === 'online' && !isConnected && !this.registry.isReconnecting(node.id) ? 'offline' : node.status,
       isConnected,
       liveHealthReport: connectedNode?.lastHealthReport ?? null,
       liveStatsReport: connectedNode?.lastStatsReport ?? null,
@@ -317,7 +320,8 @@ export class NodesService {
         ...node,
         lastHealthReport: connectedNode?.lastHealthReport ?? node.lastHealthReport,
       }),
-      status: node.status === 'online' && !isConnected ? 'offline' : node.status,
+      status:
+        node.status === 'online' && !isConnected && !this.registry.isReconnecting(node.id) ? 'offline' : node.status,
       isConnected,
       liveHealthReport: connectedNode?.lastHealthReport ?? null,
       liveStatsReport: connectedNode?.lastStatsReport ?? null,
@@ -586,13 +590,12 @@ export class NodesService {
       secondaryServiceAddress: serviceAddressesUpdateRequested
         ? (nextServiceAddresses[1] ?? null)
         : existing.secondaryServiceAddress,
-      metadata:
-        input.builderSettings === undefined
-          ? existing.metadata
-          : {
-              ...((existing.metadata ?? {}) as Record<string, unknown>),
-              builderSettings: input.builderSettings,
-            },
+      // Merged in the database: writing back the metadata read above would erase an update that started meanwhile.
+      ...(input.builderSettings === undefined
+        ? {}
+        : {
+            metadata: sql`COALESCE(${nodes.metadata}, '{}'::jsonb) || jsonb_build_object('builderSettings', ${JSON.stringify(input.builderSettings)}::jsonb)`,
+          }),
       updatedAt: new Date(),
     };
     const updateNode = async (slug?: string) => {

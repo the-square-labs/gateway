@@ -1,3 +1,4 @@
+import { isGatewayVersionNewer } from "@/lib/gateway-update-reload";
 import { cn } from "@/lib/utils";
 import type { NodeAppearanceColor, NodeType } from "@/types";
 
@@ -108,4 +109,16 @@ export function nodeIconClassNames(color: NodeAppearanceColor | null | undefined
     ),
     icon: option?.iconClassName ?? "text-muted-foreground",
   };
+}
+
+/**
+ * Whether a node's daemon is older than the latest release of its type. Decided from the node's
+ * current daemon version, so a daemon-update status fetched before the node updated cannot keep
+ * offering the release it already runs.
+ */
+export function isDaemonUpdateAvailable(
+  daemonVersion: string | null | undefined,
+  latestVersion: string | null | undefined
+): latestVersion is string {
+  return !!latestVersion && isGatewayVersionNewer(latestVersion, daemonVersion ?? "");
 }

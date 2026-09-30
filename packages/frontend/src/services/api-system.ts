@@ -172,12 +172,11 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
 
     async triggerDaemonUpdate(
       nodeId: string
-    ): Promise<{ scheduled: boolean; targetVersion: string }> {
+    ): Promise<{ scheduled: boolean; targetVersion: string; leaseSequenced?: boolean }> {
       return this.unwrapData(
-        this.request<{ data: { scheduled: boolean; targetVersion: string } }>(
-          `/system/daemon-updates/${nodeId}`,
-          { method: "POST" }
-        )
+        this.request<{
+          data: { scheduled: boolean; targetVersion: string; leaseSequenced?: boolean };
+        }>(`/system/daemon-updates/${nodeId}`, { method: "POST" })
       );
     }
 

@@ -21,6 +21,7 @@ import {
   isDatabaseBackupCandidateNode,
   listManagedDatabaseCandidateNodes,
 } from "@/lib/managed-database-nodes";
+import { nodeChangesFor } from "@/lib/node-changed";
 import { databaseRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -276,8 +277,12 @@ function DatabaseDetailContent({
   }, [activeTab, isManagedPaused, liveHealthStatus, managedNodeAvailable, setActiveTab]);
 
   useRealtime(canObserveManagedNode ? "node.changed" : null, (payload) => {
-    const event = payload as { id?: string; status?: string };
-    if (!event?.id || event.id !== managedNodeId || !event.status) return;
+    const event = managedNodeId
+      ? nodeChangesFor(payload, managedNodeId)
+          .filter((change) => change.status)
+          .at(-1)
+      : undefined;
+    if (!event?.status) return;
     setDatabase((current) =>
       current?.managed
         ? {

@@ -24,7 +24,10 @@ import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
   type DockerRuntimeStatus,
+  getNodeUpdateLastError,
   getNodeUpdateTargetVersion,
+  getNodeUpdateWaitingFor,
+  isNodeUpdateQueued,
   isNodeUpdating,
   type NodeDetail,
   type NodeHealthReport,
@@ -205,7 +208,12 @@ export function NodeDetailsTab({
     if (event.nodeId === node.id) void refreshDockerCounts("compose");
   });
   const [isUpdating, setIsUpdating] = useState(false);
-  const [pendingUpdateTarget, setPendingUpdateTarget] = useState<string | null>(null);
+  // The update this page started, until the node shows it running, finishing or failing.
+  const [pendingUpdate, setPendingUpdate] = useState<{
+    target: string;
+    errorAtTrigger: string | null;
+    sawUpdating: boolean;
+  } | null>(null);
   const [ipAddressesOpen, setIpAddressesOpen] = useState(false);
   const h: NodeHealthReport | null = node.liveHealthReport ?? node.lastHealthReport;
   const caps = (node.capabilities ?? {}) as Record<string, unknown>;
@@ -215,6 +223,9 @@ export function NodeDetailsTab({
   );
   const [runtimeAction, setRuntimeAction] = useState<"preflight" | "install" | null>(null);
   const nodeUpdating = isNodeUpdating(node);
+  const updateQueued = isNodeUpdateQueued(node);
+  const updateWaitingFor = getNodeUpdateWaitingFor(node);
+  const lastUpdateError = getNodeUpdateLastError(node);
   // A live NodeControl stream is sufficient to deliver the update even when
   // the daemon and the new generic tunnel protocol do not match yet.
   const canTriggerDaemonUpdate = node.status === "online" && node.isConnected;
@@ -248,13 +259,23 @@ export function NodeDetailsTab({
   }, []);
 
   useEffect(() => {
-    if (!pendingUpdateTarget) return;
+    if (!pendingUpdate) return;
     const current = normalizeVersion(node.daemonVersion);
-    const target = normalizeVersion(pendingUpdateTarget);
-    if ((target && current === target) || !daemonUpdate.available) {
-      setPendingUpdateTarget(null);
+    const target = normalizeVersion(pendingUpdate.target);
+    // A failure recorded after the click, or an update that ran and ended, ends the wait too: the
+    // Update panel comes back with the reason instead of staying hidden.
+    const failed = !!lastUpdateError && lastUpdateError.at !== pendingUpdate.errorAtTrigger;
+    if (
+      (target && current === target) ||
+      !daemonUpdate.available ||
+      failed ||
+      (pendingUpdate.sawUpdating && !nodeUpdating)
+    ) {
+      setPendingUpdate(null);
+    } else if (nodeUpdating && !pendingUpdate.sawUpdating) {
+      setPendingUpdate({ ...pendingUpdate, sawUpdating: true });
     }
-  }, [daemonUpdate.available, node.daemonVersion, pendingUpdateTarget]);
+  }, [daemonUpdate.available, lastUpdateError, node.daemonVersion, nodeUpdating, pendingUpdate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -288,16 +309,31 @@ export function NodeDetailsTab({
     }
     setIsUpdating(true);
     const targetVersion = daemonUpdate.latestVersion;
+    let result: Awaited<ReturnType<typeof api.triggerDaemonUpdate>>;
     try {
-      await api.triggerDaemonUpdate(node.id);
-      if (targetVersion) setPendingUpdateTarget(targetVersion);
-      toast.success("Daemon update triggered — the node will restart shortly");
-      await Promise.all([refreshNode(), refreshDaemonUpdateStatus({ force: true })]);
+      result = await api.triggerDaemonUpdate(node.id);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to trigger update");
-    } finally {
       setIsUpdating(false);
+      return;
     }
+    if (targetVersion) {
+      setPendingUpdate({
+        target: targetVersion,
+        errorAtTrigger: lastUpdateError?.at ?? null,
+        sawUpdating: false,
+      });
+    }
+    toast.success(
+      result.leaseSequenced
+        ? "Daemon update queued — the node restarts once the other members of its availability lease have settled"
+        : "Daemon update triggered — the node will restart shortly"
+    );
+    // The update runs regardless of whether this refresh succeeds; realtime events refresh the page too.
+    await Promise.all([refreshNode(), refreshDaemonUpdateStatus({ force: true })]).catch(
+      () => undefined
+    );
+    setIsUpdating(false);
   };
 
   const handleRuntimeAction = async (action: "preflight" | "install") => {
@@ -446,31 +482,58 @@ export function NodeDetailsTab({
         </PanelShell>
       )}
 
-      {!nodeUpdating && daemonUpdate.available && !pendingUpdateTarget && (
+      {!nodeUpdating && daemonUpdate.available && !pendingUpdate && (
         <PanelShell
           title={<span className="text-warning-text">Update Available</span>}
           description={`${daemonUpdate.latestVersion} is ready to install`}
           dirty
           actions={
-            <Button
-              variant="warning"
-              onClick={handleDaemonUpdate}
-              pending={isUpdating}
-              disabled={!canTriggerDaemonUpdate}
-              title={
-                canTriggerDaemonUpdate
-                  ? undefined
-                  : "Daemon update requires a connected compatible node"
-              }
-            >
-              <ArrowUpCircle />
-              Update to {daemonUpdate.latestVersion}
-            </Button>
+            node.type === "relay" ? (
+              // A relay restart drops the control streams it carries; the Relay Pool update drains
+              // and orders relays, so relay nodes update from there.
+              <Button asChild variant="warning">
+                <Link to="/settings/general">
+                  <ArrowUpCircle />
+                  Update the Relay Pool
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                variant="warning"
+                onClick={handleDaemonUpdate}
+                pending={isUpdating}
+                disabled={!canTriggerDaemonUpdate}
+                title={
+                  canTriggerDaemonUpdate
+                    ? undefined
+                    : "Daemon update requires a connected compatible node"
+                }
+              >
+                <ArrowUpCircle />
+                Update to {daemonUpdate.latestVersion}
+              </Button>
+            )
           }
         >
           <div className="divide-y divide-border">
             <DetailRow label="Current version" value={node.daemonVersion ?? "Unknown"} />
             <DetailRow label="New version" value={daemonUpdate.latestVersion ?? "Unknown"} />
+            {lastUpdateError && (
+              <DetailRow
+                label="Last attempt"
+                value={
+                  <span className="text-destructive">
+                    {lastUpdateError.message}
+                    {lastUpdateError.at ? (
+                      <>
+                        {" "}
+                        (<RelativeTime value={lastUpdateError.at} />)
+                      </>
+                    ) : null}
+                  </span>
+                }
+              />
+            )}
           </div>
         </PanelShell>
       )}
@@ -598,8 +661,16 @@ export function NodeDetailsTab({
                 )}
                 {(caps.versionMismatch as boolean) && <Badge variant="warning">Mismatch</Badge>}
                 {nodeUpdating && (
-                  <Badge variant="warning">
-                    Updating{updateTargetVersion ? ` to ${updateTargetVersion}` : ""}
+                  <Badge
+                    variant="warning"
+                    title={
+                      updateQueued && updateWaitingFor.length > 0
+                        ? `Waits for ${updateWaitingFor.length} lease member${updateWaitingFor.length === 1 ? "" : "s"}: ${updateWaitingFor.map((entry) => entry.reason).join(", ")}`
+                        : undefined
+                    }
+                  >
+                    {updateQueued ? "Queued" : "Updating"}
+                    {updateTargetVersion ? ` to ${updateTargetVersion}` : ""}
                   </Badge>
                 )}
               </div>

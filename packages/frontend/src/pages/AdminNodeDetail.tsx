@@ -67,9 +67,11 @@ import { isManagedDatabaseCandidateNode } from "@/lib/managed-database-nodes";
 import {
   daemonTypeForNode,
   getNodeAppearanceColor,
+  isDaemonUpdateAvailable,
   NODE_APPEARANCE_COLOR_OPTIONS,
   nodeTypeLabel,
 } from "@/lib/node-appearance";
+import { nodeChangesFor } from "@/lib/node-changed";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { dockerNodeListRoute, nodeRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
@@ -539,13 +541,11 @@ export function AdminNodeDetail({
     const forced = getForcedDaemonUpdateForNode(node);
     if (forced) return forced;
     const daemonType = daemonTypeForNode(node.type);
-    const typeStatus = daemonUpdates.find((status) => status.daemonType === daemonType);
-    const nodeStatus = typeStatus?.nodes.find((status) => status.nodeId === id);
-    return {
-      available: !!(nodeStatus?.updateAvailable && typeStatus?.latestVersion),
-      latestVersion:
-        nodeStatus?.updateAvailable && typeStatus?.latestVersion ? typeStatus.latestVersion : null,
-    };
+    const latestVersion = daemonUpdates.find(
+      (status) => status.daemonType === daemonType
+    )?.latestVersion;
+    const available = isDaemonUpdateAvailable(node.daemonVersion, latestVersion);
+    return { available, latestVersion: available ? latestVersion : null };
   }, [daemonUpdates, id, node]);
   const visibleTabs = useMemo(
     () => [
@@ -610,12 +610,16 @@ export function AdminNodeDetail({
     };
   }, [canReadNodeFiles, canWriteNodeFiles, id]);
 
+  // Node reads run from polls, events and actions at once; only the latest one may land.
+  const nodeRequestSeq = useRef(0);
   const loadNode = useCallback(
     async (silent = false) => {
       if (!id) return;
       if (!silent) setIsLoading(true);
+      const seq = ++nodeRequestSeq.current;
       try {
         const [data, history] = await Promise.all([api.getNode(id), api.getNodeHealthHistory(id)]);
+        if (seq !== nodeRequestSeq.current) return;
         setNode(data);
         setHealthHistory(history);
       } catch (err) {
@@ -635,7 +639,9 @@ export function AdminNodeDetail({
 
   const refreshNodeDetails = useCallback(async () => {
     if (!id) return;
-    setNode(await api.getNode(id));
+    const seq = ++nodeRequestSeq.current;
+    const data = await api.getNode(id);
+    if (seq === nodeRequestSeq.current) setNode(data);
   }, [id]);
 
   const loadDaemonUpdateStatus = useCallback(
@@ -697,16 +703,26 @@ export function AdminNodeDetail({
     void loadDaemonUpdateStatus().finally(() => setDaemonUpdatesSettled(true));
   }, [loadDaemonUpdateStatus]);
 
-  useRealtime(id ? "node.changed" : null, (payload) => {
-    const event = payload as { id?: string; action?: string };
-    if (!id || event.id !== id) return;
-    if (event.action === "deleted") {
-      navigate("/nodes");
-      return;
+  useRealtime(
+    id ? "node.changed" : null,
+    (payload) => {
+      const changes = id ? nodeChangesFor(payload, id) : [];
+      if (!id || changes.length === 0) return;
+      if (changes.some((change) => change.action === "deleted")) {
+        navigate("/nodes");
+        return;
+      }
+      loadNode(true);
+      void loadDaemonUpdateStatus({ force: true });
+    },
+    {
+      // Events sent while the socket was away (a Gateway restart during an update) are lost.
+      onReconnect: () => {
+        loadNode(true);
+        void loadDaemonUpdateStatus({ force: true });
+      },
     }
-    loadNode(true);
-    void loadDaemonUpdateStatus({ force: true });
-  });
+  );
 
   useRealtime(id ? "docker.runtime.changed" : null, (payload) => {
     const event = payload as { nodeId?: string; status?: DockerRuntimeStatus };
@@ -824,6 +840,7 @@ export function AdminNodeDetail({
         if (!approved) return;
         updated = await api.updateNode(id, { ...update, confirmDomainDnsUpdate: true });
       }
+      nodeRequestSeq.current++;
       setNode((prev) => (prev ? { ...prev, ...updated } : prev));
       if (updated.slug && updated.slug !== routeSlug) {
         navigate(nodeRoute(updated.slug, activeTab), { replace: true });
@@ -858,11 +875,12 @@ export function AdminNodeDetail({
       const statuses = await api.checkDaemonUpdates();
       setDaemonUpdates(statuses);
       const daemonType = daemonTypeForNode(node.type);
-      const typeStatus = statuses.find((status) => status.daemonType === daemonType);
-      const nodeStatus = typeStatus?.nodes.find((status) => status.nodeId === node.id);
+      const latestVersion = statuses.find(
+        (status) => status.daemonType === daemonType
+      )?.latestVersion;
 
-      if (nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
-        toast.info(`Update available: ${typeStatus.latestVersion}`);
+      if (isDaemonUpdateAvailable(node.daemonVersion, latestVersion)) {
+        toast.info(`Update available: ${latestVersion}`);
       } else {
         toast.success("Node daemon is already up to date");
       }
@@ -878,6 +896,7 @@ export function AdminNodeDetail({
     setLockSaving(true);
     try {
       const updated = await api.setNodeServiceCreationLock(node.id, serviceCreationLocked);
+      nodeRequestSeq.current++;
       setNode(updated);
       toast.success(
         serviceCreationLocked ? "Service creation locked" : "Service creation unlocked"

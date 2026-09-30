@@ -62,7 +62,8 @@ class EventStream {
   private reconnectListeners = new Set<() => void>();
   private hasConnected = false;
   private nodeChangedTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingNodeChangedPayload: unknown;
+  /** Latest node.changed payload per node while a flush is pending; events of other nodes must not replace it. */
+  private pendingNodeChangedPayloads = new Map<string, unknown>();
 
   start() {
     this.refCount++;
@@ -97,7 +98,7 @@ class EventStream {
     if (this.nodeChangedTimer) {
       clearTimeout(this.nodeChangedTimer);
       this.nodeChangedTimer = null;
-      this.pendingNodeChangedPayload = undefined;
+      this.pendingNodeChangedPayloads.clear();
     }
     if (this.ws) {
       const dying = this.ws;
@@ -378,7 +379,12 @@ class EventStream {
   }
 
   private scheduleNodeChanged(payload: unknown, immediate: boolean) {
-    this.pendingNodeChangedPayload = payload;
+    const id = (payload as { id?: unknown } | undefined)?.id;
+    // A payload without a node id still refreshes every node view; it is kept under its own key.
+    const key =
+      typeof id === "string" && id ? id : `unkeyed:${this.pendingNodeChangedPayloads.size}`;
+    this.pendingNodeChangedPayloads.delete(key);
+    this.pendingNodeChangedPayloads.set(key, payload);
     if (immediate) {
       if (this.nodeChangedTimer) {
         clearTimeout(this.nodeChangedTimer);
@@ -395,10 +401,16 @@ class EventStream {
   }
 
   private flushNodeChanged() {
-    const payload = this.pendingNodeChangedPayload;
-    this.pendingNodeChangedPayload = undefined;
+    const changes = [...this.pendingNodeChangedPayloads.values()];
+    this.pendingNodeChangedPayloads.clear();
     this.invalidateNodeStores();
-    this.dispatch("node.changed", payload);
+    // One dispatch per burst; views of a single node read their own event from `changes`
+    // (see nodeChangesFor), the top-level fields stay those of the last event.
+    const last = changes[changes.length - 1];
+    this.dispatch("node.changed", {
+      ...(last && typeof last === "object" ? last : {}),
+      changes,
+    });
   }
 
   private scheduleReconnect() {

@@ -2093,12 +2093,23 @@ export async function initializeContainer(): Promise<void> {
   // Restarts of lease voters and candidates (daemon and relay updates) go one policy member at a time.
   const daemonUpdateRollout = new DaemonUpdateRollout({ loadView: () => loadLeaseUpdateView(db, nodeRegistry) });
   container.registerInstance(DaemonUpdateRollout, daemonUpdateRollout);
-  scheduleQueuedDaemonUpdateResume({
-    db,
-    daemonUpdateService,
-    dispatch: nodeDispatch,
-    rollout: daemonUpdateRollout,
-  });
+  const processStartedAt = new Date();
+  // Updates sent before a restart lost their expiry timers and can no longer get a command result.
+  void daemonUpdateService.resumeNodeUpdateDeadlines(processStartedAt).catch((error) =>
+    logger.error('Daemon update deadlines could not be resumed after the restart', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  );
+  scheduleQueuedDaemonUpdateResume(
+    {
+      db,
+      daemonUpdateService,
+      dispatch: nodeDispatch,
+      rollout: daemonUpdateRollout,
+    },
+    undefined,
+    processStartedAt
+  );
   nodeDispatch.setDaemonUpdateService(daemonUpdateService);
   nodesService.setDaemonUpdateService(daemonUpdateService);
   if (relayPoolService) {

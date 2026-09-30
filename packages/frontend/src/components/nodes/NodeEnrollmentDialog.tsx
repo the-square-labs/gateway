@@ -28,6 +28,7 @@ import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { allowedCreationFolderId, creationFolderChoices } from "@/lib/creation-folders";
+import { nodeChangesFor } from "@/lib/node-changed";
 import { canCreateInFolder } from "@/lib/scope-utils";
 import { STEP_ANIMATION } from "@/pages/notifications/template-editor";
 import { api } from "@/services/api";
@@ -222,11 +223,11 @@ export function NodeEnrollmentDialog({
   useRealtime(
     resultOpen && result ? "node.changed" : null,
     (payload) => {
-      if (!payload || typeof payload !== "object") return;
-      const event = payload as { id?: unknown; status?: unknown };
       const nodeId = result?.nodeId;
-      if (!nodeId || event.id !== nodeId) return;
-      if (event.status === "online") completeEnrollment(nodeId);
+      if (!nodeId) return;
+      const changes = nodeChangesFor(payload, nodeId);
+      if (changes.length === 0) return;
+      if (changes.some((change) => change.status === "online")) completeEnrollment(nodeId);
       else void checkEnrollment();
     },
     { onReconnect: () => void checkEnrollment() }

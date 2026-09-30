@@ -28,6 +28,10 @@ export class NodeOfflineDebounce {
     this.timers.set(nodeId, timer);
   }
 
+  isPending(nodeId: string): boolean {
+    return this.timers.has(nodeId);
+  }
+
   /** Returns whether an offline transition was pending. */
   cancel(nodeId: string): boolean {
     const timer = this.timers.get(nodeId);
