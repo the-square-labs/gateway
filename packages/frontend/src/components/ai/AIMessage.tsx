@@ -16,12 +16,21 @@ import {
   SquarePen,
   TerminalSquare,
 } from "lucide-react";
-import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  type ComponentType,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import {
   AIChangedResources,
+  isResourceMarkdownHref,
   resourceAwareMarkdown,
   resourceMarkdownLinkComponent,
 } from "@/lib/ai-resource-links";
@@ -76,63 +85,124 @@ interface ArtifactAttachment {
 type ArtifactPreviewKind = "image" | "text" | null;
 
 const COMMENT_WORD_REVEAL_DELAY_MS = 55;
+/** How long a newly shown piece of reply text takes to fade in. */
+const REVEAL_FADE_MS = 180;
 
-function useAnimatedCommentContent(
-  messageId: string,
-  content: string,
-  enabled: boolean
-): { content: string; chunk: string } {
+function useAnimatedCommentContent(messageId: string, content: string, enabled: boolean): string {
   const tokens = useMemo(() => content.match(/\S+\s*/gu) ?? (content ? [content] : []), [content]);
   const [reveal, setReveal] = useState(() => ({
     messageId,
     revealed: enabled ? 0 : tokens.length,
-    batchStart: 0,
   }));
+  const tokenCount = useRef(tokens.length);
+  useEffect(() => {
+    tokenCount.current = tokens.length;
+  });
 
   useEffect(() => {
     if (reveal.messageId !== messageId) {
-      setReveal({
-        messageId,
-        revealed: enabled ? 0 : tokens.length,
-        batchStart: 0,
-      });
+      setReveal({ messageId, revealed: enabled ? 0 : tokens.length });
       return;
     }
-    if (!enabled) {
-      if (reveal.revealed !== tokens.length || reveal.batchStart !== tokens.length) {
-        setReveal({ messageId, revealed: tokens.length, batchStart: tokens.length });
-      }
-      return;
+    // Kept in step so a later reveal continues from here instead of hiding shown words again.
+    if (!enabled && reveal.revealed !== tokens.length) {
+      setReveal({ messageId, revealed: tokens.length });
     }
-    if (reveal.revealed >= tokens.length) return;
+  }, [enabled, messageId, reveal, tokens.length]);
 
-    const timer = window.setTimeout(() => {
+  const behind = enabled && reveal.messageId === messageId && reveal.revealed < tokens.length;
+  // One interval for the whole catch-up: a timeout restarted on every render never fired while
+  // new text arrived faster than the reveal delay, so the words showed only after the text ended.
+  useEffect(() => {
+    if (!behind) return;
+    const timer = window.setInterval(() => {
       setReveal((current) => {
         if (current.messageId !== messageId) return current;
         const batchSize = 1 + Math.floor(Math.random() * 3);
         return {
           messageId,
-          batchStart: current.revealed,
-          revealed: Math.min(tokens.length, current.revealed + batchSize),
+          revealed: Math.min(tokenCount.current, current.revealed + batchSize),
         };
       });
     }, COMMENT_WORD_REVEAL_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [enabled, messageId, reveal, tokens.length]);
+    return () => window.clearInterval(timer);
+  }, [behind, messageId]);
 
-  const revealed = Math.min(reveal.revealed, tokens.length);
-  const batchStart = Math.min(reveal.batchStart, revealed);
-  return {
-    content: tokens.slice(0, revealed).join(""),
-    chunk: enabled ? tokens.slice(batchStart, revealed).join("") : "",
-  };
+  // Without the reveal the content is shown as is: the reveal state lags a render behind new text.
+  if (!enabled) return content;
+  return tokens.slice(0, Math.min(reveal.revealed, tokens.length)).join("");
 }
 
-function stabilizeStreamingHeadings(content: string): string {
-  return content
-    .split("\n")
-    .map((line) => line.replace(/^( {0,3})(#{1,6})[\t ]*$/u, "$1\\$2 "))
-    .join("\n");
+const RESOURCE_MARKER_OPENING = "[[resource:";
+const RESOURCE_MARKER_MAX_LENGTH = 300;
+
+/**
+ * The end of text that is still arriving can render very differently once it is finished: a bare
+ * heading marker or a setext underline turns into a heading, and a resource marker shows as raw text
+ * until it closes and becomes a link. That part stays hidden until the next characters settle it.
+ */
+function holdBackUnfinishedTail(content: string): string {
+  const lineStart = content.lastIndexOf("\n") + 1;
+  if (/^ {0,3}(?:#{1,6}|-+|=+)[\t ]*$/u.test(content.slice(lineStart))) {
+    return content.slice(0, lineStart);
+  }
+  const open = content.lastIndexOf("[[");
+  if (open !== -1 && content.length - open <= RESOURCE_MARKER_MAX_LENGTH) {
+    const tail = content.slice(open);
+    if (
+      !tail.includes("]]") &&
+      !/[\r\n]/u.test(tail) &&
+      RESOURCE_MARKER_OPENING.startsWith(tail.slice(0, RESOURCE_MARKER_OPENING.length))
+    ) {
+      return content.slice(0, open);
+    }
+  }
+  // A lone trailing bracket may be the first half of a marker's opening.
+  return content.endsWith("[") ? content.slice(0, -1) : content;
+}
+
+interface RevealChunk {
+  /** Offset in the Markdown source where this piece starts; it runs to the next piece. */
+  start: number;
+  /** performance.now() when the piece was first shown. */
+  at: number;
+}
+
+interface RevealTimeline {
+  source: string;
+  chunks: RevealChunk[];
+}
+
+/** Advances the timeline to a new source: whatever follows the unchanged prefix is a new piece. */
+function advanceRevealTimeline(
+  previous: RevealTimeline,
+  source: string,
+  tracking: boolean,
+  now: number
+): RevealTimeline {
+  const limit = Math.min(previous.source.length, source.length);
+  let common = 0;
+  while (common < limit && previous.source.charCodeAt(common) === source.charCodeAt(common)) {
+    common += 1;
+  }
+  const chunks = previous.chunks.filter(
+    (chunk) => chunk.start < common && now - chunk.at < REVEAL_FADE_MS
+  );
+  if (tracking && source.length > common) chunks.push({ start: common, at: now });
+  return { source, chunks };
+}
+
+/**
+ * When each piece of the rendered Markdown source appeared. Offsets are taken on the exact string
+ * handed to the renderer, so resource links, which change the text length, cannot shift them onto
+ * words that were already shown.
+ */
+function useRevealTimeline(source: string, tracking: boolean): RevealChunk[] {
+  const [timeline, setTimeline] = useState<RevealTimeline>(() => ({ source, chunks: [] }));
+  if (timeline.source === source) return timeline.chunks;
+  const next = advanceRevealTimeline(timeline, source, tracking, performance.now());
+  setTimeline(next);
+  return next.chunks;
 }
 
 function AITimelineDivider({
@@ -212,36 +282,19 @@ export function AIMessage({
   const animatedCommentEnabled = Boolean(
     message.id?.includes(":comment:") && message.streamingChunk && !prefersReducedMotion
   );
-  const animatedComment = useAnimatedCommentContent(
+  const commentContent = useAnimatedCommentContent(
     message.id ?? "",
     content,
     animatedCommentEnabled
   );
+  const contentGrowing = Boolean(message.isStreaming) || animatedCommentEnabled;
   const visibleToolCalls = message.toolCalls?.filter(
     (toolCall) => toolCall.name !== "send_comment"
   );
   const toolCallItems = visibleToolCalls ? buildToolCallRenderItems(visibleToolCalls) : [];
   const hasCompactContextTool =
     visibleToolCalls?.some((tc) => tc.name === "compact_context") ?? false;
-  const visibleContent =
-    message.compactMarker && hasCompactContextTool ? "" : animatedComment.content;
-  const markdownContent = message.isStreaming
-    ? stabilizeStreamingHeadings(visibleContent)
-    : visibleContent;
-  const streamingChunk =
-    animatedComment.chunk ||
-    (message.isStreaming &&
-    message.streamingChunk &&
-    visibleContent.endsWith(message.streamingChunk)
-      ? message.streamingChunk
-      : "");
-  const streamingRehypePlugins = useMemo(
-    () =>
-      streamingChunk
-        ? [createStreamingChunkRehypePlugin(markdownContent.length - streamingChunk.length)]
-        : [],
-    [markdownContent.length, streamingChunk]
-  );
+  const visibleContent = message.compactMarker && hasCompactContextTool ? "" : commentContent;
   const errorMessage = extractErrorMessage(visibleContent);
   const compactSummary = message.compactMarker ? content : undefined;
   const artifacts = extractArtifactAttachments(visibleToolCalls);
@@ -249,6 +302,19 @@ export function AIMessage({
   const availableResourceReferences = useMemo(
     () => mergeResourceReferences(resourceReferences, message.resourceReferences),
     [resourceReferences, message.resourceReferences]
+  );
+  const markdownSource = useMemo(
+    () =>
+      resourceAwareMarkdown(
+        contentGrowing ? holdBackUnfinishedTail(visibleContent) : visibleContent,
+        availableResourceReferences
+      ),
+    [availableResourceReferences, contentGrowing, visibleContent]
+  );
+  const revealChunks = useRevealTimeline(markdownSource, contentGrowing && !prefersReducedMotion);
+  const revealRehypePlugins = useMemo(
+    () => (revealChunks.length > 0 ? [createRevealRehypePlugin(revealChunks)] : []),
+    [revealChunks]
   );
   const assistantMarkdownComponents = useMemo(
     () => ({
@@ -474,10 +540,10 @@ export function AIMessage({
           <div className="prose dark:prose-invert !max-w-none break-words text-sm prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-table:my-0 prose-code:text-xs prose-pre:text-xs prose-pre:rounded-none prose-code:rounded-none prose-code:before:content-none prose-code:after:content-none [&>*:first-child]:!mt-0 [&>*:last-child]:!mb-0">
             <Markdown
               remarkPlugins={[remarkGfm]}
-              rehypePlugins={streamingRehypePlugins}
+              rehypePlugins={revealRehypePlugins}
               components={assistantMarkdownComponents}
             >
-              {resourceAwareMarkdown(markdownContent, availableResourceReferences)}
+              {markdownSource}
             </Markdown>
           </div>
         )}
@@ -883,71 +949,100 @@ interface StreamingHastNode {
 const NO_RESOURCE_REFERENCES: AIResourceReference[] = [];
 
 /**
- * Module-level so the Markdown renderer keeps the same component type across re-renders: a new type
- * would remount the chunk and replay its fade-in on every render. The fade replays only when a new
- * chunk starts, keyed by its start offset.
+ * Module-level so the Markdown renderer keeps the same component type across re-renders. The fade is
+ * driven by the time the piece first appeared, not by mounting: a span that React re-creates or
+ * reuses for another piece picks the fade up where that piece is, so shown text never flashes again.
  */
 function StreamingMarkdownSpan({
   children,
   className,
-  "data-chunk-start": chunkStart,
+  "data-reveal-at": revealAt,
+  node: _node,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { "data-chunk-start"?: number | string }) {
-  const prefersReducedMotion = useReducedMotion();
-  if (!className?.includes("ai-streaming-chunk")) {
-    return (
-      <span className={className} {...props}>
-        {children}
-      </span>
-    );
-  }
+}: React.HTMLAttributes<HTMLSpanElement> & {
+  "data-reveal-at"?: number | string;
+  node?: unknown;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const at = revealAt === undefined ? Number.NaN : Number(revealAt);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || !Number.isFinite(at) || typeof element.animate !== "function") return;
+    const elapsed = performance.now() - at;
+    if (elapsed >= REVEAL_FADE_MS) return;
+    const animation = element.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: REVEAL_FADE_MS,
+      easing: "ease-out",
+    });
+    animation.currentTime = Math.max(0, elapsed);
+    return () => animation.cancel();
+  }, [at]);
   return (
-    <motion.span
-      key={String(chunkStart)}
-      className={className}
-      initial={prefersReducedMotion ? false : { opacity: 0, y: 2 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: prefersReducedMotion ? 0 : 0.12, ease: "easeOut" }}
-    >
+    <span ref={ref} className={className} {...props}>
       {children}
-    </motion.span>
+    </span>
   );
 }
 
-function createStreamingChunkRehypePlugin(chunkStartOffset: number) {
+function createRevealRehypePlugin(chunks: RevealChunk[]) {
   return () => (tree: StreamingHastNode) => {
-    wrapStreamingTextNodes(tree, chunkStartOffset);
+    wrapRevealTextNodes(tree, chunks);
   };
 }
 
-function wrapStreamingTextNodes(parent: StreamingHastNode, chunkStartOffset: number): void {
-  if (!parent.children) return;
+function revealSpan(at: number, children: StreamingHastNode[]): StreamingHastNode {
+  return {
+    type: "element",
+    tagName: "span",
+    properties: { className: ["ai-streaming-chunk"], dataRevealAt: at },
+    children,
+  };
+}
+
+/** Wraps each still-fading piece of text in a span that carries the time the piece appeared. */
+function wrapRevealTextNodes(parent: StreamingHastNode, chunks: RevealChunk[]): void {
+  if (!parent.children || chunks.length === 0) return;
   const nextChildren: StreamingHastNode[] = [];
 
   for (const child of parent.children) {
+    // A resource link renders as one chip, not as its text, so it fades as a whole.
+    if (child.tagName === "a" && isResourceMarkdownHref(child.properties?.href)) {
+      const linkStart = child.position?.start?.offset;
+      const chunk =
+        linkStart === undefined
+          ? undefined
+          : chunks.filter((item) => item.start <= linkStart).at(-1);
+      nextChildren.push(chunk ? revealSpan(chunk.at, [child]) : child);
+      continue;
+    }
     if (child.type !== "text" || typeof child.value !== "string") {
-      wrapStreamingTextNodes(child, chunkStartOffset);
+      wrapRevealTextNodes(child, chunks);
       nextChildren.push(child);
       continue;
     }
 
     const startOffset = child.position?.start?.offset;
     const endOffset = child.position?.end?.offset;
-    if (startOffset === undefined || endOffset === undefined || endOffset <= chunkStartOffset) {
+    if (startOffset === undefined || endOffset === undefined || endOffset <= chunks[0].start) {
       nextChildren.push(child);
       continue;
     }
 
-    const splitAt = Math.max(0, Math.min(child.value.length, chunkStartOffset - startOffset));
-    if (splitAt > 0) {
-      nextChildren.push({ ...child, value: child.value.slice(0, splitAt) });
-    }
-    nextChildren.push({
-      type: "element",
-      tagName: "span",
-      properties: { className: ["ai-streaming-chunk"], dataChunkStart: chunkStartOffset },
-      children: [{ ...child, value: child.value.slice(splitAt) }],
+    // Source offsets map onto the value from its start: escapes and indentation only make the
+    // value shorter, so an error leaves a new character unfaded rather than fading a shown one.
+    const value = child.value;
+    const toValueOffset = (offset: number) =>
+      Math.max(0, Math.min(value.length, offset - startOffset));
+    let cursor = 0;
+    chunks.forEach((chunk, index) => {
+      const to = index + 1 < chunks.length ? toValueOffset(chunks[index + 1].start) : value.length;
+      const from = Math.max(cursor, toValueOffset(chunk.start));
+      if (to <= from) return;
+      if (from > cursor) nextChildren.push({ ...child, value: value.slice(cursor, from) });
+      nextChildren.push(revealSpan(chunk.at, [{ type: "text", value: value.slice(from, to) }]));
+      cursor = to;
     });
+    if (cursor < value.length) nextChildren.push({ ...child, value: value.slice(cursor) });
   }
 
   parent.children = nextChildren;

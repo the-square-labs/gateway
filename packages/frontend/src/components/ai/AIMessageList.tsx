@@ -42,85 +42,60 @@ export function AIMessageList({
   const groups = groupAssistantTurns(visibleMessages);
   const retryTargets = buildRetryTargets(visibleMessages);
   const activityLabel = runActivityLabel(visibleMessages, isStreaming);
+  const lastGroup = groups.at(-1);
 
+  const renderMessage = (message: AIMessageType, index: number) => (
+    <AIMessage
+      key={messageKey(message, index)}
+      message={message}
+      assistantMaxWidthClass={assistantMaxWidthClass}
+      onApprove={onApprove}
+      onReject={onReject}
+      onAnswer={onAnswer}
+      onEditUserMessage={onEditUserMessage}
+      onRetry={
+        onRetryUserMessage && retryTargets.has(message)
+          ? () => onRetryUserMessage(retryTargets.get(message)!)
+          : undefined
+      }
+      retryDisabled={retryDisabled}
+      editUserMessageDisabled={editUserMessageDisabled}
+      resourceReferences={resourceReferences}
+      suppressActivityIndicator
+    />
+  );
+  const activityRow = activityLabel ? (
+    <div
+      key="ai-run-activity"
+      className={`${assistantMaxWidthClass ?? "max-w-[95%]"} min-h-7`}
+      data-testid="ai-run-activity"
+    >
+      <AIActivityIndicator label={activityLabel} />
+    </div>
+  ) : null;
+
+  // A group keeps one element type for its whole life. Wrapping a bare message only while the
+  // activity row shows remounted it when the reply text started, which replayed its animations.
   return (
     <>
-      {groups.map((group, groupIndex) =>
-        activityLabel && groupIndex === groups.length - 1 ? (
+      {groups.map((group) =>
+        isWrappedGroup(group) ? (
           <div key={messageKey(group[0], 0)} className="space-y-1">
-            {group.map((message, index) => (
-              <AIMessage
-                key={messageKey(message, index)}
-                message={message}
-                assistantMaxWidthClass={assistantMaxWidthClass}
-                onApprove={onApprove}
-                onReject={onReject}
-                onAnswer={onAnswer}
-                onEditUserMessage={onEditUserMessage}
-                onRetry={
-                  onRetryUserMessage && retryTargets.has(message)
-                    ? () => onRetryUserMessage(retryTargets.get(message)!)
-                    : undefined
-                }
-                retryDisabled={retryDisabled}
-                editUserMessageDisabled={editUserMessageDisabled}
-                resourceReferences={resourceReferences}
-                suppressActivityIndicator
-              />
-            ))}
-            <div
-              className={`${assistantMaxWidthClass ?? "max-w-[95%]"} min-h-7`}
-              data-testid="ai-run-activity"
-            >
-              <AIActivityIndicator label={activityLabel} />
-            </div>
+            {group.map(renderMessage)}
+            {group === lastGroup && activityRow}
           </div>
-        ) : group.length === 1 ? (
-          <AIMessage
-            key={messageKey(group[0], 0)}
-            message={group[0]}
-            assistantMaxWidthClass={assistantMaxWidthClass}
-            onApprove={onApprove}
-            onReject={onReject}
-            onAnswer={onAnswer}
-            onEditUserMessage={onEditUserMessage}
-            onRetry={
-              onRetryUserMessage && retryTargets.has(group[0])
-                ? () => onRetryUserMessage(retryTargets.get(group[0])!)
-                : undefined
-            }
-            retryDisabled={retryDisabled}
-            editUserMessageDisabled={editUserMessageDisabled}
-            resourceReferences={resourceReferences}
-            suppressActivityIndicator
-          />
         ) : (
-          <div key={messageKey(group[0], 0)} className="space-y-1">
-            {group.map((message, index) => (
-              <AIMessage
-                key={messageKey(message, index)}
-                message={message}
-                assistantMaxWidthClass={assistantMaxWidthClass}
-                onApprove={onApprove}
-                onReject={onReject}
-                onAnswer={onAnswer}
-                onEditUserMessage={onEditUserMessage}
-                onRetry={
-                  onRetryUserMessage && retryTargets.has(message)
-                    ? () => onRetryUserMessage(retryTargets.get(message)!)
-                    : undefined
-                }
-                retryDisabled={retryDisabled}
-                editUserMessageDisabled={editUserMessageDisabled}
-                resourceReferences={resourceReferences}
-                suppressActivityIndicator
-              />
-            ))}
-          </div>
+          renderMessage(group[0], 0)
         )
       )}
+      {lastGroup && !isWrappedGroup(lastGroup) && activityRow}
     </>
   );
+}
+
+/** Assistant turns always get a wrapper, so the activity row can join and leave without a remount. */
+function isWrappedGroup(group: AIMessageType[]): boolean {
+  return group.length > 1 || (group[0].role === "assistant" && !group[0].conversationStatus);
 }
 
 function runActivityLabel(messages: AIMessageType[], isStreaming: boolean): string | null {

@@ -10,6 +10,11 @@ import { createReturnNavigationState } from "./return-navigation";
 const MARKER_RE = /\[\[resource:(gwr_[a-f0-9]{24})\|((?:[^[\]\r\n]|\[[^[\]\r\n]*\]){1,240})\]\]/g;
 const INTERNAL_HREF_PREFIX = "#gateway-resource:";
 
+/** Whether a Markdown link target is a resource link that renders as a chip. */
+export function isResourceMarkdownHref(href: unknown): boolean {
+  return typeof href === "string" && href.startsWith(INTERNAL_HREF_PREFIX);
+}
+
 export function resourceAwareMarkdown(content: string, references: AIResourceReference[]): string {
   const referencesById = new Map(references.map((reference) => [reference.refId, reference]));
   return content.replace(MARKER_RE, (_marker, refId: string, fallbackLabel: string) => {
