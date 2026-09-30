@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
-import { dockerSourceBindings } from '@/db/schema/index.js';
+import { dockerAvailabilityPolicies, dockerSourceBindings } from '@/db/schema/index.js';
 import { DockerSourceService } from './docker-source.service.js';
 import {
   type DockerSourceOrphanRepairDeps,
@@ -31,11 +31,16 @@ function binding(containerName: string, patch: Partial<Row> = {}): Row {
   };
 }
 
-function fakeDb(rows: Row[]) {
+function fakeDb(rows: Row[], availabilityManaged: string[] = []) {
   const deleted: unknown[] = [];
   const updated: Record<string, unknown>[] = [];
   const db = {
-    select: () => ({ from: () => ({ where: async () => rows }) }),
+    select: () => ({
+      from: (table: unknown) => ({
+        where: async () =>
+          table === dockerAvailabilityPolicies ? availabilityManaged.map((containerName) => ({ containerName })) : rows,
+      }),
+    }),
     update: () => ({
       set: (values: Record<string, unknown>) => ({
         where: async () => {
@@ -194,6 +199,15 @@ describe('OrphanedSourceBindingRepair', () => {
     expect(deleted).toEqual([]);
     await repair.run();
     expect(remove).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the binding of a container under an availability policy', async () => {
+    const { db, deleted } = fakeDb([binding('ha-app')], ['ha-app']);
+    const { repair, advance } = repairWith(db, { listContainers: async () => listing() });
+    await repair.run();
+    advance(ORPHAN_CONFIRMATION_MS);
+    expect(await repair.run()).toBe(0);
+    expect(deleted).toEqual([]);
   });
 
   it('keeps the binding of an existing container', async () => {

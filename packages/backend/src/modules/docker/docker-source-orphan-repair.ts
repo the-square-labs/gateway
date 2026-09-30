@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, ne, or } from 'drizzle-orm';
 import { container } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerSourceBindings } from '@/db/schema/index.js';
+import { dockerAvailabilityPolicies, dockerSourceBindings } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { detachRemovedContainerSource } from './docker-container-source-detach.js';
 import { DockerSourceService } from './docker-source.service.js';
@@ -56,8 +56,9 @@ function listedNames(result: { success: boolean; detail?: string }): Set<string>
  * container that legitimately has no container yet. A recreate briefly hides
  * the name from the list, so a container with an active transition is skipped,
  * and any sign of life (listed, pending, in transition), an offline node or an
- * unknown inventory forgets the first sighting. Sightings are kept in memory
- * only. Idempotent.
+ * unknown inventory forgets the first sighting. A container under an
+ * availability policy may run on another node than its binding names, so its
+ * binding is never touched. Sightings are kept in memory only. Idempotent.
  */
 export class OrphanedSourceBindingRepair {
   private readonly firstAbsent = new Map<string, number>();
@@ -90,6 +91,19 @@ export class OrphanedSourceBindingRepair {
       })
       .from(dockerSourceBindings)
       .where(eq(dockerSourceBindings.targetKind, 'container'));
+    const availabilityManaged = new Set(
+      (
+        await db
+          .select({ containerName: dockerAvailabilityPolicies.containerName })
+          .from(dockerAvailabilityPolicies)
+          .where(
+            and(
+              eq(dockerAvailabilityPolicies.resourceKind, 'container'),
+              or(ne(dockerAvailabilityPolicies.mode, 'single'), ne(dockerAvailabilityPolicies.status, 'single'))
+            )
+          )
+      ).map((policy) => policy.containerName)
+    );
 
     const byNode = new Map<string, typeof rows>();
     for (const row of rows) {
@@ -127,6 +141,7 @@ export class OrphanedSourceBindingRepair {
           const awaitingFirstBuild = binding.initialConfig != null && binding.deployedCommitSha == null;
           if (
             names.has(containerName) ||
+            availabilityManaged.has(containerName) ||
             pendingNames.has(containerName) ||
             awaitingFirstBuild ||
             binding.deployingCommitSha != null ||
