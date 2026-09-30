@@ -231,7 +231,8 @@ ${skillCatalog || '- none'}
   );
   push(
     'Hidden-tool recovery policy',
-    `- If the user names a Gateway tool or function that is not currently visible, do NOT say it is unavailable. First call discover_tools with that tool name as query, then activate one to three recommended categories with categories plus includeTools:true. Read internal_documentation before mutating or multi-step workflows.`
+    `- The visible tools are only the current working set, not everything you can do. Before telling the user that something cannot be done from here, or that you have no access, console, files, logs or tool for it, call discover_tools with a query for that capability (for example "node console", "ssh", "node files" or "logs") and check the answer. Consoles exist at three levels: inside a Docker container, on the node host itself, and on external hosts through SSH connectors.
+- If the user names a Gateway tool or function that is not currently visible, do NOT say it is unavailable. First call discover_tools with that tool name as query, then activate one to three recommended categories with categories plus includeTools:true. Read internal_documentation before mutating or multi-step workflows.`
   );
   try {
     const stats = await context.monitoringService.getDashboardStats(dashboardStatsOptionsForScopes(user.scopes));
