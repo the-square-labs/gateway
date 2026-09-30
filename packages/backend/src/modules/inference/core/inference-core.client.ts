@@ -145,6 +145,7 @@ export class InferenceCoreClient {
       applicable?: unknown;
       reason?: unknown;
       message?: unknown;
+      error?: unknown;
     };
     if (body.applicable === false && ['static_catalog', 'forward_auth'].includes(String(body.reason))) return null;
     if (
@@ -153,8 +154,12 @@ export class InferenceCoreClient {
       body.message.startsWith('Passthrough provider is configured')
     )
       return null;
-    if (body.ok !== true || !Array.isArray(body.modelIds))
-      throw new InferenceCoreClientError('Core live model discovery did not succeed');
+    if (body.ok !== true || !Array.isArray(body.modelIds)) {
+      // Keep the core's reason (for example an upstream 401 or a lost OAuth login) so the
+      // connection's sync error tells the operator what to fix.
+      const reason = typeof body.error === 'string' && body.error ? `: ${body.error.slice(0, 300)}` : '';
+      throw new InferenceCoreClientError(`Core live model discovery did not succeed${reason}`);
+    }
     const ids = body.modelIds
       .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
       .map((id) => unnamespaceCoreModelId(name, id));
@@ -259,19 +264,45 @@ export class InferenceCoreClient {
    * Per-account subscription quota. The provider-wide quota report only describes the core's active account, so a
    * connection bound to any other account must read its own row here. `quota` is null while the core has no reading.
    */
-  async coreOauthAccountQuotas(
-    provider: string
-  ): Promise<{ activeAccountId: string | null; quotas: Map<string, unknown> } | null> {
+  async coreOauthAccountQuotas(provider: string): Promise<{
+    activeAccountId: string | null;
+    quotas: Map<string, unknown>;
+    /** Accounts whose quota probe failed, with the core's closed failure code. */
+    failures: Map<string, string>;
+    /** Accounts the core will not use until they are signed in again. */
+    reauthRequired: Set<string>;
+  } | null> {
     const response = await this.request('GET', `/api/oauth/accounts?provider=${encodeURIComponent(provider)}&quota=1`);
     if (!response || response.status !== 200 || !response.body || typeof response.body !== 'object') return null;
     const body = response.body as { activeAccountId?: unknown; accounts?: unknown };
     const quotas = new Map<string, unknown>();
+    const failures = new Map<string, string>();
+    const reauthRequired = new Set<string>();
     for (const account of Array.isArray(body.accounts) ? body.accounts : []) {
       if (!account || typeof account !== 'object') continue;
-      const row = account as { id?: unknown; quota?: unknown };
-      if (typeof row.id === 'string' && row.id) quotas.set(row.id, row.quota ?? null);
+      const row = account as {
+        id?: unknown;
+        quota?: unknown;
+        quotaUnavailable?: unknown;
+        quotaFailure?: unknown;
+        needsReauth?: unknown;
+        health?: unknown;
+      };
+      if (typeof row.id !== 'string' || !row.id) continue;
+      quotas.set(row.id, row.quota ?? null);
+      if (row.quotaUnavailable === true) {
+        failures.set(row.id, typeof row.quotaFailure === 'string' && row.quotaFailure ? row.quotaFailure : 'unknown');
+      }
+      const healthStatus =
+        row.health && typeof row.health === 'object' ? (row.health as { status?: unknown }).status : undefined;
+      if (row.needsReauth === true || healthStatus === 'reauth_required') reauthRequired.add(row.id);
     }
-    return { activeAccountId: typeof body.activeAccountId === 'string' ? body.activeAccountId : null, quotas };
+    return {
+      activeAccountId: typeof body.activeAccountId === 'string' ? body.activeAccountId : null,
+      quotas,
+      failures,
+      reauthRequired,
+    };
   }
 
   async deleteCoreOauthAccount(provider: string, accountId: string): Promise<void> {
