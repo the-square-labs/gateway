@@ -122,6 +122,12 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | housekeeping:run | Run housekeeping manually |
 | housekeeping:configure | Edit housekeeping config and schedule |
 
+### Gateway diagnostics
+| Scope | Description |
+|-------|-------------|
+| diagnostics:view | Gateway's own state and 48-hour history: host, process, Postgres, Redis, stack containers, background jobs, API latency |
+| diagnostics:logs | Read the logs of Gateway's own containers; implies diagnostics:view |
+
 ### Licensing
 | Scope | Description |
 |-------|-------------|

@@ -59,6 +59,50 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
     invalidateStores: ['settings'],
   },
   {
+    name: 'manage_gateway_diagnostics',
+    description:
+      "Read the state of Gateway itself, the control plane (for managed nodes use get_node and manage_node). operation: snapshot (now: Gateway's host CPU, memory, load and data-volume disk; the backend process memory, CPU and event-loop delay; Postgres and Redis reachability, latency, connection pool, size and long queries; the stack containers such as app, postgres, redis, relay and registry with state, health, restarts, CPU and memory; failing background jobs; API latency and 5xx), history (one-minute samples kept 48 hours: from/to as ISO or durations such as 6h or 1d, default the last 6 hours; metrics as dotted paths like host.cpuPercent, requests.p95Ms, postgres.poolWaiting or containers.postgres.memoryBytes, see availableMetrics; returns avg and max per step, stepMinutes defaults to at most 120 points), requests (per-route counts, p95 and 5xx over the last minutes, up to 60), jobs (every background job: last run, duration, last error, failures in a row), or logs (lines of one Gateway container, newest last: source app (default), update (the last Gateway update run), or a stack service such as postgres, redis, relay or registry; since/until as ISO or durations, default the last hour; level is the minimum (error, warn, info, debug); text, context and requestId filter app lines; limit up to 1000, default 200; needs diagnostics:logs).",
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: ['snapshot', 'history', 'requests', 'jobs', 'logs'],
+          description: 'Diagnostics operation to perform.',
+        },
+        from: { type: 'string', description: 'history: start, ISO 8601 or a duration before now such as 6h.' },
+        to: { type: 'string', description: 'history: end, ISO 8601 or a duration before now; default now.' },
+        metrics: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'history: dotted metric paths; default a compact overview set.',
+        },
+        stepMinutes: { type: 'number', description: 'history: minutes per point.' },
+        minutes: { type: 'number', description: 'requests: how many recent minutes, 1 to 60 (default 15).' },
+        source: {
+          type: 'string',
+          description: 'logs: app (default), update, or a stack service name such as postgres, redis, relay, registry.',
+        },
+        since: { type: 'string', description: 'logs: start, ISO 8601 or a duration before now such as 30m.' },
+        until: { type: 'string', description: 'logs: end, ISO 8601 or a duration before now.' },
+        level: {
+          type: 'string',
+          enum: ['error', 'warn', 'info', 'debug'],
+          description: 'logs: minimum level.',
+        },
+        text: { type: 'string', description: 'logs: case-insensitive text to find.' },
+        context: { type: 'string', description: 'logs: app component (the logger context), such as UpdateService.' },
+        requestId: { type: 'string', description: 'logs: lines of one API request.' },
+        limit: { type: 'number', description: 'logs: most lines to return, up to 1000 (default 200).' },
+      },
+      required: ['operation'],
+    },
+    destructive: false,
+    category: 'Maintenance',
+    requiredScope: 'diagnostics:view',
+    invalidateStores: [],
+  },
+  {
     name: 'get_gateway_settings',
     description:
       'Read every Gateway settings section: sign-in methods, password policy and MFA grace, OIDC provisioning and provider, SMTP (secrets masked), logging backend, MCP server, web TLS transport, general settings (public URL, update channel, relay tuning, features), network security, outbound webhook policy, and environment settings with their defaults.',
@@ -255,7 +299,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_system_alerts',
     description:
-      'List the Gateway system alerts shown in the header (node, certificate, relay, and update problems) or dismiss one by alertId. Operations: list, dismiss.',
+      "List Gateway's system alerts about certificates (expiry warnings, CA expiry, revocations) or dismiss one by alertId. Operations: list, dismiss. For Gateway's own health use manage_gateway_diagnostics; for configurable alerts use list_alert_rules.",
     parameters: {
       type: 'object',
       properties: {

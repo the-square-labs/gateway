@@ -165,6 +165,11 @@ export const ALL_SCOPES = [
   'housekeeping:view',
   'housekeeping:run',
   'housekeeping:configure',
+  // ── Gateway diagnostics ──────────────────────────────────────────
+  // Gateway's own state (host, process, database, cache, stack containers, background jobs, API
+  // latency and its history) and, separately, the logs of Gateway's own containers.
+  'diagnostics:view',
+  'diagnostics:logs',
   // ── Licensing ────────────────────────────────────────────────────
   'license:view',
   'license:manage',

@@ -26,7 +26,11 @@ import {
   type WindowProbeSample,
 } from './notification.constants.js';
 import type { NotificationAlertRuleService } from './notification-alert-rule.service.js';
-import type { NotificationDispatcherService } from './notification-dispatcher.service.js';
+import type {
+  DispatchResult,
+  DispatchWebhook,
+  NotificationDispatcherService,
+} from './notification-dispatcher.service.js';
 import {
   buildNotificationTemplateContext,
   type NotificationEvent,
@@ -49,6 +53,39 @@ const HOSTING_CATEGORIES = new Set(['hosting_account', 'hosting_vm']);
 /** Rule fields that decide which resources/metric a firing state belongs to. */
 const RULE_SOURCE_KEYS = ['type', 'category', 'metric', 'metricTarget', 'eventPattern'] as const;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** After a Redis error, alert windows stay in memory this long before Redis is tried again. */
+const MEMORY_PROBE_RETRY_MS = 60_000;
+const MEMORY_PROBE_SAMPLE_LIMIT = 1_000;
+const GATEWAY_SAMPLING_MS = 60_000;
+/** Resource keys of Gateway's own alerts (category gateway). */
+export const GATEWAY_RESOURCE_ID = 'gateway';
+export const GATEWAY_POSTGRES_RESOURCE_ID = 'gateway-postgres';
+
+/** Samples (oldest first) from windowStart on, plus the newest one before it: the state the window starts in. */
+function withWindowAnchor(samples: WindowProbeSample[], windowStart: number): WindowProbeSample[] {
+  let anchor = 0;
+  samples.forEach((sample, index) => {
+    if (sample.timestamp < windowStart) anchor = index;
+  });
+  return samples.slice(anchor);
+}
+
+interface PostgresOutageAlert {
+  rule: any;
+  firedAt: number;
+  event: NotificationEvent;
+  details: TemplateDetails;
+  sends: Array<{ webhook: DispatchWebhook; result: DispatchResult; sentAt: Date }>;
+}
+
+/** A Postgres outage seen by Gateway diagnostics, with the alerts sent for it outside the database. */
+interface PostgresOutage {
+  startedAt: number;
+  /** When Postgres answered again; null while it is still down. */
+  backSince: number | null;
+  error: string | null;
+  fired: Map<string, PostgresOutageAlert>;
+}
 
 type AlertStateRow = typeof notificationAlertStates.$inferSelect;
 type ResourceKind = 'node' | 'proxy' | 'certificate' | 'database' | 'logging';
@@ -94,6 +131,13 @@ export class NotificationEvaluatorService {
   private lastResolvedStatePrune = 0;
   private readonly hostingEventChains = new Map<string, Promise<void>>();
   private hostingRuleBarrier: Promise<void> = Promise.resolve();
+
+  /** Probe windows kept in memory while Redis cannot take them; a Redis outage is itself an alert. */
+  private readonly memoryProbeOutcomes = new Map<string, WindowProbeSample[]>();
+  private memoryProbesUntil = 0;
+  /** Rules and webhooks for postgres.unavailable, copied while Postgres answers, used while it does not. */
+  private postgresOutageTargets: Array<{ rule: any; webhooks: DispatchWebhook[] }> = [];
+  private postgresOutage: PostgresOutage | null = null;
 
   private thresholdRulesCache: any[] = [];
   private eventRulesCache: any[] = [];
@@ -293,6 +337,162 @@ export class NotificationEvaluatorService {
       }
     }
   }
+  /** Gateway's own metrics from the diagnostics sampler, once a minute; the resource is Gateway itself. */
+  async evaluateGatewaySnapshot(metrics: Record<string, number | null>): Promise<void> {
+    const rules = await this.getThresholdRules();
+    for (const rule of rules) {
+      if (rule.category !== 'gateway') continue;
+      if (rule.resourceIds?.length > 0 && !rule.resourceIds.includes(GATEWAY_RESOURCE_ID)) continue;
+      const value = metrics[rule.metric];
+      if (typeof value !== 'number' || Number.isNaN(value)) continue;
+
+      const breached = evaluateThreshold(value, rule.operator, rule.thresholdValue);
+      await this.recordProbeOutcome(
+        rule.id,
+        GATEWAY_RESOURCE_ID,
+        breached,
+        Math.max(rule.durationSeconds ?? 0, rule.resolveAfterSeconds ?? 0) * 1000,
+        GATEWAY_SAMPLING_MS
+      );
+      if (breached) {
+        await this.handleThresholdBreach(rule, GATEWAY_RESOURCE_ID, value, GATEWAY_RESOURCE_ID, 'Gateway');
+      } else {
+        await this.handleThresholdClear(rule, GATEWAY_RESOURCE_ID, value, GATEWAY_RESOURCE_ID, 'Gateway');
+      }
+    }
+  }
+
+  /**
+   * Postgres reachability from Gateway diagnostics, once a minute. Rules, alert states and the delivery
+   * outbox all live in Postgres, so an outage is alerted outside the database: the rules and webhooks
+   * copied while it answered are used to send directly, and the alert state and delivery rows are
+   * written once it answers again, together with the resolved notification.
+   */
+  async observeGatewayPostgres(available: boolean, error?: string): Promise<void> {
+    const now = Date.now();
+    if (available) {
+      await this.refreshPostgresOutageTargets().catch((refreshError: unknown) => {
+        logger.debug('Could not refresh Postgres outage alert targets', {
+          error: refreshError instanceof Error ? refreshError.message : String(refreshError),
+        });
+      });
+      const outage = this.postgresOutage;
+      if (!outage) return;
+      outage.backSince ??= now;
+      for (const [ruleId, alert] of outage.fired) {
+        const resolveMs = (alert.rule.resolveAfterSeconds ?? 60) * 1000;
+        if (now - outage.backSince < resolveMs) continue;
+        await this.settlePostgresOutageAlert(alert, outage);
+        outage.fired.delete(ruleId);
+      }
+      if (outage.fired.size === 0) this.postgresOutage = null;
+      return;
+    }
+
+    const outage = (this.postgresOutage ??= { startedAt: now, backSince: null, error: null, fired: new Map() });
+    outage.backSince = null;
+    outage.error = error ?? outage.error;
+    for (const { rule, webhooks } of this.postgresOutageTargets) {
+      if (outage.fired.has(rule.id)) continue;
+      if (now - outage.startedAt < (rule.durationSeconds ?? 0) * 1000) continue;
+      const details = this.getEventTemplateDetails(
+        { error: outage.error, down_since: new Date(outage.startedAt).toISOString() },
+        'postgres.unavailable',
+        'postgres.unavailable',
+        GATEWAY_POSTGRES_RESOURCE_ID
+      );
+      const event = this.buildFiredEvent(rule, 'gateway', GATEWAY_POSTGRES_RESOURCE_ID, 'Postgres', details);
+      const sends: PostgresOutageAlert['sends'] = [];
+      for (const webhook of webhooks) {
+        const sentAt = new Date();
+        const result = await this.dispatcherService.send(webhook, event).catch(
+          (sendError: unknown): DispatchResult => ({
+            success: false,
+            error: sendError instanceof Error ? sendError.message : String(sendError),
+            body: '',
+            responseTimeMs: 0,
+          })
+        );
+        sends.push({ webhook, result, sentAt });
+      }
+      outage.fired.set(rule.id, { rule, firedAt: now, event, details, sends });
+      logger.warn('Postgres is unavailable: alert sent directly to its webhooks', {
+        ruleId: rule.id,
+        webhooks: sends.length,
+        delivered: sends.filter((send) => send.result.success).length,
+      });
+    }
+  }
+
+  private async refreshPostgresOutageTargets(): Promise<void> {
+    const rules = (await this.getEventRules()).filter(
+      (rule) =>
+        rule.category === 'gateway' &&
+        rule.eventPattern === 'postgres.unavailable' &&
+        (!(rule.resourceIds?.length > 0) || rule.resourceIds.includes(GATEWAY_POSTGRES_RESOURCE_ID))
+    );
+    const webhookIds = [...new Set(rules.flatMap((rule) => (rule.webhookIds ?? []) as string[]))];
+    const webhooks =
+      webhookIds.length > 0
+        ? (await this.webhookService.getRawByIds(webhookIds)).filter((webhook) => webhook.enabled)
+        : [];
+    if (webhooks.length > 0) await this.dispatcherService.primeOutboundPolicy();
+    const byId = new Map(webhooks.map((webhook) => [webhook.id, webhook]));
+    this.postgresOutageTargets = rules.map((rule) => ({
+      rule,
+      webhooks: ((rule.webhookIds ?? []) as string[]).flatMap((id) => {
+        const webhook = byId.get(id);
+        return webhook ? [webhook] : [];
+      }),
+    }));
+  }
+
+  /** Postgres answers again: record the outage alert, the deliveries already made, and notify the resolve. */
+  private async settlePostgresOutageAlert(alert: PostgresOutageAlert, outage: PostgresOutage): Promise<void> {
+    const details = this.getEventTemplateDetails(
+      {
+        ...(alert.details.details ?? {}),
+        back_since: outage.backSince ? new Date(outage.backSince).toISOString() : null,
+      },
+      'postgres.unavailable',
+      'ok',
+      GATEWAY_POSTGRES_RESOURCE_ID
+    );
+    const resolvedEvent = this.buildResolvedEvent(
+      alert.rule,
+      'gateway',
+      GATEWAY_POSTGRES_RESOURCE_ID,
+      'Postgres',
+      details
+    );
+    try {
+      await this.commitWithDeliveries(alert.rule, resolvedEvent, async (tx) => {
+        await tx.insert(notificationAlertStates).values({
+          ruleId: alert.rule.id,
+          resourceType: 'gateway',
+          resourceId: GATEWAY_POSTGRES_RESOURCE_ID,
+          status: 'resolved',
+          severity: alert.rule.severity,
+          firedAt: new Date(alert.firedAt),
+          lastNotifiedAt: new Date(alert.firedAt),
+          resolvedAt: new Date(),
+          context: details,
+        });
+        for (const send of alert.sends) {
+          await this.dispatcherService.recordSentDelivery(tx, send.webhook, alert.event, send.result, send.sentAt);
+        }
+        return true;
+      });
+      logger.info('Postgres outage alert resolved', { ruleId: alert.rule.id });
+    } catch (settleError) {
+      // The rule or a webhook may have been deleted meanwhile; the outage was already reported.
+      logger.warn('Could not record a resolved Postgres outage alert', {
+        ruleId: alert.rule.id,
+        error: settleError instanceof Error ? settleError.message : String(settleError),
+      });
+    }
+  }
+
   async evaluateHostingAccount(snapshot: HostingAccountObservation): Promise<void> {
     if (snapshot.syncStatus !== 'success' || !snapshot.summary) return;
     for (const rule of await this.getThresholdRules()) {
@@ -978,20 +1178,44 @@ export class NotificationEvaluatorService {
 
     const now = Date.now();
     const redisKey = this.getProbeOutcomeKey(ruleId, compositeResourceId);
-    await this.redis.zadd(redisKey, now, `${now}:${breached ? 1 : 0}`);
-
     const windowStart = now - Math.max(windowMs, 0);
-    const anchor = this.parseProbeOutcomeSamples(
-      await this.redis.zrevrangebyscore(redisKey, `(${windowStart}`, '-inf', 'LIMIT', 0, 1)
-    )[0];
-    if (anchor) await this.redis.zremrangebyscore(redisKey, '-inf', `(${anchor.timestamp}`);
+    if (!this.usingMemoryProbes()) {
+      try {
+        await this.redis.zadd(redisKey, now, `${now}:${breached ? 1 : 0}`);
 
-    // The anchor must survive until the next sample arrives.
-    const ttlSeconds = Math.max(
-      METRIC_BUFFER_TTL,
-      Math.ceil((Math.max(windowMs, 0) + 2 * Math.max(samplingPeriodMs, 0)) / 1000)
-    );
-    await this.redis.expire(redisKey, ttlSeconds);
+        const anchor = this.parseProbeOutcomeSamples(
+          await this.redis.zrevrangebyscore(redisKey, `(${windowStart}`, '-inf', 'LIMIT', 0, 1)
+        )[0];
+        if (anchor) await this.redis.zremrangebyscore(redisKey, '-inf', `(${anchor.timestamp}`);
+
+        // The anchor must survive until the next sample arrives.
+        const ttlSeconds = Math.max(
+          METRIC_BUFFER_TTL,
+          Math.ceil((Math.max(windowMs, 0) + 2 * Math.max(samplingPeriodMs, 0)) / 1000)
+        );
+        await this.redis.expire(redisKey, ttlSeconds);
+        this.memoryProbeOutcomes.delete(redisKey);
+        return;
+      } catch (error) {
+        this.fallBackToMemoryProbes(error);
+      }
+    }
+    // Same window rule as in Redis: keep the samples in the window plus the newest one before it.
+    const samples = [...(this.memoryProbeOutcomes.get(redisKey) ?? []), { timestamp: now, breached }];
+    this.memoryProbeOutcomes.set(redisKey, withWindowAnchor(samples, windowStart).slice(-MEMORY_PROBE_SAMPLE_LIMIT));
+  }
+
+  private usingMemoryProbes(): boolean {
+    return Date.now() < this.memoryProbesUntil;
+  }
+
+  private fallBackToMemoryProbes(error: unknown): void {
+    if (!this.usingMemoryProbes()) {
+      logger.warn('Redis did not take an alert sample; alert windows are kept in memory for now', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    this.memoryProbesUntil = Date.now() + MEMORY_PROBE_RETRY_MS;
   }
 
   private parseProbeOutcomeSamples(samples: string[]): WindowProbeSample[] {
@@ -1015,20 +1239,23 @@ export class NotificationEvaluatorService {
     const now = Date.now();
     const redisKey = this.getProbeOutcomeKey(ruleId, compositeResourceId);
     const windowStart = now - windowMs;
-    const [inWindow, beforeWindow] = await Promise.all([
-      this.redis.zrangebyscore(redisKey, windowStart, '+inf'),
-      this.redis.zrevrangebyscore(redisKey, `(${windowStart}`, '-inf', 'LIMIT', 0, 1),
-    ]);
-    const windowSamples = this.parseProbeOutcomeSamples(inWindow).sort((a, b) => a.timestamp - b.timestamp);
-    const preWindowAnchor = this.parseProbeOutcomeSamples(beforeWindow)[0];
+    let samples: WindowProbeSample[] | null = null;
+    if (!this.usingMemoryProbes()) {
+      try {
+        const [inWindow, beforeWindow] = await Promise.all([
+          this.redis.zrangebyscore(redisKey, windowStart, '+inf'),
+          this.redis.zrevrangebyscore(redisKey, `(${windowStart}`, '-inf', 'LIMIT', 0, 1),
+        ]);
+        const windowSamples = this.parseProbeOutcomeSamples(inWindow).sort((a, b) => a.timestamp - b.timestamp);
+        const preWindowAnchor = this.parseProbeOutcomeSamples(beforeWindow)[0];
+        samples = preWindowAnchor ? [preWindowAnchor, ...windowSamples] : windowSamples;
+      } catch (error) {
+        this.fallBackToMemoryProbes(error);
+      }
+    }
+    samples ??= withWindowAnchor(this.memoryProbeOutcomes.get(redisKey) ?? [], windowStart);
 
-    return evaluateWindowRatio(
-      preWindowAnchor ? [preWindowAnchor, ...windowSamples] : windowSamples,
-      targetState,
-      thresholdPercent,
-      windowMs,
-      now
-    );
+    return evaluateWindowRatio(samples, targetState, thresholdPercent, windowMs, now);
   }
 
   // ── EventBus Event Handling ─────────────────────────────────────────
@@ -1272,31 +1499,7 @@ export class NotificationEvaluatorService {
     resourceName: string,
     details: TemplateDetails
   ): Promise<void> {
-    // Render the alert's message template
-    const now = new Date().toISOString();
-    const resource = this.buildTemplateResource(resourceType, resourceKey, resourceName, details.resourceId);
-    const messageContext = this.buildAlertTemplateContext(rule, 'alert.fired', 'firing', resource, now, {
-      ...details,
-      fired: { ...details.fired, at: details.fired?.at ?? now },
-    });
-    const message = rule.messageTemplate
-      ? renderTemplate(rule.messageTemplate, messageContext)
-      : `${rule.name}: ${resourceName}`;
-    const eventContext = {
-      ...messageContext,
-      notification: { ...messageContext.notification, message },
-    };
-
-    // Build notification event
-    const event: NotificationEvent = {
-      type: 'alert.fired',
-      title: rule.name,
-      message,
-      severity: rule.severity as Severity,
-      resource,
-      context: eventContext,
-      timestamp: now,
-    };
+    const event = this.buildFiredEvent(rule, resourceType, resourceKey, resourceName, details);
 
     const fired = await this.commitWithDeliveries(rule, event, async (tx) => {
       // The partial unique index on firing states makes a concurrent duplicate a no-op.
@@ -1336,40 +1539,7 @@ export class NotificationEvaluatorService {
     details: TemplateDetails,
     options: { notify?: boolean } = {}
   ): Promise<void> {
-    const now = new Date().toISOString();
-    const resolvedResource = this.buildTemplateResource(
-      resourceType,
-      resourceKey,
-      resourceName ?? resourceKey,
-      details.resourceId
-    );
-
-    // Render resolve message if template exists
-    const resolveContext = this.buildAlertTemplateContext(
-      rule,
-      'alert.resolved',
-      'resolved',
-      resolvedResource,
-      now,
-      details
-    );
-    const resolveMessage = rule.messageTemplate
-      ? renderTemplate(rule.messageTemplate, resolveContext)
-      : `${rule.name} has been resolved.`;
-    const eventContext = {
-      ...resolveContext,
-      notification: { ...resolveContext.notification, message: resolveMessage },
-    };
-
-    const event: NotificationEvent = {
-      type: 'alert.resolved',
-      title: `Resolved: ${rule.name}`,
-      message: resolveMessage,
-      severity: 'info',
-      resource: resolvedResource,
-      context: eventContext,
-      timestamp: now,
-    };
+    const event = this.buildResolvedEvent(rule, resourceType, resourceKey, resourceName, details);
 
     // Health reports and sweeps race on the same state: only the caller that flips it notifies.
     const resolved = await this.commitWithDeliveries(rule, options.notify === false ? null : event, async (tx) => {
@@ -1390,6 +1560,71 @@ export class NotificationEvaluatorService {
     });
 
     logger.info('Alert resolved', { ruleId: rule.id, ruleName: rule.name, resourceType, resourceId: resourceKey });
+  }
+
+  /** The notification for a firing alert, with the rule's message template rendered. */
+  private buildFiredEvent(
+    rule: any,
+    resourceType: string,
+    resourceKey: string,
+    resourceName: string,
+    details: TemplateDetails
+  ): NotificationEvent {
+    const now = new Date().toISOString();
+    const resource = this.buildTemplateResource(resourceType, resourceKey, resourceName, details.resourceId);
+    const messageContext = this.buildAlertTemplateContext(rule, 'alert.fired', 'firing', resource, now, {
+      ...details,
+      fired: { ...details.fired, at: details.fired?.at ?? now },
+    });
+    const message = rule.messageTemplate
+      ? renderTemplate(rule.messageTemplate, messageContext)
+      : `${rule.name}: ${resourceName}`;
+    return {
+      type: 'alert.fired',
+      title: rule.name,
+      message,
+      severity: rule.severity as Severity,
+      resource,
+      context: { ...messageContext, notification: { ...messageContext.notification, message } },
+      timestamp: now,
+    };
+  }
+
+  /** The notification for a resolved alert, with the rule's message template rendered. */
+  private buildResolvedEvent(
+    rule: any,
+    resourceType: string,
+    resourceKey: string,
+    resourceName: string | undefined,
+    details: TemplateDetails
+  ): NotificationEvent {
+    const now = new Date().toISOString();
+    const resolvedResource = this.buildTemplateResource(
+      resourceType,
+      resourceKey,
+      resourceName ?? resourceKey,
+      details.resourceId
+    );
+    const resolveContext = this.buildAlertTemplateContext(
+      rule,
+      'alert.resolved',
+      'resolved',
+      resolvedResource,
+      now,
+      details
+    );
+    const resolveMessage = rule.messageTemplate
+      ? renderTemplate(rule.messageTemplate, resolveContext)
+      : `${rule.name} has been resolved.`;
+    return {
+      type: 'alert.resolved',
+      title: `Resolved: ${rule.name}`,
+      message: resolveMessage,
+      severity: 'info',
+      resource: resolvedResource,
+      context: { ...resolveContext, notification: { ...resolveContext.notification, message: resolveMessage } },
+      timestamp: now,
+    };
   }
 
   /** Fire an event-type alert — no persistent state, just cooldown tracking */
@@ -1647,7 +1882,8 @@ export class NotificationEvaluatorService {
       rule.category === 'database_clickhouse' ||
       rule.category === 'database_redis' ||
       rule.category === 'logging' ||
-      rule.category === 'hosting_account'
+      rule.category === 'hosting_account' ||
+      rule.category === 'gateway'
     ) {
       return sourceId;
     }

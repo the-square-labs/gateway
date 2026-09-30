@@ -19,6 +19,9 @@ import { AlertService } from '@/modules/audit/alert.service.js';
 import { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
 import { backupRuntime } from '@/modules/backups/backup-runtime.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
+import { DiagnosticsService } from '@/modules/diagnostics/diagnostics.service.js';
+import { createGatewayAlertObserver } from '@/modules/diagnostics/diagnostics-alerts.js';
+import { PostgresProbe } from '@/modules/diagnostics/postgres-probe.js';
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { AvailabilityLeaseService } from '@/modules/docker/availability/lease/availability-lease.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
@@ -61,13 +64,15 @@ import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { InternalCertificateRenewalService } from '@/modules/ssl/internal-cert-renewal.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
-import { CacheService } from '@/services/cache.service.js';
+import { CacheService, type RedisClient } from '@/services/cache.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { DockerService } from '@/services/docker.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import {
   GATEWAY_IDENTITY_RENEWAL_CHECK_INTERVAL_MS,
   GatewayIdentityRenewalService,
 } from '@/services/gateway-identity-renewal.service.js';
+import { GatewayLifecycleService } from '@/services/gateway-lifecycle.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -172,6 +177,20 @@ export async function initializeBackgroundServices(): Promise<void> {
   // Background jobs
   const scheduler = new SchedulerService();
   container.registerInstance(SchedulerService, scheduler);
+
+  // Gateway's own diagnostics: one sample a minute for the 48-hour history and Gateway alerts.
+  const diagnosticsService = new DiagnosticsService(
+    db,
+    container.resolve<RedisClient>(TOKENS.RedisClient),
+    container.resolve(DockerService),
+    scheduler,
+    container.resolve(GatewayLifecycleService),
+    container.resolve(PostgresProbe),
+    env.APP_VERSION
+  );
+  container.registerInstance(DiagnosticsService, diagnosticsService);
+  diagnosticsService.setObserver(createGatewayAlertObserver(notifEvaluatorService));
+  scheduler.registerInterval('gateway-diagnostics-sample', 60_000, () => diagnosticsService.sampleMinute());
   container
     .resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition)
     .initializeBackups(scheduler, backupRuntime, relayPolicyService);

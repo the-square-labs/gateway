@@ -774,14 +774,33 @@ export class DockerService {
 
   async getContainerLogs(
     id: string,
-    options: { stdout?: boolean; stderr?: boolean; tail?: number } = {}
+    options: {
+      stdout?: boolean;
+      stderr?: boolean;
+      tail?: number;
+      /** Only lines logged at or after this instant (epoch milliseconds). */
+      sinceMs?: number;
+      /** Only lines logged before this instant (epoch milliseconds). */
+      untilMs?: number;
+      /** Prefix each line with Docker's RFC 3339 timestamp. */
+      timestamps?: boolean;
+      timeoutMs?: number;
+    } = {}
   ): Promise<string> {
     const params = new URLSearchParams({
       stdout: String(options.stdout ?? true),
       stderr: String(options.stderr ?? true),
     });
     if (options.tail !== undefined) params.set('tail', String(Math.max(0, Math.floor(options.tail))));
-    const res = await this.request('GET', `${API_VERSION}/containers/${encodeURIComponent(id)}/logs?${params}`);
+    if (options.sinceMs !== undefined) params.set('since', (Math.max(0, options.sinceMs) / 1000).toFixed(3));
+    if (options.untilMs !== undefined) params.set('until', (Math.max(0, options.untilMs) / 1000).toFixed(3));
+    if (options.timestamps) params.set('timestamps', 'true');
+    const res = await this.request(
+      'GET',
+      `${API_VERSION}/containers/${encodeURIComponent(id)}/logs?${params}`,
+      undefined,
+      options.timeoutMs
+    );
     if (res.statusCode !== 200 && res.statusCode !== 404) {
       throw new Error(`Docker container logs failed (${res.statusCode}): ${res.body}`);
     }

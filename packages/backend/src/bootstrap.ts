@@ -62,7 +62,7 @@ import { ManagedDatabaseBindingService } from '@/modules/databases/managed-datab
 import { managedDatabaseRuntime } from '@/modules/databases/managed-database-runtime.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
-
+import { PostgresProbe } from '@/modules/diagnostics/postgres-probe.js';
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { dockerAvailabilityCommercialRuntime } from '@/modules/docker/availability/docker-availability-commercial-runtime.js';
 import { DockerWorkloadResolverService } from '@/modules/docker/availability/docker-workload-resolver.service.js';
@@ -321,6 +321,8 @@ export async function initializeContainer(): Promise<void> {
   // Register services with explicit factories
   const cacheService = new CacheService(redis);
   container.registerInstance(CacheService, cacheService);
+  // Its own Postgres connection for /health and diagnostics: a saturated pool must not read as an outage.
+  container.registerInstance(PostgresProbe, new PostgresProbe(env.DATABASE_URL));
 
   const resourceSnapshotStore = new ResourceSnapshotStore(cacheService);
   container.registerInstance(ResourceSnapshotStore, resourceSnapshotStore);

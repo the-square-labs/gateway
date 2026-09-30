@@ -29,7 +29,16 @@ const DELIVERY_CLAIM_LEASE_MS = 60_000;
 /** Deliveries the retry job still has to send: queued by the outbox, or waiting for a retry. */
 export const OPEN_DELIVERY_STATUSES = ['pending', 'retrying'] as const;
 
-type DispatchWebhook = {
+export interface DispatchResult {
+  success: boolean;
+  statusCode?: number;
+  error?: string;
+  body: string;
+  responseBody?: string;
+  responseTimeMs: number;
+}
+
+export type DispatchWebhook = {
   id: string;
   url: string;
   method: string;
@@ -71,6 +80,45 @@ export class NotificationDispatcherService {
     event: NotificationEvent,
     isTest = false
   ): Promise<{ success: boolean; statusCode?: number; error?: string; rendered?: string }> {
+    const {
+      success,
+      statusCode: responseStatus,
+      error,
+      body,
+      responseBody,
+      responseTimeMs,
+    } = await this.send(webhook, event);
+
+    // Log the delivery attempt
+    const status = success ? 'success' : isTest ? 'failed' : 'retrying';
+    const nextRetryAt = !success && !isTest ? new Date(Date.now() + RETRY_DELAYS[0] * 1000) : null;
+
+    await this.db.insert(notificationDeliveryLog).values({
+      webhookId: webhook.id,
+      eventType: event.type,
+      severity: event.severity,
+      requestUrl: webhook.url,
+      requestMethod: webhook.method || 'POST',
+      requestBody: body,
+      responseStatus: responseStatus ?? null,
+      responseBody: responseBody ?? null,
+      responseTimeMs,
+      attempt: 1,
+      maxAttempts: isTest ? 1 : MAX_DELIVERY_ATTEMPTS,
+      nextRetryAt,
+      status,
+      error: error ?? null,
+      completedAt: success ? new Date() : null,
+    });
+
+    return { success, statusCode: responseStatus, error, rendered: isTest ? body : undefined };
+  }
+
+  /**
+   * Render, sign and send one event without recording it. Used as is only while the database cannot
+   * take the delivery row (an alert about a Postgres outage); recordSentDelivery() logs it afterwards.
+   */
+  async send(webhook: DispatchWebhook, event: NotificationEvent): Promise<DispatchResult> {
     const body = this.renderBody(webhook, event);
 
     // Build headers
@@ -128,28 +176,6 @@ export class NotificationDispatcherService {
     const responseTimeMs = Date.now() - startTime;
     const success = responseStatus !== undefined && responseStatus >= 200 && responseStatus < 300;
 
-    // Log the delivery attempt
-    const status = success ? 'success' : isTest ? 'failed' : 'retrying';
-    const nextRetryAt = !success && !isTest ? new Date(Date.now() + RETRY_DELAYS[0] * 1000) : null;
-
-    await this.db.insert(notificationDeliveryLog).values({
-      webhookId: webhook.id,
-      eventType: event.type,
-      severity: event.severity,
-      requestUrl: webhook.url,
-      requestMethod: webhook.method || 'POST',
-      requestBody: body,
-      responseStatus: responseStatus ?? null,
-      responseBody: responseBody ?? null,
-      responseTimeMs,
-      attempt: 1,
-      maxAttempts: isTest ? 1 : MAX_DELIVERY_ATTEMPTS,
-      nextRetryAt,
-      status,
-      error: error ?? null,
-      completedAt: success ? new Date() : null,
-    });
-
     if (!success) {
       logger.warn('Webhook delivery failed', {
         webhookId: webhook.id,
@@ -160,7 +186,40 @@ export class NotificationDispatcherService {
       });
     }
 
-    return { success, statusCode: responseStatus, error, rendered: isTest ? body : undefined };
+    return { success, statusCode: responseStatus, error, body, responseBody, responseTimeMs };
+  }
+
+  /** Read the outbound webhook policy now, so send() still has it if the database stops answering. */
+  async primeOutboundPolicy(): Promise<void> {
+    await this.outboundWebhookPolicyService.getConfig();
+  }
+
+  /** Record a delivery send() already made, as one finished attempt. */
+  async recordSentDelivery(
+    tx: DrizzleExecutor,
+    webhook: DispatchWebhook,
+    event: NotificationEvent,
+    result: DispatchResult,
+    sentAt: Date
+  ): Promise<void> {
+    await tx.insert(notificationDeliveryLog).values({
+      webhookId: webhook.id,
+      eventType: event.type,
+      severity: event.severity,
+      requestUrl: webhook.url,
+      requestMethod: webhook.method || 'POST',
+      requestBody: result.body,
+      responseStatus: result.statusCode ?? null,
+      responseBody: result.responseBody ?? null,
+      responseTimeMs: result.responseTimeMs,
+      attempt: 1,
+      maxAttempts: 1,
+      nextRetryAt: null,
+      status: result.success ? 'success' : 'failed',
+      error: result.error ?? null,
+      createdAt: sentAt,
+      completedAt: sentAt,
+    });
   }
 
   private renderBody(webhook: Pick<DispatchWebhook, 'bodyTemplate'>, event: NotificationEvent): string {

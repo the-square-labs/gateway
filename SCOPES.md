@@ -254,6 +254,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `housekeeping:view` |  |
 | `housekeeping:run` |  |
 | `housekeeping:configure` |  |
+| `diagnostics:view` | Gateway's own state and its 48-hour minute history: host CPU, memory and disk, the backend process, its Postgres and Redis, the stack containers, background jobs and API latency. Granted to the built-in admin groups. |
+| `diagnostics:logs` | Read the logs of Gateway's own containers (app, Postgres, Redis, relay, registry, update runs). Implies `diagnostics:view`. Granted to the built-in admin groups; not to demo-admin. |
 | `license:view` |  |
 | `license:manage` |  |
 | `ai:workspace:use` | Use AI Workspace. Granted to the built-in viewer group and above. |

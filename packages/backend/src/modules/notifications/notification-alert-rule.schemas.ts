@@ -1,22 +1,7 @@
 import { z } from 'zod';
+import { ALERT_CATEGORY_IDS } from './notification-catalog.js';
 
-const alertCategorySchema = z.enum([
-  'hosting_vm',
-  'hosting_account',
-  'node',
-  'container',
-  'build',
-  'compose',
-  'proxy',
-  'gateway',
-  'logging',
-  'integration',
-  'certificate',
-  'security',
-  'database_postgres',
-  'database_clickhouse',
-  'database_redis',
-]);
+const alertCategorySchema = z.enum(ALERT_CATEGORY_IDS);
 
 /**
  * Certificate expiry is checked once a day (and on certificate changes). A fire or resolve window

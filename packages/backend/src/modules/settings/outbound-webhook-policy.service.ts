@@ -45,7 +45,14 @@ export class OutboundWebhookPolicyService {
     const now = Date.now();
     if (this.cached && now - this.cachedAt < 5000) return this.cached;
 
-    const [row] = await this.db.select().from(settings).where(eq(settings.key, SETTINGS_KEY)).limit(1);
+    let row: { value: unknown } | undefined;
+    try {
+      [row] = await this.db.select().from(settings).where(eq(settings.key, SETTINGS_KEY)).limit(1);
+    } catch (error) {
+      // While Postgres is down, alerts about that outage still go out under the last policy read.
+      if (this.cached) return this.cached;
+      throw error;
+    }
     const config = this.normalize(row?.value);
     this.cached = config;
     this.cachedAt = now;

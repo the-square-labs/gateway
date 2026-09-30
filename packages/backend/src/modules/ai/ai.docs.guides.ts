@@ -122,6 +122,10 @@ Identify the failing surface, read its focused internal topic, and inspect the c
 - Sign-in failure: distinguish OIDC, password, and email-code methods. Check OIDC issuer/client settings and verified-email policy, or verified SMTP for email-based sign-in. Do not claim OIDC is mandatory.
 - Browser URL problem: confirm the explicit canonical URL and whether the browser reaches Gateway directly or through a reverse proxy. Native HTTP/HTTPS use port 3000.
 
+## Gateway Itself
+- Slow UI or API, a failing background job, database or cache trouble, or a failed update: read manage_gateway_diagnostics snapshot first, then history for the time window (48 hours of one-minute samples) and requests for the routes involved.
+- Read Gateway's own logs with manage_gateway_diagnostics logs (scope diagnostics:logs): source app for the backend, update for the last update run, or postgres, redis, relay, registry. Filter by level, text, context or requestId and a since/until window rather than reading everything.
+
 ## Nodes, Ingress, And Certificates
 - Offline node: inspect node health and reconnect status before retrying a mutation.
 - Route failure: verify its nginx ingress node, domain affinity, upstream reachability, published Docker port where applicable, and rendered configuration. Do not disable a route to imitate maintenance mode.

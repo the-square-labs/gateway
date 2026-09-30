@@ -1,32 +1,17 @@
+import { ALERT_CATEGORY_IDS } from '@/modules/notifications/notification-catalog.js';
 import type { AIToolDefinition } from './ai.types.js';
 
 export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_alert_rules',
     description:
-      'List notification alert rules. Returns id, name, enabled, type (threshold/event), category, severity, metric, operator, thresholdValue, eventPattern, resourceIds, webhookIds, cooldownSeconds. Categories include hosting VM/account, node, container, build, compose, proxy, gateway, logging, integration, certificate, security, and managed database types. Use manage_notifications alert_categories for each category metrics, events, and template variables.',
+      'List notification alert rules. Returns id, name, enabled, type (threshold/event), category, severity, metric, operator, thresholdValue, eventPattern, resourceIds, webhookIds, cooldownSeconds. Categories include hosting VM/account, node, container, build, compose, proxy, pages, gateway (the Gateway host, backend process, Postgres, Redis, stack containers and background jobs, plus relay and license), logging, integration, certificate, security, and managed database types. Use manage_notifications alert_categories for each category metrics, events, and template variables.',
     parameters: {
       type: 'object',
       properties: {
         category: {
           type: 'string',
-          enum: [
-            'hosting_vm',
-            'hosting_account',
-            'node',
-            'container',
-            'build',
-            'compose',
-            'proxy',
-            'gateway',
-            'logging',
-            'integration',
-            'certificate',
-            'security',
-            'database_postgres',
-            'database_clickhouse',
-            'database_redis',
-          ],
+          enum: ALERT_CATEGORY_IDS,
           description: 'Filter by category',
         },
         type: { type: 'string', enum: ['threshold', 'event'] },
@@ -67,23 +52,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         type: { type: 'string', enum: ['threshold', 'event'], description: 'Rule type' },
         category: {
           type: 'string',
-          enum: [
-            'hosting_vm',
-            'hosting_account',
-            'node',
-            'container',
-            'build',
-            'compose',
-            'proxy',
-            'gateway',
-            'logging',
-            'integration',
-            'certificate',
-            'security',
-            'database_postgres',
-            'database_clickhouse',
-            'database_redis',
-          ],
+          enum: ALERT_CATEGORY_IDS,
           description: 'Resource category',
         },
         severity: { type: 'string', enum: ['info', 'warning', 'critical'], description: 'Alert severity' },

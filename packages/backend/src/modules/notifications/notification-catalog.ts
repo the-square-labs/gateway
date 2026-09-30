@@ -393,8 +393,97 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
   {
     id: 'gateway',
     label: 'Gateway',
-    metrics: [],
+    // Gateway's own host, process and dependencies, sampled once a minute by Gateway diagnostics.
+    metrics: [
+      {
+        id: 'host_cpu',
+        label: 'Host CPU Usage (%)',
+        unit: '%',
+        defaultOperator: '>',
+        defaultValue: 90,
+        defaultDurationSeconds: 300,
+      },
+      {
+        id: 'host_memory',
+        label: 'Host Memory Usage (%)',
+        unit: '%',
+        defaultOperator: '>',
+        defaultValue: 90,
+        defaultDurationSeconds: 300,
+      },
+      { id: 'host_disk', label: 'Data Disk Usage (%)', unit: '%', defaultOperator: '>', defaultValue: 85 },
+      {
+        id: 'process_memory',
+        label: 'Backend Memory (MB)',
+        unit: 'MB',
+        defaultOperator: '>',
+        defaultValue: 2048,
+        defaultDurationSeconds: 300,
+      },
+      {
+        id: 'event_loop_delay',
+        label: 'Event Loop Delay p99 (ms)',
+        unit: 'ms',
+        defaultOperator: '>',
+        defaultValue: 200,
+        defaultDurationSeconds: 300,
+      },
+      {
+        id: 'api_error_rate',
+        label: 'API 5xx Rate (%)',
+        unit: '%',
+        defaultOperator: '>',
+        defaultValue: 5,
+        defaultDurationSeconds: 300,
+      },
+      {
+        id: 'api_latency_p95',
+        label: 'API Latency p95 (ms)',
+        unit: 'ms',
+        defaultOperator: '>',
+        defaultValue: 2000,
+        defaultDurationSeconds: 300,
+      },
+      {
+        id: 'postgres_latency',
+        label: 'Postgres Latency (ms)',
+        unit: 'ms',
+        defaultOperator: '>',
+        defaultValue: 500,
+        defaultDurationSeconds: 300,
+      },
+      {
+        id: 'postgres_pool_waiting',
+        label: 'Queries Waiting for a Postgres Connection',
+        unit: 'queries',
+        defaultOperator: '>',
+        defaultValue: 0,
+        defaultDurationSeconds: 300,
+      },
+      {
+        id: 'redis_latency',
+        label: 'Redis Latency (ms)',
+        unit: 'ms',
+        defaultOperator: '>',
+        defaultValue: 200,
+        defaultDurationSeconds: 300,
+      },
+    ],
     events: [
+      {
+        id: 'postgres.unavailable',
+        label: 'Postgres Unavailable',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      { id: 'redis.unavailable', label: 'Redis Unavailable', defaultSeverity: 'critical', supportsThreshold: true },
+      {
+        id: 'container.unhealthy',
+        label: 'Gateway Container Down or Unhealthy',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
+      { id: 'job.failing', label: 'Background Job Failing', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'relay.recovering', label: 'Relay Recovering', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'relay.unavailable', label: 'Relay Unavailable', defaultSeverity: 'critical', supportsThreshold: true },
       {
@@ -430,6 +519,12 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{details.plan}}', description: 'Effective license plan' },
       { name: '{{details.expires_at}}', description: 'License expiration time' },
       { name: '{{details.grace_until}}', description: 'License grace deadline' },
+      { name: '{{metric.value}}', description: 'Measured value of a Gateway metric' },
+      { name: '{{details.error}}', description: 'Why Postgres, Redis or a background job failed' },
+      { name: '{{details.service}}', description: 'Gateway container service (container.unhealthy)' },
+      { name: '{{details.state}}', description: 'Container state or health (container.unhealthy)' },
+      { name: '{{details.job}}', description: 'Background job name (job.failing)' },
+      { name: '{{details.failures_in_a_row}}', description: 'Failed runs in a row (job.failing)' },
     ],
   },
   {
@@ -678,6 +773,12 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{health.status}}', description: 'Health status' },
     ],
   },
+];
+
+/** Every category id, for schemas and tool definitions that must accept exactly the catalog. */
+export const ALERT_CATEGORY_IDS = ALERT_CATEGORIES.map((category) => category.id) as [
+  AlertCategory,
+  ...AlertCategory[],
 ];
 
 export const CATEGORY_MAP = new Map(ALERT_CATEGORIES.map((c) => [c.id, c]));

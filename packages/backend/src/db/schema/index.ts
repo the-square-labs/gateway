@@ -36,6 +36,7 @@ export * from './docker-webhooks.js';
 export * from './domain-folders.js';
 export * from './domains.js';
 export * from './external-ssh-connectors.js';
+export * from './gateway-diagnostics.js';
 export * from './hosting.js';
 export * from './hosting-snapshot-folders.js';
 export * from './inference-auth.js';

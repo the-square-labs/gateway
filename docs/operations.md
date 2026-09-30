@@ -415,7 +415,18 @@ If Gateway cannot start:
 - Check `docker compose ps`.
 - Check app logs with `docker compose logs app`.
 - Verify `.env` values.
-- Verify PostgreSQL, Redis, and ClickHouse health. Redis outages intentionally make `/health` fail and API/auth/public rate-limited endpoints return `503` until rate limiting is enforceable again.
+- Verify PostgreSQL, Redis, and ClickHouse health. Redis and PostgreSQL outages make `/health` fail. Redis outages also make API/auth/public rate-limited endpoints return `503` until rate limiting is enforceable again. `/health` checks PostgreSQL over a connection of its own, so a busy connection pool does not read as an outage.
+
+If Gateway runs but is slow or misbehaves:
+
+- Ask the AI assistant or an MCP client to use `manage_gateway_diagnostics`. It needs `diagnostics:view`, or `diagnostics:logs` for logs; both are held by the built-in admin groups. It shows:
+  - Gateway's host CPU, memory and disk;
+  - the backend process and event-loop delay;
+  - PostgreSQL and Redis;
+  - the stack containers, background jobs, and API latency and errors;
+  - 48 hours of one-minute history;
+  - the logs of the app, database, cache, relay, registry and the last update run.
+- Alert rules in the Gateway category can report high host CPU, memory or disk use, process memory, event-loop delay, API 5xx rate and p95 latency, PostgreSQL latency and pool waits, and Redis latency. They also fire when PostgreSQL or Redis is unavailable, when a stack container is down or unhealthy, and when a background job keeps failing. A PostgreSQL outage alert is sent directly to the webhooks of its rules; the webhooks and rules come from the last copy read before the outage.
 
 If a node does not connect:
 

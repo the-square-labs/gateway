@@ -1,6 +1,8 @@
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
+import { routePath } from 'hono/route';
 import { logger } from '@/lib/logger.js';
 import { ONE_TIME_LINK_TOKEN_PATH } from '@/lib/one-time-link-path.js';
+import { requestStats } from '@/modules/diagnostics/request-stats.js';
 import type { AppEnv } from '@/types.js';
 
 const DOCKER_WEBHOOK_TOKEN_PATH = /^(\/api\/webhooks\/docker\/)[^/]+(?=\/|$)/;
@@ -28,6 +30,9 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const duration = Date.now() - start;
   const status = c.res.status;
 
+  // A protocol switch (WebSocket) is not a request that completes, so it would skew latency.
+  if (status !== 101) requestStats.record(matchedRoutePath(c), status, duration);
+
   const logLevel = status >= 500 ? 'error' : status >= 400 ? 'warn' : 'info';
 
   logger[logLevel]('Request completed', {
@@ -38,3 +43,13 @@ export const loggerMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     duration: `${duration}ms`,
   });
 };
+
+/** The route pattern (`/api/nodes/:id`) that answered, so statistics group requests without IDs. */
+function matchedRoutePath(c: Context<AppEnv>): string | null {
+  try {
+    const path = routePath(c);
+    return path && path !== '*' && path !== '/*' ? `${c.req.method} ${path}` : null;
+  } catch {
+    return null;
+  }
+}

@@ -18,6 +18,19 @@ export const PLATFORM_TOKEN_SCOPES = [
     desc: "Edit housekeeping configuration and schedule",
     group: "Housekeeping",
   },
+  // Gateway diagnostics
+  {
+    value: "diagnostics:view",
+    label: "View Gateway Diagnostics",
+    desc: "View Gateway's own host, process, database, cache, container, background job and API latency state and its history",
+    group: "Diagnostics",
+  },
+  {
+    value: "diagnostics:logs",
+    label: "Read Gateway Logs",
+    desc: "Read the logs of Gateway's own containers: the app, its database, cache, relay and registry",
+    group: "Diagnostics",
+  },
   // Licensing
   {
     value: "license:view",

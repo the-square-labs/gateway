@@ -32,6 +32,7 @@ import {
   updateAdminUserGroups,
 } from '@/modules/admin/admin-user-actions.js';
 import { readGatewaySettings, updateGatewaySettings } from '@/modules/admin/gateway-settings.js';
+import { DiagnosticsService } from '@/modules/diagnostics/diagnostics.service.js';
 import { HousekeepingConfigUpdateSchema } from '@/modules/housekeeping/housekeeping.docs.js';
 import { toLicenseAppError } from '@/modules/license/license.errors.js';
 import { LicenseService } from '@/modules/license/license.service.js';
@@ -282,6 +283,42 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
           }
         } catch (error) {
           throw toLicenseAppError(error) ?? error;
+        }
+      }
+      case 'manage_gateway_diagnostics': {
+        const service = container.resolve(DiagnosticsService);
+        const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
+        const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+        switch (a.operation) {
+          case 'snapshot':
+            return await service.snapshot();
+          case 'history':
+            return await service.history({
+              from: text(a.from),
+              to: text(a.to),
+              metrics: Array.isArray(a.metrics)
+                ? a.metrics.filter((metric: unknown) => typeof metric === 'string')
+                : undefined,
+              stepMinutes: count(a.stepMinutes),
+            });
+          case 'requests':
+            return service.requests(count(a.minutes));
+          case 'jobs':
+            return service.jobs();
+          case 'logs':
+            this.ensureToolScope(user, 'diagnostics:logs');
+            return await service.logs({
+              source: text(a.source),
+              since: text(a.since),
+              until: text(a.until),
+              level: ['error', 'warn', 'info', 'debug'].includes(a.level) ? a.level : undefined,
+              text: text(a.text),
+              context: text(a.context),
+              requestId: text(a.requestId),
+              limit: count(a.limit),
+            });
+          default:
+            throw new Error('Unsupported diagnostics operation');
         }
       }
       case 'manage_housekeeping': {

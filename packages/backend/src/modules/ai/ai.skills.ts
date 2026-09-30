@@ -200,6 +200,10 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
 - One healthy connector, container, relay, or probe does not disprove an intermittent failure. For intermittent incidents, look for a failing request or event and correlate it through the relevant path before assigning cause.
 - Distinguish confirmed cause, contributing condition, impact, and missing evidence. Do not restart, reconfigure, or delete evidence sources merely to see whether the symptom disappears.
 
+### Gateway itself and managed resources
+- When the symptom is Gateway itself (slow UI or API, a failed update, a background job, its database or cache), use manage_gateway_diagnostics: snapshot for now, history for a window of the last 48 hours (host CPU, memory and disk, process, API latency and 5xx, Postgres, Redis, stack containers), requests for slow or failing routes, jobs for failing background jobs, and logs (needs diagnostics:logs) for app, postgres, redis, relay, registry or update lines. Read the logs of the same window before naming a cause.
+- For managed nodes use get_node for live resources and manage_node health_history, monitoring_history, daemon_logs and nginx_logs; for a route use manage_route access_logs and health_history; for a container use its stats, stats_history and logs.
+
 ### Configure observability
 - On an empty Gateway, inspect logging backend state first. Use the managed local backend when appropriate; configure an external backend only with user-supplied connection details and supported TLS/auth settings.
 - Define alert/health conditions around an exact resource and actionable failure. Preserve existing destinations, thresholds, labels, and audience unless the request changes them.

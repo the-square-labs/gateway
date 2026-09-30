@@ -247,7 +247,8 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
   {
     id: 'maintenance',
     title: 'Maintenance',
-    description: 'Gateway settings, system updates, license, and housekeeping control-plane operations.',
+    description:
+      "Gateway settings, system updates, license, housekeeping, and Gateway's own diagnostics (host, process, Postgres, Redis, stack containers, jobs, API latency, logs).",
     toolNames: toolNamesForCategories(['Maintenance']),
   },
   {
@@ -261,7 +262,7 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
     id: 'ai_assistant',
     title: 'AI assistant',
     description: 'AI assistant provider, limits, tool access, web search, and sandbox runner configuration.',
-    toolNames: toolNamesForCategories(['AI Assistant']),
+    toolNames: toolNamesForCategories(['AI Workspace']),
   },
 ];
 

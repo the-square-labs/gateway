@@ -1541,6 +1541,13 @@
       "when": 1790706469198,
       "tag": "0219_pki_and_template_folders",
       "breakpoints": true
+    },
+    {
+      "idx": 220,
+      "version": "7",
+      "when": 1790806344343,
+      "tag": "0220_gateway_diagnostics_samples",
+      "breakpoints": true
     }
   ]
 }

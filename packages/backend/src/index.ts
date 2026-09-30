@@ -33,6 +33,7 @@ import { AIRunService } from '@/modules/ai/ai-run.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { AuthEmailQueueService } from '@/modules/auth/auth-email-queue.service.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
+import { PostgresProbe } from '@/modules/diagnostics/postgres-probe.js';
 import { AvailabilityLeaseService } from '@/modules/docker/availability/lease/availability-lease.service.js';
 import { DockerMigrationService } from '@/modules/docker/docker-migration.service.js';
 import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-reconciler.service.js';
@@ -384,7 +385,10 @@ async function main() {
             },
             closeDatabase: async () => {
               const database = container.resolve(TOKENS.DrizzleClient) as any;
-              await settleShutdownTask('postgres', Promise.resolve(database.$client?.end?.()));
+              await settleShutdownTask(
+                'postgres',
+                Promise.all([database.$client?.end?.(), container.resolve(PostgresProbe).close()])
+              );
               logger.info('Database pool close completed');
             },
           });

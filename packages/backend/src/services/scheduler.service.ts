@@ -24,6 +24,27 @@ interface IntervalJob {
   handle?: ReturnType<typeof setInterval>;
 }
 
+/** How a background job has been doing since Gateway started. */
+export interface SchedulerJobStats {
+  name: string;
+  /** Cron expression, or "every <n>ms" for an interval job. */
+  schedule: string;
+  running: boolean;
+  runs: number;
+  failures: number;
+  consecutiveFailures: number;
+  /** Runs skipped because the previous run of the same job had not finished. */
+  skippedOverlaps: number;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastDurationMs: number | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+}
+
+const MAX_JOB_ERROR_LENGTH = 500;
+
 export class SchedulerService {
   private jobs: ScheduledJob[] = [];
   private intervals: IntervalJob[] = [];
@@ -31,6 +52,7 @@ export class SchedulerService {
   private activeTaskNames = new Set<string>();
   private running = false;
   private stopController = new AbortController();
+  private readonly stats = new Map<string, SchedulerJobStats>();
 
   register(name: string, schedule: string, task: SchedulerTask): void {
     this.jobs.push({ name, schedule, task });
@@ -90,24 +112,80 @@ export class SchedulerService {
     await Promise.allSettled([...this.activeTasks]);
   }
 
+  /** Run statistics of every registered job, including jobs that have not run yet. */
+  getJobStats(): SchedulerJobStats[] {
+    return [
+      ...this.jobs.map((job) => ({ ...this.jobStats(job.name, job.schedule) })),
+      ...this.intervals.map((interval) => ({ ...this.jobStats(interval.name, `every ${interval.intervalMs}ms`) })),
+    ];
+  }
+
+  private jobStats(name: string, schedule: string): SchedulerJobStats {
+    let stats = this.stats.get(name);
+    if (!stats) {
+      stats = {
+        name,
+        schedule,
+        running: false,
+        runs: 0,
+        failures: 0,
+        consecutiveFailures: 0,
+        skippedOverlaps: 0,
+        lastStartedAt: null,
+        lastFinishedAt: null,
+        lastDurationMs: null,
+        lastSuccessAt: null,
+        lastError: null,
+        lastErrorAt: null,
+      };
+      this.stats.set(name, stats);
+    }
+    stats.schedule = schedule;
+    return stats;
+  }
+
   private runTask(kind: string, name: string, task: SchedulerTask): void {
     if (!this.running) return;
+    const stats = this.jobStats(name, this.scheduleOf(name));
     if (this.activeTaskNames.has(name)) {
+      stats.skippedOverlaps += 1;
       logger.debug(`Skipping overlapping ${kind.toLowerCase()}: ${name}`);
       return;
     }
     logger.debug(`Running ${kind.toLowerCase()}: ${name}`);
     this.activeTaskNames.add(name);
+    const startedAt = Date.now();
+    stats.running = true;
+    stats.runs += 1;
+    stats.lastStartedAt = new Date(startedAt).toISOString();
     const signal = this.stopController.signal;
     const promise = Promise.resolve()
       .then(() => task(signal))
+      .then(() => {
+        stats.consecutiveFailures = 0;
+        stats.lastSuccessAt = new Date().toISOString();
+      })
       .catch((error) => {
+        stats.failures += 1;
+        stats.consecutiveFailures += 1;
+        stats.lastError = (error instanceof Error ? error.message : String(error)).slice(0, MAX_JOB_ERROR_LENGTH);
+        stats.lastErrorAt = new Date().toISOString();
         logger.error(`${kind} ${name} failed`, { error });
       })
       .finally(() => {
+        stats.running = false;
+        stats.lastFinishedAt = new Date().toISOString();
+        stats.lastDurationMs = Date.now() - startedAt;
         this.activeTaskNames.delete(name);
         this.activeTasks.delete(promise);
       });
     this.activeTasks.add(promise);
+  }
+
+  private scheduleOf(name: string): string {
+    const job = this.jobs.find((candidate) => candidate.name === name);
+    if (job) return job.schedule;
+    const interval = this.intervals.find((candidate) => candidate.name === name);
+    return interval ? `every ${interval.intervalMs}ms` : '';
   }
 }

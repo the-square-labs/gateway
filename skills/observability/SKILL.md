@@ -1,11 +1,22 @@
 ---
 name: observability
-description: Work with Gateway observability, including structured-logging environments, schemas, ingest tokens, and log search, alert rules and notification webhooks, SIEM audit export, public status pages and incidents, and the audit log. Use when asked to search logs, set up log ingestion, create or debug an alert or webhook, export audit events to a SIEM, manage a status page or incident, or find who changed something. Use after using-gateway has confirmed the Gateway MCP connection.
+description: Work with Gateway observability, including Gateway's own health, resources and logs, structured-logging environments, schemas, ingest tokens, and log search, alert rules and notification webhooks, SIEM audit export, public status pages and incidents, and the audit log. Use when asked to search logs, set up log ingestion, create or debug an alert or webhook, export audit events to a SIEM, manage a status page or incident, or find who changed something. Use after using-gateway has confirmed the Gateway MCP connection.
 ---
 
 # Observability
 
 Start with `using-gateway` for connection, discovery, and safety rules. For an incident, begin with its diagnosis reference and use this skill for the logs, alerts, and audit evidence. Read `read_gateway_documentation({ topic })` with `logging`, `notifications`, `siem`, `status-page`, or `audit` before an unfamiliar workflow.
+
+## Gateway itself
+
+`manage_gateway_diagnostics` reads the control plane, not managed nodes:
+
+- `snapshot`: now. Gateway's host (CPU, memory, load, disk of the data volume), the backend process (memory, CPU, event-loop delay), Postgres and Redis (reachability, latency, pool, size, long queries), the stack containers (app, postgres, redis, relay, registry: state, health, restarts, CPU, memory), failing background jobs, API latency and 5xx.
+- `history`: one-minute samples kept 48 hours. `from`/`to` take ISO or durations such as `6h`; `metrics` are dotted paths such as `host.cpuPercent`, `requests.p95Ms`, `postgres.poolWaiting`, `containers.postgres.memoryBytes` (the result lists `availableMetrics`).
+- `requests`: per-route counts, p95 and 5xx over the last minutes (up to 60). `jobs`: every background job with its last run, duration, last error and failures in a row.
+- `logs` (scope `diagnostics:logs`): lines of one Gateway container, `source` `app` (default), `update` (the last Gateway update run), `postgres`, `redis`, `relay` or `registry`; `since`/`until`, minimum `level`, `text`, `context`, `requestId`, `limit` up to 1000.
+
+`diagnostics:view` covers everything but the logs; both are granted to the built-in admin groups. For nodes use `get_node` and `manage_node` (`health_history`, `monitoring_history`, `daemon_logs`, `nginx_logs`); for a route, `manage_route` `access_logs`.
 
 ## Structured logging
 
@@ -46,6 +57,7 @@ The status page is served by Gateway through its ingress Node, which keeps the l
 
 ## Verify
 
+- Gateway itself: name the time window, and back a cause with the history series and the log lines of that window.
 - Alert rule: a real or realistic test condition produces a successful delivery with the expected rendered text in `list_webhook_deliveries`.
 - SIEM: `test_siem_destination`, then a completed synthetic delivery in `list_siem_deliveries`.
 - Status page: `preview` matches intent before announcing it.

@@ -63,6 +63,7 @@ import { databaseRouteRuntime } from '@/modules/databases/database-route-runtime
 import { databaseRoutes } from '@/modules/databases/databases.routes.js';
 import { createManagedDatabaseLogStreamWSHandlers } from '@/modules/databases/managed-database-logs.ws.js';
 import { isDemoMode } from '@/modules/demo/demo-mode.js';
+import { PostgresProbe } from '@/modules/diagnostics/postgres-probe.js';
 import { dockerRoutes } from '@/modules/docker/docker.routes.js';
 import { DOCKER_LOG_TAIL_MAX } from '@/modules/docker/docker.schemas.js';
 import { createComposeLogsWSHandlers } from '@/modules/docker/docker-compose-logs.ws.js';
@@ -405,6 +406,12 @@ async function getRedisHealth(): Promise<'ok' | 'unavailable'> {
   }
 }
 
+/** Over the probe's own connection: a pool saturated by work must not read as a database outage. */
+async function getPostgresHealth(): Promise<'ok' | 'unavailable'> {
+  if (!container.isRegistered(PostgresProbe)) return 'ok';
+  return (await container.resolve(PostgresProbe).probe()).status;
+}
+
 export interface GatewayAppRuntime {
   app: OpenAPIHono<AppEnv>;
   injectWebSocket: NodeWebSocket['injectWebSocket'];
@@ -694,8 +701,8 @@ export function createApp(): GatewayAppRuntime {
   // Health check
   app.use('/health', optionalAuthMiddleware);
   app.get('/health', async (c) => {
-    const redis = await getRedisHealth();
-    const healthy = redis === 'ok';
+    const [redis, postgres] = await Promise.all([getRedisHealth(), getPostgresHealth()]);
+    const healthy = redis === 'ok' && postgres === 'ok';
     if (!c.get('user')) {
       return c.json({ status: healthy ? 'ok' : 'unavailable' }, healthy ? 200 : 503);
     }
@@ -705,7 +712,7 @@ export function createApp(): GatewayAppRuntime {
         lifecycleState: container.resolve(GatewayLifecycleService).getState(),
         version: getEnv().APP_VERSION,
         timestamp: new Date().toISOString(),
-        dependencies: { redis },
+        dependencies: { redis, postgres },
       },
       healthy ? 200 : 503
     );
