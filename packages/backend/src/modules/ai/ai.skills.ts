@@ -328,7 +328,8 @@ const SYSTEM_SKILLS: readonly AIAgentSkill[] = [
 - If no material issue is found, say so and name the most important verification limitation. Avoid burying the conclusion under a narration of every file or tool inspected.
 
 ### Fix and verify when authorized
-- Review/diagnosis alone is read-only. Modify code or configuration only when the user asks for a fix or the request clearly includes implementation.
+- Review, audit and code diagnosis alone are read-only. Modify code or configuration only when the user asks for a fix or the request clearly includes implementation.
+- A report that a running service is broken is a request to restore it: after diagnosis, carry out the reversible recovery steps the evidence supports (restart, reload, rerun a failed build or job) and verify, as the base rules say. Ask before irreversible or data-losing steps.
 - Keep changes minimal and consistent with existing product patterns, contracts, and neighboring code. Do not broaden into adjacent refactors, custom UI patterns, or speculative hardening.
 - Verify the changed behavior with targeted tests/builds and the real integration boundary when one is materially affected. Re-check the original failure path; a compilation success alone does not prove a runtime bug is fixed.
 - If verification cannot be completed, state the exact remaining check and do not claim readiness or resolution. Preserve unrelated user changes and report any overlap that prevented safe completion.`,
