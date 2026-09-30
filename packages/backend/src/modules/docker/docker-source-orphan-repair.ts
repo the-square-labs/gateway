@@ -1,8 +1,9 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { container } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerSourceBindings } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { detachRemovedContainerSource } from './docker-container-source-detach.js';
 import { DockerSourceService } from './docker-source.service.js';
 
 const logger = createChildLogger('DockerSourceOrphanRepair');
@@ -141,13 +142,7 @@ export class OrphanedSourceBindingRepair {
           }
           if (now - first < ORPHAN_CONFIRMATION_MS) continue;
           try {
-            if (service) {
-              await service.remove({ kind: 'container', nodeId, containerName }, 'system');
-            } else {
-              await db
-                .delete(dockerSourceBindings)
-                .where(and(eq(dockerSourceBindings.id, binding.id), eq(dockerSourceBindings.targetKind, 'container')));
-            }
+            await detachRemovedContainerSource(db, nodeId, containerName, 'system');
             this.firstAbsent.delete(key);
             removed += 1;
             logger.info('Removed the Git source binding of a container that no longer exists', {

@@ -1,5 +1,4 @@
 import { and, eq } from 'drizzle-orm';
-import { container } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   dockerSourceBindings,
@@ -14,6 +13,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
+import { detachRemovedContainerSource } from './docker-container-source-detach.js';
 import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
 import { placeCreatedDockerResource } from './docker-creation-access.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
@@ -34,7 +34,6 @@ import {
 } from './docker-runtime-operations.js';
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
 import type { DockerSecretService } from './docker-secret.service.js';
-import { DockerSourceService } from './docker-source.service.js';
 import {
   assertDockerMountChangeAllowed,
   containerRecreateChangesWorkload,
@@ -318,11 +317,7 @@ async function renameContainerWebhooks(
     );
 }
 
-/**
- * Detach the Git source of a removed container. The commercial source service
- * also removes the provider webhook; without it the binding row is deleted
- * directly. A failure here never fails the removal that already happened.
- */
+/** Detach the Git source of a removed container; a failure never fails the removal that already happened. */
 async function detachContainerSource(
   db: DrizzleClient,
   nodeId: string,
@@ -330,21 +325,7 @@ async function detachContainerSource(
   userId: string
 ): Promise<void> {
   try {
-    if (container.isRegistered(DockerSourceService)) {
-      await container
-        .resolve(DockerSourceService)
-        .remove({ kind: 'container', nodeId, containerName }, userId);
-      return;
-    }
-    await db
-      .delete(dockerSourceBindings)
-      .where(
-        and(
-          eq(dockerSourceBindings.targetKind, 'container'),
-          eq(dockerSourceBindings.nodeId, nodeId),
-          eq(dockerSourceBindings.containerName, containerName)
-        )
-      );
+    await detachRemovedContainerSource(db, nodeId, containerName, userId);
   } catch (error) {
     logger.warn('Failed to detach the Git source of a removed container', {
       nodeId,

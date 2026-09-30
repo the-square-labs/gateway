@@ -33,15 +33,23 @@ function binding(containerName: string, patch: Partial<Row> = {}): Row {
 
 function fakeDb(rows: Row[]) {
   const deleted: unknown[] = [];
+  const updated: Record<string, unknown>[] = [];
   const db = {
     select: () => ({ from: () => ({ where: async () => rows }) }),
+    update: () => ({
+      set: (values: Record<string, unknown>) => ({
+        where: async () => {
+          updated.push(values);
+        },
+      }),
+    }),
     delete: (table: unknown) => ({
       where: async () => {
         deleted.push(table);
       },
     }),
   };
-  return { db: db as never, deleted };
+  return { db: db as never, deleted, updated };
 }
 
 /** A repair whose clock the test advances; `passes` runs it that many times, `gapMs` apart. */
@@ -154,6 +162,38 @@ describe('OrphanedSourceBindingRepair', () => {
     await repair.run();
     expect(remove).toHaveBeenCalledWith({ kind: 'container', nodeId: NODE, containerName: 'gone' }, 'system');
     expect(deleted).toEqual([]);
+  });
+
+  it('deletes the row itself when the source service is the host stub', async () => {
+    container.registerInstance(DockerSourceService, {
+      remove: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('unavailable'), { code: 'COMMERCIAL_MODULE_UNAVAILABLE' })),
+      listPendingContainers: vi.fn().mockResolvedValue([]),
+    } as never);
+    const { db, deleted } = fakeDb([binding('gone')]);
+    const { repair, advance } = repairWith(db, { listContainers: async () => listing() });
+    await repair.run();
+    advance(ORPHAN_CONFIRMATION_MS);
+    expect(await repair.run()).toBe(1);
+    expect(deleted).toEqual([dockerSourceBindings]);
+  });
+
+  it('switches auto-build off and retries when the webhook cannot be removed', async () => {
+    const remove = vi.fn().mockRejectedValue(new Error('webhook cleanup required'));
+    container.registerInstance(DockerSourceService, {
+      remove,
+      listPendingContainers: vi.fn().mockResolvedValue([]),
+    } as never);
+    const { db, deleted, updated } = fakeDb([binding('gone')]);
+    const { repair, advance } = repairWith(db, { listContainers: async () => listing() });
+    await repair.run();
+    advance(ORPHAN_CONFIRMATION_MS);
+    expect(await repair.run()).toBe(0);
+    expect(updated[0]).toMatchObject({ autoBuild: false, autoDeploy: false });
+    expect(deleted).toEqual([]);
+    await repair.run();
+    expect(remove).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the binding of an existing container', async () => {

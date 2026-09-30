@@ -80,14 +80,27 @@ describe('container Git source binding lifecycle', () => {
   });
 
   it('detaches through the source service when registered, and survives its failure', async () => {
-    const { db, deletes } = recordingDb();
+    const { db, deletes, updates } = recordingDb();
     const remove = vi.fn().mockRejectedValue(new Error('provider unreachable'));
     container.registerInstance(DockerSourceService, { remove } as never);
     const ctx = baseContext(db, vi.fn().mockResolvedValue({ success: true }));
     await removeContainer(ctx, 'node-1', 'container-1', false, 'user-1');
     expect(remove).toHaveBeenCalledWith({ kind: 'container', nodeId: 'node-1', containerName: 'api' }, 'user-1');
     expect(deletes.some((d) => d.table === dockerSourceBindings)).toBe(false);
+    // The kept binding can no longer rebuild the removed container.
+    expect(sourceUpdates(updates)[0]?.values).toMatchObject({ autoBuild: false, autoDeploy: false });
     expect(ctx.emitContainer).toHaveBeenCalled();
+  });
+
+  it('deletes the source binding row when the source service is the host stub', async () => {
+    const { db, deletes } = recordingDb();
+    const remove = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('unavailable'), { code: 'COMMERCIAL_MODULE_UNAVAILABLE' }));
+    container.registerInstance(DockerSourceService, { remove } as never);
+    const ctx = baseContext(db, vi.fn().mockResolvedValue({ success: true }));
+    await removeContainer(ctx, 'node-1', 'container-1', false, 'user-1');
+    expect(deletes.some((d) => d.table === dockerSourceBindings)).toBe(true);
   });
 
   it('keeps the source binding when the Docker removal itself fails', async () => {
