@@ -1,4 +1,4 @@
-import { Cloud, FolderPlus, Plus, Server, Trash2 } from "lucide-react";
+import { ArrowUpCircle, Cloud, FolderPlus, Plus, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -12,6 +12,7 @@ import { PageTransition } from "@/components/common/PageTransition";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { BulkNodeUpdateDialog } from "@/components/nodes/BulkNodeUpdateDialog";
 import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,7 +34,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { hostingNodeLabel } from "@/lib/hosting-status";
-import { daemonTypeForNode, nodeIconClassNames, nodeTypeLabel } from "@/lib/node-appearance";
+import {
+  daemonTypeForNode,
+  isDaemonUpdateAvailable,
+  nodeIconClassNames,
+  nodeTypeLabel,
+} from "@/lib/node-appearance";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
@@ -43,7 +49,13 @@ import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { useNodesStore } from "@/stores/nodes";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import type { Node, NodeStatus } from "@/types";
-import { effectiveNodeStatus, isNodeIncompatible, isNodeUpdating } from "@/types";
+import {
+  effectiveNodeStatus,
+  getNodeUpdateLastError,
+  isNodeIncompatible,
+  isNodeUpdateQueued,
+  isNodeUpdating,
+} from "@/types";
 import type { HostingConnector } from "@/types/hosting";
 import { HOSTING_PROVIDER_LABELS, type HostingNodeBinding } from "@/types/hosting";
 import { HostingIntegrationsSection } from "./settings/HostingIntegrationsSection";
@@ -76,6 +88,7 @@ export function AdminNodes() {
   const [searchInput, setSearchInput] = useState(filters.search);
   const [enrollDialogOpen, setEnrollDialogOpen] = useState(false);
   const [choiceOpen, setChoiceOpen] = useState(false);
+  const [bulkUpdateOpen, setBulkUpdateOpen] = useState(false);
   const [enrollMode, setEnrollMode] = useState<"external" | "hosting">("external");
   const [hostingUnavailable, setHostingUnavailable] = useState(false);
   const [checkingHosting, setCheckingHosting] = useState(false);
@@ -198,14 +211,35 @@ export function AdminNodes() {
     fetchNodes();
   }, [fetchNodes]);
 
-  useRealtime("node.changed", () => {
-    void loadDaemonUpdates({ force: true });
-  });
+  useRealtime(
+    "node.changed",
+    () => {
+      void loadDaemonUpdates({ force: true });
+    },
+    {
+      // Events sent while the socket was away (a Gateway restart during updates) are lost.
+      onReconnect: () => {
+        useNodesStore.getState().invalidate();
+        void loadDaemonUpdates({ force: true });
+      },
+    }
+  );
 
   // Fetch daemon update statuses
   useEffect(() => {
     void loadDaemonUpdates().finally(() => setDaemonUpdatesSettled(true));
   }, [loadDaemonUpdates]);
+
+  // Offered while any node, on any page of the list, runs an older daemon than its type's latest.
+  const canBulkUpdate =
+    hasScope("admin:update") &&
+    daemonUpdates.some(
+      (status) =>
+        (status.daemonType as string) !== "relay" &&
+        status.nodes.some((entry) =>
+          isDaemonUpdateAvailable(entry.currentVersion, status.latestVersion)
+        )
+    );
 
   const handleSearch = () => setFilters({ search: searchInput });
   const hasActiveFilters =
@@ -293,7 +327,11 @@ export function AdminNodes() {
         width: "14%",
         align: "center",
         renderCell: (node) => {
-          if (isNodeUpdating(node)) return <Badge variant="warning">UPDATING</Badge>;
+          if (isNodeUpdating(node)) {
+            return (
+              <Badge variant="warning">{isNodeUpdateQueued(node) ? "QUEUED" : "UPDATING"}</Badge>
+            );
+          }
           if (isNodeIncompatible(node)) return <Badge variant="destructive">INCOMPATIBLE</Badge>;
           const hostingPhase = hostingBindings[node.id]?.operationPhase;
           const hostingAction = hostingBindings[node.id]?.operationAction;
@@ -317,9 +355,19 @@ export function AdminNodes() {
           const eStatus = effectiveNodeStatus(node);
           const daemonType = daemonTypeForNode(node.type);
           const typeStatus = daemonUpdates.find((s) => s.daemonType === daemonType);
-          const nodeStatus = typeStatus?.nodes.find((n) => n.nodeId === node.id);
-          if (eStatus === "online" && nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
-            return <Badge variant="warning-solid">{typeStatus.latestVersion}</Badge>;
+          if (
+            eStatus === "online" &&
+            isDaemonUpdateAvailable(node.daemonVersion, typeStatus?.latestVersion)
+          ) {
+            const lastError = getNodeUpdateLastError(node);
+            return (
+              <Badge
+                variant="warning-solid"
+                title={lastError ? `Last update failed: ${lastError.message}` : undefined}
+              >
+                {typeStatus?.latestVersion}
+              </Badge>
+            );
           }
           return <Badge variant={STATUS_BADGE[eStatus] || "secondary"}>{eStatus}</Badge>;
         },
@@ -374,6 +422,15 @@ export function AdminNodes() {
             activeTab === "nodes" && (
               <ResponsiveHeaderActions
                 actions={[
+                  ...(canBulkUpdate
+                    ? [
+                        {
+                          label: "Update Nodes",
+                          icon: <ArrowUpCircle className="h-4 w-4" />,
+                          onClick: () => setBulkUpdateOpen(true),
+                        },
+                      ]
+                    : []),
                   ...(canManageFolders && createFolderAction
                     ? [
                         {
@@ -394,6 +451,12 @@ export function AdminNodes() {
                     : []),
                 ]}
               >
+                {canBulkUpdate && (
+                  <Button variant="outline" onClick={() => setBulkUpdateOpen(true)}>
+                    <ArrowUpCircle className="h-4 w-4" />
+                    Update Nodes
+                  </Button>
+                )}
                 {canManageFolders && (
                   <Button variant="outline" onClick={() => createFolderAction?.()}>
                     <FolderPlus className="h-4 w-4" />
@@ -567,6 +630,7 @@ export function AdminNodes() {
         onNodeEnrolled={() => fetchNodes()}
         onHostingCreated={fetchNodes}
       />
+      <BulkNodeUpdateDialog open={bulkUpdateOpen} onOpenChange={setBulkUpdateOpen} />
     </PageTransition>
   );
 }
