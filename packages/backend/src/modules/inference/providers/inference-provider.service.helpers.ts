@@ -4,6 +4,7 @@ import type {
   inferenceQuotaSnapshots,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { InferenceCoreClientError } from '../core/inference-core.client.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { InferenceProviderDefinition, InferenceQuotaWindow } from './inference-provider.types.js';
 import { knownProviderModel, pricingFromDiscoveredMetadata } from './inference-provider-model-catalog.js';
@@ -54,8 +55,29 @@ export function preferSyncError(first: unknown, second: unknown): unknown {
 }
 
 export function redactedError(error: unknown): string {
-  if (error instanceof InferenceProtocolError || error instanceof AppError) return error.message.slice(0, 500);
+  // Core client messages are the core's own management errors and never carry credentials.
+  if (error instanceof InferenceProtocolError || error instanceof AppError || error instanceof InferenceCoreClientError)
+    return error.message.slice(0, 500);
   return 'Provider synchronization failed';
+}
+
+/** How old a reading may be when the core returns it alongside a failed probe. */
+const CORE_FAILED_PROBE_QUOTA_MAX_AGE_MS = 10 * 60_000;
+
+/**
+ * A failed core probe still returns the account's last reading. Only a recent one (for example
+ * observed on the account's own response headers) may be stored as current; an older one would
+ * get a fresh fetchedAt here and keep routing on numbers that no longer hold.
+ */
+export function isRecentCoreQuotaReading(quota: unknown, now = Date.now()): boolean {
+  if (!quota || typeof quota !== 'object') return false;
+  const updatedAt = (quota as { updatedAt?: unknown }).updatedAt;
+  return (
+    typeof updatedAt === 'number' &&
+    Number.isFinite(updatedAt) &&
+    updatedAt <= now + 60_000 &&
+    now - updatedAt <= CORE_FAILED_PROBE_QUOTA_MAX_AGE_MS
+  );
 }
 
 export function latestQuota(rows: Array<typeof inferenceQuotaSnapshots.$inferSelect>) {

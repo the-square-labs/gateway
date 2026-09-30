@@ -243,9 +243,18 @@ export function InferenceProvidersPanel({
   const syncConnection = async (connection: InferenceProviderConnection) => {
     setSyncingId(connection.id);
     try {
-      await api.syncInferenceProvider(connection.id);
+      const synced = await api.syncInferenceProvider(connection.id);
       await changed();
-      toast.success("Provider synchronized");
+      // The sync endpoint records a failed sync on the connection and still answers 200.
+      if (synced.syncStatus === "error") {
+        toast.error(
+          synced.syncLastError
+            ? `Provider sync failed: ${synced.syncLastError}`
+            : "Provider sync failed"
+        );
+      } else {
+        toast.success("Provider synchronized");
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Provider sync failed");
     } finally {

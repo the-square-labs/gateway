@@ -43,6 +43,7 @@ import {
   consistentTokenLimits,
   derivedSource,
   type InferenceModelMetadataSource,
+  isRecentCoreQuotaReading,
   latestQuota,
   latestValidQuota,
   nextRoutingOrder,
@@ -739,11 +740,28 @@ export class InferenceProviderService {
       // The provider report describes the core's active account only. With several accounts of one provider it
       // would stamp that account's usage on every connection, so each connection reads its own account row.
       const accounts = await client.coreOauthAccountQuotas(target.oauthProvider);
+      // A failed token refresh leaves the account parked in the core until it is signed in again.
+      // Its last reading can still look healthy, so the core's verdict wins over any cached quota.
+      if (accounts?.reauthRequired.has(accountId)) {
+        throw new InferenceCoreClientError(
+          'The inference core could not refresh this account sign-in. Reconnect the account to resume sync and routing'
+        );
+      }
       if (accounts && accounts.quotas.size > 0) {
+        const ownQuota = accounts.quotas.get(accountId);
+        // The core tried and failed to read this account. Its last reading may come back with the
+        // failure; storing an old one would put it on screen and in routing as if it were current.
+        const failure = accounts.failures.get(accountId);
+        if (failure && !isRecentCoreQuotaReading(ownQuota)) {
+          throw new InferenceCoreClientError(`The inference core could not read this account's quota (${failure})`);
+        }
         const [own] = parseCoreQuotaReports({
-          reports: [{ provider: providerRef, quota: accounts.quotas.get(accountId) }],
+          reports: [{ provider: providerRef, quota: ownQuota }],
         });
         if (own) return coreQuotaToWindows(own);
+        if (failure) {
+          throw new InferenceCoreClientError(`The inference core could not read this account's quota (${failure})`);
+        }
         const describesThisAccount = accounts.quotas.size === 1 || accounts.activeAccountId === accountId;
         if (!describesThisAccount) return [];
       }
