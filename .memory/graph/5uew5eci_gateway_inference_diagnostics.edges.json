@@ -1,0 +1,35 @@
+{
+  "file_name": "5uew5eci_gateway_inference_diagnostics",
+  "edges": [
+    {
+      "from_id": "5uew5eci",
+      "to_id": "123u7vfm",
+      "relation": "same_workflow",
+      "weight": 0.94,
+      "reason": "Both define Gateway MCP OAuth token behavior, scopes, credentials, and authentication contracts.",
+      "source": "auto",
+      "created_at": 1790766624137,
+      "updated_at": 1790766624137
+    },
+    {
+      "from_id": "5uew5eci",
+      "to_id": "xg6y81q3",
+      "relation": "same_workflow",
+      "weight": 0.82,
+      "reason": "Tool discovery and delegated-scope filtering explain the MCP tools available during these diagnostics.",
+      "source": "auto",
+      "created_at": 1790766624137,
+      "updated_at": 1790766624137
+    },
+    {
+      "from_id": "5uew5eci",
+      "to_id": "gpx2fdwu",
+      "relation": "same_area",
+      "weight": 0.7,
+      "reason": "MCP compatibility settings directly affect OAuth-scoped tool discovery and diagnostic visibility.",
+      "source": "auto",
+      "created_at": 1790766624137,
+      "updated_at": 1790766624137
+    }
+  ]
+}

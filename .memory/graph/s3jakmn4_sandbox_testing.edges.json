@@ -3,13 +3,33 @@
   "edges": [
     {
       "from_id": "s3jakmn4",
-      "to_id": "rnxjftcd",
-      "relation": "same_workflow",
+      "to_id": "gz01c8d5",
+      "relation": "same_area",
       "weight": 0.78,
-      "reason": "Both document the inference-core backend testing workflow, including deterministic tests, live-provider boundaries, and verification constraints.",
+      "reason": "Both document local inference-core testing constraints involving Docker-managed services, loopback networking, and sandbox limitations.",
       "source": "auto",
-      "created_at": 1790153372964,
-      "updated_at": 1790153372964
+      "created_at": 1790759490726,
+      "updated_at": 1790759490726
+    },
+    {
+      "from_id": "s3jakmn4",
+      "to_id": "nuc3c3hq",
+      "relation": "same_area",
+      "weight": 0.62,
+      "reason": "Both concern Gateway sandbox behavior and verification constraints, including secure or restricted test execution.",
+      "source": "auto",
+      "created_at": 1790759490726,
+      "updated_at": 1790759490726
+    },
+    {
+      "from_id": "s3jakmn4",
+      "to_id": "92pnq26b",
+      "relation": "same_area",
+      "weight": 0.58,
+      "reason": "Both capture durable Gateway sandbox testing limitations and the need for direct, constrained verification workflows.",
+      "source": "auto",
+      "created_at": 1790759490726,
+      "updated_at": 1790759490726
     }
   ]
 }
