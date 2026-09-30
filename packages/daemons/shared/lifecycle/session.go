@@ -465,14 +465,23 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 				result.Success = false
 				result.Error = err.Error()
 			}
-			if err := writer.Send(&pb.DaemonMessage{
+			sendErr := writer.Send(&pb.DaemonMessage{
 				Payload: &pb.DaemonMessage_CommandResult{CommandResult: result},
-			}); err != nil {
-				return err
-			}
+			})
 			if result.Success {
-				d.logger.Info("self-update staged successfully, exiting for restart", "target_version", updateCmd.TargetVersion)
+				// The new binary is staged: restart even when the acknowledgement could not be sent (the
+				// stream broke during the download). The gateway treats a lost result as "wait for the
+				// reconnect", and a daemon that kept running the old binary would refuse every retry
+				// while its update stays pending.
+				if sendErr != nil {
+					d.logger.Warn("self-update staged but the result could not be sent; restarting anyway", "target_version", updateCmd.TargetVersion, "error", sendErr)
+				} else {
+					d.logger.Info("self-update staged successfully, exiting for restart", "target_version", updateCmd.TargetVersion)
+				}
 				return &RestartRequestedError{Message: "self-update staged successfully"}
+			}
+			if sendErr != nil {
+				return sendErr
 			}
 			d.logger.Error("self-update failed", "target_version", updateCmd.TargetVersion, "error", result.Error)
 			continue
