@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import type { Node } from "@/types";
 import { movePriorityNode, priorityRoleLabel } from "./availability-priority";
 
@@ -28,6 +29,9 @@ export function AvailabilityPriorityControls({
   failbackDelay,
   onFailbackDelayChange,
   disabled,
+  part = "all",
+  rowClassName,
+  detailsClassName,
 }: {
   nodes: Node[];
   compatibleNodeIds: Set<string>;
@@ -38,6 +42,10 @@ export function AvailabilityPriorityControls({
   failbackDelay: string;
   onFailbackDelayChange: (value: string) => void;
   disabled: boolean;
+  /** Render only the Priority mode row, only its details (order and delay), or both. */
+  part?: "all" | "row" | "details";
+  rowClassName?: string;
+  detailsClassName?: string;
 }) {
   const moveButtons = useRef(new Map<string, HTMLButtonElement>());
 
@@ -57,27 +65,30 @@ export function AvailabilityPriorityControls({
 
   return (
     <>
-      <SettingsControlRow
-        title="Priority mode"
-        description="Prefer nodes in a fixed order and move back to the primary when it returns."
-        help="Traffic is served from the first available nodes in the order below; the first node is the primary. When a higher-priority node comes back and stays healthy for the delay below, the workload starts there, traffic switches to it, and the backup placement is drained and removed."
-      >
-        <Switch
-          checked={priorityMode}
-          onChange={onPriorityModeChange}
-          disabled={disabled}
-          ariaLabel="Priority mode"
-        />
-      </SettingsControlRow>
-      {priorityMode && (
+      {part !== "details" && (
+        <SettingsControlRow
+          className={rowClassName}
+          title="Priority mode"
+          description="Prefer nodes in a fixed order and move back to the primary when it returns."
+          help="Traffic is served from the first available nodes in the order below; the first node is the primary. When a higher-priority node comes back and stays healthy for the delay below, the workload starts there, traffic switches to it, and the backup placement is drained and removed."
+        >
+          <Switch
+            checked={priorityMode}
+            onChange={onPriorityModeChange}
+            disabled={disabled}
+            ariaLabel="Priority mode"
+          />
+        </SettingsControlRow>
+      )}
+      {part !== "row" && priorityMode && (
         <>
           {order.length === 0 ? (
-            <div className="border-b border-border">
+            <div className={cn("border-b border-border", detailsClassName)}>
               <EmptyState embedded message="Select eligible nodes to set their priority." />
             </div>
           ) : (
             <ol
-              className="divide-y divide-border border-b border-border"
+              className={cn("divide-y divide-border border-b border-border", detailsClassName)}
               aria-label="Node priority"
             >
               {order.map((nodeId, index) => {
@@ -128,6 +139,7 @@ export function AvailabilityPriorityControls({
             </ol>
           )}
           <SettingsControlRow
+            className={detailsClassName}
             title="Return to the primary after"
             description="How long a returning higher-priority node must stay healthy first."
             help="A node that goes offline or reports an error again restarts this delay, so a flapping node never takes traffic back. Zero moves back as soon as the node is healthy."

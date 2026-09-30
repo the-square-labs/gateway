@@ -766,11 +766,13 @@ export function DeploymentSettings({
             </div>
           </SettingsControlRow>
           <SettingsControlRow title="Command" description="Command override">
-            <Input
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder="nginx -g daemon off;"
-            />
+            <SettingsInlineControl label="Command">
+              <Input
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="nginx -g daemon off;"
+              />
+            </SettingsInlineControl>
           </SettingsControlRow>
         </PanelShell>
       </div>

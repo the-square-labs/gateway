@@ -24,7 +24,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -1241,32 +1241,29 @@ export function DockerGitSourcePanel({
               </SettingsControlRow>
             </>
           ) : (
-            <>
-              <SettingsControlRow
-                title="Dockerfile"
-                description="Dockerfile path from the repository root."
-              >
-                <Input
-                  value={settings.dockerfilePath}
-                  onChange={(event) => updateSetting("dockerfilePath", event.target.value)}
-                  className={controlWidth}
-                  placeholder="Dockerfile"
-                  disabled={!canEdit}
-                />
-              </SettingsControlRow>
-              <SettingsControlRow
-                title="Build context"
-                description="Repository directory sent to BuildKit."
-              >
-                <Input
-                  value={settings.contextPath}
-                  onChange={(event) => updateSetting("contextPath", event.target.value)}
-                  className={controlWidth}
-                  placeholder="."
-                  disabled={!canEdit}
-                />
-              </SettingsControlRow>
-            </>
+            <SettingsControlRow
+              title="Dockerfile and context"
+              description="Paths from the repository root."
+            >
+              <div className="grid w-full gap-2 sm:grid-cols-2">
+                <SettingsInlineControl label="Dockerfile">
+                  <Input
+                    value={settings.dockerfilePath}
+                    onChange={(event) => updateSetting("dockerfilePath", event.target.value)}
+                    placeholder="Dockerfile"
+                    disabled={!canEdit}
+                  />
+                </SettingsInlineControl>
+                <SettingsInlineControl label="Build context">
+                  <Input
+                    value={settings.contextPath}
+                    onChange={(event) => updateSetting("contextPath", event.target.value)}
+                    placeholder="."
+                    disabled={!canEdit}
+                  />
+                </SettingsInlineControl>
+              </div>
+            </SettingsControlRow>
           )}
           {!pagesTarget && (
             <SettingsControlRow

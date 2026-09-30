@@ -27,6 +27,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type {
@@ -453,6 +454,9 @@ export function AvailabilitySection({
   useContentLoading(loading);
   if (loading) return null;
 
+  // Right-hand cells of the two-column body get the column divider on wide screens.
+  const rightColumn = "xl:border-l";
+
   return (
     <div className="flex flex-col gap-6">
       <PanelShell
@@ -508,6 +512,9 @@ export function AvailabilitySection({
         }
         wrapHeader
         dirty={dirty}
+        // Two columns filled pair by pair on wide screens; the lists and notes a row opens span
+        // both columns under its pair. The last row's bottom border slides under the panel edge.
+        bodyClassName="-mb-px grid grid-cols-1 xl:grid-cols-2"
       >
         <SettingsControlRow
           title="Enable"
@@ -528,51 +535,52 @@ export function AvailabilitySection({
           />
         </SettingsControlRow>
         <SettingsControlRow
+          className={rightColumn}
           title="Mode"
-          description="Choose simultaneous replicas or automatic failover."
-          help="Replicated serves traffic from multiple nodes at the same time. Failover keeps one serving placement and creates a replacement after the active node becomes unavailable."
+          description="Simultaneous replicas or automatic failover."
+          help="Replicated serves traffic from multiple nodes at the same time, from the given number of placements, one per node. Failover keeps one serving placement and creates a replacement after the active node becomes unavailable."
         >
-          <Select
-            value={mode}
-            onValueChange={(value) => setMode(value as typeof mode)}
-            disabled={!canManage || !enabledDraft}
-          >
-            <SelectTrigger aria-label="Availability mode">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem
-                value="replicated"
-                description="Serve traffic from multiple nodes at the same time."
+          <div className={cn("grid w-full gap-2", mode === "replicated" && "sm:grid-cols-2")}>
+            <SettingsInlineControl label="Mode">
+              <Select
+                value={mode}
+                onValueChange={(value) => setMode(value as typeof mode)}
+                disabled={!canManage || !enabledDraft}
               >
-                Replicated
-              </SelectItem>
-              <SelectItem
-                value="failover"
-                description="Keep one serving placement and replace it after node loss."
-              >
-                Failover
-              </SelectItem>
-            </SelectContent>
-          </Select>
+                <SelectTrigger aria-label="Availability mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    value="replicated"
+                    description="Serve traffic from multiple nodes at the same time."
+                  >
+                    Replicated
+                  </SelectItem>
+                  <SelectItem
+                    value="failover"
+                    description="Keep one serving placement and replace it after node loss."
+                  >
+                    Failover
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsInlineControl>
+            {mode === "replicated" && (
+              <SettingsInlineControl label="Serving placements">
+                <Input
+                  aria-label="Serving placements"
+                  type="number"
+                  min={2}
+                  max={32}
+                  value={replicas}
+                  onChange={(event) => setReplicas(event.target.value)}
+                  disabled={!canManage || !enabledDraft}
+                />
+              </SettingsInlineControl>
+            )}
+          </div>
         </SettingsControlRow>
-        {mode === "replicated" && (
-          <SettingsControlRow
-            title="Serving placements"
-            description="Fixed replica count, one placement per node."
-            help="The desired number of simultaneously serving placements. Each placement runs on a different eligible Docker node."
-          >
-            <Input
-              aria-label="Serving placements"
-              type="number"
-              min={2}
-              max={32}
-              value={replicas}
-              onChange={(event) => setReplicas(event.target.value)}
-              disabled={!canManage || !enabledDraft}
-            />
-          </SettingsControlRow>
-        )}
         <SettingsControlRow
           title="Eligible nodes"
           description="Use every compatible node or keep an explicit allowlist."
@@ -592,8 +600,21 @@ export function AvailabilitySection({
             </SelectContent>
           </Select>
         </SettingsControlRow>
+        <AvailabilityPriorityControls
+          part="row"
+          rowClassName={rightColumn}
+          nodes={nodes}
+          compatibleNodeIds={compatibleNodeIds}
+          priorityMode={priorityMode}
+          onPriorityModeChange={setPriorityMode}
+          order={priorityOrder}
+          onOrderChange={setNodePriority}
+          failbackDelay={failbackDelay}
+          onFailbackDelayChange={setFailbackDelay}
+          disabled={!canManage || !enabledDraft}
+        />
         {selectionMode === "selected" && (
-          <div className="grid gap-2 border-b border-border px-4 py-3 sm:grid-cols-2">
+          <div className="grid gap-2 border-b border-border px-4 py-3 sm:grid-cols-2 xl:col-span-2">
             {nodes
               .filter((node) => node.type === "docker")
               .map((node) => {
@@ -627,6 +648,8 @@ export function AvailabilitySection({
           </div>
         )}
         <AvailabilityPriorityControls
+          part="details"
+          detailsClassName="xl:col-span-2"
           nodes={nodes}
           compatibleNodeIds={compatibleNodeIds}
           priorityMode={priorityMode}
@@ -649,13 +672,8 @@ export function AvailabilitySection({
             ariaLabel="Allow available mode"
           />
         </SettingsControlRow>
-        {partitionMode === "available" && (
-          <p className="border-b border-border px-4 py-3 text-sm text-warning-text">
-            May briefly run two copies during a network split; do not enable for singletons
-            (indexers, queue consumers, cron).
-          </p>
-        )}
         <AvailabilityWitnessControls
+          className={rightColumn}
           nodes={nodes}
           relayInstances={relayInstances}
           candidateNodeIds={new Set(eligibleNodeIds)}
@@ -663,65 +681,72 @@ export function AvailabilitySection({
           onWitnessChange={setWitness}
           disabled={!canManage || !enabledDraft}
         />
+        {partitionMode === "available" && (
+          <p className="border-b border-border px-4 py-3 text-sm text-warning-text xl:col-span-2">
+            May briefly run two copies during a network split; do not enable for singletons
+            (indexers, queue consumers, cron).
+          </p>
+        )}
         <SettingsControlRow
-          title="Replacement grace"
-          description="Wait briefly for a disconnected node before creating a replacement."
-          help="Gateway waits this many seconds after losing the node control connection before it creates a replacement on another eligible node."
+          title="Replacement and drain"
+          description="Seconds to wait before replacing a lost node and before removing a placement."
+          help="Replacement grace: after losing a node's control connection, Gateway waits this long before creating a replacement on another eligible node. Drain interval: before a planned removal, Gateway takes the placement out of routing and waits this long for existing connections to finish."
         >
-          <Input
-            aria-label="Replacement grace in seconds"
-            type="number"
-            min={0}
-            max={3600}
-            value={graceSeconds}
-            onChange={(event) => setGraceSeconds(event.target.value)}
-            disabled={!canManage || !enabledDraft}
-          />
+          <div className="grid w-full gap-2 sm:grid-cols-2">
+            <SettingsInlineControl label="Replacement grace">
+              <Input
+                aria-label="Replacement grace in seconds"
+                type="number"
+                min={0}
+                max={3600}
+                value={graceSeconds}
+                onChange={(event) => setGraceSeconds(event.target.value)}
+                disabled={!canManage || !enabledDraft}
+              />
+            </SettingsInlineControl>
+            <SettingsInlineControl label="Drain interval">
+              <Input
+                aria-label="Drain interval in seconds"
+                type="number"
+                min={0}
+                max={3600}
+                value={drainSeconds}
+                onChange={(event) => setDrainSeconds(event.target.value)}
+                disabled={!canManage || !enabledDraft}
+              />
+            </SettingsInlineControl>
+          </div>
         </SettingsControlRow>
         <SettingsControlRow
-          title="Maximum unavailable"
-          description="Limit how many serving placements a planned rollout may take out at once."
-          help="The maximum number of desired placements that a planned update may leave unavailable at the same time. Zero preserves the full serving count during rollout."
+          className={rightColumn}
+          title="Rollout limits"
+          description="Placements a planned rollout may take out or add at once."
+          help="Maximum unavailable: how many desired placements a planned update may leave unavailable at the same time; zero preserves the full serving count. Maximum surge: how many temporary placements Gateway may create above the desired count during the rollout."
         >
-          <Input
-            aria-label="Maximum unavailable placements"
-            type="number"
-            min={0}
-            max={32}
-            value={maxUnavailable}
-            onChange={(event) => setMaxUnavailable(event.target.value)}
-            disabled={!canManage || !enabledDraft}
-          />
-        </SettingsControlRow>
-        <SettingsControlRow
-          title="Maximum surge"
-          description="Allow temporary placements when a zero-unavailable rollout needs spare capacity."
-          help="The maximum number of temporary placements Gateway may create above the desired count while performing a planned rollout."
-        >
-          <Input
-            aria-label="Maximum surge placements"
-            type="number"
-            min={0}
-            max={32}
-            value={maxSurge}
-            onChange={(event) => setMaxSurge(event.target.value)}
-            disabled={!canManage || !enabledDraft}
-          />
-        </SettingsControlRow>
-        <SettingsControlRow
-          title="Drain interval"
-          description="Stop sending new connections before a planned placement removal."
-          help="Gateway removes the placement from routing, waits this many seconds for existing connections to drain, and then stops the placement."
-        >
-          <Input
-            aria-label="Drain interval in seconds"
-            type="number"
-            min={0}
-            max={3600}
-            value={drainSeconds}
-            onChange={(event) => setDrainSeconds(event.target.value)}
-            disabled={!canManage || !enabledDraft}
-          />
+          <div className="grid w-full gap-2 sm:grid-cols-2">
+            <SettingsInlineControl label="Maximum unavailable">
+              <Input
+                aria-label="Maximum unavailable placements"
+                type="number"
+                min={0}
+                max={32}
+                value={maxUnavailable}
+                onChange={(event) => setMaxUnavailable(event.target.value)}
+                disabled={!canManage || !enabledDraft}
+              />
+            </SettingsInlineControl>
+            <SettingsInlineControl label="Maximum surge">
+              <Input
+                aria-label="Maximum surge placements"
+                type="number"
+                min={0}
+                max={32}
+                value={maxSurge}
+                onChange={(event) => setMaxSurge(event.target.value)}
+                disabled={!canManage || !enabledDraft}
+              />
+            </SettingsInlineControl>
+          </div>
         </SettingsControlRow>
       </PanelShell>
 

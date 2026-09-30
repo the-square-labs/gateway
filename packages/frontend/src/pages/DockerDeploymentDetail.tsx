@@ -1314,7 +1314,7 @@ export function DockerDeploymentDetail({
               sourceImageReference={availabilityPolicy?.sourceImageReference}
             />
           </TabsContent>
-          <TabsContent value="source" className="pb-0">
+          <TabsContent value="source" className="pb-6">
             <DockerResourceGitTabs
               target={{ kind: "deployment", nodeId, deploymentId }}
               view="source"

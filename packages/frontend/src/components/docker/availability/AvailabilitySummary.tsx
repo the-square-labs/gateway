@@ -146,7 +146,10 @@ export function AvailabilitySummary({
           }
           icon={<ShieldCheck className="h-4 w-4" />}
           description="Logical workload state across independent Docker nodes."
-          bodyClassName="divide-y divide-border"
+          // Two columns filled row by row on wide screens: the row count depends on the mode and
+          // the lease state, so rows pair up instead of splitting into two uneven lists. The
+          // last row's bottom border slides under the panel edge.
+          bodyClassName="-mb-px grid grid-cols-1 xl:grid-cols-2 [&>*]:border-b [&>*]:border-border xl:[&>*:nth-child(even)]:border-l"
         >
           <DetailRow label="Mode" value={label(mode)} />
           <DetailRow

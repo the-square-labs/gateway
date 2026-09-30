@@ -151,7 +151,7 @@ export function DockerPendingContainerDetail({
               Environment
             </TabsTrigger>
           </TabsList>
-          <TabsContent value="source">
+          <TabsContent value="source" className="pb-6">
             <DockerResourceGitTabs
               target={{ kind: "container", nodeId, containerName }}
               view="source"

@@ -21,6 +21,7 @@ export function AvailabilityWitnessControls({
   witness,
   onWitnessChange,
   disabled,
+  className,
 }: {
   nodes: Node[];
   relayInstances: DashboardRelayInstance[];
@@ -28,11 +29,13 @@ export function AvailabilityWitnessControls({
   witness: string | null;
   onWitnessChange: (value: string | null) => void;
   disabled: boolean;
+  className?: string;
 }) {
   const eligibleNodes = nodes.filter((node) => !candidateNodeIds.has(node.id));
 
   return (
     <SettingsControlRow
+      className={className}
       title="Witness"
       description="A relay or node outside this policy that breaks ties during a network partition."
       help="Auto picks the eligible member with the largest minimum latency to every candidate, which is least likely to share a site with any of them. Set an explicit relay instance or node to override the automatic choice; the API validates eligibility."
