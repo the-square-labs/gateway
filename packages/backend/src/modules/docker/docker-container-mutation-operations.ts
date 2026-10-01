@@ -34,6 +34,7 @@ import {
 } from './docker-runtime-operations.js';
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
 import type { DockerSecretService } from './docker-secret.service.js';
+import { assertDuplicateDropsLinkEnvironment } from './docker-secret-env.js';
 import {
   assertDockerMountChangeAllowed,
   containerRecreateChangesWorkload,
@@ -1028,6 +1029,8 @@ export async function duplicateContainer(
   const sourceName = await ctx.resolveContainerName(nodeId, containerId);
   const inspect = await ctx.inspectContainer(nodeId, containerId);
   assertDuplicateDropsReservedLabels(inspect?.Config?.Labels ?? inspect?.Labels, node?.capabilities);
+  const linkEnvKeys = (await ctx.secretService?.getManagedSecretKeys(nodeId, sourceName)) ?? [];
+  assertDuplicateDropsLinkEnvironment(linkEnvKeys, node?.capabilities);
   assertDockerMountChangeAllowed({
     nodeId,
     resourceId: String(inspect?.scopeResourceId ?? ''),
@@ -1051,6 +1054,8 @@ export async function duplicateContainer(
     const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'duplicate', {
       containerId,
       newName: name,
+      // The copy is not linked: the daemon leaves the link variables out of its environment.
+      ...(linkEnvKeys.length > 0 ? { configJson: JSON.stringify({ removeEnv: linkEnvKeys }) } : {}),
     });
     data = ctx.parseResult(result);
   } catch (err) {

@@ -85,7 +85,7 @@ Gateway provides Portainer-like Docker container management through a daemon run
 - **Create**: Deploy from image with ports, volumes, env, networks, restart policy
 - **Start/Stop/Restart/Kill**: Lifecycle management (transitions tracked as tasks)
 - **Recreate**: Stop + remove + create with new config (preserves name, secrets auto-injected)
-- **Duplicate**: Clone a container with a new name (secrets are copied too)
+- **Duplicate**: Clone a container with a new name (its own secrets are copied too; database and storage link variables are not, so link the copy separately)
 - **Remove**: Delete container (must be stopped first)
 
 Before creating a container, list images on the selected node. If the requested image is absent, pull it and wait for the pull task to complete before calling create; do not use a failed create as an image-existence probe. Public Docker Hub images are pulled directly without a saved registry or \`registryId\`.

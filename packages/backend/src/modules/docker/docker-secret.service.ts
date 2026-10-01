@@ -219,6 +219,41 @@ export class DockerSecretService {
     return map;
   }
 
+  /**
+   * The user's own secrets of a container. Managed secrets hold database and storage link credentials: they belong
+   * to the link, are revealed only through it, and never leave with a copy or an archive of the container.
+   */
+  async getUserDecryptedMap(nodeId: string, containerName: string): Promise<Record<string, string>> {
+    const rows = await this.db
+      .select()
+      .from(dockerSecrets)
+      .where(
+        and(
+          eq(dockerSecrets.nodeId, nodeId),
+          eq(dockerSecrets.containerName, containerName),
+          eq(dockerSecrets.managed, false)
+        )
+      );
+
+    return Object.fromEntries(rows.map((row) => [row.key, this.decrypt(row.encryptedValue)]));
+  }
+
+  /** Key names of a container's managed secrets: the variables its database and storage links inject. */
+  async getManagedSecretKeys(nodeId: string, containerName: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ key: dockerSecrets.key })
+      .from(dockerSecrets)
+      .where(
+        and(
+          eq(dockerSecrets.nodeId, nodeId),
+          eq(dockerSecrets.containerName, containerName),
+          eq(dockerSecrets.managed, true)
+        )
+      );
+
+    return rows.map((row) => row.key);
+  }
+
   /** Replace all stored secrets after a trusted archive import. */
   async replaceImported(
     nodeId: string,
@@ -279,12 +314,13 @@ export class DockerSecretService {
   }
 
   /**
-   * Copy secrets from one container name to another (used for duplicate).
+   * Copy the user's secrets from one container name to another (used for duplicate). Link credentials stay with the
+   * link: a copy is not linked.
    */
   async copySecrets(nodeId: string, fromName: string, toName: string, userId: string) {
     await this.migrationGuard?.assertContainerAllowed(nodeId, fromName);
     await this.migrationGuard?.assertContainerNameAvailable(nodeId, toName);
-    const secrets = await this.getDecryptedMap(nodeId, fromName);
+    const secrets = await this.getUserDecryptedMap(nodeId, fromName);
     for (const [key, value] of Object.entries(secrets)) {
       await this.create(nodeId, toName, key, value, userId);
     }

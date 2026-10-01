@@ -196,10 +196,11 @@ export async function openDockerContainerArchiveExport(args: {
     const containerName = String(inspected?.Name ?? '').replace(/^\/+/, '');
     if (!containerName) throw new AppError(409, 'GWCA_SOURCE_INVALID', 'Could not resolve container name');
     const secretService = container.resolve(DockerSecretService);
+    // Database and storage link credentials belong to the link: the archive carries the user's secrets only.
     if (query.includeSecrets) {
-      secrets = await secretService.getDecryptedMap(nodeId, containerName);
+      secrets = await secretService.getUserDecryptedMap(nodeId, containerName);
     } else {
-      secretKeys = [...(await secretService.getSecretKeys(nodeId, containerName))];
+      secretKeys = (await secretService.list(nodeId, containerName, false)).map((secret) => secret.key);
     }
   }
   const dispatch = container.resolve(DockerMigrationDispatchAdapter);
