@@ -364,6 +364,78 @@ describe('RelayPolicyService route runtime', () => {
       listener
     );
   });
+
+  describe('adopting a binding route for a new owner', () => {
+    const listener = {
+      networkName: 'gateway-db-binding',
+      listenAddress: '172.28.0.1',
+      listenPort: 5432,
+      allowedSources: ['deployment:api'],
+    };
+    const placementRoute = {
+      id: 'route-1',
+      generation: 5,
+      ownerKind: 'managed_database_binding',
+      ownerId: 'placement-binding',
+      sourceKind: 'daemon',
+      sourceId: 'node-source',
+      sourceCertificateSha256: 'sha256:source',
+      targetEndpointId: 'endpoint-1',
+      managedDatabaseListener: { ...listener, allowedSources: [...listener.allowedSources] },
+    };
+
+    async function adopt(desiredListener: typeof listener, sourceNodeId = 'node-source') {
+      const updates = new Map<unknown, Record<string, unknown>>();
+      const tx = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([placementRoute]) })) })),
+        })),
+        delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+        update: vi.fn((table: unknown) => ({
+          set: vi.fn((values: Record<string, unknown>) => {
+            updates.set(table, values);
+            return { where: vi.fn().mockResolvedValue(undefined) };
+          }),
+        })),
+      };
+      const db = { transaction: vi.fn(async (callback: (writer: typeof tx) => Promise<unknown>) => callback(tx)) };
+      const service = createService(db, { applySnapshot: vi.fn() });
+      vi.spyOn(service as any, 'ensureManagedDatabaseEndpoint').mockResolvedValue('endpoint-1');
+      (service as any).grantIssuer = {
+        requireNodeIdentity: vi.fn().mockResolvedValue({
+          certificateFingerprint: sourceNodeId === 'node-source' ? 'sha256:source' : 'sha256:other',
+        }),
+      };
+      const ensureRoute = vi.spyOn(service as any, 'ensureRoute');
+      vi.spyOn(service, 'syncSnapshot').mockResolvedValue(9);
+      vi.spyOn(service as any, 'syncNodeGrants').mockResolvedValue(undefined);
+      await expect(
+        service.adoptBindingRoute(
+          'placement-binding',
+          'binding-1',
+          'database-1',
+          sourceNodeId,
+          'node-target',
+          desiredListener
+        )
+      ).resolves.toBe('route-1');
+      expect(ensureRoute).not.toHaveBeenCalled();
+      // The policy revision moves either way: the route changed owner.
+      expect(updates.get(relayPolicyState)).toBeDefined();
+      return updates.get(relayRoutes)!;
+    }
+
+    it('keeps the generation, so open connections survive, when the listener stays the same', async () => {
+      const route = await adopt({ ...listener, allowedSources: [...listener.allowedSources] });
+      expect(route).toMatchObject({ ownerId: 'binding-1', generation: 5, managedDatabaseListener: listener });
+    });
+
+    it('moves the generation when the listener or the source changes', async () => {
+      expect(await adopt({ ...listener, allowedSources: ['compose:api:web'] })).toMatchObject({ generation: 6 });
+      expect(await adopt({ ...listener, listenAddress: '172.29.0.1' })).toMatchObject({ generation: 6 });
+      expect(await adopt(listener, 'node-other')).toMatchObject({ generation: 6, sourceId: 'node-other' });
+    });
+  });
 });
 
 describe('RelayPolicyService snapshots', () => {

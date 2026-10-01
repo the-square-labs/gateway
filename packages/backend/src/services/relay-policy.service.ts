@@ -1230,6 +1230,15 @@ export class RelayPolicyService {
       await tx
         .delete(relayRoutes)
         .where(and(eq(relayRoutes.ownerKind, 'managed_database_binding'), eq(relayRoutes.ownerId, bindingId)));
+      // Only a changed source, target or listener moves the generation. A new generation makes the
+      // relay close the route's tunnels and the daemon replace its listener; a workload that stays
+      // on the same node and network keeps its open connections while the route changes owner.
+      const changed =
+        placementRoute.sourceKind !== 'daemon' ||
+        placementRoute.sourceId !== sourceNodeId ||
+        placementRoute.sourceCertificateSha256 !== source.certificateFingerprint ||
+        placementRoute.targetEndpointId !== endpointId ||
+        !managedDatabaseListenerConfigsEqual(placementRoute.managedDatabaseListener, managedDatabaseListener);
       await tx
         .update(relayRoutes)
         .set({
@@ -1239,7 +1248,7 @@ export class RelayPolicyService {
           sourceCertificateSha256: source.certificateFingerprint,
           targetEndpointId: endpointId,
           managedDatabaseListener,
-          generation: placementRoute.generation + 1,
+          generation: changed ? placementRoute.generation + 1 : placementRoute.generation,
           updatedAt: new Date(),
         })
         .where(eq(relayRoutes.id, placementRoute.id));
