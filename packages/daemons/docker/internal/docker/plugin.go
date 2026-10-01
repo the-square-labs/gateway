@@ -78,6 +78,8 @@ type DockerPlugin struct {
 	memberProbe     func(ctx context.Context, links []string, cheap bool) memberProbeResult
 	// relayTunnelOutcomes logs failing incoming relay tunnels per endpoint owner and state change (L-1).
 	relayTunnelOutcomes logepisode.Tracker
+	// linkRejections logs the connections of database bindings and storage links no relay admitted.
+	linkRejections linkRejectionLog
 
 	// Log stream follow support
 	writer           *stream.Writer

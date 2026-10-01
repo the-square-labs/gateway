@@ -632,25 +632,48 @@ func (p *DockerPlugin) openSidecar(connection net.Conn) {
 func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID string, routeGeneration uint64) {
 	assignment := p.relayGrants.lookup("connect", "managed_database_binding", bindingID)
 	if assignment == nil {
+		p.linkRejections.rejected(p.logger, linkKindManagedDatabaseBinding, bindingID, linkRejectedGrantUnavailable)
 		return
 	}
 	if routeGeneration != 0 {
 		listener := assignment.GetManagedDatabaseListener()
 		if listener == nil || listener.GetRouteGeneration() != routeGeneration {
+			p.linkRejections.rejected(p.logger, linkKindManagedDatabaseBinding, bindingID, linkRejectedRouteChanged)
 			return
 		}
 	}
+	tunnel, err := p.openRelaySource(assignment)
+	if err != nil {
+		p.linkRejections.rejected(p.logger, linkKindManagedDatabaseBinding, bindingID, relayRefusalReason(err),
+			"error", relayRefusalMessage(err))
+		return
+	}
+	tunnel.bridge(connection)
+}
+
+// openRelaySource opens a source tunnel for assignment on the first of its relay candidates (in load and latency
+// order) that accepts it. When none does, the error is a capacity refusal if any relay gave one (the relay's own
+// reason), else the last refusal.
+func (p *DockerPlugin) openRelaySource(assignment *pb.RelayGrantAssignment) (*relaySourceTunnel, error) {
 	candidates := relaybridge.PoolCandidates(assignment, false)
 	if len(candidates) == 0 {
-		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
+		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.GetGrant()}}
 	}
-	candidates = p.orderRelayCandidates(candidates)
-	for _, candidate := range candidates {
+	refusal := errRelayLaneUnavailable
+	for _, candidate := range p.orderRelayCandidates(candidates) {
 		router := p.relayRouter(candidate.GetRelayInstanceId())
-		if router != nil && router.openSourceTunnel(connection, candidate.GetGrant()) {
-			return
+		if router == nil {
+			continue
+		}
+		tunnel, err := router.openSource(candidate.GetGrant())
+		if err == nil {
+			return tunnel, nil
+		}
+		if relayRefusalReason(refusal) != linkRejectedRelayCapacity {
+			refusal = err
 		}
 	}
+	return nil, refusal
 }
 
 func (p *DockerPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
@@ -747,24 +770,61 @@ func (p *DockerPlugin) OpenBackupRelayRoute(ctx context.Context, ownerKind, rout
 	return route, nil
 }
 
+// openSourceTunnel opens a source tunnel with grant and bridges connection over it until either side ends it. It
+// reports false, before any data moved, when the relay did not admit the tunnel.
 func (r *relayTunnelRouter) openSourceTunnel(connection net.Conn, grant *pb.RelaySignedGrant) bool {
-	tunnelCtx, cancel := context.WithCancel(r.ctx)
-	defer cancel()
-	stream, err := r.client.OpenTunnel(tunnelCtx)
+	tunnel, err := r.openSource(grant)
 	if err != nil {
 		return false
 	}
-	if err = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}}); err != nil {
-		return false
-	}
-	first, err := stream.Recv()
-	if err != nil || first.GetReady() == nil {
-		return false
-	}
-	r.active.Add(1)
-	defer r.active.Add(-1)
-	_ = bridgeRelayConnection(connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
+	tunnel.bridge(connection)
 	return true
+}
+
+// relaySourceTunnel is a source tunnel the relay admitted, before it carries any data.
+type relaySourceTunnel struct {
+	router   *relayTunnelRouter
+	stream   relayFrameStream
+	cancel   context.CancelFunc
+	maxFrame int
+}
+
+// openSource opens a source tunnel with grant and waits until the relay admits it. A refusal (the route's or
+// endpoint's session capacity, a revoked or stale grant) is the relay's status error.
+func (r *relayTunnelRouter) openSource(grant *pb.RelaySignedGrant) (*relaySourceTunnel, error) {
+	tunnelCtx, cancel := context.WithCancel(r.ctx)
+	stream, err := r.client.OpenTunnel(tunnelCtx)
+	if err == nil {
+		err = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}})
+	}
+	var first *relayv1.TunnelFrame
+	if err == nil {
+		first, err = stream.Recv()
+	}
+	if err == nil && first.GetReady() == nil {
+		err = errors.New("relay sent no ready frame")
+		if relayErr := first.GetError(); relayErr != nil {
+			err = fmt.Errorf("relay tunnel error: %s", relayErr.GetCode())
+		}
+	}
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &relaySourceTunnel{router: r, stream: stream, cancel: cancel, maxFrame: int(first.GetReady().MaxFrameBytes)}, nil
+}
+
+// bridge carries connection over the tunnel until either side ends it.
+func (t *relaySourceTunnel) bridge(connection net.Conn) {
+	defer t.cancel()
+	t.router.active.Add(1)
+	defer t.router.active.Add(-1)
+	_ = bridgeRelayConnection(connection, t.stream, t.maxFrame, t.cancel)
+}
+
+// close abandons a tunnel that was never bridged.
+func (t *relaySourceTunnel) close() {
+	t.cancel()
 }
 
 func (p *DockerPlugin) ProbeRelayCandidate(command *pb.ProbeRelayCandidateCommand) (string, error) {
