@@ -99,7 +99,7 @@ First confirm the registry is enabled, available for the selected node, and pass
 
   clickhouse: `# ClickHouse In Gateway
 
-Gateway supports ClickHouse as a saved external database connection, a Gateway-managed database instance on a dedicated database node, or the optional structured-logging backend.
+Gateway supports ClickHouse as a saved external database connection, a Gateway-managed database instance on a dedicated Storage node, or the optional structured-logging backend.
 
 ## Access And Connectivity
 External ClickHouse connections require an HTTP(S) URL or host plus database and username. Managed instances are private by default. Application bindings use the private connector and authenticated Gateway tunnel; do not present a binding as direct TCP access or disclose its injected credentials.

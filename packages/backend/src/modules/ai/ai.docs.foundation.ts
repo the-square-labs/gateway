@@ -61,7 +61,7 @@ Use find_resource with an empty query and a concrete type when the user asks to 
 - Types: tls-server (web/SSL), tls-client (client auth), code-signing, email (S/MIME).
 - Fields: caId, commonName, keyAlgorithm, validityDays, type, sans (Subject Alternative Names).
 - SANs: array of PLAIN strings — just the value, NO type prefix. Examples: "example.com", "*.example.com", "10.0.0.1", "user@example.com". The system auto-detects the type (dns/ip/email/url). NEVER use "DNS:", "IP:", or other prefixes — they will cause errors.
-- Certificates can be revoked with a reason (key_compromise, superseded, unspecified, etc.).
+- Certificates can be revoked with an RFC 5280 reason: unspecified (default), keyCompromise, caCompromise, affiliationChanged, superseded, cessationOfOperation, or certificateHold.
 - Private keys are generated server-side and encrypted at rest.
 
 ## System PKI Audit
@@ -328,7 +328,7 @@ Let's Encrypt integration for free, automated SSL certificates.
 ## Authentication
 Gateway can enable OIDC, password, and email one-time-code sign-in independently. Email-based sign-in requires verified SMTP. Users can add passkeys after they sign in; passkeys are not a first-run primary method.
 - The browser setup wizard creates exactly one deliberate first administrator in the built-in system-admin group. It does not promote an arbitrary first OIDC login.
-- OIDC is configured under Settings > Advanced with an issuer URL, client ID, client secret, auto-provisioning policy, default group, and optional verified-email requirement.
+- OIDC is configured under Settings > Authentication with an issuer URL, client ID, client secret, auto-provisioning policy, default group, and optional verified-email requirement.
 - When OIDC auto-provisioning is enabled, later valid OIDC logins can create users in the configured default group. Existing OIDC users are bound to the provider subject; Gateway may refresh their name and avatar from the provider.
 - Password and email-code configuration, recovery flows, passkeys, and first-run choices are described in the authentication topic. Do not claim that OIDC is the only sign-in method.
 
@@ -481,7 +481,7 @@ curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/se
 
 The setup script:
 1. Downloads the daemon binary to \`/usr/local/bin/<type>-daemon\`
-2. On a fresh generic Docker node, preflights and attempts to install the optional Secure Runtime before enrollment. Database-profile nodes skip this generic-workload runtime.
+2. On a fresh generic Docker node, preflights and attempts to install the optional Secure Runtime before enrollment, and installs the lease watchdog (\`gateway-lease-watchdog\` service) that stops an Availability lease-mode copy past its lease deadline. Storage and legacy database nodes skip both. A Docker daemon running as root with systemd or OpenRC installs a missing watchdog itself; otherwise re-run the installer, or Availability lists the node under excludedNodes.
 3. Creates config at \`/etc/<type>-daemon/config.yaml\` with the gateway address, token, and certificate fingerprint
 4. Creates a systemd service and enables it
 5. Starts the daemon — it connects to the gateway and completes mTLS enrollment automatically
@@ -543,13 +543,13 @@ Daemons report hardware/OS info on registration:
 - **Rename**: change display name (does not affect hostname).
 - **Delete**: removes the node from Gateway. The daemon will fail to reconnect (mTLS cert becomes invalid).
 - **Pin to sidebar**: quick-access link in the sidebar navigation.
-- **Default node**: one nginx node can be marked as default — used for proxy operations when no specific node is selected.
+- **Service creation lock**: \`set_node_service_creation_lock\` (\`nodes:lock\`) stops new routes and containers from being placed on a node.
 
 ## Key Fields
 - id, hostname, displayName, type, status (pending/online/offline/error)
 - serviceAddress (optional Docker reachability override)
 - lastSeenAt, capabilities (daemon version, features, system info)
-- certificateSerial (mTLS cert), enrollmentTokenHash
+- certificateSerial (mTLS cert); node reads never include enrollment token material
 - metadata (extensible metadata object)`,
 
   housekeeping: `# Housekeeping

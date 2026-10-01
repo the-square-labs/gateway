@@ -173,6 +173,40 @@ Long-running operations (stop, restart, kill, recreate, update) create tasks vis
 - Container IDs change after recreate/update — the frontend handles navigation to new IDs
 - Transition states (stopping, restarting, recreating, deploying, switching, etc.) block concurrent operations on the same container or deployment`,
 
+  availability: `# Docker Workload Availability
+
+Availability places a standalone Container, a blue/green Deployment, or a whole Compose Project on several independent Docker nodes. It is a Business and Enterprise feature. A policy attaches to the existing workload and from then on owns placements, routing membership, and cleanup; there is no new resource type. One tool covers it: \`manage_docker_availability({ operation, ... })\`, gated by \`docker:availability:manage\` (folder grants resolve through the workload's folder; the scope implies \`docker:containers:view\`).
+
+## Modes
+- \`replicated\`: 2 to 32 serving placements, at most one per node (\`desiredReplicaCount\`). Replica count is manual; there is no metric autoscaling.
+- \`failover\`: exactly one serving placement; after a loss a standby or replacement on another node takes over.
+- Priority mode (\`priorityMode: true\` with an ordered \`nodePriority\`) serves from the first available nodes and fails back to a higher-priority node once it has stayed healthy for \`failbackDelaySeconds\` (default 300).
+
+## Prerequisites
+- At least two online compatible Docker nodes with capacity for the placements plus temporary rollout placements.
+- No mounts of any kind (named, external, read-only, or host bind; the whole Compose project is checked). Persistent state must live outside the workload, for example in a managed database binding.
+- Images are pinned by digest in the internal registry and pre-pulled on standby nodes.
+
+## Workflow
+1. \`preflight\` with \`resource: { type, nodeId, containerName | deploymentId | composeProjectId }\`, \`mode\`, and optional \`desiredReplicaCount\`, \`nodeSelectionMode\`, \`selectedNodeIds\`; resolve every incompatibility it reports.
+2. \`enable\` with the same shape plus optional \`rolloutPolicy\`, \`offlineReplacementGraceSeconds\`, and \`partitionMode\`. The running workload becomes the first placement where it runs, without an outage or a second copy beside it.
+3. Poll \`get\` / \`get_by_resource\` and \`list_operations\` until the serving count is reached, then verify real traffic through the Route.
+4. \`update\` changes mode, replicas, node selection, rollout policy, grace, \`partitionMode\`, or priority mode; \`retry_operation\` retries a failed operation.
+5. \`disable\` needs \`survivingPlacementId\` and the exact typed \`confirmation\` the tool or Console shows; the survivor keeps running as the plain workload. Never guess either value.
+Stop stops every copy and keeps the placements; Start starts the copies that served last. None of these deletes the original workload.
+
+## Data-plane failover (lease mode)
+- A policy switches to lease mode by itself once every candidate Docker node, ingress Nginx node, carrying relay and witness has run \`availability_lease_v2\` (with its lease watchdog) for 2 minutes without a restart; until then \`lease.reason\` is \`participants_settling\`. There is no switch to turn it off.
+- In lease mode nodes and relays hold a lease per serving slot. A holder that cannot renew stops its own copy, and the next candidate takes over within about 45 seconds even while Gateway is down. Takeovers are audited as \`docker.availability.lease_failover\`, planned moves as \`lease_handoff\`, and a slot retaken by the same node as \`lease_reacquired\`.
+- \`partitionMode\`: \`strict\` (default) never runs two copies of a slot; \`available\` keeps serving on both sides of a split and may briefly run two copies. Never use \`available\` for singletons such as queue consumers or cron jobs.
+- Voters are the candidate nodes (one per physical host) plus witnesses so the count is odd and at least 3. \`lease.voterMargin.margin\` of 0 or less means losing one more voter disables autonomous failover. Every node of a lease-mode policy must reach every relay.
+- The lease watchdog (\`gateway-lease-watchdog\` on each Docker node) stops a lease-mode copy past its deadline even when the Docker daemon or dockerd hangs. The node installer installs it, and a root Docker daemon with systemd or OpenRC installs it itself. A node without it is listed in \`lease.excludedNodes\` with \`watchdog_missing\`; re-run the node installer there. Other reasons are \`offline\`, \`daemon_outdated\`, and \`identity_pending\`; an excluded node never changes the policy's mode.
+- A planned move (failback, drain, \`nodePriority\` change) in lease mode is a handoff with a short gap, usually 5 to 15 seconds; in failover mode with \`strict\` requests fail for that time.
+- Daemon and relay updates of lease participants run one after another; a waiting node shows \`metadata.updatePhase: waiting_for_lease_peers\`.
+
+## Limits
+Availability protects the workload, not Gateway itself, nginx, the database engine, registry storage, or shared volumes. Compose Availability replicates the whole project per placement; it does not spread individual services across nodes.`,
+
   databases: `# Databases
 
 ## Overview
@@ -205,6 +239,7 @@ Managed database instances are not generic Docker workloads. Storage nodes run G
 - \`databases:view\`, \`databases:create\`, \`databases:edit\`, \`databases:delete\` govern both external connections and managed instances/bindings; no new managed-database scope is introduced.
 - \`databases:query:read\`, \`databases:query:write\`, \`databases:query:admin\`; a query grant also lets the caller view that database, in REST and in AI/MCP tools alike.
 - \`databases:credentials:reveal\`
+- Backups: \`databases:backups:view\` (policies and history), \`databases:backups:manage\` (policies, removing runs), \`databases:backups:run\` (start and cancel runs), \`databases:backups:restore\` (OAuth manual-approval); runs also need \`storage:credentials:use\` on the destination storage and \`nodes:backups:execute\` on the executor Storage node.
 - Most database scopes are resource-scopable by database ID, so access can be limited per saved connection.
 
 ## Monitoring

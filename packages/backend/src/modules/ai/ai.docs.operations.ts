@@ -22,6 +22,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - admin_users
 - permission_groups
 - routes
+- pages (Page Projects)
 - docker with dockerResourceType: container, compose, image, network, or volume
 
 ## Operations
@@ -208,7 +209,7 @@ curl -X POST -H "Authorization: Bearer gw_your_token_here" -H "Content-Type: app
 - A completed request whose response was not stored (it looked like it carried a secret, or was over 1 MiB) answers \`409 IDEMPOTENCY_RESPONSE_WITHHELD\` with the original status and \`Location\` when known: look the resource up instead of retrying.
 - Only 2xx and deterministic 400/404/409/422 JSON responses are recorded. 401, 403, 5xx, streamed and non-JSON responses are not, so a retry runs again.
 - Endpoints that return a secret once (API, inference, ingest and Pages deploy tokens, node enrollment, keys, credentials, bindings) never take the header, and neither do other endpoints outside the list. Bodies over 1 MiB, non-JSON uploads and WebSocket routes run without idempotency, and so does everything while the idempotency store (Redis) is unavailable.
-- MCP create tools (containers, deployments, Compose projects, routes, domains, ACME certificates, databases, storage, Page Projects and similar; not nodes or other secret-returning tools) take an optional \`idempotencyKey\` argument with the same semantics, bound to the MCP token, its scopes and the owner's live scopes; a replayed result carries \`_meta.idempotencyReplayed: true\`.
+- MCP create tools (containers, deployments, Compose projects, routes, domains, ACME certificates, databases, storage, Page Projects and similar; not nodes or other secret-returning tools) take an optional \`idempotencyKey\` argument with the same semantics, bound to the MCP token, its scopes and the owner's live scopes; a replayed result carries \`_meta.idempotencyReplayed: true\`. Over MCP the errors are tool errors that start with the code: \`IDEMPOTENCY_KEY_REUSED\`, \`IDEMPOTENCY_KEY_IN_PROGRESS\`, and \`IDEMPOTENCY_RESULT_WITHHELD\` (the MCP name of the withheld-response case; look the resource up instead of retrying).
 
 ## Key Endpoints
 

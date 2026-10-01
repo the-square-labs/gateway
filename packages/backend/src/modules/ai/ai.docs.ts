@@ -48,6 +48,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   ],
   'node-files': ['nodes:files:read', 'nodes:files:write'],
   docker: ['docker:containers:view', 'docker:compose:view'],
+  availability: ['docker:availability:manage', 'docker:containers:view', 'docker:compose:view'],
   sandbox: 'ai:sandbox:use',
   conversations: ['ai:workspace:use', 'mcp:use'],
   databases: 'databases:view',

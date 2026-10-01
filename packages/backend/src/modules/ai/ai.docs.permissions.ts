@@ -19,8 +19,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### PKI: Certificates
 | Scope | Description |
 |-------|-------------|
-| pki:cert:view | List PKI certificates |
-| pki:cert:view | View certificate details |
+| pki:cert:view | List PKI certificates and view their details (resource-scopable) |
 | pki:cert:issue | Issue certificates from a CA (resource-scopable) |
 | pki:cert:revoke | Revoke certificates |
 | pki:cert:export | Download certificate files and private keys |
@@ -29,8 +28,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### PKI: Certificate Templates
 | Scope | Description |
 |-------|-------------|
-| pki:templates:view | List certificate templates |
-| pki:templates:view | View template details |
+| pki:templates:view | List certificate templates and view their details |
 | pki:templates:create | Create templates |
 | pki:templates:edit | Edit templates |
 | pki:templates:delete | Delete templates |
@@ -39,8 +37,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Ingress Routes
 | Scope | Description |
 |-------|-------------|
-| proxy:view | List routes |
-| proxy:view | View route details (resource-scopable) |
+| proxy:view | List routes and view their details (resource-scopable) |
 | proxy:create | Create routes (resource-scopable) |
 | proxy:edit | Update routes (resource-scopable) |
 | proxy:delete | Delete routes (resource-scopable) |
@@ -49,15 +46,32 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | proxy:raw:write | Write raw nginx config and enable/disable raw config mode (resource-scopable) |
 | proxy:advanced | Edit advanced nginx snippets (resource-scopable) |
 | proxy:unrestricted | Bypass the dangerous advanced snippet and raw directive restrictions (resource-scopable) |
+| proxy:maintenance:bypass | Create temporary browser access codes for routes in maintenance; implies nothing else (resource-scopable) |
 | proxy:templates:view | List and view nginx proxy templates (resource-scopable) |
 | proxy:templates:manage | Create, edit, test, clone, and delete nginx proxy templates (resource-scopable) |
 | proxy:templates:folders:manage | Manage nginx template folders and placement of custom templates |
 
+### Pages
+| Scope | Description |
+|-------|-------------|
+| pages:view | View Page Projects, Deployments, Tags, previews, and usage (resource-scopable by Project) |
+| pages:create | Create Page Projects (accepts folder/ and node/ destinations) |
+| pages:edit | Rename Page Projects, edit retention, quota, and preview settings, and rotate preview links (resource-scopable) |
+| pages:delete | Delete Page Projects after their dependencies and retained Deployments are removed (resource-scopable) |
+| pages:deploy | Create and upload Deployments and start Git-source builds (resource-scopable) |
+| pages:deployments:manage | Pin, unpin, clean up, and delete eligible Deployments (resource-scopable) |
+| pages:tags:manage | Create, move, and delete Tags (resource-scopable) |
+| pages:tokens:manage | Create, restrict, and revoke Project deploy tokens (resource-scopable) |
+| pages:folders:manage | Manage Page Project folders; moving a Project also needs pages:edit on it |
+| pages:settings:view | View the wildcard Pages profile and storage defaults |
+| pages:settings:edit | Configure and migrate the wildcard Pages profile and storage defaults |
+
+Every resource-qualified Pages scope uses the Page Project ID, including Deployment, Tag, and deploy-token operations.
+
 ### SSL Certificates
 | Scope | Description |
 |-------|-------------|
-| ssl:cert:view | List SSL certificates |
-| ssl:cert:view | View SSL certificate details |
+| ssl:cert:view | List SSL certificates and view their details (resource-scopable) |
 | ssl:cert:issue | Request ACME / upload / link internal certs |
 | ssl:cert:folders:manage | Manage SSL certificate folders and placement |
 | ssl:cert:delete | Delete SSL certificates (resource-scopable) |
@@ -74,8 +88,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Access Control Lists
 | Scope | Description |
 |-------|-------------|
-| acl:view | List access lists |
-| acl:view | View access list details |
+| acl:view | List access lists and view their details (resource-scopable) |
 | acl:create | Create access lists |
 | acl:edit | Edit access lists (resource-scopable) |
 | acl:delete | Delete access lists (resource-scopable) |
@@ -83,8 +96,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Nodes
 | Scope | Description |
 |-------|-------------|
-| nodes:details | List daemon nodes |
-| nodes:details | View node details, health, stats (resource-scopable) |
+| nodes:details | List daemon nodes and view their details, health, and stats (resource-scopable) |
 | nodes:create | Create/enroll new nodes |
 | nodes:rename | Rename a node (resource-scopable) |
 | nodes:delete | Delete a node (resource-scopable) |
@@ -94,6 +106,8 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | nodes:console | Open interactive shell (resource-scopable) |
 | nodes:files:read | Browse, open, copy, and download node files (resource-scopable) |
 | nodes:files:write | Create, edit, upload, move, and delete node files (resource-scopable) |
+| nodes:lock | Lock or unlock service creation on a node, which stops new routes and containers from being placed there (resource-scopable) |
+| nodes:backups:execute | Use a Storage node as the executor of database backups, restores and storage copy jobs (resource-scopable) |
 | nodes:folders:manage | Manage node folders and folder placement |
 
 ### Administration
@@ -105,6 +119,9 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | admin:users:folders:manage | Manage administration user folders and placement |
 | admin:groups:folders:manage | Manage permission group folders and placement |
 | admin:audit | View audit log |
+| audit:siem:view | View SIEM destinations and the audit delivery history |
+| audit:siem:manage | Create, edit, test, and delete SIEM destinations and requeue failed deliveries |
+| admin:details:certificates | View Gateway's internal system PKI and SSL certificates read-only; audit_system_pki_leaves also needs it |
 | admin:system | System-level administration (protected) |
 | admin:update | Apply system updates |
 | admin:alerts | View and manage alerts |
@@ -112,8 +129,8 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Gateway Settings
 | Scope | Description |
 |-------|-------------|
-| settings:gateway:view | View sign-in provisioning and MCP server settings |
-| settings:gateway:edit | Edit sign-in provisioning and MCP server settings |
+| settings:gateway:view | View Gateway settings: public URL, sign-in, SMTP, OAuth and MCP, network, environment, and relay settings |
+| settings:gateway:edit | Edit those settings; SMTP, the OIDC provider, the public URL, and relaxing OIDC verified-email enforcement also need admin:system |
 
 ### Housekeeping
 | Scope | Description |
@@ -161,8 +178,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Docker: Containers
 | Scope | Description |
 |-------|-------------|
-| docker:containers:view | List containers on a node |
-| docker:containers:view | View container details (resource-scopable) |
+| docker:containers:view | List containers and deployments on a node and view their details (resource-scopable) |
 | docker:containers:create | Create/deploy containers |
 | docker:containers:edit | Edit container settings (resource-scopable) |
 | docker:containers:manage | Start/stop/restart/kill/update containers (resource-scopable) |
@@ -174,6 +190,8 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | docker:containers:export | Export portable container archives (resource-scopable) |
 | docker:containers:secrets | Manage encrypted secrets (resource-scopable) |
 | docker:containers:webhooks | Configure CI/CD webhook URLs |
+| docker:containers:migrate | Migrate containers and deployments between Docker nodes (resource-scopable) |
+| docker:availability:manage | Enable, update, scale, heal, and disable multi-node Availability; implies docker:containers:view (resource-scopable; folder grants resolve through the container or Compose folder) |
 | docker:containers:mounts | Add, remove, or change container/deployment mounts using Gateway-managed volumes; new host bind mounts are prohibited. Also required to give a workload with legacy host bind mounts a new image, command or runtime; environment, label, network and link changes that keep its image need none. Automatic Git deployments check it on the account that last saved the source, and webhook calls on the account that last saved the webhook (resource-scopable) |
 | docker:folders:manage | Manage folders and placement for containers, deployments, Compose projects, networks, volumes, and images |
 
@@ -199,6 +217,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | docker:volumes:create | Create volumes |
 | docker:volumes:edit | Rename, relabel, resize and adopt volumes |
 | docker:volumes:delete | Remove volumes |
+| docker:volumes:export | Export portable volume archives |
 | docker:volumes:files:read | Browse/read volume files |
 | docker:volumes:files:write | Create/edit/upload/move/delete volume files |
 
@@ -229,8 +248,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Databases
 | Scope | Description |
 |-------|-------------|
-| databases:view | List external connections and managed database instances |
-| databases:view | View database details (resource-scopable) |
+| databases:view | List external connections and managed database instances and view their details (resource-scopable) |
 | databases:create | Create external connections or deploy managed database instances |
 | databases:edit | Edit external connections, managed instances and publication settings; link and unlink workload bindings, which also need docker:containers:environment + docker:containers:secrets on the target (or docker:compose:manage for a Compose service) (resource-scopable) |
 | databases:delete | Delete external connections or managed instances (resource-scopable) |
@@ -239,6 +257,16 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | databases:query:admin | Run admin queries with the connection's full credentials (resource-scopable); implies databases:query:write |
 | databases:credentials:reveal | Reveal explicitly requested external or managed owner/published credentials (resource-scopable); does not reveal per-binding injected secrets by default |
 | databases:folders:manage | Manage database folders and placement |
+
+### Database Backups
+| Scope | Description |
+|-------|-------------|
+| databases:backups:view | List backup policies and run history (resource-scopable by database) |
+| databases:backups:manage | Create, edit, and delete backup policies and remove runs from history (resource-scopable) |
+| databases:backups:run | Start and cancel backup runs (resource-scopable) |
+| databases:backups:restore | Restore a backup; restoring into an existing connection also needs it on the target (resource-scopable) |
+
+Backups, restores, retention and history deletion also need storage:credentials:use on the destination storage and nodes:backups:execute on the executor Storage node. Restoring into a new managed database needs databases:create on the Storage node or the chosen folder.
 
 ### Storage
 | Scope | Description |
@@ -258,8 +286,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 ### Logging
 | Scope | Description |
 |-------|-------------|
-| logs:environments:view | List logging environments |
-| logs:environments:view | View logging environments (resource-scopable) |
+| logs:environments:view | List and view logging environments (resource-scopable) |
 | logs:environments:create | Create logging environments |
 | logs:environments:edit | Edit logging environments (resource-scopable) |
 | logs:environments:delete | Delete logging environments (resource-scopable) |
@@ -267,8 +294,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | logs:tokens:view | List ingest tokens (resource-scopable by environment or environment folder) |
 | logs:tokens:create | Create ingest tokens (resource-scopable by environment or environment folder) |
 | logs:tokens:delete | Delete ingest tokens (resource-scopable by environment or environment folder) |
-| logs:schemas:view | List logging schemas |
-| logs:schemas:view | View logging schemas (resource-scopable by schema ID) |
+| logs:schemas:view | List and view logging schemas (resource-scopable by schema ID) |
 | logs:schemas:create | Create logging schemas |
 | logs:schemas:edit | Edit logging schemas (resource-scopable by schema ID) |
 | logs:schemas:delete | Delete logging schemas (resource-scopable by schema ID) |
@@ -299,8 +325,37 @@ Git scopes can be limited with stable IDs: \`<scope>:<connectorId>\` (every repo
 - A repository operation is allowed by the unqualified scope, the connector, any containing group/owner, or the exact project/repository; implied view applies per qualifier (\`repo:write:<connectorId>/project/42\` also grants \`view\` there).
 - The connector credential is used when \`:use\` covers the repository the same way, the personal credential otherwise.
 - Connector, project and repository lists only show what the caller's grants cover.
-- Configuring a Docker or Pages build source needs \`integrations:<provider>:use\` on the repository (any covering qualifier), not \`repo:read\` or a personal credential. Manual builds check it again. Sources saved before this release keep auto-building; for sources saved since, automatic builds pause ("Build paused: <user> no longer has use on <repo>" in the build history) once the saver loses it.
+- Configuring a Docker or Pages build source needs \`integrations:<provider>:use\` on the repository (any covering qualifier), not \`repo:read\` or a personal credential. Manual builds check it again. Sources saved before 2.11 keep auto-building; for sources saved since, automatic builds pause ("Build paused: <user> no longer has use on <repo>" in the build history) once the saver loses it.
 - Tokens and MCP grants are bounded per qualifier by the owner's grants; for repository operations both the token and the owner's current scopes must cover the repository (a token limited to a project inside the owner's group works; a token limited to a group whose owner holds one project reaches that project only).
+
+### Other Integrations
+| Scope | Description |
+|-------|-------------|
+| integrations:ssh:view | View configured external SSH servers |
+| integrations:ssh:manage | Add, configure, and delete external SSH servers and jump hosts |
+| integrations:ssh:use | Run commands and file operations on configured external SSH servers |
+| integrations:cloudflare:view | View Cloudflare connectors and their synchronization status |
+| integrations:cloudflare:manage | Create, edit, test, rotate, and delete Cloudflare connectors |
+| integrations:cloudflare:sync | Refresh Cloudflare zones and token capabilities with the connector credential |
+| integrations:hosting:view | View hosting provider accounts (restrictable to connector ID) |
+| integrations:hosting:manage | Create, reconfigure, and synchronize hosting accounts and read their secrets (restrictable to connector ID) |
+
+### Hosting
+| Scope | Description |
+|-------|-------------|
+| hosting:resources:view | View provider inventory (restrictable to connector ID) |
+| hosting:resources:create | Create hosted nodes (restrictable to connector ID); also needs nodes:create |
+| hosting:resources:power | Start, shut down, or reboot a hosted VM (restrictable to resource ID) |
+| hosting:resources:resize | Resize a hosted VM (restrictable to resource ID) |
+| hosting:resources:delete | Destroy a hosted VM or cancel a HOSTKEY rental (restrictable to resource ID) |
+| hosting:resources:recover | Restart a hosted daemon through an independent provider channel (restrictable to resource ID) |
+| hosting:snapshots:view | View VM snapshots and snapshot folders (restrictable to resource ID); also needs VM inventory and bound-node details access |
+| hosting:snapshots:create | Create a VM snapshot (restrictable to resource ID); also needs configuration access to bound nodes |
+| hosting:snapshots:delete | Delete a VM snapshot (restrictable to resource ID) |
+| hosting:snapshots:restore | Restore a VM snapshot, replacing disk data (restrictable to resource ID) |
+| hosting:snapshots:folders:manage | Create folders and organize VM snapshots (restrictable to resource ID) |
+| hosting:billing:view | Read account finances (restrictable to connector ID); never implied by node access |
+| hosting:billing:topup | Create a HOSTKEY deposit invoice (restrictable to connector ID) |
 
 ### Status Page
 | Scope | Description |
@@ -316,10 +371,10 @@ Git scopes can be limited with stable IDs: \`<scope>:<connectorId>\` (every repo
 
 | Group | Description |
 |-------|-------------|
-| system-admin | Full access including admin:system |
-| admin | Curated broad access, excluding admin:system, settings:gateway:edit, housekeeping:configure, and Docker registry create/edit/delete defaults |
-| operator | Operational access — PKI, proxy, SSL, ACL, nodes, Docker containers, AI |
-| viewer | Read-only — view/discovery scopes for PKI, proxy, SSL, Docker containers |
+| system-admin | Every scope, including admin:system |
+| admin | Every scope except admin:system, admin:users:impersonate, settings:gateway:edit, housekeeping:configure, nodes:console, ai:skills:manage, inference:setup, the hosting:* and integrations:hosting:* scopes, and Docker registry create/edit/delete |
+| operator | Day-to-day operations: storage connections and objects (no credential reveal, IAM keys, or bucket admin) with storage:credentials:use for backups, database backup policies and runs (no restore) and backup execution, PKI certificates and templates, domains, routes and Pages without delete, SSL, ACL, node details, config view, logs, and files, Docker containers and Compose without create or delete, read-only images, volumes, networks, and registries, databases with queries, notifications, log search and ingest tokens, alerts, AI Workspace, and MCP |
+| viewer | Read-only: storage, backups, PKI, domains, routes, nginx templates, Pages, SSL, ACL, Docker, databases, notifications, logging including log search, GitLab and Cloudflare connectors, plus AI Workspace |
 | guest | Account access only — no infrastructure permissions |
 
 Custom groups can be created with any combination of scopes.
@@ -332,7 +387,7 @@ Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:ce
 
 Folder grants: scopes of foldered resources accept "<scope>:folder/<folder-id>". The grant covers every resource in that folder and its subfolders, including resources created or moved there later, and stops covering a resource that leaves the folder. Creation scopes accept a destination instead: "proxy:create:folder/<folder-id>" or "proxy:create:node/<node-id>" lets the caller create in that folder or on that node only; pass the folderId (and nodeId) when creating. list_resource_folders shows a folder-scoped caller its granted folders even while they are empty, and list_nodes with a type shows creators the nodes they may create on. Route creators can also use list_route_ingress_nodes, and create_route may omit nodeId when a registered domain pins the ingress node or only one node is eligible.
 
-Implied scopes: any action scope in a family implies that family's view scope with the same suffix, so "proxy:edit:<route-id>" also lets the caller view that route and "databases:query:read:<database-id>" lets it view that database.
+Implied scopes: any action scope in a family except creation scopes (\`*:create*\`, \`docker:images:pull\`, \`ssl:cert:issue\`, \`pki:cert:issue\`) implies that family's view scope with the same suffix, including delete scopes, so "proxy:edit:<route-id>" also lets the caller view that route and "databases:query:read:<database-id>" lets it view that database.
 
 ## Limited Access (folders, nodes, resources)
 Access limited to folders, nodes or resources is normal. If you can't see or do something at the root, check get_my_access; folder-limited access is normal, so work inside the granted folders.
