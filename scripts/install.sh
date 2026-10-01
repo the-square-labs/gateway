@@ -511,7 +511,7 @@ verify_signed_relay() {
     die "Signed relay manifest does not match a compatible Relay image."
   fi
   [[ -n "$min_gateway_version" ]] || min_gateway_version="$manifest_version"
-  if [[ ! "$min_gateway_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || version_is_newer "$min_gateway_version" "$VERSION"; then
+  if [[ ! "$min_gateway_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || version_is_newer "$min_gateway_version" "$VERSION"; then
     rm -rf "$tmp_dir"
     die "Relay ${manifest_version} requires Gateway ${min_gateway_version} or newer."
   fi
@@ -576,9 +576,25 @@ docker_bounded_logging_allowed() {
   [[ "$DOCKER_LOG_DRIVER" == "json-file" && "$DOCKER_LOG_OPTS" == "none" ]]
 }
 
+# Whether vX.Y.Z[-rc.N] version $1 is newer than $2, ordered like the Gateway backend: numerically,
+# and a release candidate before its release. $1 in another format is never newer; $2 in another
+# format is older than any release.
 version_is_newer() {
-  local candidate="$1" current="$2"
-  [[ "$candidate" != "$current" && "$(printf '%s\n%s\n' "$candidate" "$current" | sort -V | tail -n1)" == "$candidate" ]]
+  local pattern='^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$' index
+  local -a candidate current
+  [[ "$1" =~ $pattern ]] || return 1
+  candidate=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[5]:-}")
+  [[ "$2" =~ $pattern ]] || return 0
+  current=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[5]:-}")
+  for index in 0 1 2; do
+    if ((10#${candidate[index]} != 10#${current[index]})); then
+      ((10#${candidate[index]} > 10#${current[index]}))
+      return
+    fi
+  done
+  [[ -n "${current[3]}" ]] || return 1
+  [[ -n "${candidate[3]}" ]] || return 0
+  ((10#${candidate[3]} > 10#${current[3]}))
 }
 
 prepare_install_metadata() {
@@ -601,9 +617,14 @@ prepare_install_metadata() {
 
   local release_json relay_json relay_tag relay_version current_gateway_version current_relay_version
   info "Resolving the latest Gateway release"
-  current_gateway_version="$(env_value GATEWAY_IMAGE_REF)"
-  current_gateway_version="${current_gateway_version##*:}"
-  [[ "$current_gateway_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || current_gateway_version=""
+  # The installer and the updater record the running version; older installs only carry it in a
+  # tagged image reference. A release candidate stays installed until its stable release exists.
+  current_gateway_version="$(env_value GATEWAY_VERSION)"
+  if [[ -z "$current_gateway_version" ]]; then
+    current_gateway_version="$(env_value GATEWAY_IMAGE_REF)"
+    current_gateway_version="${current_gateway_version##*:}"
+  fi
+  [[ "$current_gateway_version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || current_gateway_version=""
   release_json="$(fetch_release gateway "$current_gateway_version")" || die "Unable to query Gateway releases"
   if [[ -z "$release_json" && -n "$current_gateway_version" ]]; then
     VERSION="$current_gateway_version"
@@ -853,6 +874,7 @@ ensure_env GATEWAY_REGISTRY_IMAGE_REF "registry:3"
 ensure_env GATEWAY_REGISTRY_HTTP_SECRET "$(openssl rand -hex 32)"
 ensure_env GATEWAY_RELAY_MANAGED "$([[ -z "$SOURCE_DIR" ]] && printf true || printf false)"
 if [[ "$FRESH" == 1 ]]; then
+  ensure_env GATEWAY_VERSION "$VERSION"
   ensure_env GATEWAY_RELAY_IMAGE_REF "$RELAY_IMAGE_REF"
   ensure_env GATEWAY_RELAY_BUILD_VERSION "$RELAY_BUILD_VERSION"
   ensure_env GATEWAY_RELAY_PROTOCOL_MAJOR "$RELAY_PROTOCOL_MAJOR"
