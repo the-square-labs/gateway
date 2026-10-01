@@ -16,6 +16,7 @@ export { __testOnly } from './proxy.service-helpers.js';
 import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import { isDockerUpstream, logger, type ProxyHostRow } from './proxy.service.core.js';
 import { ProxyServiceListing } from './proxy.service.listing.js';
+import { rawConfigUsesSecureLink } from './proxy.service-helpers.js';
 
 interface AppliedNodeHostConfig {
   config: string;
@@ -165,9 +166,21 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     this.queueDockerReconciliation(true);
   }
 
+  /**
+   * Whether a raw-mode Route needs its Secure Link. It keeps the link it has; a link an earlier release tore
+   * down when the Route entered raw mode comes back while the raw config, or the config Gateway renders while no
+   * raw config is stored, still proxies to it.
+   */
+  protected async rawRouteUsesSecureLink(host: ProxyHostRow): Promise<boolean> {
+    if (host.secureLinkGeneration > 0) return true;
+    if (host.rawConfig) return rawConfigUsesSecureLink(host.id, host.rawConfig);
+    const members = await this.secureLinks?.getActiveAvailabilityMembers?.(host.id, `proxy-host:${host.id}`);
+    return !members?.length;
+  }
+
   protected async resolveStoredDockerUpstream(host: ProxyHostRow, force = false): Promise<ProxyHostRow> {
     if (!isDockerUpstream(host.upstreamKind) || !this.dockerUpstreams) return host;
-    if (host.type === 'raw' || host.rawConfigEnabled) return host;
+    if ((host.type === 'raw' || host.rawConfigEnabled) && !(await this.rawRouteUsesSecureLink(host))) return host;
     const resolved = await this.dockerUpstreams.resolve(host, { allowPortRebind: true });
     const changed =
       host.dockerContainerPort !== resolved.dockerContainerPort ||
@@ -217,7 +230,7 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     }
     const hosts = await this.db.query.proxyHosts.findMany({
       where: and(
-        eq(proxyHosts.type, 'proxy'),
+        inArray(proxyHosts.type, ['proxy', 'raw']),
         inArray(proxyHosts.upstreamKind, ['docker_container', 'docker_deployment']),
         ne(proxyHosts.secureLinkStatus, 'cleanup_pending')
       ),
@@ -230,17 +243,16 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
           const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, listedHost.id) });
           if (
             !host ||
-            host.type !== 'proxy' ||
+            (host.type !== 'proxy' && host.type !== 'raw') ||
             !isDockerUpstream(host.upstreamKind) ||
             host.secureLinkStatus === 'cleanup_pending'
           ) {
             return true;
           }
-          if (host.rawConfigEnabled) {
-            if (host.secureLinkGeneration > 0) await this.secureLinks?.cleanup(host);
-            return true;
-          }
-          const availabilityManaged = (await this.availabilityIngressReconciler?.(host.id)) ?? false;
+          // A raw-mode Route keeps its Secure Link (see rawRouteUsesSecureLink): it follows its target here like a
+          // managed Route's. Availability places the ingress of managed Routes only.
+          const rawMode = host.type === 'raw' || host.rawConfigEnabled;
+          const availabilityManaged = !rawMode && ((await this.availabilityIngressReconciler?.(host.id)) ?? false);
           if (availabilityManaged) return true;
           const updated = await this.resolveStoredDockerUpstream(host, force);
           const secureLinkChanged =

@@ -148,6 +148,17 @@ export function storedRawConfigForRawModeEnablement(
   return existing.rawConfig;
 }
 
+/**
+ * Whether a raw config proxies to the Route's own Secure Link: raw mode starts from the rendered config, whose
+ * upstream block is named after the Route and points at the link's socket.
+ */
+export function rawConfigUsesSecureLink(hostId: string, rawConfig: string): boolean {
+  return (
+    rawConfig.includes(`/run/gateway-secure-links/${hostId}.sock`) ||
+    rawConfig.includes(`gateway_secure_link_${hostId.replace(/-/g, '_')}`)
+  );
+}
+
 export function assertSslPrerequisites(input: SslPrerequisiteState) {
   if (input.sslEnabled && !input.sslCertificateId && !input.internalCertificateId) {
     throw new AppError(400, 'SSL_CERTIFICATE_REQUIRED', 'An SSL certificate must be selected before enabling HTTPS');
