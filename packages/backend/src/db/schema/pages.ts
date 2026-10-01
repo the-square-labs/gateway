@@ -136,8 +136,9 @@ export const pageProjects = pgTable(
     name: varchar('name', { length: 255 }).notNull(),
     slug: varchar('slug', { length: 60 }).notNull(),
     // Random, never derived from the name. Prefixes every Tag preview label and
-    // is replaced (with every Deployment preview slug) by a link rotation.
-    previewHash: varchar('preview_hash', { length: 12 }).notNull(),
+    // is replaced (with every Deployment preview slug) by a link rotation. Gateway
+    // sets it; the database default (0221) covers inserts by releases before v2.11.
+    previewHash: varchar('preview_hash', { length: 12 }).notNull().default(sql`gateway_page_preview_hash()`),
     description: text('description'),
     appearanceColor: varchar('appearance_color', { length: 32 }),
     previewsEnabled: boolean('previews_enabled').notNull().default(true),
