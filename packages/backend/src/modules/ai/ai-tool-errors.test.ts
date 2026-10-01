@@ -18,6 +18,14 @@ describe('tool errors', () => {
     expect(describeToolError(new AppError(409, 'CONTAINER_BUSY', 'Container is currently stopping')).expected).toBe(
       true
     );
+    // A Route config nginx rejects (HTTP or HTTPS) is the caller's to fix.
+    const rejected = describeToolError(
+      new AppError(422, 'NGINX_CONFIG_FAILED', 'Failed to apply Nginx config: unknown directive "bogus_directive"')
+    );
+    expect(rejected.expected).toBe(true);
+    expect(formatToolError(rejected)).toBe(
+      'NGINX_CONFIG_FAILED: Failed to apply Nginx config: unknown directive "bogus_directive"'
+    );
   });
 
   it('report AppError details, except the permission metadata a 403 message already names', () => {
