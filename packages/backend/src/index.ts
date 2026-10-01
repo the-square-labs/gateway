@@ -68,12 +68,25 @@ import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import { drainWebSocketsForRestart, terminateRemainingWebSockets } from '@/services/websocket-shutdown.js';
 
+/**
+ * Apply pending migrations on one dedicated connection. A session advisory lock keeps two starting instances from
+ * applying the same migrations, and PostgreSQL 14+ aborts the migration transaction soon after this process dies
+ * instead of finishing the running statement while it holds its locks.
+ */
 async function runMigrations(databaseUrl: string) {
   logger.info('Running database migrations...');
-  const pool = new pg.Pool({ connectionString: databaseUrl });
-  const db = drizzle(pool);
-  await migrate(db, { migrationsFolder: resolve('src/db/migrations') });
-  await pool.end();
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ version: number }>(
+      "select current_setting('server_version_num')::int as version"
+    );
+    if (rows[0].version >= 140000) await client.query("set client_connection_check_interval = '5s'");
+    await client.query("select pg_advisory_lock(hashtext('gateway-migrations'))");
+    await migrate(drizzle(client), { migrationsFolder: resolve('src/db/migrations') });
+  } finally {
+    await client.end();
+  }
   logger.info('Database migrations completed');
 }
 
