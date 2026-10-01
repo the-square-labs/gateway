@@ -45,4 +45,26 @@ describe('container detail snapshot after a recreate', () => {
 
     await expect(service.getContainerDetail(NODE, 'api')).resolves.toMatchObject({ Id: 'new-runtime' });
   });
+
+  it('answers 404 for a removed container whose inspect is still cached', async () => {
+    const service = snapshots(envelope([{ id: 'other', name: 'web' }], '2026-10-01T21:51:00.000Z'), {
+      api: envelope(
+        { Id: 'removed-runtime', Name: '/api', State: { Status: 'restarting' } },
+        '2026-10-01T20:44:00.000Z'
+      ),
+    });
+
+    await expect(service.getContainerDetail(NODE, 'api')).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'CONTAINER_NOT_FOUND',
+    });
+  });
+
+  it('answers with the inspect of a container created after the list was read', async () => {
+    const service = snapshots(envelope([{ id: 'other', name: 'web' }], '2026-10-01T20:00:00.000Z'), {
+      api: envelope({ Id: 'new-container', Name: '/api' }, '2026-10-01T20:00:02.000Z'),
+    });
+
+    await expect(service.getContainerDetail(NODE, 'api')).resolves.toMatchObject({ Id: 'new-container' });
+  });
 });

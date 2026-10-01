@@ -384,7 +384,14 @@ export class DockerSnapshotReconciler {
       return;
     }
 
-    if (action === 'removed' || action === 'deleted') return;
+    if (action === 'removed' || action === 'deleted') {
+      // A removed container's cached inspect must not answer for it.
+      const keys = [event.name, event.id].filter((value): value is string => typeof value === 'string');
+      void this.snapshots.deleteDetails(nodeId, 'container-detail', keys).catch((error) => {
+        logger.warn('Failed to drop the cached inspect of a removed container', { nodeId, error });
+      });
+      return;
+    }
     // A recreated container keeps its name: its detail is cached under the name, like every other refresh, so the
     // name's cached inspect follows the new runtime at once instead of waiting for the periodic refresh.
     const detailKey = [event.name, event.id, event.ref].find(
