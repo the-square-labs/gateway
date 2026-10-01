@@ -30,10 +30,12 @@ func (f *fakeTunnelBroker) OpenTunnel(context.Context, ...grpc.CallOption) (grpc
 	return f.open(), nil
 }
 
-// fakeSourceStream answers the open frame with first (after admit closes, when set), then ends the tunnel.
+// fakeSourceStream answers the open frame with first (after admit closes, when set), then ends the tunnel (once hold
+// closes, when set).
 type fakeSourceStream struct {
 	grpc.ClientStream
 	admit   chan struct{}
+	hold    chan struct{}
 	first   *relayv1.TunnelFrame
 	refusal error
 	sent    chan *relayv1.TunnelFrame
@@ -51,6 +53,9 @@ func (s *fakeSourceStream) Send(frame *relayv1.TunnelFrame) error {
 func (s *fakeSourceStream) Recv() (*relayv1.TunnelFrame, error) {
 	s.recvs++
 	if s.recvs > 1 {
+		if s.hold != nil {
+			<-s.hold
+		}
 		return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}}, nil
 	}
 	if s.admit != nil {
@@ -79,7 +84,11 @@ func newRelayTestPlugin(t *testing.T, broker *fakeTunnelBroker, assignments ...*
 }
 
 func connectAssignment(ownerKind, ownerID string) *pb.RelayGrantAssignment {
-	payload, _ := json.Marshal(map[string]any{"kind": "connect", "maxConcurrentSessions": 64})
+	return connectAssignmentWithSessions(ownerKind, ownerID, 64)
+}
+
+func connectAssignmentWithSessions(ownerKind, ownerID string, sessions uint32) *pb.RelayGrantAssignment {
+	payload, _ := json.Marshal(map[string]any{"kind": "connect", "maxConcurrentSessions": sessions})
 	return &pb.RelayGrantAssignment{Role: "connect", OwnerKind: ownerKind, OwnerId: ownerID,
 		Grant: &pb.RelaySignedGrant{KeyId: "key-1", Payload: payload, Signature: []byte("signature")}}
 }
@@ -171,5 +180,52 @@ func TestStorageConnectorRelayReportsTheCapacityRefusal(t *testing.T) {
 	}
 	if !strings.Contains(output.lines("rejected")[0], "owner_kind="+storageBindingOwnerKind) {
 		t.Fatalf("storage refusal without its owner kind: %q", output.lines("rejected"))
+	}
+}
+
+// Every connection of a storage link passes the daemon's connector socket: the link is held at its grant's limit
+// whichever relay of the pool would carry the next connection, and the refusal reaches the connector, the log and the
+// link's runtime.
+func TestStorageConnectorRelayHoldsTheLinkAtItsGrantLimit(t *testing.T) {
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+	broker := &fakeTunnelBroker{open: func() *fakeSourceStream {
+		return &fakeSourceStream{first: readyFrame(), hold: hold, sent: make(chan *relayv1.TunnelFrame, 4)}
+	}}
+	plugin, output := newRelayTestPlugin(t, broker, connectAssignmentWithSessions(storageBindingOwnerKind, testStorageBindingID, 2))
+	open := func() securelink.RelayResponse {
+		t.Helper()
+		connector, daemonSide := net.Pipe()
+		t.Cleanup(func() { connector.Close() })
+		go plugin.handleStorageConnectorRelay(daemonSide)
+		if err := securelink.WriteJSON(connector, securelink.RelayRequest{Version: securelink.ProtocolVersion, OwnerKind: storageBindingOwnerKind, BindingID: testStorageBindingID}); err != nil {
+			t.Fatal(err)
+		}
+		var response securelink.RelayResponse
+		if err := securelink.ReadJSON(connector, &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	for range 2 {
+		if response := open(); response.Error != "" {
+			t.Fatalf("connection within the link limit refused: %q", response.Error)
+		}
+	}
+	if response := open(); response.Error != "storage link session capacity reached: the link carries its 2 concurrent connections" {
+		t.Fatalf("connection over the link limit answered with %q", response.Error)
+	}
+	if lines := output.lines("level=WARN", "owner_kind="+storageBindingOwnerKind, "binding_id="+testStorageBindingID, "reason="+linkRejectedLinkLimit, "limit=2"); len(lines) != 1 {
+		t.Fatalf("storage link limit logged %q", output.lines("rejected"))
+	}
+	reports := plugin.managedLinkRuntime()
+	if len(reports) != 1 {
+		t.Fatalf("link reports %+v", reports)
+	}
+	report := reports[0]
+	if report.GetOwnerKind() != storageBindingOwnerKind || report.GetOwnerId() != testStorageBindingID ||
+		report.GetActiveConnections() != 2 || report.GetConnectionLimit() != 2 || report.GetRejectedTotal() != 1 ||
+		report.GetLastRejectionReason() != linkRejectedLinkLimit || report.GetLastRejectedAtUnixMs() == 0 {
+		t.Fatalf("storage link report %+v", report)
 	}
 }

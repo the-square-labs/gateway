@@ -626,6 +626,16 @@ func (p *DockerPlugin) openSidecar(connection net.Conn) {
 	if err != nil {
 		return
 	}
+	// A binding served through a legacy sidecar has no host listener: the link is held at its limit here.
+	if assignment := p.relayGrants.lookup("connect", linkKindManagedDatabaseBinding, bindingID); assignment != nil {
+		link := linkKey{kind: linkKindManagedDatabaseBinding, id: bindingID}
+		limit := relayGrantSessionLimit(assignment, managedLinkDefaultSessions)
+		if !p.linkConnections.acquire(link, int(limit)) {
+			p.linkRejections.rejected(p.logger, link.kind, link.id, linkRejectedLinkLimit, "limit", limit)
+			return
+		}
+		defer p.linkConnections.release(link)
+	}
 	p.openManagedDatabaseBinding(connection, bindingID, 0)
 }
 

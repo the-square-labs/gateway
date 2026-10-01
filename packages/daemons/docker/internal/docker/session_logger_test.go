@@ -48,7 +48,7 @@ func TestComponentWarningsReachTheSessionLogStream(t *testing.T) {
 	commands := &fakeCommandStream{}
 	plugin.SetLogger(slog.New(stream.NewGrpcLogHandlerWithWriter(stream.NewWriter(commands), journal.Handler())))
 
-	manager.rejections.rejected(manager.logger, linkKindManagedDatabaseBinding, testListenerBindingA, linkRejectedListenerLimit, "limit", 128)
+	manager.rejections.rejected(manager.logger, linkKindManagedDatabaseBinding, testListenerBindingA, linkRejectedLinkLimit, "limit", 64)
 	derived.Warn("derived logger line")
 
 	entries := commands.logEntries("managed link connection rejected")
@@ -56,13 +56,13 @@ func TestComponentWarningsReachTheSessionLogStream(t *testing.T) {
 		t.Fatalf("rejection sent to Gateway %d times", len(entries))
 	}
 	if entry := entries[0]; entry.GetLevel() != "warn" || entry.GetFields()["binding_id"] != testListenerBindingA ||
-		entry.GetFields()["reason"] != linkRejectedListenerLimit || entry.GetFields()["limit"] != "128" {
+		entry.GetFields()["reason"] != linkRejectedLinkLimit || entry.GetFields()["limit"] != "64" {
 		t.Fatalf("rejection entry %+v", entry)
 	}
 	if entries := commands.logEntries("derived logger line"); len(entries) != 1 || entries[0].GetComponent() != "links" {
 		t.Fatalf("derived logger entries %+v", entries)
 	}
-	if len(journalLines.lines("managed link connection rejected", "reason="+linkRejectedListenerLimit)) != 1 ||
+	if len(journalLines.lines("managed link connection rejected", "reason="+linkRejectedLinkLimit)) != 1 ||
 		len(journalLines.lines("derived logger line")) != 1 {
 		t.Fatal("lines missing from the journal")
 	}

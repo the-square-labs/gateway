@@ -14,6 +14,8 @@ func (p *DockerPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 	// Lease state goes first: it must reach the Gateway even when Docker
 	// itself does not answer.
 	base.AvailabilityLease = p.availabilityLeaseReport()
+	// So do the link counters: they come from the daemon's own state.
+	base.ManagedLinks = p.managedLinkRuntime()
 	if p.storageManager != nil {
 		mount, err := p.storageManager.storageRootHealthMount()
 		if err != nil {

@@ -22,7 +22,8 @@ const (
 
 // Rejection reasons. The reason keys the rate limit, so it stays a short fixed label; the detail goes into "error".
 const (
-	linkRejectedListenerLimit     = "listener_limit"
+	// linkRejectedLinkLimit: the link already carries the concurrent connections its grant allows.
+	linkRejectedLinkLimit         = "link_limit"
 	linkRejectedNodeLimit         = "node_limit"
 	linkRejectedNetworkUnverified = "network_unverified"
 	linkRejectedNetworkChanged    = "network_changed"
@@ -35,14 +36,22 @@ const (
 	linkRejectedRelayUnavailable  = "relay_unavailable"
 )
 
+// linkRejectedAtCapacity reports the reasons this node refuses a connection for capacity: they are the link's
+// admission rejects next to the relays' own (relay_capacity is counted by the relay that refused).
+func linkRejectedAtCapacity(reason string) bool {
+	return reason == linkRejectedLinkLimit || reason == linkRejectedNodeLimit
+}
+
 // linkRejectionLog writes the WARN for connections a managed link (database binding, storage link) turns away
 // instead of a silent close: the first rejection of a link and reason at once, then at most one line per
-// linkRejectionLogInterval with the number of rejections since the previous line. The zero value is ready to use.
+// linkRejectionLogInterval with the number of rejections since the previous line. It also keeps each link's
+// counters for the health report (managedLinkRuntime). The zero value is ready to use.
 type linkRejectionLog struct {
 	// now overrides the clock (tests).
 	now     func() time.Time
 	mu      sync.Mutex
 	entries map[linkRejectionKey]*linkRejectionEntry
+	links   map[linkKey]*linkRejectionCounts
 }
 
 type linkRejectionKey struct{ kind, id, reason string }
@@ -52,6 +61,17 @@ type linkRejectionEntry struct {
 	suppressed int
 }
 
+// linkKey names one managed link: its owner kind and binding (or placement) id.
+type linkKey struct{ kind, id string }
+
+// linkRejectionCounts are one link's rejections since the daemon started.
+type linkRejectionCounts struct {
+	// atCapacity counts the connections refused at the link's or the node's limit.
+	atCapacity uint64
+	lastReason string
+	lastAt     time.Time
+}
+
 func (l *linkRejectionLog) rejected(logger *slog.Logger, kind, bindingID, reason string, attrs ...any) {
 	now := time.Now()
 	if l.now != nil {
@@ -59,6 +79,7 @@ func (l *linkRejectionLog) rejected(logger *slog.Logger, kind, bindingID, reason
 	}
 	key := linkRejectionKey{kind: kind, id: bindingID, reason: reason}
 	l.mu.Lock()
+	l.countLocked(linkKey{kind: kind, id: bindingID}, reason, now)
 	entry := l.entries[key]
 	if entry != nil && now.Sub(entry.logged) < linkRejectionLogInterval {
 		entry.suppressed++
@@ -89,6 +110,36 @@ func (l *linkRejectionLog) rejected(logger *slog.Logger, kind, bindingID, reason
 		args = append(args, "rejected_since_last_log", suppressed)
 	}
 	logger.Warn("managed link connection rejected", append(args, attrs...)...)
+}
+
+func (l *linkRejectionLog) countLocked(link linkKey, reason string, now time.Time) {
+	if l.links == nil {
+		l.links = map[linkKey]*linkRejectionCounts{}
+	}
+	counts := l.links[link]
+	if counts == nil {
+		counts = &linkRejectionCounts{}
+		l.links[link] = counts
+	}
+	if linkRejectedAtCapacity(reason) {
+		counts.atCapacity++
+	}
+	counts.lastReason, counts.lastAt = reason, now
+}
+
+// counts returns the rejections of the links in keep and forgets every other link (a link that left the node).
+func (l *linkRejectionLog) counts(keep map[linkKey]struct{}) map[linkKey]linkRejectionCounts {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	result := make(map[linkKey]linkRejectionCounts, len(l.links))
+	for link, counts := range l.links {
+		if _, present := keep[link]; !present {
+			delete(l.links, link)
+			continue
+		}
+		result[link] = *counts
+	}
+	return result
 }
 
 // errRelayLaneUnavailable is the refusal when no relay transport of the link's candidates is connected.

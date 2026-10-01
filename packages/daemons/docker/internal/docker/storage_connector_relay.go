@@ -89,6 +89,17 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: "storage binding relay route is unavailable"})
 		return
 	}
+	// Every connection of the link passes this socket, whichever connector of the node and relay of the pool carries
+	// it: the link is held at its capacity here.
+	link := linkKey{kind: linkKindManagedStorageBinding, id: request.BindingID}
+	limit := relayGrantSessionLimit(assignment, managedLinkDefaultSessions)
+	if !p.linkConnections.acquire(link, int(limit)) {
+		p.linkRejections.rejected(p.logger, link.kind, link.id, linkRejectedLinkLimit, "limit", limit)
+		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion,
+			Error: fmt.Sprintf("storage link session capacity reached: the link carries its %d concurrent connections", limit)})
+		return
+	}
+	defer p.linkConnections.release(link)
 	// The connector hears "ready" only once a relay admitted the tunnel, so a refusal (the link's session capacity)
 	// reaches it as an error it logs, instead of an accepted connection that closes without a reason.
 	tunnel, err := p.openRelaySource(assignment)

@@ -183,6 +183,9 @@ message HealthReport {
   // Availability lease state of a daemon advertising availability_lease_v1:
   // persisted acks, held leases and, for a voter, its acceptor view.
   AvailabilityLeaseReport availability_lease = 36;
+  // Docker daemons advertising managed_link_runtime_v1: the connections of
+  // every managed database and storage link this node serves workloads of.
+  repeated ManagedLinkRuntime managed_links = 37;
   // Smoothed round-trip time from this node to each relay it measured
   // recently. Gateway places relay assignments by network distance with it.
   repeated RelayLatencySample relay_latencies = 40;
@@ -206,6 +209,27 @@ message IngressHealthReport {
   uint32 secure_link_sources = 6;
   uint32 usable_relay_transports = 7;
   int64 checked_at_unix_ms = 8;
+}
+
+// One managed link on the node that runs its workloads. The node is the
+// link's single gate: its host listener (the storage connector socket for a
+// storage link) holds the link at connection_limit, whichever relay of the
+// pool carries a connection.
+message ManagedLinkRuntime {
+  // managed_database_binding or managed_storage_binding.
+  string owner_kind = 1;
+  // The binding id; an Availability placement id for a placement's link.
+  string owner_id = 2;
+  uint32 active_connections = 3;
+  // The session limit Gateway signed into the link's grant.
+  uint32 connection_limit = 4;
+  // Connections this node refused since the daemon started because the link
+  // or the node was at its limit. The relays count their own refusals.
+  uint64 rejected_total = 5;
+  // The reason of the latest refused connection, whatever refused it
+  // (link_limit, node_limit, relay_capacity, source_not_allowed, ...).
+  string last_rejection_reason = 6;
+  int64 last_rejected_at_unix_ms = 7;
 }
 
 message RelayLatencySample {

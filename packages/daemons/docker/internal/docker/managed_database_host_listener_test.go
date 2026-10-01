@@ -63,7 +63,9 @@ func newTestLogger() (*slog.Logger, *lockedLog) {
 // listenerHarness runs a host listener manager on loopback: the binding network's gateway is 127.0.0.1 and every
 // peer is the deployment's container. Connections that reach the relay side are held until the test ends.
 type listenerHarness struct {
-	t       *testing.T
+	t *testing.T
+	// plugin owns the manager's rejection log; a test gives it grants to read the link report.
+	plugin  *DockerPlugin
 	manager *managedDatabaseHostListenerManager
 	log     *lockedLog
 	port    uint16
@@ -83,11 +85,13 @@ type openedBinding struct {
 func newListenerHarness(t *testing.T) *listenerHarness {
 	t.Helper()
 	logger, output := newTestLogger()
-	h := &listenerHarness{t: t, log: output, port: freeLoopbackPort(t), openedCh: make(chan struct{}, 1024), release: make(chan struct{})}
+	h := &listenerHarness{t: t, plugin: &DockerPlugin{logger: logger}, log: output, port: freeLoopbackPort(t),
+		openedCh: make(chan struct{}, 1024), release: make(chan struct{})}
 	h.manager = &managedDatabaseHostListenerManager{
-		logger:    logger,
-		listeners: map[string]*managedDatabaseHostListener{},
-		global:    make(chan struct{}, managedDatabaseHostListenerGlobalConnections),
+		logger:     logger,
+		listeners:  map[string]*managedDatabaseHostListener{},
+		global:     make(chan struct{}, managedDatabaseHostListenerGlobalConnections),
+		rejections: &h.plugin.linkRejections,
 		inspectNetwork: func(context.Context, string) (network.Inspect, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -112,6 +116,7 @@ func newListenerHarness(t *testing.T) *listenerHarness {
 			<-h.release
 		},
 	}
+	h.plugin.databaseListeners = h.manager
 	t.Cleanup(func() {
 		close(h.release)
 		h.manager.mu.Lock()
@@ -222,43 +227,56 @@ func requireClosed(t *testing.T, connection net.Conn) {
 	}
 }
 
-// One binding carries 40 concurrent connections (a deployment's two slots during a rollout). Its listener guards at
-// twice the grant's session limit: the relay counts and refuses sessions over the limit, the listener only stops a
-// flood beyond it and says so.
-func TestManagedDatabaseHostListenerCarriesConcurrentConnectionsUpToTwiceTheGrantLimit(t *testing.T) {
+// One binding is offered 70 concurrent connections (a deployment's two slots during a rollout with pools too large
+// for the link). The listener is the link's single gate on the node: exactly the grant's 64 reach the relay side,
+// whichever relay of the pool would carry them, and the other 6 are closed, logged once and counted for the link's
+// runtime.
+func TestManagedDatabaseHostListenerHoldsTheLinkAtItsGrantLimit(t *testing.T) {
 	h := newListenerHarness(t)
-	status := h.reconcile(h.assignment(testListenerBindingA, 3, 64))[testListenerBindingA]
+	assignment := h.assignment(testListenerBindingA, 3, 64)
+	status := h.reconcile(assignment)[testListenerBindingA]
 	if status.State != "ready" {
 		t.Fatalf("listener status %+v", status)
 	}
-	connections := make([]net.Conn, 0, 128)
-	for range 40 {
+	connections := make([]net.Conn, 0, 64)
+	for range 64 {
 		connections = append(connections, h.dial())
 	}
-	h.waitOpened(40)
+	h.waitOpened(64)
 	for _, opened := range h.openedBindings() {
 		if opened != (openedBinding{bindingID: testListenerBindingA, generation: 3}) {
 			t.Fatalf("connection opened as %+v", opened)
 		}
 	}
-	for range 88 {
-		connections = append(connections, h.dial())
-	}
-	h.waitOpened(88)
 	requireOpen(t, connections...)
 	if lines := h.log.lines("connection rejected"); len(lines) != 0 {
-		t.Fatalf("connections within the guard were rejected: %v", lines)
+		t.Fatalf("connections within the link limit were rejected: %v", lines)
 	}
 
-	requireClosed(t, h.dial())
-	lines := h.log.lines("level=WARN", "managed link connection rejected", "binding_id="+testListenerBindingA, "reason="+linkRejectedListenerLimit, "limit=128")
-	if len(lines) != 1 {
-		t.Fatalf("listener limit rejection not logged once: %q", h.log.lines("rejected"))
+	for range 6 {
+		requireClosed(t, h.dial())
 	}
-	// A burst over the guard is one line per interval, not one per connection.
-	requireClosed(t, h.dial())
-	if lines := h.log.lines("connection rejected"); len(lines) != 1 {
-		t.Fatalf("repeated rejection logged again: %v", lines)
+	if opened := len(h.openedBindings()); opened != 64 {
+		t.Fatalf("%d connections reached the relay side, want 64", opened)
+	}
+	requireOpen(t, connections...)
+	// A burst over the limit is one line per interval, not one per connection.
+	lines := h.log.lines("level=WARN", "managed link connection rejected", "binding_id="+testListenerBindingA, "reason="+linkRejectedLinkLimit, "limit=64")
+	if len(lines) != 1 || len(h.log.lines("connection rejected")) != 1 {
+		t.Fatalf("link limit rejection not logged once: %q", h.log.lines("rejected"))
+	}
+
+	// The health report carries the link's connections and what the node refused.
+	h.plugin.relayGrants = &relayGrantStore{current: &pb.SyncRelayGrantsCommand{Grants: []*pb.RelayGrantAssignment{assignment}}}
+	reports := h.plugin.managedLinkRuntime()
+	if len(reports) != 1 {
+		t.Fatalf("link reports %+v", reports)
+	}
+	report := reports[0]
+	if report.GetOwnerKind() != linkKindManagedDatabaseBinding || report.GetOwnerId() != testListenerBindingA ||
+		report.GetActiveConnections() != 64 || report.GetConnectionLimit() != 64 || report.GetRejectedTotal() != 6 ||
+		report.GetLastRejectionReason() != linkRejectedLinkLimit || report.GetLastRejectedAtUnixMs() == 0 {
+		t.Fatalf("link report %+v", report)
 	}
 }
 
@@ -268,8 +286,8 @@ func TestManagedDatabaseHostListenerTakesANewGrantLimitInPlace(t *testing.T) {
 	h := newListenerHarness(t)
 	h.reconcile(h.assignment(testListenerBindingA, 3, 1))
 	listener := h.listener(testListenerBindingA)
-	held := []net.Conn{h.dial(), h.dial()}
-	h.waitOpened(2)
+	held := []net.Conn{h.dial()}
+	h.waitOpened(1)
 	requireClosed(t, h.dial())
 
 	status := h.reconcile(h.assignment(testListenerBindingA, 3, 4))[testListenerBindingA]
@@ -277,13 +295,13 @@ func TestManagedDatabaseHostListenerTakesANewGrantLimitInPlace(t *testing.T) {
 		t.Fatalf("a new limit replaced the listener: %+v", status)
 	}
 	requireOpen(t, held...)
-	for range 6 {
+	for range 3 {
 		h.dial()
 	}
-	h.waitOpened(6)
+	h.waitOpened(3)
 	requireClosed(t, h.dial())
-	if got := listener.currentConfig().maxConnections; got != 8 {
-		t.Fatalf("listener limit %d, want 8", got)
+	if got := listener.currentConfig().maxConnections; got != 4 {
+		t.Fatalf("listener limit %d, want 4", got)
 	}
 }
 
@@ -291,8 +309,8 @@ func TestManagedDatabaseHostListenerTakesANewGrantLimitInPlace(t *testing.T) {
 func TestManagedDatabaseHostListenerDefaultsToTheLinkLimit(t *testing.T) {
 	h := newListenerHarness(t)
 	h.reconcile(h.assignment(testListenerBindingA, 3, 0))
-	if got := h.listener(testListenerBindingA).currentConfig().maxConnections; got != 128 {
-		t.Fatalf("listener limit %d, want 128", got)
+	if got := h.listener(testListenerBindingA).currentConfig().maxConnections; got != 64 {
+		t.Fatalf("listener limit %d, want 64", got)
 	}
 }
 
@@ -317,8 +335,8 @@ func TestManagedDatabaseHostListenerSurvivesAFailedNetworkInspect(t *testing.T) 
 	requireOpen(t, held)
 	// A new limit still applies meanwhile.
 	h.reconcile(h.assignment(testListenerBindingA, 3, 16))
-	if got := listener.currentConfig().maxConnections; got != 32 {
-		t.Fatalf("listener limit %d, want 32", got)
+	if got := listener.currentConfig().maxConnections; got != 16 {
+		t.Fatalf("listener limit %d, want 16", got)
 	}
 
 	h.setInspectError(nil)
@@ -374,7 +392,7 @@ func TestLinkRejectionLogIsRateLimited(t *testing.T) {
 		rejections.rejected(logger, linkKindManagedDatabaseBinding, testListenerBindingA, linkRejectedRelayCapacity)
 	}
 	rejections.rejected(logger, linkKindManagedDatabaseBinding, testListenerBindingB, linkRejectedRelayCapacity)
-	rejections.rejected(logger, linkKindManagedDatabaseBinding, testListenerBindingA, linkRejectedListenerLimit)
+	rejections.rejected(logger, linkKindManagedDatabaseBinding, testListenerBindingA, linkRejectedLinkLimit)
 	if lines := output.lines("connection rejected"); len(lines) != 3 {
 		t.Fatalf("logged %d lines, want one per link and reason: %v", len(lines), lines)
 	}
@@ -382,5 +400,19 @@ func TestLinkRejectionLogIsRateLimited(t *testing.T) {
 	rejections.rejected(logger, linkKindManagedDatabaseBinding, testListenerBindingA, linkRejectedRelayCapacity)
 	if lines := output.lines("binding_id="+testListenerBindingA, "reason="+linkRejectedRelayCapacity, "rejected_since_last_log=2"); len(lines) != 1 {
 		t.Fatalf("summary line missing: %v", output.lines("connection rejected"))
+	}
+	// Every rejection counts, logged or not; the node's own capacity refusals are the link's admission rejects (the
+	// relay counts relay_capacity itself). A link that left the node is forgotten.
+	linkA := linkKey{kind: linkKindManagedDatabaseBinding, id: testListenerBindingA}
+	linkB := linkKey{kind: linkKindManagedDatabaseBinding, id: testListenerBindingB}
+	counts := rejections.counts(map[linkKey]struct{}{linkA: {}})
+	if got := counts[linkA]; got.atCapacity != 1 || got.lastReason != linkRejectedRelayCapacity || !got.lastAt.Equal(now) {
+		t.Fatalf("link counts %+v", got)
+	}
+	if _, kept := counts[linkB]; kept {
+		t.Fatal("counts of a link that left the node were kept")
+	}
+	if _, kept := rejections.counts(map[linkKey]struct{}{linkB: {}})[linkB]; kept {
+		t.Fatal("a forgotten link came back")
 	}
 }

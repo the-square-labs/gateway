@@ -24,14 +24,7 @@ const (
 	// managedDatabaseHostListenerGlobalConnections bounds the connections of every binding's host listener on the
 	// node together (file descriptors).
 	managedDatabaseHostListenerGlobalConnections = 1024
-	// managedDatabaseBindingDefaultSessions is a binding's relay session limit when its grant names none; Gateway
-	// signs its link limit (MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS) into the grant.
-	managedDatabaseBindingDefaultSessions = 64
-	// The relay counts and caps a binding's sessions at its grant's limit, and the binding runtime shows what it
-	// refused. A host listener only guards file descriptors and abuse above that limit: it takes this many times the
-	// grant's sessions, so connections over the limit still reach the relay, which counts them.
-	managedDatabaseHostListenerSessionHeadroom = 2
-	managedDatabaseHostListenerInspectTimeout  = 5 * time.Second
+	managedDatabaseHostListenerInspectTimeout    = 5 * time.Second
 )
 
 // errManagedDatabaseListenerUnverified marks a listener network that could not be inspected (a slow or failing
@@ -48,8 +41,11 @@ type managedDatabaseHostListenerConfig struct {
 	listenPort      uint16
 	allowedSources  []string
 	routeGeneration uint64
-	// maxConnections caps the binding's connections on the listener. A grant refresh changes it on the running
-	// listener; it is not part of the listener's identity (equal), so a new limit never drops a connection.
+	// maxConnections is the link's capacity: the session limit Gateway signed into the binding's grant. The listener
+	// is the link's single gate on the node and holds it there whichever relay of the pool carries a connection; each
+	// relay caps the route at the same limit, so any one of them can carry the whole link. A grant refresh changes it
+	// on the running listener; it is not part of the listener's identity (equal), so a new limit never drops a
+	// connection.
 	maxConnections int
 }
 
@@ -78,7 +74,7 @@ type managedDatabaseHostListenerManager struct {
 	inspectNetwork   func(context.Context, string) (network.Inspect, error)
 	inspectContainer func(context.Context, string) (mobyclient.ContainerInspectResult, error)
 	openBinding      func(net.Conn, string, uint64)
-	rejections       linkRejectionLog
+	rejections       *linkRejectionLog
 }
 
 func newManagedDatabaseHostListenerManager(plugin *DockerPlugin) *managedDatabaseHostListenerManager {
@@ -87,6 +83,8 @@ func newManagedDatabaseHostListenerManager(plugin *DockerPlugin) *managedDatabas
 		logger:    plugin.logger,
 		listeners: map[string]*managedDatabaseHostListener{},
 		global:    make(chan struct{}, managedDatabaseHostListenerGlobalConnections),
+		// The plugin's log: the health report counts what the listeners refuse.
+		rejections: &plugin.linkRejections,
 	}
 	manager.inspectNetwork = func(ctx context.Context, name string) (network.Inspect, error) {
 		inspected, err := plugin.client.cli.NetworkInspect(ctx, name, mobyclient.NetworkInspectOptions{})
@@ -278,12 +276,12 @@ func managedDatabaseHostListenerConfigFromAssignment(assignment *pb.RelayGrantAs
 	return managedDatabaseHostListenerConfig{
 		bindingID: assignment.GetOwnerId(), networkName: listener.GetNetworkName(), listenAddress: address,
 		listenPort: uint16(listener.GetListenPort()), allowedSources: allowed, routeGeneration: listener.GetRouteGeneration(),
-		maxConnections: managedDatabaseHostListenerSessionHeadroom * int(relayGrantSessionLimit(assignment, managedDatabaseBindingDefaultSessions)),
+		maxConnections: int(relayGrantSessionLimit(assignment, managedLinkDefaultSessions)),
 	}, nil
 }
 
-// relayGrantSessionLimit reads the session limit Gateway signed into an assignment's grants (the relay enforces it
-// and verifies the grant; the daemon only sizes its own guard from it), or fallback when they name none.
+// relayGrantSessionLimit reads the session limit Gateway signed into an assignment's grants, or fallback when they name
+// none. The relay verifies the grant and enforces the limit per route; the daemon holds the whole link at it.
 func relayGrantSessionLimit(assignment *pb.RelayGrantAssignment, fallback uint32) uint32 {
 	grants := []*pb.RelaySignedGrant{assignment.GetGrant()}
 	for _, candidate := range assignment.GetCandidates() {
@@ -436,7 +434,7 @@ func (m *managedDatabaseHostListenerManager) acquire(listener *managedDatabaseHo
 		bindingID := listener.config.bindingID
 		listener.mu.Unlock()
 		<-m.global
-		m.rejections.rejected(m.logger, linkKindManagedDatabaseBinding, bindingID, linkRejectedListenerLimit, "limit", limit)
+		m.rejections.rejected(m.logger, linkKindManagedDatabaseBinding, bindingID, linkRejectedLinkLimit, "limit", limit)
 		return false
 	}
 	listener.connections[connection] = struct{}{}
@@ -502,6 +500,23 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 	if active {
 		m.openBinding(connection, current.bindingID, current.routeGeneration)
 	}
+}
+
+// activeConnections returns the connections each binding's listener holds, by binding id.
+func (m *managedDatabaseHostListenerManager) activeConnections() map[string]int {
+	m.mu.Lock()
+	listeners := make(map[string]*managedDatabaseHostListener, len(m.listeners))
+	for bindingID, listener := range m.listeners {
+		listeners[bindingID] = listener
+	}
+	m.mu.Unlock()
+	result := make(map[string]int, len(listeners))
+	for bindingID, listener := range listeners {
+		listener.mu.Lock()
+		result[bindingID] = len(listener.connections)
+		listener.mu.Unlock()
+	}
+	return result
 }
 
 func managedDatabaseListenerPeerContainerID(inspected network.Inspect, remote netip.Addr) string {

@@ -78,8 +78,10 @@ type DockerPlugin struct {
 	memberProbe     func(ctx context.Context, links []string, cheap bool) memberProbeResult
 	// relayTunnelOutcomes logs failing incoming relay tunnels per endpoint owner and state change (L-1).
 	relayTunnelOutcomes logepisode.Tracker
-	// linkRejections logs the connections of database bindings and storage links no relay admitted.
-	linkRejections linkRejectionLog
+	// linkRejections logs and counts the connections of database bindings and storage links the node or the relays
+	// refused; linkConnections holds the links without a host listener at their limit.
+	linkRejections  linkRejectionLog
+	linkConnections linkConnectionCounts
 	// logHandler sends the plugin's lines, those of the managers built at Init included, to the current session.
 	logHandler *sessionLogHandler
 
@@ -494,7 +496,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		// Advertised only with a live watchdog (A12.4); the lease report's
 		// watchdog_ready carries later changes within the session.
 		values = append(values, p.leaseCapabilities()...)
-		values = append(values, "managed_database_binding_listener_v1")
+		values = append(values, "managed_database_binding_listener_v1", managedLinkRuntimeCapability)
 		if p.volumeImages != nil && p.volumeImages.supported {
 			values = append(values, "docker_volume_storage_images_v1")
 		}
