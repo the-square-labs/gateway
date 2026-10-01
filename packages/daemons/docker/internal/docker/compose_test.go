@@ -319,7 +319,7 @@ func TestComposePolicyMatchesBackendParityFixtures(t *testing.T) {
 // Project variables and secrets reach the sidecar's environment; the names its
 // compose client reads itself are refused, and its own settings come last.
 func TestComposeBindingsCannotReconfigureTheSidecarClient(t *testing.T) {
-	for _, name := range []string{"DOCKER_HOST", "DOCKER_CONFIG", "COMPOSE_FILE", "PATH"} {
+	for _, name := range []string{"DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_TLS_VERIFY", "BUILDKIT_HOST", "COMPOSE_FILE", "PATH"} {
 		variable := validComposeCommand("apply", "operation-env")
 		variable.Variables = map[string]string{name: "tcp://203.0.113.1:2375"}
 		if _, err := validateComposeCommand(variable); err == nil || !strings.Contains(err.Error(), "reserved") {
@@ -330,6 +330,12 @@ func TestComposeBindingsCannotReconfigureTheSidecarClient(t *testing.T) {
 		if _, err := validateComposeCommand(secret); err == nil || !strings.Contains(err.Error(), "reserved") {
 			t.Fatalf("secret %s: %v", name, err)
 		}
+	}
+	// Other DOCKER_* names are ordinary project variables.
+	tag := validComposeCommand("apply", "operation-env")
+	tag.Variables = map[string]string{"DOCKER_IMAGE_TAG": "1.2", "DOCKER_REGISTRY": "registry.example.test"}
+	if _, err := validateComposeCommand(tag); err != nil {
+		t.Fatalf("image tag and registry variables refused: %v", err)
 	}
 	env := composeSidecarEnvironment(composeRequest{variables: map[string]string{"TAG": "1"}, secrets: map[string]string{"TOKEN": "x"}})
 	if len(env) != 3 || env[len(env)-1] != "DOCKER_HOST=unix:///var/run/docker.sock" {

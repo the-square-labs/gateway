@@ -363,7 +363,7 @@ func validateComposeEnvironment(variables, secrets map[string]string) error {
 			return errors.New("docker compose variable binding is invalid")
 		}
 		if isReservedComposeEnvironmentName(key) {
-			return fmt.Errorf("docker compose variable %q is reserved for the compose client", key)
+			return fmt.Errorf("docker compose variable %q is reserved: the compose client reads it to find and configure its Docker daemon", key)
 		}
 		if _, conflicts := secrets[key]; conflicts {
 			return errors.New("docker compose variable and secret names must not overlap")
@@ -374,19 +374,27 @@ func validateComposeEnvironment(variables, secrets map[string]string) error {
 			return errors.New("docker compose secret binding is invalid")
 		}
 		if isReservedComposeEnvironmentName(key) {
-			return fmt.Errorf("docker compose secret %q is reserved for the compose client", key)
+			return fmt.Errorf("docker compose secret %q is reserved: the compose client reads it to find and configure its Docker daemon", key)
 		}
 	}
 	return nil
 }
 
-// isReservedComposeEnvironmentName reports the variables the sidecar's docker
-// compose client reads itself: its daemon, config, context and TLS
-// (DOCKER_*), Compose settings (COMPOSE_*) and the executable search path.
-// Project variables and secrets reach the sidecar's environment for
-// interpolation and must not repoint or reconfigure the client.
+// composeClientEnvironment are the variables the sidecar's docker compose
+// client reads itself: its daemon, context, config, TLS, API version,
+// platform and build settings, and the executable search path. Project
+// variables and secrets reach the sidecar's environment for interpolation and
+// must not repoint or reconfigure the client; other DOCKER_* names (an image
+// tag, a registry) stay ordinary variables. The backend Compose policy refuses
+// the same names.
+var composeClientEnvironment = map[string]bool{
+	"PATH": true, "DOCKER_HOST": true, "DOCKER_CONTEXT": true, "DOCKER_CONFIG": true, "DOCKER_CERT_PATH": true,
+	"DOCKER_TLS_VERIFY": true, "DOCKER_TLS": true, "DOCKER_API_VERSION": true, "DOCKER_DEFAULT_PLATFORM": true,
+	"DOCKER_BUILDKIT": true,
+}
+
 func isReservedComposeEnvironmentName(name string) bool {
-	return name == "PATH" || strings.HasPrefix(name, "DOCKER_") || strings.HasPrefix(name, "COMPOSE_")
+	return composeClientEnvironment[name] || strings.HasPrefix(name, "BUILDKIT_") || strings.HasPrefix(name, "COMPOSE_")
 }
 
 func composeRequestFingerprint(request composeRequest) string {
