@@ -254,14 +254,34 @@ export class DockerSecretService {
     return rows.map((row) => row.key);
   }
 
-  /** Replace all stored secrets after a trusted archive import. */
+  /**
+   * Replace all stored secrets after a trusted archive import, or when Availability hands a workload back to a single
+   * container. `flagsFrom` names the container the secrets were copied from: a secret with the same key and value
+   * there keeps its managed flag and owner, so database and storage link credentials stay the link's (revealed only
+   * through it, removed with it).
+   */
   async replaceImported(
     nodeId: string,
     containerName: string,
     secrets: Record<string, string>,
-    userId: string | null
+    userId: string | null,
+    flagsFrom?: { nodeId: string; containerName: string }
   ): Promise<void> {
     await this.db.transaction(async (tx) => {
+      const flags = new Map<string, { managed: boolean; managedOwner: string | null }>();
+      if (flagsFrom) {
+        const sources = await tx
+          .select()
+          .from(dockerSecrets)
+          .where(
+            and(eq(dockerSecrets.nodeId, flagsFrom.nodeId), eq(dockerSecrets.containerName, flagsFrom.containerName))
+          );
+        for (const row of sources) {
+          if (Object.hasOwn(secrets, row.key) && secrets[row.key] === this.decrypt(row.encryptedValue)) {
+            flags.set(row.key, { managed: row.managed, managedOwner: row.managedOwner });
+          }
+        }
+      }
       await tx
         .delete(dockerSecrets)
         .where(and(eq(dockerSecrets.nodeId, nodeId), eq(dockerSecrets.containerName, containerName)));
@@ -273,6 +293,7 @@ export class DockerSecretService {
             containerName,
             key,
             encryptedValue: JSON.stringify(this.cryptoService.encryptString(value)),
+            ...flags.get(key),
           }))
         );
       }
