@@ -10,6 +10,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// dockerMigrationCapability names the migration contract this daemon speaks.
+// v2: the manifest's environment keys are the container's own environment
+// (manifest schema 2). A Gateway that requires v1 refuses the migration in its
+// preflight instead of sending the whole runtime environment.
+const dockerMigrationCapability = "docker_migration_v2"
+
 type migrationFilesystemCapacity struct {
 	Path       string `json:"path"`
 	TotalBytes uint64 `json:"totalBytes"`
@@ -131,7 +137,7 @@ func (p *DockerPlugin) migrationCapabilities(ctx context.Context) (dockerMigrati
 	}
 	sort.Strings(runtimes)
 	return dockerMigrationCapabilities{
-		Protocol: "docker_migration_v1", EngineVersion: version.Version, APIVersion: version.APIVersion,
+		Protocol: dockerMigrationCapability, EngineVersion: version.Version, APIVersion: version.APIVersion,
 		OSType: info.OSType, Architecture: info.Architecture, StorageDriver: info.Driver,
 		DockerRootDir: dockerCapacity, StateDir: stateCapacity, Runtimes: runtimes,
 		VolumePlugins: append([]string(nil), info.Plugins.Volume...), NetworkPlugins: append([]string(nil), info.Plugins.Network...),

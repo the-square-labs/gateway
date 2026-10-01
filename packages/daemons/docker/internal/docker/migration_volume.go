@@ -47,8 +47,8 @@ func (p *DockerPlugin) prepareMigrationVolume(ctx context.Context, migrationID, 
 	if err != nil {
 		return migrationArtifactMetadata{}, fmt.Errorf("inspect migration volume: %w", err)
 	}
-	if volume.Volume.Driver != "local" || volume.Volume.Mountpoint == "" {
-		return migrationArtifactMetadata{}, fmt.Errorf("only mounted local volumes are supported")
+	if err := migratableLocalVolume(volume.Volume); err != nil {
+		return migrationArtifactMetadata{}, err
 	}
 	path, err := p.migrationStore.artifactPath(migrationID, artifactID, true)
 	if err != nil {

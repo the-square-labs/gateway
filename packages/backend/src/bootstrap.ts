@@ -1480,7 +1480,14 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(DockerMigrationDispatchAdapter, dockerMigrationDispatch);
   const dockerMigrationPreflight = commercialEdition.createDockerMigration(
     'DockerMigrationPreflightService',
-    [db, dockerManagementService, dockerDeploymentService, dockerMigrationDispatch],
+    [
+      db,
+      dockerManagementService,
+      dockerDeploymentService,
+      dockerMigrationDispatch,
+      dockerEnvironmentService,
+      dockerSecretService,
+    ],
     dockerMigrationCommercialRuntime
   );
   container.registerInstance(DockerMigrationPreflightService, dockerMigrationPreflight);
