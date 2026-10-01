@@ -8,7 +8,8 @@ const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 /**
  * Opt-in (GATEWAY_MIGRATION_TEST_DATABASE_URL): the ingress group migration. A route on an ingress group owns one
  * proxy_host_domains row per member, so a name is unique across every member; member changes rebuild the rows;
- * proxy Secure Link routes may have one relay route per source while every other owner keeps one route.
+ * proxy Secure Link routes may have one relay route per source while every other owner keeps one route. Storage links
+ * (one route per Availability placement node, a later migration) follow the Secure Link rule.
  */
 describe.skipIf(!url)('ingress group migration on disposable PostgreSQL', () => {
   let database: Awaited<ReturnType<typeof disposableDatabase>>;
@@ -151,7 +152,7 @@ describe.skipIf(!url)('ingress group migration on disposable PostgreSQL', () => 
     ).toMatchObject({ code: '23514', constraint: 'ingress_groups_dns_failover_mode_valid' });
   });
 
-  it('allows one proxy Secure Link route per source and one route per owner otherwise', async () => {
+  it('allows one proxy Secure Link or storage link route per source and one route per owner otherwise', async () => {
     const endpoint = randomUUID();
     await q(
       `insert into relay_endpoints (id, owner_kind, owner_id, subject_kind, subject_id, certificate_sha256)
@@ -170,6 +171,13 @@ describe.skipIf(!url)('ingress group migration on disposable PostgreSQL', () => 
     expect(await rejection(route('proxy_host_secure_link', link, nodeB))).toMatchObject({
       code: '23505',
       constraint: 'relay_routes_proxy_link_source_unique',
+    });
+    const storageLink = randomUUID();
+    await route('managed_storage_binding', storageLink, nodeA);
+    await route('managed_storage_binding', storageLink, nodeB);
+    expect(await rejection(route('managed_storage_binding', storageLink, nodeB))).toMatchObject({
+      code: '23505',
+      constraint: 'relay_routes_storage_link_source_unique',
     });
     const binding = randomUUID();
     await route('managed_database_binding', binding, nodeA);

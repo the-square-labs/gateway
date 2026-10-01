@@ -18,6 +18,9 @@ const (
 	storageConnectorSocketName      = "storage-relay.sock"
 	storageConnectorSocketPath      = "/run/gateway/storage-relay.sock"
 	storageBindingOwnerKind         = "managed_storage_binding"
+	// managedStorageLinkCapability: the node hosts managed storage link connectors (this socket). Availability
+	// projects a workload's storage links only to Docker nodes that advertise it.
+	managedStorageLinkCapability = "managed_storage_link_v1"
 )
 
 func storageConnectorRelayDirectory(stateDir string) string {

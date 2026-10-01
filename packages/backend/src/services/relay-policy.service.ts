@@ -1560,6 +1560,7 @@ export class RelayPolicyService {
   }
 
   async getManagedStorageBindingRouteRuntime(bindingId: string): Promise<RelayRouteRuntime | null> {
+    // An Availability workload runs the link from every placement node, one route each: the runtime is their sum.
     const routes = await this.managedLinkRoutes('managed_storage_binding', [bindingId]);
     return routes.length ? this.managedLinkRuntime(routes) : null;
   }
@@ -1708,6 +1709,12 @@ export class RelayPolicyService {
     }
   }
 
+  /**
+   * The route of a storage link from one workload node (relay_routes_storage_link_source_unique). A link has one route
+   * per node that runs its workload: its own node, and every placement node while Availability runs the workload. All
+   * of them lead to the link's cluster, so pointing the link at another cluster takes every route along. Returns the
+   * route of `sourceNodeId`.
+   */
   async ensureStorageBindingRoute(
     bindingId: string,
     clusterId: string,
@@ -1716,18 +1723,85 @@ export class RelayPolicyService {
   ): Promise<string> {
     const endpointId = await this.ensureManagedStorageEndpoint(clusterId, targetNodeId);
     const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
-    const routeId = await this.ensureRoute(
-      'managed_storage_binding',
-      bindingId,
-      'daemon',
-      sourceNodeId,
-      source.certificateFingerprint,
-      endpointId
-    );
+    const { routeId, retargetedSourceIds } = await this.db.transaction(async (tx) => {
+      const routes = await tx
+        .select()
+        .from(relayRoutes)
+        .where(and(eq(relayRoutes.ownerKind, 'managed_storage_binding'), eq(relayRoutes.ownerId, bindingId)));
+      let changed = false;
+      let routeId: string;
+      const own = routes.find((route) => route.sourceKind === 'daemon' && route.sourceId === sourceNodeId);
+      if (!own) {
+        const [created] = await tx
+          .insert(relayRoutes)
+          .values({
+            ownerKind: 'managed_storage_binding',
+            ownerId: bindingId,
+            sourceKind: 'daemon',
+            sourceId: sourceNodeId,
+            sourceCertificateSha256: source.certificateFingerprint,
+            targetEndpointId: endpointId,
+            maxFrameBytes: RELAY_MAX_FRAME_BYTES,
+          })
+          .returning({ id: relayRoutes.id });
+        routeId = created.id;
+        changed = true;
+      } else {
+        routeId = own.id;
+        if (own.sourceCertificateSha256 !== source.certificateFingerprint || own.targetEndpointId !== endpointId) {
+          await tx
+            .update(relayRoutes)
+            .set({
+              sourceCertificateSha256: source.certificateFingerprint,
+              targetEndpointId: endpointId,
+              generation: own.generation + 1,
+              updatedAt: new Date(),
+            })
+            .where(eq(relayRoutes.id, own.id));
+          changed = true;
+        }
+      }
+      const retargetedSourceIds: string[] = [];
+      for (const route of routes) {
+        if (route.id === routeId || route.targetEndpointId === endpointId) continue;
+        await tx
+          .update(relayRoutes)
+          .set({ targetEndpointId: endpointId, generation: route.generation + 1, updatedAt: new Date() })
+          .where(eq(relayRoutes.id, route.id));
+        if (route.sourceKind === 'daemon') retargetedSourceIds.push(route.sourceId);
+        changed = true;
+      }
+      if (changed) await bumpRelayPolicyRevision(tx);
+      return { routeId, retargetedSourceIds };
+    });
     await this.syncSnapshot();
     await this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC);
     await this.syncNodeGrants(sourceNodeId, ROUTINE_GRANT_SYNC);
+    for (const nodeId of new Set(retargetedSourceIds)) await this.syncNodeGrants(nodeId, ROUTINE_GRANT_SYNC);
     return routeId;
+  }
+
+  /** Removes the route of a storage link from one workload node, leaving its other routes in place. */
+  async revokeStorageBindingRoute(bindingId: string, sourceNodeId: string): Promise<void> {
+    const removed = await this.db.transaction(async (tx) => {
+      const routes = await tx
+        .delete(relayRoutes)
+        .where(
+          and(
+            eq(relayRoutes.ownerKind, 'managed_storage_binding'),
+            eq(relayRoutes.ownerId, bindingId),
+            eq(relayRoutes.sourceKind, 'daemon'),
+            eq(relayRoutes.sourceId, sourceNodeId)
+          )
+        )
+        .returning({ id: relayRoutes.id });
+      if (routes.length) await bumpRelayPolicyRevision(tx);
+      return routes.length > 0;
+    });
+    if (!removed) return;
+    await this.syncSnapshot();
+    const affectedNodes = new Set([...(await this.grantIssuer.policyNodeIds()), sourceNodeId]);
+    await Promise.allSettled([...affectedNodes].map((nodeId) => this.syncNodeGrants(nodeId)));
   }
 
   async ensureStorageGatewayRoute(

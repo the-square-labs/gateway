@@ -683,6 +683,75 @@ describe('RelayPolicyService route runtime', () => {
   });
 });
 
+describe('RelayPolicyService storage link routes', () => {
+  const route = (id: string, sourceId: string, targetEndpointId = 'endpoint-old') => ({
+    id,
+    generation: 3,
+    ownerKind: 'managed_storage_binding',
+    ownerId: 'link-1',
+    sourceKind: 'daemon',
+    sourceId,
+    sourceCertificateSha256: `sha256:${sourceId}`,
+    targetEndpointId,
+  });
+
+  function harness(routes: ReturnType<typeof route>[]) {
+    const updates: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+    const inserts: Array<Record<string, unknown>> = [];
+    const tx = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue(routes) })) })),
+      insert: vi.fn(() => ({
+        values: vi.fn((values: Record<string, unknown>) => {
+          inserts.push(values);
+          return { returning: vi.fn().mockResolvedValue([{ id: 'route-new' }]) };
+        }),
+      })),
+      update: vi.fn((table: unknown) => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          updates.push({ table, values });
+          return { where: vi.fn().mockResolvedValue(undefined) };
+        }),
+      })),
+    };
+    const db = { transaction: vi.fn(async (callback: (writer: typeof tx) => Promise<unknown>) => callback(tx)) };
+    const service = createService(db, { applySnapshot: vi.fn() });
+    vi.spyOn(service as any, 'ensureManagedStorageEndpoint').mockResolvedValue('endpoint-new');
+    (service as any).grantIssuer = {
+      requireNodeIdentity: vi.fn(async (nodeId: string) => ({ certificateFingerprint: `sha256:${nodeId}` })),
+    };
+    vi.spyOn(service, 'syncSnapshot').mockResolvedValue(9);
+    const syncNodeGrants = vi.spyOn(service as any, 'syncNodeGrants').mockResolvedValue(undefined);
+    return { service, updates, inserts, syncNodeGrants };
+  }
+
+  it('adds the route of a placement node next to the link route', async () => {
+    const { service, updates, inserts } = harness([route('route-a', 'node-a', 'endpoint-new')]);
+    await expect(service.ensureStorageBindingRoute('link-1', 'cluster-1', 'node-b', 'node-storage')).resolves.toBe(
+      'route-new'
+    );
+    expect(inserts).toEqual([
+      expect.objectContaining({ ownerKind: 'managed_storage_binding', ownerId: 'link-1', sourceId: 'node-b' }),
+    ]);
+    expect(updates.filter(({ table }) => table === relayRoutes)).toEqual([]);
+  });
+
+  it('takes every route of the link to the cluster the link moves to', async () => {
+    const { service, updates, inserts, syncNodeGrants } = harness([
+      route('route-a', 'node-a'),
+      route('route-b', 'node-b'),
+    ]);
+    await expect(service.ensureStorageBindingRoute('link-1', 'cluster-2', 'node-a', 'node-storage')).resolves.toBe(
+      'route-a'
+    );
+    expect(inserts).toEqual([]);
+    expect(updates.filter(({ table }) => table === relayRoutes).map(({ values }) => values)).toEqual([
+      expect.objectContaining({ targetEndpointId: 'endpoint-new', generation: 4 }),
+      expect.objectContaining({ targetEndpointId: 'endpoint-new', generation: 4 }),
+    ]);
+    expect(syncNodeGrants.mock.calls.map(([nodeId]) => nodeId)).toEqual(['node-storage', 'node-a', 'node-b']);
+  });
+});
+
 describe('RelayPolicyService snapshots', () => {
   it('serializes snapshot publication and continues after an earlier RPC failure', async () => {
     const service = createService({}, { applySnapshot: vi.fn() });

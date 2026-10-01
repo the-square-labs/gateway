@@ -509,7 +509,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		// Advertised only with a live watchdog (A12.4); the lease report's
 		// watchdog_ready carries later changes within the session.
 		values = append(values, p.leaseCapabilities()...)
-		values = append(values, "managed_database_binding_listener_v1", managedLinkRuntimeCapability)
+		values = append(values, "managed_database_binding_listener_v1", managedStorageLinkCapability, managedLinkRuntimeCapability)
 		if p.volumeImages != nil && p.volumeImages.supported {
 			values = append(values, "docker_volume_storage_images_v1")
 		}

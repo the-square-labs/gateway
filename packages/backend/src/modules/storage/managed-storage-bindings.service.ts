@@ -29,6 +29,7 @@ export class ManagedStorageBindingsService {
           | 'getManagedStorageBindingRouteRuntime'
           | 'getNodeGrantBundle'
           | 'revokeOwner'
+          | 'revokeStorageBindingRoute'
           | 'syncNodeGrants'
         >
       | undefined,

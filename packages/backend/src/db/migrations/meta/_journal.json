@@ -1562,6 +1562,13 @@
       "when": 1790881350561,
       "tag": "0222_managed_link_session_capacity",
       "breakpoints": true
+    },
+    {
+      "idx": 223,
+      "version": "7",
+      "when": 1790895488028,
+      "tag": "0223_storage_link_placement_routes",
+      "breakpoints": true
     }
   ]
 }

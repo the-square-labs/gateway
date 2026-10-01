@@ -186,7 +186,8 @@ Availability places a standalone Container, a blue/green Deployment, or a whole 
 
 ## Prerequisites
 - At least two online compatible Docker nodes with capacity for the placements plus temporary rollout placements.
-- No mounts of any kind (named, external, read-only, or host bind; the whole Compose project is checked). Persistent state must live outside the workload, for example in a managed database binding.
+- No mounts of any kind (named, external, read-only, or host bind; the whole Compose project is checked). Persistent state must live outside the workload, for example in a managed database binding or a managed storage link.
+- Every placement gets the workload's managed database bindings and managed storage links on its own node. A workload with a storage link runs only on Docker nodes whose daemon hosts storage links (\`managed_storage_link_v1\`); preflight lists other nodes as incompatible (\`AVAILABILITY_STORAGE_LINK_CAPABILITY_UNAVAILABLE\`) and refuses when one of them was selected or too few nodes remain.
 - Images are pinned by digest in the internal registry and pre-pulled on standby nodes.
 
 ## Workflow
