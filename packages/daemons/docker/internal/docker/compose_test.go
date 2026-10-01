@@ -343,6 +343,39 @@ func TestComposeBindingsCannotReconfigureTheSidecarClient(t *testing.T) {
 	}
 }
 
+// A project saved before the reserved network, label and variable rules is
+// refused for every action that creates or starts containers, yet it can
+// still be stopped and brought down, without its reserved bindings.
+func TestReservedRulesBlockStartsButNotStopOrDown(t *testing.T) {
+	legacy := func(action string) *pb.DockerComposeCommand {
+		command := validComposeCommand(action, "operation-legacy-"+action)
+		command.ComposeYaml = []byte("services:\n  web:\n    image: nginx:alpine\n    labels:\n      gateway.sandbox: \"true\"\n    networks: [outside]\nnetworks:\n  outside:\n    external: true\n    name: host\n")
+		command.Variables = map[string]string{"DOCKER_HOST": "tcp://203.0.113.1:2375", "TAG": "1"}
+		return command
+	}
+	for _, action := range []string{"apply", "pull_apply", composeActionPullCreate, "start", "restart"} {
+		if _, err := validateComposeCommand(legacy(action)); err == nil {
+			t.Fatalf("%s of a project with reserved labels, networks and variables accepted", action)
+		}
+	}
+	for _, action := range []string{"stop", "down"} {
+		request, err := validateComposeCommand(legacy(action))
+		if err != nil {
+			t.Fatalf("%s of a project saved before the reserved rules refused: %v", action, err)
+		}
+		env := composeSidecarEnvironment(request)
+		if strings.Join(env, " ") != "TAG=1 DOCKER_HOST=unix:///var/run/docker.sock" {
+			t.Fatalf("%s sidecar environment = %v, want the reserved binding dropped and DOCKER_HOST last", action, env)
+		}
+	}
+	// Compose's own ownership labels stay refused for every action, as before.
+	down := validComposeCommand("down", "operation-legacy-owned")
+	down.ComposeYaml = []byte("services:\n  web:\n    image: nginx:alpine\n    labels:\n      com.docker.compose.project: other\n")
+	if _, err := validateComposeCommand(down); err == nil {
+		t.Fatal("down of a project that overrides Compose ownership labels accepted")
+	}
+}
+
 func TestComposeSidecarCommandsPreservePullAndVolumesSemantics(t *testing.T) {
 	apply, err := composeSidecarCommands(composeRequest{action: "apply"})
 	if err != nil || len(apply) != 1 || strings.Join(apply[0], " ") != "up --detach --no-build --pull never" {

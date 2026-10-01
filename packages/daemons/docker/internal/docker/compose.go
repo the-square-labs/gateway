@@ -337,7 +337,7 @@ func validateComposeCommand(cmd *pb.DockerComposeCommand) (composeRequest, error
 		if request.normalizedModelJSON == "" || len(request.normalizedModelJSON) > 1024*1024 || !json.Valid([]byte(request.normalizedModelJSON)) {
 			return composeRequest{}, errors.New("docker compose lifecycle action requires valid normalized_model_json")
 		}
-		if err := validateComposeEnvironment(request.variables, request.secrets); err != nil {
+		if err := validateComposeEnvironment(request.variables, request.secrets, composeActionStartsContainers(request.action)); err != nil {
 			return composeRequest{}, err
 		}
 		if err := validateAndInjectComposeYAML(&request); err != nil {
@@ -357,12 +357,16 @@ func isComposeAction(action string) bool {
 	}
 }
 
-func validateComposeEnvironment(variables, secrets map[string]string) error {
+// validateComposeEnvironment checks the variable and secret bindings. With
+// reservedPolicy (actions that create or start containers) it also refuses
+// the names the compose client reads; stop and down run with them, since the
+// sidecar's own settings are set last (composeSidecarEnvironment).
+func validateComposeEnvironment(variables, secrets map[string]string, reservedPolicy bool) error {
 	for key, value := range variables {
 		if !composeEnvironmentPattern.MatchString(key) || len(value) > 64*1024 {
 			return errors.New("docker compose variable binding is invalid")
 		}
-		if isReservedComposeEnvironmentName(key) {
+		if reservedPolicy && isReservedComposeEnvironmentName(key) {
 			return fmt.Errorf("docker compose variable %q is reserved: the compose client reads it to find and configure its Docker daemon", key)
 		}
 		if _, conflicts := secrets[key]; conflicts {
@@ -373,7 +377,7 @@ func validateComposeEnvironment(variables, secrets map[string]string) error {
 		if !composeEnvironmentPattern.MatchString(key) || len(value) > 64*1024 {
 			return errors.New("docker compose secret binding is invalid")
 		}
-		if isReservedComposeEnvironmentName(key) {
+		if reservedPolicy && isReservedComposeEnvironmentName(key) {
 			return fmt.Errorf("docker compose secret %q is reserved: the compose client reads it to find and configure its Docker daemon", key)
 		}
 	}
@@ -596,16 +600,22 @@ func (s *dockerComposeSidecar) cancelAll() {}
 
 // composeSidecarEnvironment lists the project variables and secrets, then the
 // sidecar's own settings last: Docker keeps the last value of a repeated name,
-// so nothing a project binds overrides them (validateComposeEnvironment
-// refuses those names as well).
+// so nothing a project binds overrides them. Bindings named like a compose
+// client setting never reach the sidecar: actions that create or start
+// containers refuse them (validateComposeEnvironment), and stop or down of a
+// project saved before that rule runs without them.
 func composeSidecarEnvironment(request composeRequest) []string {
 	env := make([]string, 0, len(request.variables)+len(request.secrets)+1)
 	keys := make([]string, 0, len(request.variables)+len(request.secrets))
 	for key := range request.variables {
-		keys = append(keys, key)
+		if !isReservedComposeEnvironmentName(key) {
+			keys = append(keys, key)
+		}
 	}
 	for key := range request.secrets {
-		keys = append(keys, key)
+		if !isReservedComposeEnvironmentName(key) {
+			keys = append(keys, key)
+		}
 	}
 	sort.Strings(keys)
 	for _, key := range keys {

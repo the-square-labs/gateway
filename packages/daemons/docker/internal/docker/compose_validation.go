@@ -29,7 +29,23 @@ var composeDependsOnConditions = map[string]bool{
 	"service_started": true, "service_healthy": true, "service_completed_successfully": true,
 }
 
+// composeActionStartsContainers reports the actions that create or start a
+// project's containers. Only they apply the rules that keep a project off the
+// host's and Gateway's networks and labels and its bindings off the compose
+// client's settings (reservedPolicy): a project saved before those rules can
+// still be stopped and brought down, which joins and labels nothing, and the
+// sidecar's own environment is set last for every action.
+func composeActionStartsContainers(action string) bool {
+	switch action {
+	case "apply", "pull_apply", composeActionPullCreate, "start", "restart":
+		return true
+	default:
+		return false
+	}
+}
+
 func validateAndInjectComposeYAML(request *composeRequest) error {
+	reservedPolicy := composeActionStartsContainers(request.action)
 	var document yaml.Node
 	if err := yaml.Unmarshal(request.composeYAML, &document); err != nil {
 		return errors.New("compose_yaml is invalid")
@@ -63,17 +79,19 @@ func validateAndInjectComposeYAML(request *composeRequest) error {
 	if networks != nil && networks.Kind != yaml.MappingNode {
 		return errors.New("compose networks must be a mapping")
 	}
-	if err := validateTopLevelResources(volumes, "volume"); err != nil {
+	if err := validateTopLevelResources(volumes, "volume", reservedPolicy); err != nil {
 		return err
 	}
-	if err := validateTopLevelResources(networks, "network"); err != nil {
+	if err := validateTopLevelResources(networks, "network", reservedPolicy); err != nil {
 		return err
 	}
-	if err := validateComposeNetworkNames(networks); err != nil {
-		return err
+	if reservedPolicy {
+		if err := validateComposeNetworkNames(networks); err != nil {
+			return err
+		}
 	}
 	for i := 0; i < len(services.Content); i += 2 {
-		if err := validateComposeService(services.Content[i].Value, services.Content[i+1], services, volumes, networks); err != nil {
+		if err := validateComposeService(services.Content[i].Value, services.Content[i+1], services, volumes, networks, reservedPolicy); err != nil {
 			return err
 		}
 		injectComposeLabels(services.Content[i+1], request.projectID, request.configDigest)
@@ -86,7 +104,7 @@ func validateAndInjectComposeYAML(request *composeRequest) error {
 	return nil
 }
 
-func validateComposeService(name string, service, services, volumes, networks *yaml.Node) error {
+func validateComposeService(name string, service, services, volumes, networks *yaml.Node, reservedPolicy bool) error {
 	if name == "" || service.Kind != yaml.MappingNode {
 		return errors.New("compose service definition is invalid")
 	}
@@ -100,7 +118,7 @@ func validateComposeService(name string, service, services, volumes, networks *y
 			return fmt.Errorf("compose service feature %q is not supported", key)
 		}
 	}
-	if err := validateServiceLabels(values["labels"]); err != nil {
+	if err := validateServiceLabels(values["labels"], reservedPolicy); err != nil {
 		return err
 	}
 	if err := validateServiceVolumes(name, values["volumes"], volumes); err != nil {
@@ -283,7 +301,7 @@ func validateByteValue(node *yaml.Node, field string, allowUnlimited ...bool) er
 	return nil
 }
 
-func validateTopLevelResources(node *yaml.Node, resource string) error {
+func validateTopLevelResources(node *yaml.Node, resource string, reservedPolicy bool) error {
 	if node == nil {
 		return nil
 	}
@@ -307,7 +325,7 @@ func validateTopLevelResources(node *yaml.Node, resource string) error {
 				return fmt.Errorf("compose %s %s must be a string", resource, key)
 			}
 			if key == "labels" {
-				if err := validateServiceLabels(value); err != nil {
+				if err := validateServiceLabels(value, reservedPolicy); err != nil {
 					return err
 				}
 			}
@@ -550,7 +568,11 @@ func isComposeNull(node *yaml.Node) bool {
 	return node != nil && node.Kind == yaml.ScalarNode && node.Tag == "!!null"
 }
 
-func validateServiceLabels(node *yaml.Node) error {
+// validateServiceLabels refuses the labels Gateway and Docker Compose read. With
+// reservedPolicy (actions that create or start containers) that is the full
+// reserved set and keys built from variables; otherwise only Compose's
+// ownership labels, as before the full set existed.
+func validateServiceLabels(node *yaml.Node, reservedPolicy bool) error {
 	if node == nil {
 		return nil
 	}
@@ -574,6 +596,12 @@ func validateServiceLabels(node *yaml.Node) error {
 		return errors.New("compose labels must be a mapping or KEY=value list")
 	}
 	for key := range mappingValues(node) {
+		if !reservedPolicy {
+			if strings.HasPrefix(key, "com.docker.compose.") || strings.HasPrefix(key, "wiolett.gateway.compose.") {
+				return fmt.Errorf("compose label %q is reserved by Docker Compose or Gateway", key)
+			}
+			continue
+		}
 		// Compose interpolates a KEY=value list entry, so a variable could spell a reserved key.
 		if strings.Contains(key, "$") {
 			return fmt.Errorf("compose label %q cannot use variables in its key", key)
