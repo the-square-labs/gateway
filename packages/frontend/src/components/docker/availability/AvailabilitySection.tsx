@@ -211,7 +211,6 @@ export function AvailabilitySection({
   const [disableOpen, setDisableOpen] = useState(false);
   const [survivorId, setSurvivorId] = useState("");
   const [confirmation, setConfirmation] = useState("");
-  const [enablePreviewOpen, setEnablePreviewOpen] = useState(false);
   const dirtyRef = useRef(false);
   const stableResource = useStableAvailabilityResource(resource);
 
@@ -413,13 +412,9 @@ export function AvailabilitySection({
     }
   }
 
-  async function save(previewConfirmed = false) {
+  async function save() {
     if (!canManage || !requireLicenseFeature("multi-node-availability", "Availability")) return;
     if (!dirty) return;
-    if (!enabled && enabledDraft && !previewConfirmed) {
-      setEnablePreviewOpen(true);
-      return;
-    }
     if (enabled && !enabledDraft) {
       setSurvivorId(
         policy?.placements.find((placement) => canKeepPlacement(placement, policy.shouldRun))?.id ??
@@ -463,20 +458,6 @@ export function AvailabilitySection({
         title={
           <span className="inline-flex flex-wrap items-center gap-2" aria-label="Availability">
             <span>Availability</span>
-            <TooltipProvider delayDuration={200}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge size="inline" variant="warning" tabIndex={0}>
-                    Tech Preview
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-sm break-words">
-                  Availability is available as a Tech Preview. Not all scenarios and edge cases have
-                  been verified, and the feature may be unstable. Validate it with your own workload
-                  before using it.
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
             {policy && displayStatus && policy.mode !== "single" ? (
               <StatusBadge status={displayStatus} error={policy.lastErrorMessage} />
             ) : null}
@@ -769,34 +750,6 @@ export function AvailabilitySection({
           />
         </PanelShell>
       )}
-
-      <Dialog open={enablePreviewOpen} onOpenChange={setEnablePreviewOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Enable Availability Tech Preview?</DialogTitle>
-            <DialogDescription>
-              Review the Tech Preview limitations before enabling Availability.
-            </DialogDescription>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Not all scenarios and edge cases have been verified, and the feature may be unstable.
-            Validate it with your own workload before using it.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEnablePreviewOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                setEnablePreviewOpen(false);
-                void save(true);
-              }}
-            >
-              Enable Tech Preview
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={disableOpen} onOpenChange={setDisableOpen}>
         <DialogContent className="sm:max-w-lg">
