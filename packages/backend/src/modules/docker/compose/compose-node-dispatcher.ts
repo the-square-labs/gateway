@@ -16,7 +16,15 @@ export class DockerComposeNodeDispatcher implements DockerComposeDispatcher {
       revisionId: input.revisionId ?? undefined,
       configDigest: input.configDigest ?? undefined,
       composeYaml: input.yaml == null ? undefined : Buffer.from(input.yaml, 'utf8'),
-      normalizedModelJson: input.normalizedModel == null ? undefined : JSON.stringify(input.normalizedModel),
+      // The per-service digests travel with the normalized model; the daemon reads `serviceConfigDigests` from it.
+      normalizedModelJson:
+        input.normalizedModel == null
+          ? undefined
+          : JSON.stringify(
+              input.serviceConfigDigests
+                ? { ...input.normalizedModel, serviceConfigDigests: input.serviceConfigDigests }
+                : input.normalizedModel
+            ),
       variables: input.variables,
       secrets: input.secrets,
       removeOrphans: input.options.removeOrphans ?? false,
