@@ -52,8 +52,12 @@ func (s *coordinateStream) SendHeader(metadata.MD) error { return nil }
 func (s *coordinateStream) SetTrailer(metadata.MD)       {}
 
 func clientContext(commonName string) context.Context {
+	return clientContextWith(context.Background(), commonName)
+}
+
+func clientContextWith(parent context.Context, commonName string) context.Context {
 	certificate := &x509.Certificate{Subject: pkix.Name{CommonName: commonName}, SerialNumber: big.NewInt(1), Raw: []byte(commonName)}
-	return grpcpeer.NewContext(context.Background(), &grpcpeer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, VerifiedChains: [][]*x509.Certificate{{certificate}}}}})
+	return grpcpeer.NewContext(parent, &grpcpeer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, VerifiedChains: [][]*x509.Certificate{{certificate}}}}})
 }
 
 // serve runs Coordinate for a client and returns its stream and result.
@@ -190,6 +194,31 @@ func TestCoordinateRoutesByDestinationAndFollowsSignedBlocks(t *testing.T) {
 			t.Fatal("stream did not end")
 		}
 	}
+}
+
+// D3: a frame is routed only between peers one policy names together. x is a
+// candidate of policy-2 only: its frame to d1 (policy-1 only) is dropped, its
+// frame to v1, which votes in both, is routed.
+func TestCoordinateRoutesOnlyWithinASharedPolicy(t *testing.T) {
+	h := newHarness(t, true)
+	h.signPolicy("policy-2", []string{"x"}, []string{"v1", "v2", "v3"}, false)
+	h.relay.ApplyPolicy(h.snapshot())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	x, _ := serve(h, clientContextWith(ctx, "x"))
+	d1, _ := serve(h, clientContextWith(ctx, "d1"))
+	v1, _ := serve(h, clientContextWith(ctx, "v1"))
+	waitConnected(t, h, "d1", "v1")
+
+	x.in <- h.frame("x", "d1")
+	toV1 := h.frame("x", "v1")
+	x.in <- toV1
+	waitFrame(t, v1, toV1)
+	// d1's stream is first in, first out: a routed frame from x would arrive
+	// before this one from v1, and waitFrame fails on any other frame.
+	fromV1 := h.frame("v1", "d1")
+	v1.in <- fromV1
+	waitFrame(t, d1, fromV1)
 }
 
 func waitConnected(t *testing.T, h *harness, ids ...string) {

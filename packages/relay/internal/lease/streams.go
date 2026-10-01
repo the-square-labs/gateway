@@ -123,7 +123,7 @@ func (c *Coordinator) ingestFrame(frame *relayv1.CoordinationFrame) {
 	if proto.Unmarshal(frame.GetPayload(), batch) != nil || (len(batch.GetBlocks()) == 0 && len(batch.GetKeyRotations()) == 0) {
 		return
 	}
-	if c.ingest(batch.GetKeyRotations(), batch.GetBlocks()) {
+	if c.ingest(batch.GetKeyRotations(), batch.GetBlocks(), true) {
 		c.revalidateStreams()
 		c.kick()
 	}
@@ -140,9 +140,13 @@ func (c *Coordinator) deliver(frame *relayv1.CoordinationFrame) {
 	c.kick()
 }
 
-// Send routes a frame to its destination's newest stream. It never blocks:
-// the lease node calls it as its Transport, and a full stream drops frames.
+// Send routes a frame to its destination's newest stream, only when a policy
+// names both its sender and its destination (D3). It never blocks: the lease
+// node calls it as its Transport, and a full stream drops frames.
 func (c *Coordinator) Send(frame *relayv1.CoordinationFrame) {
+	if !c.view.shares(frame.GetSenderId(), frame.GetDestinationId()) {
+		return
+	}
 	c.mu.Lock()
 	var target *memberStream
 	if streams := c.streams[frame.GetDestinationId()]; len(streams) > 0 {

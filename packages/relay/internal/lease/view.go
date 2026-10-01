@@ -158,11 +158,34 @@ func (v *memberView) authorized(id string) bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	for _, manifest := range v.manifests {
-		if _, member := manifest.members[id]; member || manifest.candidates[id] {
+		if manifest.names(id) {
 			return true
 		}
 	}
 	return false
+}
+
+// shares reports whether one policy manifest the relay holds names both a
+// and b, each as a member or a candidate. Coordinate routes a frame only
+// between such peers (D3): a node or relay of one policy must not reach the
+// members of another, whose leases it could otherwise disturb.
+func (v *memberView) shares(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, manifest := range v.manifests {
+		if manifest.names(a) && manifest.names(b) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m viewManifest) names(id string) bool {
+	_, member := m.members[id]
+	return member || m.candidates[id]
 }
 
 func (v *memberView) manifest(policyID string) (viewManifest, bool) {

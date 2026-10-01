@@ -275,8 +275,8 @@ func (c *Coordinator) ApplyPolicy(snapshot *policy.Snapshot) {
 		c.view.trust(key.KeyID, key.PublicKey)
 	}
 	changed := false
-	c.seedOnce.Do(func() { changed = c.ingest(c.seedLinks, c.seedBlocks) })
-	if snapshot != nil && c.ingest(snapshot.LeaseKeyRotations, snapshot.LeaseBlocks) {
+	c.seedOnce.Do(func() { changed = c.ingest(c.seedLinks, c.seedBlocks, false) })
+	if snapshot != nil && c.ingest(snapshot.LeaseKeyRotations, snapshot.LeaseBlocks, false) {
 		changed = true
 	}
 	if changed {
@@ -288,7 +288,9 @@ func (c *Coordinator) ApplyPolicy(snapshot *policy.Snapshot) {
 // ingest adopts rotation links and policy manifests (which carry each
 // policy's voters, A18) into the node and the member view.
 // Anyone may forward them: both verify the policy-key signatures (A4, A14).
-func (c *Coordinator) ingest(links []*relayv1.LeasePolicyKeyRotation, blocks []*relayv1.LeaseSignedBlock) bool {
+// The view routes for every policy; the node adopts a manifest forwarded in
+// a frame only when it names this relay or updates a policy it holds.
+func (c *Coordinator) ingest(links []*relayv1.LeasePolicyKeyRotation, blocks []*relayv1.LeaseSignedBlock, forwarded bool) bool {
 	pending := links
 	for len(pending) > 0 {
 		var retry []*relayv1.LeasePolicyKeyRotation
@@ -308,7 +310,11 @@ func (c *Coordinator) ingest(links []*relayv1.LeasePolicyKeyRotation, blocks []*
 		if block.GetKind() != relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST {
 			continue
 		}
-		if _, err := c.node.AdoptManifest(block); err != nil {
+		adopt := c.node.AdoptManifest
+		if forwarded {
+			adopt = c.node.AdoptForwardedManifest
+		}
+		if _, err := adopt(block); err != nil {
 			c.logger.Debug("availability lease manifest rejected", "error", err)
 		}
 		if c.view.adoptBlock(block) {
