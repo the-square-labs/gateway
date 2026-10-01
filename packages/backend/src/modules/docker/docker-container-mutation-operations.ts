@@ -13,6 +13,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
+import { containerAnonymousVolumes, removeContainerAnonymousVolumes } from './docker-container-anonymous-volumes.js';
 import { detachRemovedContainerSource } from './docker-container-source-detach.js';
 import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
 import { placeCreatedDockerResource } from './docker-creation-access.js';
@@ -925,6 +926,8 @@ export async function removeContainer(
   }
   const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'remove', { containerId, force });
   ctx.parseResult(result);
+  // Docker keeps a removed container's anonymous volumes (image VOLUME declarations); named volumes stay.
+  await removeContainerAnonymousVolumes(ctx, nodeId, containerAnonymousVolumes(inspect));
   await ctx.auditService.log({
     action: 'docker.container.remove',
     userId,
