@@ -40,10 +40,10 @@ func (w *simWorld) fencesSince(node string, key Key, since time.Duration) int {
 	return count
 }
 
-// The invoise layout (A18): two candidates on different sites and a witness
+// The two-site layout (A18): two candidates on different sites and a witness
 // relay on a third. Losing any one site keeps the policy running: the holder's
 // site fails over within 45 s, the other sites' loss does not disturb it.
-func TestA18InvoiseLayoutSurvivesEachSiteLoss(t *testing.T) {
+func TestA18TwoSiteLayoutSurvivesEachSiteLoss(t *testing.T) {
 	w := newScenario(t, scenarioSpec{
 		// Sites: A = {d1, r1}, B = {d2, r2}, C = {w}. Only the witness relay
 		// votes; r1 and r2 keep shadow accepts for their gates.
