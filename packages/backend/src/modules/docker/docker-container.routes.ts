@@ -107,6 +107,7 @@ import { resolveDockerContainerByName } from './docker-route-resolvers.js';
 import { DockerSecretService } from './docker-secret.service.js';
 import { DockerSnapshotService, sanitizeContainerInspect } from './docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
+import { assertNotPendingSourceContainer } from './docker-source.service.js';
 
 const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_CONTAINER_PORT_PREVIEW_MAX = 64;
@@ -539,12 +540,17 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Remove container
   router.openapi(
-    { ...removeContainerRoute, middleware: requireDockerContainerScope('docker:containers:delete') },
+    {
+      ...removeContainerRoute,
+      middleware: requireDockerContainerScope('docker:containers:delete', 'containerId', { allowPendingSource: true }),
+    },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
+      // A Git-source container waiting for its first build has nothing to inspect or remove yet.
+      await assertNotPendingSourceContainer(nodeId, containerId);
       await assertComposeChildMutationAllowed(nodeId, containerId);
       // Gateway never removes an active container; a stopped one needs no force.
       await service.removeContainer(nodeId, containerId, false, user.id);
