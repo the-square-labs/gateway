@@ -134,6 +134,20 @@ export interface ManagedDatabaseBinding {
   updatedAt: string;
 }
 
+/**
+ * A managed link's connections as the node running its workloads reports them. The node holds the link at its
+ * capacity whichever relay of the pool carries a connection.
+ */
+export interface ManagedLinkConnections {
+  active: number;
+  limit: number;
+  /** Connections the node refused at the link's or the node's limit; part of throttledTotal. */
+  rejectedTotal: string;
+  lastRejectionReason: string | null;
+  lastRejectedAt: string | null;
+  reportedAt: string;
+}
+
 export interface ManagedDatabaseBindingRuntime {
   routeId: string;
   activeStreams: number;
@@ -147,6 +161,8 @@ export interface ManagedDatabaseBindingRuntime {
   averageDurationMs: number;
   lastActivityAt: string | null;
   metricsSince: string;
+  /** Null while the node running the workload does not report its links (an older daemon). */
+  connections?: ManagedLinkConnections | null;
 }
 
 export interface ManagedDatabaseBindingRuntimeStatus {

@@ -14,7 +14,7 @@ import { normalizeDockerRuntimeProfile } from "@/lib/docker-runtime-profile";
 import { api } from "@/services/api";
 import type { DockerAvailabilityPolicy } from "@/types";
 import { copyToClipboard, type InspectData, STATUS_BADGE } from "./helpers";
-import { type ContainerDatabaseLink, LinkRuntimeTab } from "./LinkRuntimeTab";
+import { type ContainerDatabaseLink, WorkloadLinkRuntime } from "./LinkRuntimeTab";
 
 export function OverviewTab({
   nodeId,
@@ -304,9 +304,13 @@ export function OverviewTab({
         </PanelShell>
       )}
 
-      {databaseLinks.length > 0 && (
-        <LinkRuntimeTab links={databaseLinks} onHealthChange={onSecureLinkHealthChange} />
-      )}
+      <WorkloadLinkRuntime
+        nodeId={nodeId}
+        targetType="container"
+        targetResourceId={containerName}
+        databaseLinks={databaseLinks}
+        onHealthChange={onSecureLinkHealthChange}
+      />
 
       {/* Recent Tasks */}
       {recentTasks.length > 0 && (

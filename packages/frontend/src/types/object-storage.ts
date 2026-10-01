@@ -1,3 +1,5 @@
+import type { ManagedDatabaseBindingRuntime } from "./databases";
+
 // Object Storage
 export type ObjectStorageProvider =
   | "aws"
@@ -292,6 +294,12 @@ export interface ManagedStorageBinding {
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ManagedStorageBindingRuntimeStatus {
+  binding: ManagedStorageBinding;
+  /** The same runtime a database link reports. */
+  runtime: ManagedDatabaseBindingRuntime | null;
 }
 
 export interface ManagedStorageBindingCreateInput {

@@ -22,6 +22,7 @@ import type {
   ManagedStorageBinding,
   ManagedStorageBindingCreateInput,
   ManagedStorageBindingDeleteInput,
+  ManagedStorageBindingRuntimeStatus,
 } from "@/types/object-storage";
 import { API_BASE } from "./api-base";
 import type { ApiClientBaseConstructor } from "./api-mixins";
@@ -354,6 +355,17 @@ export function withObjectStorageApi<TBase extends ApiClientBaseConstructor>(Bas
       return this.unwrapData(
         this.request<{ data: ManagedStorageBinding[] }>(
           `/managed-storage/${encodeURIComponent(id)}/bindings`
+        )
+      );
+    }
+
+    async getManagedStorageBindingRuntime(
+      id: string,
+      bindingId: string
+    ): Promise<ManagedStorageBindingRuntimeStatus> {
+      return this.unwrapData(
+        this.request<{ data: ManagedStorageBindingRuntimeStatus }>(
+          `/managed-storage/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}/runtime`
         )
       );
     }

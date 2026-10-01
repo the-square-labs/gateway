@@ -15,10 +15,13 @@ import { StatCard } from "@/components/ui/stat-card";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import type {
   ManagedDatabaseBinding,
   ManagedDatabaseBindingRuntime,
   ManagedDatabaseBindingTargetType,
+  ManagedObjectStorage,
+  ManagedStorageBinding,
 } from "@/types";
 
 const MAX_HISTORY = 60;
@@ -36,6 +39,24 @@ export interface ContainerDatabaseLink {
     | "status"
     | "lastError"
   >;
+}
+
+/** A managed storage link of a container or deployment. */
+export interface WorkloadStorageLink {
+  storage: Pick<ManagedObjectStorage, "id" | "name">;
+  binding: Pick<
+    ManagedStorageBinding,
+    "id" | "clusterId" | "targetNodeId" | "targetType" | "targetResourceId" | "status" | "lastError"
+  >;
+}
+
+/** One database or storage link of the section, with how its runtime is read. */
+interface RuntimeLink {
+  id: string;
+  name: string;
+  badges: string[];
+  status: ManagedDatabaseBinding["status"];
+  load: () => Promise<ManagedDatabaseBindingRuntime | null>;
 }
 
 interface RuntimeSample {
@@ -90,6 +111,21 @@ function duration(milliseconds: number) {
   return `${(milliseconds / 60_000).toFixed(1)} min`;
 }
 
+/** Why the node or a relay refused a link's latest refused connection (the daemon's reasons). */
+const REJECTION_REASONS: Record<string, string> = {
+  link_limit: "link at its connection limit",
+  node_limit: "node at its connection limit",
+  relay_capacity: "relay at capacity",
+  relay_unavailable: "relay unavailable",
+  relay_refused: "relay refused",
+  source_not_allowed: "source not allowed",
+  unknown_peer: "unknown peer",
+  network_unverified: "network not verified",
+  network_changed: "network changed",
+  grant_unavailable: "no relay grant",
+  route_changed: "route changed",
+};
+
 function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSample[]) {
   const activeHistory = history.map((sample) => counter(sample.runtime.activeStreams));
   const openedRateHistory = rollingRate(history, (sample) => counter(sample.runtime.openedTotal));
@@ -107,6 +143,10 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
   const failed = counter(runtime.failedTotal);
   const successPercent =
     completed > 0 ? clampPercent(((completed - failed) / completed) * 100) : 100;
+  const connections = runtime.connections ?? null;
+  const lastRejection = connections?.lastRejectionReason
+    ? (REJECTION_REASONS[connections.lastRejectionReason] ?? connections.lastRejectionReason)
+    : null;
   const successHistory = history.map((sample) => {
     const sampleCompleted = counter(sample.runtime.completedTotal);
     const sampleFailed = counter(sample.runtime.failedTotal);
@@ -123,7 +163,11 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
         icon={Activity}
         history={activeHistory}
         color="#3b82f6"
-        subtitle="Current streams on this link"
+        subtitle={
+          connections && connections.limit > 0
+            ? `Open connections, limit ${connections.limit.toLocaleString()}`
+            : "Current streams on this link"
+        }
       />
       <StatCard
         label="New streams"
@@ -187,7 +231,9 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
         subtitle={
           latest(throttledRateHistory) > 0
             ? `${latest(throttledRateHistory).toFixed(1)}/s currently`
-            : `${latest(failedRateHistory).toFixed(1)}/s tunnel failures`
+            : lastRejection
+              ? `Last: ${lastRejection}`
+              : `${latest(failedRateHistory).toFixed(1)}/s tunnel failures`
         }
       />
     </div>
@@ -223,25 +269,47 @@ function emptyRuntimeCards() {
 
 export function LinkRuntimeTab({
   links,
+  storageLinks = [],
   onHealthChange,
 }: {
   links: ContainerDatabaseLink[];
+  storageLinks?: WorkloadStorageLink[];
   onHealthChange?: (down: boolean) => void;
 }) {
   const [states, setStates] = useState<Record<string, LinkRuntimeState>>({});
   const generationRef = useRef(0);
-  const orderedLinks = useMemo(
+  const orderedLinks = useMemo<RuntimeLink[]>(
     () =>
-      [...links].sort(
-        (left, right) =>
-          left.database.name.localeCompare(right.database.name) ||
-          left.binding.id.localeCompare(right.binding.id)
+      [
+        ...links.map(({ database, binding }) => ({
+          id: binding.id,
+          name: database.name,
+          badges: [
+            database.type,
+            ...(binding.targetType === "compose_service"
+              ? [composeServiceName(binding.targetResourceId)]
+              : []),
+          ],
+          status: binding.status,
+          load: async () =>
+            (await api.getManagedDatabaseBindingRuntime(database.id, binding.id)).runtime,
+        })),
+        ...storageLinks.map(({ storage, binding }) => ({
+          id: binding.id,
+          name: storage.name,
+          badges: ["S3"],
+          status: binding.status,
+          load: async () =>
+            (await api.getManagedStorageBindingRuntime(storage.id, binding.id)).runtime,
+        })),
+      ].sort(
+        (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)
       ),
-    [links]
+    [links, storageLinks]
   );
   const linksRef = useRef(orderedLinks);
   linksRef.current = orderedLinks;
-  const linkIds = orderedLinks.map(({ binding }) => binding.id).join("|");
+  const linkIds = orderedLinks.map(({ id }) => id).join("|");
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -250,10 +318,10 @@ export function LinkRuntimeTab({
     setStates((current) =>
       Object.fromEntries(
         linksRef.current
-          .filter(({ binding }) => activeLinkIds.has(binding.id))
-          .map(({ binding }) => [
-            binding.id,
-            current[binding.id] ?? {
+          .filter(({ id }) => activeLinkIds.has(id))
+          .map(({ id }) => [
+            id,
+            current[id] ?? {
               runtime: null,
               history: [],
               telemetryUnavailable: false,
@@ -266,24 +334,19 @@ export function LinkRuntimeTab({
       if (inFlight) return;
       inFlight = true;
       try {
-        const currentLinks = linksRef.current.filter(({ binding }) => binding.status !== "error");
-        const results = await Promise.allSettled(
-          currentLinks.map(async ({ database, binding }) => ({
-            bindingId: binding.id,
-            status: await api.getManagedDatabaseBindingRuntime(database.id, binding.id),
-          }))
-        );
+        const currentLinks = linksRef.current.filter(({ status }) => status !== "error");
+        const results = await Promise.allSettled(currentLinks.map((link) => link.load()));
         if (generation !== generationRef.current) return;
         const sampledAt = Date.now();
         setStates((current) => {
           if (generation !== generationRef.current) return current;
           const next: Record<string, LinkRuntimeState> = {};
           for (const [index, result] of results.entries()) {
-            const bindingId = currentLinks[index]!.binding.id;
-            const previous = current[bindingId];
+            const linkId = currentLinks[index]!.id;
+            const previous = current[linkId];
             if (result.status === "fulfilled") {
-              const runtime = result.value.status.runtime;
-              next[bindingId] = {
+              const runtime = result.value;
+              next[linkId] = {
                 runtime,
                 history: runtime
                   ? [...(previous?.history ?? []), { at: sampledAt, runtime }].slice(-MAX_HISTORY)
@@ -292,7 +355,7 @@ export function LinkRuntimeTab({
                 loading: false,
               };
             } else {
-              next[bindingId] = {
+              next[linkId] = {
                 runtime: previous?.runtime ?? null,
                 history: previous?.history ?? [],
                 telemetryUnavailable: true,
@@ -314,11 +377,11 @@ export function LinkRuntimeTab({
     };
   }, [linkIds]);
 
-  const hasDownLink = orderedLinks.some(({ binding }) => binding.status === "error");
+  const hasDownLink = orderedLinks.some(({ status }) => status === "error");
   useContentLoading(
-    orderedLinks.some(({ binding }) => {
-      if (binding.status === "error") return false;
-      const state = states[binding.id];
+    orderedLinks.some(({ id, status }) => {
+      if (status === "error") return false;
+      const state = states[id];
       return !state || state.loading;
     })
   );
@@ -328,27 +391,28 @@ export function LinkRuntimeTab({
 
   return (
     <div className="space-y-6">
-      {orderedLinks.map(({ database, binding }) => {
-        const state = states[binding.id];
-        if (binding.status === "error") return null;
+      {orderedLinks.map(({ id, name, badges, status }) => {
+        const state = states[id];
+        if (status === "error") return null;
         return (
-          <section key={binding.id} className="space-y-3">
+          <section key={id} className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-sm font-semibold text-muted-foreground">{database.name}</h3>
-              <Badge variant="secondary">{database.type}</Badge>
-              {binding.targetType === "compose_service" && (
-                <Badge variant="secondary">{composeServiceName(binding.targetResourceId)}</Badge>
-              )}
+              <h3 className="text-sm font-semibold text-muted-foreground">{name}</h3>
+              {badges.map((badge) => (
+                <Badge key={badge} variant="secondary">
+                  {badge}
+                </Badge>
+              ))}
               <Badge
                 variant={
-                  binding.status === "ready"
+                  status === "ready"
                     ? "success"
-                    : binding.status === "creating" || binding.status === "deleting"
+                    : status === "creating" || status === "deleting"
                       ? "warning"
                       : "destructive"
                 }
               >
-                {binding.status}
+                {status}
               </Badge>
             </div>
 
@@ -376,22 +440,33 @@ export function LinkRuntimeTab({
 }
 
 /**
- * The Link Runtime of a deployment or Compose project. Container details carry their links; these
- * targets list them from the managed databases the caller can view. A Compose target id is the
- * project id and matches the links of all its services.
+ * The Link Runtime of a workload: its managed database links and, for a container or deployment, its managed storage
+ * links. A container's database links come with its details; the others are listed from the managed databases and
+ * storage the caller can view. A Compose target id is the project id and matches the links of all its services.
  */
 export function WorkloadLinkRuntime({
   nodeId,
   targetType,
   targetResourceId,
+  databaseLinks,
+  onHealthChange,
 }: {
   nodeId: string;
-  targetType: Extract<ManagedDatabaseBindingTargetType, "deployment" | "compose_service">;
+  targetType: ManagedDatabaseBindingTargetType;
   targetResourceId: string;
+  /** The links a container's details carry; listed here when absent. */
+  databaseLinks?: ContainerDatabaseLink[];
+  onHealthChange?: (down: boolean) => void;
 }) {
-  const [links, setLinks] = useState<ContainerDatabaseLink[]>([]);
-  const [loading, setLoading] = useState(true);
-  const loadRef = useRef(0);
+  const canViewStorage = useAuthStore((state) => state.hasScopedAccess("storage:view"));
+  const [listedDatabaseLinks, setListedDatabaseLinks] = useState<ContainerDatabaseLink[]>([]);
+  const [storageLinks, setStorageLinks] = useState<WorkloadStorageLink[]>([]);
+  const [databasesLoading, setDatabasesLoading] = useState(!databaseLinks);
+  const [storageLoading, setStorageLoading] = useState(true);
+  const databaseLoadRef = useRef(0);
+  const storageLoadRef = useRef(0);
+  const listsDatabases = !databaseLinks;
+  const storageTarget = targetType === "container" || targetType === "deployment";
   const matches = useCallback(
     (binding: Pick<ManagedDatabaseBinding, "targetNodeId" | "targetType" | "targetResourceId">) =>
       binding.targetNodeId === nodeId &&
@@ -402,8 +477,9 @@ export function WorkloadLinkRuntime({
     [nodeId, targetResourceId, targetType]
   );
 
-  const load = useCallback(async () => {
-    const current = ++loadRef.current;
+  const loadDatabases = useCallback(async () => {
+    if (!listsDatabases) return;
+    const current = ++databaseLoadRef.current;
     try {
       const databases = await api.listManagedDatabases();
       const results = await Promise.all(
@@ -414,8 +490,8 @@ export function WorkloadLinkRuntime({
             .catch(() => [] as ManagedDatabaseBinding[]),
         }))
       );
-      if (current !== loadRef.current) return;
-      setLinks(
+      if (current !== databaseLoadRef.current) return;
+      setListedDatabaseLinks(
         results.flatMap(({ database, bindings }) =>
           bindings.filter(matches).map((binding) => ({
             database: { id: database.id, name: database.name, type: database.type },
@@ -425,20 +501,60 @@ export function WorkloadLinkRuntime({
       );
     } catch {
       // Without managed database access there is no link runtime to show.
-      if (current === loadRef.current) setLinks([]);
+      if (current === databaseLoadRef.current) setListedDatabaseLinks([]);
     } finally {
-      if (current === loadRef.current) setLoading(false);
+      if (current === databaseLoadRef.current) setDatabasesLoading(false);
     }
-  }, [matches]);
+  }, [listsDatabases, matches]);
+
+  const loadStorage = useCallback(async () => {
+    const current = ++storageLoadRef.current;
+    if (!storageTarget || !canViewStorage) {
+      setStorageLinks([]);
+      setStorageLoading(false);
+      return;
+    }
+    try {
+      const clusters = await api.listManagedObjectStorages();
+      const results = await Promise.all(
+        clusters.map(async (storage) => ({
+          storage,
+          bindings: await api
+            .listManagedStorageBindings(storage.id)
+            .catch(() => [] as ManagedStorageBinding[]),
+        }))
+      );
+      if (current !== storageLoadRef.current) return;
+      setStorageLinks(
+        results.flatMap(({ storage, bindings }) =>
+          bindings.filter(matches).map((binding) => ({
+            storage: { id: storage.id, name: storage.name },
+            binding,
+          }))
+        )
+      );
+    } catch {
+      // Without managed storage access there is no link runtime to show.
+      if (current === storageLoadRef.current) setStorageLinks([]);
+    } finally {
+      if (current === storageLoadRef.current) setStorageLoading(false);
+    }
+  }, [canViewStorage, matches, storageTarget]);
 
   useEffect(() => {
-    setLoading(true);
-    void load();
-  }, [load]);
+    setDatabasesLoading(listsDatabases);
+    void loadDatabases();
+  }, [listsDatabases, loadDatabases]);
+
+  useEffect(() => {
+    setStorageLoading(true);
+    void loadStorage();
+  }, [loadStorage]);
 
   useRealtime(
     "database.changed",
     (rawPayload) => {
+      if (!listsDatabases) return;
       const payload = rawPayload as
         | {
             resourceKind?: string;
@@ -460,12 +576,25 @@ export function WorkloadLinkRuntime({
       ) {
         return;
       }
-      void load();
+      void loadDatabases();
     },
-    { onReconnect: () => void load() }
+    { onReconnect: () => void loadDatabases() }
   );
 
-  useContentLoading(loading);
-  if (links.length === 0) return null;
-  return <LinkRuntimeTab links={links} />;
+  useRealtime(
+    "storage.changed",
+    (rawPayload) => {
+      // Link changes carry their binding id; cluster changes do not touch this workload's links.
+      if (!(rawPayload as { bindingId?: string } | undefined)?.bindingId) return;
+      void loadStorage();
+    },
+    { onReconnect: () => void loadStorage() }
+  );
+
+  const links = databaseLinks ?? listedDatabaseLinks;
+  useContentLoading(databasesLoading || storageLoading);
+  if (links.length === 0 && storageLinks.length === 0) return null;
+  return (
+    <LinkRuntimeTab links={links} storageLinks={storageLinks} onHealthChange={onHealthChange} />
+  );
 }
