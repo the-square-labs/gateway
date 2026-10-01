@@ -7,13 +7,20 @@
     "command-palette",
     "frontend",
     "gateway-inference",
-    "quota",
-    "rolling-window"
+    "quota"
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.85,
   "created_at": 1785448712405,
-  "updated_at": 1785448712405
+  "updated_at": 1790812541697
 }
 ---
-Gateway Inference rolling-window `recoveryAt` must be derived from `inference_usage_ledger.occurred_at`, not `now + window`. For an exhausted window, calculate the earliest ledger expiry whose cumulative removal brings usage back below the UI recovery threshold; this prevents a countdown that renews on every poll or promises availability too early. The self-usage cards should show an exact future recovery date and must not use the past-only `formatRelativeDate`, which labels every future date as `Just now`; keep the existing card label/value scale and override only the recovery subtitle from 10px to 12px. Command Palette search state must clear on the dialog content's completed closed animation rather than immediately when `open` becomes false. AI conversation titles must strip hidden `<system-instruction>...</system-instruction>` blocks while preserving the full wrapped message for runtime execution.
+Gateway frontend details for inference usage cards, the Command Palette and AI conversation titles:
+
+- Superseded (2026-09): the July 2026 rule that derived a rolling-window `recoveryAt` from `inference_usage_ledger.occurred_at` no longer applies. Subscription limits are now fixed, lazily started 5-hour/7-day/30-day windows (see the inference product contract memory); recovery time is the end of the active window.
+- Self-usage cards show an exact future recovery date. Do not use the past-only `formatRelativeDate` for future dates (it labels every future date "Just now"). Keep the existing card label/value scale; only the recovery subtitle is 12px instead of 10px.
+- Command Palette search state clears when the dialog content's closing animation completes, not immediately when `open` becomes false.
+- AI conversation titles strip hidden `<system-instruction>...</system-instruction>` blocks (the Command Palette wraps AI queries in them), while the full wrapped message is kept for runtime execution.

@@ -5,31 +5,11 @@
       "from_id": "v80uezny",
       "to_id": "dv6ewa57",
       "relation": "related_to",
-      "weight": 0.5034,
+      "weight": 0.4757,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736847,
-      "updated_at": 1787862736847
-    },
-    {
-      "from_id": "v80uezny",
-      "to_id": "w75b8az4",
-      "relation": "related_to",
-      "weight": 0.2902,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736847,
-      "updated_at": 1787862736847
-    },
-    {
-      "from_id": "v80uezny",
-      "to_id": "wlmqdf8c",
-      "relation": "related_to",
-      "weight": 0.3211,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736847,
-      "updated_at": 1787862736847
+      "created_at": 1790813101821,
+      "updated_at": 1790813101821
     },
     {
       "from_id": "v80uezny",
@@ -38,8 +18,28 @@
       "weight": 0.3593,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736847,
-      "updated_at": 1787862736847
+      "created_at": 1790813101821,
+      "updated_at": 1790813101821
+    },
+    {
+      "from_id": "v80uezny",
+      "to_id": "wlmqdf8c",
+      "relation": "related_to",
+      "weight": 0.3211,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101821,
+      "updated_at": 1790813101821
+    },
+    {
+      "from_id": "v80uezny",
+      "to_id": "w75b8az4",
+      "relation": "related_to",
+      "weight": 0.2902,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101821,
+      "updated_at": 1790813101821
     },
     {
       "from_id": "v80uezny",
@@ -48,8 +48,8 @@
       "weight": 0.268,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736847,
-      "updated_at": 1787862736847
+      "created_at": 1790813101821,
+      "updated_at": 1790813101821
     }
   ]
 }

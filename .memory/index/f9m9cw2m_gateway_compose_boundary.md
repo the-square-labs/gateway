@@ -17,7 +17,9 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1787483483982,
-  "updated_at": 1787532788311
+  "updated_at": 1790812463962
 }
 ---
-[→ j6oni2tm] Gateway documentation reality and accepted first-class Compose Projects boundary
+[→ j6oni2tm] # Gateway Docker Compose Projects: status and original design boundary
+
+Status (verified in main on 2026-10-01): first-class Compose Projects are implemented...

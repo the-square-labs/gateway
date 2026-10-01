@@ -3,33 +3,43 @@
   "edges": [
     {
       "from_id": "02e60mqr",
-      "to_id": "3ta908aa",
-      "relation": "same_workflow",
-      "weight": 0.58,
-      "reason": "Secure Link release candidates depend on immutable daemon and relay artifacts governed by these release conventions.",
+      "to_id": "nr9hvzr3",
+      "relation": "uses_service",
+      "weight": 0.4938,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1788309575156,
-      "updated_at": 1788309575156
+      "created_at": 1790813101016,
+      "updated_at": 1790813101016
     },
     {
       "from_id": "02e60mqr",
-      "to_id": "hqwh565e",
-      "relation": "same_workflow",
-      "weight": 0.68,
-      "reason": "Installer artifacts are published and consumed through the repository's release-tag conventions.",
+      "to_id": "8v2nc5jg",
+      "relation": "uses_service",
+      "weight": 0.4622,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1788309575156,
-      "updated_at": 1788309575156
+      "created_at": 1790813101016,
+      "updated_at": 1790813101016
     },
     {
       "from_id": "02e60mqr",
-      "to_id": "lvklfxgs",
-      "relation": "same_workflow",
-      "weight": 0.75,
-      "reason": "Gateway release preparation and upgrade validation are stages of the same release workflow.",
+      "to_id": "zzulrspz",
+      "relation": "uses_service",
+      "weight": 0.4586,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1788309575156,
-      "updated_at": 1788309575156
+      "created_at": 1790813101016,
+      "updated_at": 1790813101016
+    },
+    {
+      "from_id": "02e60mqr",
+      "to_id": "rzidwe4n",
+      "relation": "uses_service",
+      "weight": 0.4539,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1790813101016,
+      "updated_at": 1790813101016
     }
   ]
 }

@@ -1,0 +1,55 @@
+{
+  "file_name": "i5ntywfb_ai_conversations_command",
+  "edges": [
+    {
+      "from_id": "i5ntywfb",
+      "to_id": "dcfkgqwx",
+      "relation": "related_to",
+      "weight": 0.4445,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813100760,
+      "updated_at": 1790813100760
+    },
+    {
+      "from_id": "i5ntywfb",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.391,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813100760,
+      "updated_at": 1790813100760
+    },
+    {
+      "from_id": "i5ntywfb",
+      "to_id": "fk86zmru",
+      "relation": "related_to",
+      "weight": 0.3597,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813100760,
+      "updated_at": 1790813100760
+    },
+    {
+      "from_id": "i5ntywfb",
+      "to_id": "mzmjdewo",
+      "relation": "related_to",
+      "weight": 0.3474,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813100760,
+      "updated_at": 1790813100760
+    },
+    {
+      "from_id": "i5ntywfb",
+      "to_id": "ub47mk8e",
+      "relation": "related_to",
+      "weight": 0.3384,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813100760,
+      "updated_at": 1790813100760
+    }
+  ]
+}

@@ -3,33 +3,33 @@
   "edges": [
     {
       "from_id": "s3jakmn4",
-      "to_id": "gz01c8d5",
-      "relation": "same_area",
-      "weight": 0.78,
-      "reason": "Both document local inference-core testing constraints involving Docker-managed services, loopback networking, and sandbox limitations.",
+      "to_id": "d3cheyb1",
+      "relation": "same_workflow",
+      "weight": 0.82,
+      "reason": "Both document sandbox and dependency-install prerequisites for verifying code in this pnpm monorepo.",
       "source": "auto",
-      "created_at": 1790759490726,
-      "updated_at": 1790759490726
+      "created_at": 1790818824447,
+      "updated_at": 1790818824447
+    },
+    {
+      "from_id": "s3jakmn4",
+      "to_id": "pz22sp0a",
+      "relation": "same_workflow",
+      "weight": 0.76,
+      "reason": "Both define practical test and typecheck execution rules for the gateway monorepo.",
+      "source": "auto",
+      "created_at": 1790818824447,
+      "updated_at": 1790818824447
     },
     {
       "from_id": "s3jakmn4",
       "to_id": "nuc3c3hq",
-      "relation": "same_area",
-      "weight": 0.62,
-      "reason": "Both concern Gateway sandbox behavior and verification constraints, including secure or restricted test execution.",
-      "source": "auto",
-      "created_at": 1790759490726,
-      "updated_at": 1790759490726
-    },
-    {
-      "from_id": "s3jakmn4",
-      "to_id": "92pnq26b",
-      "relation": "same_area",
+      "relation": "related_to",
       "weight": 0.58,
-      "reason": "Both capture durable Gateway sandbox testing limitations and the need for direct, constrained verification workflows.",
+      "reason": "Shares backend sandbox verification commands and targeted test execution guidance.",
       "source": "auto",
-      "created_at": 1790759490726,
-      "updated_at": 1790759490726
+      "created_at": 1790818824447,
+      "updated_at": 1790818824447
     }
   ]
 }

@@ -19,15 +19,15 @@
   "confidence": 0.99,
   "importance": 0.95,
   "created_at": 1786463265800,
-  "updated_at": 1787862245378
+  "updated_at": 1790812596353
 }
 ---
-# Secure Link and managed-database relay contract
+# Relay, Secure Link admission and telemetry contract
 
 ## Relay architecture
 
 - Standalone `gateway-relay` owns the public relay port; the Gateway app retains its HTTP port. Do not add another public relay port.
-- Daemons maintain process-lifetime multiplexed HTTP/2 mTLS data tunnels. Binding and logical proxy streams remain multiplexed; never open one connection per binding or request.
+- Daemons maintain process-lifetime multiplexed HTTP/2 mTLS data tunnels. Binding and logical proxy streams remain multiplexed; never open one connection per binding or request. Control-plane monitoring stays on the app session.
 - Nginx secure-link proxying uses deterministic Unix sockets under `/run/gateway-secure-links`; loopback TCP exists only as a rolling-upgrade fallback.
 - Generated Nginx config uses a named upstream, connection reuse for non-WebSocket traffic, and the Unix-socket target.
 - Nginx maintains configurable persistent data lanes with least-active selection. Grant timestamp refreshes must not reconnect lanes.
@@ -66,10 +66,4 @@
 - Cross-tab update messages reuse one session ID as the cache-bust token, ignore handled/stale messages, do not overlap checks, and stop scheduling navigation after detecting a version change.
 - The global rate-limit screen clears after its retry window and must not reload the page.
 
-## Managed-database continuity
-
-- Managed database storage remains a fixed-size loop-backed ext4 image, never a Docker volume or soft quota.
-- Database-profile install validates Docker before enrollment and exercises allocate, format, attach, mount, write-probe, grow, resize, cleanup, and failure-cleanup paths.
-- Unsupported container environments fail before enrollment with actionable host passthrough guidance; no unbounded fallback is allowed.
-- Connector sidecars mount the daemon-owned socket directory read-only rather than the socket file, preventing stale-inode failures after daemon restart.
-- App/relay replacement and daemon upgrades must preserve foundation data, node identities, existing database sessions where supported, and the ability to open new binding sessions.
+Managed-database storage, relay migration and connector-socket rules are kept in the managed-database relay memory.

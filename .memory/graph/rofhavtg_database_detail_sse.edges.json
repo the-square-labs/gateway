@@ -3,43 +3,53 @@
   "edges": [
     {
       "from_id": "rofhavtg",
-      "to_id": "3ta908aa",
+      "to_id": "47jk3wjw",
       "relation": "same_area",
-      "weight": 0.66,
-      "reason": "Both cover managed-database monitoring and its relay/proxy runtime behavior.",
+      "weight": 0.5444,
+      "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1790021818459,
-      "updated_at": 1790021818459
-    },
-    {
-      "from_id": "rofhavtg",
-      "to_id": "412x4uua",
-      "relation": "same_workflow",
-      "weight": 0.78,
-      "reason": "The frontend database detail page consumes the database API methods covered by this client-splitting workflow.",
-      "source": "auto",
-      "created_at": 1790021818459,
-      "updated_at": 1790021818459
+      "created_at": 1790813101128,
+      "updated_at": 1790813101128
     },
     {
       "from_id": "rofhavtg",
       "to_id": "7abclq2n",
-      "relation": "same_area",
-      "weight": 0.9,
-      "reason": "Both document Gateway managed-database backend ownership and database service/API boundaries.",
+      "relation": "related_to",
+      "weight": 0.4999,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1790021818459,
-      "updated_at": 1790021818459
+      "created_at": 1790813101128,
+      "updated_at": 1790813101128
     },
     {
       "from_id": "rofhavtg",
-      "to_id": "94t2cjlq",
-      "relation": "same_area",
-      "weight": 0.7,
-      "reason": "The managed database detail page should use the shared Gateway frontend shell, table, and detail primitives.",
+      "to_id": "asy6c7bj",
+      "relation": "related_to",
+      "weight": 0.4092,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1790021818459,
-      "updated_at": 1790021818459
+      "created_at": 1790813101128,
+      "updated_at": 1790813101128
+    },
+    {
+      "from_id": "rofhavtg",
+      "to_id": "ip47mets",
+      "relation": "related_to",
+      "weight": 0.3848,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101128,
+      "updated_at": 1790813101128
+    },
+    {
+      "from_id": "rofhavtg",
+      "to_id": "0s83sww0",
+      "relation": "related_to",
+      "weight": 0.3842,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101128,
+      "updated_at": 1790813101128
     }
   ]
 }

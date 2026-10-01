@@ -3,43 +3,33 @@
   "edges": [
     {
       "from_id": "lvklfxgs",
-      "to_id": "hqwh565e",
+      "to_id": "8v2nc5jg",
       "relation": "same_workflow",
-      "weight": 0.427,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "weight": 0.93,
+      "reason": "Both document the Gateway fresh-install and stepwise upgrade workflow, including install.sh, setup APIs, SMTP trust, and RC upgrade behavior.",
       "source": "auto",
-      "created_at": 1787862736489,
-      "updated_at": 1787862736489
+      "created_at": 1790869267663,
+      "updated_at": 1790869267663
     },
     {
       "from_id": "lvklfxgs",
-      "to_id": "kufbu8qt",
+      "to_id": "02e60mqr",
       "relation": "same_workflow",
-      "weight": 0.5197,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "weight": 0.67,
+      "reason": "The release-upgrade E2E relies on Gateway and component tag formats and release-channel conventions documented here.",
       "source": "auto",
-      "created_at": 1787862736489,
-      "updated_at": 1787862736489
+      "created_at": 1790869267663,
+      "updated_at": 1790869267663
     },
     {
       "from_id": "lvklfxgs",
-      "to_id": "rzidwe4n",
+      "to_id": "e5deql0f",
       "relation": "same_workflow",
-      "weight": 0.4822,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "weight": 0.54,
+      "reason": "The E2E workflow invokes the installer and node setup scripts, whose Docker provisioning behavior is documented here.",
       "source": "auto",
-      "created_at": 1787862736489,
-      "updated_at": 1787862736489
-    },
-    {
-      "from_id": "lvklfxgs",
-      "to_id": "vrch49nc",
-      "relation": "related_to",
-      "weight": 0.4793,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736489,
-      "updated_at": 1787862736489
+      "created_at": 1790869267663,
+      "updated_at": 1790869267663
     }
   ]
 }

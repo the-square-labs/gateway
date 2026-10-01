@@ -15,7 +15,7 @@
   "confidence": 0.99,
   "importance": 0.85,
   "created_at": 1781991270180,
-  "updated_at": 1787862600845
+  "updated_at": 1790812761559
 }
 ---
-In the Gateway repository, the oversized frontend ApiClient can be safely split by first adding contract tests against packages/frontend/src/services/api.ts, then extracting domain methods into mixin modules. The first successful batch moved proxy, database/Postgres/Redis, and Docker methods into packages/frontend/src/services/api-proxy.ts, api-databases.ts, and api-docker.ts, composed with withProxyApi/withDatabaseApi/withDockerApi so the exported api singleton stays unchanged. Verification sequence that passed: pnpm --filter frontend test -- src/services/api.test.ts src/services/api-base.test.ts src/services/event-stream.test.ts; pnpm --filter frontend exec tsc -p tsconfig.json; pnpm --filter frontend lint; pnpm --filter frontend build; git diff --check.
+Gateway frontend API client structure: the former monolithic ApiClient in `packages/frontend/src/services/api.ts` is composed from domain mixin modules (`api-proxy.ts`, `api-databases.ts`, `api-docker.ts`, plus `api-docker-migrations.ts`, `api-docker-resources.ts`, `api-docker-webhooks.ts`) through `withProxyApi` / `withDatabaseApi` / `withDockerApi`-style wrappers, so the exported `api` singleton and its call sites stay unchanged. Add new domain methods to the matching mixin rather than back into api.ts. The split was done in June 2026 behind temporary contract tests; those test files were removed by the 2026-09-29 light-suite cut, so verify such moves with frontend typecheck, lint and build (structure re-verified 2026-10-01).

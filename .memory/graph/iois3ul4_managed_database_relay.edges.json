@@ -5,51 +5,41 @@
       "from_id": "iois3ul4",
       "to_id": "3ta908aa",
       "relation": "uses_service",
-      "weight": 0.6021,
+      "weight": 0.5402,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787862736244,
-      "updated_at": 1787862736244
-    },
-    {
-      "from_id": "iois3ul4",
-      "to_id": "43cdn720",
-      "relation": "uses_service",
-      "weight": 0.4186,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736244,
-      "updated_at": 1787862736244
-    },
-    {
-      "from_id": "iois3ul4",
-      "to_id": "7abclq2n",
-      "relation": "uses_service",
-      "weight": 0.3955,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736244,
-      "updated_at": 1787862736244
-    },
-    {
-      "from_id": "iois3ul4",
-      "to_id": "lvklfxgs",
-      "relation": "uses_service",
-      "weight": 0.4178,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736244,
-      "updated_at": 1787862736244
+      "created_at": 1790813100661,
+      "updated_at": 1790813100661
     },
     {
       "from_id": "iois3ul4",
       "to_id": "rzidwe4n",
-      "relation": "same_workflow",
-      "weight": 0.4791,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "relation": "uses_service",
+      "weight": 0.507,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787862736244,
-      "updated_at": 1787862736244
+      "created_at": 1790813100661,
+      "updated_at": 1790813100661
+    },
+    {
+      "from_id": "iois3ul4",
+      "to_id": "l2g94u2b",
+      "relation": "uses_service",
+      "weight": 0.462,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1790813100661,
+      "updated_at": 1790813100661
+    },
+    {
+      "from_id": "iois3ul4",
+      "to_id": "8vganhe2",
+      "relation": "related_to",
+      "weight": 0.4148,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813100661,
+      "updated_at": 1790813100661
     }
   ]
 }

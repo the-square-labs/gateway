@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "a7elxcv1",
-      "to_id": "3ta908aa",
-      "relation": "same_workflow",
-      "weight": 0.4576,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736506,
-      "updated_at": 1787862736506
-    },
-    {
-      "from_id": "a7elxcv1",
       "to_id": "8c9f2oec",
       "relation": "related_to",
       "weight": 0.465,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736506,
-      "updated_at": 1787862736506
+      "created_at": 1790813101586,
+      "updated_at": 1790813101586
+    },
+    {
+      "from_id": "a7elxcv1",
+      "to_id": "3ta908aa",
+      "relation": "same_workflow",
+      "weight": 0.4257,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1790813101586,
+      "updated_at": 1790813101586
     },
     {
       "from_id": "a7elxcv1",
       "to_id": "rzidwe4n",
       "relation": "same_workflow",
-      "weight": 0.4233,
+      "weight": 0.4173,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787862736506,
-      "updated_at": 1787862736506
+      "created_at": 1790813101586,
+      "updated_at": 1790813101586
     },
     {
       "from_id": "a7elxcv1",
-      "to_id": "vks9ym4c",
-      "relation": "same_workflow",
-      "weight": 0.4212,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736506,
-      "updated_at": 1787862736506
-    },
-    {
-      "from_id": "a7elxcv1",
-      "to_id": "x7unpgb6",
+      "to_id": "7uk369vl",
       "relation": "related_to",
-      "weight": 0.344,
+      "weight": 0.3868,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736506,
-      "updated_at": 1787862736506
+      "created_at": 1790813101586,
+      "updated_at": 1790813101586
+    },
+    {
+      "from_id": "a7elxcv1",
+      "to_id": "8vganhe2",
+      "relation": "related_to",
+      "weight": 0.3839,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101586,
+      "updated_at": 1790813101586
     }
   ]
 }

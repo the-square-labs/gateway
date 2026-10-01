@@ -14,7 +14,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1781993057004,
-  "updated_at": 1787862658014
+  "updated_at": 1790812768414
 }
 ---
-[→ duvbj7h2] Remove machine-specific absolute checkout path
+[→ duvbj7h2] Gateway AI tool registry layout: `packages/backend/src/modules/ai/ai.tools.ts` assembles `AI_TOOLS` from category files that each export an `AIToolDefinition...

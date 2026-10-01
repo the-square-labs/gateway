@@ -17,7 +17,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1785765229346,
-  "updated_at": 1788309567528
+  "updated_at": 1790812367204
 }
 ---
-[→ 02e60mqr] Correct Gateway and daemon RC tag naming and current GitHub release ordering
+[→ 02e60mqr] Gateway and daemon release conventions, verified against the repository on 2026-09-02 and re-checked against `scripts/release-tag.sh` and `.github/workflows`...

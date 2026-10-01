@@ -6,8 +6,7 @@
     "file-descriptors",
     "incident",
     "nginx",
-    "production",
-    "proxmox"
+    "provisioning"
   ],
   "layer": "lite",
   "ref": "29r4kznl",
@@ -15,7 +14,9 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1787844764519,
-  "updated_at": 1787862232760
+  "updated_at": 1790813315128
 }
 ---
-[→ 29r4kznl] Sanitize nginx FD exhaustion memory while preserving the durable hardening rule
+[→ 29r4kznl] Gateway nginx ingress file-descriptor exhaustion hardening:
+
+- If Nginx begins returning broad HTTP failures and logs `accept4()`, `socket()`, or `open()` wi...

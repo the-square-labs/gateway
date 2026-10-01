@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "asy6c7bj",
-      "to_id": "37llsl1w",
+      "to_id": "nr9hvzr3",
       "relation": "same_area",
-      "weight": 0.4741,
+      "weight": 0.5278,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787862737348,
-      "updated_at": 1787862737348
+      "created_at": 1790813100906,
+      "updated_at": 1790813100906
     },
     {
       "from_id": "asy6c7bj",
       "to_id": "412x4uua",
       "relation": "same_area",
-      "weight": 0.5411,
+      "weight": 0.4825,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787862737348,
-      "updated_at": 1787862737348
+      "created_at": 1790813100906,
+      "updated_at": 1790813100906
     },
     {
       "from_id": "asy6c7bj",
-      "to_id": "7rchqhpz",
+      "to_id": "j6oni2tm",
       "relation": "related_to",
-      "weight": 0.4255,
+      "weight": 0.456,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862737348,
-      "updated_at": 1787862737348
+      "created_at": 1790813100906,
+      "updated_at": 1790813100906
     },
     {
       "from_id": "asy6c7bj",
-      "to_id": "h8y5ou2d",
-      "relation": "same_area",
-      "weight": 0.4749,
-      "reason": "The memories share tags or vocabulary from the same area.",
+      "to_id": "adzvqx6l",
+      "relation": "related_to",
+      "weight": 0.4558,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862737348,
-      "updated_at": 1787862737348
+      "created_at": 1790813100906,
+      "updated_at": 1790813100906
     },
     {
       "from_id": "asy6c7bj",
-      "to_id": "nr9hvzr3",
+      "to_id": "37llsl1w",
       "relation": "same_area",
-      "weight": 0.4313,
+      "weight": 0.4553,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787862737348,
-      "updated_at": 1787862737348
+      "created_at": 1790813100906,
+      "updated_at": 1790813100906
     }
   ]
 }

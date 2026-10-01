@@ -15,7 +15,9 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1785951397694,
-  "updated_at": 1787862303230
+  "updated_at": 1790812587168
 }
 ---
-[→ rzidwe4n] Replace dated migration topology with durable Secure Link migration rules
+[→ rzidwe4n] Gateway Secure Link migration and deployment-safety rules:
+
+- Install compatible daemon versions before cutover and preserve node identities and stateful fou...

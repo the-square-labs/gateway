@@ -15,7 +15,7 @@
   "confidence": 0.99,
   "importance": 0.9,
   "created_at": 1786140832137,
-  "updated_at": 1787862295928
+  "updated_at": 1790812580962
 }
 ---
 # Gateway SIEM contract
@@ -27,6 +27,7 @@
 - When disabled, SIEM tabs/preloads disappear, SIEM-only users lose Notifications navigation, `/api/audit/siem` and SIEM AI tools fail closed, local audit records continue, new SIEM outbox rows are not created, and in-process delivery pauses.
 - Destinations, history, and queued records remain and resume when re-enabled.
 - Existing `system.config.changed` invalidation refreshes UI/config caches; no restart or extra service is required.
+- Licensing: SIEM forwarding stops only after the licence grace period ends, never at the moment a licence is lost.
 
 ## Authentication
 
@@ -45,10 +46,4 @@ Supported modes are Bearer, HMAC-SHA256, and `custom_header`.
 - SIEM and notification logs use the shared compact end-of-list sentinel.
 - SIEM Delivery Details reuses the Audit Entry Details layout and standard dialog footer rather than a custom modal.
 
-## Relay and deployment safety
-
-- Standalone relay and Gateway app retain distinct public-port ownership; do not add another relay port.
-- Daemon data-plane tunnels are process-lifetime and multiplex binding streams; control-plane monitoring stays on the app session.
-- Gateway supervises relay health with bounded recovery and surfaces a critical Dashboard notice when recovery fails.
-- Upgrade compatibility must be checked for all participating daemon endpoints before relay cutover.
-- Deployment procedures must inspect ownership before replacing services, preserve stateful foundation services and credentials, use signed immutable artifacts, and fail closed on incompatible or unavailable artifacts.
+(Relay and deployment-safety rules that used to be appended here live in the relay/Secure Link memories.)

@@ -4,28 +4,23 @@
   "file_name": "8irxtjyz_gateway_notification_template",
   "tags": [
     "gateway",
-    "memory-update",
     "notifications",
     "templates",
-    "verification",
     "webhooks"
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.88,
   "created_at": 1783070851927,
-  "updated_at": 1783070851927
+  "updated_at": 1790812797054
 }
 ---
-Project scope: gateway notifications templates now rely on a canonical nested context across alert messages, webhook dispatch, webhook preview, presets, and frontend help. Supported variable families (namespaced) include: notification.*, alert.*, resource.*, metric.*, node.*, health.*, certificate.*, state.*, event.*, fired.*, resolution.*, and gateway.*. Historically used flat variables (e.g., value, data_value, resourceName, fired_at, fired_duration) are intentionally excluded from the generated render context. Helpers available: coalesce and existing formatting helpers.
+Gateway notification templates use one canonical nested render context across alert messages, webhook dispatch, webhook preview, presets and frontend help (`packages/backend/src/modules/notifications/notification-templates.ts`, `notification-dispatcher.service.ts`).
 
-Verification and tests:
-- Run: rtk corepack pnpm --filter backend test -- src/modules/notifications/notification-evaluator.service.test.ts src/modules/notifications/notification-dispatcher.service.test.ts src/modules/notifications/notification.constants.test.ts src/modules/notifications/notification-templates.test.ts
-- Typecheck: rtk corepack pnpm --filter backend typecheck
-- Frontend build: rtk corepack pnpm --filter frontend build
-
-Important edge cases:
-- Container lifecycle events should place the real Docker containerId into resource.id when present; resource.key remains the alert state/dedupe key.
-- Webhook preview should use NotificationDispatcherService.getGatewayUrl() just like real dispatch.
-
-Notes:
-- This content updates project conventions for rendering context and verification workflows. The changes are durable for the project and should be incorporated into repository-level practices and tests."
+- Supported namespaced variable families: notification.*, alert.*, resource.*, metric.*, node.*, health.*, certificate.*, state.*, event.*, fired.*, resolution.*, and gateway.*. Helpers: coalesce plus the existing formatting helpers.
+- Historical flat variables (value, data_value, resourceName, fired_at, fired_duration and similar) are intentionally excluded from the generated context.
+- Container lifecycle events put the real Docker containerId into resource.id when present; resource.key remains the alert state/dedupe key.
+- Webhook preview must build its context with NotificationDispatcherService.getGatewayUrl(), exactly like real dispatch.
+- The notification catalog and EventBus mappings (`notification-catalog.ts`, `notification-event-mappings.ts`) must stay in sync with frontend help. The July 2026 test commands for this area referenced files removed by the 2026-09-29 light-suite cut; verify with backend typecheck and frontend build.

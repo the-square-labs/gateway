@@ -14,7 +14,10 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1777399734516,
-  "updated_at": 1787862239438
+  "updated_at": 1790812536244
 }
 ---
-[→ 2npkkqwm] Remove production ClickHouse topology and retain logging contracts
+[→ 2npkkqwm] ## Gateway ClickHouse Logging
+
+- `CLICKHOUSE_DATABASE` must match `^[A-Za-z_][A-Za-z0-9_]*$`; reject hyphenated database names.
+- Gateway structured logs use...

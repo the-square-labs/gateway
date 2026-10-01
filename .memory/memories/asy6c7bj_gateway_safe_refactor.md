@@ -13,12 +13,15 @@
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.84,
   "created_at": 1781739683142,
-  "updated_at": 1781739683142
+  "updated_at": 1790812442821
 }
 ---
-Gateway safe-refactor pattern for oversized detail/service files:
-- Before extracting orchestration from DockerContainerDetail, SettingsTab, or ProxyHostDetail, add behavior tests around the existing files first. The useful seams were: container mutation snapshots/settle detection, stopped-container live runtime save callbacks, recreate payload building, and proxy-host null-clearing plus resync after access-list/advanced-config saves.
-- Safe frontend extraction split: `docker-detail/mutation-transition.ts`, `docker-detail/useContainerDetailRealtime.ts`, `docker-detail/settings-payload.ts`, plus `proxy-detail/state.ts` and `proxy-detail/mutations.ts`. Keep page-level tests green by re-exporting moved helpers from the original page file when needed.
-- Safe backend extraction split: `database-error-mapping.ts`, `postgres-row-sql.ts`, and `docker-recreate-watch.ts`, while keeping existing service-level tests as behavior guards during the move.
-- Useful verification sequence for this refactor class: targeted frontend tests for the moved seams, targeted backend DB/docker tests, then `pnpm --filter frontend lint`, `pnpm --filter frontend build`, `pnpm --filter backend lint`, `pnpm --filter backend typecheck`, and `git diff --check`.
+Gateway safe-refactor pattern for oversized detail/service files (June 2026 refactor series):
+- Before extracting orchestration from a large page or service (DockerContainerDetail, SettingsTab, ProxyHostDetail were the originals), pin its behaviour first. The useful seams were: container mutation snapshots/settle detection, stopped-container live runtime save callbacks, recreate payload building, and proxy-host null-clearing plus resync after access-list/advanced-config saves.
+- Frontend split that resulted: `docker-detail/mutation-transition.ts`, `docker-detail/useContainerDetailRealtime.ts`, `docker-detail/settings-payload.ts`, plus `proxy-detail/state.ts` and `proxy-detail/mutations.ts`. Keep page-level imports working by re-exporting moved helpers from the original page file when needed.
+- Backend split: `docker-recreate-watch.ts` stays in this repo; the database pieces from that series (`database-error-mapping.ts`, `postgres-row-sql.ts`) now live in the private gateway-commercial repo.
+- Under the test policy since 2026-09-29 (light suite only), behaviour pins for such refactors are temporary scaffolding or stand checks, not permanent unit tests; finish with compile checks, lint and `git diff --check`.

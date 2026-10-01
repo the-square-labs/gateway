@@ -12,14 +12,13 @@
   ],
   "layer": "deep",
   "ref": null,
-  "source": "model_inferred",
-  "confidence": 0.75,
-  "importance": 0.8,
   "created_at": 1781442235588,
-  "updated_at": 1784761727128
+  "updated_at": 1790813281335
 }
 ---
-Gateway design-system (DS) architecture contract:
+Status (verified 2026-10-01): @wiolett/design-system and its viewer exist only on the unmerged branches `codex/design-system` (2026-06-09) and `codex/design-system-viewer` (2026-06-17). Main has no `packages/design-system`; the production kit is `packages/frontend/src/components/ui` plus `components/common`. Use this contract only if that work is revived.
+
+Gateway design-system (DS) architecture contract (branch-only):
 - When work asks to populate or expand @wiolett/design-system or its viewer, prioritize the library and registry docs. Do not migrate the main frontend or AI assistant UI unless that scope is explicit.
 - Use existing frontend UI as the visual source of truth; public DS APIs should expose generic components, not page/domain wrappers or accidental Radix-style subparts.
 
@@ -45,6 +44,4 @@ Public style contracts:
 - Checkbox is one Radix-backed primitive; Textarea is non-resizable by default.
 - Registry docs expose behavior through props/controls and cover layouts, primitives, typography, widgets, and helpers.
 
-Verification:
-- DS/viewer work: lint, typecheck, test, and build both @wiolett/design-system and design-system-viewer, then git diff --check and browser-smoke visible/interactive viewer changes.
-- Run frontend checks only when the main frontend is touched.
+Verification: lint, typecheck, test and build both @wiolett/design-system and design-system-viewer, then git diff --check and browser-smoke visible/interactive viewer changes; run frontend checks only when the main frontend is touched.

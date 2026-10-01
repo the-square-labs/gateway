@@ -17,7 +17,9 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1782911201956,
-  "updated_at": 1782916289372
+  "updated_at": 1790812689304
 }
 ---
-[→ nr9hvzr3] Gateway local daemon containers and frontend proxy recovery
+[→ nr9hvzr3] Gateway local development stack gotchas (merged 2026-10-01 from four notes written April–August 2026).
+
+Status first: since 2026-09-28/29 the repository owne...

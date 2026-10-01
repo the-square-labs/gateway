@@ -14,7 +14,7 @@
   "confidence": 0.99,
   "importance": 0.9,
   "created_at": 1785532665862,
-  "updated_at": 1787862459450
+  "updated_at": 1790812636107
 }
 ---
 # Gateway Docker authorization and state contract
@@ -43,7 +43,7 @@
 
 - Container environment variables live in `docker_env_vars`, separate from `docker_secrets`, using the same `CryptoService` envelope encryption pattern.
 - Management reads database-backed values first, seeds existing runtime values on first read, persists updates only after daemon acceptance, and merges stored environment/secrets into recreate/update flows.
-- Daemon recreate accepts `env` and `removeEnv`.
+- Daemon recreate (`packages/daemons/docker/internal/docker/client.go`) accepts `env` and `removeEnv`.
 - If replacement creation or startup fails after removing the old container, the daemon attempts rollback from the original container snapshot.
 
 Cross-cutting secret-retention, installation-hardening, and MCP-token policy remains canonical in the dedicated security-boundary memory rather than duplicated here.

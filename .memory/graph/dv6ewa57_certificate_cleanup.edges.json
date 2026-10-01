@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "dv6ewa57",
-      "to_id": "mu4tydcq",
-      "relation": "related_to",
-      "weight": 0.3088,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736764,
-      "updated_at": 1787862736764
-    },
-    {
-      "from_id": "dv6ewa57",
       "to_id": "v80uezny",
       "relation": "related_to",
-      "weight": 0.5034,
+      "weight": 0.4757,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736764,
-      "updated_at": 1787862736764
-    },
-    {
-      "from_id": "dv6ewa57",
-      "to_id": "wlmqdf8c",
-      "relation": "related_to",
-      "weight": 0.3461,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736764,
-      "updated_at": 1787862736764
+      "created_at": 1790813100792,
+      "updated_at": 1790813100792
     },
     {
       "from_id": "dv6ewa57",
       "to_id": "x8kr3aye",
       "relation": "same_workflow",
-      "weight": 0.4268,
+      "weight": 0.4211,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787862736764,
-      "updated_at": 1787862736764
+      "created_at": 1790813100792,
+      "updated_at": 1790813100792
     },
     {
       "from_id": "dv6ewa57",
-      "to_id": "z638qk12",
+      "to_id": "wlmqdf8c",
       "relation": "related_to",
-      "weight": 0.3167,
+      "weight": 0.3394,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736764,
-      "updated_at": 1787862736764
+      "created_at": 1790813100792,
+      "updated_at": 1790813100792
+    },
+    {
+      "from_id": "dv6ewa57",
+      "to_id": "acdy69d9",
+      "relation": "same_workflow",
+      "weight": 0.3354,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1790813100792,
+      "updated_at": 1790813100792
+    },
+    {
+      "from_id": "dv6ewa57",
+      "to_id": "p3e1ow76",
+      "relation": "same_workflow",
+      "weight": 0.3232,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1790813100792,
+      "updated_at": 1790813100792
     }
   ]
 }

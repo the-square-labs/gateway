@@ -17,7 +17,10 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786049117386,
-  "updated_at": 1786486124617
+  "updated_at": 1790812629655
 }
 ---
-[→ e5deql0f] Gateway Docker bootstrap across Debian, RPM, and Alpine hosts
+[→ e5deql0f] Gateway installer and daemon setup-script contract (Docker provisioning, unit detection, terminal output):
+
+Docker bootstrap
+- `scripts/install.sh` must boot...

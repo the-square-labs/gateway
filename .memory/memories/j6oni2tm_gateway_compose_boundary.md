@@ -15,32 +15,24 @@
   "ref": null,
   "source": "model_inferred",
   "confidence": 0.99,
-  "importance": 0.95,
+  "importance": 0.9,
   "created_at": 1787483483982,
-  "updated_at": 1787532788311
+  "updated_at": 1790812463962
 }
 ---
-# Gateway documentation and Docker Compose boundary
+# Gateway Docker Compose Projects: status and original design boundary
 
-For future product, implementation, and documentation work:
+Status (verified in main on 2026-10-01): first-class Compose Projects are implemented and shipped, so the 2026-08-24 rule "describe Compose lifecycle as planned/in development" is obsolete.
+- Backend: `packages/backend/src/modules/docker/compose/*` (discovery, dispatcher, node dispatcher, policy, managed bindings, routes/docs) and schema `docker-compose.ts` with `management_state` external | managed (default external).
+- Scopes: `docker:compose:view/create/manage/delete`. Managed Compose is licence-gated as feature `compose-applications` (Personal plan and up as of 2026-10-01; the original plan said Business). Pages is also a Personal-and-up feature.
+- The Compose host services are Community contracts implemented by the private core (see the edition-contract rule: new host methods need `config/editions/extraction.json`).
+- Compose now supports Git-source builds (`ComposeGitBuildSpec`), which supersedes the original "reject `build` because Gateway has no build workers" rule; Gateway has Docker build workers today.
 
-- Pages is a shipped Ready capability on Personal, Business, and Enterprise. Preserve the current implementation and entitlement truth when editing broad capability documentation.
-- Docker Compose support currently remains minimal runtime awareness through Docker labels/grouping and aggregated logs; this is not application orchestration.
-- On August 24, 2026, a decision-complete implementation plan for first-class Compose Projects was accepted, but implementation has not started and the feature is not shipped. The active artifact is `.workflow/plans/08-24-26-first-class-compose-projects`.
-
-Accepted first-class Compose Projects boundary:
-
-- Compose Projects are a first-class Docker resource; do not introduce or depend on an Apps model.
-- One ComposeProject entity has `managementState: external | managed`.
-- External projects are discovered from Docker labels, read-only, and visible with Compose view RBAC without a Business license gate.
-- External projects may be adopted only from a complete single Compose YAML supplied by the user. Gateway must not read host compose paths. The project remains external until the first apply succeeds.
-- Managed create/adopt/lifecycle is Business-gated and uses `docker:compose:view/create/manage/delete`. Existing Docker folder-management permission controls Compose folders.
-- Reuse existing Docker folders and UI shell/list/detail/editor/log/task patterns. Extract one reusable `ComposeLogsView` rather than adding another log transport.
-- Compose-owned containers, named volumes, and non-external networks are hidden from global standalone lists and direct mutations are blocked server-side. Images and external/shared resources remain global.
-- Daemon owns Compose execution through a typed Gateway protocol. Do not execute Compose in backend and do not depend on a host-installed `docker compose` CLI. Use the official embedded Compose SDK only if a bounded compatibility/cancellation/Engine-client spike passes; otherwise use a pinned daemon-owned sidecar behind the same protocol.
-- Explicitly reject `build`, including `image + build`, because Gateway has no PaaS build workers. Also reject multi-file/override/include/extends, `env_file`, file configs/secrets, profiles/develop/replicas/scale, host binds, `docker.sock`, privileged/devices, and host network/pid/ipc.
-- Accepted subset includes image-based services, environment interpolation, ports, healthcheck, depends_on, restart, named volumes, external volumes/networks, command/entrypoint/workdir/user/hostname, and safe labels.
-- Revisions are immutable and drafts are not persisted. Ordinary apply does not force-pull present mutable tags; Pull & Apply is separate. Down preserves named volumes and deletion is separate. Reapplying an older revision is configuration rollback only. Drift is detected and shown, never auto-reconciled.
-- Scope is single-node. Git deployment, build pipelines, scaling, migration, and multi-node scheduling are non-goals.
-
-Documentation rule: until the plan is implemented and verified, continue describing Compose lifecycle as planned/in development rather than Ready.
+Original accepted boundary (plan `.workflow/plans/08-24-26-first-class-compose-projects`, 2026-08-24). Treat these as design intent and check `compose-policy.ts` before relying on any single rule:
+- Compose Projects are a Docker resource; do not introduce or depend on an Apps model.
+- External projects are discovered from Docker labels, read-only, and visible with Compose view RBAC. Adoption requires a complete single Compose YAML supplied by the user; Gateway does not read host compose paths, and the project stays external until the first apply succeeds.
+- Reuse Docker folders and the existing shell/list/detail/editor/log/task patterns, with one reusable Compose logs view.
+- Compose-owned containers, named volumes and non-external networks are hidden from global standalone lists, and direct mutations are blocked server-side. Images and external/shared resources remain global.
+- The daemon owns Compose execution through a typed Gateway protocol; the backend never runs Compose and no host `docker compose` CLI is assumed.
+- Originally rejected: multi-file/override/include/extends, `env_file`, file configs/secrets, profiles/develop/replicas/scale, host binds, `docker.sock`, privileged/devices, host network/pid/ipc.
+- Revisions are immutable, drafts are not persisted, ordinary apply does not force-pull present mutable tags (Pull & Apply is separate), Down preserves named volumes, reapplying an older revision is configuration rollback only, and drift is shown, never auto-reconciled.

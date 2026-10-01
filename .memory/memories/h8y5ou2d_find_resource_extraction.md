@@ -11,24 +11,14 @@
   ],
   "layer": "deep",
   "ref": null,
+  "source": "model_inferred",
+  "confidence": 0.99,
+  "importance": 0.85,
   "created_at": 1781992344550,
-  "updated_at": 1781992344550
+  "updated_at": 1790812774278
 }
 ---
-Project: gateway (monorepo) - relocate find_resource implementation from ai.service.ts to ai.resource-search.ts as part of a refactor.
-
-Files:
-- moved implementation to packages/backend/src/modules/ai/ai.resource-search.ts
-- tests updated: packages/backend/src/modules/ai/ai.service-resource-search.test.ts continues to validate via the public executeTool path
-
-Key behaviors preserved (contracts):
-- Empty query returns tool error: 'query is required'
-- Proxy searches delegate to list_proxy_hosts with clamped limit; skip extra matching when service search is used
-- Docker resource search discovers allowed docker node IDs from resource-scoped grants and delegates per node via executeToolInternal
-
-Verification performed:
-- AI resource-search helper/web-search tests
-- mcp-ai-audit.test.ts
-- Backend typecheck
-- Backend lint
-- git diff --check
+Gateway AI `find_resource` implementation lives in `packages/backend/src/modules/ai/ai.resource-search.ts` (moved out of ai.service.ts in June 2026) and is reached through the public executeTool path. Current behaviour, re-verified 2026-10-01 (the June notes about "query is required" and list_proxy_hosts are outdated):
+- A call with neither `query` nor `types` is rejected ("query or types is required").
+- Each resource type is searched only when the caller holds its base scope (e.g. `proxy:view`, `proxy:templates:view`), by delegating to the ordinary list tools through `executeToolInternal` (proxy hosts via `list_routes` with the search term, templates via `manage_proxy_template` list, CAs via `list_cas`, and so on), so results never exceed what the caller could list directly.
+- Docker resources are searched per allowed Docker node derived from resource-scoped grants.

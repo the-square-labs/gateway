@@ -14,7 +14,11 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1785532665862,
-  "updated_at": 1787862459450
+  "updated_at": 1790812636107
 }
 ---
-[→ adzvqx6l] Remove duplicated security policy and local-machine runbook from Docker memory
+[→ adzvqx6l] # Gateway Docker authorization and state contract
+
+## Container archive export
+
+- Container archive export requires resource-scoped `docker:containers:export...

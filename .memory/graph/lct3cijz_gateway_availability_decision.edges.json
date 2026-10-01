@@ -3,23 +3,53 @@
   "edges": [
     {
       "from_id": "lct3cijz",
-      "to_id": "3ta908aa",
+      "to_id": "j6oni2tm",
       "relation": "uses_service",
-      "weight": 0.56,
-      "reason": "Availability relies on the existing authenticated daemon and relay communication architecture.",
+      "weight": 0.5217,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1788310927559,
-      "updated_at": 1788310927559
+      "created_at": 1790813100875,
+      "updated_at": 1790813100875
     },
     {
       "from_id": "lct3cijz",
-      "to_id": "j6oni2tm",
+      "to_id": "02e60mqr",
       "relation": "same_workflow",
-      "weight": 0.82,
-      "reason": "Availability explicitly includes first-class Compose Projects in the same product contract and release.",
+      "weight": 0.4505,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1788310927559,
-      "updated_at": 1788310927559
+      "created_at": 1790813100875,
+      "updated_at": 1790813100875
+    },
+    {
+      "from_id": "lct3cijz",
+      "to_id": "adzvqx6l",
+      "relation": "related_to",
+      "weight": 0.4454,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813100875,
+      "updated_at": 1790813100875
+    },
+    {
+      "from_id": "lct3cijz",
+      "to_id": "pzorr3qy",
+      "relation": "uses_service",
+      "weight": 0.4399,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1790813100875,
+      "updated_at": 1790813100875
+    },
+    {
+      "from_id": "lct3cijz",
+      "to_id": "nr9hvzr3",
+      "relation": "uses_service",
+      "weight": 0.4255,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1790813100875,
+      "updated_at": 1790813100875
     }
   ]
 }

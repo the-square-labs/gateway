@@ -16,7 +16,7 @@
   "confidence": 0.99,
   "importance": 0.95,
   "created_at": 1786048875275,
-  "updated_at": 1787582917162
+  "updated_at": 1790812664681
 }
 ---
 # Gateway Onboarding, AI Workspace, and Interface Contract
@@ -63,22 +63,18 @@
 - Dashboard availability and routing must use the same `hasDashboardContent` contract as Sidebar visibility.
 - If Dashboard is absent from Sidebar, both `/` in Operations Console and `/dashboard` redirect to `/profile`.
 - Profile remains universally available for authenticated users.
-- Dashboard and Sidebar continue to share the deduplicated `POST /api/monitoring/dashboard/bootstrap` Zustand snapshot; do not create a parallel dashboard authorization model.
+- Dashboard and Sidebar keep sharing the deduplicated bootstrap snapshot (Dashboard bootstrap memory); do not create a parallel dashboard authorization model.
 
-## Scenario, Work Session, and Resource Handoffs
+## Handoffs and resource links
 
-- Missing connectors or Gateway-managed nodes are setup decisions, not terminal scenario blockers. Use `open_connector_setup` and `open_node_enrollment` and return the outcome to the same conversation.
-- Do not route an in-progress scenario into the global Finalize Setup checklist.
 - AI resource links use backend-issued canonical `uiHref` and `workspaceEmbeddable`; never derive Gateway routes from model text.
-- Terminal Work Session state stays in hidden assistant messages with `conversationStatus` and optional `blockReason`; do not add conversation columns for this state.
+- Scenario prerequisite handoffs (`open_connector_setup`, `open_node_enrollment`) and terminal Work Session markers are specified in their own memories (scenario prerequisites; AI chat terminal state).
 
 ## Gateway Inference Boundary
 
-- Gateway Inference is a standalone bounded context with `/api/inference/v1`, dedicated `gwi_` tokens, isolated credentials/runtime, persisted feature flags, and separate Settings/Profile surfaces.
-- Administration is under Settings > Inference. Personal usage and inference-token management are under Profile.
+- Gateway Inference administration is under Settings > Inference; personal usage and inference-token management are under Profile. The bounded-context contract lives in the inference product memory.
 - The embedded Assistant may expose permission-aware inference management tools, but Gateway Inference remains excluded from remote Gateway MCP.
 
 ## Verification
 
 - Keep backend scope definitions, built-in group defaults, migration compatibility, frontend scope metadata, AI route guards, chooser behavior, Sidebar/Profile visibility, Dashboard routing, internal docs, and tests synchronized.
-- Verify with targeted backend/frontend tests, backend typecheck, frontend production build, scoped Biome, and `git diff --check`.

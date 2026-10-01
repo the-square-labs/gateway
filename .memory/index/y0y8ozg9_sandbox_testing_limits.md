@@ -17,9 +17,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1790153367031,
-  "updated_at": 1790759484917
+  "updated_at": 1790818819677
 }
 ---
-[→ s3jakmn4] Verified while testing changes in this monorepo (pnpm 9.15.0 workspace, nx, vitest 4):
-
-- `pnpm install --frozen-lockfile --offline` fails because the local ...
+[→ s3jakmn4] Sandbox/test-environment gotchas: pnpm offline store, pnpm DB write, bare npx biome, loopback EPERM, Node 26 webstorage vs jsdom, silent file skips

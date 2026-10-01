@@ -13,9 +13,9 @@
   "ref": null,
   "source": "model_inferred",
   "confidence": 0.99,
-  "importance": 0.95,
+  "importance": 0.96,
   "created_at": 1785947696656,
-  "updated_at": 1786067590918
+  "updated_at": 1790812529097
 }
 ---
 # System PKI Lifecycle and Ownership
@@ -28,9 +28,6 @@
 - Destroying a key and recording its redacted per-certificate audit row must be one database transaction. Audit metadata may include cert/CA/owner/lifecycle/retention/trigger, never key or PEM material.
 - Preserve certificate rows, PEM, revocation/audit data, CAs, user PKI, SSL/ACME, current leaves, and unknown leaves.
 - Retry pending system CRLs at bootstrap and every five minutes; clear the marker only after successful generation.
-- When a PKI lifecycle change introduces a database transaction, affected test database stubs must implement and assert transaction usage; run the full backend suite because narrow dashboard checks will not expose fixture drift.
-
-## Ownership and Assistant Boundaries
-
-- Nodes and PKI certificate authorities remain Gateway-owned root infrastructure. App linkage never transfers referenced ownership.
-- Ordinary PKI tools hide system CAs/leaves. The sole Assistant path is read-only `audit_system_pki_leaves`, requiring `pki:cert:view` plus `admin:details:certificates`; it must never expose private keys or mutate system PKI.
+- Nodes and PKI certificate authorities remain Gateway-owned root infrastructure.
+- The Assistant's only access to system PKI is the read-only `audit_system_pki_leaves` tool; its contract is kept in the dedicated AI system-PKI memory.
+- System CAs themselves (node mTLS, managed storage TLS, managed database TLS) live 10 years without automatic rollover; everything they issue self-renews, and rollover was deliberately postponed by the owner as a separate task.

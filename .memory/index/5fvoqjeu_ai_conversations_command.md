@@ -7,13 +7,17 @@
     "command-palette",
     "frontend",
     "gateway-inference",
-    "quota",
-    "rolling-window"
+    "quota"
   ],
   "layer": "lite",
   "ref": "i5ntywfb",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1785448712405,
-  "updated_at": 1785448712405
+  "updated_at": 1790812541697
 }
 ---
-[→ i5ntywfb] Gateway Inference recovery, palette exit, and hidden-title safeguards
+[→ i5ntywfb] Gateway frontend details for inference usage cards, the Command Palette and AI conversation titles:
+
+- Superseded (2026-09): the July 2026 rule that derived ...

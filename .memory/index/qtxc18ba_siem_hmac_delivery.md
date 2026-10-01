@@ -15,7 +15,11 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786140832137,
-  "updated_at": 1787862295928
+  "updated_at": 1790812580962
 }
 ---
-[→ 43cdn720] Remove SIEM deployment host details and retain feature, auth, UI, and relay contracts
+[→ 43cdn720] # Gateway SIEM contract
+
+## Feature flag
+
+- `generalSettings.features.siemEnabled` is installation-wide and defaults to `true` for backward-compatible upgrad...

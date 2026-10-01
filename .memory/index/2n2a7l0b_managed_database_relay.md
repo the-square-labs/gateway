@@ -18,7 +18,9 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786111914144,
-  "updated_at": 1787862309994
+  "updated_at": 1790812605532
 }
 ---
-[→ iois3ul4] Remove managed-database test topology and retain migration/storage/socket contracts
+[→ iois3ul4] # Managed-database relay migration, storage and connector contract
+
+Relay architecture (public port ownership, multiplexed process-lifetime tunnels, admissio...

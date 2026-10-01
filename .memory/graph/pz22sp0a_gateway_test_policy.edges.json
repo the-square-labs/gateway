@@ -1,0 +1,45 @@
+{
+  "file_name": "pz22sp0a_gateway_test_policy",
+  "edges": [
+    {
+      "from_id": "pz22sp0a",
+      "to_id": "asy6c7bj",
+      "relation": "related_to",
+      "weight": 0.4168,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101033,
+      "updated_at": 1790813101033
+    },
+    {
+      "from_id": "pz22sp0a",
+      "to_id": "d3cheyb1",
+      "relation": "related_to",
+      "weight": 0.4159,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101033,
+      "updated_at": 1790813101033
+    },
+    {
+      "from_id": "pz22sp0a",
+      "to_id": "qokk2wfo",
+      "relation": "related_to",
+      "weight": 0.3877,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101033,
+      "updated_at": 1790813101033
+    },
+    {
+      "from_id": "pz22sp0a",
+      "to_id": "47jk3wjw",
+      "relation": "same_workflow",
+      "weight": 0.3801,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1790813101033,
+      "updated_at": 1790813101033
+    }
+  ]
+}

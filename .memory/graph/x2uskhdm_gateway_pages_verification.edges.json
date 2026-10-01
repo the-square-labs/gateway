@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "x2uskhdm",
+      "to_id": "7uk369vl",
+      "relation": "related_to",
+      "weight": 0.4436,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101571,
+      "updated_at": 1790813101571
+    },
+    {
+      "from_id": "x2uskhdm",
       "to_id": "2tjfa2g5",
       "relation": "related_to",
       "weight": 0.3977,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736473,
-      "updated_at": 1787862736473
-    },
-    {
-      "from_id": "x2uskhdm",
-      "to_id": "8c9f2oec",
-      "relation": "related_to",
-      "weight": 0.3719,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736473,
-      "updated_at": 1787862736473
-    },
-    {
-      "from_id": "x2uskhdm",
-      "to_id": "kufbu8qt",
-      "relation": "same_workflow",
-      "weight": 0.3929,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736473,
-      "updated_at": 1787862736473
-    },
-    {
-      "from_id": "x2uskhdm",
-      "to_id": "lvklfxgs",
-      "relation": "same_workflow",
-      "weight": 0.3779,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736473,
-      "updated_at": 1787862736473
+      "created_at": 1790813101571,
+      "updated_at": 1790813101571
     },
     {
       "from_id": "x2uskhdm",
       "to_id": "vks9ym4c",
+      "relation": "related_to",
+      "weight": 0.397,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101571,
+      "updated_at": 1790813101571
+    },
+    {
+      "from_id": "x2uskhdm",
+      "to_id": "qokk2wfo",
+      "relation": "related_to",
+      "weight": 0.3924,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101571,
+      "updated_at": 1790813101571
+    },
+    {
+      "from_id": "x2uskhdm",
+      "to_id": "02e60mqr",
       "relation": "same_workflow",
-      "weight": 0.4062,
+      "weight": 0.3908,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787862736473,
-      "updated_at": 1787862736473
+      "created_at": 1790813101571,
+      "updated_at": 1790813101571
     }
   ]
 }

@@ -13,9 +13,16 @@
   "ref": null,
   "source": "model_inferred",
   "confidence": 0.99,
-  "importance": 0.88,
+  "importance": 0.9,
   "created_at": 1777057210510,
-  "updated_at": 1787862542902
+  "updated_at": 1790812409402
 }
 ---
-Gateway licensing uses a separate Go service with binary `gls`, SQLite storage, CLI license management, and an HTTP API. Gateway talks to the fixed vendor licensing endpoint configured by the product rather than an installation-defined URL. License state is stored in the existing `settings` table with encrypted key storage through `CryptoService`. Scopes are `license:view` and `license:manage`; absence of a key means Community. The supported paid tier labels are Homelab and Enterprise. Heartbeat verifies only, activation may replace the active installation, and an unreachable licensing service uses a 30-day grace window from the last valid check.
+Gateway licensing contract (plan names and grace values re-verified in `packages/backend/src/modules/license/license.types.ts` on 2026-10-01):
+
+- Licensing uses a separate Go service (binary `gls`, SQLite storage, CLI license management, HTTP API) that lives in its own repository. Gateway talks to the fixed vendor endpoint `LICENSE_SERVER_URL = https://license.thesqlabs.com`, not an installation-defined URL. The same service serves signed private-core releases (`/api/v1/releases/*`).
+- License state is stored in the existing `settings` table with encrypted key storage through `CryptoService`. Scopes are `license:view` and `license:manage`.
+- Plans: `community`, `personal`, `business`, `enterprise` (the older "Homelab" label is gone). Community installs also heartbeat (every 30 min; paid every 15 min).
+- Offline grace is 100 days (`LICENSE_OFFLINE_GRACE_DAYS`). After expiry or a plan downgrade, paid entitlements drop after a plan-specific grace: personal 24 h, business 72 h, enterprise 168 h.
+- Activation may replace the active installation; a paid key moves to a new installation after explicit deactivation or when the previous one has been offline for over an hour.
+- Post-grace behaviour must follow the owner's continuity contract: running workloads, data plane, scheduled jobs, viewing and deletion keep working; only creating paid resources and changing their configuration is blocked.

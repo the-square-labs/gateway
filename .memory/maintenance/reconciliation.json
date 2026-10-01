@@ -1,227 +1,209 @@
 {
   "version": 2,
-  "last_reconciled_at": "2026-08-27T20:33:39.775Z",
+  "last_reconciled_at": "2026-10-01T00:09:54.253Z",
   "report": {
-    "summary": "Reviewed all Gateway project memories. Removed real production and test topology, internal addresses, live hostnames, deployment snapshots, dated CI or release status, machine-specific checkout paths, and stale inference package or endpoint contracts. Confirmed no actual credentials or secret values were stored. Consolidated duplicated durable rules, deleted six superseded records, regenerated embeddings and indexes, and rebuilt graph links with clean structural health.",
-    "reviewed": 118,
+    "summary": "Full reconciliation of Gateway project memory against main (f093d720). Verified claims in code and fixed stale ones: release tags (watchdog, GitHub only), licence plans/grace, setup gating, Compose and Availability now shipped, databases implementation in the commercial repo, ClickHouse internals default, fixed inference windows. Marked design-system and App contracts as branch-only. Merged duplicates (installer, env persistence, local dev stack, session cookies, relay/SIEM/dashboard sections), removed dead test-file references after the 2026-09-29 light-suite cut, moved one host-ops note to global memory, repaired four missing index pointers, rebuilt the graph. 127 -> 118 memories; no secrets or infrastructure facts remain.",
+    "reviewed": 127,
     "changes": [
       {
-        "action": "updated",
-        "memory_id": "29r4kznl",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "action": "saved",
+        "memory_id": "7uk369vl",
+        "summary": "New: nginx defaults that break deploys (websocketSupport off by default, deployment router body size), split out of two global incident notes."
+      },
+      {
+        "action": "saved",
+        "memory_id": "pz22sp0a",
+        "summary": "New: test policy since the 2026-09-29 light-suite cut; explains deleted test files cited by older memories."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "muapjlzr",
+        "summary": "Duplicate of the Docker unit-detection section in e5deql0f."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "kk05lizc",
+        "summary": "Duplicate of env persistence/rollback in adzvqx6l (daemon path merged there)."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "kufbu8qt",
+        "summary": "Superseded GitLab-era release workflow; durable manifest-digest rule merged into 02e60mqr."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "rnxjftcd",
+        "summary": "Stale plan-specific TDD rules of a no-longer-active inference-core plan in another repo; contradicted by the current test policy."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "mu4tydcq",
+        "summary": "Merged into 35fip13o (App contract, branch-only)."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "7rchqhpz",
+        "summary": "Merged into nr9hvzr3 (local dev stack); container names historical."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "wlju46pr",
+        "summary": "Merged into nr9hvzr3 (arm64 daemon cross-build)."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "dnv2klmw",
+        "summary": "Merged into nr9hvzr3 (recreate only the app, compare effective DB config)."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "dulrcn1x",
+        "summary": "Code lesson merged into vrru6m60 (session cookies); local stand status dropped."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "j4jc2kmk",
+        "summary": "Host-ops fact about a specific node moved to global memory per the infra rule."
+      },
+      {
+        "action": "deleted",
+        "memory_id": "h0g48t5u",
+        "summary": "Merged into e5deql0f (installer terminal output)."
       },
       {
         "action": "updated",
-        "memory_id": "2npkkqwm",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "02e60mqr",
+        "summary": "Release conventions re-verified: watchdog component, GitHub-only workflows, tag push limit, manifest digest history."
       },
       {
         "action": "updated",
-        "memory_id": "3fym4ikf",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "lvklfxgs",
+        "summary": "Release-upgrade harness: configurable baseline (now v2.8.18), removed stale migration range and relay claim."
       },
       {
         "action": "updated",
-        "memory_id": "3ta908aa",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "zzulrspz",
+        "summary": "Daemon update feed is RELEASES_API_URL, not GitLab; file paths added."
       },
       {
         "action": "updated",
-        "memory_id": "43cdn720",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "iois3ul4",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "rzidwe4n",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "yfhytkcz",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "zq6da64z",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "myhj1f8i",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "adzvqx6l",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "dcfkgqwx",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "qme9z5oh",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "z36pcfh4",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "ifp3c48s",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "w75b8az4",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "3mk44b9q",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "yjerrsgn",
+        "summary": "Setup gating rewritten to the current setup:completed_at/forced_open contract."
       },
       {
         "action": "updated",
         "memory_id": "acdy69d9",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "mzmjdewo",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "gpx2fdwu",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "hc1xhdcx",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
-      },
-      {
-        "action": "updated",
-        "memory_id": "412x4uua",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "summary": "Licence plans personal/business/enterprise, 100-day offline grace, plan grace hours."
       },
       {
         "action": "updated",
         "memory_id": "7abclq2n",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "summary": "Databases implementation lives in gateway-commercial; host keeps stubs and contracts."
       },
       {
         "action": "updated",
-        "memory_id": "7oked0dp",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "j6oni2tm",
+        "summary": "Compose Projects shipped; original boundary kept as design intent; build rule superseded."
       },
       {
         "action": "updated",
-        "memory_id": "8rqz22k0",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "lct3cijz",
+        "summary": "Multi-node Availability marked implemented (lease mode, Business feature)."
       },
       {
         "action": "updated",
-        "memory_id": "92pnq26b",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "35fip13o",
+        "summary": "App contract merged and marked branch-only (app-entity-mvp, not in main)."
       },
       {
         "action": "updated",
-        "memory_id": "duvbj7h2",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "2npkkqwm",
+        "summary": "ClickHouse internals default fixed (enabled only for local storage)."
       },
       {
         "action": "updated",
-        "memory_id": "evv95a8g",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "i5ntywfb",
+        "summary": "Rolling-window recoveryAt rule marked superseded by fixed windows."
       },
       {
         "action": "updated",
-        "memory_id": "fgmxlp0p",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "nr9hvzr3",
+        "summary": "Canonical local dev stack memory; historical container names flagged."
       },
       {
         "action": "updated",
-        "memory_id": "fk86zmru",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "vrru6m60",
+        "summary": "Session cookie contract incl. transport-preferred cookie selection."
       },
       {
         "action": "updated",
-        "memory_id": "hh3v2vdi",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "gz01c8d5",
+        "summary": "Removed lost /tmp compose paths; kept core install lessons."
       },
       {
         "action": "updated",
-        "memory_id": "huz2cldt",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "d3cheyb1",
+        "summary": "Characterization digests marked historical (tests deleted on main)."
       },
       {
         "action": "updated",
-        "memory_id": "nuc3c3hq",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "qokk2wfo",
+        "summary": "app-preview location differs on main vs WIP branch; deleted test noted."
       },
       {
         "action": "updated",
-        "memory_id": "ph8ejel0",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "s3jakmn4",
+        "summary": "Sandbox test list updated after the light-suite cut."
       },
       {
         "action": "updated",
-        "memory_id": "pstn8fla",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "l2g94u2b",
+        "summary": "Fix version recorded (v2.11.0-rc.17-docker, c50c9ce1); test removed."
       },
       {
         "action": "updated",
-        "memory_id": "vrch49nc",
-        "summary": "Sanitized or reconciled durable project memory while preserving the canonical contract."
+        "memory_id": "hqwh565e",
+        "summary": "Bundled installer marked historical (v2.5.0 RC line only)."
       },
       {
-        "action": "deleted",
-        "memory_id": "zsgne0nk",
-        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+        "action": "updated",
+        "memory_id": "adzvqx6l",
+        "summary": "Absorbed daemon recreate path from kk05lizc."
       },
       {
-        "action": "deleted",
-        "memory_id": "vvdi4727",
-        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+        "action": "updated",
+        "memory_id": "e5deql0f",
+        "summary": "Absorbed installer output rule; removed duplicated log-bounds bullet; Wants= wording."
       },
       {
-        "action": "deleted",
-        "memory_id": "gdptltym",
-        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+        "action": "updated",
+        "summary": "0s83sww0, ip47mets, orq9dru7: design-system contracts marked branch-only (codex/design-system*, not in main)."
       },
       {
-        "action": "deleted",
-        "memory_id": "qz6ixfnq",
-        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+        "action": "updated",
+        "summary": "gahvf5k5, myhj1f8i, 43cdn720, rzidwe4n, 3ta908aa, iois3ul4, gpx2fdwu, vks9ym4c, z638qk12, dv6ewa57: duplicated sections removed or moved to their canonical memory, with pointers."
       },
       {
-        "action": "deleted",
-        "memory_id": "127mkya9",
-        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+        "action": "updated",
+        "summary": "412x4uua, duvbj7h2, h8y5ou2d, ph8ejel0, 8irxtjyz, huz2cldt, asy6c7bj, 3b6g7z3k: dead test-file references removed, behaviour re-verified in code."
       },
       {
-        "action": "deleted",
-        "memory_id": "c8ql9nhv",
-        "summary": "Removed a stale, superseded, deployment-specific, or fully duplicated memory after preserving durable content elsewhere."
+        "action": "updated",
+        "summary": "92pnq26b dated as a July audit; 29r4kznl infra-sounding tags removed."
       },
       {
         "action": "repaired",
-        "summary": "Rebuilt automatic graph links for all remaining project memories and verified zero dead pointers, dangling edges, orphan graph files, or invalid edges."
+        "summary": "Created missing index pointers for 0s83sww0, ip47mets, orq9dru7, vrch49nc (content unchanged)."
+      },
+      {
+        "action": "repaired",
+        "summary": "graph_maintain rebuilt AUTO links for 118 memories; prune found no dangling edges; 0 dead pointers, 0 dangling, 1 independent orphan."
       }
     ],
     "unresolved": [
-      "Earlier Git commits still contain some removed topology text. Current project memory is sanitized, but removing those strings from repository history would require a separately authorized history rewrite and force push."
+      "Design-system and App contracts describe unmerged branches; kept (marked branch-only) until the owner says those branches are abandoned.",
+      "Some older memories still list historical verification commands; the test-policy memory explains that cited test files may be gone.",
+      "Public git history still contains infrastructure text removed in earlier reconciliations (history rewrite not requested)."
     ]
   }
 }

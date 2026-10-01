@@ -18,16 +18,15 @@
   "confidence": 0.99,
   "importance": 0.95,
   "created_at": 1786111914144,
-  "updated_at": 1787862309994
+  "updated_at": 1790812605532
 }
 ---
-# Independent managed-database relay, upgrade, and storage contract
+# Managed-database relay migration, storage and connector contract
 
-## Architecture and operator behavior
+Relay architecture (public port ownership, multiplexed process-lifetime tunnels, admission and telemetry) is kept in the relay/Secure Link admission memory. This memory covers supervision, migration, storage and connectors.
 
-- Standalone `gateway-relay` owns the existing public relay endpoint; the Gateway app retains HTTP and internal control access. Do not add another public relay port.
-- Each daemon maintains one additional process-lifetime multiplexed tunnel for data-plane traffic. Binding streams remain multiplexed.
-- Control-plane monitoring stays on the existing app session.
+## Supervision
+
 - Gateway supervises relay health with bounded automatic recovery; failed recovery produces a critical Dashboard notice linked to shared-shell details.
 
 ## Stateful migration
@@ -40,7 +39,7 @@
 
 ## Fixed-size storage and installer gate
 
-- Managed database capacity remains a hard fixed-size loop-backed ext4 image, not a Docker volume or soft quota.
+- Managed database capacity remains a hard fixed-size loop-backed ext4 image, never a Docker volume or soft quota.
 - Database-profile installation validates Docker before enrollment and exercises command checks, loop allocation, non-sparse image creation, ext4 formatting, attach/mount, write probe, grow/resize, unmount, detach, and cleanup.
 - Every preflight path uses cleanup traps and leaves no image, mount, or loop attachment after success or failure.
 - Unsupported container environments fail before enrollment with actionable host passthrough guidance and no unbounded fallback.

@@ -3,13 +3,13 @@
   "edges": [
     {
       "from_id": "d8e1oh13",
-      "to_id": "94t2cjlq",
+      "to_id": "z638qk12",
       "relation": "related_to",
-      "weight": 0.3624,
+      "weight": 0.4293,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736657,
-      "updated_at": 1787862736657
+      "created_at": 1790813101684,
+      "updated_at": 1790813101684
     },
     {
       "from_id": "d8e1oh13",
@@ -18,8 +18,28 @@
       "weight": 0.3836,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736657,
-      "updated_at": 1787862736657
+      "created_at": 1790813101684,
+      "updated_at": 1790813101684
+    },
+    {
+      "from_id": "d8e1oh13",
+      "to_id": "94t2cjlq",
+      "relation": "related_to",
+      "weight": 0.3624,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101684,
+      "updated_at": 1790813101684
+    },
+    {
+      "from_id": "d8e1oh13",
+      "to_id": "myhj1f8i",
+      "relation": "related_to",
+      "weight": 0.3529,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101684,
+      "updated_at": 1790813101684
     },
     {
       "from_id": "d8e1oh13",
@@ -28,28 +48,8 @@
       "weight": 0.3473,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736657,
-      "updated_at": 1787862736657
-    },
-    {
-      "from_id": "d8e1oh13",
-      "to_id": "myhj1f8i",
-      "relation": "related_to",
-      "weight": 0.363,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736657,
-      "updated_at": 1787862736657
-    },
-    {
-      "from_id": "d8e1oh13",
-      "to_id": "z638qk12",
-      "relation": "related_to",
-      "weight": 0.4109,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736657,
-      "updated_at": 1787862736657
+      "created_at": 1790813101684,
+      "updated_at": 1790813101684
     }
   ]
 }

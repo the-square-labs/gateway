@@ -15,7 +15,9 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1790155283819,
-  "updated_at": 1790634432082
+  "updated_at": 1790812703890
 }
 ---
-[→ gz01c8d5] Verified local setup lesson: the managed inference core must be installed from a Compose-managed Gateway container. A bare `tsx` backend can show a stale see...
+[→ gz01c8d5] Managed inference core in local development (verified 2026-09-28/29 with core `2.60.0-thesqlabs.3`):
+
+- Install the managed inference core from a Compose-man...

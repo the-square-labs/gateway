@@ -7,12 +7,18 @@
     "backward-compatibility",
     "cookies",
     "http",
-    "https"
+    "https",
+    "websocket"
   ],
   "layer": "lite",
   "ref": "vrru6m60",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1785917497779,
-  "updated_at": 1785917497779
+  "updated_at": 1790812696670
 }
 ---
-[→ vrru6m60] Transport-specific browser session cookie migration
+[→ vrru6m60] Gateway browser session cookie contract (merged 2026-10-01 with the localhost auth-recovery note):
+
+- Session cookies use separate, installation-namespaced n...

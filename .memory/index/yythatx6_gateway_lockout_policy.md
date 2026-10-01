@@ -11,8 +11,11 @@
   ],
   "layer": "lite",
   "ref": "yjerrsgn",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1777903845880,
-  "updated_at": 1777903845880
+  "updated_at": 1790812403596
 }
 ---
-[→ yjerrsgn] Gateway setup API lockout policy
+[→ yjerrsgn] Gateway first-run setup gating (verified against `packages/backend/src/modules/setup/setup-token-policy.ts` and `setup.routes.ts` on 2026-10-01; this replace...

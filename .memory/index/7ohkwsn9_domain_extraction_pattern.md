@@ -15,7 +15,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1781991270180,
-  "updated_at": 1787862600845
+  "updated_at": 1790812761559
 }
 ---
-[→ 412x4uua] Remove machine-specific absolute checkout path
+[→ 412x4uua] Gateway frontend API client structure: the former monolithic ApiClient in `packages/frontend/src/services/api.ts` is composed from domain mixin modules (`api...

@@ -10,8 +10,11 @@
   ],
   "layer": "lite",
   "ref": "qokk2wfo",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1790446177695,
-  "updated_at": 1790446177695
+  "updated_at": 1790812724901
 }
 ---
-[→ qokk2wfo] Page double-flash root cause (nested reveal gate forced visibility: visible) and how to verify reveal/animation changes locally in a real browser before any release
+[→ qokk2wfo] Reveal gates (packages/frontend/src/components/common/PageTransition.tsx and reveal-gate.tsx): a nested gate (TabsContent) often reveals before its page gate...

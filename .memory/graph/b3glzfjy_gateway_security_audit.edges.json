@@ -3,43 +3,13 @@
   "edges": [
     {
       "from_id": "b3glzfjy",
-      "to_id": "123u7vfm",
-      "relation": "uses_service",
-      "weight": 0.3995,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862737078,
-      "updated_at": 1787862737078
-    },
-    {
-      "from_id": "b3glzfjy",
       "to_id": "adzvqx6l",
       "relation": "same_area",
-      "weight": 0.5261,
+      "weight": 0.5248,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787862737078,
-      "updated_at": 1787862737078
-    },
-    {
-      "from_id": "b3glzfjy",
-      "to_id": "gahvf5k5",
-      "relation": "uses_service",
-      "weight": 0.4163,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862737078,
-      "updated_at": 1787862737078
-    },
-    {
-      "from_id": "b3glzfjy",
-      "to_id": "nuc3c3hq",
-      "relation": "same_area",
-      "weight": 0.4309,
-      "reason": "The memories share tags or vocabulary from the same area.",
-      "source": "auto",
-      "created_at": 1787862737078,
-      "updated_at": 1787862737078
+      "created_at": 1790813101970,
+      "updated_at": 1790813101970
     },
     {
       "from_id": "b3glzfjy",
@@ -48,8 +18,38 @@
       "weight": 0.4606,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787862737078,
-      "updated_at": 1787862737078
+      "created_at": 1790813101970,
+      "updated_at": 1790813101970
+    },
+    {
+      "from_id": "b3glzfjy",
+      "to_id": "nuc3c3hq",
+      "relation": "same_area",
+      "weight": 0.4309,
+      "reason": "The memories share tags or vocabulary from the same area.",
+      "source": "auto",
+      "created_at": 1790813101970,
+      "updated_at": 1790813101970
+    },
+    {
+      "from_id": "b3glzfjy",
+      "to_id": "123u7vfm",
+      "relation": "uses_service",
+      "weight": 0.3995,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1790813101970,
+      "updated_at": 1790813101970
+    },
+    {
+      "from_id": "b3glzfjy",
+      "to_id": "asy6c7bj",
+      "relation": "uses_service",
+      "weight": 0.3977,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1790813101970,
+      "updated_at": 1790813101970
     }
   ]
 }

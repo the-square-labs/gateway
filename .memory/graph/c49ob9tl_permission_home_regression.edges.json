@@ -5,21 +5,51 @@
       "from_id": "c49ob9tl",
       "to_id": "elp4yliv",
       "relation": "related_to",
-      "weight": 0.64,
-      "reason": "Both require defensive, context-aware session identity handling for authentication state and live authorization changes.",
+      "weight": 0.4093,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1788516394592,
-      "updated_at": 1788516394592
+      "created_at": 1790813101175,
+      "updated_at": 1790813101175
     },
     {
       "from_id": "c49ob9tl",
-      "to_id": "gahvf5k5",
+      "to_id": "fk86zmru",
       "relation": "related_to",
-      "weight": 0.72,
-      "reason": "Both cover permission-driven auth state changes propagated through realtime and session-aware frontend behavior.",
+      "weight": 0.3979,
+      "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1788516394592,
-      "updated_at": 1788516394592
+      "created_at": 1790813101175,
+      "updated_at": 1790813101175
+    },
+    {
+      "from_id": "c49ob9tl",
+      "to_id": "hic3s1ta",
+      "relation": "related_to",
+      "weight": 0.3637,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101175,
+      "updated_at": 1790813101175
+    },
+    {
+      "from_id": "c49ob9tl",
+      "to_id": "vrru6m60",
+      "relation": "related_to",
+      "weight": 0.3581,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101175,
+      "updated_at": 1790813101175
+    },
+    {
+      "from_id": "c49ob9tl",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.3449,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101175,
+      "updated_at": 1790813101175
     }
   ]
 }

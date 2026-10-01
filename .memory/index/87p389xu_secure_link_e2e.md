@@ -19,7 +19,11 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1786463265800,
-  "updated_at": 1787862245378
+  "updated_at": 1790812596353
 }
 ---
-[→ 3ta908aa] Remove deployment topology and load snapshot from Secure Link memory
+[→ 3ta908aa] # Relay, Secure Link admission and telemetry contract
+
+## Relay architecture
+
+- Standalone `gateway-relay` owns the public relay port; the Gateway app retain...

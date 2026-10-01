@@ -5,51 +5,41 @@
       "from_id": "rzidwe4n",
       "to_id": "3ta908aa",
       "relation": "same_workflow",
-      "weight": 0.5184,
+      "weight": 0.5129,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787862736259,
-      "updated_at": 1787862736259
-    },
-    {
-      "from_id": "rzidwe4n",
-      "to_id": "43cdn720",
-      "relation": "same_workflow",
-      "weight": 0.3774,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736259,
-      "updated_at": 1787862736259
-    },
-    {
-      "from_id": "rzidwe4n",
-      "to_id": "a7elxcv1",
-      "relation": "same_workflow",
-      "weight": 0.4233,
-      "reason": "The memories appear to belong to the same workflow or operating process.",
-      "source": "auto",
-      "created_at": 1787862736259,
-      "updated_at": 1787862736259
+      "created_at": 1790813100697,
+      "updated_at": 1790813100697
     },
     {
       "from_id": "rzidwe4n",
       "to_id": "iois3ul4",
       "relation": "same_workflow",
-      "weight": 0.4791,
+      "weight": 0.507,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787862736259,
-      "updated_at": 1787862736259
+      "created_at": 1790813100697,
+      "updated_at": 1790813100697
     },
     {
       "from_id": "rzidwe4n",
-      "to_id": "lvklfxgs",
+      "to_id": "02e60mqr",
       "relation": "same_workflow",
-      "weight": 0.4822,
+      "weight": 0.4539,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787862736259,
-      "updated_at": 1787862736259
+      "created_at": 1790813100697,
+      "updated_at": 1790813100697
+    },
+    {
+      "from_id": "rzidwe4n",
+      "to_id": "a7elxcv1",
+      "relation": "same_workflow",
+      "weight": 0.4173,
+      "reason": "The memories appear to belong to the same workflow or operating process.",
+      "source": "auto",
+      "created_at": 1790813100697,
+      "updated_at": 1790813100697
     }
   ]
 }

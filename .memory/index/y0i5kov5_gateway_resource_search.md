@@ -11,8 +11,11 @@
   ],
   "layer": "lite",
   "ref": "h8y5ou2d",
+  "source": "model_inferred",
+  "confidence": 0.5,
+  "importance": 0.5,
   "created_at": 1781992344550,
-  "updated_at": 1781992344550
+  "updated_at": 1790812774278
 }
 ---
-[→ h8y5ou2d] Gateway AI find_resource extraction contract
+[→ h8y5ou2d] Gateway AI `find_resource` implementation lives in `packages/backend/src/modules/ai/ai.resource-search.ts` (moved out of ai.service.ts in June 2026) and is r...

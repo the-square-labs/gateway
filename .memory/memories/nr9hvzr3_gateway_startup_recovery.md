@@ -14,23 +14,26 @@
   "layer": "deep",
   "ref": null,
   "source": "model_inferred",
-  "confidence": 0.65,
-  "importance": 0.7,
+  "confidence": 0.99,
+  "importance": 0.9,
   "created_at": 1782911201956,
-  "updated_at": 1782916289372
+  "updated_at": 1790812689304
 }
 ---
-Gateway local dev daemon and frontend startup gotchas (project scope):
-- Do not create replacement daemon containers when existing local containers are present. Reuse/start the existing containers: gateway-dind, gateway-docker-daemon, gateway-monitoring-daemon, gateway-nginx-daemon. These containers already carry enrollment tokens, state volumes, and node identities.
-- If gateway-nginx-daemon or gateway-monitoring-daemon exit with code 127, inspect /tmp/gateway-local-daemons/bin/* because Docker may have created directories at file bind-mount paths. Replace them with executable Linux arm64 binaries from:
-  - packages/daemons/nginx/bin/nginx-daemon-linux-arm64
-  - packages/daemons/monitoring/bin/monitoring-daemon-linux-arm64
-- If gateway-dind exits with the message failed to save daemon pid to disk: process with PID 37 is still running, then:
-  1) Start the same container again.
-  2) Quickly clear stale runtime directories inside it: /run/docker, /run/containerd, /run/docker.sock, /var/run/docker, /var/run/containerd, and /var/run/docker.sock.
-  3) Retry starting/checking within the retry timeout.
-- Backend gRPC listener must be up on GRPC_PORT=9443.
-  - If another project owns HTTP port 3000, run the Gateway backend with PORT=3001 (example: corepack pnpm dev) in a detached tmux session, while keeping gRPC on 9443.
-- Local Postgres for this workspace is mapped to host port 55432 in docker-compose.dev.yml to avoid conflicts.
-- The frontend Vite dev proxy must not be hardcoded to http://localhost:3000 when port 3000 is in use by another project. Set GATEWAY_DEV_PROXY_TARGET=http://localhost:3001 in packages/frontend/.env and ensure packages/frontend/vite.config.ts reads that env for the endpoints /api, /auth, /.well-known, /pki, /docs, and /health.
-- Smoke check: curl -i http://localhost:5173/auth/me should reflect the target project, i.e., match http://localhost:3001/auth/me (usually 401 unauthenticated). It should not return a 404 from another project.
+Gateway local development stack gotchas (merged 2026-10-01 from four notes written April–August 2026).
+
+Status first: since 2026-09-28/29 the repository owner does not want tests, tsc or image builds on the development Mac (they run on a build server), and the local Docker stacks described in older notes were not running on 2026-10-01. Container and Compose project names below are historical (seen: `gateway_app_local`, `gateway-upgrade-e2e`, `gateway-local`, `daemon-docker`, `gateway-dind`, `gateway-docker-daemon`, `gateway-monitoring-daemon`, `gateway-nginx-daemon`). Run `docker ps -a` before assuming any of them exists. The Docker socket is blocked by the agent sandbox, so docker commands need the sandbox disabled.
+
+Still-valid repository facts (verified 2026-10-01)
+- `docker-compose.dev.yml` maps local Postgres to host port 55432 to avoid conflicts.
+- The Vite dev proxy target comes from `GATEWAY_DEV_PROXY_TARGET` (default http://localhost:3000) in `packages/frontend/vite.config.ts`. When another project owns port 3000, run the backend with PORT=3001 (gRPC stays on GRPC_PORT=9443) and set `GATEWAY_DEV_PROXY_TARGET=http://localhost:3001` in `packages/frontend/.env`. Smoke check: `curl -i http://localhost:5173/auth/me` must match `http://localhost:3001/auth/me` (usually 401), not a 404 from another project.
+
+Recreating containers
+- `docker compose ... up -d --build app` recreates the app and re-reads `.env`. A recreated app with a missing or different DB password crashes in migrations. Before recreating only the app, compare the running container's effective `DATABASE_URL`/Compose environment with the env file and pass the existing effective database configuration (never record its secret); require `/health` to report lifecycleState running afterwards. Replacing only the app while PostgreSQL, Redis and Gateway volumes stay intact preserves browser sessions.
+- To ship a frontend change to a running app without recreating it: `pnpm --filter frontend build`, then `docker cp packages/frontend/dist/. <app-container>:/app/public/` and hard-refresh (asset names are hashed).
+
+Local daemons
+- Reuse existing local daemon containers instead of creating replacements: they carry enrollment tokens, state volumes and node identities.
+- Daemon binaries for an arm64 Linux container are cross-built, e.g. `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '-s -w -X main.Version=dev' -o bin/docker-daemon-linux-arm64 ./cmd/docker-daemon` in `packages/daemons/docker`; a host-platform build fails there with `Exec format error`. After `docker cp` into the container, restart the in-container process and check its log for `docker engine connected` and `connected to gateway`.
+- If a daemon container exits with code 127, check whether Docker created directories at file bind-mount paths for its binaries and replace them with executable Linux binaries.
+- If a Docker-in-Docker container exits with `failed to save daemon pid to disk: process with PID N is still running`, start it again and quickly clear stale runtime paths inside it (/run/docker, /run/containerd, /run/docker.sock, /var/run/docker, /var/run/containerd, /var/run/docker.sock), then retry.

@@ -6,16 +6,15 @@
     "file-descriptors",
     "incident",
     "nginx",
-    "production",
-    "proxmox"
+    "provisioning"
   ],
   "layer": "deep",
   "ref": null,
   "source": "model_inferred",
   "confidence": 0.99,
-  "importance": 0.9,
+  "importance": 0.88,
   "created_at": 1787844764519,
-  "updated_at": 1787862232760
+  "updated_at": 1790813315128
 }
 ---
 Gateway nginx ingress file-descriptor exhaustion hardening:

@@ -3,53 +3,53 @@
   "edges": [
     {
       "from_id": "3ta908aa",
-      "to_id": "43cdn720",
+      "to_id": "iois3ul4",
       "relation": "uses_service",
-      "weight": 0.4166,
+      "weight": 0.5402,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787862736309,
-      "updated_at": 1787862736309
+      "created_at": 1790813100681,
+      "updated_at": 1790813100681
+    },
+    {
+      "from_id": "3ta908aa",
+      "to_id": "rzidwe4n",
+      "relation": "uses_service",
+      "weight": 0.5129,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1790813100681,
+      "updated_at": 1790813100681
+    },
+    {
+      "from_id": "3ta908aa",
+      "to_id": "l2g94u2b",
+      "relation": "uses_service",
+      "weight": 0.4648,
+      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
+      "source": "auto",
+      "created_at": 1790813100681,
+      "updated_at": 1790813100681
     },
     {
       "from_id": "3ta908aa",
       "to_id": "a7elxcv1",
       "relation": "uses_service",
-      "weight": 0.4576,
+      "weight": 0.4257,
       "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
       "source": "auto",
-      "created_at": 1787862736309,
-      "updated_at": 1787862736309
+      "created_at": 1790813100681,
+      "updated_at": 1790813100681
     },
     {
       "from_id": "3ta908aa",
-      "to_id": "iois3ul4",
-      "relation": "uses_service",
-      "weight": 0.6021,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736309,
-      "updated_at": 1787862736309
-    },
-    {
-      "from_id": "3ta908aa",
-      "to_id": "rzidwe4n",
+      "to_id": "02e60mqr",
       "relation": "same_workflow",
-      "weight": 0.5184,
+      "weight": 0.3968,
       "reason": "The memories appear to belong to the same workflow or operating process.",
       "source": "auto",
-      "created_at": 1787862736309,
-      "updated_at": 1787862736309
-    },
-    {
-      "from_id": "3ta908aa",
-      "to_id": "vks9ym4c",
-      "relation": "uses_service",
-      "weight": 0.422,
-      "reason": "The memory appears to describe a workflow that uses the related service or configuration.",
-      "source": "auto",
-      "created_at": 1787862736309,
-      "updated_at": 1787862736309
+      "created_at": 1790813100681,
+      "updated_at": 1790813100681
     }
   ]
 }

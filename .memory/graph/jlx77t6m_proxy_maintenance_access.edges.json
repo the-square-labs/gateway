@@ -3,23 +3,13 @@
   "edges": [
     {
       "from_id": "jlx77t6m",
-      "to_id": "123u7vfm",
-      "relation": "related_to",
-      "weight": 0.3755,
-      "reason": "The memories are similar enough to be useful related context.",
-      "source": "auto",
-      "created_at": 1787862736557,
-      "updated_at": 1787862736557
-    },
-    {
-      "from_id": "jlx77t6m",
       "to_id": "ml88valu",
       "relation": "same_area",
       "weight": 0.4866,
       "reason": "The memories share tags or vocabulary from the same area.",
       "source": "auto",
-      "created_at": 1787862736557,
-      "updated_at": 1787862736557
+      "created_at": 1790813101615,
+      "updated_at": 1790813101615
     },
     {
       "from_id": "jlx77t6m",
@@ -28,8 +18,18 @@
       "weight": 0.4067,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736557,
-      "updated_at": 1787862736557
+      "created_at": 1790813101615,
+      "updated_at": 1790813101615
+    },
+    {
+      "from_id": "jlx77t6m",
+      "to_id": "z638qk12",
+      "relation": "related_to",
+      "weight": 0.3883,
+      "reason": "The memories are similar enough to be useful related context.",
+      "source": "auto",
+      "created_at": 1790813101615,
+      "updated_at": 1790813101615
     },
     {
       "from_id": "jlx77t6m",
@@ -38,18 +38,18 @@
       "weight": 0.3849,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736557,
-      "updated_at": 1787862736557
+      "created_at": 1790813101615,
+      "updated_at": 1790813101615
     },
     {
       "from_id": "jlx77t6m",
-      "to_id": "z638qk12",
+      "to_id": "123u7vfm",
       "relation": "related_to",
-      "weight": 0.3795,
+      "weight": 0.3755,
       "reason": "The memories are similar enough to be useful related context.",
       "source": "auto",
-      "created_at": 1787862736557,
-      "updated_at": 1787862736557
+      "created_at": 1790813101615,
+      "updated_at": 1790813101615
     }
   ]
 }

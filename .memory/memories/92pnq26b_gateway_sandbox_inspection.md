@@ -17,7 +17,12 @@
   "confidence": 0.99,
   "importance": 0.9,
   "created_at": 1783530886860,
-  "updated_at": 1787862631091
+  "updated_at": 1790812814822
 }
 ---
-In the project at the Gateway repository, the same-process clone inspection contract is narrower than a working checkout. The tools list_artifact_files, read_artifact, and send_artifact operating on the returned processId should inspect and hand off the extracted GitLab archive without launching a second sandbox process; these tools remain AI-only/excluded from MCP. The clone process currently runs a fixed extract-then-sleep command, and write_process_stdin is not an exec API. Every run_process creates a fresh workspace, and the archive has no .git metadata. Therefore the current clone can perform read-only inspection only and must not be documented or planned as supporting edits, tests, builds, git diff, or multi-file tooling. A production-grade fix requires a durable workspace/session identity with bounded exec and write/patch primitives plus explicit git or archive-to-patch semantics. The 2026-07-09 audit also confirmed that workspaceBytes is passed through policy but not enforced on the host bind mount; quota and expanded-archive limits must be verified with mandatory Linux Docker tests.
+Gateway AI sandbox clone inspection contract, from the 2026-07-08/09 audit (re-check the current sandbox runner before relying on the implementation details):
+
+- `gitlab_clone_repository_to_sandbox` downloads a GitLab archive through Gateway into a no-network sandbox and extracts it under /workspace. After CLONE_READY (read via read_process_output), inspect it with `list_artifact_files`, `read_artifact` and hand it off with `send_artifact` on the returned processId, without launching a second sandbox process. These tools are AI-only and excluded from MCP (still true on 2026-10-01).
+- As audited in July: the clone process ran a fixed extract-then-sleep command, `write_process_stdin` is not an exec API, every `run_process` creates a fresh workspace, and the archive has no .git metadata. So the clone supports read-only inspection only and must not be documented or planned as supporting edits, tests, builds, git diff, or multi-file tooling.
+- A production-grade editable clone needs a durable workspace/session identity with bounded exec and write/patch primitives plus explicit git or archive-to-patch semantics.
+- The audit also found `workspaceBytes` passed through policy but not enforced on the host bind mount; quota and expanded-archive limits must be verified with Linux Docker tests.
