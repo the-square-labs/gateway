@@ -170,3 +170,30 @@ describe('authentication boundaries in the complete application route graph', ()
     expect(sourceWebhook).toHaveBeenCalledExactlyOnceWith(id, expect.any(Headers), Buffer.from('{}'));
   });
 });
+
+describe('unknown API paths', () => {
+  it.each([
+    // A module router authenticates before it routes: the caller is signed in.
+    ['GET', '/api/system/diagnostics', true],
+    ['DELETE', '/api/not-a-module/1', false],
+    ['POST', '/auth/not-a-route', false],
+  ])('answers %s %s with a JSON 404, not the Console page', async (method, path, signedIn) => {
+    if (signedIn) {
+      validateOAuth.mockResolvedValueOnce({
+        user: { id: 'user', scopes: ['diagnostics:view'] },
+        scopes: ['diagnostics:view'],
+        tokenId: 'token',
+        tokenPrefix: 'gwo_fixture',
+        clientId: 'client',
+      });
+    }
+    const response = await createApp().app.request(path, {
+      method,
+      headers: { host: 'gateway.test', ...(signedIn ? { Authorization: 'Bearer gwo_fixture' } : {}) },
+    });
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    expect(await response.json()).toEqual({ code: 'NOT_FOUND', message: `No API endpoint at ${method} ${path}` });
+  });
+});
