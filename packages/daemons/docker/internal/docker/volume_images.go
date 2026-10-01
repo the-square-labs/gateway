@@ -41,6 +41,9 @@ type volumeImageRecord struct {
 	MountPath     string `json:"mountPath"`
 	LoopDevice    string `json:"loopDevice,omitempty"`
 	CapacityBytes int64  `json:"capacityBytes"`
+	// Deleting is set once the Docker volume is gone. Such an image is never
+	// mounted again; the repair pass finishes a deletion that failed part-way.
+	Deleting bool `json:"deleting,omitempty"`
 }
 
 type volumeMetrics struct {
@@ -60,6 +63,15 @@ type volumeImageManager struct {
 	root      string
 	supported bool
 	mu        sync.Mutex
+	// loops overrides the kernel loop-device surface (tests).
+	loops *loopHost
+}
+
+func (m *volumeImageManager) loopHost() *loopHost {
+	if m.loops != nil {
+		return m.loops
+	}
+	return systemLoopHost
 }
 
 func newVolumeImageManager(stateDir string, dockerClient *Client, logger *slog.Logger) (*volumeImageManager, error) {
@@ -75,6 +87,8 @@ func newVolumeImageManager(stateDir string, dockerClient *Client, logger *slog.L
 	}
 	manager.supported = manager.preflight()
 	if manager.supported {
+		// Before remounting: leaked devices could leave none for live volumes.
+		manager.repairLoopImages(context.Background())
 		if err := manager.reconcile(context.Background()); err != nil {
 			manager.supported = false
 			logger.Warn("disk-image volume support disabled after reconciliation failure", "error", err)
@@ -231,8 +245,14 @@ func (m *volumeImageManager) create(ctx context.Context, name string, capacity i
 	if capacity < minimumVolumeImageBytes {
 		return fmt.Errorf("disk-image volume capacity must be at least %d bytes", minimumVolumeImageBytes)
 	}
-	if _, err := m.loadRecord(name); err == nil {
-		return fmt.Errorf("volume %q already exists", name)
+	if existing, err := m.loadRecord(name); err == nil {
+		if !existing.Deleting {
+			return fmt.Errorf("volume %q already exists", name)
+		}
+		// A deletion of this name that failed part-way: finish it first.
+		if err := m.cleanupStorage(ctx, &existing, true); err != nil {
+			return err
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -245,18 +265,40 @@ func (m *volumeImageManager) create(ctx context.Context, name string, capacity i
 		return err
 	}
 	record := m.newRecord(name, capacity)
+	// A renamed volume keeps the image and mount point named after its first
+	// name, so a new volume of that name must not touch them.
+	records, err := m.records()
+	if err != nil {
+		return err
+	}
+	for _, other := range records {
+		if other.ImagePath == record.ImagePath || other.MountPath == record.MountPath {
+			return fmt.Errorf("volume %q cannot be created while volume %q, first created under this name, exists", name, other.Name)
+		}
+	}
+	// No record owns these paths, so anything there is left from a create
+	// that failed before (or from an older release).
+	if err := m.loopHost().release(ctx, record.ImagePath, record.MountPath); err != nil {
+		return err
+	}
+	if err := os.Remove(record.ImagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if err := os.MkdirAll(record.MountPath, 0700); err != nil {
 		return err
 	}
 	if err := createVolumeImage(ctx, record); err != nil {
-		_ = os.RemoveAll(record.MountPath)
-		_ = os.Remove(record.ImagePath)
+		_ = m.loopHost().removeMountPoint(record.MountPath)
 		return err
 	}
 	cleanup := true
 	defer func() {
 		if cleanup {
-			_ = m.cleanupStorage(context.Background(), &record, true)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+			defer cancel()
+			if err := m.cleanupStorage(cleanupCtx, &record, true); err != nil {
+				m.logger.Warn("failed disk-image volume create left storage behind; the repair pass releases it", "volume", name, "error", err)
+			}
 		}
 	}()
 	if err := m.saveRecord(record); err != nil {
@@ -302,12 +344,18 @@ func volumeImageLabels(capacity int64) map[string]string {
 	}
 }
 
-func createVolumeImage(ctx context.Context, record volumeImageRecord) error {
+// createVolumeImage removes its own partial image on failure, and only that.
+func createVolumeImage(ctx context.Context, record volumeImageRecord) (err error) {
 	file, err := os.OpenFile(record.ImagePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("create volume storage image: %w", err)
 	}
 	_ = file.Close()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(record.ImagePath)
+		}
+	}()
 	if output, err := exec.CommandContext(ctx, "fallocate", "-l", fmt.Sprintf("%d", record.CapacityBytes), record.ImagePath).CombinedOutput(); err != nil {
 		return fmt.Errorf("preallocate volume storage image: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -318,6 +366,9 @@ func createVolumeImage(ctx context.Context, record volumeImageRecord) error {
 }
 
 func (m *volumeImageManager) ensureMounted(ctx context.Context, record *volumeImageRecord) error {
+	if record.Deleting {
+		return errors.New("disk-image volume is being deleted")
+	}
 	if mounted(record.MountPath) {
 		output, err := exec.CommandContext(ctx, "findmnt", "-n", "-o", "SOURCE", "--target", record.MountPath).CombinedOutput()
 		if err != nil {
@@ -367,6 +418,9 @@ func (m *volumeImageManager) reconcile(ctx context.Context) error {
 			!pathWithin(m.root, record.ImagePath) ||
 			!pathWithin(m.root, record.MountPath) {
 			return fmt.Errorf("invalid disk-image volume record %q", entry.Name())
+		}
+		if record.Deleting {
+			continue
 		}
 		if err := m.ensureFstabEntry(record); err != nil {
 			return fmt.Errorf("persist disk-image volume %q mount: %w", record.Name, err)
@@ -530,30 +584,121 @@ func (m *volumeImageManager) remove(ctx context.Context, name string, force bool
 	return m.cleanupStorage(ctx, &record, true)
 }
 
+// cleanupStorage releases a volume image in a fixed order: mount, then loop
+// device (waiting until the kernel has let go of it), then, with removeImage,
+// the image and record. A removal is marked Deleting and its fstab entry goes
+// first, so a failure part-way never brings the image back at the next boot
+// or start and the repair pass completes it.
 func (m *volumeImageManager) cleanupStorage(ctx context.Context, record *volumeImageRecord, removeImage bool) error {
-	if mounted(record.MountPath) {
-		if output, err := exec.CommandContext(ctx, "umount", record.MountPath).CombinedOutput(); err != nil {
-			return fmt.Errorf("unmount volume storage image: %w: %s", err, strings.TrimSpace(string(output)))
-		}
-	}
-	if record.LoopDevice != "" {
-		if output, err := exec.CommandContext(ctx, "losetup", "-d", record.LoopDevice).CombinedOutput(); err != nil {
-			return fmt.Errorf("detach volume storage image: %w: %s", err, strings.TrimSpace(string(output)))
-		}
-	}
 	if removeImage {
+		if !record.Deleting {
+			record.Deleting = true
+			// Best effort: a create that failed before its first save has no
+			// record, and its leftovers are orphans for the repair pass anyway.
+			_ = m.saveRecord(*record)
+		}
 		if err := m.removeFstabEntry(*record); err != nil {
 			return fmt.Errorf("remove volume image mount persistence: %w", err)
 		}
+	}
+	if err := m.loopHost().release(ctx, record.ImagePath, record.MountPath); err != nil {
+		return fmt.Errorf("release volume storage image: %w", err)
+	}
+	record.LoopDevice = ""
+	if removeImage {
 		if err := os.Remove(record.ImagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		_ = os.RemoveAll(record.MountPath)
+		if err := m.loopHost().removeMountPoint(record.MountPath); err != nil {
+			return err
+		}
 		if err := os.Remove(m.recordPath(record.Name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
 	return nil
+}
+
+// repairLoopImages finishes deletions that could not complete and releases
+// mounts, loop devices and image files no disk-image volume owns. It runs at
+// start and periodically; see loopHost.repair for what is never touched.
+func (m *volumeImageManager) repairLoopImages(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.supported {
+		return
+	}
+	records, err := m.records()
+	if err != nil {
+		m.logger.Warn("disk-image volume storage repair skipped", "error", err)
+		return
+	}
+	imageDir, mountDir := filepath.Join(m.root, "images"), filepath.Join(m.root, "mounts")
+	images, mounts := map[string]bool{}, map[string]bool{}
+	for _, record := range records {
+		if filepath.Dir(record.ImagePath) != imageDir || filepath.Dir(record.MountPath) != mountDir {
+			m.logger.Warn("disk-image volume storage repair skipped: a record names storage outside its directories", "volume", record.Name)
+			return
+		}
+	}
+	for _, record := range records {
+		if record.Deleting {
+			if err := m.cleanupStorage(ctx, &record, true); err != nil {
+				m.logger.Warn("disk-image volume deletion could not be finished yet", "volume", record.Name, "error", err)
+			} else {
+				m.logger.Info("finished interrupted disk-image volume deletion", "volume", record.Name)
+				continue
+			}
+		}
+		// A renamed volume keeps the image named after its first name.
+		images[filepath.Base(record.ImagePath)] = true
+		mounts[filepath.Base(record.MountPath)] = true
+	}
+	m.loopHost().repair(ctx, loopImageDomain{
+		label:      "disk-image volume",
+		imageDir:   imageDir,
+		mountDir:   mountDir,
+		mountRoot:  mountDir,
+		imageInUse: func(name string, _ bool) bool { return images[name] },
+		imageKept:  func(name string) bool { return images[name] },
+		mountInUse: func(name string) bool { return mounts[name] },
+		orphanImage: func(name string) bool {
+			key, ok := strings.CutSuffix(name, ".img")
+			if !ok || len(key) != sha256.Size*2 {
+				return false
+			}
+			_, err := hex.DecodeString(key)
+			return err == nil
+		},
+	}, m.logger)
+}
+
+// records reads every volume image record; any unreadable record fails the
+// whole read, so that no storage is repaired without knowing every owner.
+func (m *volumeImageManager) records() ([]volumeImageRecord, error) {
+	entries, err := os.ReadDir(filepath.Join(m.root, "records"))
+	if err != nil {
+		return nil, err
+	}
+	var records []volumeImageRecord
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(m.root, "records", entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var record volumeImageRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			return nil, fmt.Errorf("parse volume image record %q: %w", entry.Name(), err)
+		}
+		if entry.Name() != filepath.Base(m.recordPath(record.Name)) {
+			return nil, fmt.Errorf("invalid disk-image volume record %q", entry.Name())
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func volumeImageFstabMarker(record volumeImageRecord) string {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,15 @@ type managedStorageManager struct {
 	// (see handleTLSReload); generations is guarded by mu.
 	generations lifecycleGenerations
 	tlsReloads  resourceLocks
+	// loops overrides the kernel loop-device surface (tests).
+	loops *loopHost
+}
+
+func (m *managedStorageManager) loopHost() *loopHost {
+	if m.loops != nil {
+		return m.loops
+	}
+	return systemLoopHost
 }
 
 // stageTLS writes the legacy MinIO certs directory. Every file is replaced
@@ -122,12 +132,19 @@ func (m *managedStorageManager) storageRootHealthMount() (*pb.DiskMount, error) 
 	}, nil
 }
 
-func (m *managedStorageManager) createImage(ctx context.Context, record managedStorageRecord) error {
+// createImage removes its own partial image on failure; a leftover would make
+// every retry of the create fail on the existing file.
+func (m *managedStorageManager) createImage(ctx context.Context, record managedStorageRecord) (err error) {
 	file, err := os.OpenFile(record.ImagePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("create managed storage image: %w", err)
 	}
 	defer file.Close()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(record.ImagePath)
+		}
+	}()
 	if output, err := exec.CommandContext(ctx, "fallocate", "-l", fmt.Sprintf("%d", record.StorageBytes), record.ImagePath).CombinedOutput(); err != nil {
 		return fmt.Errorf("preallocate managed storage image: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -147,7 +164,13 @@ func (m *managedStorageManager) createImage(ctx context.Context, record managedS
 }
 
 func (m *managedStorageManager) ensureMounted(ctx context.Context, record *managedStorageRecord) error {
+	if record.Removed {
+		return errors.New("managed storage was removed")
+	}
 	if mounted(record.MountPath) {
+		if loop := m.loopHost().mountedLoop(record.MountPath); loop != "" {
+			record.LoopDevice = loop
+		}
 		return nil
 	}
 	if err := os.MkdirAll(record.MountPath, 0700); err != nil {
@@ -221,7 +244,18 @@ func (m *managedStorageManager) createNetwork(ctx context.Context, record manage
 	return nil
 }
 
+// remove takes a member down in a fixed order and answers only once the
+// storage is released: container, then mount, then loop device (waiting until
+// the kernel has let go of it), then, with deleteData, the image and record.
+// The record is marked first, so a removal that fails part-way is never
+// mounted again and is completed by a repeated command or the repair pass.
 func (m *managedStorageManager) remove(ctx context.Context, record *managedStorageRecord, deleteData bool) error {
+	record.DesiredRunning = false
+	record.Removed = true
+	record.DeleteData = record.DeleteData || deleteData
+	if err := m.saveRecord(*record); err != nil {
+		return err
+	}
 	if record.ContainerID != "" {
 		if err := m.client.RemoveContainer(ctx, record.ContainerID, true); err != nil && !isNotFoundErr(err) {
 			return err
@@ -230,8 +264,6 @@ func (m *managedStorageManager) remove(ctx context.Context, record *managedStora
 	if record.NetworkName != "" {
 		_, _ = m.client.cli.NetworkRemove(ctx, record.NetworkName, mobyclient.NetworkRemoveOptions{})
 	}
-	record.DesiredRunning = false
-	record.Removed = true
 	record.ContainerID = ""
 	// A removed workload cannot be started again, so staged secrets (root
 	// identity, TLS keys, SFTP host key) have no further use.
@@ -240,34 +272,125 @@ func (m *managedStorageManager) remove(ctx context.Context, record *managedStora
 			return err
 		}
 	}
-	if deleteData {
+	if record.DeleteData {
 		for _, directory := range []string{"tls", "sftp"} {
 			_ = os.RemoveAll(filepath.Join(m.root, "storage", directory, fmt.Sprintf("%s-%d", record.ID, record.MemberIndex)))
 		}
 		return m.cleanupStorage(ctx, record, true)
 	}
+	// The data stays on disk; the mount and loop device of a removed workload
+	// would only hold a device from the node's pool.
+	if err := m.cleanupStorage(ctx, record, false); err != nil {
+		return err
+	}
+	if err := m.loopHost().removeMountPoint(record.MountPath); err != nil {
+		return err
+	}
 	return m.saveRecord(*record)
 }
 
 func (m *managedStorageManager) cleanupStorage(ctx context.Context, record *managedStorageRecord, removeImage bool) error {
-	if mounted(record.MountPath) {
-		if output, err := exec.CommandContext(ctx, "umount", record.MountPath).CombinedOutput(); err != nil {
-			return fmt.Errorf("unmount managed storage: %w: %s", err, strings.TrimSpace(string(output)))
-		}
+	if err := m.loopHost().release(ctx, record.ImagePath, record.MountPath); err != nil {
+		return fmt.Errorf("release managed storage image: %w", err)
 	}
-	if record.LoopDevice != "" {
-		_ = exec.CommandContext(ctx, "losetup", "-d", record.LoopDevice).Run()
-	}
+	record.LoopDevice = ""
 	if removeImage {
 		if err := os.Remove(record.ImagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		_ = os.Remove(record.MountPath)
+		if err := m.loopHost().removeMountPoint(record.MountPath); err != nil {
+			return err
+		}
 		if err := os.Remove(m.recordPath(record.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
 	return nil
+}
+
+// repairLoopImages finishes removals that could not complete and releases
+// mounts, loop devices and image files no managed storage member owns; a
+// removed member keeps its image but not its mount or loop device. It runs at
+// start and periodically; see loopHost.repair for what is never touched.
+func (m *managedStorageManager) repairLoopImages(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	records, unreadable, err := m.records()
+	if err != nil {
+		m.logger.Warn("managed storage repair skipped", "error", err)
+		return
+	}
+	for _, record := range records {
+		if !record.Removed || !record.DeleteData {
+			continue
+		}
+		if err := m.remove(ctx, &record, true); err != nil {
+			m.logger.Warn("managed storage deletion could not be finished yet", "id", record.ID, "error", err)
+			continue
+		}
+		m.logger.Info("finished interrupted managed storage deletion", "id", record.ID)
+	}
+	if unreadable {
+		m.logger.Warn("managed storage repair skipped: a record could not be read")
+		return
+	}
+	records, unreadable, err = m.records()
+	if err != nil || unreadable {
+		return
+	}
+	imageDir := filepath.Join(m.root, "storage", "images")
+	mountDir := filepath.Join(m.root, "storage", "mounts")
+	inUseImages, keptImages, inUseMounts := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, record := range records {
+		if filepath.Dir(record.ImagePath) != imageDir || filepath.Dir(record.MountPath) != mountDir {
+			m.logger.Warn("managed storage repair skipped: a record names storage outside its directories", "id", record.ID)
+			return
+		}
+		keptImages[filepath.Base(record.ImagePath)] = true
+		if !record.Removed {
+			inUseImages[filepath.Base(record.ImagePath)] = true
+			inUseMounts[filepath.Base(record.MountPath)] = true
+		}
+	}
+	m.loopHost().repair(ctx, loopImageDomain{
+		label:      "managed storage",
+		imageDir:   imageDir,
+		mountDir:   mountDir,
+		mountRoot:  mountDir,
+		imageInUse: func(name string, _ bool) bool { return inUseImages[name] },
+		imageKept:  func(name string) bool { return keptImages[name] },
+		mountInUse: func(name string) bool { return inUseMounts[name] },
+		orphanImage: func(name string) bool {
+			base, ok := strings.CutSuffix(name, ".img")
+			index := strings.LastIndex(base, "-")
+			if !ok || index < 0 {
+				return false
+			}
+			_, err := strconv.ParseUint(base[index+1:], 10, 16)
+			return err == nil && managedStorageIDPattern.MatchString(base[:index])
+		},
+	}, m.logger)
+}
+
+// records reads every managed storage record; unreadable reports a record
+// file that could not be read, whose storage must then be left alone.
+func (m *managedStorageManager) records() (records []managedStorageRecord, unreadable bool, err error) {
+	entries, err := os.ReadDir(filepath.Join(m.root, "storage", "records"))
+	if err != nil {
+		return nil, false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		record, err := m.loadRecord(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			unreadable = true
+			continue
+		}
+		records = append(records, record)
+	}
+	return records, unreadable, nil
 }
 
 func (m *managedStorageManager) reconcile(ctx context.Context) error {

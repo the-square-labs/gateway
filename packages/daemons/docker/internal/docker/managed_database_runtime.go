@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -610,9 +609,24 @@ func marshalManagedDatabaseRuntimeStats(stats managedDatabaseRuntimeStats) (stri
 	return string(data), nil
 }
 
+// remove deletes a managed database in a fixed order and answers only once
+// the storage is really gone: container, then mount, then loop device (waiting
+// until the kernel has released it), then image and record. A step that fails
+// is reported and leaves the record marked Deleting, so a repeated delete or
+// the repair pass completes it instead of the Gateway losing track of a mount
+// or loop device that is still held.
 func (m *managedDatabaseManager) remove(ctx context.Context, record managedDatabaseRecord) error {
+	if !record.Deleting {
+		record.Deleting = true
+		record.DesiredRunning = false
+		if err := m.saveRecord(record); err != nil {
+			return err
+		}
+	}
 	if record.ContainerID != "" {
-		_ = m.client.RemoveContainer(ctx, record.ContainerID, true)
+		if err := m.client.RemoveContainer(ctx, record.ContainerID, true); err != nil && !isNotFoundErr(err) {
+			return fmt.Errorf("remove managed database container: %w", err)
+		}
 	}
 	if record.NetworkName != "" {
 		_, _ = m.client.cli.NetworkRemove(ctx, record.NetworkName, mobyclient.NetworkRemoveOptions{})
@@ -621,16 +635,10 @@ func (m *managedDatabaseManager) remove(ctx context.Context, record managedDatab
 }
 
 func (m *managedDatabaseManager) cleanupStorage(ctx context.Context, record *managedDatabaseRecord, removeImage bool) error {
-	if mounted(record.MountPath) {
-		if output, err := exec.CommandContext(ctx, "umount", record.MountPath).CombinedOutput(); err != nil {
-			return fmt.Errorf("unmount database storage image: %w: %s", err, strings.TrimSpace(string(output)))
-		}
+	if err := m.loopHost().release(ctx, record.ImagePath, record.MountPath); err != nil {
+		return fmt.Errorf("release database storage image: %w", err)
 	}
-	if record.LoopDevice != "" {
-		if output, err := exec.CommandContext(ctx, "losetup", "-d", record.LoopDevice).CombinedOutput(); err != nil {
-			return fmt.Errorf("detach database loop device: %w: %s", err, strings.TrimSpace(string(output)))
-		}
-	}
+	record.LoopDevice = ""
 	if removeImage {
 		if err := os.RemoveAll(m.tlsDirectory(*record)); err != nil {
 			return fmt.Errorf("remove managed database TLS material: %w", err)
@@ -638,11 +646,93 @@ func (m *managedDatabaseManager) cleanupStorage(ctx context.Context, record *man
 		if err := os.Remove(record.ImagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove database storage image: %w", err)
 		}
+		if err := m.loopHost().removeMountPoint(record.MountPath); err != nil {
+			return err
+		}
 		if err := os.Remove(m.recordPath(record.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove managed database record: %w", err)
 		}
 	}
 	return nil
+}
+
+// records reads every managed database record; unreadable reports a record
+// file that could not be read, whose storage must then be left alone.
+func (m *managedDatabaseManager) records() (records []managedDatabaseRecord, unreadable bool, err error) {
+	entries, err := os.ReadDir(filepath.Join(m.root, "records"))
+	if err != nil {
+		return nil, false, fmt.Errorf("read managed database records: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		record, err := m.loadRecord(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			unreadable = true
+			continue
+		}
+		records = append(records, record)
+	}
+	return records, unreadable, nil
+}
+
+// repairLoopImages finishes deletes that could not complete and releases
+// mounts, loop devices and image files that belong to no managed database,
+// plus loop devices left bound to deleted backup workspaces. It runs at start
+// and periodically; see loopHost.repair for what is never touched.
+func (m *managedDatabaseManager) repairLoopImages(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	records, unreadable, err := m.records()
+	if err != nil {
+		m.logger.Warn("managed database storage repair skipped", "error", err)
+		return
+	}
+	for _, record := range records {
+		if !record.Deleting {
+			continue
+		}
+		if err := m.remove(ctx, record); err != nil {
+			m.logger.Warn("managed database deletion could not be finished yet", "id", record.ID, "error", err)
+			continue
+		}
+		m.logger.Info("finished interrupted managed database deletion", "id", record.ID)
+	}
+	if unreadable {
+		m.logger.Warn("managed database storage repair skipped: a record could not be read")
+	} else if records, unreadable, err = m.records(); err == nil && !unreadable {
+		ids := make(map[string]bool, len(records))
+		for _, record := range records {
+			ids[record.ID] = true
+		}
+		imageOwned := func(name string) bool {
+			id, ok := strings.CutSuffix(name, ".img")
+			return ok && ids[id]
+		}
+		m.loopHost().repair(ctx, loopImageDomain{
+			label:      "managed database",
+			imageDir:   filepath.Join(m.root, "images"),
+			mountDir:   filepath.Join(m.root, "mounts"),
+			mountRoot:  filepath.Join(m.root, "mounts"),
+			imageInUse: func(name string, _ bool) bool { return imageOwned(name) },
+			imageKept:  imageOwned,
+			mountInUse: func(name string) bool { return ids[name] },
+			orphanImage: func(name string) bool {
+				id, ok := strings.CutSuffix(name, ".img")
+				return ok && managedDatabaseIDPattern.MatchString(id)
+			},
+		}, m.logger)
+	}
+	// Backup runs own their live workspace images and remove them themselves;
+	// only a loop device bound to a deleted workspace image is released here.
+	m.loopHost().repair(ctx, loopImageDomain{
+		label:      "backup workspace",
+		imageDir:   filepath.Join(m.root, "backups", "images"),
+		mountRoot:  filepath.Join(m.cfg.StateDir, backupStateDirectory),
+		imageInUse: func(_ string, deleted bool) bool { return !deleted },
+		imageKept:  func(string) bool { return true },
+	}, m.logger)
 }
 
 func (m *managedDatabaseManager) reconcile(ctx context.Context) error {
