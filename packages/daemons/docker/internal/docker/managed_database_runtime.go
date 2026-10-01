@@ -657,20 +657,22 @@ func (m *managedDatabaseManager) cleanupStorage(ctx context.Context, record *man
 	return nil
 }
 
-// records reads every managed database record; unreadable reports a record
-// file that could not be read, whose storage must then be left alone.
-func (m *managedDatabaseManager) records() (records []managedDatabaseRecord, unreadable bool, err error) {
-	entries, err := os.ReadDir(filepath.Join(m.root, "records"))
+// records reads every managed database record and lists the record files
+// that cannot be read.
+func (m *managedDatabaseManager) records() (records []managedDatabaseRecord, unreadable []unreadableRecord, err error) {
+	dir := filepath.Join(m.root, "records")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, false, fmt.Errorf("read managed database records: %w", err)
+		return nil, nil, fmt.Errorf("read managed database records: %w", err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		record, err := m.loadRecord(strings.TrimSuffix(entry.Name(), ".json"))
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		record, err := m.loadRecord(id)
 		if err != nil {
-			unreadable = true
+			unreadable = append(unreadable, unreadableRecord{ID: id, Path: filepath.Join(dir, entry.Name()), Err: err})
 			continue
 		}
 		records = append(records, record)
@@ -681,7 +683,9 @@ func (m *managedDatabaseManager) records() (records []managedDatabaseRecord, unr
 // repairLoopImages finishes deletes that could not complete and releases
 // mounts, loop devices and image files that belong to no managed database,
 // plus loop devices left bound to deleted backup workspaces. It runs at start
-// and periodically; see loopHost.repair for what is never touched.
+// and periodically; see loopHost.repair for what is never touched. A record
+// that cannot be read keeps everything named after its id (image, mount point,
+// loop device, container) and is reported; the rest is repaired as usual.
 func (m *managedDatabaseManager) repairLoopImages(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -700,12 +704,17 @@ func (m *managedDatabaseManager) repairLoopImages(ctx context.Context) {
 		}
 		m.logger.Info("finished interrupted managed database deletion", "id", record.ID)
 	}
-	if unreadable {
-		m.logger.Warn("managed database storage repair skipped: a record could not be read")
-	} else if records, unreadable, err = m.records(); err == nil && !unreadable {
-		ids := make(map[string]bool, len(records))
+	for _, bad := range unreadable {
+		m.logger.Warn("managed database record cannot be read; its storage and container are left alone until it is repaired or removed by hand",
+			"id", bad.ID, "path", bad.Path, "error", bad.Err)
+	}
+	if records, unreadable, err = m.records(); err == nil {
+		ids := make(map[string]bool, len(records)+len(unreadable))
 		for _, record := range records {
 			ids[record.ID] = true
+		}
+		for _, bad := range unreadable {
+			ids[bad.ID] = true
 		}
 		imageOwned := func(name string) bool {
 			id, ok := strings.CutSuffix(name, ".img")
@@ -750,7 +759,7 @@ func (m *managedDatabaseManager) reconcile(ctx context.Context) error {
 		// offline: the node comes up with the others, and Gateway sees this one as not running and can repair it.
 		record, err := m.loadRecord(id)
 		if err != nil {
-			m.logger.Warn("managed database record could not be read at startup", "id", id, "error", err)
+			m.logger.Warn("managed database record could not be read at startup", "id", id, "path", m.recordPath(id), "error", err)
 			continue
 		}
 		if record.ContainerID != "" {

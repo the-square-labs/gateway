@@ -299,7 +299,10 @@ func (m *managedStorageManager) cleanupStorage(ctx context.Context, record *mana
 // repairLoopImages finishes removals that could not complete and releases
 // mounts, loop devices and image files no managed storage member owns; a
 // removed member keeps its image but not its mount or loop device. It runs at
-// start and periodically; see loopHost.repair for what is never touched.
+// start and periodically; see loopHost.repair for what is never touched. A
+// record that cannot be read keeps everything named after its id (images,
+// mount points, loop devices, container) and is reported; the rest is
+// repaired as usual.
 func (m *managedStorageManager) repairLoopImages(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -318,21 +321,25 @@ func (m *managedStorageManager) repairLoopImages(ctx context.Context) {
 		}
 		m.logger.Info("finished interrupted managed storage deletion", "id", record.ID)
 	}
-	if unreadable {
-		m.logger.Warn("managed storage repair skipped: a record could not be read")
-		return
+	for _, bad := range unreadable {
+		m.logger.Warn("managed storage record cannot be read; its storage and container are left alone until it is repaired or removed by hand",
+			"id", bad.ID, "path", bad.Path, "error", bad.Err)
 	}
-	records, unreadable, err = m.records()
-	if err != nil || unreadable {
+	if records, unreadable, err = m.records(); err != nil {
 		return
 	}
 	imageDir := filepath.Join(m.root, "storage", "images")
 	mountDir := filepath.Join(m.root, "storage", "mounts")
 	inUseImages, keptImages, inUseMounts := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	protected := map[string]bool{}
+	for _, bad := range unreadable {
+		protected[bad.ID] = true
+	}
 	for _, record := range records {
 		if filepath.Dir(record.ImagePath) != imageDir || filepath.Dir(record.MountPath) != mountDir {
-			m.logger.Warn("managed storage repair skipped: a record names storage outside its directories", "id", record.ID)
-			return
+			m.logger.Warn("managed storage record names storage outside its directories; everything of its id is left alone", "id", record.ID)
+			protected[record.ID] = true
+			continue
 		}
 		keptImages[filepath.Base(record.ImagePath)] = true
 		if !record.Removed {
@@ -340,40 +347,53 @@ func (m *managedStorageManager) repairLoopImages(ctx context.Context) {
 			inUseMounts[filepath.Base(record.MountPath)] = true
 		}
 	}
+	// Member images and mount points are named <id>-<member index>.
+	ofProtected := func(name string) bool {
+		id, _, ok := cutStorageMemberName(strings.TrimSuffix(name, ".img"))
+		return ok && protected[id]
+	}
 	m.loopHost().repair(ctx, loopImageDomain{
 		label:      "managed storage",
 		imageDir:   imageDir,
 		mountDir:   mountDir,
 		mountRoot:  mountDir,
-		imageInUse: func(name string, _ bool) bool { return inUseImages[name] },
-		imageKept:  func(name string) bool { return keptImages[name] },
-		mountInUse: func(name string) bool { return inUseMounts[name] },
+		imageInUse: func(name string, _ bool) bool { return inUseImages[name] || ofProtected(name) },
+		imageKept:  func(name string) bool { return keptImages[name] || ofProtected(name) },
+		mountInUse: func(name string) bool { return inUseMounts[name] || ofProtected(name) },
 		orphanImage: func(name string) bool {
 			base, ok := strings.CutSuffix(name, ".img")
-			index := strings.LastIndex(base, "-")
-			if !ok || index < 0 {
-				return false
-			}
-			_, err := strconv.ParseUint(base[index+1:], 10, 16)
-			return err == nil && managedStorageIDPattern.MatchString(base[:index])
+			id, _, member := cutStorageMemberName(base)
+			return ok && member && managedStorageIDPattern.MatchString(id)
 		},
 	}, m.logger)
 }
 
-// records reads every managed storage record; unreadable reports a record
-// file that could not be read, whose storage must then be left alone.
-func (m *managedStorageManager) records() (records []managedStorageRecord, unreadable bool, err error) {
-	entries, err := os.ReadDir(filepath.Join(m.root, "storage", "records"))
+// cutStorageMemberName splits "<id>-<member index>".
+func cutStorageMemberName(name string) (string, uint64, bool) {
+	index := strings.LastIndex(name, "-")
+	if index < 0 {
+		return "", 0, false
+	}
+	member, err := strconv.ParseUint(name[index+1:], 10, 16)
+	return name[:index], member, err == nil
+}
+
+// records reads every managed storage record and lists the record files that
+// cannot be read.
+func (m *managedStorageManager) records() (records []managedStorageRecord, unreadable []unreadableRecord, err error) {
+	dir := filepath.Join(m.root, "storage", "records")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		record, err := m.loadRecord(strings.TrimSuffix(entry.Name(), ".json"))
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		record, err := m.loadRecord(id)
 		if err != nil {
-			unreadable = true
+			unreadable = append(unreadable, unreadableRecord{ID: id, Path: filepath.Join(dir, entry.Name()), Err: err})
 			continue
 		}
 		records = append(records, record)
@@ -395,7 +415,7 @@ func (m *managedStorageManager) reconcile(ctx context.Context) error {
 		// offline: the node comes up with the others, and Gateway sees this one as not running and can repair it.
 		record, err := m.loadRecord(id)
 		if err != nil {
-			m.logger.Warn("managed storage record could not be read at startup", "id", id, "error", err)
+			m.logger.Warn("managed storage record could not be read at startup", "id", id, "path", m.recordPath(id), "error", err)
 			continue
 		}
 		if record.ContainerID != "" {
