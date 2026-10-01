@@ -80,6 +80,8 @@ type DockerPlugin struct {
 	relayTunnelOutcomes logepisode.Tracker
 	// linkRejections logs the connections of database bindings and storage links no relay admitted.
 	linkRejections linkRejectionLog
+	// logHandler sends the plugin's lines, those of the managers built at Init included, to the current session.
+	logHandler *sessionLogHandler
 
 	// Log stream follow support
 	writer           *stream.Writer
@@ -139,14 +141,26 @@ func (p *DockerPlugin) Type() string {
 	return "docker"
 }
 
-// SetLogger replaces the plugin's logger with a session-scoped one.
+// SetLogger points the plugin's logger at a new session's: its lines reach the Gateway's node logs. The logger the
+// plugin handed out at Init (the host listeners, the database and storage managers, Compose, the Docker client)
+// follows, so a component's WARN is not left in the node's journal.
 func (p *DockerPlugin) SetLogger(logger *slog.Logger) {
-	p.logger = logger
+	if p.logHandler == nil {
+		p.logger = logger
+		return
+	}
+	p.logHandler.follow(logger.Handler())
+}
+
+// useLogger makes logger the plugin's until a session's replaces it (SetLogger).
+func (p *DockerPlugin) useLogger(logger *slog.Logger) {
+	p.logHandler = newSessionLogHandler(logger.Handler())
+	p.logger = slog.New(p.logHandler)
 }
 
 // Init initializes the Docker client, pings the engine, and stores its version.
 func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) error {
-	p.logger = logger
+	p.useLogger(logger)
 	p.availability = nil
 	ctx := context.Background()
 
@@ -190,7 +204,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		}
 	}
 
-	c, err := NewClient(p.cfg.Docker.Socket, p.cfg.StateDir, logger)
+	c, err := NewClient(p.cfg.Docker.Socket, p.cfg.StateDir, p.logger)
 	if err != nil {
 		return fmt.Errorf("init docker client: %w", err)
 	}
