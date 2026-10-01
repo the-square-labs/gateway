@@ -438,8 +438,8 @@ export function AdditionalSecureLinkBindings({
                   "Start with a letter; use up to 64 letters, numbers and underscores."
                 ) : (
                   <>
-                    Referenced in Advanced config as{" "}
-                    <code className="font-mono">{`{{additionalSecureLinks.${name || "name"}}}`}</code>
+                    The variable includes the scheme. Use it in Advanced config as{" "}
+                    <code className="font-mono">{`proxy_pass {{additionalSecureLinks.${name || "name"}}};`}</code>
                   </>
                 )}
               </p>
