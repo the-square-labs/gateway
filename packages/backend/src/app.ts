@@ -15,6 +15,7 @@ import { requestId } from 'hono/request-id';
 import { getEnv, isDevelopment } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import type { CommercialEditionRuntime } from '@/edition/runtime.js';
+import { COMMERCIAL_ONLY_ROUTE_PREFIXES, commercialUnavailableRoutes } from '@/edition/unavailable-routes.js';
 import { GATEWAY_RESTARTING_HTML, GATEWAY_RESTARTING_SCRIPT, gatewayNotFoundHtml } from '@/lib/gateway-error-pages.js';
 import { injectLoginAuthMethods } from '@/lib/login-page.js';
 import { ONE_TIME_LINK_TOKEN_PATH } from '@/lib/one-time-link-path.js';
@@ -834,6 +835,7 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/object-storage', objectStorageRoutes);
   app.route('/api/databases', databaseRoutes);
   app.route('/api/managed-storage', managedStorageRoutes);
+  for (const prefix of COMMERCIAL_ONLY_ROUTE_PREFIXES) app.route(prefix, commercialUnavailableRoutes);
 
   // AI WebSocket endpoint
   const wsHandlers = createWSHandlers();

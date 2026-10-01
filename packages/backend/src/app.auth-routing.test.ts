@@ -140,6 +140,25 @@ describe('authentication boundaries in the complete application route graph', ()
     expect(validateOAuth).not.toHaveBeenCalled();
   });
 
+  it('answers private-module Console routes with COMMERCIAL_MODULE_UNAVAILABLE, to signed-in callers only', async () => {
+    const anonymous = await createApp().app.request('/api/status-page/settings', {
+      headers: { host: 'gateway.test' },
+    });
+    expect(anonymous.status).toBe(401);
+    validateOAuth.mockResolvedValueOnce({
+      user: { id: 'user', scopes: ['status-page:view'] },
+      scopes: ['status-page:view'],
+      tokenId: 'token',
+      tokenPrefix: 'gwo_fixture',
+      clientId: 'client',
+    });
+    const signedIn = await createApp().app.request('/api/status-page/settings', {
+      headers: { host: 'gateway.test', Authorization: 'Bearer gwo_fixture' },
+    });
+    expect(signedIn.status).toBe(503);
+    expect(await signedIn.json()).toMatchObject({ code: 'COMMERCIAL_MODULE_UNAVAILABLE' });
+  });
+
   it('allows a source webhook to reach signature verification without a REST bearer', async () => {
     const id = '11111111-1111-4111-8111-111111111111';
     const response = await createApp().app.request(`/api/webhooks/docker-source/${id}`, {
