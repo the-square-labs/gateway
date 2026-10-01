@@ -273,13 +273,13 @@ describe('lease witness (A19)', () => {
     ).toBe(false);
   });
 
-  it('survives the loss of any one site in the invoise layout: two candidate sites plus a witness site', () => {
-    // Site A: yuna VM (docker d1 and relay r1). Site B: CloudBlast Birmingham (docker d2 and relay r2). Site C: witness.
+  it('survives the loss of any one site in a two-site layout with a witness site', () => {
+    // Site A: one VM (docker d1 and relay r1). Site B: a VM at another provider (docker d2 and relay r2). Site C: witness.
     const selection = selectPolicyVoters({
-      candidates: [candidate('d1', 'vm-yuna', ['fd-a']), candidate('d2', 'vm-birmingham', ['fd-b'])],
+      candidates: [candidate('d1', 'vm-a', ['fd-a']), candidate('d2', 'vm-b', ['fd-b'])],
       pool: [
-        witness('r1', { hostKey: 'vm-yuna', faultDomain: 'fd-a', rtt: { d1: 0.3, d2: 21 } }),
-        witness('r2', { hostKey: 'vm-birmingham', faultDomain: 'fd-b', rtt: { d1: 21, d2: 0.4 } }),
+        witness('r1', { hostKey: 'vm-a', faultDomain: 'fd-a', rtt: { d1: 0.3, d2: 21 } }),
+        witness('r2', { hostKey: 'vm-b', faultDomain: 'fd-b', rtt: { d1: 21, d2: 0.4 } }),
         witness('r3', { hostKey: 'vm-witness', faultDomain: 'fd-c', rtt: { d1: 14, d2: 18 } }),
       ],
       configuredWitness: null,
