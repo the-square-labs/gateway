@@ -73,7 +73,8 @@ Installer запускает Gateway и выводит одноразовый к
 |------|--------|
 | Понять, чем может управлять Gateway | [Capabilities](docs/capabilities.md) |
 | Установить Gateway | [Installation guide](docs/installation.md) |
-| Добавить nginx, Docker, database или monitoring узлы | [Nodes and daemons](docs/nodes.md) |
+| Добавить Ingress, Docker, Build Worker, Storage, Monitoring или Relay узлы | [Nodes and daemons](docs/nodes.md) |
+| Запустить Storage-узлы, storage connections и бэкапы баз данных | [Storage and backups](docs/storage-and-backups.md) |
 | Экспортировать или импортировать Docker-контейнеры со встроенным image или без него | [GWCA container archives](docs/docker-container-archives.md) |
 | Настроить tokens, OAuth, MCP, logging, updates и AI | [Operations guide](docs/operations.md) |
 | Настроить multi-provider inference proxy | [Inference proxy](docs/inference.md) |
@@ -120,13 +121,14 @@ Installer запускает Gateway и выводит одноразовый к
 | Docker | Container lifecycle, first-class single-node Compose Projects, доступный в Business+ прямой Git repository/branch push-to-deploy для containers, blue/green deployments и Compose projects, изолированные Build Workers, private-by-default внутренний registry под управлением Gateway во всех планах с опциональным внешним доступом в Business+, профиль runtime Default (`runc`) во всех планах и Secure (`runsc`/gVisor) в Business и Enterprise, Gateway-managed volumes, rollout/rollback, shared физические NVIDIA/AMD/Intel GPU, допустимые cross-node migrations контейнеров и volumes, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports и cleanup. Secure workloads не поддерживают GPU, migration и export; GPU-attached workloads в v1 также нельзя мигрировать или экспортировать. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports и привязка к routes. |
 | Domains | Единый реестр hostnames, выбор nginx ingress-ноды, внешний или Cloudflare-managed DNS, validation, usage tracking и явная ingress migration. |
-| Databases | Saved PostgreSQL, Redis и ClickHouse connections с encrypted credentials, health history, browsing, scoped query consoles и capability-aware write operations; private-by-default managed Postgres, Redis и ClickHouse instances могут безопасно подключаться к Docker workloads через Console, AI Workspace или MCP. |
+| Databases | Saved PostgreSQL, Redis и ClickHouse connections с encrypted credentials, health history, browsing, scoped query consoles и capability-aware write operations; private-by-default managed Postgres, Redis и ClickHouse instances могут безопасно подключаться к Docker workloads через Console, AI Workspace или MCP. Плановые native backups и restores выполняются на выбранном Storage-узле. Доступно в Personal и выше; с 2.11 это относится и к saved external connections. |
+| Storage | Storage connections к AWS S3, Cloudflare R2, MinIO и другим S3-compatible endpoints, FTP, FTPS и SFTP, а также private-by-default managed SeaweedFS object storage на Storage-узлах с bucket-scoped application bindings. Доступно в Personal и выше. |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware telemetry физических GPU, daemon runtime details, log streaming и update checks. |
 | Logging | Опциональный ClickHouse-backed structured log ingestion со schemas, retention, ingest tokens, rate limits, search, storage caps и health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint со scoped-операциями для Ingress, Pages, Databases, Docker/Compose, source builds и Build Workers, чтением internal Gateway documentation, CI/CD webhooks, webhook notifications и status pages. |
-| Integrations | GitLab workflows для projects, repositories, CI/CD, variables, webhooks, registry и sandbox; GitHub repositories и Actions; generic Git connectors; external SSH connectors; Cloudflare DNS/ACME automation. Credentials connectors шифруются, а доступ ограничен scopes. |
-| Relay | Long-lived local relay владеет публичным `9443/tcp` для daemon control и managed tunnel traffic. Relay Pool добавляет remote supervisor/worker pairs, явное placement и rebalancing, drain и rolling signed updates, сохраняя один логический Secure Link. |
-| AI Workspace | Опциональные intent-driven operations с готовыми Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, отслеживанием прогресса и финальной проверкой. До явного подтверждения планирование не выполняет изменений. |
+| Integrations | GitLab workflows для projects, repositories, CI/CD, variables, webhooks, registry и sandbox; GitHub repositories и Actions; generic Git connectors; external SSH connectors; Cloudflare DNS/ACME automation. Credentials connectors шифруются, а доступ ограничен scopes. GitLab integration доступна в Personal и выше. |
+| Relay | Long-lived local relay владеет публичным `9443/tcp` для daemon control и managed tunnel traffic. Relay Pool добавляет remote supervisor/worker pairs, явное placement и rebalancing, drain и rolling signed updates, сохраняя один логический Secure Link. Сертификаты Gateway, local relay и remote relay обновляются без перезапуска. |
+| AI Workspace | Опциональные intent-driven operations с готовыми Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, отслеживанием прогресса и финальной проверкой. До явного подтверждения планирование не выполняет изменений. Scenarios, Plan Mode и sandboxed execution доступны в Personal и выше. |
 | Inference | Опциональный multi-provider model gateway с отдельными tokens, usage controls, capability-compatible cross-provider fallback до начала output, OpenAI- и Anthropic-compatible API и управляемой настройкой Codex или Claude Code с опциональным user-session auto-start через `@sqgateway/inference`. |
 | Administration | OIDC, password, email-code и passkey login, group-based и дополнительные per-user permissions, scoped programmatic access, audit logs, setup state, updates и license controls. |
 
@@ -137,7 +139,8 @@ Gateway запускается как Docker stack на control-plane серве
 ```text
                 Gateway server
         +-----------------------------+
-        | app + relay + redis         |
+        | app + relay + registry      |
+        | redis                       |
         | postgres local or remote    |
         | clickhouse local/remote/off |
         | relay gRPC :9443            |
@@ -147,13 +150,15 @@ Gateway запускается как Docker stack на control-plane серве
                       |
         +-------------+-------------------+
         |             |                   |
- nginx-daemon   docker-daemon     database profile     monitoring-daemon
- ingress route  container host    managed databases    metrics-only host
+ nginx-daemon   docker-daemon     storage profile      monitoring-daemon
+ ingress route  container host    databases, S3 store  metrics-only host
 ```
 
-Relay — отдельный long-lived container и единственный публичный владелец `9443/tcp`. Обычные app-only обновления сохраняют relay container и установленные managed-database binding streams; обновление relay остается отдельным событием обслуживания data plane.
+Relay — отдельный long-lived container и единственный публичный владелец `9443/tcp`. Обычные app-only обновления сохраняют relay container и установленные managed-database binding streams; обновление relay остается отдельным событием обслуживания data plane. Каждый релиз Relay указывает минимальную версию Gateway, и Gateway предлагает или применяет отдельное обновление relay только после того, как сам работает на этой версии.
 
-Локальный relay можно расширить до единого Relay Pool в **Settings > Relay**. Дополнительные relay-ноды подключаются через отдельный supervisor, исходяще соединяются с Gateway для управления и публикуют только настроенный data endpoint relay (по умолчанию TCP `9443`) для участвующих managed hosts. Gateway не меняет firewall, не выполняет NAT traversal и не создаёт overlay network. Добавление ноды само по себе не переносит трафик: это делает только явный Rebalance, после которого новые соединения распределяются по заранее проверенному активному набору relay workload-а, а пользователь по-прежнему видит один логический Secure Link.
+Gateway раз в час проверяет свои сертификаты gRPC, web и local relay и обновляет каждый за 30 дней до истечения без перезапуска: установленные соединения daemons и relay сохраняют текущий сертификат, а новые handshakes получают обновлённый. Пока есть неиспользованные enrollment tokens, gRPC-сертификат, закреплённый в их командах установки, обновляется только в последнюю неделю срока.
+
+Локальный relay можно расширить до единого Relay Pool в **Settings > Relay**. Дополнительные relay-ноды подключаются через отдельный supervisor, исходяще соединяются с Gateway для управления и публикуют только настроенный data endpoint relay (по умолчанию TCP `9443`) для участвующих managed hosts. Gateway не меняет firewall, не выполняет NAT traversal и не создаёт overlay network. Gateway сам переносит placements на новый relay, когда pool стабилен (или когда администратор запускает **Rebalance**), и переключает workload только после того, как его хосты достучались до нового relay; новые соединения затем распределяются по заранее проверенному активному набору relay workload-а, а пользователь по-прежнему видит один логический Secure Link. Сертификаты remote relay обновляются автоматически до истечения; remote relay, который не может восстановиться, можно заново подключить на той же странице, а policy trust локального relay Gateway восстанавливает сам.
 
 Узлам не нужны входящие management-порты. Public traffic ports, например `80` и `443` на nginx nodes, все еще нужны для сервисов, которые вы публикуете.
 
@@ -193,7 +198,7 @@ Gateway по умолчанию ориентирован на безопасну
 <details>
 <summary><strong>Может ли Gateway работать без ClickHouse?</strong></summary>
 
-Да. Выберите **Disabled** для structured logging в first-run wizard или **Settings > Advanced**. Остальная часть Gateway продолжает работать; managed local ClickHouse можно отключить без удаления data volume.
+Да. Выберите **Disabled** для structured logging в first-run wizard или **Settings > Features**. Остальная часть Gateway продолжает работать; managed local ClickHouse можно отключить без удаления data volume.
 </details>
 
 <details>
@@ -233,10 +238,12 @@ Managed services продолжают работать. Existing nginx configs �
 
 | План | Месяц | Год | Масштаб и назначение |
 |------|-------|-----|----------------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Ядро платформы, AI Workspace и Gateway Inference для своей инфраструктуры и других сценариев, не конкурирующих с Gateway; до 25 managed nodes, 3 пользователей и 1 custom permission group; read-only discovery, inventory, monitoring и logs Compose-проектов. Pages недоступны. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Неограниченные plan quotas для managed nodes/users/groups, deployment и lifecycle management Compose-проектов, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases, публичные status pages, Pages static-site hosting и registry discovery. Multi-node Workload Availability доступна с Business и выше. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Ядро платформы, AI Workspace и Gateway Inference для своей инфраструктуры и других сценариев, не конкурирующих с Gateway; до 25 managed nodes, 3 пользователей и 1 custom permission group; read-only discovery, inventory, monitoring и logs Compose-проектов. Pages, databases, storage, GitLab integration, а также Scenarios, Plan Mode и sandboxes AI Workspace недоступны. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Неограниченные plan quotas для managed nodes/users/groups, deployment и lifecycle management Compose-проектов, import/export архивов контейнеров, blue/green deployments, cross-node migration, managed databases и external database connections с бэкапами, storage connections и managed SeaweedFS object storage, GitLab integration, Scenarios, Plan Mode и sandboxes AI Workspace, публичные status pages, Pages static-site hosting и registry discovery. Multi-node Workload Availability доступна с Business и выше. |
 | ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Возможности Personal (включая Compose management и Pages), а также Git push-to-deploy для containers, blue/green deployments, Compose Projects и Pages с изолированными Build Workers и build vulnerability policy, опциональный внешний доступ к private internal registry, Docker Secure Runtime, structured logging, audit export, guided onboarding, доступную multi-node Workload Availability (HA), а также расширенное сканирование безопасности, автомасштабирование по метрикам и same-node multi-instance после выпуска. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | По запросу | По запросу | Возможности Business (включая Pages), а также Internal PKI, SIEM export, выделенный технический контакт и сопровождение развёртывания и миграции. |
+
+Эти лимиты Community и возможности выше, которым теперь нужен Personal или выше, действуют с 2.11; в 2.10 Community допускал 100 managed nodes, 10 пользователей и 5 custom permission groups. Лимиты проверяются только при создании, поэтому установка, которая уже превышает их, сохраняет существующие ноды, пользователей и группы, но не может добавить новые, пока остаётся на лимите или выше.
 
 Полная матрица возможностей, статусы доступности, проверка лицензии и граница source license приведены в [Планах и лицензировании](docs/licensing.md).
 

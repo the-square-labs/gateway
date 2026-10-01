@@ -73,7 +73,8 @@ curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts
 |------|------|
 | 了解 Gateway 可以管理什么 | [Capabilities](docs/capabilities.md) |
 | 安装 Gateway | [Installation guide](docs/installation.md) |
-| 添加 nginx、Docker、database 或 monitoring 节点 | [Nodes and daemons](docs/nodes.md) |
+| 添加 Ingress、Docker、Build Worker、Storage、Monitoring 或 Relay 节点 | [Nodes and daemons](docs/nodes.md) |
+| 运行 Storage 节点、storage connections 和数据库备份 | [Storage and backups](docs/storage-and-backups.md) |
 | 导出或导入包含或不包含内嵌 image 的 Docker containers | [GWCA container archives](docs/docker-container-archives.md) |
 | 配置 tokens、OAuth、MCP、logging、updates 和 AI | [Operations guide](docs/operations.md) |
 | 配置 multi-provider inference proxy | [Inference proxy](docs/inference.md) |
@@ -120,13 +121,14 @@ curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts
 | Docker | Container lifecycle、first-class single-node Compose Projects、Business+ 可用的面向 container、blue/green deployment 和 Compose project 的直接 Git repository/branch push-to-deploy、隔离的 Build Worker、所有计划均可使用的默认私有 Gateway-managed internal registry（Business+ 可选 external access）、所有计划均可使用的 Default (`runc`) runtime profile，以及 Business 和 Enterprise 可使用的 Secure (`runsc`/gVisor) profile、Gateway-managed volumes、rollout/rollback、shared physical NVIDIA/AMD/Intel GPU attachment、eligible cross-node container 和 volume migrations、offline inventory snapshots、registries、images、networks、tasks、webhooks、logs、console、file browser、secrets、env vars、ports 和 cleanup。Secure workloads 不支持 GPU、migration 或 export；GPU-attached workloads 在 v1 中也不能迁移或导出。 |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports 和 route binding。 |
 | Domains | Central hostname registry、nginx ingress placement、external 或 Cloudflare-managed DNS、validation、usage tracking 和 explicit ingress migration。 |
-| Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可通过 Console、AI Workspace 或 MCP 安全绑定到 Docker workloads。 |
+| Databases | Saved PostgreSQL、Redis 和 ClickHouse connections，含 encrypted credentials、health history、browsing、scoped query consoles 和 capability-aware write operations；private-by-default managed Postgres、Redis 和 ClickHouse instances 可通过 Console、AI Workspace 或 MCP 安全绑定到 Docker workloads。定时 native backups 和 restores 在选定的 Storage 节点上运行。Personal 及以上计划可用；自 2.11 起也包括 saved external connections。 |
+| Storage | 连接 AWS S3、Cloudflare R2、MinIO 及其他 S3-compatible endpoints、FTP、FTPS 和 SFTP 的 storage connections，以及 Storage 节点上默认私有的 managed SeaweedFS object storage，支持 bucket-scoped application bindings。Personal 及以上计划可用。 |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming 和 update checks。 |
 | Logging | 可选的 ClickHouse-backed structured log ingestion，包含 schemas、retention、ingest tokens、rate limits、search、storage caps 和 health safeguards。 |
 | Automation | API tokens、OAuth 2.0 PKCE、提供 Ingress、Pages、Databases、Docker/Compose、source build 与 Build Worker scoped operations 及 internal Gateway documentation 读取能力的 remote MCP endpoint、CI/CD webhooks、webhook notifications 和 status pages。 |
-| Integrations | GitLab project、repository、CI/CD、variable、webhook、registry 和 sandbox workflows；GitHub repository 与 Actions workflows；generic Git connectors；external SSH connectors；以及 Cloudflare DNS/ACME automation。Connector credentials 会加密保存，访问受 scopes 限制。 |
-| Relay | Long-lived local relay 负责公开 `9443/tcp` 上的 daemon control 与 managed tunnel traffic。Relay Pool 可增加 remote supervisor/worker pairs、显式 placement/rebalancing、drain 与 rolling signed updates，同时保持一个逻辑 Secure Link。 |
-| AI Workspace | 可选的 intent-driven operations，包含引导式 Scenarios、Plan Mode、permission-aware tools、approvals、sandboxed execution、进度跟踪和最终验证。在明确确认之前，规划不会执行任何变更。 |
+| Integrations | GitLab project、repository、CI/CD、variable、webhook、registry 和 sandbox workflows；GitHub repository 与 Actions workflows；generic Git connectors；external SSH connectors；以及 Cloudflare DNS/ACME automation。Connector credentials 会加密保存，访问受 scopes 限制。GitLab integration 需要 Personal 及以上计划。 |
+| Relay | Long-lived local relay 负责公开 `9443/tcp` 上的 daemon control 与 managed tunnel traffic。Relay Pool 可增加 remote supervisor/worker pairs、显式 placement/rebalancing、drain 与 rolling signed updates，同时保持一个逻辑 Secure Link。Gateway、local relay 和 remote relay 的证书在运行中自动续期。 |
+| AI Workspace | 可选的 intent-driven operations，包含引导式 Scenarios、Plan Mode、permission-aware tools、approvals、sandboxed execution、进度跟踪和最终验证。在明确确认之前，规划不会执行任何变更。Scenarios、Plan Mode 和 sandboxed execution 需要 Personal 及以上计划。 |
 | Inference | 可选的 multi-provider model gateway，包含独立 tokens、usage controls、仅在 output 开始前进行的 capability-compatible cross-provider fallback、OpenAI/Anthropic-compatible APIs，以及通过 `@sqgateway/inference` 管理且可选 user-session auto-start 的 Codex 或 Claude Code 配置。 |
 | Administration | OIDC、password、email-code 和 passkey login，group-based 和 per-user additional permissions, scoped programmatic access, audit logs, setup state, updates 和 license controls。 |
 
@@ -137,7 +139,8 @@ Gateway 作为 Docker stack 运行在 control-plane server 上。Managed hosts �
 ```text
                 Gateway server
         +-----------------------------+
-        | app + relay + redis         |
+        | app + relay + registry      |
+        | redis                       |
         | postgres local or remote    |
         | clickhouse local/remote/off |
         | relay gRPC :9443            |
@@ -147,13 +150,15 @@ Gateway 作为 Docker stack 运行在 control-plane server 上。Managed hosts �
                       |
         +-------------+-------------------+
         |             |                   |
- nginx-daemon   docker-daemon     database profile     monitoring-daemon
- ingress route  container host    managed databases    metrics-only host
+ nginx-daemon   docker-daemon     storage profile      monitoring-daemon
+ ingress route  container host    databases, S3 store  metrics-only host
 ```
 
-Relay 是一个独立的 long-lived container，也是 `9443/tcp` 唯一的公开监听方。普通 app-only 更新会保留 relay container 和已建立的 managed-database binding streams；更新 relay 仍然是一个单独的 data-plane maintenance event。
+Relay 是一个独立的 long-lived container，也是 `9443/tcp` 唯一的公开监听方。普通 app-only 更新会保留 relay container 和已建立的 managed-database binding streams；更新 relay 仍然是一个单独的 data-plane maintenance event。每个 Relay 版本都会声明所需的最低 Gateway 版本，Gateway 只有在自身运行该版本后才会提供或执行独立的 relay 更新。
 
-可以在 **Settings > Relay** 中把本地 relay 扩展为一个逻辑 Relay Pool。额外的 relay 节点由专用 supervisor 管理，控制连接仍然只需 outbound 到 Gateway，并且只向参与的 managed hosts 暴露配置的 relay data endpoint（默认 TCP `9443`）。Gateway 不修改 firewall、不提供 NAT traversal，也不创建 overlay network。添加节点不会自动迁移流量；管理员明确执行 Rebalance 后，新连接会分散到 workload 预先验证的 active relay 集合中，而用户仍然看到一个逻辑 Secure Link。
+Gateway 每小时检查其 gRPC、web 和 local relay 证书，并在到期前 30 天内续期，无需重启：已建立的 daemon 和 relay 连接继续使用当前证书，新的 handshake 获得续期后的证书。只要还有未使用的 node enrollment tokens，其安装命令所固定的 gRPC 证书只会在最后一周内续期。
+
+可以在 **Settings > Relay** 中把本地 relay 扩展为一个逻辑 Relay Pool。额外的 relay 节点由专用 supervisor 管理，控制连接仍然只需 outbound 到 Gateway，并且只向参与的 managed hosts 暴露配置的 relay data endpoint（默认 TCP `9443`）。Gateway 不修改 firewall、不提供 NAT traversal，也不创建 overlay network。Relay Pool 稳定后，Gateway 会自动把 placements 迁移到新的 relay（管理员也可以手动执行 **Rebalance**），并且只有在 workload 的主机确认能访问新 relay 后才切换；之后新连接会分散到 workload 预先验证的 active relay 集合中，而用户仍然看到一个逻辑 Secure Link。Remote relay 证书会在到期前自动续期；无法恢复的 remote relay 可以在同一页面重新注册，而 local relay 的 policy trust 由 Gateway 自动修复。
 
 节点不需要入站 management 端口。你对外提供服务时仍然需要 public traffic ports，例如 nginx nodes 上的 `80` 和 `443`。
 
@@ -193,7 +198,7 @@ Gateway 的设计目标是让自托管基础设施控制平面默认更安全：
 <details>
 <summary><strong>Gateway 可以不使用 ClickHouse 吗？</strong></summary>
 
-可以。在 first-run wizard 或 **Settings > Advanced** 中为 structured logging 选择 **Disabled**。Gateway 的其他部分会继续工作；managed local ClickHouse 可以在不删除 data volume 的情况下关闭。
+可以。在 first-run wizard 或 **Settings > Features** 中为 structured logging 选择 **Disabled**。Gateway 的其他部分会继续工作；managed local ClickHouse 可以在不删除 data volume 的情况下关闭。
 </details>
 
 <details>
@@ -233,10 +238,12 @@ Gateway 源代码由 Square Labs 依据 [PolyForm Perimeter License 1.0.1](LICEN
 
 | 计划 | 月付 | 年付 | 规模与重点 |
 |------|------|------|------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference，可用于内部及其他非竞争性用途；最多 25 个 managed nodes、3 个用户和 1 个 custom permission group；提供只读 Compose 项目发现、inventory、monitoring 和 logs；Pages 不可用。 |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | managed nodes/users/groups 的 plan quotas 不限，并包含 Compose deployment 与 lifecycle management、container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；多节点 Workload Availability 需要 Business 或 Enterprise。 |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference，可用于内部及其他非竞争性用途；最多 25 个 managed nodes、3 个用户和 1 个 custom permission group；提供只读 Compose 项目发现、inventory、monitoring 和 logs；Pages、databases、storage、GitLab integration 以及 AI Workspace 的 Scenarios、Plan Mode 和 sandboxes 不可用。 |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | managed nodes/users/groups 的 plan quotas 不限，并包含 Compose deployment 与 lifecycle management、container archive import/export、blue/green deployments、cross-node migration、managed databases 和带备份的 external database connections、storage connections 和 managed SeaweedFS object storage、GitLab integration、AI Workspace 的 Scenarios、Plan Mode 和 sandboxes、public status pages、Pages 静态站点托管和 registry discovery；多节点 Workload Availability 需要 Business 或 Enterprise。 |
 | ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Compose management 和 Pages）的全部功能，并增加面向 containers、blue/green deployments、Compose Projects 与 Pages、带隔离 Build Workers 和 build vulnerability policy 的 Git push-to-deploy、private internal registry 的可选 external access、Docker Secure Runtime、structured logging、audit export、guided onboarding、已可用的多节点 Workload Availability (HA)，以及发布后的更广泛安全扫描、基于指标的自动扩缩容和 same-node multi-instance 功能。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business（包括 Pages）的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |
+
+上述 Community 限制以及现在需要 Personal 及以上计划的功能自 2.11 起生效；2.10 的 Community 允许 100 个 managed nodes、10 个用户和 5 个 custom permission groups。计划限制只在创建时检查，因此已经超出限制的实例会保留现有节点、用户和组，但在仍处于或超过限制时无法再添加。
 
 完整功能矩阵、可用性状态、许可证验证和 source-license 边界请参见[产品计划与许可](docs/licensing.md)。
 
