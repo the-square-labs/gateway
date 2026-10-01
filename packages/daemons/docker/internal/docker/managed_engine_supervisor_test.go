@@ -25,6 +25,8 @@ type fakeEngineDocker struct {
 	calls   *[]string
 	running map[string]bool
 	policy  map[string]string
+	// users are the containers a container list returns.
+	users []string
 }
 
 func (d *fakeEngineDocker) client() *Client {
@@ -47,6 +49,14 @@ func (d *fakeEngineDocker) serve(request *http.Request) (*http.Response, error) 
 		return reply(http.StatusNotFound, `{"message":"not found"}`)
 	}
 	id, action := match[1], match[2]
+	if id == "json" && request.Method == http.MethodGet {
+		items := []map[string]string{}
+		for _, user := range d.users {
+			items = append(items, map[string]string{"Id": user})
+		}
+		raw, _ := json.Marshal(items)
+		return reply(http.StatusOK, string(raw))
+	}
 	running, exists := d.running[id]
 	if !exists {
 		return reply(http.StatusNotFound, `{"message":"No such container: `+id+`"}`)
@@ -59,6 +69,10 @@ func (d *fakeEngineDocker) serve(request *http.Request) (*http.Response, error) 
 			"HostConfig": map[string]any{"RestartPolicy": map[string]any{"Name": d.policy[id]}},
 		})
 		return reply(http.StatusOK, string(raw))
+	case request.Method == http.MethodPost && action == "/stop":
+		*d.calls = append(*d.calls, "stop "+id)
+		d.running[id] = false
+		return reply(http.StatusNoContent, "")
 	case request.Method == http.MethodPost && action == "/start":
 		*d.calls = append(*d.calls, "start "+id)
 		d.running[id] = true

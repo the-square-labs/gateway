@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -33,6 +34,9 @@ const (
 	loopDeletedSuffix       = " (deleted)"
 	sysBlockRoot            = "/sys/block"
 	selfMountInfoPath       = "/proc/self/mountinfo"
+	// volumePlaceholderSource names the read-only empty tmpfs mounted at the
+	// mount point of a disk-image volume whose image could not be mounted.
+	volumePlaceholderSource = "gateway-volume-placeholder"
 )
 
 // loopDevice is one bound loop device as sysfs reports it.
@@ -47,6 +51,8 @@ type loopDevice struct {
 type mountEntry struct {
 	MountPoint string
 	Number     string // major:minor of the mounted device
+	FSType     string
+	Source     string
 }
 
 // loopHost is the kernel surface of loop-backed images (managed databases,
@@ -63,6 +69,8 @@ type loopHost struct {
 	// attach binds a free loop device to an image; mount mounts a device.
 	attach func(ctx context.Context, image string) (string, error)
 	mount  func(ctx context.Context, device, path, options string) error
+	// placeholder mounts the read-only empty placeholder at path.
+	placeholder func(ctx context.Context, path string) error
 }
 
 var systemLoopHost = &loopHost{
@@ -88,6 +96,9 @@ var systemLoopHost = &loopHost{
 	attach: attachDatabaseLoopDevice,
 	mount: func(ctx context.Context, device, path, options string) error {
 		return runLoopCommand(ctx, "mount", "-o", options, device, path)
+	},
+	placeholder: func(ctx context.Context, path string) error {
+		return runLoopCommand(ctx, "mount", "-t", "tmpfs", "-o", "ro,nodev,nosuid,noexec,size=16k,mode=0555", volumePlaceholderSource, path)
 	},
 }
 
@@ -160,7 +171,13 @@ func parseMountInfo(r io.Reader) ([]mountEntry, error) {
 		if len(fields) < 5 {
 			continue
 		}
-		result = append(result, mountEntry{MountPoint: unescapeMountInfo(fields[4]), Number: fields[2]})
+		entry := mountEntry{MountPoint: unescapeMountInfo(fields[4]), Number: fields[2]}
+		// Optional fields end at "-", followed by the type and the source.
+		if separator := slices.Index(fields[5:], "-"); separator >= 0 && 5+separator+2 < len(fields) {
+			entry.FSType = fields[5+separator+1]
+			entry.Source = unescapeMountInfo(fields[5+separator+2])
+		}
+		result = append(result, entry)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read mount table: %w", err)
@@ -260,6 +277,22 @@ func (h *loopHost) isMounted(path string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// isPlaceholder reports whether the visible mount at path is the read-only
+// placeholder of a volume image that could not be mounted.
+func (h *loopHost) isPlaceholder(path string) (bool, error) {
+	mounts, err := h.mounts()
+	if err != nil {
+		return false, err
+	}
+	placeholder := false
+	for _, mount := range mounts {
+		if mount.MountPoint == path {
+			placeholder = mount.FSType == "tmpfs" && mount.Source == volumePlaceholderSource // the last one is visible
+		}
+	}
+	return placeholder, nil
 }
 
 // mountedLoop returns the loop device mounted at mountPath, or "". The

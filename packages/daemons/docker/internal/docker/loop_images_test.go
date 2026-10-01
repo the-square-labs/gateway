@@ -34,8 +34,10 @@ type fakeLoops struct {
 	held     map[string]bool
 	calls    []string
 	onDetach func(device string)
-	// attachErr fails every attach, like a node without a free loop device.
-	attachErr error
+	// attachErr fails every attach, like a node without a free loop device;
+	// failImages fails the attach of single images.
+	attachErr  error
+	failImages map[string]bool
 }
 
 func newFakeLoops(t *testing.T) *fakeLoops {
@@ -80,6 +82,9 @@ func (f *fakeLoops) host() *loopHost {
 			if f.attachErr != nil {
 				return "", f.attachErr
 			}
+			if f.failImages[image] {
+				return "", errNoFreeLoopDevice
+			}
 			number := strconv.Itoa(100 + len(f.loops))
 			f.attach("/dev/loop"+number, "7:"+number, image)
 			return "/dev/loop" + number, nil
@@ -87,6 +92,11 @@ func (f *fakeLoops) host() *loopHost {
 		mount: func(_ context.Context, device, path, _ string) error {
 			f.calls = append(f.calls, "mount "+device+" "+path)
 			f.mount("7:"+strings.TrimPrefix(device, "/dev/loop"), path)
+			return nil
+		},
+		placeholder: func(_ context.Context, path string) error {
+			f.calls = append(f.calls, "placeholder "+path)
+			f.mounts = append(f.mounts, mountEntry{MountPoint: canonicalLoopPath(path), Number: "0:99", FSType: "tmpfs", Source: volumePlaceholderSource})
 			return nil
 		},
 	}
@@ -379,7 +389,7 @@ func TestReadLoopDevicesAndMountInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mounts) != 2 || mounts[1] != (mountEntry{MountPoint: "/var/lib/docker-daemon/databases/mounts/a b", Number: "7:7"}) {
+	if len(mounts) != 2 || mounts[1] != (mountEntry{MountPoint: "/var/lib/docker-daemon/databases/mounts/a b", Number: "7:7", FSType: "ext4", Source: "/dev/loop7"}) {
 		t.Fatalf("mounts = %+v", mounts)
 	}
 }

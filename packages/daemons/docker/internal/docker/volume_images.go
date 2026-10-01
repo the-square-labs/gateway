@@ -87,6 +87,7 @@ func newVolumeImageManager(stateDir string, dockerClient *Client, logger *slog.L
 	}
 	manager.supported = manager.preflight()
 	if manager.supported {
+		manager.ensureVolumeImageBootUnit(stateDir)
 		// Before remounting: leaked devices could leave none for live volumes.
 		manager.repairLoopImages(context.Background())
 		if err := manager.reconcile(context.Background()); err != nil {
@@ -307,7 +308,7 @@ func (m *volumeImageManager) create(ctx context.Context, name string, capacity i
 	if err := m.ensureFstabEntry(record); err != nil {
 		return fmt.Errorf("persist volume image mount: %w", err)
 	}
-	if err := m.ensureMounted(ctx, &record); err != nil {
+	if _, err := m.ensureMounted(ctx, &record); err != nil {
 		return err
 	}
 	// The application UID is unknown at creation time. Initialize only the new
@@ -365,36 +366,72 @@ func createVolumeImage(ctx context.Context, record volumeImageRecord) (err error
 	return nil
 }
 
-func (m *volumeImageManager) ensureMounted(ctx context.Context, record *volumeImageRecord) error {
+// ensureMounted mounts the record's image, replacing the read-only placeholder
+// the boot step leaves at the mount point of an image it could not mount. It
+// reports whether the image was not mounted before: the volume's running
+// containers then sit on the placeholder or on the bare mount point.
+func (m *volumeImageManager) ensureMounted(ctx context.Context, record *volumeImageRecord) (bool, error) {
 	if record.Deleting {
-		return errors.New("disk-image volume is being deleted")
+		return false, errors.New("disk-image volume is being deleted")
 	}
-	if mounted(record.MountPath) {
-		output, err := exec.CommandContext(ctx, "findmnt", "-n", "-o", "SOURCE", "--target", record.MountPath).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("resolve mounted volume image device: %w: %s", err, strings.TrimSpace(string(output)))
-		}
-		loopDevice := strings.TrimSpace(string(output))
-		if !strings.HasPrefix(loopDevice, "/dev/loop") || strings.ContainsAny(loopDevice, " \t\n") {
-			return fmt.Errorf("unexpected mounted volume image device %q", loopDevice)
-		}
-		record.LoopDevice = loopDevice
-		return nil
-	}
-	if err := os.MkdirAll(record.MountPath, 0700); err != nil {
-		return err
-	}
-	loopDevice, err := attachDatabaseLoopDevice(ctx, record.ImagePath)
+	h := m.loopHost()
+	path := canonicalLoopPath(record.MountPath)
+	placeholder, err := h.isPlaceholder(path)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if placeholder {
+		if err := h.unmountAll(ctx, path, loopReleaseAttempts); err != nil {
+			return false, fmt.Errorf("remove the read-only placeholder of %s: %w", record.MountPath, err)
+		}
+	}
+	mounted, err := h.isMounted(path)
+	if err != nil {
+		return false, err
+	}
+	loopDevice, err := h.mountImage(ctx, record.ImagePath, record.MountPath, volumeImageMountOptions)
+	if err == nil && loopDevice == "" {
+		err = fmt.Errorf("%s is mounted, but not from a loop device", record.MountPath)
+	}
+	if err != nil {
+		if placeholder {
+			// Keep containers off the bare mount point until the next attempt.
+			if guardErr := h.placeholder(ctx, record.MountPath); guardErr != nil {
+				m.logger.Error("read-only placeholder of a disk-image volume could not be put back", "volume", record.Name, "error", guardErr)
+			}
+		}
+		return false, fmt.Errorf("mount volume storage image: %w", err)
 	}
 	record.LoopDevice = loopDevice
-	if output, err := exec.CommandContext(ctx, "mount", "-o", "noatime,nodev,nosuid", loopDevice, record.MountPath).CombinedOutput(); err != nil {
-		_ = exec.Command("losetup", "-d", loopDevice).Run()
-		record.LoopDevice = ""
-		return fmt.Errorf("mount volume storage image: %w: %s", err, strings.TrimSpace(string(output)))
+	return !mounted, nil
+}
+
+// mountVolume makes a live volume's image mounted. When that replaces the
+// placeholder or the bare mount point, the volume's running containers are
+// restarted onto the image. An image that cannot be mounted gets the
+// read-only placeholder, and the next repair pass tries again.
+func (m *volumeImageManager) mountVolume(ctx context.Context, record *volumeImageRecord) {
+	previous := record.LoopDevice
+	late, err := m.ensureMounted(ctx, record)
+	if err != nil {
+		m.logger.Warn("disk-image volume image could not be mounted; its mount point stays read-only", "volume", record.Name, "error", err)
+		path := canonicalLoopPath(record.MountPath)
+		if mounted, mountErr := m.loopHost().isMounted(path); mountErr == nil && !mounted {
+			if guardErr := m.guardMountPoint(ctx, record.MountPath); guardErr != nil {
+				m.logger.Error("read-only placeholder of a disk-image volume could not be mounted", "volume", record.Name, "error", guardErr)
+			}
+		}
+		return
 	}
-	return nil
+	if late {
+		m.logger.Warn("disk-image volume image was not mounted at boot; mounted it now", "volume", record.Name)
+		m.restartVolumeUsers(ctx, record.Name)
+	}
+	if late || record.LoopDevice != previous {
+		if err := m.saveRecord(*record); err != nil {
+			m.logger.Warn("disk-image volume record could not be saved", "volume", record.Name, "error", err)
+		}
+	}
 }
 
 func (m *volumeImageManager) reconcile(ctx context.Context) error {
@@ -425,34 +462,35 @@ func (m *volumeImageManager) reconcile(ctx context.Context) error {
 		if err := m.ensureFstabEntry(record); err != nil {
 			return fmt.Errorf("persist disk-image volume %q mount: %w", record.Name, err)
 		}
-		mountedAtBoot := mounted(record.MountPath)
-		if err := m.ensureMounted(ctx, &record); err != nil {
-			return fmt.Errorf("restore disk-image volume %q: %w", record.Name, err)
-		}
-		if !mountedAtBoot {
-			m.restartVolumeUsers(ctx, record.Name)
-		}
-		if err := m.saveRecord(record); err != nil {
-			return err
-		}
+		// One volume that cannot be mounted keeps its placeholder; it does not
+		// take the others down.
+		m.mountVolume(ctx, &record)
 	}
 	return nil
 }
 
-// restartVolumeUsers restarts the running containers that use a volume whose
-// image this daemon had to mount itself: the boot-time mount did not happen,
-// so Docker started them on the bare mount point of the root filesystem, and
-// only a restart binds them to the image.
+// restartVolumeUsers moves the running containers of a volume whose image was
+// mounted late onto the image. Docker binds a local volume once for all its
+// containers and keeps that bind (of the placeholder or the bare directory)
+// while any of them runs, so all of them stop before any starts again.
 func (m *volumeImageManager) restartVolumeUsers(ctx context.Context, name string) {
 	containers, err := m.client.cli.ContainerList(ctx, client.ContainerListOptions{Filters: client.Filters{}.Add("volume", name)})
 	if err != nil {
 		m.logger.Warn("containers of a disk-image volume mounted late could not be listed", "volume", name, "error", err)
 		return
 	}
+	var stopped []string
 	for _, item := range containers.Items {
-		m.logger.Warn("container started before its disk-image volume was mounted; restarting it on the volume", "volume", name, "container", item.ID)
-		if err := m.client.RestartContainer(ctx, item.ID, 30); err != nil {
-			m.logger.Warn("container of a disk-image volume mounted late could not be restarted", "volume", name, "container", item.ID, "error", err)
+		if err := m.client.StopContainer(ctx, item.ID, 30); err != nil {
+			m.logger.Warn("container of a disk-image volume mounted late could not be stopped", "volume", name, "container", item.ID, "error", err)
+			continue
+		}
+		stopped = append(stopped, item.ID)
+	}
+	for _, id := range stopped {
+		m.logger.Warn("restarting a container that ran before its disk-image volume was mounted", "volume", name, "container", id)
+		if err := m.client.StartContainer(ctx, id); err != nil {
+			m.logger.Warn("container of a disk-image volume mounted late could not be started", "volume", name, "container", id, "error", err)
 		}
 	}
 }
@@ -470,7 +508,7 @@ func (m *volumeImageManager) resize(ctx context.Context, name string, target int
 	if err := m.ensureCapacity(target - record.CapacityBytes); err != nil {
 		return err
 	}
-	if err := m.ensureMounted(ctx, &record); err != nil {
+	if _, err := m.ensureMounted(ctx, &record); err != nil {
 		return err
 	}
 	if output, err := exec.CommandContext(ctx, "fallocate", "-l", fmt.Sprintf("%d", target), record.ImagePath).CombinedOutput(); err != nil {
@@ -693,6 +731,13 @@ func (m *volumeImageManager) repairLoopImages(ctx context.Context) {
 			return err == nil
 		},
 	}, m.logger)
+	// A volume whose image could not be mounted at boot (or since) gets it as
+	// soon as it can be mounted.
+	for _, record := range records {
+		if !record.Deleting && images[filepath.Base(record.ImagePath)] {
+			m.mountVolume(ctx, &record)
+		}
+	}
 }
 
 // records reads every volume image record; any unreadable record fails the
@@ -734,11 +779,12 @@ func escapeFstabPath(value string) string {
 
 // volumeImageFstabEntryLine mounts the image at boot before Docker starts:
 // nofail keeps a failed mount from blocking the boot but also drops the
-// implicit ordering before local-fs.target, so the ordering against Docker,
-// which would otherwise start containers on the bare mount point, is explicit.
+// implicit ordering before local-fs.target, so the ordering is explicit. The
+// boot step (see MountVolumeImagesAtBoot) runs after these mounts and guards
+// the mount point of any that failed.
 func volumeImageFstabEntryLine(record volumeImageRecord) string {
 	return fmt.Sprintf(
-		"%s %s ext4 loop,noatime,nodev,nosuid,nofail,x-systemd.before=docker.service 0 0",
+		"%s %s ext4 loop,noatime,nodev,nosuid,nofail,x-systemd.before="+volumeImageBootService+".service,x-systemd.before=docker.service 0 0",
 		escapeFstabPath(record.ImagePath),
 		escapeFstabPath(record.MountPath),
 	)
