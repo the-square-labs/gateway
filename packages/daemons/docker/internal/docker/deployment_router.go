@@ -443,6 +443,41 @@ func routerReloadNotReady(output string) bool {
 	return strings.Contains(output, ".pid\" failed")
 }
 
+// deploymentSlotCrashLoopRestarts is how often a slot may restart while it waits for readiness: one restart (a
+// dependency not up yet) is allowed, the second means it crash-loops and readiness fails at once.
+const deploymentSlotCrashLoopRestarts = 2
+
+// deploymentSlotFailure tells why a slot will never become ready: it exited for good, or it restarted
+// deploymentSlotCrashLoopRestarts times since readiness began (firstRestarts is its restart count then). Empty while
+// it may still become ready.
+func deploymentSlotFailure(inspect container.InspectResponse, firstRestarts int) string {
+	state := inspect.State
+	if state == nil {
+		return ""
+	}
+	restarts := inspect.RestartCount - firstRestarts
+	switch {
+	case !state.Running && !state.Restarting && (state.Status == container.StateExited || state.Status == container.StateDead):
+		return fmt.Sprintf("exited (exit code %d)", state.ExitCode)
+	case restarts >= deploymentSlotCrashLoopRestarts:
+		return fmt.Sprintf("is crash-looping (exit code %d, %d restarts)", state.ExitCode, restarts)
+	}
+	return ""
+}
+
+// deploymentContainerIP is the container's address on the network, or empty when it is not attached.
+func deploymentContainerIP(inspect container.InspectResponse, networkName string) string {
+	if inspect.NetworkSettings == nil {
+		return ""
+	}
+	if endpoint := inspect.NetworkSettings.Networks[networkName]; endpoint != nil && endpoint.IPAddress.IsValid() {
+		return endpoint.IPAddress.String()
+	}
+	return ""
+}
+
+// waitDeploymentReady probes the slot's primary route until it answers, and fails at once when the slot exits or
+// crash-loops instead of waiting out the deploy timeout.
 func (c *Client) waitDeploymentReady(ctx context.Context, networkName, containerName string, routes []deploymentRouteConfig, health deploymentHealthConfig) error {
 	primary := routes[0]
 	for _, route := range routes {
@@ -482,9 +517,19 @@ func (c *Client) waitDeploymentReady(ctx context.Context, networkName, container
 	deadline := time.Now().Add(time.Duration(health.DeployTimeoutSeconds) * time.Second)
 	successes := 0
 	client := http.Client{Timeout: time.Duration(health.TimeoutSeconds) * time.Second}
+	firstRestarts := -1
 	for time.Now().Before(deadline) {
-		ip, err := c.containerIP(ctx, containerName, networkName)
-		if err == nil && ip != "" {
+		ip := ""
+		if inspect, err := c.cli.ContainerInspect(ctx, containerName, mobyclient.ContainerInspectOptions{}); err == nil {
+			if firstRestarts < 0 {
+				firstRestarts = inspect.Container.RestartCount
+			}
+			if failure := deploymentSlotFailure(inspect.Container, firstRestarts); failure != "" {
+				return fmt.Errorf("deployment slot %s %s", containerName, failure)
+			}
+			ip = deploymentContainerIP(inspect.Container, networkName)
+		}
+		if ip != "" {
 			url := fmt.Sprintf("http://%s:%d%s", ip, primary.ContainerPort, health.Path)
 			resp, reqErr := client.Get(url)
 			if reqErr == nil {
@@ -542,10 +587,8 @@ func (c *Client) containerIP(ctx context.Context, containerName, networkName str
 	if err != nil {
 		return "", err
 	}
-	if endpoint := insp.Container.NetworkSettings.Networks[networkName]; endpoint != nil {
-		if endpoint.IPAddress.IsValid() {
-			return endpoint.IPAddress.String(), nil
-		}
+	if ip := deploymentContainerIP(insp.Container, networkName); ip != "" {
+		return ip, nil
 	}
 	return "", fmt.Errorf("container %s is not attached to %s", containerName, networkName)
 }
