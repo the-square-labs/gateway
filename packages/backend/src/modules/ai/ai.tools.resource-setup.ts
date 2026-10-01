@@ -268,7 +268,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_additional_secure_link',
     description:
-      'List, create, retry, retarget, or delete Additional Secure Links from a Route to Docker workloads or managed S3 storage. For managed_storage pass managedStorageId; the private relay needs no shared network or published S3 port, and S3 authentication remains required. retarget (bindingId plus the new target fields: upstreamKind and managedStorageId, or the Docker fields) points an existing link at a new target in place, keeping its id and name so the Route config keeps working; moving a managed storage link to another managed storage cluster keeps it active and restores the old cluster if the new one does not answer. Route-owned bindings are managed only through manage_additional_route.',
+      'List, create, retry, retarget, or delete Additional Secure Links from a Route to Docker workloads or managed S3 storage. For managed_storage pass managedStorageId; the private relay needs no shared network or published S3 port, and S3 authentication remains required. A Route config references a link as {{additionalSecureLinks.<name>}}; the value already includes its scheme, so write proxy_pass {{additionalSecureLinks.<name>}}; without a scheme of its own. retarget (bindingId plus the new target fields: upstreamKind and managedStorageId, or the Docker fields) points an existing link at a new target in place, keeping its id and name so the Route config keeps working; moving a managed storage link to another managed storage cluster keeps it active and restores the old cluster if the new one does not answer. Route-owned bindings are managed only through manage_additional_route.',
     parameters: {
       type: 'object',
       properties: {
@@ -335,7 +335,10 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         type: { type: 'string', enum: ['postgres', 'redis', 'clickhouse'] },
         version: { type: 'string', description: 'Exact version returned by catalog.' },
         nodeId: { type: 'string', description: 'Database node ID for create, or optional list filter.' },
-        storageSizeGb: { type: 'number' },
+        storageSizeGb: {
+          type: 'number',
+          description: 'Disk in GB, 0.1 to 16384 with at most one decimal place; an update can only grow it.',
+        },
         cpuCores: { type: 'number' },
         memoryMb: { type: 'number' },
         swapMb: { type: 'number' },

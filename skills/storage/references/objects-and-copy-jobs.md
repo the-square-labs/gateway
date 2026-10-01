@@ -7,7 +7,7 @@
 - `list_buckets`, `list_objects`, `head`;
 - `create_bucket` and `delete_bucket` (`storage:objects:admin`);
 - `create_prefix`, `delete_objects`;
-- `presign`: GET by default, PUT needs `storage:objects:write`; private managed storage refuses it;
+- `presign`: GET by default, PUT needs `storage:objects:write`; private managed storage refuses it unless its S3 endpoint is published, and then the URL points at the published endpoint;
 - `read_object`: small objects only (256 KiB by default, 1 MiB decoded at most, returned as base64). Download anything larger with `download_storage_object`.
 
 Deleting objects or buckets is destructive; confirm the exact bucket and keys with the user first.

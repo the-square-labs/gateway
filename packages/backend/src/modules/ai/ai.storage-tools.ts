@@ -115,7 +115,7 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_storage_objects',
     description:
-      'List buckets/objects, inspect metadata, create or delete a bucket, create a prefix, delete objects, read a small object, or obtain a supported signed URL. delete_bucket takes config.bucket and needs storage:objects:admin. presign takes config.bucket/key, optional config.operation get or put (put needs storage:objects:write), contentType and expiresIn; private managed storage refuses presign. read_object takes config.bucket/key and optional config.maxBytes (default 262144, max 1048576) and returns base64 content; over MCP, download a larger object with download_storage_object.',
+      'List buckets/objects, inspect metadata, create or delete a bucket, create a prefix, delete objects, read a small object, or obtain a supported signed URL. delete_bucket takes config.bucket and needs storage:objects:admin. presign takes config.bucket/key, optional config.operation get or put (put needs storage:objects:write), contentType and expiresIn; private managed storage refuses presign unless its S3 endpoint is published, and then the URL points at the published endpoint. read_object takes config.bucket/key and optional config.maxBytes (default 262144, max 1048576) and returns base64 content; over MCP, download a larger object with download_storage_object.',
     parameters: {
       type: 'object',
       properties: {

@@ -21,7 +21,7 @@ Native PostgreSQL, Redis, and ClickHouse backups use the immutable runner bundle
 
 ## Restore
 
-`restore` creates a **new** managed database by default and refuses a non-empty target. It needs `config.executorNodeId` plus `newManagedDatabaseName` or `restoreTargetConnectionId`, which must be another connection than the source database. An external Redis restore requires the target to reach the executor's service address for temporary replication. `databases:backups:restore` is an OAuth manual-approval scope; run a restore only when the user explicitly asks for one.
+`restore` creates a **new** managed database by default and refuses a non-empty target. It needs `config.executorNodeId` plus `newManagedDatabaseName` or `restoreTargetConnectionId`, which must be another connection than the source database. For a new managed database, `config.storageSizeGb`, `cpuCores`, `memoryMb` and `swapMb` set its size with the limits of create; each defaults to the source managed database. An external Redis restore requires the target to reach the executor's service address for temporary replication. `databases:backups:restore` is an OAuth manual-approval scope; run a restore only when the user explicitly asks for one.
 
 ## Verify backups
 
