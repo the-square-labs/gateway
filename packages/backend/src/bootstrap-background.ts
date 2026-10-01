@@ -380,6 +380,9 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('daemon-update-check', env.UPDATE_CHECK_INTERVAL_HOURS * 3_600_000, () =>
     daemonUpdateCheckJob.run()
   );
+  // The interval restarts with every restart, including the one that finishes a Gateway update,
+  // so check now: daemon releases for the new Gateway show up without waiting hours.
+  setTimeout(() => void daemonUpdateCheckJob.run(), 0);
 
   const housekeepingJob = new HousekeepingJob(housekeepingService);
   const hkConfig = await housekeepingService.getConfig();
