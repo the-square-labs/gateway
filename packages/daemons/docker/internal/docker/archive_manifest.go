@@ -87,6 +87,32 @@ func sanitizeGwcaLabels(labels map[string]string) map[string]string {
 	return result
 }
 
+// validateGwcaNetworks applies the container create network rules to the
+// networks an archive manifest names, which are user input: no host
+// networking, no other container's namespace, none only as the one network,
+// and none of the networks Gateway owns on the node (Secure Links, managed
+// database and storage links), existing or to be created under that name.
+func validateGwcaNetworks(networks []gwcaNetwork) error {
+	named, isolated := 0, false
+	for _, entry := range networks {
+		if entry.Name == "" {
+			continue
+		}
+		named++
+		isolated = isolated || entry.Name == "none"
+		if err := validateUserWorkloadNetworkMode(entry.Name); err != nil {
+			return fmt.Errorf("archive network: %w", err)
+		}
+		if isReservedGatewayNetworkName(entry.Name) {
+			return fmt.Errorf("archive network %q is managed by Gateway and cannot be attached to imported containers", entry.Name)
+		}
+	}
+	if isolated && named > 1 {
+		return fmt.Errorf("archive network none cannot be combined with other networks")
+	}
+	return nil
+}
+
 func buildGwcaContainerManifest(
 	ctx context.Context,
 	p *DockerPlugin,
@@ -291,6 +317,9 @@ func valueOrZero(value *int64) int64 {
 func gwcaManifestToMigration(manifest gwcaContainerManifest, imageID, imageReference, name, migrationID string) (createStoppedContainerRequest, error) {
 	if manifest.SchemaVersion != 1 {
 		return createStoppedContainerRequest{}, fmt.Errorf("unsupported archive container manifest")
+	}
+	if err := validateGwcaNetworks(manifest.Networks); err != nil {
+		return createStoppedContainerRequest{}, err
 	}
 	if strings.TrimSpace(name) == "" {
 		return createStoppedContainerRequest{}, fmt.Errorf("container name is required")

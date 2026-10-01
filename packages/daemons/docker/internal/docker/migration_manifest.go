@@ -190,6 +190,9 @@ func (c *Client) CreateContainerStopped(ctx context.Context, req createStoppedCo
 	if req.MigrationID == "" || manifest.SchemaVersion != 1 || manifest.Config == nil || manifest.HostConfig == nil {
 		return "", fmt.Errorf("unsupported or incomplete migration manifest")
 	}
+	if err := validateStoppedCreateNetworks(manifest.HostConfig, manifest.NetworkingConfig); err != nil {
+		return "", err
+	}
 	if existing, err := c.cli.ContainerInspect(ctx, manifest.Name, mobyclient.ContainerInspectOptions{}); err == nil {
 		if existing.Container.Config != nil && existing.Container.Config.Labels[migrationOwnershipLabel] == req.MigrationID {
 			return existing.Container.ID, nil
@@ -232,6 +235,26 @@ func (c *Client) CreateContainerStopped(ctx context.Context, req createStoppedCo
 		return "", fmt.Errorf("create stopped migration container: %w", err)
 	}
 	return resp.ID, nil
+}
+
+// validateStoppedCreateNetworks keeps a stopped create (a migration target or
+// an archive import) to the networks a user container may join: never the
+// host's or another container's namespace or the Secure Links management
+// network. Managed database networks stay allowed, as for
+// validateUserWorkloadNetworkMode.
+func validateStoppedCreateNetworks(host *container.HostConfig, networking *network.NetworkingConfig) error {
+	if err := validateUserWorkloadNetworkMode(string(host.NetworkMode)); err != nil {
+		return err
+	}
+	if networking == nil {
+		return nil
+	}
+	for name := range networking.EndpointsConfig {
+		if err := validateUserWorkloadNetworkMode(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func applyMigrationCreateImage(config *container.Config, manifest dockerMigrationManifest) error {

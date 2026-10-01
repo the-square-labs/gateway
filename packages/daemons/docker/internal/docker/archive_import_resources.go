@@ -258,6 +258,9 @@ func (p *DockerPlugin) prepareGwcaNetworks(
 	manifest *gwcaContainerManifest,
 ) ([]string, error) {
 	created := make([]string, 0)
+	if err := validateGwcaNetworks(manifest.Networks); err != nil {
+		return created, err
+	}
 	for index := range manifest.Networks {
 		entry := &manifest.Networks[index]
 		if entry.Name == "" {
