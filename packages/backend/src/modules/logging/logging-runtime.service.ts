@@ -5,16 +5,16 @@ import type { LoggingClickHouseService } from './logging-clickhouse.service.js';
 import type { LoggingFeatureService } from './logging-feature.service.js';
 import type { LoggingSettingsInput, LoggingSettingsService } from './logging-settings.service.js';
 export class LoggingRuntimeService {
-  // biome-ignore lint/complexity/noUselessConstructor: Preserve the private factory ABI.
   constructor(
-    _settings: LoggingSettingsService,
+    private readonly settings: LoggingSettingsService,
     _local: LocalClickHouseService,
     _storage: LoggingClickHouseService,
     _feature: LoggingFeatureService
   ) {}
   setLicensePolicyService(_service: LicensePolicyService): void {}
   async initialize(): Promise<void> {}
-  async update(_input: LoggingSettingsInput): Promise<{
+  /** Turning structured logging off needs no private module: setup and settings save it on every edition. */
+  async update(input: LoggingSettingsInput): Promise<{
     password: undefined;
     passwordLast4: string | null;
     mode: import('./logging-settings.service.js').LoggingStorageMode;
@@ -24,7 +24,9 @@ export class LoggingRuntimeService {
     table: string;
     requestTimeoutMs: number;
   }> {
-    return commercialModuleUnavailable();
+    if (input.mode !== 'disabled') return commercialModuleUnavailable();
+    await this.settings.saveConfig(input);
+    return this.settings.getPublicConfig();
   }
   async snapshot(): Promise<import('./logging-settings.service.js').LoggingRuntimeSettings> {
     return {

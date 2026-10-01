@@ -132,7 +132,10 @@ export class SetupWizardService {
         applied.general = general;
       });
       await this.configureAuth(input.auth);
-      await loggingRuntime.update(input.logging);
+      // Keeping structured logging off changes nothing, and Community has no logging runtime to call.
+      if (input.logging.mode !== 'disabled' || loggingSnapshot.mode !== 'disabled') {
+        await loggingRuntime.update(input.logging);
+      }
       if (!administratorCreated) {
         createdAdministratorId = (await this.createAdministrator(input.administrator!)).id;
       }

@@ -773,7 +773,8 @@
         "restore"
       ],
       "sharedMethods": [
-        "snapshot"
+        "snapshot",
+        "update"
       ]
     },
     {

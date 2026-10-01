@@ -132,6 +132,10 @@ function restoreStepWithRequiredSecrets(
   );
 }
 
+function isStructuredLoggingLicensed(config: SetupConfig): boolean {
+  return config.license.status.entitlements.features.includes("structured-logging");
+}
+
 async function setupRequest<T>(
   path: string,
   method = "GET",
@@ -255,6 +259,7 @@ export function SetupWizardPage() {
       database: next.logging.database,
       table: next.logging.table,
       ...(saved?.logging ?? {}),
+      ...(isStructuredLoggingLicensed(next) ? {} : { mode: "disabled" as const }),
       password: "",
     });
     autoOidcRedirect.current = saved?.autoOidcRedirect ?? null;
@@ -599,6 +604,7 @@ export function SetupWizardPage() {
                 busy={busy}
                 hasSavedPassword={Boolean(config?.logging.passwordLast4)}
                 logging={logging}
+                storageLicensed={Boolean(config && isStructuredLoggingLicensed(config))}
                 setLogging={setLogging}
                 onBack={previousStep}
                 onContinue={nextStep}

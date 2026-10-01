@@ -13,6 +13,7 @@ import {
 import { type Dispatch, type SetStateAction, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -309,12 +310,15 @@ export function LoggingStep({
   busy,
   hasSavedPassword,
   logging,
+  storageLicensed,
   setLogging,
   onBack,
   onContinue,
 }: NavigationProps & {
   hasSavedPassword: boolean;
   logging: LoggingDraft;
+  /** Managed local and external storage need a Business license, which setup activates only after this step. */
+  storageLicensed: boolean;
   setLogging: Dispatch<SetStateAction<LoggingDraft>>;
 }) {
   return (
@@ -340,13 +344,25 @@ export function LoggingStep({
               className="w-full"
               variant={logging.mode === option.mode ? "default" : "outline"}
               aria-pressed={logging.mode === option.mode}
+              disabled={option.mode !== "disabled" && !storageLicensed}
               onClick={() => setLogging((value) => ({ ...value, mode: option.mode }))}
             >
               {option.mode === "local" && <Database className="h-4 w-4" />}
               {option.label}
+              {option.mode !== "disabled" && !storageLicensed && (
+                <Badge size="inline" variant="info">
+                  Business
+                </Badge>
+              )}
             </Button>
           ))}
         </div>
+        {!storageLicensed && (
+          <p className="text-center text-sm text-muted-foreground">
+            Structured logs need the Business plan. Activate a license after setup, then turn them
+            on in Settings.
+          </p>
+        )}
         {logging.mode === "external" && (
           <div className="space-y-3">
             <Input
