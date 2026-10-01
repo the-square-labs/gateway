@@ -232,6 +232,39 @@ describe('LicenseService', () => {
     expect(db.rows.get('license:cached_state')).toBe(cache);
   });
 
+  it('keeps the v4 cache a release before v2.11 reads and stores its own state under a new key', async () => {
+    const db = createDb();
+    const legacy = {
+      registrationStatus: 'registered',
+      status: 'valid',
+      plan: 'business',
+      paidPlan: 'business',
+      paidLicenseStatus: 'valid',
+      entitlementsVersion: 4,
+      entitlements: LICENSE_PLAN_ENTITLEMENTS_V4.business,
+      lastCheckedAt: new Date().toISOString(),
+      lastValidAt: new Date().toISOString(),
+      errorMessage: null,
+    };
+    db.rows.set('license:cached_state', legacy);
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    db.rows.set('license:key_encrypted', createCrypto().encryptString('WLT-GW-AAAA-BBBB-CCCC-DDDD'));
+    const fetcher = vi.fn().mockImplementation(() => dataResponse(paidState('business')));
+    const service = createService(db, fetcher);
+
+    // An unsigned cache from an older release is replaced by a signed state at the first heartbeat.
+    await service.heartbeat();
+    expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(['/api/v1/installations/heartbeat']);
+    await expect(service.getStatus()).resolves.toMatchObject({ status: 'valid', plan: 'business' });
+    expect(db.rows.get('license:cached_state_v5')).toMatchObject({ entitlementsVersion: 5, status: 'valid' });
+    // An updater rollback to that release finds its cache as it left it.
+    expect(db.rows.get('license:cached_state')).toBe(legacy);
+
+    // After the rolled-back release wrote its cache again, this release keeps its own signed state.
+    db.rows.set('license:cached_state', { ...legacy, plan: 'community', lastCheckedAt: new Date().toISOString() });
+    await expect(createService(db, vi.fn()).getStatus()).resolves.toMatchObject({ status: 'valid', plan: 'business' });
+  });
+
   it('authorizes an exact private core online and keeps installation credentials out of URLs', async () => {
     const db = createDb();
     db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
@@ -432,8 +465,8 @@ describe('LicenseService', () => {
       .mockImplementationOnce(() => dataResponse(paidState('business')));
     const service = createService(db, fetcher);
     await service.heartbeat();
-    db.rows.set('license:cached_state', {
-      ...(db.rows.get('license:cached_state') as Record<string, unknown>),
+    db.rows.set('license:cached_state_v5', {
+      ...(db.rows.get('license:cached_state_v5') as Record<string, unknown>),
       lastCheckedAt: '2020-01-01T00:00:00.000Z',
     });
 
@@ -549,8 +582,8 @@ describe('LicenseService', () => {
     });
 
     // Clearing the recorded error in the database cannot stretch an old signature.
-    db.rows.set('license:cached_state', {
-      ...(db.rows.get('license:cached_state') as Record<string, unknown>),
+    db.rows.set('license:cached_state_v5', {
+      ...(db.rows.get('license:cached_state_v5') as Record<string, unknown>),
       errorMessage: null,
       lastValidAt: new Date().toISOString(),
     });
@@ -897,7 +930,7 @@ describe('LicenseService', () => {
     const db = createDb();
     const expiresAt = new Date('2026-08-17T12:00:00.000Z');
     vi.setSystemTime(new Date('2026-08-18T12:00:00.001Z'));
-    db.rows.set('license:cached_state', {
+    db.rows.set('license:cached_state_v5', {
       registrationStatus: 'registered',
       status: 'expired_grace',
       plan: 'business',
@@ -1140,8 +1173,8 @@ describe('LicenseService signed states', () => {
 
   it('clamps a forged cache in the database to Community with continuity', async () => {
     const db = await activatedService('personal');
-    const cached = db.rows.get('license:cached_state') as Record<string, unknown>;
-    db.rows.set('license:cached_state', {
+    const cached = db.rows.get('license:cached_state_v5') as Record<string, unknown>;
+    db.rows.set('license:cached_state_v5', {
       ...cached,
       status: 'valid',
       plan: 'enterprise',

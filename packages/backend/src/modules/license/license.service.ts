@@ -46,7 +46,11 @@ const SETTINGS_KEYS = {
   registrationNonceEncrypted: 'license:registration_nonce_encrypted',
   installationTokenEncrypted: 'license:installation_token_encrypted',
   keyEncrypted: 'license:key_encrypted',
-  cachedState: 'license:cached_state',
+  // The cache in this release's entitlement format. Releases before v2.11 read only `license:cached_state`
+  // (entitlements v4), and an updater that rolls back to one restores no database, so that key is read until
+  // this one exists and never written.
+  cachedState: 'license:cached_state_v5',
+  legacyCachedState: 'license:cached_state',
   onboardingCompleted: 'license:onboarding_completed',
 } as const;
 
@@ -207,7 +211,7 @@ export class LicenseService {
   async authorizeCommercialUpdate(hostVersion: string): Promise<CommercialUpdateGrant> {
     commercialVersionKey(hostVersion);
     return this.runSerialized(async () => {
-      const cached = await this.getSetting<Record<string, unknown> | null>(SETTINGS_KEYS.cachedState, null);
+      const cached = await this.getStoredCachedState();
       const credential = await this.ensureRegistered(true, false);
       if (!credential)
         throw new LicenseServerRequestError(
@@ -281,7 +285,7 @@ export class LicenseService {
 
   private async checkNowUnlocked(): Promise<LicenseStatusView> {
     const [legacyCached, encryptedKey, encryptedToken] = await Promise.all([
-      this.getSetting<Record<string, unknown> | null>(SETTINGS_KEYS.cachedState, null),
+      this.getStoredCachedState(),
       this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null),
       this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.installationTokenEncrypted, null),
     ]);
@@ -1110,8 +1114,14 @@ export class LicenseService {
   }
 
   private async getCachedState(): Promise<CachedLicenseState | null> {
-    const value = await this.getSetting<Record<string, unknown> | null>(SETTINGS_KEYS.cachedState, null);
+    const value = await this.getStoredCachedState();
     return value ? this.normalizeCachedState(value) : null;
+  }
+
+  /** The stored cache, or the one a release before v2.11 left until this release writes its own. */
+  private async getStoredCachedState(): Promise<Record<string, unknown> | null> {
+    const value = await this.getSetting<Record<string, unknown> | null>(SETTINGS_KEYS.cachedState, null);
+    return value ?? this.getSetting<Record<string, unknown> | null>(SETTINGS_KEYS.legacyCachedState, null);
   }
 
   private async saveCachedState(state: CachedLicenseState): Promise<void> {
