@@ -8,6 +8,7 @@ import {
   getCreateFolderChoices,
   isCreateFolderAllowed,
 } from "@/components/common/CreateFolderSelect";
+import { ManagedResourceFields } from "@/components/common/ManagedResourceFields";
 import { PanelShell } from "@/components/common/PanelShell";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
@@ -36,6 +37,7 @@ import {
   normalizeManagedDatabaseName,
 } from "@/lib/managed-database-name";
 import { formatBytes, formatDateTime } from "@/lib/utils";
+import { minimumManagedDatabaseMemoryMb } from "@/pages/database-detail/managed-database-capacity";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
@@ -424,6 +426,15 @@ export function DatabaseBackupsTab({
       <RestoreDialog
         run={restoreRun}
         sourceDatabaseName={database.databaseName}
+        sourceResources={
+          database.managed
+            ? {
+                storageSizeGb:
+                  Math.round((Number(database.managed.storageSizeBytes) / 1024 ** 3) * 10) / 10,
+                ...database.managed.runtimeConfig,
+              }
+            : undefined
+        }
         onOpenChange={(open) => !open && setRestoreRun(null)}
         executors={executors}
         onRestore={async (input) => {
@@ -716,9 +727,60 @@ function PolicyDialog({
   );
 }
 
+type RestoreResourceKey = "storageSizeGb" | "cpuCores" | "memoryMb" | "swapMb";
+const RESTORE_RESOURCE_KEYS: RestoreResourceKey[] = [
+  "storageSizeGb",
+  "cpuCores",
+  "memoryMb",
+  "swapMb",
+];
+
+function restoreResourceInputs(source?: Record<RestoreResourceKey, number>) {
+  return Object.fromEntries(
+    RESTORE_RESOURCE_KEYS.map((key) => [
+      key,
+      source && (key === "swapMb" ? source[key] >= 0 : source[key] > 0) ? String(source[key]) : "",
+    ])
+  ) as Record<RestoreResourceKey, string>;
+}
+
+/** The entered size and resources of the new database, or the first field that is not valid. */
+function parsedRestoreResources(
+  inputs: Record<RestoreResourceKey, string>,
+  minimumMemoryMb: number
+): { resources: Partial<Record<RestoreResourceKey, number>> } | { error: string } {
+  const resources: Partial<Record<RestoreResourceKey, number>> = {};
+  for (const key of RESTORE_RESOURCE_KEYS) {
+    const text = inputs[key].trim();
+    if (!text) continue;
+    const value = Number(text);
+    const valid =
+      key === "storageSizeGb"
+        ? value >= 0.1 && Math.abs(value * 10 - Math.round(value * 10)) < 1e-9
+        : key === "cpuCores"
+          ? value >= 0.1
+          : Number.isInteger(value) && value >= (key === "memoryMb" ? minimumMemoryMb : 0);
+    if (!Number.isFinite(value) || !valid) {
+      return {
+        error:
+          key === "storageSizeGb"
+            ? "Storage must be at least 0.1 GB with one decimal at most"
+            : key === "cpuCores"
+              ? "CPU cores must be at least 0.1"
+              : key === "memoryMb"
+                ? `Memory must be a whole number of MB, at least ${minimumMemoryMb}`
+                : "Swap must be a whole number of MB",
+      };
+    }
+    resources[key] = value;
+  }
+  return { resources };
+}
+
 export function RestoreDialog({
   run,
   sourceDatabaseName,
+  sourceResources,
   onOpenChange,
   executors,
   onRestore,
@@ -726,16 +788,28 @@ export function RestoreDialog({
   run: BackupRun | null;
   /** Database name of the source connection, used when the backup manifest does not record one. */
   sourceDatabaseName?: string | null;
+  /** Size and resources of the source managed database: the defaults of the new one. */
+  sourceResources?: Record<RestoreResourceKey, number>;
   onOpenChange: (open: boolean) => void;
   executors: BackupSelectionOption[];
   onRestore: (
     input: Pick<
       BackupRestoreInput,
-      "executorNodeId" | "newManagedDatabaseName" | "targetDatabaseName" | "folderId"
+      | "executorNodeId"
+      | "newManagedDatabaseName"
+      | "targetDatabaseName"
+      | "folderId"
+      | RestoreResourceKey
     >
   ) => Promise<void>;
 }) {
   const [executorNodeId, setExecutorNodeId] = useState("");
+  const [resourceInputs, setResourceInputs] = useState(() =>
+    restoreResourceInputs(sourceResources)
+  );
+  const minimumMemoryMb = minimumManagedDatabaseMemoryMb(run?.engine ?? "postgres");
+  const resourceCheck = parsedRestoreResources(resourceInputs, minimumMemoryMb);
+  const resourceError = "error" in resourceCheck ? resourceCheck.error : null;
   const [newManagedDatabaseName, setNewManagedDatabaseName] = useState("");
   const [folderId, setFolderId] = useState("");
   const scopes = useAuthStore((state) => state.user?.scopes);
@@ -769,25 +843,28 @@ export function RestoreDialog({
     !MANAGED_DATABASE_NAME_PATTERN.test(trimmedTargetDatabaseName)
       ? "Use letters, digits and underscores, starting with a letter or underscore (up to 63 characters)"
       : null;
+  const sourceResourceKey = JSON.stringify(sourceResources ?? null);
   useEffect(() => {
     if (!runId) return;
     setExecutorNodeId("");
     setNewManagedDatabaseName("");
     setFolderId("");
     setTargetDatabaseName(defaultTargetDatabaseName);
+    setResourceInputs(restoreResourceInputs(JSON.parse(sourceResourceKey) ?? undefined));
     void fetchFolders("database");
-  }, [defaultTargetDatabaseName, fetchFolders, runId]);
+  }, [defaultTargetDatabaseName, fetchFolders, runId, sourceResourceKey]);
   const restore = async () => {
     if (!executorNodeId || !newManagedDatabaseName.trim()) {
       toast.error("Choose the Storage node and a name for the new database");
       return;
     }
-    if (targetDatabaseNameError || !destinationAllowed) return;
+    if (targetDatabaseNameError || !destinationAllowed || !("resources" in resourceCheck)) return;
     setRestoring(true);
     try {
       await onRestore({
         executorNodeId,
         newManagedDatabaseName: newManagedDatabaseName.trim(),
+        ...resourceCheck.resources,
         ...(folderId ? { folderId } : {}),
         ...(hasDatabaseName && trimmedTargetDatabaseName
           ? { targetDatabaseName: trimmedTargetDatabaseName }
@@ -874,6 +951,25 @@ export function RestoreDialog({
               </p>
             </div>
           )}
+          <ManagedResourceFields
+            idPrefix="backup-restore"
+            values={resourceInputs}
+            capacity={{}}
+            onChange={(key, value) =>
+              setResourceInputs((current) => ({ ...current, [key]: value }))
+            }
+            minimumMemoryMb={minimumMemoryMb}
+          />
+          <p
+            className={resourceError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}
+          >
+            {resourceError ??
+              (sourceResources
+                ? "Defaults to the size of the source database."
+                : `Empty fields use the defaults: storage three times the backup (at least 20 GB), 1 CPU core, ${
+                    run?.engine === "clickhouse" ? 2048 : 1024
+                  } MB of memory, no swap.`)}
+          </p>
         </div>
         <DialogFooter>
           <Button
@@ -887,7 +983,9 @@ export function RestoreDialog({
           <Button
             type="button"
             pending={restoring}
-            disabled={Boolean(targetDatabaseNameError) || !destinationAllowed}
+            disabled={
+              Boolean(targetDatabaseNameError) || Boolean(resourceError) || !destinationAllowed
+            }
             onClick={() => void restore()}
           >
             Queue restore

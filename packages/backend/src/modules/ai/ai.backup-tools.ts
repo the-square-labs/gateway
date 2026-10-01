@@ -12,7 +12,7 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
     destructive: true,
     invalidateStores: [],
     description:
-      'List native backup policies/history, manage policies (config: destinationId, bucket, prefix, optional staging target, executorNodeId, schedule, timezone, retentionCount, limits, enabled), run or cancel a backup or restore run (config.force ends a run whose executor cannot confirm), restore a verified artifact into an empty target (config: executorNodeId plus newManagedDatabaseName or restoreTargetConnectionId, optional targetDatabaseName and limits; a new managed database is created in config.folderId, which needs databases:create on the Storage node or that folder), and delete_run to remove a finished run from history. When that backup still has files, delete_run needs config.artifacts: "delete" removes the files first (the entry is kept if that fails) and "forget" removes only the entry and leaves the files in storage; ask the user which one before calling. Runtime addresses and credentials are resolved by Gateway.',
+      'List native backup policies/history, manage policies (config: destinationId, bucket, prefix, optional staging target, executorNodeId, schedule, timezone, retentionCount, limits, enabled), run or cancel a backup or restore run (config.force ends a run whose executor cannot confirm), restore a verified artifact into an empty target (config: executorNodeId plus newManagedDatabaseName or restoreTargetConnectionId, optional targetDatabaseName and limits; a new managed database is created in config.folderId, which needs databases:create on the Storage node or that folder, with config.storageSizeGb, cpuCores, memoryMb and swapMb as in managed database create, each defaulting to the value of the source managed instance), and delete_run to remove a finished run from history. When that backup still has files, delete_run needs config.artifacts: "delete" removes the files first (the entry is kept if that fails) and "forget" removes only the entry and leaves the files in storage; ask the user which one before calling. Runtime addresses and credentials are resolved by Gateway.',
     parameters: {
       type: 'object',
       properties: {
@@ -72,6 +72,19 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
               description:
                 'restore with newManagedDatabaseName: folder of the new database (databases:create on the Storage node or this folder).',
             },
+            storageSizeGb: {
+              type: 'number',
+              description: 'restore with newManagedDatabaseName: disk of the new database in GiB (as in create).',
+            },
+            cpuCores: {
+              type: 'number',
+              description: 'restore with newManagedDatabaseName: CPU cores of the new database.',
+            },
+            memoryMb: {
+              type: 'number',
+              description: 'restore with newManagedDatabaseName: memory of the new database.',
+            },
+            swapMb: { type: 'number', description: 'restore with newManagedDatabaseName: swap of the new database.' },
             targetDatabaseName: { type: 'string', description: 'Database name inside the restore target.' },
             restoreTargetConnectionId: { type: 'string' },
             overwrite: { type: 'boolean', enum: [false] },

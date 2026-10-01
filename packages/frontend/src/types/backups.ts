@@ -97,6 +97,11 @@ export interface BackupRestoreInput {
   restoreTargetConnectionId?: string;
   /** Folder of a new managed restore target; null or omitted is the root. */
   folderId?: string | null;
+  /** Size and resources of a new managed restore target; each defaults to the source managed instance's. */
+  storageSizeGb?: number;
+  cpuCores?: number;
+  memoryMb?: number;
+  swapMb?: number;
   overwrite?: false;
   limits?: Partial<BackupLimits>;
 }

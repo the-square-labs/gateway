@@ -32,6 +32,14 @@ export interface BackupRestoreInput {
   restoreTargetConnectionId?: string;
   /** Folder of a new managed restore target; folder-scoped creators must name one they can create in. */
   folderId?: string | null;
+  /**
+   * Size and resources of a new managed restore target, with the names and limits of managed database create. Each
+   * defaults to the source managed instance's value when the backup comes from one.
+   */
+  storageSizeGb?: number;
+  cpuCores?: number;
+  memoryMb?: number;
+  swapMb?: number;
   /** Restore never overwrites an existing nonempty target. */
   overwrite?: false;
   limits?: Partial<BackupLimits>;
