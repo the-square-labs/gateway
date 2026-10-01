@@ -1562,13 +1562,15 @@ export class DockerManagementService {
       return this.parseResult(result);
     };
     return collectDockerRolloutDiagnostics({
+      secretEntries: async (inspect) =>
+        this.secretService ? dockerSecretEnvMatcher(this.secretService, dockerSecretEnvOwners(nodeId, inspect)) : null,
       storedValues: async () => {
-        if (!containerName) return [];
+        if (!containerName) return { environment: [], secrets: [] };
         const [env, secrets] = await Promise.all([
           this.environmentService?.getDecryptedMap(nodeId, containerName),
           this.secretService?.getDecryptedMap(nodeId, containerName),
         ]);
-        return [...Object.values(env ?? {}), ...Object.values(secrets ?? {})];
+        return { environment: Object.values(env ?? {}), secrets: Object.values(secrets ?? {}) };
       },
       inspect: async (timeoutMs) =>
         parseBounded(await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId }, timeoutMs)),
