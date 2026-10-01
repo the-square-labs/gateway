@@ -6,30 +6,30 @@
       "to_id": "8v2nc5jg",
       "relation": "same_workflow",
       "weight": 0.93,
-      "reason": "Both document the Gateway fresh-install and stepwise upgrade workflow, including install.sh, setup APIs, SMTP trust, and RC upgrade behavior.",
+      "reason": "Both document Gateway fresh-install and upgrade E2E flows, including setup APIs, installer behavior, and stepwise release updates.",
       "source": "auto",
-      "created_at": 1790869267663,
-      "updated_at": 1790869267663
+      "created_at": 1790877577022,
+      "updated_at": 1790877577022
+    },
+    {
+      "from_id": "lvklfxgs",
+      "to_id": "acdy69d9",
+      "relation": "same_workflow",
+      "weight": 0.86,
+      "reason": "The release-upgrade workflow explicitly tests license-server reachability modes and paid license behavior covered by this licensing contract.",
+      "source": "auto",
+      "created_at": 1790877577022,
+      "updated_at": 1790877577022
     },
     {
       "from_id": "lvklfxgs",
       "to_id": "02e60mqr",
       "relation": "same_workflow",
-      "weight": 0.67,
-      "reason": "The release-upgrade E2E relies on Gateway and component tag formats and release-channel conventions documented here.",
+      "weight": 0.78,
+      "reason": "The upgrade test targets stable and RC Gateway tags, directly relying on the release tag and component versioning conventions.",
       "source": "auto",
-      "created_at": 1790869267663,
-      "updated_at": 1790869267663
-    },
-    {
-      "from_id": "lvklfxgs",
-      "to_id": "e5deql0f",
-      "relation": "same_workflow",
-      "weight": 0.54,
-      "reason": "The E2E workflow invokes the installer and node setup scripts, whose Docker provisioning behavior is documented here.",
-      "source": "auto",
-      "created_at": 1790869267663,
-      "updated_at": 1790869267663
+      "created_at": 1790877577022,
+      "updated_at": 1790877577022
     }
   ]
 }
