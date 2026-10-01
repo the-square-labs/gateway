@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { and, count, desc, eq, ilike, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import type { BasicAuthUser } from '@/db/schema/access-lists.js';
-import { accessLists, pageProjects } from '@/db/schema/index.js';
+import { accessLists, nodes, pageProjects } from '@/db/schema/index.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
@@ -473,12 +473,13 @@ export class AccessListService {
     logger.debug('Htpasswd deployed to nodes', { accessListId, nodeCount: nodeIds.length });
   }
 
+  /**
+   * Remove the list's credentials once no route config references them (basic auth turned off, or the list
+   * deleted) from every connected Nginx node: a node keeps them from routes that moved away or dropped the list
+   * earlier, so the routes using the list now do not name every node that holds them. A node that is not connected
+   * drops them in its reconnect sync, which removes the credentials no config of the node references.
+   */
   private async removeHtpasswd(accessListId: string): Promise<void> {
-    const hostsUsingList = await this.db
-      .select({ nodeId: proxyHosts.nodeId, ingressGroupId: proxyHosts.ingressGroupId })
-      .from(proxyHosts)
-      .where(eq(proxyHosts.accessListId, accessListId));
-
     // Pages previews render the same htpasswd file on their Project's node(s);
     // removing it there would break a protected preview.
     const pagesUsingList = await this.db.query.pageProjects.findMany({
@@ -489,9 +490,10 @@ export class AccessListService {
       pagesUsingList.flatMap((project) => [project.nodeId, project.migrationTargetNodeId]).filter(Boolean)
     );
 
-    const nodeIds = [
-      ...new Set([...(await resolveIngressNodesForMany(this.db, hostsUsingList)).values()].flat()),
-    ].filter((nodeId) => !pagesNodeIds.has(nodeId));
+    const nginxNodes = await this.db.select({ id: nodes.id }).from(nodes).where(eq(nodes.type, 'nginx'));
+    const nodeIds = nginxNodes
+      .map((node) => node.id)
+      .filter((nodeId) => !pagesNodeIds.has(nodeId) && this.nodeDispatch.isNodeConnected(nodeId));
 
     for (const nodeId of nodeIds) {
       try {
