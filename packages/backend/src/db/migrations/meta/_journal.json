@@ -1555,6 +1555,13 @@
       "when": 1790820291165,
       "tag": "0221_page_preview_hash_default",
       "breakpoints": true
+    },
+    {
+      "idx": 222,
+      "version": "7",
+      "when": 1790881350561,
+      "tag": "0222_managed_link_session_capacity",
+      "breakpoints": true
     }
   ]
 }

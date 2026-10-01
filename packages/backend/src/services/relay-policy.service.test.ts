@@ -787,6 +787,7 @@ describe('RelayPolicyService snapshots', () => {
           expect.objectContaining({
             routeId: 'route-1',
             generation: '4',
+            maxConcurrentSessions: 64,
             disableIdleTimeout: false,
             trafficClass: 'database',
           }),
