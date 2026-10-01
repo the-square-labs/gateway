@@ -533,7 +533,8 @@ func composeSidecarCommands(request composeRequest) ([][]string, error) {
 	if request.noStart {
 		switch request.action {
 		case "apply":
-			return [][]string{{"up", "--no-start", "--no-build", "--pull", "never"}}, nil
+			// Images already on the node stay as they are; only a missing one is fetched.
+			return [][]string{{"up", "--no-start", "--no-build", "--pull", "missing"}}, nil
 		case "pull_apply":
 			return [][]string{{"pull"}, {"up", "--no-start", "--no-build", "--pull", "never"}}, nil
 		case "start":
@@ -544,7 +545,8 @@ func composeSidecarCommands(request composeRequest) ([][]string, error) {
 	}
 	switch request.action {
 	case "apply":
-		return [][]string{{"up", "--detach", "--no-build", "--pull", "never"}}, nil
+		// Images already on the node stay as they are; only a missing one is fetched.
+		return [][]string{{"up", "--detach", "--no-build", "--pull", "missing"}}, nil
 	case "pull_apply":
 		return [][]string{{"pull"}, {"up", "--detach", "--no-build", "--pull", "never"}}, nil
 	case composeActionPullCreate:

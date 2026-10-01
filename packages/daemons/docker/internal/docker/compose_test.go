@@ -378,7 +378,7 @@ func TestReservedRulesBlockStartsButNotStopOrDown(t *testing.T) {
 
 func TestComposeSidecarCommandsPreservePullAndVolumesSemantics(t *testing.T) {
 	apply, err := composeSidecarCommands(composeRequest{action: "apply"})
-	if err != nil || len(apply) != 1 || strings.Join(apply[0], " ") != "up --detach --no-build --pull never" {
+	if err != nil || len(apply) != 1 || strings.Join(apply[0], " ") != "up --detach --no-build --pull missing" {
 		t.Fatalf("apply commands = %#v, %v", apply, err)
 	}
 	pullApply, err := composeSidecarCommands(composeRequest{action: "pull_apply"})
