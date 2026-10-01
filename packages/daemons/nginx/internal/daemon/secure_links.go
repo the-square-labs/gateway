@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
@@ -410,12 +411,44 @@ func duplicateTCPListener(listener net.Listener) (net.Listener, error) {
 	if !ok {
 		return nil, errors.New("source listener is not TCP")
 	}
-	file, err := tcpListener.File()
+	file, err := listenerFile(tcpListener, "secure-link-listener")
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 	return net.FileListener(file)
+}
+
+// listenerFile returns a copy of a listener's descriptor whose Fd leaves the
+// socket's blocking mode alone. The File method of a net listener returns a
+// file whose Fd switches the descriptor to blocking mode (net.FileListener
+// calls it), and the mode belongs to the socket every copy shares: the
+// listener's own accept loop could then enter a blocking accept() and Close
+// would wait for the next connection, forever on an idle link, while sync
+// holds the manager. A file made by os.NewFile from a plain dup keeps the
+// mode (as listenerkeep does).
+func listenerFile(listener syscall.Conn, name string) (*os.File, error) {
+	raw, err := listener.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	duplicated := -1
+	var dupErr error
+	syscall.ForkLock.RLock()
+	controlErr := raw.Control(func(fd uintptr) {
+		duplicated, dupErr = syscall.Dup(int(fd))
+		if dupErr == nil {
+			syscall.CloseOnExec(duplicated)
+		}
+	})
+	syscall.ForkLock.RUnlock()
+	if controlErr != nil {
+		return nil, controlErr
+	}
+	if dupErr != nil {
+		return nil, dupErr
+	}
+	return os.NewFile(uintptr(duplicated), name), nil
 }
 
 func (m *sourceLinkManager) create(id string, generation uint64, port uint32, socketOnly bool) (*sourceLinkBinding, error) {
@@ -597,7 +630,7 @@ func keepUnixListener(listener net.Listener, socketPath string) string {
 	if err != nil {
 		return ""
 	}
-	file, err := unixListener.File()
+	file, err := listenerFile(unixListener, socketPath)
 	if err != nil {
 		return ""
 	}

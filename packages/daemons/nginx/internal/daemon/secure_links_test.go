@@ -14,6 +14,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -157,6 +160,95 @@ func TestSourceLinkManagerRawRotationPreservesTCPPort(t *testing.T) {
 		t.Fatalf("preserved raw TCP listener is unreachable: %v", err)
 	}
 	_ = connection.Close()
+}
+
+// A raw link's rotation duplicates its TCP listener while the listener's
+// accept loop runs. The duplicate must never switch the socket all copies
+// share to blocking mode, not even briefly: an accept() entered meanwhile
+// blocks in the kernel, and Close then waits for the next connection, forever
+// on an idle link, while sync holds the manager. 200 duplications under
+// accept load, the socket's mode watched throughout, then a time-bounded
+// Close.
+func TestDuplicateTCPListenerKeepsTheAcceptLoopClosable(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := listener.(*net.TCPListener).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan struct{})
+	go func() {
+		defer close(accepted)
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = connection.Close()
+		}
+	}()
+	var sawBlocking atomic.Bool
+	stop := make(chan struct{})
+	var load sync.WaitGroup
+	load.Add(2)
+	go func() {
+		defer load.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if connection, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second); err == nil {
+				_ = connection.Close()
+			}
+		}
+	}()
+	go func() {
+		defer load.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = raw.Control(func(fd uintptr) {
+				flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0)
+				if errno == 0 && flags&syscall.O_NONBLOCK == 0 {
+					sawBlocking.Store(true)
+				}
+			})
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		duplicate, err := duplicateTCPListener(listener)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = duplicate.Close()
+	}
+	close(stop)
+	load.Wait()
+	closed := make(chan struct{})
+	go func() {
+		_ = listener.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		// Free an accept() stuck in blocking mode so the test can end.
+		if connection, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second); err == nil {
+			_ = connection.Close()
+		}
+		t.Fatal("closing the listener hung on an accept() in blocking mode")
+	}
+	<-accepted
+	if sawBlocking.Load() {
+		t.Fatal("duplicating the listener switched its socket to blocking mode")
+	}
 }
 
 func TestSourceLinkManagerRollbackRestoresCanonicalSocketWhenMoveBackFails(t *testing.T) {
