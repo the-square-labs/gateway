@@ -49,7 +49,16 @@ const (
 	deploymentRouterRepairInterval = time.Minute
 	// A repair that keeps failing the same way is logged again after this.
 	deploymentRouterRepairRepeatLog = 15 * time.Minute
+	// deploymentRouterRepairAfterOperationWait bounds how long a repair waits for the deployment operation that held
+	// its deployment (a rollout waits out its deploy timeout, an image pull its download); the periodic repair covers
+	// a longer one.
+	deploymentRouterRepairAfterOperationWait = 15 * time.Minute
 )
+
+// errDeploymentRouterRepairWaits: a deployment operation held the deployment for the whole lock wait. That is no
+// failure: the operation brings the router back itself (start, restart, deploy and switch all ensure it) or stops it
+// on purpose, and the repair looks at the deployment again once the operation is done.
+var errDeploymentRouterRepairWaits = errors.New("a deployment operation holds the deployment")
 
 // deploymentRouterRepair is one router the repair changed.
 type deploymentRouterRepair struct {
@@ -137,11 +146,12 @@ func (m *deploymentMembers) repairable(include func(apps []ContainerInfo) bool) 
 
 // repairServingDeploymentRouters makes the router of every serving deployment
 // in scope run with the current shape. One deployment failing does not stop
-// the others.
-func (c *Client) repairServingDeploymentRouters(ctx context.Context, scope deploymentRouterRepairScope, lock deploymentRouterLock) ([]deploymentRouterRepair, error) {
+// the others. waiting are the deployments a running operation held: they are
+// repaired once it is done.
+func (c *Client) repairServingDeploymentRouters(ctx context.Context, scope deploymentRouterRepairScope, lock deploymentRouterLock) (repairs []deploymentRouterRepair, waiting []string, err error) {
 	containers, err := c.ListContainers(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var deploymentIDs []string
 	for deploymentID, members := range groupDeploymentMembers(containers) {
@@ -150,10 +160,13 @@ func (c *Client) repairServingDeploymentRouters(ctx context.Context, scope deplo
 		}
 	}
 	sort.Strings(deploymentIDs)
-	var repairs []deploymentRouterRepair
 	var errs []error
 	for _, deploymentID := range deploymentIDs {
 		repair, err := c.repairDeploymentRouter(ctx, deploymentID, scope, lock)
+		if errors.Is(err, errDeploymentRouterRepairWaits) {
+			waiting = append(waiting, deploymentID)
+			continue
+		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("deployment %s: %w", deploymentID, err))
 			continue
@@ -162,7 +175,7 @@ func (c *Client) repairServingDeploymentRouters(ctx context.Context, scope deplo
 			repairs = append(repairs, repair)
 		}
 	}
-	return repairs, errors.Join(errs...)
+	return repairs, waiting, errors.Join(errs...)
 }
 
 func (c *Client) repairDeploymentRouter(ctx context.Context, deploymentID string, scope deploymentRouterRepairScope, lock deploymentRouterLock) (deploymentRouterRepair, error) {
@@ -170,6 +183,10 @@ func (c *Client) repairDeploymentRouter(ctx context.Context, deploymentID string
 	if lock != nil {
 		unlock, err := lock(ctx, deploymentID)
 		if err != nil {
+			if ctx.Err() == nil {
+				// The lock wait ran out, not the repair.
+				return repair, errDeploymentRouterRepairWaits
+			}
 			return repair, fmt.Errorf("wait for the running deployment operation: %w", err)
 		}
 		defer unlock()
@@ -609,11 +626,49 @@ func (p *DockerPlugin) runDeploymentRouterRepair(policyID string, timeout time.D
 		defer cancelLock()
 		return p.lockDeployment(lockCtx, deploymentID)
 	}
-	repairs, err := p.client.repairServingDeploymentRouters(ctx, scope, lock)
+	repairs, waiting, err := p.client.repairServingDeploymentRouters(ctx, scope, lock)
 	for _, repair := range repairs {
 		p.logger.Info("deployment router brought back", "deployment_id", repair.DeploymentID, "router", repair.Router, "action", repair.Action, "policy_id", policyID)
 	}
+	for _, deploymentID := range waiting {
+		p.logger.Debug("deployment router repair waits for the running deployment operation", "deployment_id", deploymentID, "policy_id", policyID)
+		p.repairDeploymentRouterAfterOperation(deploymentID, policyID, scope)
+	}
 	return err
+}
+
+// repairDeploymentRouterAfterOperation repairs the router of a deployment as soon as the operation that holds it is
+// done. One repair waits per deployment; the periodic repair finds a deployment again if this one gives up.
+func (p *DockerPlugin) repairDeploymentRouterAfterOperation(deploymentID, policyID string, scope deploymentRouterRepairScope) {
+	p.deploymentOpMu.Lock()
+	if p.routerRepairsWaiting[deploymentID] {
+		p.deploymentOpMu.Unlock()
+		return
+	}
+	if p.routerRepairsWaiting == nil {
+		p.routerRepairsWaiting = map[string]bool{}
+	}
+	p.routerRepairsWaiting[deploymentID] = true
+	p.deploymentOpMu.Unlock()
+	go func() {
+		defer func() {
+			p.deploymentOpMu.Lock()
+			delete(p.routerRepairsWaiting, deploymentID)
+			p.deploymentOpMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), deploymentRouterRepairAfterOperationWait)
+		defer cancel()
+		repair, err := p.client.repairDeploymentRouter(ctx, deploymentID, scope, p.lockDeployment)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			p.logger.Debug("deployment router repair gave up waiting for the deployment operation; retried every minute",
+				"deployment_id", deploymentID, "policy_id", policyID, "error", err)
+		case err != nil:
+			p.logger.Warn("deployment router repair incomplete; retried every minute", "deployment_id", deploymentID, "policy_id", policyID, "error", err)
+		case repair.Action != "":
+			p.logger.Info("deployment router brought back", "deployment_id", repair.DeploymentID, "router", repair.Router, "action", repair.Action, "policy_id", policyID)
+		}
+	}()
 }
 
 // repairDeploymentRouters runs a repair and logs a failure; the periodic

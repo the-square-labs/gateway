@@ -37,6 +37,10 @@ type DockerPlugin struct {
 	deploymentOps   map[string]map[uint64]deploymentOperation
 	deploymentLocks map[string]*deploymentLock
 	deploymentOpSeq uint64
+
+	// routerRepairsWaiting are the deployments whose router repair waits for a running operation (deploymentOpMu).
+	routerRepairsWaiting map[string]bool
+
 	registryMu      sync.RWMutex
 	registryCreds   map[string]string // registry URL -> base64-encoded auth
 	statsCollector  *StatsCollector
