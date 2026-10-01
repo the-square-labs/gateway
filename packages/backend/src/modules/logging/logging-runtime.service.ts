@@ -1,12 +1,14 @@
+import { container } from '@/container.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { LocalClickHouseService } from './local-clickhouse.service.js';
 import type { LoggingClickHouseService } from './logging-clickhouse.service.js';
 import type { LoggingFeatureService } from './logging-feature.service.js';
-import type { LoggingSettingsInput, LoggingSettingsService } from './logging-settings.service.js';
+import { type LoggingSettingsInput, LoggingSettingsService } from './logging-settings.service.js';
 export class LoggingRuntimeService {
+  // biome-ignore lint/complexity/noUselessConstructor: Preserve the private factory ABI.
   constructor(
-    private readonly settings: LoggingSettingsService,
+    _settings: LoggingSettingsService,
     _local: LocalClickHouseService,
     _storage: LoggingClickHouseService,
     _feature: LoggingFeatureService
@@ -25,8 +27,10 @@ export class LoggingRuntimeService {
     requestTimeoutMs: number;
   }> {
     if (input.mode !== 'disabled') return commercialModuleUnavailable();
-    await this.settings.saveConfig(input);
-    return this.settings.getPublicConfig();
+    // Resolved rather than kept, so the class keeps the shape the private module implements.
+    const settings = container.resolve(LoggingSettingsService);
+    await settings.saveConfig(input);
+    return settings.getPublicConfig();
   }
   async snapshot(): Promise<import('./logging-settings.service.js').LoggingRuntimeSettings> {
     return {
