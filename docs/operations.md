@@ -193,6 +193,7 @@ Important behavior:
 - Creation scopes (`*:create*`, `docker:images:pull`, `ssl:cert:issue`, `pki:cert:issue`) imply no view.
 - Sensitive reveal or export operations require explicit scopes.
 - API tokens are not accepted by the MCP endpoint.
+- **Limit selected scopes to folder…** in the token's scope editor (and on the OAuth consent screen) narrows the selected scopes to one folder and its subfolders. A token's folder and node grants are expanded first and then bounded by the owner's current permissions, so a token never reaches a resource its owner cannot.
 
 API tokens and OAuth grants can do everything a user can do with Gateway resources, including node enrollment and global nginx config, raw route config, users and permission groups, Gateway and environment settings, integration and hosting connectors, hosting VMs, inference administration, relay drain/rebalance/force-disconnect, and updates. They can also manage the owner's personal `gwi_` inference keys when they hold `feat:ai:use`. They cannot carry the user-only AI Workspace, AI sandbox, and `mcp:use` scopes, `admin:users:impersonate`, or `integrations:gitlab:sandbox:clone`, and they cannot call browser/identity-bound routes: sign-in, password, MFA, passkeys, the caller's own sessions and preferences, starting impersonation, OAuth consent, API token and OAuth authorization management, per-user Git credentials, AI Workspace chat, UI bootstrap, and the post-setup onboarding checklist. See [SCOPES.md](../SCOPES.md#api-token-delegation).
 
@@ -247,6 +248,21 @@ The same scoped automation surface includes managed database provisioning and co
 MCP clients can read the same permission-filtered internal operator documentation used by AI Workspace through `read_gateway_documentation` or the `gateway://docs` resource tree. General topics are available to any valid MCP authorization; subsystem topics are listed and readable only when the delegated OAuth scopes grant that subsystem.
 
 Extended compatibility can expose hundreds of schemas. Disable it only for clients that correctly handle `notifications/tools/list_changed` and need the smaller discovery-driven context.
+
+### Access Summary, Skills, And Idempotent Retries
+
+`GET /api/auth/me/access` summarizes what the caller can reach, grouped by product area: broad access, or the granted folders (with their paths), nodes, accounts, and single resources with their actions, and where the caller may create. API tokens and OAuth grants are reported as bounded by their owner's current access. MCP clients get the same summary from the `get_my_access` tool, which is always listed, and the `gateway://access` resource; when a connection's access is limited, a short form of it is also part of the MCP server instructions. Folder-, node-, and resource-limited access is normal: work inside the listed grants and pass `folderId` (and `nodeId`) when creating.
+
+The MCP endpoint also serves the agent skills shipped with this Gateway release as `gateway://skills/<name>` resources and `skill-<name>` prompts, so a connected agent reads the version that matches the installation.
+
+Create operations marked in the API reference accept an optional `Idempotency-Key` header (1 to 255 printable ASCII characters, for example a UUID). The key is bound to the token or browser session, its current scopes, the method, and the path, and results are kept encrypted for 24 hours:
+
+- the same key and the same request replay the stored response with `Idempotency-Replayed: true`;
+- the same key with a different request returns `422 IDEMPOTENCY_KEY_REUSED`;
+- a retry while the first request still runs returns `409 IDEMPOTENCY_KEY_IN_PROGRESS` with `Retry-After`;
+- a completed request whose response was not stored (it looked secret or was over 1 MiB) returns `409 IDEMPOTENCY_RESPONSE_WITHHELD`; look the resource up instead of retrying.
+
+Operations that return a secret once (tokens, enrollment, keys, credentials) never take the header. MCP create tools take an `idempotencyKey` argument on the same mechanism, scoped to the MCP token and tool, except tools whose result carries a secret; their codes are `IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_KEY_IN_PROGRESS`, and `IDEMPOTENCY_RESULT_WITHHELD`.
 
 ### Scope Rules
 

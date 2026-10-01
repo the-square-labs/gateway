@@ -387,7 +387,9 @@ REST API routes accept browser sessions, `gw_` API tokens, and `gwo_` OAuth toke
 
 API tokens and MCP agents can perform every resource and management operation their delegated scopes allow, including node enrollment and config, user and group administration, Gateway settings, integrations, hosting, inference administration, and personal inference keys. Only AI Workspace chat and sandbox access, impersonation, OAuth consent, API token and OAuth authorization minting, and the caller's own sign-in, MFA, and session management remain browser-only.
 
-Gateway MCP exposes permission-filtered operator documentation through `read_gateway_documentation` and the `gateway://docs` resource tree. General topics are readable by any valid MCP authorization; subsystem topics require the corresponding delegated OAuth scope. Extended compatibility lists every granted tool by default, while discovery mode can be enabled for clients that correctly refresh `tools/list` after `notifications/tools/list_changed`.
+Callers can see what they can reach with `GET /api/auth/me/access`, and MCP agents with the always-listed `get_my_access` tool and the `gateway://access` resource. Create operations marked in the API reference accept an `Idempotency-Key` header, and MCP create tools an `idempotencyKey` argument, so a retry after a timeout does not create a second resource (see [Access Summary, Skills, And Idempotent Retries](operations.md#access-summary-skills-and-idempotent-retries)).
+
+Gateway MCP exposes permission-filtered operator documentation through `read_gateway_documentation` and the `gateway://docs` resource tree. It also serves the agent skills of the installed release as `gateway://skills` resources and `skill-<name>` prompts. General topics are readable by any valid MCP authorization; subsystem topics require the corresponding delegated OAuth scope. Extended compatibility lists every granted tool by default, while discovery mode can be enabled for clients that correctly refresh `tools/list` after `notifications/tools/list_changed`.
 
 For scope rules and delegation details, see [SCOPES.md](../SCOPES.md).
 

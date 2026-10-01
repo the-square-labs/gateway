@@ -122,6 +122,8 @@ Authorization uses granular scopes:
 - API tokens and OAuth grants cannot exceed the owning user's current effective scopes.
 - MCP access requires the owning user to have the `mcp:use` capability.
 - Resource-scoped grants can limit access to a specific node, Docker container or deployment, ingress route (`proxy_host` in API identifiers), database, logging environment, schema, or similar resource.
+- Folder grants (`<scope>:folder/<folderId>`) cover a folder, its subfolders, and every resource inside them, and nothing outside; node-bound families and every creation scope also accept `<scope>:node/<nodeId>`. API tokens and OAuth/MCP grants expand their own folder and node grants first and are then bounded by the owner's current permissions, so a token never reaches a resource its owner cannot (see [Scope Evaluation Behavior](../SCOPES.md#scope-evaluation-behavior)).
+- Git integration scopes can be limited to one connected account and, below it, to GitLab groups and projects or GitHub owners and repositories (see [Git Integration Restrictions](../SCOPES.md#git-integration-restrictions)).
 - External Docker clients use ordinary Gateway API tokens with `docker:registries:internal:pull` and `docker:registries:internal:push`; either scope can be narrowed to selected internal repository names.
 - Creation scopes (`*:create*`, `docker:images:pull`, `ssl:cert:issue`, `pki:cert:issue`) imply no view. Every other action scope, including delete, implies its family's view scope with the same qualifier, so resource-scoped grants stay bounded to the same resource (see [SCOPES.md](../SCOPES.md#scope-evaluation-behavior)).
 
