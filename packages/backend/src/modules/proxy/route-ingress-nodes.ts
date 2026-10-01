@@ -38,7 +38,8 @@ function hasFolderRouteCreationGrant(scopes: readonly string[]): boolean {
 }
 
 /**
- * Ingress nodes the caller may create routes on. Nodes locked for new services are never eligible.
+ * Ingress nodes the caller may create routes on. Nodes locked for new services and pending nodes (their daemon
+ * never connected, so a route there could not be applied) are never eligible.
  * - `folderId` given (null = root): the nodes a route in that folder may use: every node for a broad
  *   grant or a grant on that folder, otherwise the nodes of node-qualified grants.
  * - `folderId` omitted: any destination the caller holds: broad and folder grants may place on every
@@ -49,7 +50,7 @@ export function routeIngressNodesForScopes<T extends RouteIngressNodeCandidate>(
   scopes: readonly string[],
   folderId?: string | null
 ): T[] {
-  const open = nodes.filter((node) => !node.serviceCreationLocked);
+  const open = nodes.filter((node) => !node.serviceCreationLocked && node.status !== 'pending');
   if (folderId === undefined && (hasScope(scopes, 'proxy:create') || hasFolderRouteCreationGrant(scopes))) {
     return open;
   }
