@@ -1,8 +1,9 @@
 name: Release
 
 # A Gateway tag only promotes the image built for its commit on main (workflow Image): it
-# stamps the version and the backup runner, signs the digest and publishes the release.
-# Main CI already ran the light suite on the commit; stable tags add the backup-runner smoke.
+# stamps the version and the backup runner, signs the digest, packages the commercial core and
+# publishes the release. Main CI already ran the light suite on the commit; stable tags add the
+# backup-runner smoke before the image becomes :latest.
 on:
   push:
     tags:
@@ -30,7 +31,8 @@ jobs:
       endsWith(github.ref_name, '-docker') || endsWith(github.ref_name, '-monitoring') ||
       endsWith(github.ref_name, '-watchdog')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The commercial core run, with its own verification when the CI marker is missing, is part of it.
+    timeout-minutes: 90
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -119,25 +121,22 @@ jobs:
           echo "::error::Images for ${SHA} did not appear within 20 minutes" >&2
           exit 1
 
+      # Only the version tags: :latest follows once the release is complete.
       - name: Stamp and push the release image
         id: image
         env:
           BASE_IMAGE: ${{ steps.images.outputs.base }}
           RUNNER_IMAGE: ${{ steps.images.outputs.runner }}
-          RELEASE_PRERELEASE: ${{ steps.tag.outputs.prerelease }}
         run: |
           context="${RUNNER_TEMP}/stamp"
           mkdir -p "$context"
           node scripts/bundle-backup-runner.mjs "$GITHUB_REF_NAME" "$RUNNER_IMAGE" "${context}/backup-runner-image.json"
-          tags=(--tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" --tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}")
-          if [[ "$RELEASE_PRERELEASE" != "true" ]]; then
-            tags+=(--tag "${GATEWAY_IMAGE}:latest")
-          fi
           docker buildx build \
             --file docker/release.Dockerfile \
             --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
             --build-arg "APP_VERSION=${GITHUB_REF_NAME}" \
-            "${tags[@]}" \
+            --tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME}" \
+            --tag "${GATEWAY_IMAGE}:${GITHUB_REF_NAME#v}" \
             --provenance=false \
             --sbom=false \
             --metadata-file "${RUNNER_TEMP}/image.metadata.json" \
@@ -178,7 +177,7 @@ jobs:
               --out ../../gateway-image.update.json
           )
 
-      - name: Publish GitHub release
+      - name: Prepare the draft GitHub release
         env:
           RELEASE_PRERELEASE: ${{ steps.tag.outputs.prerelease }}
         run: |
@@ -213,25 +212,55 @@ jobs:
           for asset in "${assets[@]}"; do
             grep -Fxq "$(basename "$asset")" <<<"$uploaded"
           done
-          gh release edit "$GITHUB_REF_NAME" --draft=false
 
-      # Packages the commercial core against this exact release; the license server installs it
-      # once packaged. Needs COMMERCIAL_CI_TOKEN (actions:write on the commercial repository).
+      # Packages the commercial core against this exact release and waits for it: that run installs
+      # the core on the license server, so paid installs can update as soon as the release is public.
+      # Needs COMMERCIAL_CI_TOKEN (actions:write on the commercial repository).
       - name: Package the commercial core
-        if: ${{ steps.tag.outputs.prerelease == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.COMMERCIAL_CI_TOKEN }}
+          COMMERCIAL_REPOSITORY: ${{ github.repository_owner }}/gateway-commercial
         run: |
-          if [[ -z "$GH_TOKEN" ]]; then
-            echo "::warning::COMMERCIAL_CI_TOKEN is not set; dispatch the commercial release by hand"
-            exit 0
-          fi
-          gh workflow run release.yml \
-            --repo "${GITHUB_REPOSITORY_OWNER}/gateway-commercial" \
-            --ref main \
+          test -n "$GH_TOKEN" || { echo '::error::COMMERCIAL_CI_TOKEN is not set' >&2; exit 1; }
+          title="Package commercial core ${GITHUB_REF_NAME}"
+          since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh workflow run release.yml --repo "$COMMERCIAL_REPOSITORY" --ref main \
             -f "host_ref=${GITHUB_REF_NAME}" \
             -f "host_version=${GITHUB_REF_NAME}" \
             -f publish=true
+          run_id=
+          for _ in $(seq 1 30); do
+            run_id=$(
+              gh run list --repo "$COMMERCIAL_REPOSITORY" --workflow release.yml --event workflow_dispatch -L 20 \
+                --json databaseId,displayTitle,createdAt \
+                --jq "[.[] | select(.displayTitle == \"${title}\" and .createdAt >= \"${since}\")][0].databaseId // empty"
+            )
+            [[ -n "$run_id" ]] && break
+            sleep 2
+          done
+          test -n "$run_id" || { echo '::error::The commercial core run did not start' >&2; exit 1; }
+          echo "Commercial core run ${run_id} (private)"
+          if ! gh run watch "$run_id" --repo "$COMMERCIAL_REPOSITORY" --interval 10 --exit-status > /dev/null; then
+            echo "::error::The commercial core run ${run_id} failed; the release stays a draft" >&2
+            exit 1
+          fi
+
+      - name: Point latest at the release image
+        if: ${{ steps.tag.outputs.prerelease != 'true' }}
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: docker buildx imagetools create --tag "${GATEWAY_IMAGE}:latest" "${GATEWAY_IMAGE}@${DIGEST}"
+
+      # A stable Gateway release is the repository's Latest: releases/latest/download serves its installers.
+      - name: Publish GitHub release
+        env:
+          RELEASE_PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+        run: |
+          if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          fi
 
   component-release:
     name: Component release
