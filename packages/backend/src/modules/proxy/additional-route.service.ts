@@ -22,7 +22,7 @@ import {
   type ProxyHostRow,
   readInput,
 } from './additional-route.service.shared.js';
-import { normalizeAdditionalRoutePath } from './additional-route.validation.js';
+import { additionalRouteAdvancedConfigErrors, normalizeAdditionalRoutePath } from './additional-route.validation.js';
 import { supportsAdditionalRoutesTemplate } from './additional-route-template.js';
 import type { CreateProxyAdditionalSecureLinkInput } from './proxy-secure-link.service.js';
 
@@ -278,6 +278,17 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
     await this.pagesNodes().preflight(await this.pagesNodeIds(host), 0);
   }
 
+  protected assertAdvancedConfigAllowed(host: ProxyHostRow, advancedConfig: unknown, actorScopes: string[]): void {
+    if (typeof advancedConfig !== 'string' || !advancedConfig) return;
+    const errors = additionalRouteAdvancedConfigErrors(
+      advancedConfig,
+      hasScope(actorScopes, `proxy:unrestricted:${host.id}`)
+    );
+    if (errors.length > 0) {
+      throw new AppError(400, 'INVALID_ADVANCED_CONFIG', `Advanced config is invalid: ${errors.join(', ')}`);
+    }
+  }
+
   protected asSecureLinkInput(target: NormalizedTarget): CreateProxyAdditionalSecureLinkInput {
     if (!isDockerKind(target.targetKind) || !target.dockerContainerPort) {
       throw new AppError(400, 'INVALID_DOCKER_TARGET', 'A Docker target and application port are required');
@@ -299,6 +310,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
     return this.withHostLock(hostId, async () => {
       const host = await this.requireHost(hostId);
       await this.assertHostCanUse(host);
+      this.assertAdvancedConfigAllowed(host, input.advancedConfig, actorScopes);
       const target = this.normalizeTarget(input);
       await this.validateTarget(host, target, actorScopes);
       const path = normalizeAdditionalRoutePath(String(input.path ?? ''));
@@ -358,6 +370,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
     return this.withHostLock(hostId, async () => {
       const host = await this.requireHost(hostId);
       await this.assertHostCanUse(host);
+      this.assertAdvancedConfigAllowed(host, input.advancedConfig, actorScopes);
       const existing = await this.get(hostId, routeId);
       const target = this.normalizeTarget(input, existing);
       await this.validateTarget(host, target, actorScopes);

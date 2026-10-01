@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ConfigValidatorService } from '@/services/config-validator.service.js';
 
 const PATH_SEGMENT = /^[A-Za-z0-9._~-]+$/;
 const RESERVED_CANONICAL_PREFIXES = ['/_gateway', '/.well-known/acme-challenge'];
@@ -51,6 +52,18 @@ export const AdditionalRoutePathSchema = z
 const TimeoutSchema = z.number().int().min(1).max(3600);
 
 const TargetKindSchema = z.enum(['manual', 'docker_container', 'docker_deployment', 'pages']);
+const locationValidator = new ConfigValidatorService();
+
+/**
+ * Additional Route advanced config is inserted line by line into the route's location. Unless the caller holds
+ * proxy:unrestricted on the Route it gets the deny-list of the Route's own advanced config, as written inside a
+ * non-root location; either way it must consist of complete directives, so it cannot run into the directives
+ * Gateway renders after it.
+ */
+export function additionalRouteAdvancedConfigErrors(value: string, unrestricted: boolean): string[] {
+  return locationValidator.validateLocationSnippet(value, unrestricted).errors;
+}
+
 const AdditionalRouteAdvancedConfigSchema = z
   .string()
   .max(10_000)

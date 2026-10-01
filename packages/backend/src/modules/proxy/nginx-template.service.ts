@@ -23,6 +23,7 @@ import { ConfigValidatorService } from '@/services/config-validator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { injectAccessListIntoAdvancedLocations } from '@/services/nginx-advanced-location.js';
 import type { ProxyAdditionalRouteConfig, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
+import { additionalRouteAdvancedConfigErrors } from './additional-route.validation.js';
 import {
   ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER,
   supportsAdditionalRoutesTemplate,
@@ -215,6 +216,16 @@ function renderAdditionalRouteLocation(
       ]
     : [];
   const common = [...access, ...(access.length > 0 ? [''] : []), ...limits, ...(limits.length > 0 ? [''] : [])];
+  // The deny-list was applied on save unless the editor held proxy:unrestricted on the Route; the stored lines must
+  // still be complete directives, or they would run into the directives rendered after them.
+  const advancedErrors = route.advancedConfig ? additionalRouteAdvancedConfigErrors(route.advancedConfig, true) : [];
+  if (advancedErrors.length > 0) {
+    throw new AppError(
+      400,
+      'INVALID_ADDITIONAL_ROUTE_CONFIG',
+      `Additional Route ${path} advanced config is invalid: ${advancedErrors.join(', ')}`
+    );
+  }
   const advanced = route.advancedConfig ? route.advancedConfig.split(/\r?\n/).map((line) => `        ${line}`) : [];
   if (route.targetKind === 'pages') {
     const scopedConfigPath = `${path}/_gateway/pages/config.js`;
