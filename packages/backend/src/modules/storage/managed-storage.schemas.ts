@@ -21,10 +21,10 @@ export const ManagedStorageListQuerySchema = z.object({
  * optional root credentials that default to strong generated ones when
  * omitted.
  *
- * SeaweedFS clusters are single-node and speak S3 only, so the distributed
- * (`memberNodeIds`), multi-drive (`drivesPerNode`) and FTP/SFTP fields are
- * still accepted here only to be refused with a clear message below rather
- * than silently stripped.
+ * SeaweedFS clusters are single-node and speak S3 only: the distributed
+ * (`memberNodeIds`) and multi-drive (`drivesPerNode`) fields are accepted
+ * for one node and one drive and refused otherwise; FTP and SFTP are not
+ * part of the schema.
  */
 export const CreateManagedStorageSchema = z
   .object({
@@ -70,15 +70,6 @@ export const CreateManagedStorageSchema = z
     // create regardless of this field, since the loopback leg is only ever
     // served over HTTPS.
     relayEnabled: z.boolean().optional(),
-    // FTP and SFTP listeners were MinIO features. SeaweedFS has no FTP server
-    // and its SFTP server is not offered yet, so enabling either is refused
-    // below; `false`/omitted is accepted for older clients.
-    sftpEnabled: z.boolean().optional(),
-    sftpPort: z.number().int().min(1).max(65535).optional(),
-    ftpEnabled: z.boolean().optional(),
-    ftpPort: z.number().int().min(1).max(65535).optional(),
-    ftpPassivePortStart: z.number().int().min(1).max(65535).optional(),
-    ftpPassivePortCount: z.number().int().min(1).max(64).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.memberNodeIds !== undefined && value.memberNodeIds.length > 1) {
@@ -86,20 +77,6 @@ export const CreateManagedStorageSchema = z
         code: z.ZodIssueCode.custom,
         path: ['memberNodeIds'],
         message: 'Managed storage is single-node: distributed clusters are not supported',
-      });
-    }
-    if (value.sftpEnabled) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['sftpEnabled'],
-        message: 'SFTP is not available for managed storage',
-      });
-    }
-    if (value.ftpEnabled) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['ftpEnabled'],
-        message: 'FTP is not available for managed storage',
       });
     }
   });
@@ -112,7 +89,13 @@ export const UpdateManagedStorageSchema = z
     cpuCores: z.number().min(0.1).max(128).optional(),
     // 256 MiB stays valid for legacy MinIO clusters; the service enforces the
     // 512 MiB SeaweedFS minimum.
-    memoryMb: z.number().int().min(256).max(524_288).optional(),
+    memoryMb: z
+      .number()
+      .int()
+      .min(256)
+      .max(524_288)
+      .optional()
+      .describe('Memory in MiB: at least 512 for SeaweedFS clusters (as at create); legacy MinIO clusters accept 256'),
     swapMb: z.number().int().min(0).max(524_288).optional(),
     publishS3: z.boolean().optional(),
     publishedPort: z.number().int().min(1).max(65535).optional(),

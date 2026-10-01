@@ -89,12 +89,6 @@ export interface ManagedObjectStorageCreateInput {
   accessKey?: string;
   secretKey?: string;
   tlsEnabled?: boolean;
-  sftpEnabled?: boolean;
-  sftpPort?: number;
-  ftpEnabled?: boolean;
-  ftpPort?: number;
-  ftpPassivePortStart?: number;
-  ftpPassivePortCount?: number;
   /** Folder of the canonical storage connection; null or omitted is the root. */
   folderId?: string | null;
 }
