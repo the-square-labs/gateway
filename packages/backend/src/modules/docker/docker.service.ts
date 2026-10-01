@@ -109,6 +109,7 @@ import { applyRuntimeSettingsToInspect } from './docker-runtime-inspect.js';
 import type { DockerRuntimeOperationContext } from './docker-runtime-operations.js';
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
 import type { DockerSecretService } from './docker-secret.service.js';
+import { type DockerSecretEnvOwner, dockerSecretEnvMatcher, dockerSecretEnvOwners } from './docker-secret-env.js';
 import { readPendingDockerSourceContainers } from './docker-source.service.js';
 import type { DockerTaskService } from './docker-task.service.js';
 import {
@@ -1193,31 +1194,27 @@ export class DockerManagementService {
     const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
     const data = this.parseResult(result);
     if (data) {
-      const cName = ((data.Name ?? '') as string).replace(/^\//, '');
-      await this.maskSecretEnv(data, [{ nodeId, containerName: cName }]);
+      await this.maskSecretEnv(data, dockerSecretEnvOwners(nodeId, data));
       return this.decorateContainerDetailSnapshot(nodeId, data);
     }
     return data;
   }
 
   /**
-   * Mask the values of the secrets stored for the given containers in an inspect's `Config.Env`. A replica of an HA
-   * workload runs under an internal name on another node, so its inspect is masked with the logical workload's
-   * secrets as well.
+   * Mask the values of the secrets stored for the given owners in an inspect's `Config.Env`: the container's own, the
+   * deployment's on a slot (database and storage link credentials included) and the Compose project's on a service
+   * container. A replica of an HA workload runs under an internal name on another node, so its inspect is masked with
+   * the logical workload's secrets as well. Inspect never reveals them; secrets and link credentials have their own
+   * reveal endpoints.
    */
-  async maskSecretEnv(data: any, owners: ReadonlyArray<{ nodeId: string | null | undefined; containerName: string }>) {
+  async maskSecretEnv(data: any, owners: ReadonlyArray<DockerSecretEnvOwner>) {
     if (!this.secretService || !Array.isArray(data?.Config?.Env)) return data;
-    const secretKeys = new Set<string>();
-    for (const owner of owners) {
-      if (!owner.nodeId || !owner.containerName) continue;
-      for (const key of await this.secretService.getSecretKeys(owner.nodeId, owner.containerName)) secretKeys.add(key);
-    }
-    if (secretKeys.size === 0) return data;
+    const carriesSecret = await dockerSecretEnvMatcher(this.secretService, owners);
+    if (!carriesSecret) return data;
     data.Config.Env = data.Config.Env.map((entry: string) => {
       const eqIndex = entry.indexOf('=');
-      if (eqIndex === -1) return entry;
-      const key = entry.slice(0, eqIndex);
-      return secretKeys.has(key) ? `${key}=********` : entry;
+      if (eqIndex === -1 || !carriesSecret(entry)) return entry;
+      return `${entry.slice(0, eqIndex)}=********`;
     });
     return data;
   }

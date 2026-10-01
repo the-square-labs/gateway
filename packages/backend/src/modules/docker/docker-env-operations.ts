@@ -1,6 +1,7 @@
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerEnvironmentService } from './docker-environment.service.js';
 import type { DockerSecretService } from './docker-secret.service.js';
+import { dockerSecretEnvMatcher, dockerSecretEnvOwners } from './docker-secret-env.js';
 
 type DockerDispatchResult = { success: boolean; error?: string; detail?: string };
 
@@ -17,22 +18,19 @@ export async function getContainerEnv(context: DockerEnvOperationContext, nodeId
   const allEnv: string[] = inspect?.Config?.Env || [];
   const name = (inspect?.Name ?? '').replace(/^\//, '');
 
-  let visibleEnv = allEnv;
-  let secretKeys = new Set<string>();
-  if (context.secretService && name) {
-    secretKeys = await context.secretService.getSecretKeys(nodeId, name);
-    if (secretKeys.size > 0) {
-      visibleEnv = allEnv.filter((entry) => {
-        const key = entry.split('=')[0];
-        return !secretKeys.has(key);
-      });
-    }
-  }
+  // Secrets have their own endpoint: the env leaves out every entry that carries one, a deployment slot's link
+  // credentials and a Compose service's interpolated secrets included.
+  const carriesSecret =
+    context.secretService && name
+      ? await dockerSecretEnvMatcher(context.secretService, dockerSecretEnvOwners(nodeId, inspect))
+      : null;
+  const visibleEnv = carriesSecret ? allEnv.filter((entry) => !carriesSecret(entry)) : allEnv;
 
   if (context.environmentService && name) {
     const storedEnv = await context.environmentService.getDecryptedMap(nodeId, name);
     if (Object.keys(storedEnv).length > 0) {
-      return envMapToList(Object.fromEntries(Object.entries(storedEnv).filter(([key]) => !secretKeys.has(key))));
+      const storedList = envMapToList(storedEnv);
+      return carriesSecret ? storedList.filter((entry) => !carriesSecret(entry)) : storedList;
     }
 
     await context.environmentService.seedFromRuntimeIfMissing(nodeId, name, envListToMap(visibleEnv));
