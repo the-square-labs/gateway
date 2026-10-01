@@ -13,6 +13,9 @@ describe('managedLinkHealth', () => {
           rejectedTotal: '6',
           lastRejectionReason: 'link_limit',
           lastRejectedAtUnixMs: '1790935200000',
+          openedTotal: '120',
+          sourceToTargetBytes: '4096',
+          targetToSourceBytes: '65536',
         },
         {
           ownerKind: 'managed_storage_binding',
@@ -35,6 +38,9 @@ describe('managedLinkHealth', () => {
           rejectedTotal: 6,
           lastRejectionReason: 'link_limit',
           lastRejectedAt: '2026-10-02T10:00:00.000Z',
+          openedTotal: 120,
+          sourceToTargetBytes: 4096,
+          targetToSourceBytes: 65536,
         },
         {
           ownerKind: 'managed_storage_binding',
@@ -44,6 +50,9 @@ describe('managedLinkHealth', () => {
           rejectedTotal: 0,
           lastRejectionReason: null,
           lastRejectedAt: null,
+          openedTotal: 0,
+          sourceToTargetBytes: 0,
+          targetToSourceBytes: 0,
         },
       ],
     });

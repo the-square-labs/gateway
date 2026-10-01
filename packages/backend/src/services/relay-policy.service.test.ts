@@ -383,13 +383,16 @@ describe('RelayPolicyService route runtime', () => {
       rejectedTotal: rejected,
       lastRejectionReason: at ? 'link_limit' : null,
       lastRejectedAt: at,
+      openedTotal: active * 10,
+      sourceToTargetBytes: active * 1000,
+      targetToSourceBytes: active * 3000,
     });
     const routesDb = (...answers: unknown[][]) => {
       const rows = [...answers];
       return { select: vi.fn(() => ({ from: () => ({ where: async () => rows.shift() ?? [] }) })) };
     };
 
-    it('counts the open connections the node holds on every relay and adds its refusals to the relay ones', async () => {
+    it('takes the open connections, sessions and bytes the node carried on every relay and adds its refusals', async () => {
       // The local relay carries 30 of the link's 64 connections; the pool's other relays carry the rest.
       const db = routesDb([
         {
@@ -413,10 +416,14 @@ describe('RelayPolicyService route runtime', () => {
       service.setManagedLinkReports({ managedLinkReport, requestHealthReport });
 
       const runtime = await service.getManagedDatabaseBindingRouteRuntime('binding-1');
+      // Completions stay the relay's: the node does not measure them.
       expect(runtime).toMatchObject({
         activeStreams: 64,
         throttledTotal: '8',
-        openedTotal: '90',
+        openedTotal: '640',
+        sourceToTargetBytes: '64000',
+        targetToSourceBytes: '192000',
+        completedTotal: '20',
         connections: {
           active: 64,
           limit: 64,
@@ -496,6 +503,8 @@ describe('RelayPolicyService route runtime', () => {
       await expect(service.getManagedDatabaseBindingRouteRuntime('binding-1')).resolves.toMatchObject({
         activeStreams: 10,
         throttledTotal: '2',
+        openedTotal: '180',
+        sourceToTargetBytes: '200',
         connections: null,
       });
     });
@@ -539,6 +548,9 @@ describe('RelayPolicyService route runtime', () => {
       await expect(service.getManagedDatabaseBindingRouteRuntime('binding-1')).resolves.toMatchObject({
         activeStreams: 12,
         throttledTotal: '1',
+        openedTotal: '120',
+        sourceToTargetBytes: '12000',
+        targetToSourceBytes: '36000',
         connections: {
           active: 12,
           limit: 64,

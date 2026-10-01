@@ -81,8 +81,8 @@ export interface RelayRouteRuntime {
   lastActivityAt: string | null;
   metricsSince: string;
   /**
-   * Managed links: the connections the nodes running the link's workloads report. activeStreams and throttledTotal
-   * include them; null when a node does not report links (an older daemon).
+   * Managed links: what the nodes running the link's workloads report. activeStreams, openedTotal and the byte counters
+   * are theirs and throttledTotal includes their refusals; null when a node does not report links (an older daemon).
    */
   connections?: ManagedLinkConnections | null;
 }

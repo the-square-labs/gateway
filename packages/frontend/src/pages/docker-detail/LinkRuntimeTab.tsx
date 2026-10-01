@@ -175,7 +175,7 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
         icon={Zap}
         history={openedRateHistory}
         color="#06b6d4"
-        subtitle={`${counter(runtime.openedTotal).toLocaleString()} opened since Relay start`}
+        subtitle={`${counter(runtime.openedTotal).toLocaleString()} opened since ${connections ? "the node's daemon started" : "Relay start"}`}
       />
       <StatCard
         label="Source → target"

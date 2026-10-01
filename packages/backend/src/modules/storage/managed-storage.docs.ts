@@ -212,7 +212,7 @@ export const getManagedStorageBindingRuntimeRoute = appRoute({
   tags: [TAG],
   summary: 'Get managed object storage link runtime',
   description:
-    "The link's Relay counters and its connections as the node running the workload reports them: activeStreams are the link's open connections (it carries up to 64), throttledTotal counts the connections refused at that limit by the node or a relay. connections is null while that node's daemon does not report links. Needs storage:view and view access to the linked workload.",
+    "The link's Relay counters and its connections as the node running the workload reports them: activeStreams are the link's open connections (it carries up to 64), openedTotal and the byte counters what it carried through that node, throttledTotal counts the connections refused at that limit by the node or a relay. connections is null while that node's daemon does not report links. Needs storage:view and view access to the linked workload.",
   request: { params: bindingParams },
   responses: okJson(UnknownDataResponseSchema),
 });

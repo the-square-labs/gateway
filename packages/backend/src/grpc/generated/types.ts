@@ -272,6 +272,10 @@ export interface ManagedLinkRuntime {
   lastRejectionReason: string;
   /** int64 as string (proto-loader). */
   lastRejectedAtUnixMs: string;
+  /** uint64 as string (proto-loader): sessions and bytes the link carried through the node. */
+  openedTotal: string;
+  sourceToTargetBytes: string;
+  targetToSourceBytes: string;
 }
 
 export interface StatsReport {

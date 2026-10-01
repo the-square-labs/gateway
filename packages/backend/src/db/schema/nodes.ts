@@ -155,6 +155,10 @@ export interface NodeManagedLinkReport {
   rejectedTotal: number;
   lastRejectionReason: string | null;
   lastRejectedAt: string | null;
+  /** Sessions a relay opened for the link and the bytes it carried through the node since its daemon started. */
+  openedTotal: number;
+  sourceToTargetBytes: number;
+  targetToSourceBytes: number;
 }
 
 /** What an nginx daemon's `/.well-known/gateway-ingress-health` endpoint answered when it last reported. */

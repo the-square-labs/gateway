@@ -145,6 +145,10 @@ export interface ManagedLinkConnections {
   rejectedTotal: string;
   lastRejectionReason: string | null;
   lastRejectedAt: string | null;
+  /** Sessions and bytes the link carried through the node; the runtime's openedTotal and byte counters. */
+  openedTotal: string;
+  sourceToTargetBytes: string;
+  targetToSourceBytes: string;
   reportedAt: string;
 }
 

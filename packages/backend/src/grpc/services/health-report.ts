@@ -87,6 +87,9 @@ export function managedLinkHealth(rawLinks: unknown): { managedLinks?: NodeManag
         rejectedTotal: count(value.rejectedTotal),
         lastRejectionReason: lastRejectionReason || null,
         lastRejectedAt: lastRejectedAtMs > 0 ? new Date(lastRejectedAtMs).toISOString() : null,
+        openedTotal: count(value.openedTotal),
+        sourceToTargetBytes: count(value.sourceToTargetBytes),
+        targetToSourceBytes: count(value.targetToSourceBytes),
       },
     ];
   });
