@@ -80,6 +80,7 @@ import { presentDeploymentForCaller } from '@/modules/docker/docker-deployment-r
 import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
 import { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import { sanitizeContainerInspect } from '@/modules/docker/docker-snapshot.service.js';
+import { assertNotPendingSourceContainer } from '@/modules/docker/docker-source.service.js';
 import {
   canListSourceConnectors,
   canPickDockerSource,
@@ -414,7 +415,16 @@ export async function executeDockerTool(
       return { success: true, message: `Sent ${signal} to the container` };
     }
     case 'remove_docker_container':
-      await ensureDockerContainerScope(context, user, 'docker:containers:delete', a.nodeId, a.containerId);
+      // As DELETE /containers/:id: a Git-source container its first build has not created is authorized on its
+      // reserved identity and refused with 409 SOURCE_CONTAINER_NOT_BUILT.
+      await ensureDockerSourceContainerScope(
+        context.dockerService,
+        user,
+        'docker:containers:delete',
+        a.nodeId,
+        a.containerId
+      );
+      await assertNotPendingSourceContainer(a.nodeId, a.containerId);
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       await context.dockerService.removeContainer(a.nodeId, a.containerId, a.force ?? false, user.id);
       return { success: true };
