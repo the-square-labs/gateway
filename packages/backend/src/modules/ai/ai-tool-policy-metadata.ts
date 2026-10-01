@@ -160,12 +160,29 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     delete: ['delete', 'disconnect'],
     external: ['connect'],
   }),
-  manage_docker_compose: operationPolicies({
-    read: ['list', 'get', 'validate', 'revision_list', 'revision_get', 'operation_list', 'secret_list', 'logs'],
-    create: ['create', 'adopt', 'revision_create', 'secret_create'],
-    update: ['operation_start', 'secret_update'],
-    delete: ['delete', 'revision_delete', 'secret_delete'],
-  }),
+  manage_docker_compose: withArgumentPolicy(
+    operationPolicies({
+      read: ['list', 'get', 'validate', 'revision_list', 'revision_get', 'operation_list', 'secret_list', 'logs'],
+      create: ['create', 'adopt', 'revision_create', 'secret_create'],
+      update: ['operation_start', 'secret_update'],
+      delete: ['delete', 'revision_delete', 'secret_delete'],
+    }),
+    'operation_start',
+    // Applying a revision runs new code; down removes the services and delete_volumes their data.
+    {
+      path: ['action'],
+      approvalClasses: {
+        start: 'update',
+        stop: 'update',
+        restart: 'update',
+        cancel: 'update',
+        apply: 'execute',
+        pull_apply: 'execute',
+        down: 'delete',
+        delete_volumes: 'delete',
+      },
+    }
+  ),
   manage_docker_source: operationPolicies({
     read: ['get', 'pending', 'admission', 'connectors', 'repositories', 'secret_list'],
     create: ['create'],
@@ -181,23 +198,26 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   manage_docker_task: operationPolicies({ read: ['list', 'get'] }),
   manage_docker_deployment: operationPolicies({ create: ['create'], update: ['update'], delete: ['delete'] }),
   manage_docker_container_config: withArgumentPolicy(
-    operationPolicies({
-      read: ['get_env', 'list_files', 'read_file', 'list_secrets', 'get_webhook', 'get_health_check'],
-      create: ['create_secret', 'create_file', 'create_directory', 'upload_init'],
-      update: [
-        'update_env',
-        'write_file',
-        'move_file',
-        'upload_chunk',
-        'upload_complete',
-        'update_secret',
-        'upsert_webhook',
-        'regenerate_webhook_token',
-        'upsert_health_check',
-      ],
-      delete: ['delete_secret', 'delete_webhook', 'delete_file', 'upload_abort'],
-      external: ['test_health_check'],
-    }),
+    {
+      ...operationPolicies({
+        read: ['get_env', 'list_files', 'read_file', 'list_secrets', 'get_health_check'],
+        create: ['create_secret', 'create_file', 'create_directory', 'upload_init'],
+        update: [
+          'update_env',
+          'write_file',
+          'move_file',
+          'upload_chunk',
+          'upload_complete',
+          'update_secret',
+          'upsert_health_check',
+        ],
+        // Each returns the webhook trigger token, a credential.
+        execute: ['upsert_webhook', 'regenerate_webhook_token'],
+        delete: ['delete_secret', 'delete_webhook', 'delete_file', 'upload_abort'],
+        external: ['test_health_check'],
+      }),
+      get_webhook: { effect: 'read', approvalClass: 'execute' },
+    },
     'list_secrets',
     // reveal: true returns the secret values.
     { path: ['reveal'], approvalClasses: { false: 'read', true: 'execute' } }
@@ -505,6 +525,8 @@ const TOOL_POLICIES: Record<string, Pick<AIToolDefinition, 'effect' | 'approvalC
   create_domain: { effect: 'external', approvalClass: 'destructive' },
   delete_domain: { effect: 'external', approvalClass: 'delete' },
   pull_docker_image: { effect: 'external', approvalClass: 'destructive' },
+  // Runs another image with the container's env and secrets, like manage_docker_container recreate/update.
+  update_docker_container_image: { effect: 'write', approvalClass: 'execute' },
   download_artifact: { effect: 'external', approvalClass: 'destructive' },
   send_artifact: { effect: 'external', approvalClass: 'destructive' },
 };

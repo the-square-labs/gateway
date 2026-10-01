@@ -146,6 +146,9 @@ describe('AI backend approval policy', () => {
       ['manage_certificate', { operation: 'export', format: 'pkcs12' }],
       ['manage_certificate', { operation: 'export', format: 'private-key' }],
       ['manage_docker_container_config', { operation: 'list_secrets', reveal: true }],
+      ['manage_docker_container_config', { operation: 'get_webhook' }],
+      ['manage_docker_container_config', { operation: 'upsert_webhook' }],
+      ['manage_docker_container_config', { operation: 'regenerate_webhook_token' }],
     ];
     for (const [toolName, args] of calls) {
       const label = `${toolName} ${JSON.stringify(args)}`;
@@ -163,6 +166,24 @@ describe('AI backend approval policy', () => {
     expect(
       classifyAIToolForApproval('manage_docker_container_config', { operation: 'list_secrets', reveal: 'yes' })
     ).toBe('destructive');
+  });
+
+  it('asks in bypass-non-destructive mode before Docker changes that delete data or run other code', () => {
+    const calls: Array<[string, Record<string, unknown>, string]> = [
+      ['manage_docker_compose', { operation: 'operation_start', action: 'delete_volumes' }, 'delete'],
+      ['manage_docker_compose', { operation: 'operation_start', action: 'down' }, 'delete'],
+      ['manage_docker_compose', { operation: 'operation_start', action: 'pull_apply' }, 'execute'],
+      ['manage_docker_compose', { operation: 'operation_start', action: 'unknown' }, 'destructive'],
+      ['update_docker_container_image', { nodeId: 'node-1', containerId: 'c-1', tag: 'v2' }, 'execute'],
+    ];
+    for (const [toolName, args, classification] of calls) {
+      const label = `${toolName} ${JSON.stringify(args)}`;
+      expect(classifyAIToolForApproval(toolName, args), label).toBe(classification);
+      expect(getAIToolApprovalDecision(toolName, 'bypass-non-destructive', args).requiresApproval, label).toBe(true);
+    }
+    expect(
+      classifyAIToolForApproval('manage_docker_compose', { operation: 'operation_start', action: 'restart' })
+    ).toBe('update');
   });
 
   it('classifies storage presign by the signed operation', () => {
