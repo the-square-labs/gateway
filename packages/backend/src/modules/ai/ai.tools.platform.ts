@@ -209,7 +209,7 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'toggle_route_raw_mode',
     description:
-      'Enable or disable raw config mode on an ingress route. When enabled, template rendering is bypassed and the raw config is used directly.',
+      'Enable or disable raw config mode on an ingress route. Once a raw config is saved (update_route_raw_config), it is used directly instead of the rendered template; until then the managed config keeps rendering. A Docker Route keeps its Secure Link in raw mode, so the raw config must keep its upstream gateway_secure_link_<route id with - replaced by _>. Disabling returns a Route of type raw to proxy and renders the managed config again.',
     parameters: {
       type: 'object',
       properties: {
