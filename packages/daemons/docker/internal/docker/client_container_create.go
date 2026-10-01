@@ -762,14 +762,28 @@ func httpProbeBodyMatches(body string, expected string, mode string) bool {
 	}
 }
 
-// reservedDuplicateLabelPrefixes are the label namespaces Gateway and Docker Compose read to place, group or
-// hide a container. A duplicate carrying them would join the source's Compose project (and its root-level
-// folder) or disappear behind a Gateway implementation marker, so they are never copied.
-var reservedDuplicateLabelPrefixes = []string{
+// reservedDockerLabelPrefixes are the label namespaces Gateway and Docker Compose read to place, group, hide
+// or admit a container (the backend's docker-reserved-labels.ts holds the same set). A user workload carrying
+// them would join another Compose project (and its root-level folder), disappear behind a Gateway
+// implementation marker or pass for a Gateway deployment, so duplicates never copy them and Compose
+// services may not set them.
+var reservedDockerLabelPrefixes = []string{
 	"com.docker.compose.",
 	"wiolett.gateway.",
 	"net.wiolett.gateway.",
 	"com.wiolett.gateway.",
+}
+
+func isReservedDockerLabel(key string) bool {
+	if key == "gateway.sandbox" {
+		return true
+	}
+	for _, prefix := range reservedDockerLabelPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // duplicateContainerLabels copies the source labels a duplicate may keep. Daemon-owned data that describes the
@@ -785,17 +799,8 @@ func duplicateContainerLabels(source map[string]string) map[string]string {
 		case archiveImageReferenceLabel, gatewayGPUGroupIDsLabel, gatewayGPUGroupIDsVersionLabel:
 			labels[key] = value
 			continue
-		case "gateway.sandbox":
-			continue
 		}
-		reserved := false
-		for _, prefix := range reservedDuplicateLabelPrefixes {
-			if strings.HasPrefix(key, prefix) {
-				reserved = true
-				break
-			}
-		}
-		if !reserved {
+		if !isReservedDockerLabel(key) {
 			labels[key] = value
 		}
 	}

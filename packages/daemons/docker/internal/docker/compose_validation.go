@@ -69,6 +69,9 @@ func validateAndInjectComposeYAML(request *composeRequest) error {
 	if err := validateTopLevelResources(networks, "network"); err != nil {
 		return err
 	}
+	if err := validateComposeNetworkNames(networks); err != nil {
+		return err
+	}
 	for i := 0; i < len(services.Content); i += 2 {
 		if err := validateComposeService(services.Content[i].Value, services.Content[i+1], services, volumes, networks); err != nil {
 			return err
@@ -313,6 +316,53 @@ func validateTopLevelResources(node *yaml.Node, resource string) error {
 	return nil
 }
 
+// composeManagedDatabaseNetworkKey is the logical network the backend adds to
+// a project for a managed database link (compose-managed-bindings.ts
+// networkKey): it names the link's gateway-db-* network as external.
+var composeManagedDatabaseNetworkKey = regexp.MustCompile(`^gateway_db_[0-9a-f]{16}$`)
+
+// validateComposeNetworkNames keeps Compose networks off the host's network
+// namespaces and off the networks Gateway owns on the node, which a user
+// container may not join either (validateUserWorkloadNetworkMode, the
+// backend's isReservedGatewayNetworkName). Docker Compose joins an existing
+// network by its name, external or not, so the name decides: name: when
+// set, else the key of an external network. A name with a variable could
+// resolve to anything and is refused like a host path with one. The managed
+// database link network the backend adds is the one exception.
+func validateComposeNetworkNames(networks *yaml.Node) error {
+	if networks == nil {
+		return nil
+	}
+	for i := 0; i+1 < len(networks.Content); i += 2 {
+		key, values := networks.Content[i].Value, mappingValues(networks.Content[i+1])
+		external := isComposeBool(values["external"]) && strings.EqualFold(values["external"].Value, "true")
+		name := ""
+		if values["name"] != nil {
+			name = values["name"].Value
+		} else if external {
+			name = key
+		}
+		if strings.Contains(name, "$") {
+			return fmt.Errorf("compose network %q name must not use variables", key)
+		}
+		if name != "host" && name != "none" && !isReservedGatewayNetworkName(name) {
+			continue
+		}
+		if external && composeManagedDatabaseNetworkKey.MatchString(key) && strings.HasPrefix(name, "gateway-db-") {
+			continue
+		}
+		return fmt.Errorf("compose network %q uses reserved network name %q", key, name)
+	}
+	return nil
+}
+
+// isReservedGatewayNetworkName mirrors the backend's isReservedGatewayNetworkName:
+// every name Gateway owns or will own on a node, the Secure Links management
+// network and managed database and storage link networks.
+func isReservedGatewayNetworkName(name string) bool {
+	return name == secureLinkManagementNetwork || strings.HasPrefix(name, "gateway-db-") || strings.HasPrefix(name, "gateway-storage-")
+}
+
 // validateServiceVolumes mirrors the backend Compose policy: only declared named
 // volumes, as SOURCE:TARGET[:ro|rw] strings or long-syntax type: volume mappings.
 // The shared cases in testdata/compose-policy-parity.yaml keep the two in step.
@@ -524,8 +574,8 @@ func validateServiceLabels(node *yaml.Node) error {
 		return errors.New("compose labels must be a mapping or KEY=value list")
 	}
 	for key := range mappingValues(node) {
-		if strings.HasPrefix(key, "com.docker.compose.") || strings.HasPrefix(key, "wiolett.gateway.compose.") {
-			return errors.New("compose labels may not override reserved ownership labels")
+		if isReservedDockerLabel(key) {
+			return fmt.Errorf("compose label %q is reserved by Docker Compose or Gateway", key)
 		}
 	}
 	return nil

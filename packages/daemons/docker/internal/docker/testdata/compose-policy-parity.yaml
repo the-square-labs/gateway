@@ -224,6 +224,198 @@ cases:
           image: nginx:alpine
           networks: [missing]
 
+  - name: external network named host
+    valid: false
+    backendCode: RESERVED_NETWORK
+    daemonError: uses reserved network name "host"
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [outside]
+      networks:
+        outside:
+          external: true
+          name: host
+
+  - name: external network none by its key
+    valid: false
+    backendCode: RESERVED_NETWORK
+    daemonError: uses reserved network name "none"
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [none]
+      networks:
+        none:
+          external: true
+
+  - name: external Secure Links management network
+    valid: false
+    backendCode: RESERVED_NETWORK
+    daemonError: uses reserved network name "gateway-secure-links"
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [links]
+      networks:
+        links:
+          external: true
+          name: gateway-secure-links
+
+  - name: external managed database network under a user key
+    valid: false
+    backendCode: RESERVED_NETWORK
+    daemonError: uses reserved network name "gateway-db-0123456789abcdef"
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [db]
+      networks:
+        db:
+          external: true
+          name: gateway-db-0123456789abcdef
+
+  - name: project network named like a managed storage network
+    valid: false
+    backendCode: RESERVED_NETWORK
+    daemonError: uses reserved network name "gateway-storage-0123456789abcdef"
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [storage]
+      networks:
+        storage:
+          name: gateway-storage-0123456789abcdef
+
+  - name: managed database link network added by Gateway
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks:
+            gateway_db_0123456789abcdef:
+      networks:
+        gateway_db_0123456789abcdef:
+          external: true
+          name: gateway-db-0123456789abcdef
+
+  - name: managed database link key naming another reserved network
+    valid: false
+    backendCode: RESERVED_NETWORK
+    daemonError: uses reserved network name "gateway-secure-links"
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [gateway_db_0123456789abcdef]
+      networks:
+        gateway_db_0123456789abcdef:
+          external: true
+          name: gateway-secure-links
+
+  - name: network name from a variable
+    valid: false
+    backendCode: INVALID_RESOURCE_NAME
+    daemonError: name must not use variables
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [shared]
+      networks:
+        shared:
+          external: true
+          name: ${SHARED_NETWORK:-proxy}
+
+  - name: external and project networks with ordinary names
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [proxy, backend]
+      networks:
+        proxy:
+          external: true
+          name: edge-proxy
+        backend:
+          name: example-backend
+
+  - name: service label gateway.sandbox
+    valid: false
+    backendCode: RESERVED_LABEL
+    daemonError: compose label "gateway.sandbox" is reserved
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          labels:
+            gateway.sandbox: "true"
+
+  - name: service label in the wiolett.gateway. namespace
+    valid: false
+    backendCode: RESERVED_LABEL
+    daemonError: compose label "wiolett.gateway.deployment.id" is reserved
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          labels:
+            wiolett.gateway.deployment.id: 00000000-0000-4000-8000-000000000000
+
+  - name: service label in the net.wiolett.gateway. namespace
+    valid: false
+    backendCode: RESERVED_LABEL
+    daemonError: compose label "net.wiolett.gateway.managed" is reserved
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          labels:
+            - net.wiolett.gateway.managed=true
+
+  - name: service label in the com.wiolett.gateway. namespace
+    valid: false
+    backendCode: RESERVED_LABEL
+    daemonError: compose label "com.wiolett.gateway.managed-service" is reserved
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          labels:
+            com.wiolett.gateway.managed-service: database
+
+  - name: network label in the wiolett.gateway. namespace
+    valid: false
+    backendCode: RESERVED_LABEL
+    daemonError: compose label "wiolett.gateway.internal-workload" is reserved
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [app]
+      networks:
+        app:
+          labels:
+            wiolett.gateway.internal-workload: managed-storage-connector
+
+  - name: labels next to the reserved namespaces
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          labels:
+            gateway.sandboxed: "true"
+            wiolett.gateway: owner
+            org.example.wiolett.gateway.note: kept
+
   - name: depends_on list and long syntax with condition
     valid: true
     yaml: |
