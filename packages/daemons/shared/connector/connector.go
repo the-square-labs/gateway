@@ -25,6 +25,21 @@ const (
 	InitialBackoff        = 1 * time.Second
 	ConnectAttemptTimeout = 10 * time.Second
 	MaxMessageBytes       = 512 * 1024 * 1024
+	// relayLaneAckTimeout bounds how long data sent on a relay lane may stay
+	// unacknowledged before the lane's connection closes (gRPC sets
+	// TCP_USER_TIMEOUT to the keepalive timeout). A relay whose host or path
+	// went dark leaves its lanes open but silent: with the control session's
+	// 10 s, new tunnels kept trying that relay first and waited out their
+	// setup for that long. A closed lane takes the relay out of selection
+	// until it connects again. The relay holds its side of the same
+	// connections to 2 s (peer liveness), so a lane stalled this long is
+	// dropped there anyway.
+	relayLaneAckTimeout = 2 * time.Second
+)
+
+var (
+	sessionKeepalive = keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 10 * time.Second, PermitWithoutStream: true}
+	laneKeepalive    = keepalive.ClientParameters{Time: 30 * time.Second, Timeout: relayLaneAckTimeout, PermitWithoutStream: true}
 )
 
 // ReconnectParams pace grpc's own reconnects of a connection whose transport dropped. Relay lanes and the control
@@ -54,9 +69,10 @@ func NewConnector(address string, tlsMgr *auth.TLSManager, logger *slog.Logger) 
 
 // Connect creates a gRPC client connection configured for mTLS.
 func (c *Connector) Connect(ctx context.Context) (*grpc.ClientConn, error) {
-	return c.connect(ctx, c.Address, "")
+	return c.connect(ctx, c.Address, "", false)
 }
 
+// ConnectTarget creates a relay lane to the pool relay at address.
 func (c *Connector) ConnectTarget(ctx context.Context, address, serverName, certificateFingerprint string) (*grpc.ClientConn, error) {
 	return c.connectTarget(ctx, address, serverName, certificateFingerprint)
 }
@@ -78,40 +94,45 @@ func (c *Connector) connectTarget(ctx context.Context, address, serverName, cert
 		}
 		return nil
 	}
-	return grpc.NewClient(address,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-		grpc.WithConnectParams(ReconnectParams),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time: 30 * time.Second, Timeout: 10 * time.Second, PermitWithoutStream: true,
-		}),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxMessageBytes), grpc.MaxCallSendMsgSize(MaxMessageBytes)),
-	)
+	return grpc.NewClient(address, dialOptions(tlsCfg, true)...)
 }
 
-func (c *Connector) connect(ctx context.Context, address, serverName string) (*grpc.ClientConn, error) {
+func (c *Connector) connect(ctx context.Context, address, serverName string, lane bool) (*grpc.ClientConn, error) {
 	tlsCfg, err := c.TLSMgr.ClientTLSConfig()
 	if err != nil {
 		return nil, err
 	}
 
 	tlsCfg.ServerName = serverName
-	conn, err := grpc.NewClient(address,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-		grpc.WithConnectParams(ReconnectParams),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                30 * time.Second,
-			Timeout:             10 * time.Second,
-			PermitWithoutStream: true,
-		}),
-		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(MaxMessageBytes),
-			grpc.MaxCallSendMsgSize(MaxMessageBytes),
-		),
-	)
+	conn, err := grpc.NewClient(address, dialOptions(tlsCfg, lane)...)
 	if err != nil {
 		return nil, err
 	}
 	return conn, nil
+}
+
+// dialOptions configures a control session or, with lane set, a relay lane:
+// a lane is never left idle (it stays connected for the life of the process
+// and is selected by whether it is connected) and is closed once the relay
+// stops acknowledging it.
+func dialOptions(tlsCfg *tls.Config, lane bool) []grpc.DialOption {
+	keepaliveParams := sessionKeepalive
+	if lane {
+		keepaliveParams = laneKeepalive
+	}
+	options := []grpc.DialOption{
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithConnectParams(ReconnectParams),
+		grpc.WithKeepaliveParams(keepaliveParams),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(MaxMessageBytes),
+			grpc.MaxCallSendMsgSize(MaxMessageBytes),
+		),
+	}
+	if lane {
+		options = append(options, grpc.WithIdleTimeout(0))
+	}
+	return options
 }
 
 func (c *Connector) ConnectTargetAttempt(ctx context.Context, addresses []string, serverName, certificateFingerprint string) (*grpc.ClientConn, error) {
@@ -137,9 +158,19 @@ func (c *Connector) ConnectTargetAttempt(ctx context.Context, addresses []string
 
 // ConnectWithRetry retries connection with exponential backoff + jitter.
 func (c *Connector) ConnectWithRetry(ctx context.Context) (*grpc.ClientConn, error) {
+	return c.connectWithRetry(ctx, false)
+}
+
+// ConnectLaneWithRetry is ConnectWithRetry for a relay lane to the relay at
+// the Gateway address (the local relay).
+func (c *Connector) ConnectLaneWithRetry(ctx context.Context) (*grpc.ClientConn, error) {
+	return c.connectWithRetry(ctx, true)
+}
+
+func (c *Connector) connectWithRetry(ctx context.Context, lane bool) (*grpc.ClientConn, error) {
 	backoff := InitialBackoff
 	for {
-		conn, err := c.Connect(ctx)
+		conn, err := c.connect(ctx, c.Address, "", lane)
 		if err == nil {
 			attemptCtx, cancel := context.WithTimeout(ctx, ConnectAttemptTimeout)
 			err = waitUntilReady(attemptCtx, conn)
