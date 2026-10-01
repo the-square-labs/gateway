@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import {
   databaseConnections,
+  dockerAccessResources,
   loggingEnvironments,
   nodes,
   notificationAlertRules,
@@ -1070,7 +1071,7 @@ export class NotificationEvaluatorService {
 
     await this.fireAlert(rule, rule.category, compositeResourceId, resourceName, {
       ...extraDetails,
-      resourceId: this.getThresholdResourceId(rule, nodeId),
+      resourceId: await this.getThresholdResourceId(rule, nodeId, rawResourceId),
       metric: {
         name: rule.metric,
         value: currentValue,
@@ -1137,7 +1138,7 @@ export class NotificationEvaluatorService {
 
     await this.resolveAlert(existingState.id, rule, rule.category, compositeResourceId, resourceName, {
       ...extraDetails,
-      resourceId: this.getThresholdResourceId(rule, sourceId),
+      resourceId: await this.getThresholdResourceId(rule, sourceId, rawResourceId),
       metric: {
         name: rule.metric,
         value: currentValue,
@@ -1874,8 +1875,25 @@ export class NotificationEvaluatorService {
     return nodeName || rawResourceId || sourceId;
   }
 
-  private getThresholdResourceId(rule: any, sourceId?: string): string | null {
+  private async getThresholdResourceId(rule: any, sourceId?: string, rawResourceId?: string): Promise<string | null> {
     if (!sourceId) return null;
+    // A container's id is its Gateway identity (the scopeResourceId of the container API and its grants), which
+    // survives recreates; the payload names it by node and name as well (`key`, `name`, `node`).
+    if (rule.category === 'container') {
+      if (!rawResourceId) return null;
+      const [identity] = await this.db
+        .select({ id: dockerAccessResources.id })
+        .from(dockerAccessResources)
+        .where(
+          and(
+            eq(dockerAccessResources.nodeId, sourceId),
+            eq(dockerAccessResources.resourceType, 'container'),
+            eq(dockerAccessResources.resourceKey, rawResourceId)
+          )
+        )
+        .limit(1);
+      return identity?.id ?? null;
+    }
     if (
       rule.category === 'node' ||
       rule.category === 'database_postgres' ||

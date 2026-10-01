@@ -54,6 +54,7 @@ import {
   DockerContainerTransitions,
 } from './docker-container-transitions.js';
 import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker-creation-access.js';
+import { dockerDaemonUserError } from './docker-daemon-errors.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { DOCKER_DEPLOYMENT_ID_LABEL, DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { getContainerEnv as getDockerContainerEnv } from './docker-env-operations.js';
@@ -143,6 +144,24 @@ import {
 } from './docker-volume-network-operations.js';
 
 export * from './docker.service.shared.js';
+
+/**
+ * Why Secure Runtime cannot run a container on a node, from the node's runtime status. The status message describes
+ * the node ("This node can install and verify Secure Runtime"), so it is framed as the refusal it is.
+ */
+function secureRuntimeUnavailableMessage(status: { state?: unknown; message?: unknown } | undefined): string {
+  const detail = typeof status?.message === 'string' && status.message ? status.message.replace(/\.$/, '') : '';
+  switch (status?.state) {
+    case 'installable':
+      return "Secure Runtime is not installed on this node. Run Secure Runtime Setup in the node's Details, or choose another node.";
+    case 'installing':
+      return 'Secure Runtime is still being installed on this node. Try again when Setup finishes.';
+    case 'unsupported':
+      return `Secure Runtime cannot run on this node${detail ? `: ${detail}` : ''}. Choose another node.`;
+    default:
+      return `Secure Runtime is not healthy on this node${detail ? `: ${detail}` : ''}. Complete Setup in Node Details first.`;
+  }
+}
 
 export class DockerManagementService {
   private static readonly LONG_DOCKER_OPERATION_TIMEOUT_MS = 600000; // 10 minutes
@@ -891,17 +910,14 @@ export class DockerManagementService {
     const node = await this.validateDockerNode(nodeId);
     const status = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus;
     if (status?.state !== 'healthy') {
-      throw new AppError(
-        409,
-        'SECURE_RUNTIME_UNAVAILABLE',
-        status?.message || 'Secure Runtime is not healthy on this node. Complete Setup in Node Details first.'
-      );
+      throw new AppError(409, 'SECURE_RUNTIME_UNAVAILABLE', secureRuntimeUnavailableMessage(status));
     }
   }
 
   private parseResult(result: { success: boolean; error?: string; detail?: string }) {
     if (!result.success) {
-      throw new AppError(502, 'DISPATCH_ERROR', dockerDispatchErrorMessage(result, 'Command failed on daemon'));
+      const message = dockerDispatchErrorMessage(result, 'Command failed on daemon');
+      throw dockerDaemonUserError(message) ?? new AppError(502, 'DISPATCH_ERROR', message);
     }
     try {
       return result.detail ? JSON.parse(result.detail) : null;
@@ -1466,7 +1482,22 @@ export class DockerManagementService {
     const containerName = this.availabilityMutationCoordinator?.containerRemoved
       ? await this.resolveContainerName(nodeId, containerId)
       : undefined;
-    await removeDockerContainerMutation(this.containerMutationContext(), nodeId, containerId, force, userId);
+    try {
+      await removeDockerContainerMutation(this.containerMutationContext(), nodeId, containerId, force, userId);
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        error.code === 'CONTAINER_NOT_FOUND' &&
+        (await readPendingDockerSourceContainers(this.db, nodeId, containerId).catch(() => [])).length > 0
+      ) {
+        throw new AppError(
+          409,
+          'SOURCE_CONTAINER_NOT_BUILT',
+          'This container does not exist yet: the first build of its Git source creates it. Delete its Git source to remove it.'
+        );
+      }
+      throw error;
+    }
     if (containerName) await this.availabilityMutationCoordinator?.containerRemoved?.(nodeId, containerName);
   }
 

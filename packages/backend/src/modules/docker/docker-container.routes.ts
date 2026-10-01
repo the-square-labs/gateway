@@ -546,8 +546,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
       await assertComposeChildMutationAllowed(nodeId, containerId);
-      const force = c.req.query('force') === 'true';
-      await service.removeContainer(nodeId, containerId, force, user.id);
+      // Gateway never removes an active container; a stopped one needs no force.
+      await service.removeContainer(nodeId, containerId, false, user.id);
       return c.json({ success: true });
     }
   );

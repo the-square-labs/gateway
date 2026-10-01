@@ -223,7 +223,9 @@ export const removeContainerRoute = appRoute({
   path: '/nodes/{nodeId}/containers/{containerId}',
   tags: ['Docker Containers'],
   summary: 'Remove a container',
-  request: { params: containerParams, query: z.object({ force: z.coerce.boolean().optional() }) },
+  description:
+    'Removes a stopped container. A running, paused or restarting container is refused (409 CONTAINER_RUNNING): stop it first. A container a Route reaches is refused (409 PROXY_UPSTREAM_IN_USE). Its managed database and storage links are removed with it.',
+  request: { params: containerParams },
   responses: successJson,
 });
 export const renameContainerRoute = appRoute({
