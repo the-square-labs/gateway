@@ -20,15 +20,19 @@ const (
 
 // TransportLoad is what the daemon knows about its transport to one relay.
 type TransportLoad struct {
+	// Available is a transport that is connected now. A relay whose lanes
+	// lost their connection comes after every connected one, whatever its
+	// role or distance: a tunnel opened on it waits for the reconnect.
 	Available bool
 	Active    int64
 }
 
 // OrderCandidates orders the relays to try for a new source tunnel: relays
-// with a transport first, then Gateway's primaries before its standbys, then
-// the nearer path (this node's own measured round trip plus the relay's
-// round trip to the endpoint), then fewer active tunnels, then round-robin
-// from rotation. Candidates without a Gateway role get today's order.
+// with a connected transport first, then Gateway's primaries before its
+// standbys, then the nearer path (this node's own measured round trip plus
+// the relay's round trip to the endpoint), then fewer active tunnels, then
+// round-robin from rotation. Candidates without a Gateway role get today's
+// order.
 func OrderCandidates(
 	candidates []*pb.RelayDataCandidate,
 	transports map[string]TransportLoad,

@@ -34,6 +34,7 @@ var _ lifecycle.RelayPoolTunnelPlugin = (*DockerPlugin)(nil)
 type relayTunnelRouter struct {
 	plugin        *DockerPlugin
 	ctx           context.Context
+	conn          *grpc.ClientConn
 	client        relayv1.TunnelBrokerClient
 	targetID      string
 	mu            sync.Mutex
@@ -97,7 +98,7 @@ func (p *DockerPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientCon
 }
 
 func (p *DockerPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.ClientConn, _ string, relayInstanceID string) {
-	router := &relayTunnelRouter{plugin: p, ctx: ctx, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID, registrations: map[string]*relayEndpointRegistration{}, transportReady: make(chan struct{})}
+	router := &relayTunnelRouter{plugin: p, ctx: ctx, conn: conn, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID, registrations: map[string]*relayEndpointRegistration{}, transportReady: make(chan struct{})}
 	go router.watchTransport(ctx, conn)
 	p.relayTunnelMu.Lock()
 	if p.relayTunnels == nil {
@@ -307,6 +308,13 @@ func (r *relayTunnelRouter) watchTransport(ctx context.Context, conn *grpc.Clien
 		r.transportReady = make(chan struct{})
 		r.mu.Unlock()
 	}
+}
+
+// connected reports a relay whose transport is up. A source tunnel opened on
+// a relay whose connection dropped waits for the reconnect, which against a
+// relay that stopped answering ends only with the connect timeout.
+func (r *relayTunnelRouter) connected() bool {
+	return r.conn == nil || r.conn.GetState() == connectivity.Ready
 }
 
 func (r *relayTunnelRouter) transportReadySignal() <-chan struct{} {
@@ -693,7 +701,7 @@ func (p *DockerPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate)
 	p.relayTunnelMu.Lock()
 	transports := make(map[string]relaybridge.TransportLoad, len(p.relayTunnels))
 	for targetID, router := range p.relayTunnels {
-		transports[targetID] = relaybridge.TransportLoad{Available: true, Active: router.active.Load()}
+		transports[targetID] = relaybridge.TransportLoad{Available: router.connected(), Active: router.active.Load()}
 	}
 	rotation := p.relaySelection
 	p.relaySelection++

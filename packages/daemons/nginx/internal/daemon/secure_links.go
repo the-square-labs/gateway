@@ -28,6 +28,7 @@ import (
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -49,9 +50,18 @@ var secureLinkIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-
 
 type nginxRelayTunnel struct {
 	ctx      context.Context
+	conn     *grpc.ClientConn
 	client   relayv1.TunnelBrokerClient
 	targetID string
 	active   atomic.Int64
+}
+
+// connected reports a lane whose transport to its relay is up. A lane whose
+// connection dropped stays registered while it reconnects, but a tunnel
+// opened on it waits for that attempt: against a relay that stopped answering
+// (host down, port blocked) the whole setup timeout, for every connection.
+func (t *nginxRelayTunnel) connected() bool {
+	return t.conn == nil || t.conn.GetState() == connectivity.Ready
 }
 
 type sourceLinkManager struct {
@@ -990,7 +1000,7 @@ func (p *NginxPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn
 }
 
 func (p *NginxPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.ClientConn, _ string, relayInstanceID string) {
-	tunnel := &nginxRelayTunnel{ctx: ctx, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID}
+	tunnel := &nginxRelayTunnel{ctx: ctx, conn: conn, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID}
 	p.relayTunnelMu.Lock()
 	p.relayTunnels = append(p.relayTunnels, tunnel)
 	p.relayTunnelMu.Unlock()
@@ -1229,7 +1239,9 @@ func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) 
 	transports := make(map[string]relaybridge.TransportLoad, len(p.relayTunnels))
 	for _, tunnel := range p.relayTunnels {
 		load := transports[tunnel.targetID]
-		transports[tunnel.targetID] = relaybridge.TransportLoad{Available: true, Active: load.Active + tunnel.active.Load()}
+		transports[tunnel.targetID] = relaybridge.TransportLoad{
+			Available: load.Available || tunnel.connected(), Active: load.Active + tunnel.active.Load(),
+		}
 	}
 	rotation := p.relaySelection
 	p.relaySelection++
@@ -1237,16 +1249,21 @@ func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) 
 	return relaybridge.OrderCandidates(candidates, transports, rotation, relaybridge.Latency.RTT)
 }
 
+// selectRelayTunnel picks the least busy connected lane to the relay, or the
+// least busy lane while none is connected.
 func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
 	p.relayTunnelMu.Lock()
 	defer p.relayTunnelMu.Unlock()
 	var selected *nginxRelayTunnel
+	selectedConnected := false
 	for _, tunnel := range p.relayTunnels {
 		if tunnel.targetID != targetID {
 			continue
 		}
-		if selected == nil || tunnel.active.Load() < selected.active.Load() {
-			selected = tunnel
+		connected := tunnel.connected()
+		if selected == nil || (connected && !selectedConnected) ||
+			(connected == selectedConnected && tunnel.active.Load() < selected.active.Load()) {
+			selected, selectedConnected = tunnel, connected
 		}
 	}
 	if selected != nil {
