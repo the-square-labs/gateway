@@ -14,11 +14,12 @@ import {
 } from '@/lib/gateway-error-pages.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { formatHostPort } from '@/lib/network-endpoint.js';
+import { hasScope, scopeMatcher } from '@/lib/permissions.js';
 import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { getDnsResolverServers } from '@/modules/domains/dns.utils.js';
-import type { ConfigValidatorService } from '@/services/config-validator.service.js';
+import { ConfigValidatorService } from '@/services/config-validator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { injectAccessListIntoAdvancedLocations } from '@/services/nginx-advanced-location.js';
 import type { ProxyAdditionalRouteConfig, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
@@ -349,6 +350,10 @@ Handlebars.registerHelper(
   }
 );
 
+function accessListPasswordFile(accessListId: string): string {
+  return `/etc/nginx/gateway/htpasswd/access-list-${accessListId.replace(DANGEROUS_CHARS, '')}`;
+}
+
 function buildAccessListDirectives(accessList: ProxyHostConfig['accessList']): string[] {
   if (!accessList) return [];
 
@@ -358,9 +363,7 @@ function buildAccessListDirectives(accessList: ProxyHostConfig['accessList']): s
   if (accessList.ipRules.length > 0) directives.push('deny all;');
   if (accessList.basicAuthEnabled) {
     directives.push('auth_basic "Restricted Access";');
-    directives.push(
-      `auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-${accessList.id.replace(DANGEROUS_CHARS, '')};`
-    );
+    directives.push(`auth_basic_user_file ${accessListPasswordFile(accessList.id)};`);
   }
   return directives;
 }
@@ -849,7 +852,7 @@ export class NginxTemplateService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly auditService: AuditService,
-    private readonly configValidator?: ConfigValidatorService
+    private readonly configValidator: ConfigValidatorService = new ConfigValidatorService()
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -914,9 +917,56 @@ export class NginxTemplateService {
     return template;
   }
 
-  async createTemplate(input: CreateNginxTemplateInput, userId: string) {
+  /**
+   * Deny-list errors for template content written by a caller without broad proxy:unrestricted. Template content
+   * is raw nginx configuration of every route that uses the template, so it follows the raw config deny-list. A
+   * test also checks what the content rendered with sample data, because that output goes to a node.
+   */
+  templateContentErrors(content: string, scopes: readonly string[], sampleRendered?: string): string[] {
+    if (hasScope(scopes, 'proxy:unrestricted')) return [];
+    const source = this.configValidator.validateTemplate(content);
+    if (!source.valid || sampleRendered === undefined) return source.errors;
+    return this.configValidator.validateRenderedTemplate(sampleRendered).errors;
+  }
+
+  private assertTemplateContentAllowed(content: string, scopes: readonly string[]): void {
+    const errors = this.templateContentErrors(content, scopes);
+    if (errors.length > 0) {
+      throw new AppError(
+        400,
+        'INVALID_TEMPLATE_CONTENT',
+        `Template content needs proxy:unrestricted: ${errors.join('; ')}`
+      );
+    }
+  }
+
+  /**
+   * Changed content reaches every route that uses the template. Without the broad grant (a folder or template
+   * grant) the caller changes it only when they may edit each of those routes, so a folder grant cannot rewrite
+   * routes outside the caller's own.
+   */
+  private async assertTemplateRoutesEditable(templateId: string, scopes: readonly string[]): Promise<void> {
+    if (hasScope(scopes, 'proxy:templates:manage')) return;
+    const routes = await this.db
+      .select({ id: proxyHosts.id })
+      .from(proxyHosts)
+      .where(eq(proxyHosts.nginxTemplateId, templateId));
+    const holds = scopeMatcher(scopes);
+    const blocked = routes.filter((route) => !holds(`proxy:edit:${route.id}`));
+    if (blocked.length > 0) {
+      throw new AppError(
+        403,
+        'TEMPLATE_ROUTES_FORBIDDEN',
+        `Template content is used by ${blocked.length} route(s) you cannot edit`,
+        { requiredScope: `proxy:edit:${blocked[0]!.id}` }
+      );
+    }
+  }
+
+  async createTemplate(input: CreateNginxTemplateInput, userId: string, scopes: readonly string[]) {
     // Validate the template compiles
     this.compileTemplate(input.content);
+    this.assertTemplateContentAllowed(input.content, scopes);
 
     const [template] = await this.db
       .insert(nginxTemplates)
@@ -938,12 +988,14 @@ export class NginxTemplateService {
     return template;
   }
 
-  async updateTemplate(id: string, input: UpdateNginxTemplateInput, userId: string) {
+  async updateTemplate(id: string, input: UpdateNginxTemplateInput, userId: string, scopes: readonly string[]) {
     const existing = await this.getTemplate(id);
     if (existing.isBuiltin) throw new AppError(403, 'BUILTIN_IMMUTABLE', 'Built-in templates cannot be modified');
 
-    if (input.content) {
+    if (input.content !== undefined) {
       this.compileTemplate(input.content);
+      this.assertTemplateContentAllowed(input.content, scopes);
+      await this.assertTemplateRoutesEditable(id, scopes);
     }
     const [updated] = await this.db
       .update(nginxTemplates)
@@ -994,8 +1046,10 @@ export class NginxTemplateService {
     this.emitTemplate(id, 'deleted');
   }
 
-  async cloneTemplate(id: string, userId: string) {
+  async cloneTemplate(id: string, userId: string, scopes: readonly string[]) {
     const existing = await this.getTemplate(id);
+    // A copy is new content written by the caller.
+    this.assertTemplateContentAllowed(existing.content, scopes);
 
     const [clone] = await this.db
       .insert(nginxTemplates)
@@ -1026,10 +1080,17 @@ export class NginxTemplateService {
   // -----------------------------------------------------------------------
 
   renderTemplate(content: string, host: ProxyHostConfig): string {
+    return this.renderTemplateWithAdvancedConfig(content, host).rendered;
+  }
+
+  private renderTemplateWithAdvancedConfig(
+    content: string,
+    host: ProxyHostConfig
+  ): { rendered: string; advancedConfig: string | null } {
     const template = this.compileTemplate(upgradeLegacyRewriteArguments(content));
     const baseContext = this.buildBaseContext(host);
     const advancedConfig = host.advancedConfig ? this.renderTemplateString(host.advancedConfig, baseContext) : null;
-    if (advancedConfig && this.configValidator) {
+    if (advancedConfig) {
       const sourceValidation = this.configValidator.validate(host.advancedConfig!, false);
       const renderedValidation = this.configValidator.validate(advancedConfig, false);
       if (sourceValidation.valid && !renderedValidation.valid) {
@@ -1044,7 +1105,44 @@ export class NginxTemplateService {
       ...baseContext,
       advancedConfig,
     };
-    return template(context);
+    return { rendered: template(context), advancedConfig };
+  }
+
+  /**
+   * Handlebars can assemble any directive from literals and route values, so what a custom template renders gets
+   * the raw deny-list as well. Content that fails the deny-list itself was written with broad proxy:unrestricted
+   * (or before template content was checked) and renders as written.
+   */
+  private assertCustomTemplateRender(
+    content: string,
+    rendered: string,
+    advancedConfig: string | null,
+    host: ProxyHostConfig
+  ): void {
+    if (!this.configValidator.validateTemplate(content).valid) return;
+    const includePaths = [
+      host.pagesRouteIncludePath,
+      ...(host.additionalRoutes ?? []).map((route) =>
+        route.pagesRouteIncludePath ? routeNginxValue(route.pagesRouteIncludePath) : undefined
+      ),
+    ].filter((path): path is string => Boolean(path));
+    const validation = this.configValidator.validateRenderedTemplate(rendered, {
+      statements: [
+        ...includePaths.map((path) => ['include', path]),
+        ...(host.accessList ? [['auth_basic_user_file', accessListPasswordFile(host.accessList.id)]] : []),
+      ],
+      snippets: [
+        ...(advancedConfig ? [advancedConfig] : []),
+        ...(host.additionalRoutes ?? []).flatMap((route) => (route.advancedConfig ? [route.advancedConfig] : [])),
+      ],
+    });
+    if (!validation.valid) {
+      throw new AppError(
+        400,
+        'INVALID_TEMPLATE_RENDER',
+        `Template renders forbidden nginx directives for this route: ${validation.errors.join('; ')}`
+      );
+    }
   }
 
   async getBuiltinTemplateContent(type: string): Promise<string> {
@@ -1068,18 +1166,20 @@ export class NginxTemplateService {
 
   async renderForHost(host: ProxyHostConfig, templateId: string | null, hideExternalBranding = false): Promise<string> {
     let content: string;
+    let customTemplate = false;
     let supportsAdditionalRoutes = !templateId;
     if (templateId) {
       const template = await this.getTemplate(templateId);
       content = template.content;
+      customTemplate = !template.isBuiltin;
       supportsAdditionalRoutes =
         template.type === 'proxy' && (template.isBuiltin || supportsAdditionalRoutesTemplate(template.content));
     } else {
       content = await this.getBuiltinTemplateContent(host.type);
     }
-    const rendered = normalizeAcmeChallengeAlias(
-      this.applyUpstreamIpFamily(this.renderTemplate(content, host), host)
-    ).replaceAll(
+    const { rendered: renderedTemplate, advancedConfig } = this.renderTemplateWithAdvancedConfig(content, host);
+    if (customTemplate) this.assertCustomTemplateRender(content, renderedTemplate, advancedConfig, host);
+    const rendered = normalizeAcmeChallengeAlias(this.applyUpstreamIpFamily(renderedTemplate, host)).replaceAll(
       escapeNginxReturnText(GATEWAY_NOT_FOUND_HTML),
       escapeNginxReturnText(gatewayNotFoundHtml(hideExternalBranding))
     );

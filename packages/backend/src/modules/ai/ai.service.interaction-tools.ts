@@ -190,7 +190,12 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
             user,
             input.templateId ? `proxy:templates:manage:${input.templateId}` : 'proxy:templates:manage'
           );
-          return testTemplateContent(templateService, container.resolve(NodeDispatchService), input.content);
+          return testTemplateContent(
+            templateService,
+            container.resolve(NodeDispatchService),
+            input.content,
+            user.scopes
+          );
         }
         if (a.operation === 'get') {
           this.ensureToolScopeForResource(user, 'proxy:templates:view', String(a.templateId));
@@ -202,11 +207,16 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           const input = CreateNginxTemplateSchema.parse(args);
           const { NginxTemplateFolderService } = await import('@/modules/proxy/nginx-template-folders.service.js');
           await container.resolve(NginxTemplateFolderService).assertCreateFolder(user.scopes, input.folderId);
-          return templateService.createTemplate(input, user.id);
+          return templateService.createTemplate(input, user.id, user.scopes);
         }
         if (a.operation === 'update') {
           this.ensureToolScopeForResource(user, 'proxy:templates:manage', String(a.templateId));
-          return templateService.updateTemplate(a.templateId, UpdateNginxTemplateSchema.parse(args), user.id);
+          return templateService.updateTemplate(
+            a.templateId,
+            UpdateNginxTemplateSchema.parse(args),
+            user.id,
+            user.scopes
+          );
         }
         if (a.operation === 'delete') {
           this.ensureToolScopeForResource(user, 'proxy:templates:manage', String(a.templateId));
@@ -217,7 +227,7 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           // Reads the source and creates a new template.
           this.ensureToolScopeForResource(user, 'proxy:templates:view', String(a.templateId));
           this.ensureToolScope(user, 'proxy:templates:manage');
-          return templateService.cloneTemplate(a.templateId, user.id);
+          return templateService.cloneTemplate(a.templateId, user.id, user.scopes);
         }
         throw new Error(`Unsupported proxy template operation: ${String(a.operation)}`);
       }

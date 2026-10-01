@@ -46,7 +46,9 @@ registerResourceFolderRoutes(nginxTemplateRoutes, {
 // Template content is written under proxy:templates:manage (manual approval for
 // programmatic callers). Broad manage creates templates anywhere, `manage:folder/<id>` in that
 // folder; `manage:<id>` edits,
-// tests and deletes that template.
+// tests and deletes that template. The service checks the content against the raw config deny-list
+// unless the caller holds broad proxy:unrestricted, and limits a non-broad manager to templates
+// whose routes they may edit.
 // List all nginx templates
 nginxTemplateRoutes.openapi(
   { ...listNginxTemplatesRoute, middleware: requireScopeBase('proxy:templates:view') },
@@ -85,7 +87,7 @@ nginxTemplateRoutes.openapi(
     await container
       .resolve(NginxTemplateFolderService)
       .assertCreateFolder(c.get('effectiveScopes') ?? [], input.folderId);
-    const template = await service.createTemplate(input, user.id);
+    const template = await service.createTemplate(input, user.id, c.get('effectiveScopes') ?? []);
     return c.json({ data: template }, 201);
   }
 );
@@ -99,7 +101,7 @@ nginxTemplateRoutes.openapi(
     const id = c.req.param('id')!;
     const body = await c.req.json();
     const input = UpdateNginxTemplateSchema.parse(body);
-    const template = await service.updateTemplate(id, input, user.id);
+    const template = await service.updateTemplate(id, input, user.id, c.get('effectiveScopes') ?? []);
     return c.json({ data: template });
   }
 );
@@ -129,7 +131,7 @@ nginxTemplateRoutes.openapi(
       });
     }
     const id = c.req.param('id')!;
-    const clone = await service.cloneTemplate(id, user.id);
+    const clone = await service.cloneTemplate(id, user.id, scopes);
     return c.json({ data: clone }, 201);
   }
 );
@@ -179,6 +181,6 @@ nginxTemplateRoutes.openapi(
       throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${requiredScope}`, { requiredScope });
     }
 
-    return c.json({ data: await testTemplateContent(service, nodeDispatch, input.content) });
+    return c.json({ data: await testTemplateContent(service, nodeDispatch, input.content, scopes) });
   }
 );

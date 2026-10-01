@@ -43,13 +43,20 @@ export function renderTemplatePreviewForHost(
   });
 }
 
-/** Render template content with sample data and run `nginx -t` on the first nginx node (test-only apply). */
+/**
+ * Render template content with sample data and run `nginx -t` on the first nginx node (test-only apply). nginx
+ * reads every included file and loads every module while testing, so content the caller may not save never
+ * reaches the node.
+ */
 export async function testTemplateContent(
   service: NginxTemplateService,
   nodeDispatch: NodeDispatchService,
-  content: string
+  content: string,
+  scopes: readonly string[]
 ): Promise<{ rendered: string; valid: boolean; errors: string[] }> {
   const rendered = service.previewWithSampleData(content);
+  const contentErrors = service.templateContentErrors(content, scopes, rendered);
+  if (contentErrors.length > 0) return { rendered, valid: false, errors: contentErrors };
   try {
     const nodeId = await nodeDispatch.getFirstNginxNodeId();
     if (!nodeId) return { rendered, valid: false, errors: ['No nginx node available'] };

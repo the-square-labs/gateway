@@ -111,6 +111,8 @@ describe('nginx template folder routes', () => {
     expect((await call('', 'POST', { ...template, folderId: TEMPLATE })).status).toBe(403);
     expect(templates.createTemplate).not.toHaveBeenCalled();
     expect((await call('', 'POST', { ...template, folderId: FOLDER })).status).toBe(201);
-    expect(templates.createTemplate).toHaveBeenCalledWith(expect.objectContaining({ folderId: FOLDER }), 'user-1');
+    expect(templates.createTemplate).toHaveBeenCalledWith(expect.objectContaining({ folderId: FOLDER }), 'user-1', [
+      `proxy:templates:manage:folder/${FOLDER}`,
+    ]);
   });
 });
