@@ -72,7 +72,7 @@ Configure the canonical URL, authentication, and structured logging through the 
 | `pnpm test:gateway-inference` | Run inference companion tests. |
 | `pnpm test:daemon` | Run the Go daemon tests of the light suite. |
 | `pnpm test:relay` | Run local Relay tests. |
-| `pnpm test:release-upgrade` | Rehearse an upgrade from the immutable release baseline with disposable infrastructure. |
+| `pnpm test:release-upgrade -- --candidate vX.Y.Z --ssh root@host` | Prove a release candidate before a stable tag on a disposable Docker-capable Debian/Ubuntu host: install the last stable release, update through the product, update daemons and relay, force the old updater's rollback, update again, then install the candidate fresh. Prints PASS/FAIL per check and removes everything it created; `--help` lists the options. |
 | `pnpm lint` | Run frontend/backend/package lint (the frontend also runs its UI rules, `pnpm --filter frontend lint:ui-rules`) and Go vet for daemons and Relay. |
 | `pnpm lint:daemon` | Run Go vet for daemons. |
 | `pnpm typecheck` | Type-check backend, logging SDK, inference companion, and update service. |
