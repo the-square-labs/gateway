@@ -10,7 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
 
@@ -19,11 +21,14 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
 // fakeDeploymentEngine is a Docker Engine API with every slot running and attached to no network, so readiness can
-// never pass. It records the containers stopped.
+// never pass. It records the containers stopped. state, when set, gives a container's state and restart count at its
+// n-th inspection instead.
 type fakeDeploymentEngine struct {
-	t       *testing.T
-	mu      sync.Mutex
-	stopped []string
+	t           *testing.T
+	mu          sync.Mutex
+	stopped     []string
+	state       func(name string, inspection int) (map[string]any, int)
+	inspections map[string]int
 }
 
 var fakeEngineContainerPath = regexp.MustCompile(`^/v[0-9.]+/containers/([^/]+)(/[a-z]+)?$`)
@@ -58,7 +63,18 @@ func (e *fakeDeploymentEngine) serve(request *http.Request) (*http.Response, err
 	name, action := match[1], match[2]
 	switch {
 	case request.Method == http.MethodGet && action == "/json":
-		inspect, _ := json.Marshal(map[string]any{"Id": name, "Name": "/" + name, "State": map[string]any{"Running": true, "Status": "running"},
+		state, restarts := map[string]any{"Running": true, "Status": "running"}, 0
+		if e.state != nil {
+			e.mu.Lock()
+			if e.inspections == nil {
+				e.inspections = map[string]int{}
+			}
+			e.inspections[name]++
+			inspection := e.inspections[name]
+			e.mu.Unlock()
+			state, restarts = e.state(name, inspection)
+		}
+		inspect, _ := json.Marshal(map[string]any{"Id": name, "Name": "/" + name, "State": state, "RestartCount": restarts,
 			"NetworkSettings": map[string]any{"Networks": map[string]any{}}})
 		return respond(http.StatusOK, string(inspect))
 	case request.Method == http.MethodPost && action == "/stop":
@@ -135,5 +151,55 @@ func TestServingSlotIsNotStoppedOnFailedReadiness(t *testing.T) {
 	}
 	if stopped := engine.stoppedContainers(); len(stopped) != 0 {
 		t.Fatalf("serving slot stopped: %v", stopped)
+	}
+}
+
+// A candidate that crash-loops or exits fails readiness at once instead of after the deploy timeout, and is stopped.
+func TestCrashingRolloutCandidateFailsReadinessAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state func(inspection int) (map[string]any, int)
+		want  string
+	}{
+		{"crash loop", func(inspection int) (map[string]any, int) {
+			// Already restarted 4 times when readiness starts; two more restarts fail it.
+			return map[string]any{"Running": true, "Restarting": true, "Status": "restarting", "ExitCode": 3}, 3 + inspection
+		}, "deployment slot app-green is crash-looping (exit code 3, 2 restarts)"},
+		{"exit", func(int) (map[string]any, int) {
+			return map[string]any{"Running": false, "Status": "exited", "ExitCode": 1}, 0
+		}, "deployment slot app-green exited (exit code 1)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := &fakeDeploymentEngine{t: t, state: func(name string, inspection int) (map[string]any, int) {
+				if name != "app-green" {
+					return map[string]any{"Running": true, "Status": "running"}, 0
+				}
+				return tc.state(inspection)
+			}}
+			payload := deploymentCandidatePayload(t, "blue", "green", "app:2")
+			payload.Deployment.HealthConfig.DeployTimeoutSeconds = 300
+			started := time.Now()
+			_, err := engine.client().DeployDeploymentSlot(context.Background(), payload)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "green slot was stopped") {
+				t.Fatalf("crashing candidate returned %v, want %q", err, tc.want)
+			}
+			if elapsed := time.Since(started); elapsed > 10*time.Second {
+				t.Fatalf("readiness failed after %s, not at once", elapsed)
+			}
+			if stopped := engine.stoppedContainers(); len(stopped) != 1 || stopped[0] != "app-green" {
+				t.Fatalf("stopped %v, want the candidate app-green", stopped)
+			}
+		})
+	}
+}
+
+// One restart while the slot starts (a dependency not up yet) does not fail readiness.
+func TestDeploymentSlotMayRestartOnce(t *testing.T) {
+	running := &container.State{Running: true, Status: container.StateRunning}
+	if failure := deploymentSlotFailure(container.InspectResponse{State: running, RestartCount: 3}, 2); failure != "" {
+		t.Fatalf("one restart failed readiness: %s", failure)
+	}
+	if failure := deploymentSlotFailure(container.InspectResponse{State: running, RestartCount: 4}, 2); failure == "" {
+		t.Fatal("two restarts did not fail readiness")
 	}
 }
