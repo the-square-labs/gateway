@@ -21,6 +21,7 @@ import { ONE_TIME_LINK_TOKEN_PATH } from '@/lib/one-time-link-path.js';
 import { tags as openApiTags, openApiValidationHook, securitySchemes } from '@/lib/openapi.js';
 import { IDEMPOTENCY_API_DESCRIPTION, withIdempotencyKeyDocumentation } from '@/lib/openapi-idempotency.js';
 import { auditContextMiddleware } from '@/middleware/audit-context.js';
+import { emptyJsonBodyMiddleware } from '@/middleware/empty-json-body.js';
 import { errorHandler } from '@/middleware/error-handler.js';
 import { IDEMPOTENCY_REPLAYED_HEADER } from '@/middleware/idempotency.js';
 import { loggerMiddleware } from '@/middleware/logger.js';
@@ -450,6 +451,7 @@ export function createApp(): GatewayAppRuntime {
   app.use('*', auditContextMiddleware);
   app.use('*', loggerMiddleware);
   app.use('*', securityHeadersMiddleware);
+  app.use('*', emptyJsonBodyMiddleware);
   app.use('*', async (c, next) => {
     const requestHost = normalizeRequestHost(c.req.header('host'));
     const publicUrl = await getCanonicalPublicUrl();
