@@ -3,6 +3,7 @@ import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { storageToolRuntime } from '@/modules/object-storage/storage-tool-runtime.js';
 import type { User } from '@/types.js';
+import { createStorageObjectDownloadLink } from './ai.storage-object-link.js';
 import type { AIToolDefinition } from './ai.types.js';
 
 const id = { type: 'string', description: 'Canonical storage connection UUID' };
@@ -34,6 +35,26 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
     requiredScope: 'storage:objects:write',
     mcpOnly: true,
     historyRetention: { mode: 'never_full' },
+    invalidateStores: [],
+  },
+  {
+    name: 'download_storage_object',
+    description:
+      'Download an object of any size through authenticated MCP, also from private managed storage, where presign is refused. Returns a one-time download URL (valid 15 minutes, single use) with a ready `curl -fsS -o <file> <url>` command that streams the object through Gateway; a non-zero curl exit means the file is incomplete. Needs storage:objects:read on the storage connection. A missing bucket or object is refused with STORAGE_NOT_FOUND before a link is made. For a small object, read_object on manage_storage_objects returns the content directly.',
+    parameters: {
+      type: 'object',
+      properties: {
+        storageId: id,
+        bucket: { type: 'string' },
+        key: { type: 'string', description: 'Object key.' },
+      },
+      required: ['storageId', 'bucket', 'key'],
+      additionalProperties: false,
+    },
+    destructive: false,
+    category: 'Storage',
+    requiredScope: 'storage:objects:read',
+    mcpOnly: true,
     invalidateStores: [],
   },
   {
@@ -94,7 +115,7 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_storage_objects',
     description:
-      'List buckets/objects, inspect metadata, create or delete a bucket, create a prefix, delete objects, read a small object, or obtain a supported signed URL. delete_bucket takes config.bucket and needs storage:objects:admin. presign takes config.bucket/key, optional config.operation get or put (put needs storage:objects:write), contentType and expiresIn. read_object takes config.bucket/key and optional config.maxBytes (default 262144, max 1048576) and returns base64 content; use presign for larger objects.',
+      'List buckets/objects, inspect metadata, create or delete a bucket, create a prefix, delete objects, read a small object, or obtain a supported signed URL. delete_bucket takes config.bucket and needs storage:objects:admin. presign takes config.bucket/key, optional config.operation get or put (put needs storage:objects:write), contentType and expiresIn; private managed storage refuses presign. read_object takes config.bucket/key and optional config.maxBytes (default 262144, max 1048576) and returns base64 content; over MCP, download a larger object with download_storage_object.',
     parameters: {
       type: 'object',
       properties: {
@@ -183,6 +204,8 @@ export const STORAGE_TOOL_NAMES = new Set(STORAGE_AI_TOOLS.map(({ name }) => nam
 
 export async function executeStorageTool(user: User, name: string, args: Record<string, unknown>): Promise<unknown> {
   if (!container.isRegistered(TOKENS.CommercialEdition)) return commercialModuleUnavailable();
+  // The link checks the scope itself; the storage service it calls applies the storage license.
+  if (name === 'download_storage_object') return createStorageObjectDownloadLink(user, args);
   return container
     .resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition)
     .executeStorageTool(user, name, args, storageToolRuntime);

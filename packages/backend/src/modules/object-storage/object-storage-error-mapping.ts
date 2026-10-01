@@ -71,8 +71,13 @@ export function mapObjectStorageError(error: unknown, operation: ObjectStorageOp
     return new AppError(409, 'STORAGE_BUCKET_NOT_EMPTY', message);
   }
 
-  if (NOT_FOUND_NAMES.has(name) || lower.includes('does not exist')) {
-    return new AppError(404, 'STORAGE_NOT_FOUND', message);
+  if (NOT_FOUND_NAMES.has(name) || err.$metadata?.httpStatusCode === 404 || lower.includes('does not exist')) {
+    // A HEAD response has no body: the SDK then reports a missing object or bucket as "UnknownError".
+    return new AppError(
+      404,
+      'STORAGE_NOT_FOUND',
+      /^unknown(error)?$/i.test(message) ? 'The bucket or object does not exist' : message
+    );
   }
 
   if (

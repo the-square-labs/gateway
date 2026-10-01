@@ -7,10 +7,14 @@
 - `list_buckets`, `list_objects`, `head`;
 - `create_bucket` and `delete_bucket` (`storage:objects:admin`);
 - `create_prefix`, `delete_objects`;
-- `presign`: GET by default, PUT needs `storage:objects:write`;
-- `read_object`: small objects only (256 KiB by default, 1 MiB decoded at most, returned as base64). Use `presign` for anything larger.
+- `presign`: GET by default, PUT needs `storage:objects:write`; private managed storage refuses it;
+- `read_object`: small objects only (256 KiB by default, 1 MiB decoded at most, returned as base64). Download anything larger with `download_storage_object`.
 
 Deleting objects or buckets is destructive; confirm the exact bucket and keys with the user first.
+
+## Downloading objects through MCP
+
+`download_storage_object` is MCP-only: it takes `storageId`, `bucket` and `key` and needs `storage:objects:read`. It returns a one-time download URL (15 minutes, single use) and a ready `curl -fsS -o <file> <url>` command that streams the object through Gateway, so it works for any size and for private managed storage. A missing bucket or object is refused with `STORAGE_NOT_FOUND` before a link is made. If curl exits non-zero, the file is incomplete: delete it and create a new link.
 
 ## Uploading objects through MCP
 
