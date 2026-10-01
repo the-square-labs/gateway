@@ -759,7 +759,7 @@ func (m *managedStorageManager) createContainer(ctx context.Context, record *man
 		}
 		binds = append(binds, hostKeyPath+":/run/gateway-minio-sftp/host-key:ro")
 	}
-	hostCfg := &container.HostConfig{Binds: binds, RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}, Resources: container.Resources{Memory: record.MemoryBytes, MemorySwap: record.MemorySwapBytes, NanoCPUs: record.NanoCPUs}, LogConfig: container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "3"}}}
+	hostCfg := &container.HostConfig{Binds: binds, RestartPolicy: engineRestartPolicy, Resources: container.Resources{Memory: record.MemoryBytes, MemorySwap: record.MemorySwapBytes, NanoCPUs: record.NanoCPUs}, LogConfig: container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "3"}}}
 	if record.PublishS3 || record.PeerBindAddress != "" {
 		containerCfg.ExposedPorts = network.PortSet{s3Port: {}}
 		// Public S3 binds wildcard so the member is peer-reachable too. Private

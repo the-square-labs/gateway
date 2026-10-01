@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,8 @@ type fakeLoops struct {
 	held     map[string]bool
 	calls    []string
 	onDetach func(device string)
+	// attachErr fails every attach, like a node without a free loop device.
+	attachErr error
 }
 
 func newFakeLoops(t *testing.T) *fakeLoops {
@@ -72,6 +75,20 @@ func (f *fakeLoops) host() *loopHost {
 			return nil
 		},
 		sleep: func(context.Context, time.Duration) error { return nil },
+		attach: func(_ context.Context, image string) (string, error) {
+			f.calls = append(f.calls, "attach "+image)
+			if f.attachErr != nil {
+				return "", f.attachErr
+			}
+			number := strconv.Itoa(100 + len(f.loops))
+			f.attach("/dev/loop"+number, "7:"+number, image)
+			return "/dev/loop" + number, nil
+		},
+		mount: func(_ context.Context, device, path, _ string) error {
+			f.calls = append(f.calls, "mount "+device+" "+path)
+			f.mount("7:"+strings.TrimPrefix(device, "/dev/loop"), path)
+			return nil
+		},
 	}
 }
 

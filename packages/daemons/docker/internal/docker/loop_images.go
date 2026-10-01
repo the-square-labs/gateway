@@ -60,6 +60,9 @@ type loopHost struct {
 	unmount  func(ctx context.Context, path string) error
 	detach   func(ctx context.Context, device string) error
 	sleep    func(ctx context.Context, d time.Duration) error
+	// attach binds a free loop device to an image; mount mounts a device.
+	attach func(ctx context.Context, image string) (string, error)
+	mount  func(ctx context.Context, device, path, options string) error
 }
 
 var systemLoopHost = &loopHost{
@@ -81,6 +84,10 @@ var systemLoopHost = &loopHost{
 		case <-timer.C:
 			return nil
 		}
+	},
+	attach: attachDatabaseLoopDevice,
+	mount: func(ctx context.Context, device, path, options string) error {
+		return runLoopCommand(ctx, "mount", "-o", options, device, path)
 	},
 }
 
@@ -282,6 +289,29 @@ func (h *loopHost) mountedLoop(mountPath string) string {
 		}
 	}
 	return ""
+}
+
+// mountImage mounts imagePath at mountPath unless something is mounted there
+// already, and returns the loop device mounted at mountPath.
+func (h *loopHost) mountImage(ctx context.Context, imagePath, mountPath, options string) (string, error) {
+	if mounted, err := h.isMounted(canonicalLoopPath(mountPath)); err != nil {
+		return "", err
+	} else if mounted {
+		return h.mountedLoop(mountPath), nil
+	}
+	if err := os.MkdirAll(mountPath, 0o700); err != nil {
+		return "", fmt.Errorf("create mount point: %w", err)
+	}
+	device, err := h.attach(ctx, imagePath)
+	if err != nil {
+		return "", err
+	}
+	if err := h.mount(ctx, device, mountPath, options); err != nil {
+		// Nothing holds the fresh device yet, so the detach is immediate.
+		_ = h.detach(context.Background(), device)
+		return "", fmt.Errorf("mount storage image: %w", err)
+	}
+	return device, nil
 }
 
 // unmountAll removes every mount at path, stacked ones included, and retries a

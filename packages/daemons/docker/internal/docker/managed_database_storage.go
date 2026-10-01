@@ -55,27 +55,12 @@ func (m *managedDatabaseManager) ensureMounted(ctx context.Context, record *mana
 	if record.Deleting {
 		return errors.New("managed database is being deleted")
 	}
-	if mounted(record.MountPath) {
-		if loopDevice := m.loopHost().mountedLoop(record.MountPath); loopDevice != "" {
-			record.LoopDevice = loopDevice
-		}
-		return nil
-	}
-	if err := os.MkdirAll(record.MountPath, 0700); err != nil {
-		return fmt.Errorf("create database mount point: %w", err)
-	}
-	loopDevice, err := attachDatabaseLoopDevice(ctx, record.ImagePath)
+	loopDevice, err := m.loopHost().mountImage(ctx, record.ImagePath, record.MountPath, "noatime")
 	if err != nil {
-		return err
+		return fmt.Errorf("mount database storage image: %w", err)
 	}
-	record.LoopDevice = loopDevice
-	if record.LoopDevice == "" {
-		return errors.New("losetup did not return a loop device")
-	}
-	if output, err := exec.CommandContext(ctx, "mount", "-o", "noatime", record.LoopDevice, record.MountPath).CombinedOutput(); err != nil {
-		_ = exec.Command("losetup", "-d", record.LoopDevice).Run()
-		record.LoopDevice = ""
-		return fmt.Errorf("mount database storage image: %w: %s", err, strings.TrimSpace(string(output)))
+	if loopDevice != "" {
+		record.LoopDevice = loopDevice
 	}
 	return nil
 }

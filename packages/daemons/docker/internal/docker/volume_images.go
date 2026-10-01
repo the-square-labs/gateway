@@ -425,14 +425,36 @@ func (m *volumeImageManager) reconcile(ctx context.Context) error {
 		if err := m.ensureFstabEntry(record); err != nil {
 			return fmt.Errorf("persist disk-image volume %q mount: %w", record.Name, err)
 		}
+		mountedAtBoot := mounted(record.MountPath)
 		if err := m.ensureMounted(ctx, &record); err != nil {
 			return fmt.Errorf("restore disk-image volume %q: %w", record.Name, err)
+		}
+		if !mountedAtBoot {
+			m.restartVolumeUsers(ctx, record.Name)
 		}
 		if err := m.saveRecord(record); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// restartVolumeUsers restarts the running containers that use a volume whose
+// image this daemon had to mount itself: the boot-time mount did not happen,
+// so Docker started them on the bare mount point of the root filesystem, and
+// only a restart binds them to the image.
+func (m *volumeImageManager) restartVolumeUsers(ctx context.Context, name string) {
+	containers, err := m.client.cli.ContainerList(ctx, client.ContainerListOptions{Filters: client.Filters{}.Add("volume", name)})
+	if err != nil {
+		m.logger.Warn("containers of a disk-image volume mounted late could not be listed", "volume", name, "error", err)
+		return
+	}
+	for _, item := range containers.Items {
+		m.logger.Warn("container started before its disk-image volume was mounted; restarting it on the volume", "volume", name, "container", item.ID)
+		if err := m.client.RestartContainer(ctx, item.ID, 30); err != nil {
+			m.logger.Warn("container of a disk-image volume mounted late could not be restarted", "volume", name, "container", item.ID, "error", err)
+		}
+	}
 }
 
 func (m *volumeImageManager) resize(ctx context.Context, name string, target int64) error {
@@ -710,30 +732,61 @@ func escapeFstabPath(value string) string {
 	return replacer.Replace(value)
 }
 
+// volumeImageFstabEntryLine mounts the image at boot before Docker starts:
+// nofail keeps a failed mount from blocking the boot but also drops the
+// implicit ordering before local-fs.target, so the ordering against Docker,
+// which would otherwise start containers on the bare mount point, is explicit.
 func volumeImageFstabEntryLine(record volumeImageRecord) string {
 	return fmt.Sprintf(
-		"%s %s ext4 loop,noatime,nodev,nosuid,nofail 0 0",
+		"%s %s ext4 loop,noatime,nodev,nosuid,nofail,x-systemd.before=docker.service 0 0",
 		escapeFstabPath(record.ImagePath),
 		escapeFstabPath(record.MountPath),
 	)
 }
 
+// withoutFstabEntry drops a record's entry, in the current or an older format.
+func withoutFstabEntry(data string, record volumeImageRecord) string {
+	marker := volumeImageFstabMarker(record)
+	image := escapeFstabPath(record.ImagePath) + " "
+	lines := strings.Split(data, "\n")
+	filtered := make([]string, 0, len(lines))
+	for index := 0; index < len(lines); index++ {
+		if lines[index] == marker {
+			if index+1 < len(lines) && strings.HasPrefix(lines[index+1], image) {
+				index++
+			}
+			continue
+		}
+		filtered = append(filtered, lines[index])
+	}
+	return strings.Join(filtered, "\n")
+}
+
+// withFstabEntry returns data with exactly one, current entry for record.
+func withFstabEntry(data string, record volumeImageRecord) string {
+	marker := volumeImageFstabMarker(record)
+	entry := marker + "\n" + volumeImageFstabEntryLine(record) + "\n"
+	if strings.Count(data, marker+"\n") == 1 && strings.Contains(data, entry) {
+		return data
+	}
+	next := withoutFstabEntry(data, record)
+	if next != "" && !strings.HasSuffix(next, "\n") {
+		next += "\n"
+	}
+	return next + entry
+}
+
+// ensureFstabEntry also rewrites an entry an older release wrote.
 func (m *volumeImageManager) ensureFstabEntry(record volumeImageRecord) error {
 	data, err := os.ReadFile(volumeImageFstabPath)
 	if err != nil {
 		return err
 	}
-	marker := volumeImageFstabMarker(record)
-	entryLine := volumeImageFstabEntryLine(record)
-	if strings.Contains(string(data), marker+"\n"+entryLine+"\n") {
+	next := withFstabEntry(string(data), record)
+	if next == string(data) {
 		return nil
 	}
-	entry := fmt.Sprintf("%s\n%s\n", marker, entryLine)
-	separator := ""
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		separator = "\n"
-	}
-	return replaceFstab(append(append(data, separator...), entry...))
+	return replaceFstab([]byte(next))
 }
 
 func (m *volumeImageManager) removeFstabEntry(record volumeImageRecord) error {
@@ -741,20 +794,7 @@ func (m *volumeImageManager) removeFstabEntry(record volumeImageRecord) error {
 	if err != nil {
 		return err
 	}
-	marker := volumeImageFstabMarker(record)
-	entry := volumeImageFstabEntryLine(record)
-	lines := strings.Split(string(data), "\n")
-	filtered := make([]string, 0, len(lines))
-	for index := 0; index < len(lines); index++ {
-		if lines[index] == marker {
-			if index+1 < len(lines) && lines[index+1] == entry {
-				index++
-			}
-			continue
-		}
-		filtered = append(filtered, lines[index])
-	}
-	return replaceFstab([]byte(strings.Join(filtered, "\n")))
+	return replaceFstab([]byte(withoutFstabEntry(string(data), record)))
 }
 
 func replaceFstab(data []byte) error {

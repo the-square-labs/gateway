@@ -272,6 +272,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		// Copy jobs do not survive a daemon restart; remove their credentials now.
 		p.recoverStorageCopyJobs()
 		go p.runLoopImageRepair(context.Background())
+		go p.runManagedEngineSupervisor(context.Background())
 	}
 	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		composeExecutor, composeErr := newComposeExecutor(p.cfg, p.client, p.logger)

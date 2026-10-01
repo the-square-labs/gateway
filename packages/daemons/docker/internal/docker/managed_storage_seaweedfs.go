@@ -221,7 +221,7 @@ func (m *managedStorageManager) createSeaweedFSContainer(ctx context.Context, re
 	}
 	hostCfg := &container.HostConfig{
 		Binds:         []string{record.MountPath + ":/data", staging + ":" + seaweedfsContainerRoot + ":ro"},
-		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
+		RestartPolicy: engineRestartPolicy,
 		Resources:     container.Resources{Memory: record.MemoryBytes, MemorySwap: record.MemorySwapBytes, NanoCPUs: record.NanoCPUs},
 		LogConfig:     container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "3"}},
 		CapDrop:       []string{"ALL"},

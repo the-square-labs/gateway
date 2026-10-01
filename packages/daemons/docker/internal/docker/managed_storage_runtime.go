@@ -167,24 +167,12 @@ func (m *managedStorageManager) ensureMounted(ctx context.Context, record *manag
 	if record.Removed {
 		return errors.New("managed storage was removed")
 	}
-	if mounted(record.MountPath) {
-		if loop := m.loopHost().mountedLoop(record.MountPath); loop != "" {
-			record.LoopDevice = loop
-		}
-		return nil
-	}
-	if err := os.MkdirAll(record.MountPath, 0700); err != nil {
-		return err
-	}
-	loop, err := attachDatabaseLoopDevice(ctx, record.ImagePath)
+	loop, err := m.loopHost().mountImage(ctx, record.ImagePath, record.MountPath, "noatime")
 	if err != nil {
-		return err
+		return fmt.Errorf("mount managed storage image: %w", err)
 	}
-	record.LoopDevice = loop
-	if output, err := exec.CommandContext(ctx, "mount", "-o", "noatime", loop, record.MountPath).CombinedOutput(); err != nil {
-		_ = exec.Command("losetup", "-d", loop).Run()
-		record.LoopDevice = ""
-		return fmt.Errorf("mount managed storage image: %w: %s", err, strings.TrimSpace(string(output)))
+	if loop != "" {
+		record.LoopDevice = loop
 	}
 	return nil
 }
@@ -409,6 +397,11 @@ func (m *managedStorageManager) reconcile(ctx context.Context) error {
 		if err != nil {
 			m.logger.Warn("managed storage record could not be read at startup", "id", id, "error", err)
 			continue
+		}
+		if record.ContainerID != "" {
+			if err := ensureEngineRestartPolicy(ctx, m.client, record.ContainerID); err != nil {
+				m.logger.Warn("managed storage engine keeps Docker's restart policy", "id", id, "error", err)
+			}
 		}
 		if record.Removed || !record.DesiredRunning {
 			continue

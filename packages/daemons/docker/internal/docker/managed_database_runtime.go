@@ -118,7 +118,8 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		binds = append(binds, filepath.Join(record.MountPath, "gateway-tls.xml")+":/etc/clickhouse-server/config.d/gateway-tls.xml:ro")
 	}
 	hostCfg := &container.HostConfig{
-		Binds: binds,
+		Binds:         binds,
+		RestartPolicy: engineRestartPolicy,
 		LogConfig: container.LogConfig{
 			Type: "json-file",
 			Config: map[string]string{
@@ -751,6 +752,11 @@ func (m *managedDatabaseManager) reconcile(ctx context.Context) error {
 		if err != nil {
 			m.logger.Warn("managed database record could not be read at startup", "id", id, "error", err)
 			continue
+		}
+		if record.ContainerID != "" {
+			if err := ensureEngineRestartPolicy(ctx, m.client, record.ContainerID); err != nil {
+				m.logger.Warn("managed database engine keeps Docker's restart policy", "id", id, "error", err)
+			}
 		}
 		if !record.DesiredRunning {
 			continue
