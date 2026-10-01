@@ -58,7 +58,7 @@ export class AppError extends Error {
  * so the SQLSTATE lives on `cause`; the message must sit on the same error
  * as the code (the wrapper's own message embeds the query text).
  */
-function isInvalidUuidError(err: unknown): boolean {
+export function isInvalidUuidError(err: unknown): boolean {
   const seen = new Set<unknown>();
   let current: unknown = err;
   while (current && typeof current === 'object' && !seen.has(current)) {
@@ -70,6 +70,22 @@ function isInvalidUuidError(err: unknown): boolean {
     current = cause;
   }
   return false;
+}
+
+/** A zod validation error, also one thrown by another copy of zod (a separately built edition module). */
+export function isZodError(err: unknown): err is ZodError {
+  return (
+    err instanceof ZodError ||
+    (err instanceof Error && err.name === 'ZodError' && Array.isArray((err as ZodError).errors))
+  );
+}
+
+/** The `details` of a VALIDATION_ERROR: one entry per failed field. */
+export function validationErrorDetails(err: ZodError): Array<{ path: string; message: string }> {
+  return err.errors.map((e) => ({
+    path: e.path.join('.'),
+    message: e.message,
+  }));
 }
 
 export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
@@ -132,7 +148,7 @@ export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
     );
   }
 
-  if (err instanceof ZodError) {
+  if (isZodError(err)) {
     logger.warn('Validation error', {
       requestId,
       errors: err.errors,
@@ -142,10 +158,7 @@ export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
       {
         code: 'VALIDATION_ERROR',
         message: 'Request validation failed',
-        details: err.errors.map((e) => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: validationErrorDetails(err),
       },
       400
     );
