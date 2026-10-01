@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import { validateClickHouseIdentifier } from './logging-query-builder.js';
 
@@ -101,12 +102,14 @@ export class LoggingSettingsService {
     try {
       url = new URL(rawUrl);
     } catch {
-      throw new Error('ClickHouse URL must be a valid absolute URL');
+      throw invalidLoggingConfig('ClickHouse URL must be a valid absolute URL');
     }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('ClickHouse URL must use http or https');
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw invalidLoggingConfig('ClickHouse URL must use http or https');
+    }
 
     const username = (input.username ?? (local ? 'gateway' : previous?.username) ?? '').trim();
-    if (!username) throw new Error('ClickHouse username is required');
+    if (!username) throw invalidLoggingConfig('ClickHouse username is required');
     const rawPassword =
       input.password ?? (local && !previousWasLocal ? randomBytes(32).toString('base64url') : undefined);
     const password =
@@ -115,12 +118,12 @@ export class LoggingSettingsService {
         : previousWasLocal || !local
           ? previous?.password
           : undefined;
-    if (!password) throw new Error('ClickHouse password is required');
+    if (!password) throw invalidLoggingConfig('ClickHouse password is required');
     const database = validateClickHouseIdentifier(input.database ?? previous?.database ?? 'gateway_logs');
     const table = validateClickHouseIdentifier(input.table ?? previous?.table ?? 'logs');
     const requestTimeoutMs = input.requestTimeoutMs ?? previous?.requestTimeoutMs ?? 5000;
     if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1)
-      throw new Error('ClickHouse request timeout must be positive');
+      throw invalidLoggingConfig('ClickHouse request timeout must be positive');
 
     await this.setStored({
       mode: input.mode,
@@ -168,6 +171,10 @@ export class LoggingSettingsService {
       .values({ key: SETTINGS_KEY, value, updatedAt: new Date() })
       .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });
   }
+}
+
+function invalidLoggingConfig(message: string): AppError {
+  return new AppError(400, 'LOGGING_CONFIG_INVALID', message);
 }
 
 function disabledConfig(): LoggingRuntimeSettings {
