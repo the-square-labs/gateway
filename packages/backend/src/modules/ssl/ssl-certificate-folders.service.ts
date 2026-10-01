@@ -35,7 +35,12 @@ export class SSLCertificateFolderService extends FolderedResourceService {
     return super.reorderResources(input);
   }
 
-  override async moveFolder(id: string, input: MoveResourceFolderInput, userId: string, access?: FolderMoveAccess) {
+  override async moveFolder(
+    id: string,
+    input: MoveResourceFolderInput,
+    userId: string,
+    access: FolderMoveAccess | null
+  ) {
     await this.assertFolderTreeMovable(id);
     return super.moveFolder(id, input, userId, access);
   }

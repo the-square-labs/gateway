@@ -184,7 +184,12 @@ export class CertificateFolderService extends FolderedResourceService {
   }
 
   /** A folder move re-places every certificate inside it: the caller must be allowed to place each one. */
-  override async moveFolder(id: string, input: MoveResourceFolderInput, userId: string, access?: FolderMoveAccess) {
+  override async moveFolder(
+    id: string,
+    input: MoveResourceFolderInput,
+    userId: string,
+    access: FolderMoveAccess | null
+  ) {
     if (access) {
       const folderIds = await this.subtreeFolderIds(id);
       const inside = folderIds.length
@@ -200,7 +205,8 @@ export class CertificateFolderService extends FolderedResourceService {
         );
       }
     }
-    return super.moveFolder(id, input, userId);
+    // The placement check above replaces the generic one: certificates have no edit scope.
+    return super.moveFolder(id, input, userId, null);
   }
 
   private async assertMovable(ids: readonly string[]) {

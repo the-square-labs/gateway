@@ -193,7 +193,11 @@ export class FolderedResourceService {
     return folder;
   }
 
-  async moveFolder(id: string, input: MoveResourceFolderInput, userId: string, access?: FolderMoveAccess) {
+  /**
+   * `access` is required so no caller can forget the source and destination check; `null` only for a subclass that
+   * authorizes the moved resources itself.
+   */
+  async moveFolder(id: string, input: MoveResourceFolderInput, userId: string, access: FolderMoveAccess | null) {
     const result = await this.withTreeLock(async (tx) => {
       const folder = await this.getFolderOrThrow(id, tx);
       if (folder.parentId === input.parentId) return { folder, moved: false as const };

@@ -28,7 +28,7 @@ export type GenericFolderConfig = {
   /** Other scopes that list folders; held broadly they list every folder, like the HTTP folder list route. */
   listScopes?: string[];
   /** Per-resource scope a whole-folder move must hold for every moved resource and the destination. */
-  moveEditScope?: string;
+  moveEditScope: string;
   /** Scope the HTTP move-resources route requires on every moved resource and on the destination. */
   resourceMoveScope: string;
   /** Replaces the per-resource move and reorder check (and the destination check) of the HTTP routes. */
@@ -132,6 +132,7 @@ export function genericFolderConfig(resourceType: GenericFolderResourceType): Ge
         service: container.resolve(AdminUserFolderService),
         viewScope: 'admin:users',
         manageScope: 'admin:users:folders:manage',
+        moveEditScope: 'admin:users',
         resourceMoveScope: 'admin:users',
         reorderItemScope: 'admin:users',
       };
@@ -140,6 +141,7 @@ export function genericFolderConfig(resourceType: GenericFolderResourceType): Ge
         service: container.resolve(PermissionGroupFolderService),
         viewScope: 'admin:groups',
         manageScope: 'admin:groups:folders:manage',
+        moveEditScope: 'admin:groups',
         resourceMoveScope: 'admin:groups',
         reorderItemScope: 'admin:groups',
       };

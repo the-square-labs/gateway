@@ -248,12 +248,10 @@ async function executeGenericFolderTool(
     case 'update':
       return config.service.updateFolder(folderIdArg(args), UpdateResourceFolderSchema.parse(args), user.id);
     case 'move_folder':
-      return config.service.moveFolder(
-        folderIdArg(args),
-        MoveResourceFolderSchema.parse(args),
-        user.id,
-        config.moveEditScope ? { scopes: user.scopes, editScope: config.moveEditScope } : undefined
-      );
+      return config.service.moveFolder(folderIdArg(args), MoveResourceFolderSchema.parse(args), user.id, {
+        scopes: user.scopes,
+        editScope: config.moveEditScope,
+      });
     case 'delete':
       await config.service.deleteFolder(folderIdArg(args), user.id);
       return { success: true };

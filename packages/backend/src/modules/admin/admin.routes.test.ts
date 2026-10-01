@@ -10,9 +10,12 @@ import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
+import { groupRoutes } from '@/modules/groups/group.routes.js';
 import { GroupService } from '@/modules/groups/group.service.js';
+import { PermissionGroupFolderService } from '@/modules/groups/permission-group-folders.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
+import { assertFolderMoveAccess, type FolderMoveAccess } from '@/modules/resource-folders/resource-folder.service.js';
 import { DEFAULT_GENERAL_SETTINGS, GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
@@ -22,6 +25,7 @@ import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
 import { adminRoutes, generalSettingsRollbackFields, generalSettingsRollbackPatch } from './admin.routes.js';
+import { AdminUserFolderService } from './admin-user-folders.service.js';
 import { findIdentityTrustChanges } from './identity-trust-settings.js';
 
 process.env.NODE_ENV = 'test';
@@ -188,6 +192,49 @@ describe('admin user identity validation', () => {
     expect(auditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'user.avatar_reset', resourceId: target.id })
     );
+  });
+});
+
+describe('user and group folder moves', () => {
+  const OWN_FOLDER = '44444444-4444-4444-8444-444444444444';
+  const OTHER_TEAM_FOLDER = '55555555-5555-4555-8555-555555555555';
+  const OWN_MEMBER = '66666666-6666-4666-8666-666666666666';
+
+  // The moved folder holds a user and a group of another team; the real access check decides.
+  function folderServiceHolding(resourceId: string) {
+    return {
+      moveFolder: vi.fn(
+        async (_id: string, input: { parentId: string | null }, _userId: string, access: FolderMoveAccess | null) => {
+          if (access) assertFolderMoveAccess(access, [resourceId], input.parentId);
+          return { id: OTHER_TEAM_FOLDER, parentId: input.parentId };
+        }
+      ),
+    };
+  }
+
+  it('refuses moving another team folder of users or groups under a folder the caller administers', async () => {
+    registerSession([
+      'admin:users:folders:manage',
+      'admin:groups:folders:manage',
+      `admin:users:${OWN_MEMBER}`,
+      `admin:groups:${OWN_MEMBER}`,
+    ]);
+    container.registerInstance(AdminUserFolderService, folderServiceHolding(TARGET_USER.id) as never);
+    container.registerInstance(PermissionGroupFolderService, folderServiceHolding('group-of-other-team') as never);
+    const app = createApp();
+    app.route('/api/admin/groups', groupRoutes);
+
+    for (const path of [
+      `/api/admin/user-folders/${OTHER_TEAM_FOLDER}/move`,
+      `/api/admin/groups/folders/${OTHER_TEAM_FOLDER}/move`,
+    ]) {
+      const response = await app.request(path, {
+        method: 'PUT',
+        headers: sessionHeaders(),
+        body: JSON.stringify({ parentId: OWN_FOLDER }),
+      });
+      expect(response.status).toBe(403);
+    }
   });
 });
 

@@ -219,7 +219,10 @@ adminRoutes.openapi(
     const service = container.resolve(AdminUserFolderService);
     const user = c.get('user')!;
     const input = MoveResourceFolderSchema.parse(await c.req.json());
-    const data = await service.moveFolder(c.req.param('id')!, input, user.id);
+    const data = await service.moveFolder(c.req.param('id')!, input, user.id, {
+      scopes: c.get('effectiveScopes') || [],
+      editScope: 'admin:users',
+    });
     return c.json({ data });
   }
 );

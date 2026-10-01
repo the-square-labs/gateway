@@ -241,8 +241,8 @@ describe('FolderedResourceService tree consistency', () => {
     const service = treeService(db);
 
     const results = await Promise.allSettled([
-      service.moveFolder('a', { parentId: 'b' }, 'user-1'),
-      service.moveFolder('b', { parentId: 'a' }, 'user-1'),
+      service.moveFolder('a', { parentId: 'b' }, 'user-1', null),
+      service.moveFolder('b', { parentId: 'a' }, 'user-1', null),
     ]);
 
     expect(results[0]).toMatchObject({ status: 'fulfilled' });
@@ -258,7 +258,7 @@ describe('FolderedResourceService tree consistency', () => {
   it('refuses to move a folder under itself', async () => {
     const { db } = createTreeDb([{ id: 'a', name: 'A', parentId: null, depth: 0, sortOrder: 0 }]);
 
-    await expect(treeService(db).moveFolder('a', { parentId: 'a' }, 'user-1')).rejects.toMatchObject({
+    await expect(treeService(db).moveFolder('a', { parentId: 'a' }, 'user-1', null)).rejects.toMatchObject({
       code: 'CIRCULAR_REFERENCE',
     });
   });
