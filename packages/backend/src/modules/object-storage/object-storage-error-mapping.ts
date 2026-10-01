@@ -63,7 +63,8 @@ export function mapObjectStorageError(error: unknown, operation: ObjectStorageOp
   const lower = message.toLowerCase();
 
   if (AUTH_ERROR_NAMES.has(name) || lower.includes('access denied') || lower.includes('signature')) {
-    return new AppError(401, 'STORAGE_AUTH_FAILED', message);
+    // Not 401: that status means the Gateway session itself is invalid and signs the user out.
+    return new AppError(422, 'STORAGE_AUTH_FAILED', message);
   }
 
   if (name === 'BucketNotEmpty') {
