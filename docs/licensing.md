@@ -12,7 +12,7 @@ An ordinary paid key does not waive Perimeter's restriction on providing a produ
 
 Every official release includes the [Product Continuity MIT Grant](../CONTINUITY-MIT-GRANT.md), a source-continuity backstop for covered Square Labs code. The grant itself is the authoritative source for its scope, conditions, exclusions, and any MIT transition.
 
-Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterprise, adds `compose-applications` to every paid plan, and adds `git-push-to-deploy` to Business and Enterprise. Gateway still accepts legacy version 3 grants, but those grants do not unlock managed Compose lifecycle or Git source builds until the license server reissues version 4 entitlements. Community grants include read-only external Compose discovery through the shared Docker feature but do not include Pages or managed Compose mutations.
+Entitlements schema version 5 is current. It adds storage connections, external database connections, managed object storage, AI Workspace Plan Mode, Scenarios, and AI sandboxes to every paid plan and moves GitLab integration out of Community. Version 4 kept `pages` on Personal, Business, and Enterprise, added `compose-applications` to every paid plan, and added `git-push-to-deploy` to Business and Enterprise. Gateway still accepts version 3 and version 4 grants, but they do not unlock the features added after them (managed Compose lifecycle and Git source builds for version 3, the version 5 features for both) until the license server reissues version 5 entitlements. Community grants include read-only external Compose discovery through the shared Docker feature but do not include Pages, managed Compose mutations, or GitLab integration.
 
 ## Plan Positioning
 
@@ -87,7 +87,7 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 
 Workload Availability (HA) is available for mount-free Containers, Deployments, and whole Compose Projects on Business and Enterprise: 2–32 serving placements in Replicated mode or one serving placement with replacement in Failover mode. This is not HA for the Gateway control plane, nginx, registry storage, or shared volumes; metric autoscaling and same-node replicas remain in development.
 
-Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Database-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
+Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Storage-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
 
 ### Grace periods and entitlement loss
 

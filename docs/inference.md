@@ -8,7 +8,7 @@ The provider registry covers OpenAI/Codex, Anthropic, xAI, Kimi/Moonshot, Google
 
 ## Enable inference
 
-Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > General > General settings > Inference**. No process restart is required.
+Inference is disabled by default. An administrator with Gateway settings access enables it under **Settings > General > Features and updates > Inference**. No process restart is required.
 
 When disabled, management and data-plane routes return `INFERENCE_DISABLED`, and the frontend omits Inference usage, token management, and administration surfaces. Connected provider credentials, model configuration, and accounting history remain stored.
 
@@ -109,7 +109,7 @@ Supported primary operations include:
 - `POST /alpha/search`
 - `POST /realtime/calls` and `POST /live`
 
-Responses, Chat Completions, and Messages support unary and SSE responses. Responses also supports an end-to-end WebSocket transport: Gateway keeps the client socket open across turns, forwards each turn to the managed core over WebSocket, and issues fresh signed admission context per turn without converting the stream through SSE or disk files. Realtime sideband/audio WebSockets are intentionally excluded from this release. Authentication accepts only a dedicated `gwi_` token through `Authorization: Bearer` or `x-api-key`; browser sessions and regular `gw_`/`gwo_` credentials cannot enter the data plane.
+Responses, Chat Completions, and Messages support unary and SSE responses. Responses also supports an end-to-end WebSocket transport: Gateway keeps the client socket open across turns, forwards each turn to the managed core over WebSocket, and issues fresh signed admission context per turn without converting the stream through SSE or disk files. Realtime sideband/audio WebSockets are not supported. Authentication accepts only a dedicated `gwi_` token through `Authorization: Bearer` or `x-api-key`; browser sessions and regular `gw_`/`gwo_` credentials cannot enter the data plane.
 
 `GET /usage` is authenticated but does not consume inference concurrency or rate-limit admission. It returns user-visible percentage windows plus lifetime and UTC daily token totals used by compatible harness usage views; raw administrator accounting remains on management surfaces.
 
@@ -192,7 +192,7 @@ Troubleshooting:
 
 To disable inference:
 
-1. Turn off **Settings > General > General settings > Inference**. The change applies immediately.
+1. Turn off **Settings > General > Features and updates > Inference**. The change applies immediately.
 2. Revoke routing/user scopes or individual `gwi_` tokens if required.
 3. Keep provider credentials and immutable accounting/audit rows unless an administrator explicitly disconnects a provider.
 4. Do not delete inference tables as part of rollback.

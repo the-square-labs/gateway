@@ -99,10 +99,13 @@ gateway/
 |       +-- docker/       # Docker management daemon
 |       +-- monitoring/   # host metrics daemon
 |       +-- relay/        # remote Relay Pool supervisor
+|       +-- lease-watchdog/ # Availability lease fence on Docker nodes
+|       +-- backup-runner/ # database backup and storage copy runner image
 |       +-- secure-link-connector/ # Docker-to-nginx Secure Link sidecar
 |       +-- shared/       # shared Go packages and generated protobuf
 +-- proto/                # protobuf service definitions
 +-- scripts/              # Gateway and daemon installers
++-- skills/               # agent skills served as gateway://skills (synced from gateway-skills)
 +-- docker-compose.yml    # production compose stack
 +-- docker-compose.dev.yml
 ```

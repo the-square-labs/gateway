@@ -82,7 +82,7 @@ Native HTTPS and HTTP use the same port, `3000`. Native HTTPS uses a dedicated `
 
 A reverse proxy can connect to either internal protocol. Configure the proxy to trust the Gateway System CA when it verifies the native HTTPS upstream. The wizard records the Gateway addresses used by node enrollment; ingress addresses, public certificates, Cloudflare connectors, DNS records, and ACME workflows remain product configuration after the base stack is installed.
 
-Administrators can enable or disable internal HTTPS later in **Settings > General**. Gateway restarts after the change. When the browser directly addresses an IP, the UI changes `http`/`https` to follow the listener. With a domain or reverse proxy, the browser keeps its external URL and only reloads.
+Administrators can enable or disable internal HTTPS later in **Settings > General > Features and updates**. Gateway restarts after the change. When the browser directly addresses an IP, the UI changes `http`/`https` to follow the listener. With a domain or reverse proxy, the browser keeps its external URL and only reloads.
 
 ## Structured Logging
 
@@ -117,6 +117,7 @@ Back up together:
 - the `gateway_data` volume containing auto-issued TLS material;
 - the `gateway_relay_identity` volume containing relay service identity material;
 - the `gateway_relay_state` volume containing the durable relay policy and signing-key keyring;
+- the `gateway_registry_data` and `gateway_registry_auth` volumes containing the internal registry's images and its token signing material;
 - the managed ClickHouse volume when local structured logging is enabled;
 - `.env`, especially `PKI_MASTER_KEY` and database credentials.
 

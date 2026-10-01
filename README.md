@@ -165,7 +165,7 @@ The relay is a separate long-lived container and is the only public owner of `94
 
 Gateway checks its gRPC, web, and local relay certificates hourly and renews each one within 30 days of expiry without a restart: existing daemon and relay connections keep their current certificate, and new handshakes receive the renewed one. While node enrollment tokens are outstanding, the gRPC certificate their setup commands pin is renewed only in its last week.
 
-Gateway can extend that local relay into one logical Relay Pool from **Settings > Relay**. Additional relay nodes are enrolled with a dedicated supervisor, keep management outbound-only to Gateway, and expose only their configured relay data endpoint (TCP `9443` by default) to participating managed hosts. Gateway does not open firewalls, provide NAT traversal, or create an overlay network. Adding a node does not move traffic until an administrator explicitly rebalances; new connections then spread across the workload's pre-verified active relay set while the UI continues to show one logical Secure Link. Remote relay certificates renew automatically before they expire; a remote relay that cannot recover can be re-enrolled from the same page, while Gateway repairs the local relay's policy trust on its own.
+Gateway can extend that local relay into one logical Relay Pool from **Settings > Relay**. Additional relay nodes are enrolled with a dedicated supervisor, keep management outbound-only to Gateway, and expose only their configured relay data endpoint (TCP `9443` by default) to participating managed hosts. Gateway does not open firewalls, provide NAT traversal, or create an overlay network. Gateway rebalances placements onto a new relay by itself once the pool is stable (or when an administrator starts **Rebalance**) and switches a workload only after its hosts reached the new relay; new connections then spread across the workload's pre-verified active relay set while the UI continues to show one logical Secure Link. Remote relay certificates renew automatically before they expire; a remote relay that cannot recover can be re-enrolled from the same page, while Gateway repairs the local relay's policy trust on its own.
 
 Nodes do not need inbound management ports. Public traffic ports, such as `80` and `443` on nginx nodes, are still required for the services you expose.
 
@@ -205,7 +205,7 @@ Yes. Install the nginx daemon in `integrate` mode. Gateway keeps your existing `
 <details>
 <summary><strong>Can Gateway run without ClickHouse?</strong></summary>
 
-Yes. Choose **Disabled** for structured logging in the first-run wizard or **Settings > Advanced**. The rest of Gateway continues to work. Managed local ClickHouse can be disabled without deleting its data volume.
+Yes. Choose **Disabled** for structured logging in the first-run wizard or **Settings > Features**. The rest of Gateway continues to work. Managed local ClickHouse can be disabled without deleting its data volume.
 </details>
 
 <details>

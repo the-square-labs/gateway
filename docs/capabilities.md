@@ -6,7 +6,7 @@ Gateway is an AI-first but not AI-dependent infrastructure control plane. Operat
 
 Feature availability and plan limits are documented separately in [Plans and licensing](licensing.md). Capabilities marked `In development` are not generally available runtime features until released.
 
-For ready paid capabilities, Gateway enforces plan entitlements at the operation boundary as well as in the Operations Console. Plan changes preserve existing data and resources: creation and one-shot premium operations are blocked after downgrade, Git source automation stops while source history remains readable/removable, and Business-only external registry ingress is disabled. Internal PKI, SIEM export, and structured logging are disabled with their configuration and stored data retained. Personal, Business, and Enterprise expiration grace lasts 24 hours, 3 days, and 7 days respectively; the Dashboard shows a critical warning until the local deadline. See [Plans and licensing](licensing.md) for the ungrouped plan matrix and exact lifecycle rules.
+For ready paid capabilities, Gateway enforces plan entitlements at the operation boundary as well as in the Operations Console. Plan changes preserve existing data and resources: after the grace period existing paid resources keep running and stay viewable and deletable, while creating paid resources, changing their configuration, and one-shot premium operations such as Git source builds are blocked. SIEM forwarding pauses and Business-only external registry access issues no new tokens until renewal; both keep their configuration and stored data (see [Grace periods and entitlement loss](licensing.md#grace-periods-and-entitlement-loss)). Personal, Business, and Enterprise expiration grace lasts 24 hours, 3 days, and 7 days respectively; the Dashboard shows a critical warning until the local deadline. See [Plans and licensing](licensing.md) for the ungrouped plan matrix and exact lifecycle rules.
 
 ## Ingress
 
@@ -49,6 +49,8 @@ Pages workflows:
 - Model each site as a Project with immutable Deployments and mutable Tags. `latest` is system-managed, and custom Routes target Tags.
 - Store source artifacts in Gateway and materialize replicas on managed nginx nodes through `nginx_pages_v1`.
 - Configure one optional wildcard preview profile for immutable deployment hostnames. Its one-label template contains `{hash}` exactly once.
+- Give every Tag a stable preview link, `https://<project hash>-<tag>.<Pages domain>`, that follows the Tag to each later Deployment and serves the Tag's runtime configuration. Protect a Project's previews with an access list (requires a Pages node daemon that supports preview access lists) and revoke every preview link at once by rotating the Project's links.
+- Accept a build folder archive or a single HTML file as an upload, let uploaded Deployments expire after 5 minutes to 1 year, and cancel an unfinished upload.
 - Enable or disable Pages globally from Settings. Disabled Pages is removed from navigation; Community users can inspect and edit the form, but saving opens the shared Personal upgrade flow.
 - Serve public runtime configuration at `/_gateway/pages/config.js` as `window.runtime.config`. It is capped at 64 KiB, served with `no-store`, and does not change Deployment identity or artifact hashes.
 - Re-authorize resumable upload append/finalize requests and deploy-token Tag policy; publication verifies generation/status and rollback state before cleanup.
@@ -68,7 +70,7 @@ Additional Secure Link Bindings are separate user-managed bindings to Docker wor
 
 The installed local relay is a long-lived data-plane service and the sole public owner of `9443/tcp`; the Gateway app keeps only an internal gRPC listener. Managed daemons use the relay for authenticated control connections and tunnel traffic, including private managed-database bindings and Docker-to-nginx Secure Links.
 
-Gateway can extend the local relay into a Relay Pool without exposing pool topology to applications. Operators enroll remote supervisor/worker pairs, verify distinct physical fault domains, explicitly rebalance placement, drain members, and apply signed rolling updates one member at a time. Remote supervisor management remains outbound-only, while each worker's advertised data endpoint must be reachable from assigned managed hosts. Gateway does not open firewalls, provide NAT traversal, or create an overlay network; the product continues to present one logical Secure Link.
+Gateway can extend the local relay into a Relay Pool without exposing pool topology to applications. Operators enroll remote supervisor/worker pairs and verify distinct physical fault domains; Gateway rebalances placement onto ready relays by itself (or on request), measures daemon round trips so routes use the nearest relays first, and operators drain members and apply signed rolling updates one member at a time. Remote supervisor management remains outbound-only, while each worker's advertised data endpoint must be reachable from assigned managed hosts. Gateway does not open firewalls, provide NAT traversal, or create an overlay network; the product continues to present one logical Secure Link.
 
 ## Docker
 
@@ -140,7 +142,7 @@ Uploaded SSL:
 
 Internal PKI:
 
-Internal PKI is available on Enterprise. Losing the entitlement disables user-facing PKI without deleting authorities, certificates, templates, or audit history. Gateway's hidden system PKI remains available for internal platform transport.
+Internal PKI is available on Enterprise. After the grace period existing CAs and certificates stay viewable, revocable, and exportable and CRLs keep publishing; creating and changing them needs the current plan. Authorities, certificates, templates, and audit history are never deleted by a plan change. Gateway's hidden system PKI remains available for internal platform transport.
 
 - Create root and intermediate certificate authorities.
 - Issue TLS server, TLS client, code-signing, and email certificates.
@@ -167,7 +169,7 @@ Domain workflows:
 
 ## Databases
 
-Gateway can store external PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated database nodes. Enrolling database nodes is available in every plan; creating managed database instances requires Personal or higher.
+Gateway can store external PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated Storage nodes. Enrolling Storage nodes is available in every plan; creating managed database instances requires Personal or higher.
 
 AI Workspace and the remote MCP Databases toolset can read the managed catalog, provision/retry/delete instances, and create or remove standalone-container, deployment, or Compose-service bindings under the same license and database/Docker scopes as the Operations Console. The Operations Console also exposes per-binding Relay runtime telemetry for linked standalone containers, including active streams, throughput, setup latency, completion health, and admission rejects.
 
@@ -175,7 +177,7 @@ Managed instances are private by default. Gateway binds applications through a p
 
 The managed-database tunnel terminates in a dedicated long-lived relay container on the existing Gateway `9443/tcp` endpoint. Ordinary application updates do not recreate this relay, so established binding sessions and new opens for already-ready bindings can continue while the app is restarting. Relay updates are explicit data-plane maintenance and may interrupt tunnel sessions.
 
-The same logical tunnel can use a Relay Pool without exposing pool topology to the workload. Operators may enroll remote relay supervisors, explicitly rebalance assignments across distinct physical fault domains, drain instances, and roll signed relay updates one member at a time. A global fixed-count or all-ready-relays spread can be overridden per workload. Daemons balance each new connection across the pre-registered active set and exclude draining members without interrupting existing streams; Gateway remains the control plane and does not forward payload bytes.
+The same logical tunnel can use a Relay Pool without exposing pool topology to the workload. Operators may enroll remote relay supervisors, rebalance assignments across distinct physical fault domains (Gateway also does it by itself once the pool is stable), drain instances, and roll signed relay updates one member at a time. A global fixed-count or all-ready-relays spread can be overridden per workload. Daemons balance each new connection across the pre-registered active set and exclude draining members without interrupting existing streams; Gateway remains the control plane and does not forward payload bytes.
 
 TCP publication and its host port are fixed at provisioning time because Docker cannot safely change live port bindings; recreate the managed instance to change that endpoint.
 
@@ -245,7 +247,7 @@ Gateway exposes six node enrollment roles. Several roles intentionally reuse the
 | nginx | `nginx-daemon` | Public ingress, routes, TLS termination, access lists, nginx configuration, logs, and stats. |
 | docker | `docker-daemon` | Docker container and deployment management. |
 | builder | `docker-daemon` | Restricted Build Worker profile supervising dedicated BuildKit and containerd services without a Docker Engine socket. |
-| databases | `docker-daemon` | Restricted profile for Gateway-managed Postgres, Redis, and ClickHouse instances. |
+| storage | `docker-daemon` | Restricted profile for Gateway-managed Postgres, Redis, and ClickHouse instances, SeaweedFS object storage, and backup jobs. Existing `databases` nodes are shown as Storage nodes. |
 | monitoring | `monitoring-daemon` | Host metrics without nginx or Docker control. |
 | relay | `relay-supervisor` | Enrolls a physical host into the Secure Link Relay Pool and supervises its Relay worker. |
 
@@ -290,14 +292,14 @@ Logging is optional. When structured logging is set to **Disabled** in Gateway s
 Gateway includes connector and operational communication surfaces:
 
 - Cloudflare connectors for managed A/AAAA records, DNS inspection, and automated DNS-01 certificate workflows.
-- GitLab connectors with project/group allowlists, scheduled project synchronization, repository and CI operations, variables, webhooks, and sandbox clone support. Automatic container-registry discovery and import requires Personal or higher; ordinary Git integration remains available on Community.
+- GitLab connectors with project/group allowlists, scheduled project synchronization, repository and CI operations, variables, webhooks, sandbox clone support, and automatic container-registry discovery and import. GitLab integration requires Personal or higher; GitHub, generic Git, external SSH, and Cloudflare connectors are available on Community.
 - GitHub connectors for repository discovery, tree/file operations, branches, commits, Actions workflows and secrets, using the built-in Device Flow or an explicitly configured token.
 - Generic Git connectors for authenticated repository access outside the first-class GitLab and GitHub providers.
 - External SSH connectors with encrypted credentials, host-key verification, explicit scopes, and controlled command/file operations against administrator-configured hosts. This is an external integration, not a Gateway-managed node role.
 - Webhook notification targets with custom headers, templates, HMAC signing, retries, and delivery history.
 - Enterprise SIEM audit export, when enabled in Gateway settings, to up to five active HTTPS collectors, with encrypted bearer, HMAC-SHA256, or validated custom-header authentication, durable batched delivery, retry history, and least-privilege `audit:siem:*` scopes.
 - Threshold and event alert rules for nodes, containers, Git builds, Compose Projects, routes, Pages, Gateway itself (host CPU, memory and disk, backend memory and event-loop delay, API 5xx rate and latency, PostgreSQL and Redis latency and outages, stack containers, failing background jobs) and relay health, logging, integrations, certificates, security events, PostgreSQL, ClickHouse, and Redis. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.
-- Public status pages on Personal and higher with managed services, incidents, incident updates, proxy templates, and preview.
+- Public status pages on Personal and higher with managed services, incidents, incident updates, proxy templates, and preview. The Nginx node keeps serving the last published page from its cache while Gateway restarts, updates, or is unreachable.
 
 Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope. Git integration scopes can be limited to a connector, a GitLab group or project, or a GitHub owner or repository; see the Git Integration Restrictions section of [SCOPES.md](../SCOPES.md).
 

@@ -49,7 +49,7 @@ curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/se
 ```
 
 > [!IMPORTANT]
-> Daemons must reach the public Gateway relay endpoint directly on `9443/tcp`; the app-side gRPC listener is internal. During Gateway browser setup, select the direct public gRPC host or IP that should appear in enrollment commands; an optional local gRPC IP can be selected for nodes on the same private network. If the address changes later, update it in **Settings > Gateway > General settings** and generate a fresh node command instead of maintaining a manual edit workflow.
+> Daemons must reach the public Gateway relay endpoint directly on `9443/tcp`; the app-side gRPC listener is internal. During Gateway browser setup, select the direct public gRPC host or IP that should appear in enrollment commands; an optional local gRPC IP can be selected for nodes on the same private network. If the address changes later, update it in **Settings > General > Access and limits** and generate a fresh node command instead of maintaining a manual edit workflow.
 
 The wrapper downloads the daemon-specific installer and forwards all arguments.
 
@@ -95,7 +95,7 @@ Secure Runtime is an additional defense layer, not a virtual machine and not a r
 
 ### Setup and compatibility
 
-A fresh generic Docker-node installation runs a Secure Runtime preflight before enrollment and attempts installation when the host is compatible. Existing installations are not modified during upgrade: an administrator with `admin:update` can open **Node Details > Secure Runtime Setup** to run the persisted preflight and installation workflow with step and download progress.
+A fresh generic Docker-node installation runs a Secure Runtime preflight before enrollment and attempts installation when the host is compatible. Existing installations are not modified during upgrade: a user with `nodes:manage` on the node (broad `admin:update` is still accepted for one more release) can open **Node Details > Secure Runtime Setup** to run the persisted preflight and installation workflow with step and download progress.
 
 The same operations are available locally:
 
@@ -168,9 +168,13 @@ Common daemon setup options:
 | `--version <tag>` | Install a specific daemon version. |
 | `--user <username>` | Run nginx, Docker, or monitoring daemons as a specific user. Storage nodes (including legacy database nodes) accept only `--user root`. |
 | `--mode <profile>` | Docker installer only: `docker` (default), `builder`, or `storage`; `databases` is accepted as a legacy alias of the Storage profile. |
+| `--builder-egress <profile>` | Docker installer with `--mode builder` only: `internet` (default) permits public dependency downloads while blocking metadata, private, and control-plane ranges; `offline` disables build-step egress. |
+| `--nginx-mode <mode>` / `--skip-nginx` | Nginx installer only: `managed` or `integrate` (see [Nginx Node Modes](#nginx-node-modes)); `--skip-nginx` reuses an installed nginx 1.25.1 or newer. |
 | `--dry-run` | Validate inputs and show the plan without changing the host. |
 | `-y`, `--yes` | Non-interactive mode. |
 | `--help` | Show all supported options. |
+
+Every option also has an environment variable (`GATEWAY_NODE_ADDRESS`, `GATEWAY_NODE_TOKEN`, `GATEWAY_DOCKER_MODE`, and so on; `--help` lists them). `GATEWAY_LEASE_WATCHDOG_VERSION` pins the lease watchdog release that the Docker installer installs in `docker` mode (default: the latest release).
 
 The installers verify downloaded daemon binaries with SHA256 checksums and back up existing binaries during upgrades.
 
@@ -191,6 +195,8 @@ curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/se
 ```
 
 Use `managed` for fresh ingress nodes where Gateway should own nginx. Use `integrate` when nginx is already used by other workloads on the same host.
+
+In both modes the daemon installs a managed HTTPS default server (`listen 443 ssl default_server` with `ssl_reject_handshake on`), so a TLS request for a hostname without a route is refused instead of being answered with another route's site. Clients and load balancers that connect by IP over HTTPS without SNI are refused too. A node whose nginx already has its own 443 default server keeps it, and the daemon logs a warning.
 
 Gateway routes require nginx `1.25.1` or newer. On a fresh host, the installer always uses the nginx.org stable package. When it detects an older existing nginx, it asks before upgrading it; declining stops the installation before Gateway changes the nginx configuration or enrolls the daemon. Non-interactive installation refuses an unsupported existing nginx because it cannot ask for that approval.
 
@@ -214,7 +220,7 @@ Setup commands always carry the fingerprint of the gRPC certificate Gateway curr
 | Direction | Port | Purpose |
 |-----------|------|---------|
 | Node to Gateway relay | `9443/tcp` | Public relay-backed gRPC control plane and tunnel endpoint; the app-side gRPC listener is internal. |
-| Managed node to remote relay | `9443/tcp` by default | mTLS relay data plane; required only for configured Relay Pool members. |
+| Managed node to remote relay | `9443/tcp` by default | mTLS relay data plane; required only for configured Relay Pool members. Every node of a Docker Availability policy in lease mode must reach every relay. |
 | Internet to nginx node | `80/tcp`, `443/tcp` | Public HTTP/HTTPS traffic served by nginx. |
 
 Managed nodes do not need inbound management ports for Gateway.
@@ -223,7 +229,7 @@ Managed nodes do not need inbound management ports for Gateway.
 
 Relay hosts use the same enrollment lifecycle as every other managed node. Create one from **Nodes > Add Node > Relay**, or use **Settings > Relay > Add relay node** to open that same flow with Relay preselected. The node remains pending and can be deleted normally until its supervisor enrolls successfully; only then does it appear in the Relay Pool. The generated command installs a signed `relay-supervisor` and its separately signed worker, pins the Gateway certificate before sending the one-time enrollment token, and persists a physical host identity used as the Relay Pool fault domain. Two relay processes on the same physical host do not count as redundant.
 
-The supervisor connects outbound to Gateway. The worker listens on the advertised address and port (TCP `9443` by default), which must be reachable from participating Docker, nginx, Storage, and Gateway hosts. Gateway does not open that port, alter firewall rules, create an overlay, or traverse NAT. Adding a healthy relay does not remap existing endpoints; use explicit **Rebalance** after confirming reachability.
+The supervisor connects outbound to Gateway. The worker listens on the advertised address and port (TCP `9443` by default), which must be reachable from participating Docker, nginx, Storage, and Gateway hosts. Gateway does not open that port, alter firewall rules, create an overlay, or traverse NAT. Once the pool topology has been stable for 30 seconds, Gateway rebalances assignments onto a newly ready relay by itself: participating daemons probe the new relay set first, and a workload switches only after its probes succeed. **Rebalance** starts the same at once; automatic rebalancing pauses while a Relay Pool update runs. Daemons measure round trips to the relays, routes use the nearest relays first, and primaries change only when a relay is clearly closer. Availability members in lease mode are registered on every relay that supports leases.
 
 Remote relay server certificates are issued for 365 days. Gateway checks them hourly and renews each one automatically from 60 days before expiry; the worker keeps serving the previous certificate during the renewal so connected daemons are not cut off. A worker too old for that rollover reports that it needs a Relay Pool update or re-enrollment instead. When a renewal fails or a certificate has expired, **Settings > Relay** offers **Renew certificate** for that relay.
 
