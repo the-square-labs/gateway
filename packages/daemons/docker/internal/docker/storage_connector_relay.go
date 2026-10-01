@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
@@ -86,27 +85,35 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 	}
 	assignment := p.relayGrants.lookup("connect", storageBindingOwnerKind, request.BindingID)
 	if assignment == nil || (assignment.GetGrant() == nil && len(relaybridge.PoolCandidates(assignment, false)) == 0) {
+		p.linkRejections.rejected(p.logger, linkKindManagedStorageBinding, request.BindingID, linkRejectedGrantUnavailable)
 		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: "storage binding relay route is unavailable"})
 		return
 	}
-	if err := securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion}); err != nil {
+	// The connector hears "ready" only once a relay admitted the tunnel, so a refusal (the link's session capacity)
+	// reaches it as an error it logs, instead of an accepted connection that closes without a reason.
+	tunnel, err := p.openRelaySource(assignment)
+	if err != nil {
+		reason := relayRefusalReason(err)
+		p.linkRejections.rejected(p.logger, linkKindManagedStorageBinding, request.BindingID, reason, "error", relayRefusalMessage(err))
+		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: storageConnectorRelayRefusal(reason, err)})
 		return
 	}
-	p.openStorageConnectorAssignment(connection, assignment)
+	if err := securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion}); err != nil {
+		tunnel.close()
+		return
+	}
+	tunnel.bridge(connection)
 }
 
-func (p *DockerPlugin) openStorageConnectorAssignment(connection net.Conn, assignment *pb.RelayGrantAssignment) bool {
-	candidates := relaybridge.PoolCandidates(assignment, false)
-	if len(candidates) == 0 {
-		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.GetGrant()}}
+func storageConnectorRelayRefusal(reason string, err error) string {
+	switch reason {
+	case linkRejectedRelayCapacity:
+		return "storage link session capacity reached: " + relayRefusalMessage(err)
+	case linkRejectedRelayUnavailable:
+		return "storage link relay is unavailable: " + relayRefusalMessage(err)
+	default:
+		return "storage link relay refused the connection: " + relayRefusalMessage(err)
 	}
-	for _, candidate := range p.orderRelayCandidates(candidates) {
-		router := p.relayRouter(candidate.GetRelayInstanceId())
-		if router != nil && router.openSourceTunnel(connection, candidate.GetGrant()) {
-			return true
-		}
-	}
-	return false
 }
 
 // validStorageConnectorInternalWorkload is used by the internal-workload

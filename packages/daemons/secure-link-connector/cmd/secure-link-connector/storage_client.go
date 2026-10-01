@@ -6,11 +6,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
@@ -19,6 +21,9 @@ import (
 const (
 	storageConnectorListenAddress = ":9000"
 	storageBindingOwnerKind       = "managed_storage_binding"
+	// storageRelayFailureLogInterval spaces the lines of one relay failure: S3 clients retry a refused connection
+	// at once, and each retry would log again.
+	storageRelayFailureLogInterval = time.Minute
 )
 
 var storageConnectorBindingIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -99,6 +104,9 @@ func proxyStorageConnectorConnection(ctx context.Context, local net.Conn, config
 	defer local.Close()
 	remote, err := openStorageRelay(ctx, config)
 	if err != nil {
+		if ctx.Err() == nil {
+			storageRelayFailures.record(err)
+		}
 		return
 	}
 	defer remote.Close()
@@ -148,3 +156,52 @@ func openStorageRelay(ctx context.Context, config storageConnectorConfig) (net.C
 }
 
 func storageConnectorEnvironment() func(string) string { return os.Getenv }
+
+// storageRelayFailureLog logs why the daemon did not open the relay for a connection (the link's session capacity
+// reached, the relay route unavailable): the first time a reason occurs, then at most once per
+// storageRelayFailureLogInterval with the number of connections it closed in between.
+type storageRelayFailureLog struct {
+	now     func() time.Time
+	logf    func(format string, args ...any)
+	mu      sync.Mutex
+	entries map[string]*storageRelayFailureEntry
+}
+
+type storageRelayFailureEntry struct {
+	logged     time.Time
+	suppressed int
+}
+
+var storageRelayFailures = &storageRelayFailureLog{now: time.Now, logf: log.Printf}
+
+func (l *storageRelayFailureLog) record(err error) {
+	reason := err.Error()
+	now := l.now()
+	l.mu.Lock()
+	entry := l.entries[reason]
+	if entry != nil && now.Sub(entry.logged) < storageRelayFailureLogInterval {
+		entry.suppressed++
+		l.mu.Unlock()
+		return
+	}
+	if entry == nil {
+		if l.entries == nil {
+			l.entries = map[string]*storageRelayFailureEntry{}
+		}
+		for staleReason, stale := range l.entries {
+			if now.Sub(stale.logged) >= 10*storageRelayFailureLogInterval {
+				delete(l.entries, staleReason)
+			}
+		}
+		entry = &storageRelayFailureEntry{}
+		l.entries[reason] = entry
+	}
+	suppressed := entry.suppressed
+	entry.logged, entry.suppressed = now, 0
+	l.mu.Unlock()
+	if suppressed > 0 {
+		l.logf("storage connection closed, relay not opened: %s (%d more since the last line)", reason, suppressed)
+		return
+	}
+	l.logf("storage connection closed, relay not opened: %s", reason)
+}

@@ -807,9 +807,10 @@ func duplicateContainerLabels(source map[string]string) map[string]string {
 	return labels
 }
 
-// DuplicateContainer inspects a source container and creates a new one with the
-// same config and a different name.
-func (c *Client) DuplicateContainer(ctx context.Context, id string, newName string) (string, error) {
+// DuplicateContainer inspects a source container and creates a new one with the same config and a different name.
+// A copy is not linked: it leaves out removeEnv (the source's database and storage link variables, which carry the
+// links' credentials) and the source's link networks with their host aliases.
+func (c *Client) DuplicateContainer(ctx context.Context, id string, newName string, removeEnv []string) (string, error) {
 	inspResult, err := c.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", fmt.Errorf("inspect source container: %w", err)
@@ -821,11 +822,13 @@ func (c *Client) DuplicateContainer(ctx context.Context, id string, newName stri
 	cfg.Hostname = ""
 	// A copy is a new user workload: it never inherits the labels that place, group or hide a container.
 	cfg.Labels = duplicateContainerLabels(insp.Config.Labels)
+	cfg.Env = applyEnvChanges(insp.Config.Env, nil, removeEnv)
 	applyDefaultWorkloadLogConfig(insp.HostConfig, c.defaultWorkloadLogDriver())
-	netNames := inspectNetworkNames(&insp)
+	netNames := withoutLinkNetworks(inspectNetworkNames(&insp))
+	hostCfg := duplicateHostConfig(insp.HostConfig, netNames)
 	result, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:           &cfg,
-		HostConfig:       insp.HostConfig,
+		HostConfig:       hostCfg,
 		NetworkingConfig: networkingConfigForInspectNetwork(&insp, netNames),
 		Name:             newName,
 	})
@@ -839,6 +842,41 @@ func (c *Client) DuplicateContainer(ctx context.Context, id string, newName stri
 	}
 
 	return result.ID, nil
+}
+
+// isLinkNetwork reports a managed database binding or storage link network.
+func isLinkNetwork(name string) bool {
+	return strings.HasPrefix(name, "gateway-db-") || storageBindingNetworkNamePattern.MatchString(name)
+}
+
+func withoutLinkNetworks(netNames []string) []string {
+	kept := make([]string, 0, len(netNames))
+	for _, name := range netNames {
+		if !isLinkNetwork(name) {
+			kept = append(kept, name)
+		}
+	}
+	return kept
+}
+
+// duplicateHostConfig is the source's host config for a copy on netNames: without the link aliases, and on the
+// first remaining network when the source's own network mode is a link network (no network when none remains, so
+// the copy never reaches more than the source did).
+func duplicateHostConfig(source *container.HostConfig, netNames []string) *container.HostConfig {
+	if source == nil {
+		return nil
+	}
+	hostCfg := *source
+	if len(source.ExtraHosts) > 0 {
+		hostCfg.ExtraHosts = mergeManagedDatabaseExtraHosts(source.ExtraHosts, nil)
+	}
+	if isLinkNetwork(string(hostCfg.NetworkMode)) {
+		hostCfg.NetworkMode = container.NetworkMode("none")
+		if len(netNames) > 0 {
+			hostCfg.NetworkMode = container.NetworkMode(netNames[0])
+		}
+	}
+	return &hostCfg
 }
 
 // UpdateContainer performs an update of the container configuration.

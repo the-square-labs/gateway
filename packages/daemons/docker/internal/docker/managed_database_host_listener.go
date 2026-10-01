@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,10 +21,22 @@ import (
 )
 
 const (
-	managedDatabaseHostListenerGlobalConnections  = 128
-	managedDatabaseHostListenerBindingConnections = 16
-	managedDatabaseHostListenerInspectTimeout     = 5 * time.Second
+	// managedDatabaseHostListenerGlobalConnections bounds the connections of every binding's host listener on the
+	// node together (file descriptors).
+	managedDatabaseHostListenerGlobalConnections = 1024
+	// managedDatabaseBindingDefaultSessions is a binding's relay session limit when its grant names none; Gateway
+	// signs its link limit (MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS) into the grant.
+	managedDatabaseBindingDefaultSessions = 64
+	// The relay counts and caps a binding's sessions at its grant's limit, and the binding runtime shows what it
+	// refused. A host listener only guards file descriptors and abuse above that limit: it takes this many times the
+	// grant's sessions, so connections over the limit still reach the relay, which counts them.
+	managedDatabaseHostListenerSessionHeadroom = 2
+	managedDatabaseHostListenerInspectTimeout  = 5 * time.Second
 )
+
+// errManagedDatabaseListenerUnverified marks a listener network that could not be inspected (a slow or failing
+// Docker API). That proves nothing about the network, so a running listener keeps serving its connections.
+var errManagedDatabaseListenerUnverified = errors.New("inspect managed database listener network")
 
 var managedDatabaseHostContainerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
@@ -35,6 +48,9 @@ type managedDatabaseHostListenerConfig struct {
 	listenPort      uint16
 	allowedSources  []string
 	routeGeneration uint64
+	// maxConnections caps the binding's connections on the listener. A grant refresh changes it on the running
+	// listener; it is not part of the listener's identity (equal), so a new limit never drops a connection.
+	maxConnections int
 }
 
 type managedDatabaseHostListenerStatus struct {
@@ -45,9 +61,10 @@ type managedDatabaseHostListenerStatus struct {
 }
 
 type managedDatabaseHostListener struct {
+	listener *net.TCPListener
+	mu       sync.Mutex
+	// config changes in place when only the limit or the binding changes (re-key on an Availability adopt).
 	config      managedDatabaseHostListenerConfig
-	listener    *net.TCPListener
-	mu          sync.Mutex
 	closed      bool
 	connections map[net.Conn]struct{}
 }
@@ -61,6 +78,7 @@ type managedDatabaseHostListenerManager struct {
 	inspectNetwork   func(context.Context, string) (network.Inspect, error)
 	inspectContainer func(context.Context, string) (mobyclient.ContainerInspectResult, error)
 	openBinding      func(net.Conn, string, uint64)
+	rejections       linkRejectionLog
 }
 
 func newManagedDatabaseHostListenerManager(plugin *DockerPlugin) *managedDatabaseHostListenerManager {
@@ -87,10 +105,16 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 ) map[string]managedDatabaseHostListenerStatus {
 	desired, statuses := m.desired(bundle)
 	resolved := make(map[string]managedDatabaseHostListenerConfig, len(desired))
+	// unverified holds the bindings whose network could not be inspected now. Their running listeners stay and
+	// report the error; only a sync that inspects the network again replaces or closes them.
+	unverified := map[string]managedDatabaseHostListenerConfig{}
 	for bindingID, config := range desired {
 		resolvedConfig, err := m.resolve(ctx, config)
 		if err != nil {
 			statuses[bindingID] = listenerStatus(config, "error", err)
+			if errors.Is(err, errManagedDatabaseListenerUnverified) {
+				unverified[bindingID] = config
+			}
 			continue
 		}
 		resolved[bindingID] = resolvedConfig
@@ -106,14 +130,47 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// released are the listeners of bindings that left the bundle. One may serve on as another binding.
+	var released []*managedDatabaseHostListener
 	for bindingID, listener := range m.listeners {
-		config, present := resolved[bindingID]
-		if present && listener.config.equal(config) {
+		current := listener.currentConfig()
+		if config, present := resolved[bindingID]; present && current.equal(config) {
+			listener.setConfig(config)
 			statuses[bindingID] = listenerStatus(config, "ready", nil)
 			continue
 		}
-		listener.close()
+		if config, present := unverified[bindingID]; present {
+			config.networkID = current.networkID
+			if current.equal(config) {
+				listener.setConfig(config)
+				continue
+			}
+		}
 		delete(m.listeners, bindingID)
+		_, stillDesired := desired[bindingID]
+		_, stillListed := statuses[bindingID]
+		if !stillDesired && !stillListed {
+			released = append(released, listener)
+			continue
+		}
+		listener.close()
+	}
+	for _, listener := range released {
+		previous := listener.currentConfig()
+		next, verified, found := m.successorLocked(previous, resolved, unverified)
+		if !found {
+			listener.close()
+			continue
+		}
+		// An Availability adopt or release moves the binding's route to another binding id with the same network,
+		// address, sources and route generation: the listener serves on under the new id and keeps its connections.
+		listener.setConfig(next)
+		m.listeners[next.bindingID] = listener
+		if verified {
+			statuses[next.bindingID] = listenerStatus(next, "ready", nil)
+		}
+		m.logger.Info("managed database host listener moved to another binding", "from_binding_id", previous.bindingID,
+			"binding_id", next.bindingID, "address", net.JoinHostPort(next.listenAddress.String(), fmt.Sprintf("%d", next.listenPort)))
 	}
 	for bindingID, config := range resolved {
 		if _, exists := m.listeners[bindingID]; exists {
@@ -128,6 +185,40 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 		statuses[bindingID] = listenerStatus(config, "ready", nil)
 	}
 	return statuses
+}
+
+// successorLocked finds the binding a released listener serves on as: one without a listener whose config is the
+// listener's except for the binding id. verified reports a successor whose network was inspected now.
+func (m *managedDatabaseHostListenerManager) successorLocked(
+	previous managedDatabaseHostListenerConfig,
+	resolved, unverified map[string]managedDatabaseHostListenerConfig,
+) (next managedDatabaseHostListenerConfig, verified bool, found bool) {
+	passes := []struct {
+		candidates map[string]managedDatabaseHostListenerConfig
+		verified   bool
+	}{{resolved, true}, {unverified, false}}
+	for _, pass := range passes {
+		bindingIDs := make([]string, 0, len(pass.candidates))
+		for bindingID := range pass.candidates {
+			bindingIDs = append(bindingIDs, bindingID)
+		}
+		sort.Strings(bindingIDs)
+		for _, bindingID := range bindingIDs {
+			if _, exists := m.listeners[bindingID]; exists {
+				continue
+			}
+			candidate := pass.candidates[bindingID]
+			if !pass.verified {
+				candidate.networkID = previous.networkID
+			}
+			moved := previous
+			moved.bindingID = bindingID
+			if moved.equal(candidate) {
+				return candidate, pass.verified, true
+			}
+		}
+	}
+	return managedDatabaseHostListenerConfig{}, false, false
 }
 
 func (m *managedDatabaseHostListenerManager) desired(bundle *pb.SyncRelayGrantsCommand) (map[string]managedDatabaseHostListenerConfig, map[string]managedDatabaseHostListenerStatus) {
@@ -187,7 +278,33 @@ func managedDatabaseHostListenerConfigFromAssignment(assignment *pb.RelayGrantAs
 	return managedDatabaseHostListenerConfig{
 		bindingID: assignment.GetOwnerId(), networkName: listener.GetNetworkName(), listenAddress: address,
 		listenPort: uint16(listener.GetListenPort()), allowedSources: allowed, routeGeneration: listener.GetRouteGeneration(),
+		maxConnections: managedDatabaseHostListenerSessionHeadroom * int(relayGrantSessionLimit(assignment, managedDatabaseBindingDefaultSessions)),
 	}, nil
+}
+
+// relayGrantSessionLimit reads the session limit Gateway signed into an assignment's grants (the relay enforces it
+// and verifies the grant; the daemon only sizes its own guard from it), or fallback when they name none.
+func relayGrantSessionLimit(assignment *pb.RelayGrantAssignment, fallback uint32) uint32 {
+	grants := []*pb.RelaySignedGrant{assignment.GetGrant()}
+	for _, candidate := range assignment.GetCandidates() {
+		grants = append(grants, candidate.GetGrant())
+	}
+	limit := uint32(0)
+	for _, grant := range grants {
+		if len(grant.GetPayload()) == 0 {
+			continue
+		}
+		var claims struct {
+			MaxConcurrentSessions uint32 `json:"maxConcurrentSessions"`
+		}
+		if json.Unmarshal(grant.GetPayload(), &claims) == nil && claims.MaxConcurrentSessions > limit {
+			limit = claims.MaxConcurrentSessions
+		}
+	}
+	if limit == 0 {
+		return fallback
+	}
+	return limit
 }
 
 func normalizedManagedDatabaseAllowedSources(values []string) ([]string, error) {
@@ -232,8 +349,11 @@ func (m *managedDatabaseHostListenerManager) resolve(ctx context.Context, config
 	inspectCtx, cancel := context.WithTimeout(ctx, managedDatabaseHostListenerInspectTimeout)
 	defer cancel()
 	inspected, err := m.inspectNetwork(inspectCtx, config.networkName)
+	if isNotFoundErr(err) {
+		return config, fmt.Errorf("managed database listener network %s does not exist: %w", config.networkName, err)
+	}
 	if err != nil {
-		return config, fmt.Errorf("inspect managed database listener network: %w", err)
+		return config, fmt.Errorf("%w: %w", errManagedDatabaseListenerUnverified, err)
 	}
 	if inspected.Name != config.networkName || inspected.ID == "" || inspected.Driver != "bridge" || inspected.Ingress || inspected.ConfigOnly {
 		return config, errors.New("managed database listener network is not a dedicated bridge network")
@@ -302,15 +422,25 @@ func (m *managedDatabaseHostListenerManager) acquire(listener *managedDatabaseHo
 	select {
 	case m.global <- struct{}{}:
 	default:
+		m.rejections.rejected(m.logger, linkKindManagedDatabaseBinding, listener.currentConfig().bindingID, linkRejectedNodeLimit,
+			"limit", cap(m.global))
 		return false
 	}
 	listener.mu.Lock()
-	defer listener.mu.Unlock()
-	if listener.closed || len(listener.connections) >= managedDatabaseHostListenerBindingConnections {
+	if listener.closed {
+		listener.mu.Unlock()
 		<-m.global
 		return false
 	}
+	if limit := listener.config.maxConnections; len(listener.connections) >= limit {
+		bindingID := listener.config.bindingID
+		listener.mu.Unlock()
+		<-m.global
+		m.rejections.rejected(m.logger, linkKindManagedDatabaseBinding, bindingID, linkRejectedListenerLimit, "limit", limit)
+		return false
+	}
 	listener.connections[connection] = struct{}{}
+	listener.mu.Unlock()
 	return true
 }
 
@@ -322,36 +452,55 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 		<-m.global
 		_ = connection.Close()
 	}()
+	config := listener.currentConfig()
+	reject := func(reason string, attrs ...any) {
+		m.rejections.rejected(m.logger, linkKindManagedDatabaseBinding, config.bindingID, reason, attrs...)
+	}
 	remote, ok := connection.RemoteAddr().(*net.TCPAddr)
 	if !ok {
 		return
 	}
 	remoteAddress, ok := netip.AddrFromSlice(remote.IP)
 	if !ok || !remoteAddress.Unmap().Is4() {
+		reject(linkRejectedUnknownPeer, "peer", remote.IP.String())
 		return
 	}
 	inspectCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseHostListenerInspectTimeout)
 	defer cancel()
-	inspected, err := m.inspectNetwork(inspectCtx, listener.config.networkName)
-	if err != nil || inspected.Name != listener.config.networkName || inspected.ID != listener.config.networkID {
+	inspected, err := m.inspectNetwork(inspectCtx, config.networkName)
+	if err != nil {
+		reject(linkRejectedNetworkUnverified, "error", err.Error())
 		return
 	}
-	if gateway, gatewayErr := managedDatabaseNetworkGatewayAddress(inspected); gatewayErr != nil || gateway != listener.config.listenAddress {
+	if inspected.Name != config.networkName || inspected.ID != config.networkID {
+		reject(linkRejectedNetworkChanged)
+		return
+	}
+	if gateway, gatewayErr := managedDatabaseNetworkGatewayAddress(inspected); gatewayErr != nil || gateway != config.listenAddress {
+		reject(linkRejectedNetworkChanged)
 		return
 	}
 	containerID := managedDatabaseListenerPeerContainerID(inspected, remoteAddress.Unmap())
 	if containerID == "" {
+		reject(linkRejectedUnknownPeer, "peer", remoteAddress.Unmap().String())
 		return
 	}
 	containerInspect, err := m.inspectContainer(inspectCtx, containerID)
-	if err != nil || !managedDatabaseListenerSourceAllowed(containerInspect, listener.config.allowedSources) {
+	if err != nil {
+		reject(linkRejectedNetworkUnverified, "error", err.Error())
 		return
 	}
+	if !managedDatabaseListenerSourceAllowed(containerInspect, config.allowedSources) {
+		reject(linkRejectedSourceNotAllowed, "container", strings.TrimPrefix(containerInspect.Container.Name, "/"))
+		return
+	}
+	// A re-key while the peer was checked moved the listener to another binding with the same network and sources:
+	// the connection belongs to the binding the listener serves now.
 	listener.mu.Lock()
-	active := !listener.closed
+	active, current := !listener.closed, listener.config
 	listener.mu.Unlock()
 	if active {
-		m.openBinding(connection, listener.config.bindingID, listener.config.routeGeneration)
+		m.openBinding(connection, current.bindingID, current.routeGeneration)
 	}
 }
 
@@ -389,6 +538,18 @@ func managedDatabaseListenerSourceAllowed(inspected mobyclient.ContainerInspectR
 		}
 	}
 	return false
+}
+
+func (listener *managedDatabaseHostListener) currentConfig() managedDatabaseHostListenerConfig {
+	listener.mu.Lock()
+	defer listener.mu.Unlock()
+	return listener.config
+}
+
+func (listener *managedDatabaseHostListener) setConfig(config managedDatabaseHostListenerConfig) {
+	listener.mu.Lock()
+	listener.config = config
+	listener.mu.Unlock()
 }
 
 func (listener *managedDatabaseHostListener) close() {
