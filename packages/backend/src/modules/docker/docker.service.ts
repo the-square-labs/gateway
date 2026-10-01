@@ -104,7 +104,7 @@ import {
 } from './docker-read-operations.js';
 import { dockerDispatchErrorMessage } from './docker-recreate-watch.js';
 import type { DockerRegistryService } from './docker-registry.service.js';
-import { collectDockerRolloutDiagnostics, DOCKER_ROLLOUT_RAW_LIMIT } from './docker-rollout-diagnostics.js';
+import { collectDockerRolloutDiagnostics, DOCKER_ROLLOUT_RESPONSE_LIMIT } from './docker-rollout-diagnostics.js';
 import { applyRuntimeSettingsToInspect } from './docker-runtime-inspect.js';
 import type { DockerRuntimeOperationContext } from './docker-runtime-operations.js';
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
@@ -1516,17 +1516,29 @@ export class DockerManagementService {
   }
 
   /** Bounded, redacted evidence captured before a failed rollout removes its runtime. */
-  async getContainerFailureDiagnostics(nodeId: string, containerId: string): Promise<string> {
+  /**
+   * Startup evidence of a container whose rollout failed (see collectDockerRolloutDiagnostics). `containerName` lets
+   * the log lines be redacted with the values Gateway stores for the container when its inspect cannot be read.
+   */
+  async getContainerFailureDiagnostics(nodeId: string, containerId: string, containerName?: string): Promise<string> {
     const parseBounded = (result: { success: boolean; error?: string; detail?: string }) => {
       if (
-        (result.detail?.length ?? 0) > DOCKER_ROLLOUT_RAW_LIMIT ||
-        Buffer.byteLength(result.detail ?? '') > DOCKER_ROLLOUT_RAW_LIMIT
+        (result.detail?.length ?? 0) > DOCKER_ROLLOUT_RESPONSE_LIMIT ||
+        Buffer.byteLength(result.detail ?? '') > DOCKER_ROLLOUT_RESPONSE_LIMIT
       ) {
         throw new Error('Oversized runtime diagnostic response');
       }
       return this.parseResult(result);
     };
     return collectDockerRolloutDiagnostics({
+      storedValues: async () => {
+        if (!containerName) return [];
+        const [env, secrets] = await Promise.all([
+          this.environmentService?.getDecryptedMap(nodeId, containerName),
+          this.secretService?.getDecryptedMap(nodeId, containerName),
+        ]);
+        return [...Object.values(env ?? {}), ...Object.values(secrets ?? {})];
+      },
       inspect: async (timeoutMs) =>
         parseBounded(await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId }, timeoutMs)),
       logs: async (timeoutMs) =>
