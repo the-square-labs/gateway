@@ -3,6 +3,8 @@
  * winston JSON lines; other containers (Postgres, Redis, relay, registry) write plain text.
  */
 
+import { GATEWAY_TOKEN_PATTERN, PRIVATE_KEY_PATTERN } from '@/lib/secret-patterns.js';
+
 export const LOG_LEVELS = ['error', 'warn', 'info', 'debug'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
@@ -25,10 +27,27 @@ export interface LogFilter {
 const MAX_FIELD_TEXT = 2_000;
 const MAX_MESSAGE_TEXT = 4_000;
 const SECRET_KEY = /pass(word)?|secret|token|api[-_]?key|authorization|cookie|credential|private[-_]?key/i;
+/**
+ * A name that holds a secret, as a `.env` variable, a query parameter, a header or a `key: value` pair:
+ * POSTGRES_PASSWORD, GITHUB_TOKEN, access_token, x-api-key, PKI_MASTER_KEY. Bounded so a long run of name characters
+ * cannot make the scan quadratic.
+ */
+const SECRET_NAME =
+  '[A-Za-z0-9_.-]{0,64}(?:pass(?:word|wd)|pwd|secret|token|credential|api[-_]?key|access[-_]?key|private[-_]?key)[A-Za-z0-9_.-]{0,64}|[A-Za-z0-9_.-]{0,64}_key';
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
+  // A private key block, also one cut off by the log line limit.
+  [
+    new RegExp(`${PRIVATE_KEY_PATTERN.source}(?:[\\s\\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----|[\\s\\S]*$)`, 'g'),
+    '[REDACTED PRIVATE KEY]',
+  ],
+  [/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, '[REDACTED JWT]'],
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g, '$1 [REDACTED]'],
-  [/\b([a-z][a-z0-9+.-]*:\/\/[^:/\s@]+):[^@\s/]+@/gi, '$1:[REDACTED]@'],
-  [/\b(password|passwd|pwd|secret|token|api[-_]?key)=([^\s&"']+)/gi, '$1=[REDACTED]'],
+  // URL userinfo, also without a user name (`redis://:password@host`, the form Gateway builds itself).
+  [/\b([a-z][a-z0-9+.-]*:\/\/[^:/\s@]*):[^@\s/]+@/gi, '$1:[REDACTED]@'],
+  // SQL as Postgres logs it: CREATE/ALTER ROLE … PASSWORD 'value'.
+  [/\b(PASSWORD)\s+'(?:[^']|'')*'/gi, "$1 '[REDACTED]'"],
+  [new RegExp(`(\\b(?:${SECRET_NAME})["']?\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s&"',;]+)`, 'gi'), '$1[REDACTED]'],
+  [new RegExp(GATEWAY_TOKEN_PATTERN.source, 'g'), '[REDACTED]'],
 ];
 
 const RELATIVE_TIME = /^(\d+)\s*(s|m|h|d)$/i;

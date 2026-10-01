@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Context, Next } from 'hono';
 import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { GATEWAY_TOKEN_PATTERN, PRIVATE_KEY_PATTERN } from '@/lib/secret-patterns.js';
 import { CacheService, type RedisClient } from '@/services/cache.service.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import type { AppEnv } from '@/types.js';
@@ -246,10 +247,8 @@ const SECRET_FIELD_SUFFIXES = [
   'credentials',
 ];
 const REDACTED_VALUE = /^(?:\[?redacted\]?|\*+|•+)$/i;
-const PRIVATE_KEY_PATTERN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
 const PASSWORD_HASH_PATTERN = /^\$(?:2[abxy]?|argon2(?:id|i|d)|scrypt|pbkdf2[-a-z0-9]*|[156])\$/;
 const CREDENTIAL_URL_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i;
-const GATEWAY_TOKEN_PATTERN = /\bgw[a-z]{0,3}_[A-Za-z0-9_-]{16,}/;
 const SECRET_ENV_ASSIGNMENT =
   /^[A-Za-z0-9_.-]*(?:PASSWORD|PASSWD|SECRET|TOKEN|PRIVATE_KEY|API_KEY|ACCESS_KEY)[A-Za-z0-9_.-]*=./i;
 const SECRET_SCAN_MAX_NODES = 20_000;
