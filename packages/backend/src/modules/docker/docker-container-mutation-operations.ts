@@ -1539,8 +1539,13 @@ export async function recreateWithConfig(
   return executeRecreate();
 }
 
+/**
+ * Secure Runtime rules for a create, or for a recreate of `inspect`. A recreate that does not name a runtime profile
+ * keeps the container's runtime, so a Secure Runtime container is held to the rules with its new configuration.
+ */
 function assertSecureRuntimeConfiguration(config: Record<string, unknown>, inspect?: Record<string, any>) {
-  if (config.runtimeProfile !== 'secure') return;
+  const runtimeProfile = config.runtimeProfile ?? (inspect?.HostConfig?.Runtime === 'runsc' ? 'secure' : undefined);
+  if (runtimeProfile !== 'secure') return;
   const requestedNetworks = Array.isArray(config.networks) ? config.networks : undefined;
   const networkMode =
     requestedNetworks !== undefined
