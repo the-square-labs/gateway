@@ -483,7 +483,7 @@ describe('runFoundationMigrations', () => {
       `GATEWAY_RELAY_IMAGE_REF=registry/gateway/relay@sha256:${'a'.repeat(64)}`
     );
     expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_RELAY_TARGET=relay:9443');
-    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_REGISTRY_IMAGE_REF=registry:3');
+    expect(await readFile(path.join(tempDir, '.env'), 'utf8')).toContain('GATEWAY_REGISTRY_IMAGE_REF=ghcr.io/the-square-labs/gateway/registry@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8');
     const firstRegistrySecret = /^GATEWAY_REGISTRY_HTTP_SECRET=(.+)$/m.exec(
       await readFile(path.join(tempDir, '.env'), 'utf8')
     )?.[1];

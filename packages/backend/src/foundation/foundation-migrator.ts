@@ -12,7 +12,8 @@ const RELAY_SERVICE_START = '# gateway-managed:start relay-service';
 const RELAY_SERVICE_END = '# gateway-managed:end relay-service';
 const REGISTRY_SERVICE_START = '# gateway-managed:start registry-service';
 const REGISTRY_SERVICE_END = '# gateway-managed:end registry-service';
-const DEFAULT_REGISTRY_IMAGE_REF = 'registry:3';
+const DEFAULT_REGISTRY_IMAGE_REF =
+  'ghcr.io/the-square-labs/gateway/registry@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8';
 /** Bounded container logs for installer-managed services; Docker keeps json-file logs forever otherwise. */
 export const COMPOSE_LOG_MAX_SIZE = '50m';
 export const COMPOSE_LOG_MAX_FILE = '3';
