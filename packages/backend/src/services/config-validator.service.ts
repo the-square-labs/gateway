@@ -3,15 +3,84 @@ import { createChildLogger } from '@/lib/logger.js';
 const logger = createChildLogger('ConfigValidatorService');
 
 type ConfigToken =
-  | { type: 'statement'; text: string; line: number }
-  | { type: 'blockOpen'; text: string; line: number }
+  | { type: 'statement' | 'blockOpen'; words: string[]; line: number }
   | { type: 'blockClose'; line: number };
+
+interface ParsedConfig {
+  tokens: ConfigToken[];
+  /** First lexical error. nginx stops reading there; this reader goes on, so nothing after it goes unchecked. */
+  syntaxError: string | null;
+}
+
+type DenyList = 'advanced' | 'raw' | 'none';
+
+interface CheckOptions {
+  denyList: DenyList;
+  /** Size, line length and brace checks for stored text; rendered output is checked for directives only. */
+  limits: { maxLength: number } | null;
+  /** nginx syntax and block structure, for snippets that Handlebars does not assemble into whole statements. */
+  syntax: boolean;
+  /** Statements (see statementKey) allowed even though their directive is forbidden. */
+  allowedStatements?: ReadonlySet<string>;
+  /** The text is inserted into a non-root location Gateway renders. */
+  insideLocation?: boolean;
+}
+
+export interface ConfigValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+/** Statements with forbidden directive names that Gateway's own templates emit, in their template form. */
+const GATEWAY_TEMPLATE_STATEMENTS: readonly RegExp[] = [
+  /include\s+{{\s*pagesRouteIncludePath\s*}}\s*;/g,
+  /auth_basic_user_file\s+\/etc\/nginx\/gateway\/htpasswd\/access-list-{{\s*accessList\.id\s*}}\s*;/g,
+];
+
+const RAW_MAX_LENGTH = 262144;
+const ADVANCED_MAX_LENGTH = 65536;
+
+function isNginxSpace(char: string): boolean {
+  return char === ' ' || char === '\t' || char === '\r' || char === '\n';
+}
+
+function blank(text: string): string {
+  return text.replace(/[^\n]/g, ' ');
+}
+
+function statementKey(words: readonly string[]): string {
+  return words.join('\u0000');
+}
+
+/** The argument nginx stores for a token: quotes removed, `\"`, `\'`, `\\`, `\t`, `\r` and `\n` unescaped. */
+function unescapeWord(raw: string): string {
+  let word = '';
+  for (let index = 0; index < raw.length; index++) {
+    const char = raw[index]!;
+    const next = raw[index + 1];
+    if (char === '\\' && next !== undefined) {
+      if (next === '"' || next === "'" || next === '\\') {
+        word += next;
+        index++;
+        continue;
+      }
+      const control = next === 't' ? '\t' : next === 'r' ? '\r' : next === 'n' ? '\n' : null;
+      if (control) {
+        word += control;
+        index++;
+        continue;
+      }
+    }
+    word += char;
+  }
+  return word;
+}
 
 export class ConfigValidatorService {
   private static readonly HANDLEBARS_EXPR_RE = /{{{[\s\S]*?}}}|{{[\s\S]*?}}/g;
 
   private static stripHandlebarsExpressions(snippet: string): string {
-    return snippet.replace(ConfigValidatorService.HANDLEBARS_EXPR_RE, (match) => match.replace(/[^\n]/g, ' '));
+    return snippet.replace(ConfigValidatorService.HANDLEBARS_EXPR_RE, blank);
   }
 
   /**
@@ -71,16 +140,9 @@ export class ConfigValidatorService {
     'grpc_pass',
   ];
 
-  private static readonly LOCATION_OPEN_RE = /^location\b(?<rest>.*)$/i;
-
   private static readonly ROOT_LOCATION_PATTERNS: readonly RegExp[] = [/^\/$/, /^=\s*\/$/, /^\^~\s*\/$/];
 
-  private static directiveName(tokenText: string): string {
-    return tokenText.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
-  }
-
-  private static matchesForbiddenDirective(tokenText: string, directive: string): boolean {
-    const name = ConfigValidatorService.directiveName(tokenText);
+  private static matchesForbiddenDirective(name: string, directive: string): boolean {
     const forbidden = directive.trim().toLowerCase();
     if (!name || !forbidden) return false;
     if (forbidden === 'lua_') {
@@ -97,88 +159,290 @@ export class ConfigValidatorService {
     return ConfigValidatorService.ROOT_LOCATION_PATTERNS.some((pattern) => pattern.test(normalized));
   }
 
-  private static tokenize(snippet: string): ConfigToken[] {
+  /**
+   * Split config text into statements and blocks the way nginx reads it (ngx_conf_read_token): `#` starts a
+   * comment and quotes start a string only at the beginning of a token, a backslash escapes the next character
+   * inside and outside strings, and `${` stays part of a variable. A tokenizer that disagrees with nginx on any
+   * of these would let a directive hide inside what it takes for a comment or a string. After a syntax error it
+   * keeps reading: blanked Handlebars expressions leave statements nginx never sees in that form.
+   */
+  private static parse(text: string): ParsedConfig {
     const tokens: ConfigToken[] = [];
-    let buffer = '';
+    let words: string[] = [];
     let line = 1;
-    let tokenLine = 1;
-    let inComment = false;
-    let quote: '"' | "'" | null = null;
+    let statementLine = 1;
+    let start = 0;
+    let lastSpace = true;
+    let needSpace = false;
+    let comment = false;
+    let escaped = false;
+    let doubleQuoted = false;
+    let singleQuoted = false;
+    let variable = false;
 
-    const flushBuffer = (type: 'statement' | 'blockOpen') => {
-      const text = buffer.trim();
-      if (text !== '') {
-        tokens.push({ type, text, line: tokenLine });
-      }
-      buffer = '';
+    const reset = () => {
+      words = [];
+      lastSpace = true;
+      needSpace = false;
+      variable = false;
+    };
+    const end = (type: 'statement' | 'blockOpen') => {
+      tokens.push({ type, words, line: statementLine });
+      reset();
+    };
+    let syntaxError: string | null = null;
+    const error = (message: string) => {
+      syntaxError ??= `${message} on line ${line}`;
     };
 
-    const appendChar = (char: string) => {
-      if (buffer === '') {
-        tokenLine = line;
-      }
-      buffer += char;
-    };
-
-    for (let i = 0; i < snippet.length; i++) {
-      const char = snippet[i];
-
-      if (inComment) {
-        if (char === '\n') {
-          inComment = false;
-          line++;
-        }
-        continue;
-      }
-
-      if (quote) {
-        appendChar(char);
-        if (char === quote && snippet[i - 1] !== '\\') {
-          quote = null;
-        }
-        continue;
-      }
-
-      if (char === '#') {
-        inComment = true;
-        continue;
-      }
-
-      if (char === '"' || char === "'") {
-        quote = char;
-        appendChar(char);
-        continue;
-      }
-
-      if (char === ';') {
-        flushBuffer('statement');
-        continue;
-      }
-
-      if (char === '{') {
-        flushBuffer('blockOpen');
-        continue;
-      }
-
-      if (char === '}') {
-        flushBuffer('statement');
-        tokens.push({ type: 'blockClose', line });
-        continue;
-      }
-
+    for (let index = 0; index < text.length; index++) {
+      const char = text[index]!;
       if (char === '\n') {
-        if (buffer !== '' && !/\s$/.test(buffer)) {
-          buffer += ' ';
-        }
         line++;
+        comment = false;
+      }
+      if (comment) continue;
+      if (escaped) {
+        escaped = false;
         continue;
       }
 
-      appendChar(char);
+      if (needSpace) {
+        if (isNginxSpace(char)) {
+          lastSpace = true;
+          needSpace = false;
+          continue;
+        }
+        if (char === ';') {
+          end('statement');
+          continue;
+        }
+        if (char === '{') {
+          end('blockOpen');
+          continue;
+        }
+        if (char !== ')') error(`Unexpected "${char}"`);
+        lastSpace = true;
+        needSpace = false;
+      }
+
+      if (lastSpace) {
+        start = index;
+        if (words.length === 0) statementLine = line;
+        if (isNginxSpace(char)) continue;
+        switch (char) {
+          case ';':
+          case '{':
+            if (words.length === 0) error(`Unexpected "${char}"`);
+            end(char === '{' ? 'blockOpen' : 'statement');
+            continue;
+          case '}':
+            if (words.length !== 0) {
+              error('Unexpected "}"');
+              end('statement');
+            }
+            tokens.push({ type: 'blockClose', line });
+            reset();
+            continue;
+          case '#':
+            comment = true;
+            continue;
+          case '\\':
+            escaped = true;
+            lastSpace = false;
+            continue;
+          case '"':
+            start = index + 1;
+            doubleQuoted = true;
+            lastSpace = false;
+            continue;
+          case "'":
+            start = index + 1;
+            singleQuoted = true;
+            lastSpace = false;
+            continue;
+          case '$':
+            variable = true;
+            lastSpace = false;
+            continue;
+          default:
+            lastSpace = false;
+            continue;
+        }
+      }
+
+      if (char === '{' && variable) continue;
+      variable = false;
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === '$') {
+        variable = true;
+        continue;
+      }
+      let found = false;
+      if (doubleQuoted) {
+        if (char === '"') {
+          doubleQuoted = false;
+          needSpace = true;
+          found = true;
+        }
+      } else if (singleQuoted) {
+        if (char === "'") {
+          singleQuoted = false;
+          needSpace = true;
+          found = true;
+        }
+      } else if (isNginxSpace(char) || char === ';' || char === '{') {
+        lastSpace = true;
+        found = true;
+      }
+      if (!found) continue;
+      words.push(unescapeWord(text.slice(start, index)));
+      if (char === ';') end('statement');
+      else if (char === '{') end('blockOpen');
     }
 
-    flushBuffer('statement');
-    return tokens;
+    if (words.length > 0 || !lastSpace) {
+      error('Unexpected end of config, expecting ";" or "}"');
+      if (!lastSpace && !needSpace) words.push(unescapeWord(text.slice(start)));
+      end('statement');
+    }
+    return { tokens, syntaxError };
+  }
+
+  private static forbiddenDirectiveErrors(
+    tokens: readonly ConfigToken[],
+    denyList: DenyList,
+    allowedStatements?: ReadonlySet<string>,
+    insideLocation = false
+  ): string[] {
+    if (denyList === 'none') return [];
+    const errors: string[] = [];
+    const blockStack: Array<{ type: 'location'; root: boolean } | { type: 'other' }> = insideLocation
+      ? [{ type: 'location', root: false }]
+      : [];
+    for (const token of tokens) {
+      if (token.type === 'blockClose') {
+        blockStack.pop();
+        continue;
+      }
+      // nginx matches directive names case-sensitively; comparing lowercase only rejects more.
+      const name = token.words[0]?.toLowerCase() ?? '';
+      if (!name) {
+        if (token.type === 'blockOpen') blockStack.push({ type: 'other' });
+        continue;
+      }
+      const allowed = allowedStatements?.has(statementKey(token.words)) === true;
+
+      if (denyList === 'raw') {
+        if (allowed) continue;
+        for (const directive of ConfigValidatorService.RAW_FORBIDDEN_DIRECTIVES) {
+          if (ConfigValidatorService.matchesForbiddenDirective(name, directive)) {
+            errors.push(`Forbidden directive "${directive.trim()}" found on line ${token.line}`);
+          }
+        }
+        continue;
+      }
+
+      const isTopLevel = blockStack.length === 0;
+      for (const directive of ConfigValidatorService.ADVANCED_ALWAYS_FORBIDDEN_DIRECTIVES) {
+        if (ConfigValidatorService.matchesForbiddenDirective(name, directive)) {
+          errors.push(`Forbidden directive "${directive.trim()}" found on line ${token.line}`);
+        }
+      }
+      if (isTopLevel) {
+        for (const directive of ConfigValidatorService.TOP_LEVEL_FORBIDDEN_DIRECTIVES) {
+          if (ConfigValidatorService.matchesForbiddenDirective(name, directive)) {
+            errors.push(`Forbidden top-level directive "${directive.trim()}" found on line ${token.line}`);
+          }
+        }
+      }
+      if (token.type === 'blockOpen') {
+        if (name === 'location') {
+          const isRoot = ConfigValidatorService.isRootLocation(token.words.slice(1).join(' '));
+          if (isTopLevel && isRoot) {
+            errors.push(`Forbidden root location block found on line ${token.line}`);
+          }
+          blockStack.push({ type: 'location', root: isRoot });
+        } else {
+          blockStack.push({ type: 'other' });
+        }
+      }
+    }
+    return errors;
+  }
+
+  /** A snippet is inserted into a block Gateway renders, so it must not close that block or leave its own open. */
+  private static blockStructureErrors(tokens: readonly ConfigToken[]): string[] {
+    const open: number[] = [];
+    for (const token of tokens) {
+      if (token.type === 'blockOpen') open.push(token.line);
+      if (token.type !== 'blockClose') continue;
+      if (open.pop() === undefined) return [`Unexpected "}" on line ${token.line}`];
+    }
+    return open.length > 0 ? [`Block opened on line ${open[open.length - 1]} is not closed`] : [];
+  }
+
+  private check(source: string, nginxText: string, options: CheckOptions): ConfigValidationResult {
+    const errors: string[] = [];
+
+    // 1. Null byte check
+    if (source.includes('\0')) {
+      errors.push('Config snippet contains null bytes');
+    }
+
+    // 2. Maximum length check
+    if (options.limits && source.length > options.limits.maxLength) {
+      errors.push(`Config exceeds maximum length of ${options.limits.maxLength / 1024} KB`);
+    }
+
+    // 3. Forbidden directives, read the way nginx reads them
+    const parsed = ConfigValidatorService.parse(nginxText);
+    errors.push(
+      ...ConfigValidatorService.forbiddenDirectiveErrors(
+        parsed.tokens,
+        options.denyList,
+        options.allowedStatements,
+        options.insideLocation
+      )
+    );
+
+    if (options.syntax) {
+      if (parsed.syntaxError) errors.push(parsed.syntaxError);
+      errors.push(...ConfigValidatorService.blockStructureErrors(parsed.tokens));
+    }
+
+    if (options.limits) {
+      // 4. Excessively long line
+      const lines = source.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].length > 4096) {
+          errors.push(`Line ${i + 1} exceeds maximum length of 4096 characters`);
+        }
+      }
+
+      // 5. Balanced braces
+      let braceDepth = 0;
+      for (let i = 0; i < nginxText.length; i++) {
+        if (nginxText[i] === '{') braceDepth++;
+        if (nginxText[i] === '}') braceDepth--;
+        if (braceDepth < 0) {
+          errors.push('Unbalanced curly braces: unexpected closing brace');
+          break;
+        }
+      }
+      if (braceDepth > 0) {
+        errors.push('Unbalanced curly braces: missing closing brace(s)');
+      }
+    }
+
+    if (errors.length > 0) {
+      logger.debug('Config validation failed', { errorCount: errors.length, errors });
+    }
+
+    return { valid: errors.length === 0, errors };
   }
 
   /**
@@ -187,111 +451,66 @@ export class ConfigValidatorService {
    * Checks performed:
    * 1. No null bytes
    * 2. No forbidden / dangerous directives
-   * 3. Balanced curly braces
+   * 3. Valid nginx syntax with balanced blocks and curly braces
    * 4. No excessively long lines (> 4096 chars)
    * 5. Maximum snippet length (64 KB)
    */
-  validate(snippet: string, rawMode = false, bypassRawValidation = false): { valid: boolean; errors: string[] } {
-    const errors: string[] = [];
-    const nginxSnippet = rawMode ? snippet : ConfigValidatorService.stripHandlebarsExpressions(snippet);
+  validate(snippet: string, rawMode = false, bypassRawValidation = false): ConfigValidationResult {
+    return this.check(snippet, rawMode ? snippet : ConfigValidatorService.stripHandlebarsExpressions(snippet), {
+      denyList: rawMode ? (bypassRawValidation ? 'none' : 'raw') : 'advanced',
+      limits: { maxLength: rawMode ? RAW_MAX_LENGTH : ADVANCED_MAX_LENGTH },
+      syntax: true,
+    });
+  }
 
-    // 1. Null byte check
-    if (snippet.includes('\0')) {
-      errors.push('Config snippet contains null bytes');
-    }
+  /**
+   * Validate directives Gateway inserts into a non-root location it renders (Additional Route advanced config).
+   * They get the advanced deny-list as if written inside such a location, so location directives like proxy_pass
+   * stay allowed. With `unrestricted` only the structure is checked: complete directives that cannot close the
+   * location or run into the directives Gateway renders after them.
+   */
+  validateLocationSnippet(snippet: string, unrestricted = false): ConfigValidationResult {
+    return this.check(snippet, snippet, {
+      denyList: unrestricted ? 'none' : 'advanced',
+      limits: { maxLength: ADVANCED_MAX_LENGTH },
+      syntax: true,
+      insideLocation: true,
+    });
+  }
 
-    // 2. Maximum length check (64 KB for advanced, 256 KB for raw)
-    const maxLen = rawMode ? 262144 : 65536;
-    if (snippet.length > maxLen) {
-      errors.push(`Config exceeds maximum length of ${maxLen / 1024} KB`);
-    }
+  /**
+   * Validate custom nginx template content. A template is raw server configuration rendered by Handlebars:
+   * expressions are blanked as in advanced snippets and the raw deny-list applies. The Pages include and the
+   * access list password file that Gateway's own templates emit stay allowed in their template form.
+   */
+  validateTemplate(content: string): ConfigValidationResult {
+    const withoutGatewayStatements = GATEWAY_TEMPLATE_STATEMENTS.reduce(
+      (text, pattern) => text.replace(pattern, blank),
+      content
+    );
+    return this.check(content, ConfigValidatorService.stripHandlebarsExpressions(withoutGatewayStatements), {
+      denyList: 'raw',
+      limits: { maxLength: RAW_MAX_LENGTH },
+      syntax: false,
+    });
+  }
 
-    // 3. Forbidden directives
-    const lines = snippet.split('\n');
-    const tokens = ConfigValidatorService.tokenize(nginxSnippet);
-    if (rawMode) {
-      if (!bypassRawValidation) {
-        for (const token of tokens) {
-          if (token.type === 'blockClose') continue;
-          const trimmed = token.text.trim().toLowerCase();
-          if (trimmed === '') continue;
-          for (const directive of ConfigValidatorService.RAW_FORBIDDEN_DIRECTIVES) {
-            if (ConfigValidatorService.matchesForbiddenDirective(token.text, directive)) {
-              errors.push(`Forbidden directive "${directive.trim()}" found on line ${token.line}`);
-            }
-          }
-        }
-      }
-    } else {
-      const blockStack: Array<{ type: 'location'; root: boolean } | { type: 'other' }> = [];
-
-      for (const token of tokens) {
-        if (token.type === 'blockClose') {
-          blockStack.pop();
-          continue;
-        }
-
-        const trimmed = token.text.trim().toLowerCase();
-        if (trimmed === '') {
-          continue;
-        }
-
-        const isTopLevel = blockStack.length === 0;
-
-        for (const directive of ConfigValidatorService.ADVANCED_ALWAYS_FORBIDDEN_DIRECTIVES) {
-          if (ConfigValidatorService.matchesForbiddenDirective(token.text, directive)) {
-            errors.push(`Forbidden directive "${directive.trim()}" found on line ${token.line}`);
-          }
-        }
-
-        if (isTopLevel) {
-          for (const directive of ConfigValidatorService.TOP_LEVEL_FORBIDDEN_DIRECTIVES) {
-            if (ConfigValidatorService.matchesForbiddenDirective(token.text, directive)) {
-              errors.push(`Forbidden top-level directive "${directive.trim()}" found on line ${token.line}`);
-            }
-          }
-        }
-
-        if (token.type === 'blockOpen') {
-          const locationMatch = trimmed.match(ConfigValidatorService.LOCATION_OPEN_RE);
-          if (locationMatch?.groups?.rest) {
-            const isRoot = ConfigValidatorService.isRootLocation(locationMatch.groups.rest);
-            if (isTopLevel && isRoot) {
-              errors.push(`Forbidden root location block found on line ${token.line}`);
-            }
-            blockStack.push({ type: 'location', root: isRoot });
-          } else {
-            blockStack.push({ type: 'other' });
-          }
-        }
+  /**
+   * Validate what a custom template rendered to. Handlebars can assemble any directive from literals and values,
+   * so the output gets the raw deny-list too. Statements authorized elsewhere stay allowed: the given ones (the
+   * Pages include and password file paths Gateway generated) and every statement of the route's own advanced
+   * snippets, which were validated, or deliberately left unrestricted, when the route was saved.
+   */
+  validateRenderedTemplate(
+    rendered: string,
+    trusted: { statements?: readonly (readonly string[])[]; snippets?: readonly string[] } = {}
+  ): ConfigValidationResult {
+    const allowedStatements = new Set((trusted.statements ?? []).map(statementKey));
+    for (const snippet of trusted.snippets ?? []) {
+      for (const token of ConfigValidatorService.parse(snippet).tokens) {
+        if (token.type !== 'blockClose') allowedStatements.add(statementKey(token.words));
       }
     }
-
-    // 4. Excessively long line
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].length > 4096) {
-        errors.push(`Line ${i + 1} exceeds maximum length of 4096 characters`);
-      }
-    }
-
-    // 5. Balanced braces
-    let braceDepth = 0;
-    for (let i = 0; i < nginxSnippet.length; i++) {
-      if (nginxSnippet[i] === '{') braceDepth++;
-      if (nginxSnippet[i] === '}') braceDepth--;
-      if (braceDepth < 0) {
-        errors.push('Unbalanced curly braces: unexpected closing brace');
-        break;
-      }
-    }
-    if (braceDepth > 0) {
-      errors.push('Unbalanced curly braces: missing closing brace(s)');
-    }
-
-    if (errors.length > 0) {
-      logger.debug('Config validation failed', { errorCount: errors.length, errors });
-    }
-
-    return { valid: errors.length === 0, errors };
+    return this.check(rendered, rendered, { denyList: 'raw', limits: null, syntax: false, allowedStatements });
   }
 }

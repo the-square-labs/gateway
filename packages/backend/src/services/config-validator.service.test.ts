@@ -178,4 +178,82 @@ server {
     expect(result.valid).toBe(false);
     expect(result.errors).toContain('Forbidden directive "ssl_certificate_key" found on line 1');
   });
+
+  // Each snippet hides `include` from a tokenizer that reads comments, strings or escapes differently than nginx.
+  it.each([
+    ['a "#" inside a token', 'add_header X-A a#b; include /etc/passwd;'],
+    ['a quote inside a token', 'add_header X-A a"b; include /etc/passwd; #"'],
+    ['an escaped backslash before the closing quote', 'add_header X-A "a\\\\"; include /etc/passwd; #"'],
+    ['a quoted directive name', '"include" /etc/passwd;'],
+    ['a single-quoted directive name', "'include' /etc/passwd;"],
+  ])('reads %s the way nginx does', (_case, snippet) => {
+    for (const rawMode of [false, true]) {
+      const result = service.validate(snippet, rawMode);
+      expect(result.errors).toContain('Forbidden directive "include" found on line 1');
+    }
+  });
+
+  it('rejects a quoted brace that would let a snippet close the enclosing block', () => {
+    const result = service.validate('return 200 "{"; }\nserver { location / { root /; } }');
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('Unexpected "}" on line 1');
+  });
+
+  it('rejects a directive left without its semicolon', () => {
+    const result = service.validate('proxy_buffering off');
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('Unexpected end of config, expecting ";" or "}" on line 1');
+  });
+});
+
+describe('ConfigValidatorService templates', () => {
+  const service = new ConfigValidatorService();
+
+  it('allows the Pages include and access list password file Gateway templates emit', () => {
+    const result = service.validateTemplate(
+      [
+        'server {',
+        '    include {{pagesRouteIncludePath}};',
+        '    location / {',
+        '        auth_basic_user_file /etc/nginx/gateway/htpasswd/access-list-{{accessList.id}};',
+        '        proxy_pass {{upstream}};',
+        '    }',
+        '}',
+      ].join('\n')
+    );
+
+    expect(result).toEqual({ valid: true, errors: [] });
+  });
+
+  it.each([
+    ['include', 'server { include /etc/nginx/nginx.conf; }'],
+    ['include', 'server { include {{logPath}}; }'],
+    ['load_module', 'load_module /tmp/evil.so;\nserver { listen 80; }'],
+    ['lua_', 'server { location / { content_by_lua_block { ngx.say(1) } } }'],
+    ['auth_basic_user_file', 'server { auth_basic_user_file /etc/shadow; }'],
+  ])('rejects %s in template content', (directive, content) => {
+    expect(service.validateTemplate(content).errors.join('\n')).toContain(`Forbidden directive "${directive}"`);
+  });
+
+  it('hides no directive behind a Handlebars block on the same line', () => {
+    const result = service.validateTemplate('server { {{#if sslEnabled}} include /etc/passwd; {{/if}} }');
+
+    expect(result.errors).toContain('Forbidden directive "include" found on line 1');
+  });
+
+  it('allows forbidden statements in rendered output only where the route authorized them', () => {
+    const rendered = 'server {\n  include /var/lib/gateway/pages/a.conf;\n  include /etc/nginx/snippets/x.conf;\n}';
+
+    expect(
+      service.validateRenderedTemplate(rendered, { statements: [['include', '/var/lib/gateway/pages/a.conf']] }).errors
+    ).toEqual(['Forbidden directive "include" found on line 3']);
+    expect(
+      service.validateRenderedTemplate(rendered, {
+        statements: [['include', '/var/lib/gateway/pages/a.conf']],
+        snippets: ['include /etc/nginx/snippets/x.conf;'],
+      }).valid
+    ).toBe(true);
+  });
 });
