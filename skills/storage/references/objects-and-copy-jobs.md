@@ -32,6 +32,7 @@ Deleting objects or buckets is destructive; confirm the exact bucket and keys wi
 - `mode: "copy"` (default) adds and overwrites, never deletes.
 - `mode: "sync"` also **deletes** destination objects the source lacks. Use it only for a final pass after the user agrees. It is refused into a managed cluster whose writes are not frozen while links or writable keys use it; override with `allowLiveDestination: true` only after confirmation.
 - `dryRun: true` writes nothing and reports the differences.
+- Both connections must be S3 (managed or external); an SFTP or FTP(S) connection is refused with `STORAGE_COPY_PROVIDER_UNSUPPORTED`.
 - Scopes: `storage:objects:read` and `storage:credentials:use` on the source; `storage:objects:write` and `storage:credentials:use` on the destination (plus `storage:objects:admin` when buckets must be created); `nodes:backups:execute` on the executor, an online `storage` Node chosen automatically.
 
 Poll `copy_data_status({ config: { jobId } })` until `completed`, `failed`, or `cancelled`; never claim a copy finished before that. A finished job's `report` has per-bucket and `totals` counts and bytes, `missing`, `differing`, and (sync only) `extra` with sample keys, and `clean: true` only when everything matched. `copy_data_list` and `copy_data_cancel` complete the set.

@@ -252,6 +252,8 @@ export const presignObjectRoute = appRoute({
   path: '/{id}/objects/presign',
   tags: [TAG],
   summary: 'Generate a presigned URL',
+  description:
+    'A URL for an S3 connection. For managed storage reachable only through Gateway (private relay) the request is refused with 409 STORAGE_PRESIGN_UNSUPPORTED; once its S3 endpoint is published, the URL points at the published endpoint (the node address and published port). SFTP and FTP(S) connections have no presigned URLs.',
   request: { params: IdParamSchema, ...jsonBody(PresignObjectSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
