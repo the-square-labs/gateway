@@ -14,7 +14,13 @@ const NODE_ID = '11111111-1111-4111-8111-111111111111';
 const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
 const OTHER_FOLDER_ID = '33333333-3333-4333-8333-333333333333';
 
-function setup(archive: { environment?: Record<string, string>; secrets?: Record<string, string> } = {}) {
+function setup(
+  archive: {
+    environment?: Record<string, string>;
+    secrets?: Record<string, string>;
+    networks?: Array<{ name: string; createable: boolean }>;
+  } = {}
+) {
   // Destination folder lookup of assertDockerCreationAccess: an ordinary container folder. No Git source reserves
   // the imported name.
   const db = {
@@ -114,6 +120,18 @@ describe('container archive import destination', () => {
       statusCode: 403,
     });
     expect(docker.registerImportedContainer).not.toHaveBeenCalled();
+  });
+
+  it('refuses archive networks a direct create refuses: host, shared namespaces and Gateway-managed networks', async () => {
+    const scopes = [`docker:containers:create:${NODE_ID}`, `docker:networks:create:${NODE_ID}`];
+    for (const name of ['host', 'container:abc', 'gateway-secure-links', 'gateway-db-0123456789abcdef']) {
+      const { docker } = setup({ networks: [{ name, createable: true }] });
+      await expect(importInto(undefined, scopes)).rejects.toMatchObject({
+        statusCode: name.startsWith('gateway') ? 409 : 400,
+      });
+      expect(docker.registerImportedContainer).not.toHaveBeenCalled();
+      container.reset();
+    }
   });
 
   it('checks archive content grants on the node or the destination folder only', () => {

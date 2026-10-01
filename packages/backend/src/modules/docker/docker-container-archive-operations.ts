@@ -19,6 +19,7 @@ import { envListToMap } from './docker-env-operations.js';
 import { DockerEnvironmentService } from './docker-environment.service.js';
 import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
 import { inspectUserContainer } from './docker-internal-containers.js';
+import { isReservedGatewayNetworkName } from './docker-internal-networks.js';
 import { DockerMigrationDispatchAdapter } from './docker-migration-dispatch.js';
 import { DockerRegistryService } from './docker-registry.service.js';
 import { DockerSecretService } from './docker-secret.service.js';
@@ -67,6 +68,27 @@ export function assertDockerContainerArchiveExportAllowed(nodeId: string, contai
       projectId: typeof projectId === 'string' && projectId !== '' ? projectId : null,
     }
   );
+}
+
+/**
+ * Networks an imported container joins, after the import resolution is applied. The same rules as a direct create
+ * (resolveCreateNetworks): no shared namespaces (`host`, `container:<id>`), `none` only on its own, and never a
+ * Gateway-managed network. Reserved names are refused as a whole because the daemon creates a missing createable
+ * network under the archive's name.
+ */
+export function assertArchiveNetworksAllowed(networks: ReadonlyArray<{ name: string }>) {
+  const names = networks.map((network) => network.name.trim()).filter(Boolean);
+  for (const name of names) {
+    if (name === 'host' || name.includes(':')) {
+      throw new AppError(400, 'NETWORK_MODE_NOT_ALLOWED', `Network mode "${name}" is not allowed for containers`);
+    }
+    if (isReservedGatewayNetworkName(name)) {
+      throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be connected manually');
+    }
+  }
+  if (names.length > 1 && names.includes('none')) {
+    throw new AppError(400, 'NETWORK_MODE_NOT_ALLOWED', 'The none network cannot be combined with other networks');
+  }
 }
 
 function archiveImportPlanAccess(actorScopes: readonly string[], nodeId: string) {
@@ -273,6 +295,7 @@ export async function importDockerContainerArchive(args: {
         ) {
           throw new AppError(403, 'FORBIDDEN', 'Importing archive secrets is not permitted on the target node');
         }
+        assertArchiveNetworksAllowed(archiveContainer.networks ?? []);
         const canCreateNetworks = hasScopeForResource(actorScopes, 'docker:networks:create', nodeId);
         if (!canCreateNetworks && (archiveContainer.networks ?? []).some((network) => network.createNew)) {
           throw new AppError(403, 'FORBIDDEN', 'Creating archive networks is not permitted on the target node');
