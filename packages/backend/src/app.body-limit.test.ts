@@ -142,6 +142,15 @@ describe('request body limits', () => {
     );
   });
 
+  it('uses the file upload limit instead of the global API body limit for object uploads', async () => {
+    await expectNotPayloadTooLarge(
+      '/api/object-storage/storage-1/objects/upload?bucket=app&key=large.bin',
+      'POST',
+      'x'.repeat(3_000_000)
+    );
+    await expectPayloadTooLarge('/api/object-storage/storage-1/objects/prefix', 'POST', 'x'.repeat(3_000_000));
+  });
+
   it('uses the Pages chunk limit instead of the global API body limit', async () => {
     await expectNotPayloadTooLarge(
       '/api/pages-deploy/uploads/11111111-1111-4111-8111-111111111111/chunks',

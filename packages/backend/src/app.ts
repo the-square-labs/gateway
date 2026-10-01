@@ -144,6 +144,7 @@ const DOCKER_FILE_BODY_LIMIT_PATH =
   /^\/api\/docker\/nodes\/[^/]+\/(?:containers\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)|volumes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks))$/;
 const NODE_FILE_BODY_LIMIT_PATH = /^\/api\/nodes\/[^/]+\/files\/(?:write|create|uploads\/[^/]+\/chunks)$/;
 const PAGES_UPLOAD_CHUNK_PATH = /^\/api\/pages-deploy\/uploads\/[^/]+\/chunks$/;
+const OBJECT_STORAGE_UPLOAD_PATH = /^\/api\/object-storage\/[^/]+\/objects\/upload$/;
 const DOCKER_ARCHIVE_IMPORT_PATH = /^\/api\/docker\/nodes\/[^/]+\/containers\/archive$/;
 const INFERENCE_DATA_PLANE_PREFIX = /^\/api\/inference\/(?:(?:anthropic|codex)\/v1|v1)(?:\/|$)/;
 
@@ -631,6 +632,11 @@ export function createApp(): GatewayAppRuntime {
     requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
   );
   app.use('/api/pages-deploy/uploads/:id/chunks', requestBodyLimit(PAGE_UPLOAD_CHUNK_MAX_BYTES));
+  // An object upload streams the file into storage: it takes the file upload limit, not the JSON body limit.
+  app.use(
+    '/api/object-storage/:id/objects/upload',
+    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
+  );
   app.use('/api/setup/*', setupApiDisabledMiddleware);
   app.use(
     '/api/*',
@@ -640,6 +646,7 @@ export function createApp(): GatewayAppRuntime {
         DOCKER_FILE_BODY_LIMIT_PATH.test(path) ||
         NODE_FILE_BODY_LIMIT_PATH.test(path) ||
         PAGES_UPLOAD_CHUNK_PATH.test(path) ||
+        OBJECT_STORAGE_UPLOAD_PATH.test(path) ||
         // One-time transfer links stream a whole file; their handlers enforce their own size limits.
         ONE_TIME_LINK_TOKEN_PATH.test(path) ||
         DOCKER_ARCHIVE_IMPORT_PATH.test(path) ||

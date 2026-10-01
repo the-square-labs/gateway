@@ -261,6 +261,8 @@ export const uploadObjectRoute = appRoute({
   path: '/{id}/objects/upload',
   tags: [TAG],
   summary: 'Upload an object',
+  description:
+    'The raw request body is the object; it is streamed into storage. The body may be as large as the file upload limit in Settings (not the general API request body limit).',
   request: {
     params: IdParamSchema,
     query: ObjectMetadataQuerySchema.extend({ contentType: z.string().max(255).optional() }),
