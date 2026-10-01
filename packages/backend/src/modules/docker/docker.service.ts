@@ -170,6 +170,7 @@ export class DockerManagementService {
   private accessResourceService?: DockerAccessResourceService;
   private networkAccessResourceService?: DockerNetworkAccessResourceService;
   private containerRecreateCompletedHandler?: (nodeId: string, newContainerId: string) => Promise<void>;
+  private managedLinkReleaseHandler?: (nodeId: string, containerName: string, userId: string | null) => Promise<void>;
   private availabilityMutationGuard?: (nodeId: string, containerName: string) => Promise<void>;
   private availabilityMutationCoordinator?: {
     containerRemoved?(nodeId: string, containerName: string): Promise<void>;
@@ -335,6 +336,23 @@ export class DockerManagementService {
     this.containerRecreateCompletedHandler = handler;
   }
 
+  /** Releases the managed database and storage links that target a container name (see releaseContainerLinks). */
+  setManagedLinkReleaseHandler(
+    handler: (nodeId: string, containerName: string, userId: string | null) => Promise<void>
+  ): void {
+    this.managedLinkReleaseHandler = handler;
+  }
+
+  /**
+   * Managed database and storage links target a container by name. When the container that held the name is gone
+   * (Gateway removed it, or a new container, copy, import or Git source takes a free name), its links go with it:
+   * they are marked deleted at once, so no reconciliation applies them to the next container of that name, their
+   * link secrets are removed, and their credentials and connectors are torn down in the background.
+   */
+  async releaseContainerLinks(nodeId: string, containerName: string, userId: string | null): Promise<void> {
+    await this.managedLinkReleaseHandler?.(nodeId, containerName, userId);
+  }
+
   private emitContainer(
     nodeId: string,
     name: string,
@@ -364,6 +382,8 @@ export class DockerManagementService {
     folderId?: string,
     userId?: string
   ): Promise<void> {
+    // The imported container took a free name: links left on it belonged to a container that is gone.
+    await this.releaseContainerLinks(nodeId, name, userId ?? null);
     const resourceId = await this.accessResourceService?.ensureContainer(nodeId, name, runtimeId, false);
     if (resourceId)
       await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`, {
@@ -1296,6 +1316,8 @@ export class DockerManagementService {
       folderService: this.folderService,
       accessResourceService: this.accessResourceService,
       taskService: this.taskService,
+      releaseContainerLinks: (nodeId, containerName, userId) =>
+        this.releaseContainerLinks(nodeId, containerName, userId),
       longDockerOperationTimeoutMs: DockerManagementService.LONG_DOCKER_OPERATION_TIMEOUT_MS,
       validateDockerNode: (nodeId) => this.validateDockerNode(nodeId),
       assertDockerGpuCapability: (nodeId) => this.assertDockerGpuCapability(nodeId),

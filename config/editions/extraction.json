@@ -333,6 +333,7 @@
       "emptyMethods": [
         "setEventBus",
         "setLicensePolicyService",
+        "releaseContainerLinks",
         "setBindingsTeardown",
         "setAppCertificateFingerprint",
         "shutdown",
@@ -401,7 +402,8 @@
         "setEventBus",
         "setLicensePolicyService",
         "setTargetRuntimeReconciler",
-        "setAvailabilityCoordinator"
+        "setAvailabilityCoordinator",
+        "releaseContainerLinks"
       ],
       "emptyConstructor": true,
       "typeOnlyProperties": true

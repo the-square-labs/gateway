@@ -64,6 +64,7 @@ export class ManagedDatabaseBindingService {
     releaseTargetNetwork(nodeId: string, networkName: string): Promise<void>;
   }): void {}
   setAvailabilityCoordinator(_coordinator: ManagedDatabaseAvailabilityCoordinator): void {}
+  async releaseContainerLinks(_nodeId: string, _containerName: string, _userId: string | null): Promise<void> {}
   async list(_managedDatabaseId: string): Promise<
     {
       id: string;

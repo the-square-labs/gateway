@@ -131,6 +131,11 @@ export interface DockerContainerMutationContext {
   };
   accessResourceService?: DockerAccessResourceService;
   taskService?: DockerTaskService;
+  /**
+   * Releases the managed database and storage links that target a container name: the container that held it is
+   * gone, so they must never reach the next container of that name.
+   */
+  releaseContainerLinks?(nodeId: string, containerName: string, userId: string | null): Promise<void>;
   longDockerOperationTimeoutMs: number;
   validateDockerNode(nodeId: string): Promise<unknown>;
   assertDockerGpuCapability(nodeId: string): Promise<void>;
@@ -336,6 +341,25 @@ async function detachContainerSource(
   }
 }
 
+/** Release the links of a removed container; a failure never fails the removal that already happened. */
+async function releaseRemovedContainerLinks(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerName: string,
+  userId: string
+): Promise<void> {
+  try {
+    await ctx.releaseContainerLinks?.(nodeId, containerName, userId);
+  } catch (error) {
+    // The links stay saved for the name; the next container that takes the name releases them before it exists.
+    logger.error('Failed to release the managed links of a removed container', {
+      nodeId,
+      containerName,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function renameContainerSourceBinding(
   db: DrizzleClient,
   nodeId: string,
@@ -499,6 +523,9 @@ export async function createContainer(
     : null;
   if (requestedName) {
     await ctx.assertNameAvailable(nodeId, requestedName, undefined, { sourceBindingId: options.sourceBindingId });
+    // The name is free, so links still saved for it belonged to a container that is gone. A Git source's first
+    // activation keeps the links saved for its reserved name: they are this container's.
+    if (!options.sourceBindingId) await ctx.releaseContainerLinks?.(nodeId, requestedName, userId);
     ctx.setTransition(nodeId, requestedName, 'creating');
   }
   let data: any;
@@ -879,6 +906,9 @@ export async function removeContainer(
     // Nor may it inherit the Git source (and its auto-build polling).
     detachContainerSource(ctx.db, nodeId, name, userId),
   ]);
+  // Nor its managed database and storage links (network, credentials). After the secrets above: the link secrets
+  // are gone with the container's.
+  await releaseRemovedContainerLinks(ctx, nodeId, name, userId);
   const removedScopeResourceId = accessResult;
   ctx.emitContainer(nodeId, name, containerId, 'removed', {
     ...(removedScopeResourceId ? { scopeResourceId: removedScopeResourceId } : {}),
@@ -1054,6 +1084,8 @@ export async function duplicateContainer(
   });
   ctx.requireNoTransition(nodeId, sourceName);
   await ctx.assertNameAvailable(nodeId, name);
+  // The copy takes a free name: links still saved for it belonged to a container that is gone.
+  await ctx.releaseContainerLinks?.(nodeId, name, userId);
   ctx.setTransition(nodeId, name, 'creating');
   let data: any;
   try {
