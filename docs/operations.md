@@ -16,7 +16,7 @@ From the UI:
 
 Gateway verifies the signed release manifest, pulls the selected image by its immutable digest, runs the target image's foundation migrator, updates `GATEWAY_IMAGE_REF`, and recreates its own container. Relay has an independent immutable `GATEWAY_RELAY_IMAGE_REF`; Compose leaves it running when the digest is unchanged and replaces it when the signed `relayImageRef` changes. Automatic gateway updates fail closed when the signed manifest is missing, invalid, or does not match the requested version and running image repository.
 
-The installation-wide **Update channel** is configured under **Settings > General > General settings**. `stable` is the default and accepts production releases only. `preview` also allows GitHub prereleases tagged as `vX.Y.Z-rc.N` for Gateway and with the required component suffix for Relay and managed node daemons, for example `vX.Y.Z-rc.N-relay` or `vX.Y.Z-rc.N-docker`. Switching back to `stable` immediately hides cached release-candidate offers. Component-aware resolution prefers a newer patch on the current minor, otherwise the baseline release of the next minor. Daemon checks stage one target per daemon type from that type's oldest compatible installed cohort. Inference Core keeps its independent stable signed release channel and is not changed by this setting.
+The installation-wide **Update channel** is configured under **Settings > General > Features and updates**. `stable` is the default and accepts production releases only. `preview` also allows GitHub prereleases tagged as `vX.Y.Z-rc.N` for Gateway and with the required component suffix for Relay and managed node daemons, for example `vX.Y.Z-rc.N-relay` or `vX.Y.Z-rc.N-docker`. Switching back to `stable` immediately hides cached release-candidate offers. Component-aware resolution prefers a newer patch on the current minor, otherwise the baseline release of the next minor. Daemon checks stage one target per daemon type from that type's oldest compatible installed cohort. Inference Core keeps its independent stable signed release channel and is not changed by this setting.
 
 If the new version does not become healthy within about five minutes, the update container rolls back. It restores `.env` and `docker-compose.yml` from `.gateway-foundation-backups/pre-update-<time>/` and restores the Gateway database from a snapshot taken just before the new app started, so the previous version never runs on a schema changed by the new version's migrations. Data written after the snapshot is lost. The snapshot is a `pg_dump` custom-format file, `gateway-db.dump`, in the same backup directory. It is deleted once the update or the restore succeeds, and a leftover one is deleted by a later update once it is older than 7 days. To restore it, the rollback stops every Compose service except `postgres`, drops the `gateway` database and recreates it from the dump.
 
@@ -57,7 +57,7 @@ Existing daemons from before signed-manifest support can perform one transition 
 
 ## Configuration Reference
 
-The installer writes infrastructure/bootstrap values to `.env`. Product settings are stored in Gateway: canonical public URL and internal web TLS are edited in **Settings > General**; OIDC, SMTP, authentication methods, and ClickHouse are edited in **Settings > Advanced**; request limits, logging ingest guardrails, sessions, rate limiting, and PKI defaults are edited in **Settings > Environment**. ACME uses the acting user's email and the provider selected in the certificate form.
+The installer writes infrastructure/bootstrap values to `.env`. Product settings are stored in Gateway: canonical public URL and internal web TLS are edited in **Settings > General**; sign-in methods, MFA, the OIDC provider, and identity provisioning in **Settings > Authentication**; SMTP, network trust, and the outbound webhook policy in **Settings > Advanced**; structured logging (ClickHouse), OAuth and MCP access, and Housekeeping in **Settings > Features**; request limits, logging ingest guardrails, sessions, rate limiting, and PKI defaults are edited in **Settings > Environment**. ACME uses the acting user's email and the provider selected in the certificate form.
 
 | Variable | Purpose |
 |----------|---------|
@@ -122,7 +122,7 @@ The shared OAuth App currently requests `repo`, `workflow`, `read:org`, and `rea
 
 ## Local authentication operations
 
-Email/password and email-OTP sign-in require a verified SMTP configuration in **Settings > Advanced**. Do not enable either method until a test message succeeds. Gateway encrypts SMTP credentials using `PKI_MASTER_KEY`; losing or rotating that key without re-entering the SMTP password prevents delivery.
+Email/password and email-OTP sign-in require a verified SMTP configuration in **Settings > Advanced**. Do not enable either method until a test message succeeds. With verified SMTP, an account invitation email with a sign-in link can be sent from the user dialog, or automatically for every created account (**Settings > Authentication > Identity provisioning**, off by default). Gateway encrypts SMTP credentials using `PKI_MASTER_KEY`; losing or rotating that key without re-entering the SMTP password prevents delivery.
 
 For local accounts, group MFA policy is enforced after the primary credential. TOTP recovery codes are one-use. If an account loses all MFA factors, a system administrator must reset MFA from the user administration screen; that action also revokes its browser sessions. Users and administrators can independently view and revoke browser sessions, but session cookies themselves are never exposed.
 
@@ -151,8 +151,8 @@ Important behavior:
 
 - Token scopes cannot exceed the owning user's permissions.
 - Effective scopes are bounded by the owner at request time.
-- Write-capable scopes satisfy matching read/view checks, but resource-scoped grants stay limited to the same resource.
-- Create-only and destructive-only scopes do not imply browse access.
+- Every action scope except creation, including delete, satisfies its family's view check with the same qualifier, so resource-scoped grants stay limited to the same resource.
+- Creation scopes (`*:create*`, `docker:images:pull`, `ssl:cert:issue`, `pki:cert:issue`) imply no view.
 - Sensitive reveal or export operations require explicit scopes.
 - API tokens are not accepted by the MCP endpoint.
 
@@ -212,21 +212,21 @@ Extended compatibility can expose hundreds of schemas. Disable it only for clien
 
 ### Scope Rules
 
-Write-capable scopes satisfy matching read/view checks so users can operate on resources they are allowed to modify. Resource-scoped grants stay bounded to the same resource, and create-only or destructive-only scopes do not grant browse access by themselves.
+Creation scopes (`*:create*`, `docker:images:pull`, `ssl:cert:issue`, `pki:cert:issue`) imply no view. Every other action scope, including delete, implies its family's view scope with the same qualifier, so a resource-scoped grant stays bounded to the same resource (see [SCOPES.md](../SCOPES.md#scope-evaluation-behavior)).
 
 For the complete scope list, implication behavior, delegability, and manual OAuth opt-in scopes, see [SCOPES.md](../SCOPES.md).
 
 ## Structured Logging
 
-Logging is optional and is configured in **Settings > Advanced** as disabled, managed local, or external. Connection secrets are encrypted in Gateway settings. Legacy `CLICKHOUSE_*` env values are accepted only for migration and are removed by managed updates after a successful import.
+Logging is optional and is configured in **Settings > Features** as disabled, managed local, or external. Connection secrets are encrypted in Gateway settings. Legacy `CLICKHOUSE_*` env values are accepted only for migration and are removed by managed updates after a successful import.
 
 ### ClickHouse Image Upgrades
 
 Gateway pins its managed local ClickHouse container to an explicit `clickhouse/clickhouse-server` release tag instead of using `latest`. Upgrade the pinned runtime intentionally and verify it against a copy of existing ClickHouse data.
 
-An always-on guard monitors disk, structured logs, and ClickHouse internal logs. Enable **ClickHouse Internals** in **Settings → Housekeeping** to allow the five-minute guard and manual Housekeeping runs to trim supported system-log tables; enable it only when the entire ClickHouse instance is dedicated to Gateway.
+An always-on guard monitors disk, structured logs, and ClickHouse internal logs. Enable **ClickHouse Internals** in **Settings > Features > Housekeeping** to allow the five-minute guard and manual Housekeeping runs to trim supported system-log tables; enable it only when the entire ClickHouse instance is dedicated to Gateway.
 
-Settings > Housekeeping can additionally cap the shared structured-log table by row count and approximate on-disk size. Cleanup drops only complete oldest daily partitions and preserves the current partition. Per-environment `retentionDays` TTL remains active independently. Internal cleanup is best effort and does not make ingest unavailable merely because maintenance privileges are absent.
+**Settings > Features > Housekeeping** can additionally cap the shared structured-log table by row count and approximate on-disk size. Cleanup drops only complete oldest daily partitions and preserves the current partition. Per-environment `retentionDays` TTL remains active independently. Internal cleanup is best effort and does not make ingest unavailable merely because maintenance privileges are absent.
 
 If logging is disabled:
 
@@ -367,11 +367,11 @@ Notification message and webhook templates use one canonical nested context. Com
 
 Configure SIEM collectors in **Notifications → SIEM**. Gateway keeps delivery in the main app process: no separate Compose service or worker container is required. A scheduler claims durable outbox rows every 30 seconds with database leases, so duplicate scheduler execution is safe if more than one app process is present. This lease safety applies only to SIEM delivery; horizontal Gateway application clustering is not currently a supported deployment mode.
 
-The feature flag is enabled by default where the Enterprise `siem-export` entitlement is available. Use **Settings > General > General settings > SIEM audit export** to turn it off installation-wide: this hides the SIEM screens, makes the SIEM API and AI tools unavailable, stops new outbox rows, and pauses delivery without restarting Gateway. Existing destinations, terminal history, and queued records stay in PostgreSQL; queued records resume after re-enabling the feature. Entitlement loss disables SIEM while preserving its configuration and stored data.
+The feature flag is enabled by default where the Enterprise `siem-export` entitlement is available. Use **Settings > General > Features and updates > SIEM audit export** to turn it off installation-wide: this hides the SIEM screens, makes the SIEM API and AI tools unavailable, stops new outbox rows, and pauses delivery without restarting Gateway. Existing destinations, terminal history, and queued records stay in PostgreSQL; queued records resume after re-enabling the feature. Once a license grace period ends, SIEM forwarding pauses: new audit events are not queued, and the configuration, delivery history, and queued records are kept and resume on renewal.
 
 Each request sends `{ "schemaVersion": 1, "events": [...] }` to an HTTPS endpoint using either `Authorization: Bearer <token>`, one validated custom request header, or HMAC headers `X-Gateway-Timestamp` and `X-Gateway-Signature-256`. The HMAC is `sha256=<hex>` over `timestamp + "." + exact raw JSON request body`; the collector should reject stale timestamps and use constant-time comparison. A successful `2xx` completes the batch. Network errors, `408`, `429`, and `5xx` retry after 30 seconds, 2 minutes, 8 minutes, 30 minutes, 2 hours, 6 hours, and 12 hours, with at most eight attempts. Other `4xx` responses are terminal failures.
 
-Use **Send test event** after configuring a collector. It sends a synthetic event only and creates neither an audit-log record nor a queued delivery. The delivery log intentionally shows safe status, timing, retry information, error text, and the reduced event only; it never stores or displays collector response bodies. Terminal delivery history follows the Audit Log retention setting in **Settings → Housekeeping**.
+Use **Send test event** after configuring a collector. It sends a synthetic event only and creates neither an audit-log record nor a queued delivery. The delivery log intentionally shows safe status, timing, retry information, error text, and the reduced event only; it never stores or displays collector response bodies. Terminal delivery history follows the Audit Log retention setting in **Settings > Features > Housekeeping**.
 
 When troubleshooting, verify the endpoint against Gateway's outbound-webhook network policy, confirm the expected bearer, custom-header, or HMAC verification at the collector, and inspect the SIEM Delivery Log. Do not paste a token, header value, or HMAC secret into tickets, audit notes, chat, or collector URLs. Disabling an individual destination pauses its outstanding rows; re-enabling resumes them. Deleting a destination discards outstanding rows, while historical terminal rows remain until retention cleanup.
 
@@ -445,6 +445,6 @@ If Dashboard shows the red **Gateway relay is unavailable** state:
 If OAuth or OIDC fails:
 
 - Verify redirect URI exact match.
-- Verify the canonical public URL in **Settings > General** and the OIDC redirect URI in **Settings > Advanced**.
+- Verify the canonical public URL in **Settings > General** and the OIDC redirect URI in **Settings > Authentication**.
 - Verify the provider exposes discovery metadata.
 - Check Gateway app logs for callback errors.
