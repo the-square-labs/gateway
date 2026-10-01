@@ -43,7 +43,7 @@ Container IDs change on every recreate. If a tool returns "No such container", r
 
 ## Blue/green Deployments
 
-Operate the Deployment, never its slot Containers. `deploy_docker_deployment` rolls a new image to the inactive slot; verify that slot's health; `switch_docker_deployment_slot` moves traffic; keep the previous slot warm; `rollback_docker_deployment` returns to the previous release. Never switch before the new slot meets its health condition.
+Operate the Deployment, never its slot Containers. `deploy_docker_deployment` rolls a new image to the inactive slot (its `env` sets variables over the saved environment and `removeEnv` removes keys; the rest stays); verify that slot's health; `switch_docker_deployment_slot` moves traffic; keep the previous slot warm; `rollback_docker_deployment` returns to the previous release. Never switch before the new slot meets its health condition.
 
 ## Compose Projects
 

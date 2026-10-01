@@ -249,7 +249,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'deploy_docker_deployment',
     description:
-      'Deploy a new inactive slot for a blue/green Docker deployment, optionally with a full image reference or a new tag. This is the deployment-safe replacement for updating a managed slot container image. An image or tag also needs docker:containers:edit, docker:containers:environment and docker:containers:secrets on the deployment and docker:images:pull on the node (the new slot starts with the env and secrets of the deployment); env alone needs docker:containers:environment. On a deployment with legacy host bind mounts, an image or tag needs docker:containers:mounts (a new image runs new code with that host access); redeploying the saved configuration, as a link change does, needs none.',
+      'Deploy a new inactive slot for a blue/green Docker deployment, optionally with a full image reference or a new tag. This is the deployment-safe replacement for updating a managed slot container image. env sets variables over the saved environment of the deployment and removeEnv removes keys; every other saved variable stays, and the result is saved as the deployment environment. An image or tag also needs docker:containers:edit, docker:containers:environment and docker:containers:secrets on the deployment and docker:images:pull on the node (the new slot starts with the env and secrets of the deployment); env or removeEnv alone needs docker:containers:environment. On a deployment with legacy host bind mounts, an image or tag needs docker:containers:mounts (a new image runs new code with that host access); redeploying the saved configuration, as a link change does, needs none.',
     parameters: {
       type: 'object',
       properties: {
@@ -258,7 +258,16 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         image: { type: 'string', description: 'Optional full image reference to deploy' },
         tag: { type: 'string', description: 'Optional tag applied to the current deployment image repository' },
         registryId: { type: 'string', description: 'Optional Docker registry UUID for pulling the image' },
-        env: { type: 'object', description: 'Optional environment overrides for the new deployment config' },
+        env: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Optional variables to set over the saved environment; other saved variables stay.',
+        },
+        removeEnv: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional environment keys to remove from the saved environment.',
+        },
       },
       required: ['nodeId', 'deploymentId'],
     },

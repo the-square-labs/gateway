@@ -115,6 +115,7 @@ other stable hint to locate the recreated container and continue with its new ID
 - Use \`list_docker_deployments\` and \`get_docker_deployment\` to find the deployment ID, active slot, routes, and health.
 - Use \`start_docker_deployment\`, \`stop_docker_deployment\`, \`restart_docker_deployment\`, \`kill_docker_deployment\`, \`deploy_docker_deployment\`, \`switch_docker_deployment_slot\`, \`rollback_docker_deployment\`, and \`stop_docker_deployment_slot\` for deployment-safe lifecycle operations.
 - To roll out a new image or tag for a deployment, use \`deploy_docker_deployment\` instead of \`update_docker_container_image\`.
+- \`deploy_docker_deployment\` \`env\` sets variables over the saved environment and \`removeEnv\` removes keys; the other saved variables stay and the result becomes the saved environment.
 
 ## Settings
 - **Runtime (live-update)**: restart policy, memory limit, CPU shares, PID limit — applied without recreation
