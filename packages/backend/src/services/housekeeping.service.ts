@@ -18,6 +18,7 @@ import {
 } from '@/modules/docker/docker-internal-images.js';
 import type { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import type { DockerTaskService } from '@/modules/docker/docker-task.service.js';
+import type { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import type { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import type { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
 import type { DockerService } from './docker.service.js';
@@ -586,8 +587,18 @@ export class HousekeepingService {
   }
 
   private loggingMaintenanceService?: LoggingMaintenanceService;
-  setLoggingMaintenanceService(svc: LoggingMaintenanceService) {
+  private loggingFeature?: Pick<LoggingFeatureService, 'isEnabled'>;
+  setLoggingMaintenanceService(
+    svc: LoggingMaintenanceService,
+    loggingFeature?: Pick<LoggingFeatureService, 'isEnabled'>
+  ) {
     this.loggingMaintenanceService = svc;
+    this.loggingFeature = loggingFeature;
+  }
+
+  /** None while structured logging is off (always so on Community): there is no ClickHouse to clean. */
+  private activeLoggingMaintenance(): LoggingMaintenanceService | undefined {
+    return this.loggingFeature?.isEnabled() === false ? undefined : this.loggingMaintenanceService;
   }
 
   private sandboxArtifactService?: AISandboxArtifactService;
@@ -634,16 +645,18 @@ export class HousekeepingService {
     config: HousekeepingConfig['structuredLogs'],
     clickHouseInternals: HousekeepingConfig['clickHouseInternals']
   ) {
-    if (!this.loggingMaintenanceService) return { itemsCleaned: 0, spaceFreedBytes: 0 };
-    return this.loggingMaintenanceService.cleanupStructuredLogsAndRefresh(config, clickHouseInternals);
+    const maintenance = this.activeLoggingMaintenance();
+    if (!maintenance) return { itemsCleaned: 0, spaceFreedBytes: 0 };
+    return maintenance.cleanupStructuredLogsAndRefresh(config, clickHouseInternals);
   }
 
   private async cleanClickHouseInternals(
     config: HousekeepingConfig['structuredLogs'] | undefined,
     clickHouseInternals: HousekeepingConfig['clickHouseInternals']
   ) {
-    if (!this.loggingMaintenanceService) return { itemsCleaned: 0, spaceFreedBytes: 0 };
-    return this.loggingMaintenanceService.cleanupInternalLogsAndRefresh(config, clickHouseInternals);
+    const maintenance = this.activeLoggingMaintenance();
+    if (!maintenance) return { itemsCleaned: 0, spaceFreedBytes: 0 };
+    return maintenance.cleanupInternalLogsAndRefresh(config, clickHouseInternals);
   }
 
   private async cleanOrphanedAIArtifacts(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }> {

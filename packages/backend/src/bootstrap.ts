@@ -2169,7 +2169,7 @@ export async function initializeContainer(): Promise<void> {
   const housekeepingService = new HousekeepingService(db, dockerService, nodeDispatch, env);
   housekeepingService.setSandboxArtifactService(aiSandboxArtifactService);
   housekeepingService.setDockerManagementService(dockerManagementService);
-  housekeepingService.setLoggingMaintenanceService(loggingMaintenanceService);
+  housekeepingService.setLoggingMaintenanceService(loggingMaintenanceService, loggingFeatureService);
   housekeepingService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   housekeepingService.setPagesMaintenanceService(pageMaintenanceService);
   housekeepingService.setInternalRegistryMaintenanceService(dockerInternalRegistryService);
