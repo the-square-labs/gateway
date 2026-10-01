@@ -8,13 +8,18 @@ import {
   Timer,
   Zap,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
+import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
-import type { ManagedDatabaseBinding, ManagedDatabaseBindingRuntime } from "@/types";
+import type {
+  ManagedDatabaseBinding,
+  ManagedDatabaseBindingRuntime,
+  ManagedDatabaseBindingTargetType,
+} from "@/types";
 
 const MAX_HISTORY = 60;
 const POLL_INTERVAL_MS = 2000;
@@ -43,6 +48,16 @@ interface LinkRuntimeState {
   history: RuntimeSample[];
   telemetryUnavailable: boolean;
   loading: boolean;
+}
+
+/** A Compose service link targets `<project id>:<encoded service name>`. */
+function composeServiceName(targetResourceId: string) {
+  const name = targetResourceId.slice(targetResourceId.indexOf(":") + 1);
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
 }
 
 function counter(value: unknown): number {
@@ -321,6 +336,9 @@ export function LinkRuntimeTab({
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-semibold text-muted-foreground">{database.name}</h3>
               <Badge variant="secondary">{database.type}</Badge>
+              {binding.targetType === "compose_service" && (
+                <Badge variant="secondary">{composeServiceName(binding.targetResourceId)}</Badge>
+              )}
               <Badge
                 variant={
                   binding.status === "ready"
@@ -355,4 +373,99 @@ export function LinkRuntimeTab({
       })}
     </div>
   );
+}
+
+/**
+ * The Link Runtime of a deployment or Compose project. Container details carry their links; these
+ * targets list them from the managed databases the caller can view. A Compose target id is the
+ * project id and matches the links of all its services.
+ */
+export function WorkloadLinkRuntime({
+  nodeId,
+  targetType,
+  targetResourceId,
+}: {
+  nodeId: string;
+  targetType: Extract<ManagedDatabaseBindingTargetType, "deployment" | "compose_service">;
+  targetResourceId: string;
+}) {
+  const [links, setLinks] = useState<ContainerDatabaseLink[]>([]);
+  const [loading, setLoading] = useState(true);
+  const loadRef = useRef(0);
+  const matches = useCallback(
+    (binding: Pick<ManagedDatabaseBinding, "targetNodeId" | "targetType" | "targetResourceId">) =>
+      binding.targetNodeId === nodeId &&
+      binding.targetType === targetType &&
+      (targetType === "compose_service"
+        ? binding.targetResourceId.startsWith(`${targetResourceId}:`)
+        : binding.targetResourceId === targetResourceId),
+    [nodeId, targetResourceId, targetType]
+  );
+
+  const load = useCallback(async () => {
+    const current = ++loadRef.current;
+    try {
+      const databases = await api.listManagedDatabases();
+      const results = await Promise.all(
+        databases.map(async (database) => ({
+          database,
+          bindings: await api
+            .listManagedDatabaseBindings(database.id)
+            .catch(() => [] as ManagedDatabaseBinding[]),
+        }))
+      );
+      if (current !== loadRef.current) return;
+      setLinks(
+        results.flatMap(({ database, bindings }) =>
+          bindings.filter(matches).map((binding) => ({
+            database: { id: database.id, name: database.name, type: database.type },
+            binding,
+          }))
+        )
+      );
+    } catch {
+      // Without managed database access there is no link runtime to show.
+      if (current === loadRef.current) setLinks([]);
+    } finally {
+      if (current === loadRef.current) setLoading(false);
+    }
+  }, [matches]);
+
+  useEffect(() => {
+    setLoading(true);
+    void load();
+  }, [load]);
+
+  useRealtime(
+    "database.changed",
+    (rawPayload) => {
+      const payload = rawPayload as
+        | {
+            resourceKind?: string;
+            targetNodeId?: string;
+            targetType?: ManagedDatabaseBindingTargetType;
+            targetResourceId?: string;
+          }
+        | undefined;
+      if (payload?.resourceKind !== "managed_database_binding") return;
+      if (
+        payload.targetNodeId &&
+        payload.targetType &&
+        payload.targetResourceId !== undefined &&
+        !matches({
+          targetNodeId: payload.targetNodeId,
+          targetType: payload.targetType,
+          targetResourceId: payload.targetResourceId,
+        })
+      ) {
+        return;
+      }
+      void load();
+    },
+    { onReconnect: () => void load() }
+  );
+
+  useContentLoading(loading);
+  if (links.length === 0) return null;
+  return <LinkRuntimeTab links={links} />;
 }

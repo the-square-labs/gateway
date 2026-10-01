@@ -13,6 +13,7 @@ import { resolveDeploymentImageReference } from "@/lib/docker-image-ref";
 import { api } from "@/services/api";
 import type { DockerDeployment, DockerDeploymentRelease, DockerDeploymentSlot } from "@/types";
 import { copyToClipboard, type InspectData, STATUS_BADGE } from "../docker-detail/helpers";
+import { WorkloadLinkRuntime } from "../docker-detail/LinkRuntimeTab";
 
 export function statusVariant(
   status?: string
@@ -188,6 +189,12 @@ export function DeploymentOverview({
           />
         </PanelShell>
       </div>
+
+      <WorkloadLinkRuntime
+        nodeId={deployment.nodeId}
+        targetType="deployment"
+        targetResourceId={deployment.id}
+      />
     </div>
   );
 }

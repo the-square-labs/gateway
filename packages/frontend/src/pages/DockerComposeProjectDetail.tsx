@@ -98,6 +98,7 @@ import type {
 import { ComposeProjectEditor } from "./compose/ComposeProjectEditor";
 import { ComposeVariablesTab } from "./compose/ComposeVariablesTab";
 import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
+import { WorkloadLinkRuntime } from "./docker-detail/LinkRuntimeTab";
 import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
 import { MultiContainerMonitoring } from "./docker-detail/MultiContainerMonitoring";
 
@@ -1243,6 +1244,11 @@ export function DockerComposeProjectDetail() {
                   />
                 </PanelShell>
               </div>
+              <WorkloadLinkRuntime
+                nodeId={project.nodeId}
+                targetType="compose_service"
+                targetResourceId={project.id}
+              />
               <PanelShell
                 title="Recent activity"
                 icon={<History className="h-4 w-4" />}
