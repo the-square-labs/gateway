@@ -1,7 +1,13 @@
-import { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { container } from '@/container.js';
-import { appRoute, createdJson, jsonBody, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
+import {
+  appRoute,
+  createdJson,
+  GatewayOpenAPIHono,
+  jsonBody,
+  okJson,
+  UnknownDataResponseSchema,
+} from '@/lib/openapi.js';
 import { authMiddleware, rejectImpersonation, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import { requireLicenseFeature, requireLicenseFeatureForRequest } from '@/modules/license/license-policy.middleware.js';
 import { PageDeploymentListQuerySchema } from './deployments/page-deployment.schemas.js';
@@ -20,7 +26,7 @@ import { PageTagService } from './tags/page-tag.service.js';
 import { CreatePageDeployTokenSchema } from './tokens/page-deploy-token.schemas.js';
 import { PageDeployTokenService } from './tokens/page-deploy-token.service.js';
 export const pageManagementRouteRuntime = {
-  OpenAPIHono,
+  OpenAPIHono: GatewayOpenAPIHono,
   z,
   container,
   appRoute,
