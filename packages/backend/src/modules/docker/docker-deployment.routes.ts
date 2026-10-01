@@ -1,7 +1,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { requireAnyScopeBase, requireScopeBase } from '@/modules/auth/auth.middleware.js';
+import { assertNotImpersonating, requireAnyScopeBase, requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -38,6 +38,12 @@ import {
 } from './docker-access.middleware.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import {
+  type DeploymentChangeRequirements,
+  deploymentDeployRequiredScopes,
+  deploymentUpdateRequiredScopes,
+} from './docker-container-scope-requirements.js';
+import { assertDockerCreationAccess } from './docker-creation-access.js';
+import {
   DockerDeploymentCreateSchema,
   DockerDeploymentDeploySchema,
   DockerDeploymentSwitchSchema,
@@ -60,6 +66,26 @@ async function deploymentBuildRollout(deploymentId: string) {
     return rollout ? { buildId: rollout.buildId, commitSha: rollout.commitSha } : null;
   } catch {
     return null;
+  }
+}
+
+/** The container recreate rule for deployments: see deploymentDeployRequiredScopes / deploymentUpdateRequiredScopes. */
+async function assertDeploymentChangeAccess(
+  scopes: string[],
+  nodeId: string,
+  deploymentId: string,
+  requirements: DeploymentChangeRequirements
+) {
+  for (const scope of requirements.scopes) assertDockerResourceScope(scopes, scope, nodeId, deploymentId);
+  if (requirements.pullsImage) {
+    await assertDockerCreationAccess(
+      container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
+      scopes,
+      'docker:images:pull',
+      nodeId,
+      undefined,
+      'image'
+    );
   }
 }
 
@@ -244,13 +270,15 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const deploymentId = c.req.param('deploymentId')!;
       const scopes = c.get('effectiveScopes') || [];
-      const data = await service.update(
+      const input = DockerDeploymentUpdateSchema.parse(await c.req.json());
+      const saved = await service.get(nodeId, deploymentId);
+      await assertDeploymentChangeAccess(
+        scopes,
         nodeId,
         deploymentId,
-        DockerDeploymentUpdateSchema.parse(await c.req.json()),
-        user.id,
-        scopes
+        deploymentUpdateRequiredScopes(input.desiredConfig, saved.desiredConfig)
       );
+      const data = await service.update(nodeId, deploymentId, input, user.id, scopes);
       return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }
   );
@@ -321,14 +349,9 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const deploymentId = c.req.param('deploymentId')!;
       const scopes = c.get('effectiveScopes') || [];
-      const data = await service.deploy(
-        nodeId,
-        deploymentId,
-        DockerDeploymentDeploySchema.parse(await c.req.json().catch(() => ({}))),
-        user.id,
-        'manual',
-        scopes
-      );
+      const input = DockerDeploymentDeploySchema.parse(await c.req.json().catch(() => ({})));
+      await assertDeploymentChangeAccess(scopes, nodeId, deploymentId, deploymentDeployRequiredScopes(input));
+      const data = await service.deploy(nodeId, deploymentId, input, user.id, 'manual', scopes);
       return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }
   );
@@ -387,7 +410,9 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const deploymentId = c.req.param('deploymentId')!;
       await deploymentService.get(nodeId, deploymentId);
       const scopes = c.get('effectiveScopes') || [];
-      const canReveal = hasDockerResourceScope(scopes, 'docker:containers:secrets', nodeId, deploymentId);
+      // An impersonating administrator sees the keys, never the values.
+      const canReveal =
+        hasDockerResourceScope(scopes, 'docker:containers:secrets', nodeId, deploymentId) && !c.get('impersonation');
       const data = await secretService.list(nodeId, deploymentSecretContainerName(deploymentId), canReveal);
       return c.json({ data });
     }
@@ -453,13 +478,16 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const data = await service.getWebhook(c.req.param('nodeId')!, c.req.param('deploymentId')!);
-      return c.json({ data });
+      // An impersonating admin sees the config, never the user's webhook token.
+      return c.json({ data: data && c.get('impersonation') ? { ...data, token: null } : data });
     }
   );
 
   router.openapi(
     { ...upsertDeploymentWebhookRoute, middleware: requireDockerDeploymentScope('docker:containers:webhooks') },
     async (c) => {
+      // The webhook token is a long-lived credential; never mint it for an impersonated user.
+      assertNotImpersonating(c, 'Webhook tokens cannot be issued while impersonating');
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
       const data = await service.upsertWebhook(
@@ -488,6 +516,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       middleware: requireDockerDeploymentScope('docker:containers:webhooks'),
     },
     async (c) => {
+      assertNotImpersonating(c, 'Webhook tokens cannot be regenerated while impersonating');
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
       const data = await service.regenerateWebhook(c.req.param('nodeId')!, c.req.param('deploymentId')!, user.id);

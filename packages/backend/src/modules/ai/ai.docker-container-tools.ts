@@ -18,6 +18,7 @@ import {
 } from '@/modules/docker/docker-container-observability.js';
 import {
   containerRecreateRequiredScopes,
+  containerUpdateChangesImage,
   containerUpdateRequiredScopes,
 } from '@/modules/docker/docker-container-scope-requirements.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
@@ -129,6 +130,13 @@ export async function manageDockerContainerTool(
         nodeId,
         containerId
       );
+      // The route's image pull check for a new tag.
+      if (
+        containerUpdateChangesImage(config) &&
+        !hasScopeForCreation(user.scopes, 'docker:images:pull', undefined, nodeId)
+      ) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing docker:images:pull for the destination node or folder');
+      }
       await assertComposeChildMutationAllowed(nodeId, containerId);
       return dockerService.updateContainer(nodeId, containerId, config, user.id, user.scopes);
     }

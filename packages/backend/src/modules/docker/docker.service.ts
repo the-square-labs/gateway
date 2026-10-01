@@ -1194,19 +1194,31 @@ export class DockerManagementService {
     const data = this.parseResult(result);
     if (data) {
       const cName = ((data.Name ?? '') as string).replace(/^\//, '');
-      if (this.secretService && cName && Array.isArray(data?.Config?.Env)) {
-        const secretKeys = await this.secretService.getSecretKeys(nodeId, cName);
-        if (secretKeys.size > 0) {
-          data.Config.Env = data.Config.Env.map((entry: string) => {
-            const eqIndex = entry.indexOf('=');
-            if (eqIndex === -1) return entry;
-            const key = entry.slice(0, eqIndex);
-            return secretKeys.has(key) ? `${key}=********` : entry;
-          });
-        }
-      }
+      await this.maskSecretEnv(data, [{ nodeId, containerName: cName }]);
       return this.decorateContainerDetailSnapshot(nodeId, data);
     }
+    return data;
+  }
+
+  /**
+   * Mask the values of the secrets stored for the given containers in an inspect's `Config.Env`. A replica of an HA
+   * workload runs under an internal name on another node, so its inspect is masked with the logical workload's
+   * secrets as well.
+   */
+  async maskSecretEnv(data: any, owners: ReadonlyArray<{ nodeId: string | null | undefined; containerName: string }>) {
+    if (!this.secretService || !Array.isArray(data?.Config?.Env)) return data;
+    const secretKeys = new Set<string>();
+    for (const owner of owners) {
+      if (!owner.nodeId || !owner.containerName) continue;
+      for (const key of await this.secretService.getSecretKeys(owner.nodeId, owner.containerName)) secretKeys.add(key);
+    }
+    if (secretKeys.size === 0) return data;
+    data.Config.Env = data.Config.Env.map((entry: string) => {
+      const eqIndex = entry.indexOf('=');
+      if (eqIndex === -1) return entry;
+      const key = entry.slice(0, eqIndex);
+      return secretKeys.has(key) ? `${key}=********` : entry;
+    });
     return data;
   }
 

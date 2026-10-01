@@ -1,3 +1,4 @@
+import { getAuditRequestContext } from '@/modules/audit/audit-request-context.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { redactDeploymentWebhookToken } from './docker-deployment-helpers.js';
 
@@ -32,7 +33,11 @@ export function redactDeploymentEnvironment<T>(deployment: T, canViewEnvironment
   return redacted as T;
 }
 
-/** Shapes a deployment detail for one caller: webhook token and env by permission. */
+/**
+ * Shapes a deployment detail for one caller: webhook token and env by permission. An impersonating administrator
+ * never sees the webhook token, a credential that outlives the session (the REST and AI request contexts both carry
+ * the impersonation).
+ */
 export function presentDeploymentForCaller<T>(
   deployment: T,
   scopes: string[],
@@ -41,7 +46,9 @@ export function presentDeploymentForCaller<T>(
 ): T {
   if (!deployment || typeof deployment !== 'object') return deployment;
   const canViewEnvironment = hasDockerResourceScope(scopes, 'docker:containers:environment', nodeId, deploymentId);
-  const canRevealWebhookToken = hasDockerResourceScope(scopes, 'docker:containers:webhooks', nodeId, deploymentId);
+  const canRevealWebhookToken =
+    hasDockerResourceScope(scopes, 'docker:containers:webhooks', nodeId, deploymentId) &&
+    !getAuditRequestContext()?.impersonation;
   const redacted = redactDeploymentEnvironment(deployment, canViewEnvironment) as T & {
     webhook?: { token?: string; [key: string]: unknown } | null;
   };

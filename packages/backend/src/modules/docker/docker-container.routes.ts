@@ -4,7 +4,7 @@ import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { requireAnyScopeBase, requireScopeBase } from '@/modules/auth/auth.middleware.js';
+import { assertNotImpersonating, requireAnyScopeBase, requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { AppEnv } from '@/types.js';
@@ -88,6 +88,7 @@ import {
   openDockerContainerArchiveExport,
   planDockerContainerArchiveImport,
 } from './docker-container-archive-operations.js';
+import { assertCreateNetworksAccess } from './docker-container-create-networks.js';
 import {
   getDockerContainerProcesses,
   getDockerContainerStatsHistory,
@@ -96,6 +97,7 @@ import {
 } from './docker-container-observability.js';
 import {
   containerRecreateRequiredScopes,
+  containerUpdateChangesImage,
   containerUpdateRequiredScopes,
 } from './docker-container-scope-requirements.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
@@ -322,6 +324,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
     const user = c.get('user')!;
     const body = await c.req.json();
     const config = ContainerCreateSchema.parse(body);
+    await assertCreateNetworksAccess(c.get('effectiveScopes') || [], nodeId, config.networks);
     const data = await service.createContainer(nodeId, config, user.id, c.get('effectiveScopes') || []);
     return c.json({ data }, 201);
   });
@@ -346,6 +349,15 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const inspectIdentifier = runtimeTarget?.containerId ?? requestedName;
       if (runtimeTarget) {
         let resolved = await service.inspectContainer(inspectNodeId, inspectIdentifier);
+        // A replica on another node gets the logical workload's secrets in plain text under its internal name.
+        const policy = runtimeTarget.workload.policy;
+        const logicalNames = [...new Set([policy.containerName ?? '', policy.displayName])];
+        resolved = await service.maskSecretEnv(
+          resolved,
+          [policy.originNodeId, policy.sourceNodeId].flatMap((ownerNodeId) =>
+            logicalNames.map((containerName) => ({ nodeId: ownerNodeId, containerName }))
+          )
+        );
         // The live inspect carries the environment; snapshots never do.
         if (!(await callerHasContainerScope(c, 'docker:containers:environment', 'containerName'))) {
           resolved = sanitizeContainerInspect(resolved);
@@ -573,6 +585,9 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const query = ContainerArchiveExportQuerySchema.parse(c.req.query());
+      // An archive with secrets carries their values out of Gateway.
+      if (query.includeSecrets)
+        assertNotImpersonating(c, 'Archives with secrets cannot be exported while impersonating');
       const archive = await openDockerContainerArchiveExport({
         nodeId,
         containerId,
@@ -654,6 +669,16 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const body = await c.req.json();
       const config = ContainerUpdateSchema.parse(body);
       await assertAdditionalContainerScopes(c, containerUpdateRequiredScopes(config));
+      if (containerUpdateChangesImage(config)) {
+        await assertDockerCreationAccess(
+          container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
+          c.get('effectiveScopes') || [],
+          'docker:images:pull',
+          nodeId,
+          undefined,
+          'image'
+        );
+      }
       const data = await service.updateContainer(nodeId, containerId, config, user.id, c.get('effectiveScopes') || []);
       return c.json({ data });
     }
@@ -783,7 +808,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const containerName = await resolveContainerName(nodeId, containerId);
-      const data = await service.list(nodeId, containerName, true);
+      // An impersonating administrator sees the keys, never the values.
+      const data = await service.list(nodeId, containerName, !c.get('impersonation'));
       return c.json({ data });
     }
   );

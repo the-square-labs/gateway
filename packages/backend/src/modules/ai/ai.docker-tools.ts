@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import {
+  getResourceScopedIds,
+  hasScope,
+  hasScopeBase,
+  hasScopeForCreation,
+  hasScopeForResource,
+} from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   ComposeAdoptInputSchema,
@@ -56,6 +62,12 @@ import {
   DockerSourceResourceCreateSchema,
   type DockerSourceTarget,
 } from '@/modules/docker/docker-build.schemas.js';
+import { assertCreateNetworksAccess } from '@/modules/docker/docker-container-create-networks.js';
+import {
+  type DeploymentChangeRequirements,
+  deploymentDeployRequiredScopes,
+  deploymentUpdateRequiredScopes,
+} from '@/modules/docker/docker-container-scope-requirements.js';
 import {
   DockerDeploymentCreateSchema,
   DockerDeploymentDeploySchema,
@@ -195,7 +207,7 @@ export async function executeDockerTool(
         labels: a.labels,
         command: a.command,
       });
-      if (input.networks?.length) context.ensureToolScopeForResource(user, 'docker:networks:edit', a.nodeId);
+      await assertCreateNetworksAccess(user.scopes, a.nodeId, input.networks);
       const data = await context.dockerService.createContainer(a.nodeId, input, user.id, user.scopes);
       const containerId = String((data as any)?.id ?? (data as any)?.Id ?? '');
       if (!containerId) throw new Error('Docker daemon did not return the created container ID');
@@ -324,6 +336,7 @@ export async function executeDockerTool(
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
       const { DockerDeploymentService } = await import('@/modules/docker/docker-deployment.service.js');
       const input = DockerDeploymentDeploySchema.parse(args);
+      ensureDeploymentChangeAccess(context, user, a.nodeId, a.deploymentId, deploymentDeployRequiredScopes(input));
       const data = await container
         .resolve(DockerDeploymentService)
         .deploy(a.nodeId, a.deploymentId, input, user.id, 'manual', user.scopes);
@@ -897,6 +910,20 @@ function ensureDockerDeploymentScope(
   deploymentId: string
 ): void {
   context.ensureToolScopeForResource(user, baseScope, `${nodeId}/${deploymentId}`);
+}
+
+/** The deploy and update route rule (assertDeploymentChangeAccess in docker-deployment.routes.ts). */
+function ensureDeploymentChangeAccess(
+  context: DockerToolContext,
+  user: User,
+  nodeId: string,
+  deploymentId: string,
+  requirements: DeploymentChangeRequirements
+): void {
+  for (const scope of requirements.scopes) ensureDockerDeploymentScope(context, user, scope, nodeId, deploymentId);
+  if (requirements.pullsImage && !hasScopeForCreation(user.scopes, 'docker:images:pull', undefined, nodeId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing docker:images:pull for the destination node or folder');
+  }
 }
 
 async function manageDockerRegistry(context: DockerToolContext, user: User, args: Record<string, unknown>) {
@@ -1510,6 +1537,14 @@ async function manageDockerDeployment(context: DockerToolContext, user: User, ar
       const deploymentId = String(a.deploymentId ?? '');
       ensureDockerDeploymentScope(context, user, 'docker:containers:edit', nodeId, deploymentId);
       const input = DockerDeploymentUpdateSchema.parse(a.payload ?? {});
+      const saved = await service.get(nodeId, deploymentId);
+      ensureDeploymentChangeAccess(
+        context,
+        user,
+        nodeId,
+        deploymentId,
+        deploymentUpdateRequiredScopes(input.desiredConfig, saved.desiredConfig)
+      );
       const data = await service.update(nodeId, deploymentId, input, user.id, user.scopes);
       return presentDeploymentForCaller(data, user.scopes, nodeId, deploymentId);
     }
