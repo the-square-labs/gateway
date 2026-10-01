@@ -1832,6 +1832,7 @@ export async function initializeContainer(): Promise<void> {
   );
   pageProfileService.setEventBus(eventBus);
   pageProfileService.setLicensePolicyService(licensePolicyService);
+  pageProfileService.setGeneralSettings(generalSettingsService);
   container.registerInstance(PageProfileService, pageProfileService);
   const pageNodeRuntimeService = commercialEdition.createPages(
     'PageNodeRuntimeService',

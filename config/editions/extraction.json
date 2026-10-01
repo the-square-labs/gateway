@@ -993,6 +993,7 @@
         "setEventBus",
         "setRuntimeAdapter",
         "setLicensePolicyService",
+        "setGeneralSettings",
         "disableForEntitlementLoss",
         "reconcile"
       ],

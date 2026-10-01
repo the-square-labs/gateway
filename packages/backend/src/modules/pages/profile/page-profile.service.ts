@@ -2,6 +2,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { UpdatePageProfileInput } from './page-profile.schemas.js';
 export interface PageProfileRuntimeAdapter {
@@ -15,6 +16,7 @@ export class PageProfileService {
   setEventBus(_eventBus: EventBusService): void {}
   setRuntimeAdapter(_adapter: PageProfileRuntimeAdapter): void {}
   setLicensePolicyService(_policy: LicensePolicyService): void {}
+  setGeneralSettings(_settings: GeneralSettingsService): void {}
   async isEnabled(): Promise<boolean> {
     return false;
   }
