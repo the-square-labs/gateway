@@ -25,10 +25,10 @@ export async function createNodeForActor(actor: NodeActor, input: CreateNodeInpu
 }
 
 /**
- * A new enrollment token is for a node that has not enrolled yet, so it is part of creating or managing that node:
- * the actor needs nodes:create where the node sits (broadly, on its folder, or the legacy per-node grant) or
- * nodes:manage for the node. Folder-only creators and managers can therefore finish enrolling the nodes of their
- * folders, including ones created by someone else.
+ * A new enrollment token decides which machine becomes the node, and that machine receives everything already bound
+ * to it (routes and their TLS keys, ingress groups, pages). nodes:manage for the node allows it. nodes:create where
+ * the node sits (broadly, on its folder, or the legacy per-node grant) allows it only for a node the actor created:
+ * a creator finishes enrolling their own node, but cannot take over a pending node someone else prepared.
  */
 export async function regenerateNodeEnrollmentTokenForActor(actor: NodeActor, id: string, nodesService?: NodesService) {
   const denied = () => new AppError(403, 'FORBIDDEN', `Missing required scope: nodes:create:${id}`);
@@ -37,13 +37,23 @@ export async function regenerateNodeEnrollmentTokenForActor(actor: NodeActor, id
   // Without any creation grant the node is not even looked up, so its existence stays hidden.
   if (!hasScopeBase(actor.scopes, 'nodes:create')) throw denied();
   let folderId: string | null;
+  let metadata: Record<string, unknown> | null;
   try {
-    ({ folderId } = await service.get(id));
+    ({ folderId, metadata } = await service.get(id));
   } catch (error) {
     if (!hasScope(actor.scopes, 'nodes:create')) throw denied();
     throw error;
   }
   if (!hasScopeForCreation(actor.scopes, 'nodes:create', folderId, id)) throw denied();
+  // Nodes created before the creator was recorded need nodes:manage.
+  if (metadata?.createdById !== actor.id) {
+    throw new AppError(
+      403,
+      'FORBIDDEN',
+      'Only the user who created this node, or a holder of nodes:manage for it, can issue a new enrollment token',
+      { requiredScope: `nodes:manage:${id}` }
+    );
+  }
   return service.regenerateEnrollmentToken(id, actor.id);
 }
 

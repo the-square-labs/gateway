@@ -461,7 +461,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_node',
     description:
-      'Operate on one daemon node like the node page. Operations: update (displayName, appearanceColor, serviceAddresses or legacy serviceAddress/secondaryServiceAddress, confirmDomainDnsUpdate, builderSettings; each field needs the same node permission as the UI), regenerate_enrollment_token (only for a node that never enrolled; display the new token and gatewayCertSha256), health_history, monitoring_history, daemon_logs (buffered daemon log lines), and nginx_logs (recent access/error lines for the ingress routes on an nginx node).',
+      'Operate on one daemon node like the node page. Operations: update (displayName, appearanceColor, serviceAddresses or legacy serviceAddress/secondaryServiceAddress, confirmDomainDnsUpdate, builderSettings; each field needs the same node permission as the UI), regenerate_enrollment_token (only for a node that never enrolled; needs nodes:manage, or nodes:create for a node you created; display the new token and gatewayCertSha256), health_history, monitoring_history, daemon_logs (buffered daemon log lines), and nginx_logs (recent access/error lines for the ingress routes on an nginx node).',
     parameters: {
       type: 'object',
       properties: {

@@ -373,6 +373,8 @@ export class NodesService {
               enrollmentTokenExpiresAt,
               status: 'pending',
               serviceAddresses: input.type === 'relay' ? input.serviceAddresses : [],
+              // Lets the creator, and only the creator, re-issue the enrollment token with nodes:create alone.
+              metadata: { createdById: userId },
             })
             .returning();
           return created;
