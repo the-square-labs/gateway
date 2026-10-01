@@ -1,12 +1,14 @@
 import { eq } from 'drizzle-orm';
 import { getEnv } from '@/config/env.js';
 import { nodes, proxyHosts } from '@/db/schema/index.js';
+import { hasScopeForCreation } from '@/lib/permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   INTERNAL_REGISTRY_INGRESS_ID,
   INTERNAL_REGISTRY_INGRESS_PORT,
 } from '@/modules/docker/docker-registry.constants.js';
+import { assertCanPlaceOnMembers } from '@/modules/ingress-groups/ingress-group-access.js';
 import { requireRoutableIngressGroup } from '@/modules/ingress-groups/ingress-group-routing.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
@@ -87,6 +89,25 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
       [`proxy-system:${kind}`, existing && proxyHostLockKey(existing.id), ...nodeIds.map(proxyNodeLockKey)],
       fn
     );
+  }
+
+  /**
+   * The status page route is placed for the caller who configures it, so its node, or every member of its ingress
+   * group, needs proxy:create as a route of the caller's own would.
+   */
+  async assertSystemHostPlacementAccess(
+    scopes: readonly string[],
+    placement: { nodeId: string | null; ingressGroupId: string | null }
+  ): Promise<void> {
+    if (placement.ingressGroupId) {
+      const group = await requireRoutableIngressGroup(this.db, placement.ingressGroupId);
+      assertCanPlaceOnMembers(scopes, 'proxy:create', null, group.memberNodeIds);
+      return;
+    }
+    if (placement.nodeId && hasScopeForCreation(scopes, 'proxy:create', null, placement.nodeId)) return;
+    throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected nginx node', {
+      requiredScope: placement.nodeId ? `proxy:create:node/${placement.nodeId}` : 'proxy:create',
+    });
   }
 
   async upsertStatusPageSystemHost(input: StatusPageSystemHostInput, userId: string): Promise<ProxyHostRow> {

@@ -23,6 +23,7 @@ import {
   statusPageServices,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import { canViewStatusPageSource } from './status-page-source-access.js';
@@ -59,4 +60,5 @@ export const statusPageCommercialRuntime = {
   loggerStatusIncidentEvaluator,
   dockerAccessResources,
   canViewStatusPageSource,
+  hasScope,
 };
