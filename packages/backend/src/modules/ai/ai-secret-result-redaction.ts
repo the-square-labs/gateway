@@ -11,8 +11,9 @@ export function redactOneTimeSecretToolResult(toolName: string, value: unknown):
   if (toolName === 'manage_managed_storage' && isRecord(value) && typeof value.secretKey === 'string') {
     return { ...value, secretKey: ONE_TIME_SECRET_REDACTION, secretKeyRedacted: true };
   }
+  // Tokens shown once at creation (API, inference and log ingest tokens) stay out of the stored run and the model.
   if (
-    (toolName === 'manage_api_token' || toolName === 'manage_inference_token') &&
+    (toolName === 'manage_api_token' || toolName === 'manage_inference_token' || toolName === 'manage_logging') &&
     isRecord(value) &&
     typeof value.token === 'string'
   ) {

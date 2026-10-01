@@ -40,6 +40,21 @@ describe('redactOneTimeSecretToolResult', () => {
     });
   });
 
+  it('redacts a log ingest token created through manage_logging', () => {
+    expect(
+      redactOneTimeSecretToolResult('manage_logging', {
+        id: 'ingest-token-1',
+        tokenPrefix: 'gwl_0123456789',
+        token: 'gwl_0123456789abcdef0123456789abcdef',
+      })
+    ).toEqual({
+      id: 'ingest-token-1',
+      tokenPrefix: 'gwl_0123456789',
+      token: '[REDACTED_ONE_TIME_SECRET]',
+      tokenRedacted: true,
+    });
+  });
+
   it('leaves normal user-owned content and non-secret tool output unchanged', () => {
     const userContent = { content: 'my token-like note should stay searchable' };
     expect(redactOneTimeSecretToolResult('search_chats', userContent)).toBe(userContent);
