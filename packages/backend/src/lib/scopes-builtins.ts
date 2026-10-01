@@ -441,10 +441,11 @@ export const BUILTIN_GROUPS = [
   { name: 'admin', description: 'Full access to all features except system protection', scopes: ADMIN_SCOPES },
   {
     name: 'operator',
-    description: 'Operational access — manage certificates, proxies, and SSL',
+    description:
+      'Operational access — storage, backups, PKI, routes, Pages, nodes, Docker, databases, notifications and logging',
     scopes: OPERATOR_SCOPES,
   },
-  { name: 'viewer', description: 'Read-only access to all resources', scopes: VIEWER_SCOPES },
+  { name: 'viewer', description: 'Read-only access to most resources', scopes: VIEWER_SCOPES },
   {
     name: 'guest',
     description: 'Account access only — no infrastructure permissions',
