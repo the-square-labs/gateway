@@ -83,9 +83,11 @@ type DockerPlugin struct {
 	// relayTunnelOutcomes logs failing incoming relay tunnels per endpoint owner and state change (L-1).
 	relayTunnelOutcomes logepisode.Tracker
 	// linkRejections logs and counts the connections of database bindings and storage links the node or the relays
-	// refused; linkConnections holds the links without a host listener at their limit.
+	// refused; linkConnections holds the links without a host listener at their limit; linkTraffic counts the sessions
+	// and bytes each link carried.
 	linkRejections  linkRejectionLog
 	linkConnections linkConnectionCounts
+	linkTraffic     linkTraffic
 	// logHandler sends the plugin's lines, those of the managers built at Init included, to the current session.
 	logHandler *sessionLogHandler
 

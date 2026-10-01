@@ -30,13 +30,14 @@ func (f *fakeTunnelBroker) OpenTunnel(context.Context, ...grpc.CallOption) (grpc
 	return f.open(), nil
 }
 
-// fakeSourceStream answers the open frame with first (after admit closes, when set), then ends the tunnel (once hold
-// closes, when set).
+// fakeSourceStream answers the open frame with first (after admit closes, when set), then, once hold closes (when
+// set), with replies and ends the tunnel.
 type fakeSourceStream struct {
 	grpc.ClientStream
 	admit   chan struct{}
 	hold    chan struct{}
 	first   *relayv1.TunnelFrame
+	replies []*relayv1.TunnelFrame
 	refusal error
 	sent    chan *relayv1.TunnelFrame
 	recvs   int
@@ -55,6 +56,9 @@ func (s *fakeSourceStream) Recv() (*relayv1.TunnelFrame, error) {
 	if s.recvs > 1 {
 		if s.hold != nil {
 			<-s.hold
+		}
+		if s.recvs-2 < len(s.replies) {
+			return s.replies[s.recvs-2], nil
 		}
 		return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}}, nil
 	}
@@ -227,5 +231,48 @@ func TestStorageConnectorRelayHoldsTheLinkAtItsGrantLimit(t *testing.T) {
 		report.GetActiveConnections() != 2 || report.GetConnectionLimit() != 2 || report.GetRejectedTotal() != 1 ||
 		report.GetLastRejectionReason() != linkRejectedLinkLimit || report.GetLastRejectedAtUnixMs() == 0 {
 		t.Fatalf("storage link report %+v", report)
+	}
+}
+
+// A link's sessions and bytes are counted where the node proxies them, so the link runtime has its totals whichever
+// relay of the pool carries a session.
+func TestManagedLinkTrafficIsCountedOnTheNode(t *testing.T) {
+	hold := make(chan struct{})
+	stream := &fakeSourceStream{first: readyFrame(), hold: hold, sent: make(chan *relayv1.TunnelFrame, 4),
+		replies: []*relayv1.TunnelFrame{{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: []byte("pong!")}}}}}
+	broker := &fakeTunnelBroker{open: func() *fakeSourceStream { return stream }}
+	plugin, _ := newRelayTestPlugin(t, broker, connectAssignment(linkKindManagedDatabaseBinding, testListenerBindingA))
+	client, daemonSide := net.Pipe()
+	defer client.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		plugin.openManagedDatabaseBinding(daemonSide, testListenerBindingA, 0)
+	}()
+	if _, err := client.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	for sent := range stream.sent {
+		if data := sent.GetData(); data != nil {
+			if string(data.GetData()) != "ping" {
+				t.Fatalf("relay got %q", data.GetData())
+			}
+			break
+		}
+	}
+	close(hold)
+	reply := make([]byte, 5)
+	if _, err := io.ReadFull(client, reply); err != nil || string(reply) != "pong!" {
+		t.Fatalf("client read %q, %v", reply, err)
+	}
+	<-done
+
+	reports := plugin.managedLinkRuntime()
+	if len(reports) != 1 {
+		t.Fatalf("link reports %+v", reports)
+	}
+	if report := reports[0]; report.GetOpenedTotal() != 1 || report.GetSourceToTargetBytes() != 4 ||
+		report.GetTargetToSourceBytes() != 5 || report.GetActiveConnections() != 0 {
+		t.Fatalf("link report %+v", report)
 	}
 }

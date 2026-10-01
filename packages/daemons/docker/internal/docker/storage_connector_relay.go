@@ -113,7 +113,7 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 		tunnel.close()
 		return
 	}
-	tunnel.bridge(connection)
+	tunnel.bridge(p.linkTraffic.carry(link, connection))
 }
 
 func storageConnectorRelayRefusal(reason string, err error) string {

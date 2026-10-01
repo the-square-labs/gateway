@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"net"
 	"sync"
+	"sync/atomic"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
@@ -52,8 +54,81 @@ func (c *linkConnectionCounts) count(link linkKey) int {
 	return c.active[link]
 }
 
+// linkTraffic counts what each link carried through this node: the sessions a relay opened for it and the bytes in
+// each direction. The node proxies every connection of the link, whichever relay of the pool carries it, so these are
+// the link's totals. The zero value is ready to use.
+type linkTraffic struct {
+	mu    sync.Mutex
+	links map[linkKey]*linkTrafficCounts
+}
+
+type linkTrafficCounts struct {
+	opened         atomic.Uint64
+	sourceToTarget atomic.Uint64
+	targetToSource atomic.Uint64
+}
+
+// carry counts a session a relay opened for link and returns connection counting the bytes it carries over it.
+func (t *linkTraffic) carry(link linkKey, connection net.Conn) net.Conn {
+	t.mu.Lock()
+	if t.links == nil {
+		t.links = map[linkKey]*linkTrafficCounts{}
+	}
+	counts := t.links[link]
+	if counts == nil {
+		counts = &linkTrafficCounts{}
+		t.links[link] = counts
+	}
+	t.mu.Unlock()
+	counts.opened.Add(1)
+	return &linkCountedConn{Conn: connection, counts: counts}
+}
+
+// counts returns what the links in keep carried and forgets every other link (a link that left the node).
+func (t *linkTraffic) counts(keep map[linkKey]struct{}) map[linkKey]*pb.ManagedLinkRuntime {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	result := make(map[linkKey]*pb.ManagedLinkRuntime, len(t.links))
+	for link, counts := range t.links {
+		if _, present := keep[link]; !present {
+			delete(t.links, link)
+			continue
+		}
+		result[link] = &pb.ManagedLinkRuntime{OpenedTotal: counts.opened.Load(),
+			SourceToTargetBytes: counts.sourceToTarget.Load(), TargetToSourceBytes: counts.targetToSource.Load()}
+	}
+	return result
+}
+
+// linkCountedConn is the workload side of a link session: what it reads goes to the target, what it writes came
+// from it.
+type linkCountedConn struct {
+	net.Conn
+	counts *linkTrafficCounts
+}
+
+func (c *linkCountedConn) Read(buffer []byte) (int, error) {
+	n, err := c.Conn.Read(buffer)
+	c.counts.sourceToTarget.Add(uint64(max(n, 0)))
+	return n, err
+}
+
+func (c *linkCountedConn) Write(buffer []byte) (int, error) {
+	n, err := c.Conn.Write(buffer)
+	c.counts.targetToSource.Add(uint64(max(n, 0)))
+	return n, err
+}
+
+// CloseWrite half-closes the workload's connection like the bridge does without the counter.
+func (c *linkCountedConn) CloseWrite() error {
+	if half, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return half.CloseWrite()
+	}
+	return nil
+}
+
 // managedLinkRuntime reports every managed database and storage link this node serves workloads of (a connect grant
-// in the bundle): its open connections, its limit and what it refused.
+// in the bundle): its open connections, its limit, what it refused and what it carried.
 func (p *DockerPlugin) managedLinkRuntime() []*pb.ManagedLinkRuntime {
 	if p.relayGrants == nil {
 		return nil
@@ -83,6 +158,7 @@ func (p *DockerPlugin) managedLinkRuntime() []*pb.ManagedLinkRuntime {
 		}
 	})
 	rejections := p.linkRejections.counts(keep)
+	traffic := p.linkTraffic.counts(keep)
 	reports := make([]*pb.ManagedLinkRuntime, 0, len(links))
 	for _, link := range links {
 		active := p.linkConnections.count(link.key)
@@ -96,6 +172,10 @@ func (p *DockerPlugin) managedLinkRuntime() []*pb.ManagedLinkRuntime {
 		}
 		if !counts.lastAt.IsZero() {
 			report.LastRejectedAtUnixMs = counts.lastAt.UnixMilli()
+		}
+		if carried := traffic[link.key]; carried != nil {
+			report.OpenedTotal, report.SourceToTargetBytes, report.TargetToSourceBytes =
+				carried.GetOpenedTotal(), carried.GetSourceToTargetBytes(), carried.GetTargetToSourceBytes()
 		}
 		reports = append(reports, report)
 	}

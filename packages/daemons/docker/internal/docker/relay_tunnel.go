@@ -658,7 +658,7 @@ func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID
 			"error", relayRefusalMessage(err))
 		return
 	}
-	tunnel.bridge(connection)
+	tunnel.bridge(p.linkTraffic.carry(linkKey{kind: linkKindManagedDatabaseBinding, id: bindingID}, connection))
 }
 
 // openRelaySource opens a source tunnel for assignment on the first of its relay candidates (in load and latency

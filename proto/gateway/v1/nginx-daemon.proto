@@ -230,6 +230,12 @@ message ManagedLinkRuntime {
   // (link_limit, node_limit, relay_capacity, source_not_allowed, ...).
   string last_rejection_reason = 6;
   int64 last_rejected_at_unix_ms = 7;
+  // What the link carried through this node since the daemon started: the
+  // sessions a relay opened for it and the bytes in each direction. The node
+  // proxies every connection of the link, whichever relay carries it.
+  uint64 opened_total = 8;
+  uint64 source_to_target_bytes = 9;
+  uint64 target_to_source_bytes = 10;
 }
 
 message RelayLatencySample {

@@ -1545,8 +1545,14 @@ type ManagedLinkRuntime struct {
 	// (link_limit, node_limit, relay_capacity, source_not_allowed, ...).
 	LastRejectionReason  string `protobuf:"bytes,6,opt,name=last_rejection_reason,json=lastRejectionReason,proto3" json:"last_rejection_reason,omitempty"`
 	LastRejectedAtUnixMs int64  `protobuf:"varint,7,opt,name=last_rejected_at_unix_ms,json=lastRejectedAtUnixMs,proto3" json:"last_rejected_at_unix_ms,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// What the link carried through this node since the daemon started: the
+	// sessions a relay opened for it and the bytes in each direction. The node
+	// proxies every connection of the link, whichever relay carries it.
+	OpenedTotal         uint64 `protobuf:"varint,8,opt,name=opened_total,json=openedTotal,proto3" json:"opened_total,omitempty"`
+	SourceToTargetBytes uint64 `protobuf:"varint,9,opt,name=source_to_target_bytes,json=sourceToTargetBytes,proto3" json:"source_to_target_bytes,omitempty"`
+	TargetToSourceBytes uint64 `protobuf:"varint,10,opt,name=target_to_source_bytes,json=targetToSourceBytes,proto3" json:"target_to_source_bytes,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ManagedLinkRuntime) Reset() {
@@ -1624,6 +1630,27 @@ func (x *ManagedLinkRuntime) GetLastRejectionReason() string {
 func (x *ManagedLinkRuntime) GetLastRejectedAtUnixMs() int64 {
 	if x != nil {
 		return x.LastRejectedAtUnixMs
+	}
+	return 0
+}
+
+func (x *ManagedLinkRuntime) GetOpenedTotal() uint64 {
+	if x != nil {
+		return x.OpenedTotal
+	}
+	return 0
+}
+
+func (x *ManagedLinkRuntime) GetSourceToTargetBytes() uint64 {
+	if x != nil {
+		return x.SourceToTargetBytes
+	}
+	return 0
+}
+
+func (x *ManagedLinkRuntime) GetTargetToSourceBytes() uint64 {
+	if x != nil {
+		return x.TargetToSourceBytes
 	}
 	return 0
 }
@@ -12418,7 +12445,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x0econfig_applied\x18\x05 \x01(\bR\rconfigApplied\x12.\n" +
 	"\x13secure_link_sources\x18\x06 \x01(\rR\x11secureLinkSources\x126\n" +
 	"\x17usable_relay_transports\x18\a \x01(\rR\x15usableRelayTransports\x12+\n" +
-	"\x12checked_at_unix_ms\x18\b \x01(\x03R\x0fcheckedAtUnixMs\"\xbb\x02\n" +
+	"\x12checked_at_unix_ms\x18\b \x01(\x03R\x0fcheckedAtUnixMs\"\xc8\x03\n" +
 	"\x12ManagedLinkRuntime\x12\x1d\n" +
 	"\n" +
 	"owner_kind\x18\x01 \x01(\tR\townerKind\x12\x19\n" +
@@ -12427,7 +12454,11 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x10connection_limit\x18\x04 \x01(\rR\x0fconnectionLimit\x12%\n" +
 	"\x0erejected_total\x18\x05 \x01(\x04R\rrejectedTotal\x122\n" +
 	"\x15last_rejection_reason\x18\x06 \x01(\tR\x13lastRejectionReason\x126\n" +
-	"\x18last_rejected_at_unix_ms\x18\a \x01(\x03R\x14lastRejectedAtUnixMs\"_\n" +
+	"\x18last_rejected_at_unix_ms\x18\a \x01(\x03R\x14lastRejectedAtUnixMs\x12!\n" +
+	"\fopened_total\x18\b \x01(\x04R\vopenedTotal\x123\n" +
+	"\x16source_to_target_bytes\x18\t \x01(\x04R\x13sourceToTargetBytes\x123\n" +
+	"\x16target_to_source_bytes\x18\n" +
+	" \x01(\x04R\x13targetToSourceBytes\"_\n" +
 	"\x12RelayLatencySample\x12*\n" +
 	"\x11relay_instance_id\x18\x01 \x01(\tR\x0frelayInstanceId\x12\x1d\n" +
 	"\n" +
