@@ -25,7 +25,7 @@ Start with `using-gateway` for connection, discovery, and safety rules. Read `re
 1. `issue_certificate({ caId, commonName, keyAlgorithm, validityDays, type, sans? })` with `type` `tls-server`, `tls-client`, `code-signing`, or `email`. `sans` is an array of plain strings (`"example.com"`, `"*.example.com"`, `"10.0.0.1"`, `"user@example.com"`); Gateway detects the kind. Never prefix values with `DNS:` or `IP:`; that fails.
 2. A certificate cannot outlive its CA. A longer request fails with `VALIDITY_EXCEEDS_CA` unless `clampToCaValidity` is set, which ends it with the CA.
 3. Templates (`list_templates`, `create_template`, `manage_template`, `delete_template`) predefine type, key algorithm, validity, key usage, extended key usage, SAN requirements, subject defaults, CRL and AIA URLs, and custom extensions. Built-in templates (`isBuiltin: true`) cannot be edited or deleted.
-4. `get_certificate`, `list_certificates`; `revoke_certificate({ certificateId, reason })` with a reason such as `key_compromise`, `superseded`, or `unspecified`. Revocation is irreversible; confirm first.
+4. `get_certificate`, `list_certificates`; `revoke_certificate({ certificateId, reason })` with an RFC 5280 reason: `unspecified` (default), `keyCompromise`, `caCompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation`, or `certificateHold`. Revocation is irreversible; confirm first.
 
 ## Use an internal certificate on a Route
 
@@ -39,7 +39,7 @@ When Gateway holds the private key, a linked certificate reissues automatically 
 
 ## Expiry alerts
 
-User CAs alert 180, 60, 30, and 7 days before expiry. System CAs alert 730, 365, 180, 60, 30, and 7 days ahead and have no automatic rollover in this release: every Node, Relay, storage, and database certificate they issued stops working when they expire, so replacement must start at the first alert. Each threshold alerts once.
+User CAs alert 180, 60, 30, and 7 days before expiry. System CAs alert 730, 365, 180, 60, 30, and 7 days ahead and have no automatic rollover yet: every Node, Relay, storage, and database certificate they issued stops working when they expire, so replacement must start at the first alert. Each threshold alerts once.
 
 ## System PKI audit
 

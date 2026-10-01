@@ -26,7 +26,7 @@ Each binding gets its own engine identity, never the owner account: a login role
 
 The workload need not run. `create_binding` and `delete_binding` on a stopped, crash-looping, failed, or not yet deployed workload save the link and return without waiting; `list_bindings` shows `observedState: "target_applied"` until the workload next starts or finishes its rollout, then `active`. For a Deployment whose first Git build failed, retry the source build; never set its image by hand to force the link. A Git-source Container before its first build is linked by its name, and a Compose service before the first revision (or during a build rollout) by a service name the next revision defines; the link fails with the reason if that revision lacks the service. Rollbacks, slot switches, and older Compose revisions keep the current links. The target Docker Node must be online (`NODE_OFFLINE` otherwise).
 
-For TLS-enabled PostgreSQL, the plain `connectionUri` works: the database Node's daemon (2.11.0-rc.14 or later) opens TLS to PostgreSQL for a client that connects without it, and a client that requests TLS itself keeps end-to-end TLS.
+For TLS-enabled PostgreSQL, the plain `connectionUri` works: the database Node's daemon (2.11.0 or later) opens TLS to PostgreSQL for a client that connects without it, and a client that requests TLS itself keeps end-to-end TLS.
 
 ## Lifecycle is not one operation
 
