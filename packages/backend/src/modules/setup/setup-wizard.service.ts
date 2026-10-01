@@ -3,6 +3,7 @@ import { and, eq, lt } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { permissionGroups, settings, users } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { AuthService } from '@/modules/auth/auth.service.js';
 import type { AuthSettingsService, LocalAuthMethods, PasswordPolicy } from '@/modules/auth/auth.settings.service.js';
 import type { AuthMailService, SmtpConfigInput } from '@/modules/auth/auth-mail.service.js';
@@ -57,6 +58,28 @@ const logger = createChildLogger('SetupWizard');
 /** General settings the setup wizard writes, and so the only ones its rollback restores. */
 const SETUP_GENERAL_SETTINGS_FIELDS = ['publicUrl', 'gatewayGrpcPublicTarget', 'gatewayGrpcLocalIp'] as const;
 
+/** Input the administrator can correct: 400 with the message the wizard shows. */
+function invalidSetup(message: string): AppError {
+  return new AppError(400, 'SETUP_INVALID', message);
+}
+
+/** The general settings normalizers reject bad input with a plain Error. */
+function setupInput<T>(normalize: () => T): T {
+  try {
+    return normalize();
+  } catch (error) {
+    throw error instanceof Error ? invalidSetup(error.message) : error;
+  }
+}
+
+function administratorExists(message: string): AppError {
+  return new AppError(409, 'SETUP_ADMINISTRATOR_EXISTS', message);
+}
+
+function configurationRequired(message: string): AppError {
+  return new AppError(409, 'SETUP_CONFIGURATION_REQUIRED', message);
+}
+
 export class SetupWizardService {
   constructor(
     private readonly db: DrizzleClient,
@@ -91,14 +114,14 @@ export class SetupWizardService {
 
   async configureAuth(input: SetupAuthInput) {
     if (!input.methods.oidc && !input.methods.password && !input.methods.emailOtp) {
-      throw new Error('At least one authentication method must be enabled');
+      throw invalidSetup('At least one authentication method must be enabled');
     }
     if (input.oidc) {
       await this.oidcSettings.saveConfig(input.oidc);
       this.authService.invalidateOidcConfiguration();
     }
     if (input.methods.oidc && !(await this.oidcSettings.getPublicConfig()).configured) {
-      throw new Error('OIDC must be configured before enabling OIDC sign-in');
+      throw invalidSetup('OIDC must be configured before enabling OIDC sign-in');
     }
 
     if (input.smtp) {
@@ -106,7 +129,7 @@ export class SetupWizardService {
     }
     if (input.methods.password || input.methods.emailOtp) {
       const smtp = await this.authMail.getPublicConfig();
-      if (!smtp.verifiedAt) throw new Error('SMTP must be configured and verified for email-based sign-in');
+      if (!smtp.verifiedAt) throw invalidSetup('SMTP must be configured and verified for email-based sign-in');
     }
 
     return this.authSettings.updateConfig({
@@ -182,7 +205,9 @@ export class SetupWizardService {
   }
 
   async createAdministrator(input: SetupAdminInput) {
-    if (await this.policy.isGatewayConfigured()) throw new Error('The first administrator has already been created');
+    if (await this.policy.isGatewayConfigured()) {
+      throw administratorExists('The first administrator has already been created');
+    }
 
     const methods = (await this.authSettings.getConfig()).methods;
     const methodEnabled =
@@ -191,8 +216,8 @@ export class SetupWizardService {
         : input.authMethod === 'password'
           ? methods.password
           : methods.emailOtp;
-    if (!methodEnabled) throw new Error('The selected administrator authentication method is not enabled');
-    if (input.authMethod === 'password' && !input.password) throw new Error('Password is required');
+    if (!methodEnabled) throw invalidSetup('The selected administrator authentication method is not enabled');
+    if (input.authMethod === 'password' && !input.password) throw invalidSetup('Password is required');
     if (input.authMethod === 'password') await this.localAuth.validateInitialPasswordForSetup(input.password!);
 
     const claim = randomUUID();
@@ -209,13 +234,15 @@ export class SetupWizardService {
       .values({ key: FIRST_ADMIN_CLAIM_KEY, value: claim, updatedAt: new Date() })
       .onConflictDoNothing()
       .returning({ key: settings.key });
-    if (!claimed) throw new Error('The first administrator is already being created');
+    if (!claimed) throw administratorExists('The first administrator is already being created');
 
     let createdUserId: string | null = null;
     try {
       // Re-check after obtaining the database-backed singleton claim. This
       // closes the race between multiple app processes receiving setup calls.
-      if (await this.policy.isGatewayConfigured()) throw new Error('The first administrator has already been created');
+      if (await this.policy.isGatewayConfigured()) {
+        throw administratorExists('The first administrator has already been created');
+      }
 
       const adminGroup = await this.db.query.permissionGroups.findFirst({
         where: eq(permissionGroups.name, 'system-admin'),
@@ -262,14 +289,16 @@ export class SetupWizardService {
     status: 'configured' | 'skipped';
     configuredVia?: 'direct' | 'gateway_inference';
   }): Promise<void> {
-    await this.generalSettings.requirePublicUrl();
+    if (!(await this.generalSettings.getPublicUrl())) {
+      throw configurationRequired('Gateway public URL has not been configured');
+    }
     if (!(await this.policy.isGatewayConfigured()))
-      throw new Error('Create the first administrator before completing setup');
+      throw configurationRequired('Create the first administrator before completing setup');
     if ((await this.getPhase()) !== 'ai_workspace')
-      throw new Error('Apply Gateway setup before configuring AI Workspace');
+      throw configurationRequired('Apply Gateway setup before configuring AI Workspace');
     const methods = (await this.authSettings.getConfig()).methods;
     if (!methods.oidc && !methods.password && !methods.emailOtp) {
-      throw new Error('Configure at least one authentication method before completing setup');
+      throw configurationRequired('Configure at least one authentication method before completing setup');
     }
     await this.db
       .insert(settings)
@@ -304,40 +333,40 @@ export class SetupWizardService {
   }
 
   private async validateApply(input: SetupApplyInput): Promise<boolean> {
-    if (!normalizePublicUrl(input.publicUrl)) throw new Error('Gateway public URL is required');
-    if (!normalizeHostPortTarget(input.network.grpcPublicTarget)) {
-      throw new Error('Gateway gRPC public target is required');
+    if (!setupInput(() => normalizePublicUrl(input.publicUrl))) throw invalidSetup('Gateway public URL is required');
+    if (!setupInput(() => normalizeHostPortTarget(input.network.grpcPublicTarget))) {
+      throw invalidSetup('Gateway gRPC public target is required');
     }
-    normalizeIpPortTarget(input.network.grpcLocalIp);
+    setupInput(() => normalizeIpPortTarget(input.network.grpcLocalIp));
     if (!input.auth.methods.oidc && !input.auth.methods.password && !input.auth.methods.emailOtp) {
-      throw new Error('At least one authentication method must be enabled');
+      throw invalidSetup('At least one authentication method must be enabled');
     }
 
     const administratorCreated = await this.policy.isGatewayConfigured();
     if (!administratorCreated) {
-      if (!input.administrator) throw new Error('First administrator details are required');
+      if (!input.administrator) throw invalidSetup('First administrator details are required');
       const methodEnabled =
         input.administrator.authMethod === 'oidc'
           ? input.auth.methods.oidc
           : input.administrator.authMethod === 'password'
             ? input.auth.methods.password
             : input.auth.methods.emailOtp;
-      if (!methodEnabled) throw new Error('The selected administrator authentication method is not enabled');
+      if (!methodEnabled) throw invalidSetup('The selected administrator authentication method is not enabled');
       if (input.administrator.authMethod === 'password') {
-        if (!input.administrator.password) throw new Error('Password is required');
+        if (!input.administrator.password) throw invalidSetup('Password is required');
         await this.localAuth.validateInitialPasswordForSetup(input.administrator.password);
       }
     }
 
     if (input.auth.methods.oidc && !input.auth.oidc && !(await this.oidcSettings.getPublicConfig()).configured) {
-      throw new Error('OIDC configuration is required');
+      throw invalidSetup('OIDC configuration is required');
     }
     if (
       (input.auth.methods.password || input.auth.methods.emailOtp) &&
       !input.auth.smtp &&
       !(await this.authMail.getPublicConfig()).configured
     ) {
-      throw new Error('SMTP configuration is required');
+      throw invalidSetup('SMTP configuration is required');
     }
     return administratorCreated;
   }

@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 
 const OIDC_SETTING_KEY = 'auth:oidc';
@@ -93,8 +94,8 @@ export class OidcSettingsService {
     const clientSecret = input.clientSecret?.trim()
       ? this.cryptoService.encryptString(input.clientSecret.trim())
       : previous?.clientSecret;
-    if (!clientId) throw new Error('OIDC client ID is required');
-    if (!clientSecret) throw new Error('OIDC client secret is required');
+    if (!clientId) throw invalidOidcConfig('OIDC client ID is required');
+    if (!clientSecret) throw invalidOidcConfig('OIDC client secret is required');
 
     const stored: StoredOidcConfig = { issuer, clientId, clientSecret, redirectUri, scopes };
     await this.setStoredConfig(stored);
@@ -143,15 +144,19 @@ export class OidcSettingsService {
   }
 }
 
+function invalidOidcConfig(message: string): AppError {
+  return new AppError(400, 'OIDC_CONFIG_INVALID', message);
+}
+
 function normalizeUrl(value: string, label: string): string {
   const trimmed = value.trim();
   let url: URL;
   try {
     url = new URL(trimmed);
   } catch {
-    throw new Error(`${label} must be a valid absolute URL`);
+    throw invalidOidcConfig(`${label} must be a valid absolute URL`);
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`${label} must use http or https`);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw invalidOidcConfig(`${label} must use http or https`);
   return url.toString();
 }
 
@@ -164,6 +169,6 @@ function normalizeScopes(value: string | undefined): string {
         .filter(Boolean)
     ),
   ];
-  if (!scopes.includes('openid')) throw new Error('OIDC scopes must include openid');
+  if (!scopes.includes('openid')) throw invalidOidcConfig('OIDC scopes must include openid');
   return scopes.join(' ');
 }
