@@ -192,7 +192,7 @@ export class FolderService {
   // Move folder to new parent
   // -----------------------------------------------------------------------
 
-  async moveFolder(id: string, input: MoveFolderInput, userId: string, access?: FolderMoveAccess) {
+  async moveFolder(id: string, input: MoveFolderInput, userId: string, access: FolderMoveAccess) {
     const folder = await this.db.query.proxyHostFolders.findFirst({
       where: eq(proxyHostFolders.id, id),
     });
@@ -229,17 +229,15 @@ export class FolderService {
       );
     }
 
-    if (access) {
-      const movedHosts = await this.db
-        .select({ id: proxyHosts.id })
-        .from(proxyHosts)
-        .where(inArray(proxyHosts.folderId, [id, ...(await this.getDescendantIds(id))]));
-      assertFolderMoveAccess(
-        access,
-        movedHosts.map((host) => host.id),
-        input.parentId
-      );
-    }
+    const movedHosts = await this.db
+      .select({ id: proxyHosts.id })
+      .from(proxyHosts)
+      .where(inArray(proxyHosts.folderId, [id, ...(await this.getDescendantIds(id))]));
+    assertFolderMoveAccess(
+      access,
+      movedHosts.map((host) => host.id),
+      input.parentId
+    );
 
     // Update folder and all descendants' depths
     const depthDelta = newDepth - folder.depth;
