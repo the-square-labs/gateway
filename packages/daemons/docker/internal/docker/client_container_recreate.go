@@ -427,8 +427,11 @@ func (c *Client) recreateContainer(
 	if _, err := c.cli.ContainerRemove(ctx, insp.ID, client.ContainerRemoveOptions{Force: true}); err != nil {
 		return fmt.Errorf("remove container: %w", err)
 	}
+	// No container has the name now: an endpoint of it left in the container's networks or a link network (one
+	// connected while the container restarted) is stale.
+	c.removeStaleEndpoints(ctx, name, c.withLinkNetworks(ctx, inspectNetworkNames(insp)))
 
-	if _, err := c.createContainerFromInspect(ctx, insp, imageRef, envOverrides, envRemovals, expectedRunning); err != nil {
+	if _, err := c.createContainerFromInspect(ctx, insp, imageRef, envOverrides, envRemovals, expectedRunning, false); err != nil {
 		if rollbackSnapshot != nil {
 			// The original container is already removed: restore it even when the
 			// task context was cancelled or its deadline expired.
@@ -441,8 +444,17 @@ func (c *Client) recreateContainer(
 			if rollbackImage == "" {
 				rollbackImage = imageRef
 			}
-			if _, rollbackErr := c.createContainerFromInspect(rollbackCtx, rollbackSnapshot, rollbackImage, nil, nil, expectedRunning); rollbackErr != nil {
+			// The failed replacement can leave endpoints of the name behind as well.
+			c.removeStaleEndpoints(rollbackCtx, name, c.withLinkNetworks(rollbackCtx, inspectNetworkNames(rollbackSnapshot)))
+			restoredID, rollbackErr := c.createContainerFromInspect(rollbackCtx, rollbackSnapshot, rollbackImage, nil, nil, expectedRunning, true)
+			if restoredID == "" {
 				return fmt.Errorf("create container: %w (rollback failed: %v)", err, rollbackErr)
+			}
+			if rollbackErr != nil {
+				// The original container is back but did not start; a crash-looping container may not have run
+				// before either. It is kept rather than lost, and its expected state stays recorded so the next
+				// recreate starts it.
+				return fmt.Errorf("create container: %w (original container restored, not started: %v)", err, rollbackErr)
 			}
 			if clearErr := c.clearRecreateExpectedRunning(name); clearErr != nil {
 				return fmt.Errorf("create container: %w (original container restored; clear expected state: %v)", err, clearErr)
@@ -458,6 +470,9 @@ func (c *Client) recreateContainer(
 	return nil
 }
 
+// createContainerFromInspect creates a container from an inspected configuration and returns its ID. A container
+// that fails to join its networks or to start is removed, unless keepUnstarted is set (restoring the original
+// container of a failed recreate): then it is kept and its ID is returned with the error.
 func (c *Client) createContainerFromInspect(
 	ctx context.Context,
 	insp *container.InspectResponse,
@@ -465,6 +480,7 @@ func (c *Client) createContainerFromInspect(
 	envOverrides map[string]string,
 	envRemovals []string,
 	expectedRunning bool,
+	keepUnstarted bool,
 ) (string, error) {
 	name := strings.TrimPrefix(insp.Name, "/")
 	if name == "" {
@@ -510,6 +526,9 @@ func (c *Client) createContainerFromInspect(
 	}
 
 	if err := c.connectContainerToAdditionalNetworks(ctx, createResult.ID, insp, netNames); err != nil {
+		if keepUnstarted {
+			return createResult.ID, fmt.Errorf("connect container networks: %w", err)
+		}
 		c.removeContainerQuietly(ctx, createResult.ID)
 		return "", fmt.Errorf("connect container networks: %w", err)
 	}
@@ -518,9 +537,15 @@ func (c *Client) createContainerFromInspect(
 	if expectedRunning {
 		if err := c.gateStart(ctx, createResult.ID); err != nil {
 			// Created but not started: the lease holder starts it (A5).
+			if keepUnstarted {
+				return createResult.ID, err
+			}
 			return "", err
 		}
 		if _, err := c.cli.ContainerStart(ctx, createResult.ID, client.ContainerStartOptions{}); err != nil {
+			if keepUnstarted {
+				return createResult.ID, fmt.Errorf("start container: %w", err)
+			}
 			c.removeContainerQuietly(ctx, createResult.ID)
 			return "", fmt.Errorf("start container: %w", err)
 		}

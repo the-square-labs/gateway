@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/moby/moby/api/types/network"
@@ -221,13 +222,88 @@ func managedConnectorIPAM(subnet string, gatewayAddr string) (network.IPAMConfig
 	}, reservedAddress.String(), nil
 }
 
-// RemoveNetwork removes a network by ID.
+// RemoveNetwork removes a network by ID. Endpoints left behind by containers that no longer exist are deleted
+// first; a network a container still uses is not removed.
 func (c *Client) RemoveNetwork(ctx context.Context, id string) error {
+	c.removeOrphanedEndpoints(ctx, id)
 	_, err := c.cli.NetworkRemove(ctx, id, client.NetworkRemoveOptions{})
 	if err != nil {
 		return fmt.Errorf("network remove: %w", err)
 	}
 	return nil
+}
+
+// removeStaleEndpoints deletes the endpoints named after a container from the given networks. Docker can keep the
+// endpoint of a container removed while it restarted, and with it the host ports the endpoint published: a
+// container created under that name could then neither join the network nor publish its ports. Call it only while
+// no container has the name: the endpoint is deleted by name, and a forced disconnect addresses a container of that
+// name first.
+func (c *Client) removeStaleEndpoints(ctx context.Context, name string, networkNames []string) {
+	for _, networkName := range networkNames {
+		inspected, err := c.cli.NetworkInspect(ctx, networkName, client.NetworkInspectOptions{})
+		if err != nil {
+			continue
+		}
+		for _, endpoint := range inspected.Network.Containers {
+			if strings.TrimPrefix(endpoint.Name, "/") == name {
+				c.deleteEndpoint(ctx, networkName, name)
+				break
+			}
+		}
+	}
+}
+
+// withLinkNetworks adds the managed database and storage link networks of the node to a list of network names.
+func (c *Client) withLinkNetworks(ctx context.Context, networkNames []string) []string {
+	listed, err := c.cli.NetworkList(ctx, client.NetworkListOptions{
+		Filters: make(client.Filters).Add("name", "gateway-db-").Add("name", "gateway-storage-"),
+	})
+	if err != nil {
+		return networkNames
+	}
+	names := slices.Clone(networkNames)
+	for _, item := range listed.Items {
+		linkNetwork := strings.HasPrefix(item.Name, "gateway-db-") || strings.HasPrefix(item.Name, "gateway-storage-")
+		if linkNetwork && !slices.Contains(names, item.Name) {
+			names = append(names, item.Name)
+		}
+	}
+	return names
+}
+
+// deleteEndpoint deletes a network endpoint by name with a forced disconnect, which Docker turns into an endpoint
+// deletion when no container has the name.
+func (c *Client) deleteEndpoint(ctx context.Context, networkName string, name string) {
+	_, err := c.cli.NetworkDisconnect(ctx, networkName, client.NetworkDisconnectOptions{Container: name, Force: true})
+	if err != nil && !isNotFoundErr(err) && c.logger != nil {
+		c.logger.Warn("cannot delete a stale network endpoint", "network", networkName, "endpoint", name, "error", err)
+	}
+}
+
+// removeOrphanedEndpoints deletes the endpoints of a network whose container no longer exists. An endpoint of a
+// name another container now has is kept: that container is not on this network (Docker refuses a second endpoint
+// of a name), and deleting by name would address it.
+func (c *Client) removeOrphanedEndpoints(ctx context.Context, networkID string) {
+	inspected, err := c.cli.NetworkInspect(ctx, networkID, client.NetworkInspectOptions{})
+	if err != nil {
+		return
+	}
+	for key, endpoint := range inspected.Network.Containers {
+		name := strings.TrimPrefix(endpoint.Name, "/")
+		if name == "" {
+			continue
+		}
+		// An endpoint without a sandbox is listed as "ep-<endpoint id>"; any other key is its container's ID.
+		if !strings.HasPrefix(key, "ep-") {
+			if _, err := c.cli.ContainerInspect(ctx, key, client.ContainerInspectOptions{}); !isNotFoundErr(err) {
+				continue
+			}
+		}
+		if _, err := c.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{}); !isNotFoundErr(err) {
+			continue
+		}
+		c.deleteEndpoint(ctx, networkID, name)
+	}
 }
 
 // ConnectContainerToNetwork connects a container to a network.
