@@ -4,19 +4,32 @@ import { type EventLoopUtilization, monitorEventLoopDelay, performance } from 'n
 
 /**
  * Host and process readings for Gateway diagnostics. Inside the app container /proc/loadavg,
- * /proc/meminfo and /proc/stat are not namespaced, so os.* and these files describe the whole host;
- * the cgroup files describe the app container itself.
+ * /proc/meminfo and /proc/stat are not namespaced, so os.* and these files describe the whole
+ * kernel: in an LXC that is the hypervisor. The host reading therefore narrows them to what binds
+ * Gateway: the CPUs it may run on (its affinity, which an LXC's cpuset sets) and the cgroup limits
+ * of its container.
  */
 
 export interface HostReading {
+  /** CPUs Gateway may run on: its CPU affinity (an LXC or container cpuset), capped by its cgroup CPU quota. */
   cpuCount: number;
-  /** Busy share of all host CPUs since the previous reading; null on the first reading. */
+  /** CPUs of the whole kernel; more than cpuCount in an LXC or a CPU-limited container. */
+  kernelCpuCount: number;
+  /** Busy share of the CPUs Gateway may run on since the previous reading; null on the first reading. */
   cpuPercent: number | null;
+  /** Load averages of the whole kernel. */
   loadAverage: [number, number, number];
+  /** The 1-minute load per kernel CPU. */
   loadPerCpu: number;
   memoryTotalBytes: number;
   memoryAvailableBytes: number;
   memoryUsedPercent: number;
+  /**
+   * `cgroup`: the memory limit of Gateway's container and its use. `kernel`: the container has no limit, so the
+   * figures are the whole kernel's; in an LXC that is the hypervisor (gateway.dockerHost.memoryBytes is then the
+   * LXC's memory).
+   */
+  memoryScope: 'cgroup' | 'kernel';
   swapTotalBytes: number | null;
   swapFreeBytes: number | null;
   uptimeSeconds: number;
@@ -67,6 +80,44 @@ function hostCpuTimes(): CpuTimes {
   return { busy, total };
 }
 
+/** The CPUs this process may run on (`Cpus_allowed_list`, e.g. `0-3,8`); null off Linux. */
+async function readAllowedCpus(): Promise<Set<number> | null> {
+  try {
+    const list = /^Cpus_allowed_list:\s*(\S+)/m.exec(await readFile('/proc/self/status', 'utf8'))?.[1];
+    if (!list) return null;
+    const cpus = new Set<number>();
+    for (const range of list.split(',')) {
+      const [from, to = from] = range.split('-').map(Number);
+      if (from === undefined || !Number.isInteger(from) || !Number.isInteger(to)) return null;
+      for (let cpu = from; cpu <= to; cpu++) cpus.add(cpu);
+    }
+    return cpus.size > 0 ? cpus : null;
+  } catch {
+    return null;
+  }
+}
+
+/** CPU times of the allowed CPUs from /proc/stat, counted as os.cpus() counts them; every CPU off Linux. */
+async function allowedCpuTimes(allowed: Set<number> | null): Promise<CpuTimes> {
+  if (!allowed) return hostCpuTimes();
+  try {
+    let busy = 0;
+    let total = 0;
+    for (const match of (await readFile('/proc/stat', 'utf8')).matchAll(/^cpu(\d+)\s+(.+)$/gm)) {
+      if (!allowed.has(Number(match[1]))) continue;
+      // user nice system idle iowait irq …
+      const ticks = (match[2] ?? '').trim().split(/\s+/).map(Number);
+      const [user = 0, nice = 0, sys = 0, idle = 0] = ticks;
+      const irq = ticks[5] ?? 0;
+      busy += user + nice + sys + irq;
+      total += user + nice + sys + idle + irq;
+    }
+    return total > 0 ? { busy, total } : hostCpuTimes();
+  } catch {
+    return hostCpuTimes();
+  }
+}
+
 async function readMemInfo(): Promise<Map<string, number>> {
   const values = new Map<string, number>();
   try {
@@ -81,15 +132,35 @@ async function readMemInfo(): Promise<Map<string, number>> {
   return values;
 }
 
-async function readCgroupNumber(file: string): Promise<number | null> {
+async function readCgroupText(file: string): Promise<string | null> {
   try {
-    const text = (await readFile(`/sys/fs/cgroup/${file}`, 'utf8')).trim();
-    if (!text || text === 'max') return null;
-    const value = Number(text);
-    return Number.isFinite(value) ? value : null;
+    return (await readFile(`/sys/fs/cgroup/${file}`, 'utf8')).trim();
   } catch {
     return null;
   }
+}
+
+async function readCgroupNumber(file: string): Promise<number | null> {
+  const text = await readCgroupText(file);
+  if (!text || text === 'max') return null;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** The container's CPU quota in CPUs (`cpu.max` quota / period); null without a quota. */
+async function readCgroupCpuQuota(): Promise<number | null> {
+  const [quota, period] = (await readCgroupText('cpu.max'))?.split(/\s+/) ?? [];
+  const cpus = Number(quota) / Number(period);
+  return quota !== 'max' && Number.isFinite(cpus) && cpus > 0 ? cpus : null;
+}
+
+/** The container's memory limit and the memory it uses (without reclaimable inactive file cache). */
+async function readCgroupMemory(): Promise<{ limitBytes: number; usedBytes: number } | null> {
+  const limitBytes = await readCgroupNumber('memory.max');
+  if (limitBytes === null) return null;
+  const current = (await readCgroupNumber('memory.current')) ?? 0;
+  const inactiveFile = Number(/^inactive_file (\d+)$/m.exec((await readCgroupText('memory.stat')) ?? '')?.[1] ?? 0);
+  return { limitBytes, usedBytes: Math.max(0, current - inactiveFile) };
 }
 
 export async function readDisk(path: string): Promise<DiskReading | null> {
@@ -142,26 +213,36 @@ export class SystemReader {
 
   /** Host readings; `reset` starts a new measurement window for the CPU share. */
   async readHost(reset: boolean): Promise<HostReading> {
-    const cpu = hostCpuTimes();
+    const allowedCpus = await readAllowedCpus();
+    const cpu = await allowedCpuTimes(allowedCpus);
     const previous = this.previousHostCpu;
     if (reset || !previous) this.previousHostCpu = cpu;
     const cpuPercent =
       previous && cpu.total > previous.total
         ? round(((cpu.busy - previous.busy) / (cpu.total - previous.total)) * 100)
         : null;
+    const kernelCpuCount = Math.max(1, os.cpus().length);
+    const cpuQuota = await readCgroupCpuQuota();
+    const cpuCount = round(Math.min(allowedCpus?.size ?? os.availableParallelism(), cpuQuota ?? Infinity), 2);
     const memInfo = await readMemInfo();
-    const memoryTotalBytes = memInfo.get('MemTotal') ?? os.totalmem();
-    const memoryAvailableBytes = memInfo.get('MemAvailable') ?? os.freemem();
-    const cpuCount = Math.max(1, os.cpus().length);
+    const kernelMemoryTotalBytes = memInfo.get('MemTotal') ?? os.totalmem();
+    const container = await readCgroupMemory();
+    const limited = container !== null && container.limitBytes < kernelMemoryTotalBytes;
+    const memoryTotalBytes = limited ? container.limitBytes : kernelMemoryTotalBytes;
+    const memoryAvailableBytes = limited
+      ? Math.max(0, container.limitBytes - container.usedBytes)
+      : (memInfo.get('MemAvailable') ?? os.freemem());
     const loadAverage = os.loadavg().map((value) => round(value, 2)) as [number, number, number];
     return {
       cpuCount,
+      kernelCpuCount,
       cpuPercent,
       loadAverage,
-      loadPerCpu: round(loadAverage[0] / cpuCount, 2),
+      loadPerCpu: round(loadAverage[0] / kernelCpuCount, 2),
       memoryTotalBytes,
       memoryAvailableBytes,
       memoryUsedPercent: round(((memoryTotalBytes - memoryAvailableBytes) / memoryTotalBytes) * 100),
+      memoryScope: limited ? 'cgroup' : 'kernel',
       swapTotalBytes: memInfo.get('SwapTotal') ?? null,
       swapFreeBytes: memInfo.get('SwapFree') ?? null,
       uptimeSeconds: Math.round(os.uptime()),

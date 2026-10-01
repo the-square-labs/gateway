@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/nginx"
@@ -180,6 +181,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	for name := range deletedStaleConfigs {
 		removeHostCache(strings.TrimSuffix(strings.TrimPrefix(name, "proxy-host-"), ".conf"))
 	}
+	h.removeOrphanedHtpasswd()
 	// Update state
 	hostIDs := make([]string, 0, len(cmd.Hosts))
 	for _, host := range cmd.Hosts {
@@ -254,6 +256,77 @@ func (h *Handler) handleDeployHtpasswd(cmd *pb.DeployHtpasswdCommand, result *pb
 // pagesUsesAccessList keeps credentials a protected Pages preview still references.
 func (h *Handler) pagesUsesAccessList(accessListID string) bool {
 	return h.pagesRuntime != nil && h.pagesRuntime.UsesAccessList(accessListID)
+}
+
+// orphanedHtpasswdMinAge keeps a credentials file that was just deployed: the
+// config or Pages preview that will reference it may still be on its way.
+const orphanedHtpasswdMinAge = 10 * time.Minute
+
+// removeOrphanedHtpasswd deletes the access-list credentials (bcrypt hashes)
+// that no nginx config on the node references and no Pages preview uses: the
+// list was deleted, or its routes moved away or dropped it, while the node was
+// not connected. It runs after a full sync, which leaves the node with exactly
+// the configs Gateway serves from it. A config it cannot read keeps every file.
+func (h *Handler) removeOrphanedHtpasswd() {
+	dir := h.cfg.Nginx.HtpasswdDir
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			h.logger.Warn("htpasswd cleanup skipped: cannot list credentials", "error", err)
+		}
+		return
+	}
+	configs, err := h.nginxConfigText()
+	if err != nil {
+		h.logger.Warn("htpasswd cleanup skipped: cannot read nginx configs", "error", err)
+		return
+	}
+	now := time.Now()
+	for _, entry := range entries {
+		accessListID, ok := strings.CutPrefix(entry.Name(), "access-list-")
+		if !ok || !entry.Type().IsRegular() || !isValidUUID(accessListID) {
+			continue
+		}
+		if strings.Contains(configs, entry.Name()) || h.pagesUsesAccessList(accessListID) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || now.Sub(info.ModTime()) < orphanedHtpasswdMinAge {
+			continue
+		}
+		if err := nginx.RemoveFile(filepath.Join(dir, entry.Name())); err != nil {
+			h.logger.Warn("remove orphaned htpasswd", "access_list_id", accessListID, "error", err)
+			continue
+		}
+		h.logger.Info("orphaned htpasswd removed", "access_list_id", accessListID)
+	}
+}
+
+// nginxConfigText is every file of the config directory and the global config,
+// the places a host, Pages preview or operator config references credentials.
+func (h *Handler) nginxConfigText() (string, error) {
+	var text strings.Builder
+	entries, err := os.ReadDir(h.cfg.Nginx.ConfigDir)
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	paths := []string{h.cfg.Nginx.GlobalConfig}
+	for _, entry := range entries {
+		// A symlinked config counts as well.
+		path := filepath.Join(h.cfg.Nginx.ConfigDir, entry.Name())
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			paths = append(paths, path)
+		}
+	}
+	for _, path := range paths {
+		data, err := nginx.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		text.Write(data)
+		text.WriteByte('\n')
+	}
+	return text.String(), nil
 }
 
 func (h *Handler) handleRemoveHtpasswd(cmd *pb.RemoveHtpasswdCommand, result *pb.CommandResult) {

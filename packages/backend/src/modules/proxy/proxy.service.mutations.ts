@@ -657,12 +657,18 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
           updated.nodeId
         );
       }
-      if (isDockerUpstream(updated.upstreamKind) && !updatedUsesRawMode) {
+      // Raw mode keeps the Route's Secure Link: the raw config seeded from the rendered one proxies to its socket,
+      // and so does the config Gateway still renders while no raw config is stored. The link follows its target as
+      // on a managed Route; raw mode only hands the server block over to the user.
+      const managesSecureLink =
+        isDockerUpstream(updated.upstreamKind) && (!updatedUsesRawMode || existing.secureLinkGeneration > 0);
+      if (managesSecureLink) {
         if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
         const requiresSecureLink =
-          existing.upstreamKind === 'manual' ||
-          existingUsesRawMode ||
-          (existing.secureLinkGeneration < 1 && Object.keys(upstreamData).length > 0);
+          !updatedUsesRawMode &&
+          (existing.upstreamKind === 'manual' ||
+            existingUsesRawMode ||
+            (existing.secureLinkGeneration < 1 && Object.keys(upstreamData).length > 0));
         updated = await this.secureLinks.prepare(updated, requiresSecureLink, nodeChanged);
         if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
           // Existing legacy/manual config must stop serving before the durable
@@ -680,7 +686,7 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
           pagesRouteIncludePathOverride: pageNodeMigration?.targetIncludePath,
         });
         deliveredNodeIds = [...delivery.configs.keys()].filter(Boolean);
-        if (isDockerUpstream(updated.upstreamKind) && !updatedUsesRawMode) {
+        if (managesSecureLink) {
           await this.secureLinks?.activate(id);
           this.queueSecureLinkRuntimeSample(updated);
         }
@@ -702,13 +708,12 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
         }
         await this.pageRoutes.retarget(id, pageProjectId, pageTagId, userId);
       }
-      const leavesManagedDocker =
-        isDockerUpstream(existing.upstreamKind) && (updated.upstreamKind === 'manual' || updatedUsesRawMode);
+      const leavesManagedDocker = isDockerUpstream(existing.upstreamKind) && !isDockerUpstream(updated.upstreamKind);
       if (leavesManagedDocker && existing.secureLinkGeneration > 0) {
         try {
           await this.secureLinks?.cleanup(existing);
         } catch (cleanupError) {
-          // The manual/raw config is already committed. Keep it active and
+          // The manual config is already committed. Keep it active and
           // retry the independent Secure Link teardown.
           logger.warn('Proxy left managed Docker mode; Secure Link cleanup will retry', {
             hostId: id,

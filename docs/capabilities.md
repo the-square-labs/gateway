@@ -19,6 +19,7 @@ Core ingress workflows:
 - Keep each registered domain and every route using it on the same nginx node or ingress group; Gateway rejects a route whose node or group differs from its registered domain's.
 - Configure SSL termination, manual upstream targets, or managed Docker container/deployment upstreams with published-port validation.
 - Connect managed Docker workloads to nginx through Gateway Secure Links without exposing the workload port as a normal public management endpoint.
+- Switch a route to Raw Config Mode to own its whole nginx configuration. Raw mode starts from the rendered config, and Gateway stops rendering the route until raw mode is switched off. A route to a Docker workload keeps its Secure Link in raw mode: the seeded `upstream` (the link's socket on the nginx node) keeps reaching the workload and follows it when its container is recreated. Edit it as needed, but keep proxying to that upstream.
 - Put an enabled managed route into maintenance mode to return HTTP 503, pause managed health checks, preserve its TLS paths, and expose maintenance state to alerts and status pages.
 - Configure WebSocket support, custom headers, rewrites, and proxy behavior.
 - Create proxy, redirect, and 404 routes.

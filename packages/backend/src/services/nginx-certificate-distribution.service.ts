@@ -19,6 +19,7 @@ import { withProxyHostLock } from '@/modules/proxy/proxy-host-lock.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NginxConfigGenerator } from '@/services/nginx-config-generator.service.js';
+import { nginxConfigRejection } from '@/services/nginx-config-rejection.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
 const logger = createChildLogger('NginxCertificateDistribution');
@@ -497,10 +498,14 @@ export class NginxCertificateDistributionService {
         status: 'failed',
         lastError: safeError(error),
       });
-      throw new AppError(
-        500,
-        'NGINX_TLS_BUNDLE_FAILED',
-        `Failed to safely activate the TLS proxy configuration: ${safeError(error)}`
+      // The node rejecting the route's own config is the caller's error, the same as on an HTTP route.
+      throw (
+        nginxConfigRejection(error instanceof Error ? error.message : String(error), safeError(error)) ??
+        new AppError(
+          500,
+          'NGINX_TLS_BUNDLE_FAILED',
+          `Failed to safely activate the TLS proxy configuration: ${safeError(error)}`
+        )
       );
     }
   }

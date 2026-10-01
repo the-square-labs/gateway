@@ -1,10 +1,10 @@
-import { OpenAPIHono } from '@hono/zod-openapi';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { container } from '@/container.js';
 import {
   appRoute,
   createdJson,
+  GatewayOpenAPIHono,
   IdParamSchema,
   jsonBody,
   okJson,
@@ -23,7 +23,7 @@ import { requirePagesEnabledForMutation } from './profile/page-enabled.middlewar
 import { PagePublicationService } from './tags/page-publication.service.js';
 import { PageDeployTokenService } from './tokens/page-deploy-token.service.js';
 export const pageDeployRouteRuntime = {
-  OpenAPIHono,
+  OpenAPIHono: GatewayOpenAPIHono,
   HTTPException,
   z,
   container,

@@ -23,7 +23,7 @@ import { tags as openApiTags, openApiValidationHook, securitySchemes } from '@/l
 import { IDEMPOTENCY_API_DESCRIPTION, withIdempotencyKeyDocumentation } from '@/lib/openapi-idempotency.js';
 import { auditContextMiddleware } from '@/middleware/audit-context.js';
 import { emptyJsonBodyMiddleware } from '@/middleware/empty-json-body.js';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { type ApiError, errorHandler } from '@/middleware/error-handler.js';
 import { IDEMPOTENCY_REPLAYED_HEADER } from '@/middleware/idempotency.js';
 import { loggerMiddleware } from '@/middleware/logger.js';
 import {
@@ -1069,6 +1069,12 @@ export function createApp(): GatewayAppRuntime {
       layout: 'modern',
     })
   );
+
+  // Every API and auth route is registered above: an unknown path there is a JSON 404, never the SPA below.
+  const unknownApiPath = (c: Context<AppEnv>) =>
+    c.json<ApiError>({ code: 'NOT_FOUND', message: `No API endpoint at ${c.req.method} ${c.req.path}` }, 404);
+  app.all('/api/*', unknownApiPath);
+  app.all('/auth/*', unknownApiPath);
 
   // In production, serve the frontend SPA
   const statusPublicDir = resolve(process.cwd(), 'status-public');

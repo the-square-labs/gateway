@@ -17,6 +17,7 @@ import type {
   PreparedTlsCertificate,
 } from '@/services/nginx-certificate-distribution.service.js';
 import type { NginxConfigGenerator, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
+import { nginxConfigRejection } from '@/services/nginx-config-rejection.js';
 import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPoolService } from '@/services/relay-pool.service.js';
@@ -363,7 +364,8 @@ export abstract class ProxyServiceCore {
     } else {
       const result = await this.nodeDispatch.applyConfig(resolvedNodeId, hostId, config, false, configOwnership);
       if (!result.success) {
-        throw new Error(result.error || 'Daemon config apply failed');
+        const error = result.error || 'Daemon config apply failed';
+        throw nginxConfigRejection(error) ?? new Error(error);
       }
     }
     await this.auditService.log({

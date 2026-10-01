@@ -1627,13 +1627,16 @@ export class ProxySecureLinkService {
   }
 
   private async prepareLocked(host: ProxyHostRow, requireCapabilities: boolean, force: boolean): Promise<ProxyHostRow> {
-    if (host.type !== 'proxy' || !isDockerUpstream(host.upstreamKind) || !host.nodeId) return host;
+    // A raw-mode Route (type raw, or a proxy with raw config) keeps its Docker target and Secure Link.
+    if ((host.type !== 'proxy' && host.type !== 'raw') || !isDockerUpstream(host.upstreamKind) || !host.nodeId) {
+      return host;
+    }
     const target = await this.resolveTarget(host);
     // A route on an ingress group has a source (relay route, grants, listener) on every member.
     const sources = await this.hostSources(host);
     const supported = await this.nodesSupportSecureLinks(
       [...sources, target.nodeId],
-      host.rawConfigEnabled ? undefined : sources
+      host.type === 'raw' || host.rawConfigEnabled ? undefined : sources
     );
     if (!supported) {
       if (requireCapabilities) {
@@ -1774,18 +1777,14 @@ export class ProxySecureLinkService {
     const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
     if (!host) throw new Error('Secure Link state disappeared before activation');
 
-    if (
-      host.nodeId &&
-      host.type === 'proxy' &&
-      isDockerUpstream(host.upstreamKind) &&
-      !host.rawConfigEnabled &&
-      host.secureLinkGeneration > 0
-    ) {
-      // The generated Nginx config now owns the Unix-socket cutover. Reconcile
-      // the source listener before making activation durable so the daemon can
-      // drop the temporary loopback TCP listener. Raw/user-owned configs keep
-      // TCP because their upstream may still reference the durable port.
-      await this.syncSourceNodes(await this.hostSources(host), undefined, host.id);
+    if (host.nodeId && isDockerUpstream(host.upstreamKind) && host.secureLinkGeneration > 0) {
+      // The delivered Nginx config now owns the cutover. Reconcile the source
+      // listener before making activation durable: a generated config uses the
+      // Unix socket, so the daemon drops the temporary loopback TCP listener.
+      // Raw/user-owned configs keep TCP because their upstream may still
+      // reference the durable port.
+      const generated = host.type === 'proxy' && !host.rawConfigEnabled;
+      await this.syncSourceNodes(await this.hostSources(host), undefined, generated ? host.id : undefined);
     }
 
     await this.db

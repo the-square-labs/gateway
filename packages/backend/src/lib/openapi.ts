@@ -1,4 +1,6 @@
-import { createRoute, type RouteConfig, z } from '@hono/zod-openapi';
+import { createRoute, OpenAPIHono, type RouteConfig, z } from '@hono/zod-openapi';
+import type { Env } from 'hono';
+import type { BlankSchema, Schema } from 'hono/types';
 
 type Method = RouteConfig['method'];
 type RouteRequest = NonNullable<RouteConfig['request']>;
@@ -9,6 +11,21 @@ export const openApiValidationHook = (result: { success: boolean; error?: unknow
     throw result.error;
   }
 };
+
+/**
+ * OpenAPIHono with Gateway's validation hook: a request that fails its route schema is answered with the standard
+ * VALIDATION_ERROR shape, never the raw ZodError. Route runtimes hand it to the commercial edition, so the routers
+ * it creates from them answer the same way.
+ */
+export class GatewayOpenAPIHono<
+  E extends Env = Env,
+  S extends Schema = BlankSchema,
+  BasePath extends string = '/',
+> extends OpenAPIHono<E, S, BasePath> {
+  constructor(init: ConstructorParameters<typeof OpenAPIHono<E, S, BasePath>>[0] = {}) {
+    super({ defaultHook: openApiValidationHook, ...init });
+  }
+}
 
 export const ApiErrorSchema = z.object({
   code: z.string().openapi({
