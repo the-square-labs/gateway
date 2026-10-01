@@ -86,14 +86,8 @@ export class LoggingSettingsService {
     }
 
     const local = input.mode === 'local';
-    const previousWasLocal = (() => {
-      try {
-        const hostname = new URL(previous?.url ?? '').hostname;
-        return hostname === 'clickhouse' || hostname === 'gateway-clickhouse';
-      } catch {
-        return false;
-      }
-    })();
+    const previousUrl = parseUrlOrNull(previous?.url);
+    const previousWasLocal = !!previousUrl && isLocalClickHouseHost(previousUrl.hostname);
     const requestedUrl = input.url?.trim();
     const rawUrl = local
       ? requestedUrl || (previousWasLocal ? previous?.url : undefined) || 'http://gateway-clickhouse:8123'
@@ -112,12 +106,23 @@ export class LoggingSettingsService {
     if (!username) throw invalidLoggingConfig('ClickHouse username is required');
     const rawPassword =
       input.password ?? (local && !previousWasLocal ? randomBytes(32).toString('base64url') : undefined);
+    // The stored password is sent only where it was entered for: the same ClickHouse origin, or the bundled
+    // ClickHouse whose password Gateway generated. A new address needs the password again, like a SIEM destination.
+    const storedPasswordApplies =
+      !!previousUrl && (previousUrl.origin === url.origin || (previousWasLocal && isLocalClickHouseHost(url.hostname)));
     const password =
       rawPassword !== undefined
         ? this.cryptoService.encryptString(rawPassword)
-        : previousWasLocal || !local
+        : (previousWasLocal || !local) && storedPasswordApplies
           ? previous?.password
           : undefined;
+    if (!password && previous?.password && !storedPasswordApplies) {
+      throw new AppError(
+        400,
+        'CLICKHOUSE_PASSWORD_REQUIRED',
+        'Enter the ClickHouse password again when the ClickHouse URL changes'
+      );
+    }
     if (!password) throw invalidLoggingConfig('ClickHouse password is required');
     const database = validateClickHouseIdentifier(input.database ?? previous?.database ?? 'gateway_logs');
     const table = validateClickHouseIdentifier(input.table ?? previous?.table ?? 'logs');
@@ -187,4 +192,16 @@ function disabledConfig(): LoggingRuntimeSettings {
     table: 'logs',
     requestTimeoutMs: 5000,
   };
+}
+
+function parseUrlOrNull(value: string | undefined): URL | null {
+  try {
+    return new URL(value ?? '');
+  } catch {
+    return null;
+  }
+}
+
+function isLocalClickHouseHost(hostname: string): boolean {
+  return hostname === 'clickhouse' || hostname === 'gateway-clickhouse';
 }
