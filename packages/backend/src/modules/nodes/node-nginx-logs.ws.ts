@@ -189,6 +189,11 @@ export function createNodeNginxLogStreamWSHandlers(
         }
         if (msg?.type === 'load_more') {
           if (!state.authenticated || state.loadingMore) return;
+          // Nothing older is left: answer without reading the node's logs again for every request.
+          if (!state.hasMore) {
+            send(ws, { type: 'history', entries: [], hasMore: false });
+            return;
+          }
           if (!(await revalidateLogAccess(ws, state, credential, nodeId))) return;
           state.loadingMore = true;
           handleLoadMore(ws, state, nodeId, registry).catch((err) => {

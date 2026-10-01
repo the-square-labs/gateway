@@ -205,7 +205,7 @@ export function NodeNginxLogsTab({ nodeId, nodeStatus }: NodeNginxLogsTabProps) 
 
   const requestMoreLogs = useCallback(() => {
     const ws = wsRef.current;
-    if (loadingMoreRef.current) return;
+    if (loadingMoreRef.current || !hasMoreRef.current) return;
     if (ws?.readyState !== WebSocket.OPEN) return;
 
     loadingMoreRef.current = true;
