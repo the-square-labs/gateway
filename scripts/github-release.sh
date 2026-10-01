@@ -16,6 +16,13 @@ release_already_published=0
 source scripts/release-tag.sh
 classify_release_tag "$tag"
 
+# Only a stable Gateway release is the repository's Latest: releases/latest/download serves the
+# Gateway installers, which a component release does not carry.
+latest_args=(--latest=false)
+if [[ "$RELEASE_KIND" == "gateway" && "$RELEASE_PRERELEASE" != "true" ]]; then
+  latest_args=(--latest)
+fi
+
 write_release_notes() {
   local fallback=$1
   git for-each-ref "refs/tags/${tag}" --format='%(contents)' > "$release_notes_file"
@@ -31,8 +38,10 @@ prepare_release() {
   write_release_notes "$fallback"
   if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
     release_args+=(--prerelease --latest=false)
-  else
+  elif [[ "$RELEASE_KIND" == "gateway" ]]; then
     release_args+=(--prerelease=false)
+  else
+    release_args+=(--prerelease=false --latest=false)
   fi
   if gh release view "$tag" >/dev/null 2>&1; then
     is_draft=$(gh release view "$tag" --json isDraft --jq .isDraft)
@@ -68,7 +77,7 @@ complete_release() {
     gh release upload "$tag" "$@" --clobber
   fi
   verify_release_assets "$@"
-  gh release edit "$tag" --draft=false
+  gh release edit "$tag" --draft=false "${latest_args[@]}"
 }
 
 docker_login() {
