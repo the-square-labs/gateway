@@ -18,6 +18,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 )
 
 // Version is set via -ldflags at build time; falls back to "dev".
@@ -342,7 +343,7 @@ func runRelayPoolTarget(
 			var conn *grpc.ClientConn
 			var err error
 			if len(target.Addresses) == 0 {
-				conn, err = connector.ConnectWithRetry(ctx)
+				conn, err = connector.ConnectLaneWithRetry(ctx)
 			} else {
 				conn, err = connector.ConnectTargetAttempt(ctx, target.Addresses, target.CertificateIdentity, target.CertificateFingerprint)
 			}
@@ -363,6 +364,7 @@ func runRelayPoolTarget(
 		laneEnded := make(chan struct{}, len(connections))
 		for _, conn := range connections {
 			conn := conn
+			go keepRelayLaneConnected(targetCtx, conn)
 			go func() {
 				plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
 				laneEnded <- struct{}{}
@@ -378,6 +380,22 @@ func runRelayPoolTarget(
 			_ = conn.Close()
 		}
 		if ctx.Err() == nil && !waitForControlSessionReconnect(ctx) {
+			return
+		}
+	}
+}
+
+// keepRelayLaneConnected reconnects a lane whose transport dropped. gRPC
+// leaves such a connection idle until the next call on it, but tunnels are
+// only opened on lanes that are connected: a relay that was unreachable for a
+// while would stay out of use after it came back.
+func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn) {
+	for {
+		state := conn.GetState()
+		if state == connectivity.Idle {
+			conn.Connect()
+		}
+		if !conn.WaitForStateChange(ctx, state) {
 			return
 		}
 	}
