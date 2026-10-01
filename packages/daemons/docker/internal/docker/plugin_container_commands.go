@@ -159,7 +159,19 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 			result.Error = "new_name is required for duplicate"
 			return
 		}
-		id, err := p.client.DuplicateContainer(ctx, cmd.ContainerId, cmd.NewName)
+		// The backend names the variables a duplicate must not inherit: the source's database and storage link
+		// variables carry the link's credentials.
+		var params struct {
+			RemoveEnv []string `json:"removeEnv"`
+		}
+		if cmd.ConfigJson != "" {
+			if err := json.Unmarshal([]byte(cmd.ConfigJson), &params); err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("parse duplicate params: %v", err)
+				return
+			}
+		}
+		id, err := p.client.DuplicateContainer(ctx, cmd.ContainerId, cmd.NewName, params.RemoveEnv)
 		if err != nil {
 			result.Success = false
 			result.Error = err.Error()
