@@ -96,6 +96,30 @@ describe('NginxTemplateService custom rewrites', () => {
       }
     );
 
-    expect(rendered).toBe('rewrite ^/a$ return 200 x  /b;');
+    expect(rendered).toBe('rewrite ^/a$return200x /b;');
+  });
+});
+
+describe('NginxTemplateService escaping of route values', () => {
+  it('keeps a header value ending in a backslash from escaping the closing quote', async () => {
+    const db = { query: { nginxTemplates: { findFirst: async () => undefined } } };
+    const rendered = await new NginxTemplateService(db as never, {} as never, new ConfigValidatorService()).renderForHost(
+      {
+        ...host,
+        advancedConfig: null,
+        templateVariables: {},
+        customHeaders: [
+          { name: 'X-Trailing', value: 'abc\\' },
+          { name: 'X Split\tName', value: 'a\tb c' },
+        ],
+        customRewrites: [{ source: '^/old path\\', destination: '/new\\', type: 'permanent' }],
+      },
+      null
+    );
+
+    expect(rendered).toContain('proxy_set_header X-Trailing "abc";');
+    expect(rendered).toContain('proxy_set_header XSplitName "ab c";');
+    expect(rendered).toContain('rewrite ^/oldpath /new permanent;');
+    expect(new ConfigValidatorService().validate(rendered, true, true)).toEqual({ valid: true, errors: [] });
   });
 });

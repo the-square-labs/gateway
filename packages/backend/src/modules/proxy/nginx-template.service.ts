@@ -94,20 +94,33 @@ const DEFAULT_PROXY_TEMPLATE_VARIABLES = [
 // Register Handlebars helpers
 // ---------------------------------------------------------------------------
 
-const DANGEROUS_CHARS = /[\n\r;'"{}`$#]/g;
+// Characters that end a directive, open or close a block or string, start a comment or a variable, or (`\`, tabs
+// and other control characters) escape or split the token structure nginx reads. Plain spaces stay: values such as
+// header values are rendered inside quotes.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this removes.
+const DANGEROUS_CHARS = /[\x00-\x1f\x7f;'"{}`$#\\]/g;
 
 Handlebars.registerHelper('sanitize', (value: unknown) => {
   if (typeof value !== 'string') return value;
   return new Handlebars.SafeString(value.replace(DANGEROUS_CHARS, ''));
 });
 
-// Rewrite regexes and replacements need `$` for anchors and captures ($1), so
-// only the characters that could end or break out of the directive are removed.
-const DANGEROUS_REWRITE_CHARS = /[\n\r;'"{}`#]/g;
+// Rewrite regexes and replacements need `$` for anchors and captures ($1) and
+// `\` for escapes, so only the characters that could end or break out of the
+// directive are removed: whitespace (the arguments are unquoted) and a trailing
+// unpaired backslash, which would escape the separator after the argument.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this removes.
+const DANGEROUS_REWRITE_CHARS = /[\x00-\x1f\x7f\s;'"{}`#]/g;
+
+export function sanitizeRewriteArgument(value: string): string {
+  const cleaned = value.replace(DANGEROUS_REWRITE_CHARS, '');
+  const trailingBackslashes = cleaned.length - cleaned.replace(/\\+$/, '').length;
+  return trailingBackslashes % 2 === 1 ? cleaned.slice(0, -1) : cleaned;
+}
 
 Handlebars.registerHelper('sanitizeRewrite', (value: unknown) => {
   if (typeof value !== 'string') return value;
-  return new Handlebars.SafeString(value.replace(DANGEROUS_REWRITE_CHARS, ''));
+  return new Handlebars.SafeString(sanitizeRewriteArgument(value));
 });
 
 // Custom templates cloned before regex rewrites worked render them with the
@@ -1437,10 +1450,15 @@ ${rendered}`;
       sslCertPath: host.sslCertPath,
       sslKeyPath: host.sslKeyPath,
       sslChainPath: host.sslChainPath,
-      redirectUrl: host.redirectUrl,
+      // Rendered unquoted; whitespace has no place in a URL and would split the argument.
+      redirectUrl: host.redirectUrl?.replace(/\s/g, '') ?? host.redirectUrl,
       redirectStatusCode: host.redirectStatusCode,
       cacheStale: cacheOpts.staleWhileRevalidate ?? 60,
-      customHeaders: host.customHeaders,
+      // Header names are rendered unquoted: keep them to RFC 9110 token characters.
+      customHeaders: host.customHeaders.map((header) => ({
+        ...header,
+        name: header.name.replace(/[^!#$%&'*+.^_`|~0-9A-Za-z-]/g, ''),
+      })),
       customRewrites: host.customRewrites,
       accessList: host.accessList,
       accessListHasIpRules: (host.accessList?.ipRules?.length ?? 0) > 0,
