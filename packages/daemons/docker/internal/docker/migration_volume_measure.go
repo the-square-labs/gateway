@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/moby/moby/api/types/volume"
 	mobyclient "github.com/moby/moby/client"
 )
 
@@ -21,14 +22,28 @@ func (p *DockerPlugin) measureMigrationVolume(ctx context.Context, volumeName st
 	if err != nil {
 		return migrationVolumeMeasure{}, fmt.Errorf("inspect migration volume: %w", err)
 	}
-	if volume.Volume.Driver != "local" || volume.Volume.Mountpoint == "" {
-		return migrationVolumeMeasure{}, fmt.Errorf("only mounted local volumes are supported")
+	if err := migratableLocalVolume(volume.Volume); err != nil {
+		return migrationVolumeMeasure{}, err
 	}
 	entries, logicalBytes, err := measureMigrationTree(volume.Volume.Mountpoint)
 	if err != nil {
 		return migrationVolumeMeasure{}, err
 	}
 	return migrationVolumeMeasure{VolumeName: volumeName, EntryCount: entries, LogicalBytes: logicalBytes}, nil
+}
+
+// migratableLocalVolume refuses a volume the migration cannot copy from its
+// directory. Local driver options mount a host path, a network share or tmpfs
+// while a container uses the volume: once the source stops, the directory
+// holds none of that data and the volume would migrate empty.
+func migratableLocalVolume(v volume.Volume) error {
+	if v.Driver != "local" || v.Mountpoint == "" {
+		return fmt.Errorf("only mounted local volumes are supported")
+	}
+	if len(v.Options) > 0 {
+		return fmt.Errorf("volume %q mounts storage through local driver options and is host-bound", v.Name)
+	}
+	return nil
 }
 
 func measureMigrationTree(root string) (int64, int64, error) {
