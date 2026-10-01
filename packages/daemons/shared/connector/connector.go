@@ -25,6 +25,21 @@ const (
 	InitialBackoff        = 1 * time.Second
 	ConnectAttemptTimeout = 10 * time.Second
 	MaxMessageBytes       = 512 * 1024 * 1024
+	// relayLaneAckTimeout bounds how long data sent on a relay lane may stay
+	// unacknowledged before the lane's connection closes (gRPC sets
+	// TCP_USER_TIMEOUT to the keepalive timeout). A relay whose host or path
+	// went dark leaves its lanes open but silent: with the control session's
+	// 10 s, new tunnels kept trying that relay first and waited out their
+	// setup for that long. A closed lane takes the relay out of selection
+	// until it connects again. The relay holds its side of the same
+	// connections to 2 s (peer liveness), so a lane stalled this long is
+	// dropped there anyway.
+	relayLaneAckTimeout = 2 * time.Second
+)
+
+var (
+	sessionKeepalive = keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 10 * time.Second, PermitWithoutStream: true}
+	laneKeepalive    = keepalive.ClientParameters{Time: 30 * time.Second, Timeout: relayLaneAckTimeout, PermitWithoutStream: true}
 )
 
 // ReconnectParams pace grpc's own reconnects of a connection whose transport dropped. Relay lanes and the control
@@ -97,17 +112,18 @@ func (c *Connector) connect(ctx context.Context, address, serverName string, lan
 }
 
 // dialOptions configures a control session or, with lane set, a relay lane:
-// a lane is never left idle, it stays connected for the life of the process
-// and is selected by whether it is connected.
+// a lane is never left idle (it stays connected for the life of the process
+// and is selected by whether it is connected) and is closed once the relay
+// stops acknowledging it.
 func dialOptions(tlsCfg *tls.Config, lane bool) []grpc.DialOption {
+	keepaliveParams := sessionKeepalive
+	if lane {
+		keepaliveParams = laneKeepalive
+	}
 	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 		grpc.WithConnectParams(ReconnectParams),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                30 * time.Second,
-			Timeout:             10 * time.Second,
-			PermitWithoutStream: true,
-		}),
+		grpc.WithKeepaliveParams(keepaliveParams),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(MaxMessageBytes),
 			grpc.MaxCallSendMsgSize(MaxMessageBytes),
