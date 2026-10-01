@@ -1,6 +1,10 @@
 const GITHUB_API_VERSION = "2022-11-28";
 const USER_AGENT = "gateway-update-facade";
 const RELEASE_LIST_LIMIT_BYTES = 2 * 1024 * 1024;
+const RELEASE_PAGE_SIZE = 100;
+// GitHub lists releases newest first; a search that is still unsettled after this many pages
+// answers from what it has read.
+const RELEASE_PAGE_LIMIT = 10;
 const PRODUCT_NAMESPACE = "gateway";
 
 type Fetcher = typeof fetch;
@@ -43,6 +47,11 @@ interface ParsedReleaseVersion {
 	patch: number;
 	build: number;
 	rc: number | null;
+}
+
+interface ReleaseCandidate {
+	release: GitHubRelease;
+	version: ParsedReleaseVersion;
 }
 
 interface NextUpdateResponse {
@@ -242,13 +251,12 @@ function releaseMatchesChannel(
 	return channel === "preview" && release.prerelease;
 }
 
-function selectNextRelease(
+function channelCandidates(
 	component: UpdateComponent,
-	current: string | null,
 	releases: GitHubRelease[],
 	channel: UpdateChannel,
-): { release: GitHubRelease; reason: NextUpdateResponse["reason"] } | null {
-	const candidates = releases
+): ReleaseCandidate[] {
+	return releases
 		.filter(
 			(release) =>
 				!release.draft && TAG_PATTERNS[component].test(release.tag_name),
@@ -258,26 +266,48 @@ function selectNextRelease(
 			version: parseReleaseVersion(component, release.tag_name),
 		}))
 		.filter(
-			(
-				candidate,
-			): candidate is {
-				release: GitHubRelease;
-				version: ParsedReleaseVersion;
-			} => candidate.version !== null,
+			(candidate): candidate is ReleaseCandidate => candidate.version !== null,
 		)
 		.filter((candidate) =>
 			releaseMatchesChannel(channel, candidate.release, candidate.version),
 		);
+}
+
+/**
+ * Whether older release pages can no longer change the answer. Without an installed version the
+ * newest release is wanted, so any candidate settles it. Releases newer than the installed version
+ * were published after it, so the search is settled once the list reaches a candidate that is not
+ * newer than the installed version.
+ */
+function releaseSearchSettled(
+	component: UpdateComponent,
+	currentVersion: ParsedReleaseVersion | null,
+	releases: GitHubRelease[],
+	channel: UpdateChannel,
+): boolean {
+	const candidates = channelCandidates(component, releases, channel);
+	if (!currentVersion) return candidates.length > 0;
+	return candidates.some(
+		(candidate) =>
+			compareReleaseVersions(candidate.version, currentVersion) <= 0,
+	);
+}
+
+function selectNextRelease(
+	component: UpdateComponent,
+	currentVersion: ParsedReleaseVersion | null,
+	releases: GitHubRelease[],
+	channel: UpdateChannel,
+): { release: GitHubRelease; reason: NextUpdateResponse["reason"] } | null {
+	const candidates = channelCandidates(component, releases, channel);
 	if (candidates.length === 0) return null;
 
-	if (!current) {
+	if (!currentVersion) {
 		const latest = candidates.sort((a, b) =>
 			compareReleaseVersions(b.version, a.version),
 		)[0];
 		return latest ? { release: latest.release, reason: "latest" } : null;
 	}
-	const currentVersion = parseReleaseVersion(component, current);
-	if (!currentVersion) throw new Error("invalid_current_version");
 
 	if (component === "inference-core") {
 		const latest = candidates.sort((a, b) =>
@@ -321,6 +351,58 @@ function selectNextRelease(
 		: null;
 }
 
+function hasNextReleasePage(response: Response): boolean {
+	return /;\s*rel="next"/.test(response.headers.get("Link") ?? "");
+}
+
+/**
+ * Reads a repository's releases page by page until `settled` holds for what was read, GitHub has
+ * no next page, or RELEASE_PAGE_LIMIT is reached. Returns null when GitHub fails.
+ */
+async function fetchReleases(
+	env: Env,
+	repository: GitHubRepository,
+	fetcher: Fetcher,
+	settled: (releases: GitHubRelease[]) => boolean,
+): Promise<GitHubRelease[] | null> {
+	const releases: GitHubRelease[] = [];
+	for (let page = 1; page <= RELEASE_PAGE_LIMIT; page += 1) {
+		const upstream = await fetcher(
+			githubApiUrl(
+				env,
+				repository,
+				`/releases?per_page=${RELEASE_PAGE_SIZE}&page=${page}`,
+			),
+			{ headers: githubHeaders(repository) },
+		);
+		if (!upstream.ok) {
+			console.error(
+				JSON.stringify({
+					event: "github_releases_failed",
+					repository: repository.name,
+					page,
+					status: upstream.status,
+				}),
+			);
+			return null;
+		}
+		releases.push(...(await readBoundedJson<GitHubRelease[]>(upstream)));
+		if (settled(releases) || !hasNextReleasePage(upstream)) break;
+	}
+	return releases;
+}
+
+function listedOnChannel(
+	channel: UpdateChannel,
+	release: GitHubRelease,
+	stableOnly: boolean,
+): boolean {
+	return (
+		!release.draft &&
+		(stableOnly || channel === "stable" ? !release.prerelease : true)
+	);
+}
+
 async function handleReleaseList(
 	request: Request,
 	env: Env,
@@ -334,73 +416,70 @@ async function handleReleaseList(
 		if (!(componentValue in TAG_PATTERNS))
 			return jsonResponse({ error: "invalid_component" }, 400);
 		const component = componentValue as UpdateComponent;
+		const componentChannel =
+			component === "inference-core" ? "stable" : channel;
 		const current = url.searchParams.get("current");
-		const repository = repositoryForPackage(env, component);
-		const upstream = await fetcher(
-			githubApiUrl(env, repository, "/releases?per_page=100"),
-			{ headers: githubHeaders(repository) },
+		const currentVersion = current
+			? parseReleaseVersion(component, current)
+			: null;
+		if (current && !currentVersion)
+			return jsonResponse({ error: "invalid_current_version" }, 400);
+		const releases = await fetchReleases(
+			env,
+			repositoryForPackage(env, component),
+			fetcher,
+			(read) =>
+				releaseSearchSettled(component, currentVersion, read, componentChannel),
 		);
-		if (!upstream.ok)
+		if (!releases)
 			return jsonResponse({ error: "release_source_unavailable" }, 502);
-		try {
-			const selected = selectNextRelease(
+		const selected = selectNextRelease(
+			component,
+			currentVersion,
+			releases,
+			componentChannel,
+		);
+		if (!selected) {
+			return new Response(null, {
+				status: 204,
+				headers: { "Cache-Control": "no-store" },
+			});
+		}
+		return jsonResponse(
+			{
 				component,
 				current,
-				await readBoundedJson<GitHubRelease[]>(upstream),
-				component === "inference-core" ? "stable" : channel,
-			);
-			if (!selected) {
-				return new Response(null, {
-					status: 204,
-					headers: { "Cache-Control": "no-store" },
-				});
-			}
-			return jsonResponse(
-				{
-					component,
-					current,
-					target: normalizeRelease(selected.release),
-					reason: selected.reason,
-				} satisfies NextUpdateResponse,
-				200,
-				"public, max-age=30, s-maxage=60",
-			);
-		} catch (error) {
-			if (error instanceof Error && error.message === "invalid_current_version")
-				return jsonResponse({ error: "invalid_current_version" }, 400);
-			throw error;
-		}
-	}
-	const repositories = [gatewayRepository(env), inferenceCoreRepository(env)];
-	const upstreams = await Promise.all(
-		repositories.map((repository) =>
-			fetcher(githubApiUrl(env, repository, "/releases?per_page=100"), {
-				headers: githubHeaders(repository),
-			}),
-		),
-	);
-	for (let index = 0; index < upstreams.length; index += 1) {
-		const upstream = upstreams[index];
-		if (upstream?.ok) continue;
-		console.error(
-			JSON.stringify({
-				event: "github_releases_failed",
-				repository: repositories[index]?.name,
-				status: upstream?.status,
-			}),
+				target: normalizeRelease(selected.release),
+				reason: selected.reason,
+			} satisfies NextUpdateResponse,
+			200,
+			"public, max-age=30, s-maxage=60",
 		);
-		return jsonResponse({ error: "release_source_unavailable" }, 502);
 	}
-	const releasesByRepository = await Promise.all(
-		upstreams.map((upstream) => readBoundedJson<GitHubRelease[]>(upstream)),
-	);
-	const releases = releasesByRepository.flatMap((releases, index) =>
-		releases.filter(
-			(release) =>
-				!release.draft &&
-				(index === 1 || channel === "stable" ? !release.prerelease : true),
+	// Each list reaches at least one release on the channel: a Gateway release from the Gateway
+	// repository, any stable build from the inference core repository.
+	const [gatewayReleases, coreReleases] = await Promise.all([
+		fetchReleases(env, gatewayRepository(env), fetcher, (read) =>
+			read.some(
+				(release) =>
+					listedOnChannel(channel, release, false) &&
+					TAG_PATTERNS.gateway.test(release.tag_name),
+			),
 		),
-	);
+		fetchReleases(env, inferenceCoreRepository(env), fetcher, (read) =>
+			read.some((release) => listedOnChannel(channel, release, true)),
+		),
+	]);
+	if (!gatewayReleases || !coreReleases)
+		return jsonResponse({ error: "release_source_unavailable" }, 502);
+	const releases = [
+		...gatewayReleases.filter((release) =>
+			listedOnChannel(channel, release, false),
+		),
+		...coreReleases.filter((release) =>
+			listedOnChannel(channel, release, true),
+		),
+	];
 	return jsonResponse(
 		releases.map(normalizeRelease),
 		200,

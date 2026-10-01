@@ -13,6 +13,8 @@ It exposes:
 
 `stable` is the default and excludes GitHub prereleases. `preview` additionally accepts release-candidate tags such as `v2.10.0-rc.1`, `v2.10.0-rc.1-relay`, and matching daemon component tags. Component-aware requests return the newest patch on the current minor first, otherwise the baseline release of the next minor; no update returns `204` with `Cache-Control: no-store`. Inference Core ignores the requested channel and remains stable-only.
 
+GitHub lists releases newest first, 100 per page. The Worker reads further pages only until the answer is settled: a component request stops at the first page that reaches a candidate not newer than `current` (any candidate without `current`), the list stops once it holds a Gateway release on the channel. It reads at most 10 pages per repository.
+
 The Worker aggregates GitHub Releases from the public
 `the-square-labs/gateway` repository and the private
 `the-square-labs/inference-core` repository. It keeps the GitHub token only in

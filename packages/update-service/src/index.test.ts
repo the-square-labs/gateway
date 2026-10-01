@@ -21,6 +21,21 @@ function release(tag_name: string, prerelease = tag_name.includes("-rc.")) {
 	};
 }
 
+// One GitHub page of release candidates newer than any stable release.
+const releaseCandidatePage = Array.from({ length: 100 }, (_, index) =>
+	release(`v2.11.0-rc.${100 - index}`),
+);
+
+function releasePage(releases: ReturnType<typeof release>[], next: boolean) {
+	return Response.json(releases, {
+		headers: next
+			? {
+					Link: '<https://api.github.com/repositories/1/releases?per_page=100&page=2>; rel="next", <https://api.github.com/repositories/1/releases?per_page=100&page=9>; rel="last"',
+				}
+			: {},
+	});
+}
+
 describe("gateway update facade", () => {
 	it("serves health without contacting GitHub", async () => {
 		const fetcher = vi.fn<typeof fetch>();
@@ -234,6 +249,109 @@ describe("gateway update facade", () => {
 			reason: "patch",
 			target: { tag_name: "v1.1.11-watchdog" },
 		});
+	});
+
+	it("pages past release candidates to the stable releases on the next page", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(releasePage(releaseCandidatePage, true))
+			.mockResolvedValueOnce(
+				releasePage([release("v2.10.1-relay"), release("v2.10.1")], false),
+			);
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&channel=stable",
+			),
+			env,
+			fetcher,
+		);
+		await expect(response.json()).resolves.toMatchObject({
+			reason: "latest",
+			target: { tag_name: "v2.10.1" },
+		});
+		expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+			"https://api.github.com/repos/the-square-labs/gateway/releases?per_page=100&page=1",
+			"https://api.github.com/repos/the-square-labs/gateway/releases?per_page=100&page=2",
+		]);
+	});
+
+	it("reads until the installed version so a patch on an older page wins over the next minor", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(
+				releasePage(
+					[release("v2.11.0"), ...releaseCandidatePage.slice(1)],
+					true,
+				),
+			)
+			.mockResolvedValueOnce(
+				releasePage([release("v2.10.1"), release("v2.10.0")], true),
+			);
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&current=v2.10.0&channel=stable",
+			),
+			env,
+			fetcher,
+		);
+		await expect(response.json()).resolves.toMatchObject({
+			reason: "patch",
+			target: { tag_name: "v2.10.1" },
+		});
+		// The second page reached v2.10.0, so the third page is never requested.
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+
+	it("stops at the page limit when no release settles the search", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockImplementation(async () => releasePage(releaseCandidatePage, true));
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&current=v2.10.1&channel=stable",
+			),
+			env,
+			fetcher,
+		);
+		expect(response.status).toBe(204);
+		expect(fetcher).toHaveBeenCalledTimes(10);
+	});
+
+	it("fails instead of answering from a partial list when a later page fails", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(releasePage(releaseCandidatePage, true))
+			.mockResolvedValueOnce(new Response(null, { status: 403 }));
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=gateway&channel=stable",
+			),
+			env,
+			fetcher,
+		);
+		expect(response.status).toBe(502);
+	});
+
+	it("lists stable Gateway releases from a later page", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValueOnce(releasePage(releaseCandidatePage, true))
+			.mockResolvedValueOnce(
+				releasePage([release("v2.25.0-wiolett.21")], false),
+			)
+			.mockResolvedValueOnce(releasePage([release("v2.10.1")], false));
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?channel=stable",
+			),
+			env,
+			fetcher,
+		);
+		const listed = (await response.json()) as { tag_name: string }[];
+		expect(listed.map((entry) => entry.tag_name)).toEqual([
+			"v2.10.1",
+			"v2.25.0-wiolett.21",
+		]);
 	});
 
 	it("rejects unknown update channels without contacting GitHub", async () => {
