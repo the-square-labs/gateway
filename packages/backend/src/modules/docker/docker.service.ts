@@ -54,6 +54,7 @@ import {
   DockerContainerTransitions,
 } from './docker-container-transitions.js';
 import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker-creation-access.js';
+import { dockerDaemonUserError } from './docker-daemon-errors.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { DOCKER_DEPLOYMENT_ID_LABEL, DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { getContainerEnv as getDockerContainerEnv } from './docker-env-operations.js';
@@ -104,7 +105,7 @@ import {
 } from './docker-read-operations.js';
 import { dockerDispatchErrorMessage } from './docker-recreate-watch.js';
 import type { DockerRegistryService } from './docker-registry.service.js';
-import { collectDockerRolloutDiagnostics, DOCKER_ROLLOUT_RAW_LIMIT } from './docker-rollout-diagnostics.js';
+import { collectDockerRolloutDiagnostics, DOCKER_ROLLOUT_RESPONSE_LIMIT } from './docker-rollout-diagnostics.js';
 import { applyRuntimeSettingsToInspect } from './docker-runtime-inspect.js';
 import type { DockerRuntimeOperationContext } from './docker-runtime-operations.js';
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
@@ -144,6 +145,24 @@ import {
 
 export * from './docker.service.shared.js';
 
+/**
+ * Why Secure Runtime cannot run a container on a node, from the node's runtime status. The status message describes
+ * the node ("This node can install and verify Secure Runtime"), so it is framed as the refusal it is.
+ */
+function secureRuntimeUnavailableMessage(status: { state?: unknown; message?: unknown } | undefined): string {
+  const detail = typeof status?.message === 'string' && status.message ? status.message.replace(/\.$/, '') : '';
+  switch (status?.state) {
+    case 'installable':
+      return "Secure Runtime is not installed on this node. Run Secure Runtime Setup in the node's Details, or choose another node.";
+    case 'installing':
+      return 'Secure Runtime is still being installed on this node. Try again when Setup finishes.';
+    case 'unsupported':
+      return `Secure Runtime cannot run on this node${detail ? `: ${detail}` : ''}. Choose another node.`;
+    default:
+      return `Secure Runtime is not healthy on this node${detail ? `: ${detail}` : ''}. Complete Setup in Node Details first.`;
+  }
+}
+
 export class DockerManagementService {
   private static readonly LONG_DOCKER_OPERATION_TIMEOUT_MS = 600000; // 10 minutes
 
@@ -170,6 +189,7 @@ export class DockerManagementService {
   private accessResourceService?: DockerAccessResourceService;
   private networkAccessResourceService?: DockerNetworkAccessResourceService;
   private containerRecreateCompletedHandler?: (nodeId: string, newContainerId: string) => Promise<void>;
+  private managedLinkReleaseHandler?: (nodeId: string, containerName: string, userId: string | null) => Promise<void>;
   private availabilityMutationGuard?: (nodeId: string, containerName: string) => Promise<void>;
   private availabilityMutationCoordinator?: {
     containerRemoved?(nodeId: string, containerName: string): Promise<void>;
@@ -335,6 +355,23 @@ export class DockerManagementService {
     this.containerRecreateCompletedHandler = handler;
   }
 
+  /** Releases the managed database and storage links that target a container name (see releaseContainerLinks). */
+  setManagedLinkReleaseHandler(
+    handler: (nodeId: string, containerName: string, userId: string | null) => Promise<void>
+  ): void {
+    this.managedLinkReleaseHandler = handler;
+  }
+
+  /**
+   * Managed database and storage links target a container by name. When the container that held the name is gone
+   * (Gateway removed it, or a new container, copy, import or Git source takes a free name), its links go with it:
+   * they are marked deleted at once, so no reconciliation applies them to the next container of that name, their
+   * link secrets are removed, and their credentials and connectors are torn down in the background.
+   */
+  async releaseContainerLinks(nodeId: string, containerName: string, userId: string | null): Promise<void> {
+    await this.managedLinkReleaseHandler?.(nodeId, containerName, userId);
+  }
+
   private emitContainer(
     nodeId: string,
     name: string,
@@ -364,6 +401,8 @@ export class DockerManagementService {
     folderId?: string,
     userId?: string
   ): Promise<void> {
+    // The imported container took a free name: links left on it belonged to a container that is gone.
+    await this.releaseContainerLinks(nodeId, name, userId ?? null);
     const resourceId = await this.accessResourceService?.ensureContainer(nodeId, name, runtimeId, false);
     if (resourceId)
       await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`, {
@@ -871,17 +910,14 @@ export class DockerManagementService {
     const node = await this.validateDockerNode(nodeId);
     const status = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus;
     if (status?.state !== 'healthy') {
-      throw new AppError(
-        409,
-        'SECURE_RUNTIME_UNAVAILABLE',
-        status?.message || 'Secure Runtime is not healthy on this node. Complete Setup in Node Details first.'
-      );
+      throw new AppError(409, 'SECURE_RUNTIME_UNAVAILABLE', secureRuntimeUnavailableMessage(status));
     }
   }
 
   private parseResult(result: { success: boolean; error?: string; detail?: string }) {
     if (!result.success) {
-      throw new AppError(502, 'DISPATCH_ERROR', dockerDispatchErrorMessage(result, 'Command failed on daemon'));
+      const message = dockerDispatchErrorMessage(result, 'Command failed on daemon');
+      throw dockerDaemonUserError(message) ?? new AppError(502, 'DISPATCH_ERROR', message);
     }
     try {
       return result.detail ? JSON.parse(result.detail) : null;
@@ -1296,6 +1332,8 @@ export class DockerManagementService {
       folderService: this.folderService,
       accessResourceService: this.accessResourceService,
       taskService: this.taskService,
+      releaseContainerLinks: (nodeId, containerName, userId) =>
+        this.releaseContainerLinks(nodeId, containerName, userId),
       longDockerOperationTimeoutMs: DockerManagementService.LONG_DOCKER_OPERATION_TIMEOUT_MS,
       validateDockerNode: (nodeId) => this.validateDockerNode(nodeId),
       assertDockerGpuCapability: (nodeId) => this.assertDockerGpuCapability(nodeId),
@@ -1444,7 +1482,22 @@ export class DockerManagementService {
     const containerName = this.availabilityMutationCoordinator?.containerRemoved
       ? await this.resolveContainerName(nodeId, containerId)
       : undefined;
-    await removeDockerContainerMutation(this.containerMutationContext(), nodeId, containerId, force, userId);
+    try {
+      await removeDockerContainerMutation(this.containerMutationContext(), nodeId, containerId, force, userId);
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        error.code === 'CONTAINER_NOT_FOUND' &&
+        (await readPendingDockerSourceContainers(this.db, nodeId, containerId).catch(() => [])).length > 0
+      ) {
+        throw new AppError(
+          409,
+          'SOURCE_CONTAINER_NOT_BUILT',
+          'This container does not exist yet: the first build of its Git source creates it. Delete its Git source to remove it.'
+        );
+      }
+      throw error;
+    }
     if (containerName) await this.availabilityMutationCoordinator?.containerRemoved?.(nodeId, containerName);
   }
 
@@ -1494,17 +1547,29 @@ export class DockerManagementService {
   }
 
   /** Bounded, redacted evidence captured before a failed rollout removes its runtime. */
-  async getContainerFailureDiagnostics(nodeId: string, containerId: string): Promise<string> {
+  /**
+   * Startup evidence of a container whose rollout failed (see collectDockerRolloutDiagnostics). `containerName` lets
+   * the log lines be redacted with the values Gateway stores for the container when its inspect cannot be read.
+   */
+  async getContainerFailureDiagnostics(nodeId: string, containerId: string, containerName?: string): Promise<string> {
     const parseBounded = (result: { success: boolean; error?: string; detail?: string }) => {
       if (
-        (result.detail?.length ?? 0) > DOCKER_ROLLOUT_RAW_LIMIT ||
-        Buffer.byteLength(result.detail ?? '') > DOCKER_ROLLOUT_RAW_LIMIT
+        (result.detail?.length ?? 0) > DOCKER_ROLLOUT_RESPONSE_LIMIT ||
+        Buffer.byteLength(result.detail ?? '') > DOCKER_ROLLOUT_RESPONSE_LIMIT
       ) {
         throw new Error('Oversized runtime diagnostic response');
       }
       return this.parseResult(result);
     };
     return collectDockerRolloutDiagnostics({
+      storedValues: async () => {
+        if (!containerName) return [];
+        const [env, secrets] = await Promise.all([
+          this.environmentService?.getDecryptedMap(nodeId, containerName),
+          this.secretService?.getDecryptedMap(nodeId, containerName),
+        ]);
+        return [...Object.values(env ?? {}), ...Object.values(secrets ?? {})];
+      },
       inspect: async (timeoutMs) =>
         parseBounded(await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId }, timeoutMs)),
       logs: async (timeoutMs) =>

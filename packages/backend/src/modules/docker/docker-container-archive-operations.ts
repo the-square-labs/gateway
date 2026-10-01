@@ -71,6 +71,45 @@ export function assertDockerContainerArchiveExportAllowed(nodeId: string, contai
 }
 
 /**
+ * What an export may carry for this caller and this container, checked wherever an export is admitted (the REST
+ * download, and an MCP download or one-time link when it is issued): a portable image needs files access, the
+ * environment and the secrets their own scopes. A Secure Runtime (gVisor) container cannot be exported: an archive
+ * does not carry its runtime.
+ */
+export function assertDockerContainerArchiveContentAccess(
+  nodeId: string,
+  inspected: unknown,
+  query: Pick<ContainerArchiveExportQuery, 'imageMode' | 'includeEnvironment' | 'includeSecrets'>,
+  actorScopes: readonly string[]
+) {
+  const inspect = (inspected ?? {}) as Record<string, any>;
+  if (inspect.HostConfig?.Runtime === 'runsc') {
+    throw new AppError(
+      409,
+      'DOCKER_ARCHIVE_SECURE_RUNTIME',
+      'A container that runs on Secure Runtime (gVisor) cannot be exported as a container archive.'
+    );
+  }
+  const scopes = [...actorScopes];
+  const scopeResourceId = String(inspect.scopeResourceId ?? '');
+  if (
+    query.imageMode === 'portable' &&
+    !hasDockerResourceScope(scopes, 'docker:containers:files:read', nodeId, scopeResourceId)
+  ) {
+    throw new AppError(403, 'FORBIDDEN', 'Exporting a portable container archive requires files access');
+  }
+  if (
+    query.includeEnvironment &&
+    !hasDockerResourceScope(scopes, 'docker:containers:environment', nodeId, scopeResourceId)
+  ) {
+    throw new AppError(403, 'FORBIDDEN', 'Exporting a container archive requires environment access');
+  }
+  if (query.includeSecrets && !hasDockerResourceScope(scopes, 'docker:containers:secrets', nodeId, scopeResourceId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Exporting archive secrets is not permitted for this container');
+  }
+}
+
+/**
  * Networks an imported container joins, after the import resolution is applied. The same rules as a direct create
  * (resolveCreateNetworks): no shared namespaces (`host`, `container:<id>`), `none` only on its own, and never a
  * Gateway-managed network. Reserved names are refused as a whole because the daemon creates a missing createable
@@ -169,25 +208,7 @@ export async function openDockerContainerArchiveExport(args: {
       'Containers with GPU mappings cannot be exported as portable archives.'
     );
   }
-  const scopeResourceId = String(inspected?.scopeResourceId ?? '');
-  if (
-    query.imageMode === 'portable' &&
-    !hasDockerResourceScope(actorScopes, 'docker:containers:files:read', nodeId, scopeResourceId)
-  ) {
-    throw new AppError(403, 'FORBIDDEN', 'Exporting a portable container archive requires files access');
-  }
-  if (
-    query.includeEnvironment &&
-    !hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, scopeResourceId)
-  ) {
-    throw new AppError(403, 'FORBIDDEN', 'Exporting a container archive requires environment access');
-  }
-  if (
-    query.includeSecrets &&
-    !hasDockerResourceScope(actorScopes, 'docker:containers:secrets', nodeId, scopeResourceId)
-  ) {
-    throw new AppError(403, 'FORBIDDEN', 'Exporting archive secrets is not permitted for this container');
-  }
+  assertDockerContainerArchiveContentAccess(nodeId, inspected, query, actorScopes);
   let environment: Record<string, string> = {};
   let secrets: Record<string, string> = {};
   let secretKeys: string[] = [];

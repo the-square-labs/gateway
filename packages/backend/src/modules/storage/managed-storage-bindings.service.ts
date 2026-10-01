@@ -40,6 +40,7 @@ export class ManagedStorageBindingsService {
   ) {}
   setEventBus(_bus: EventBusService): void {}
   setLicensePolicyService(_service: LicensePolicyService): void {}
+  async releaseContainerLinks(_nodeId: string, _containerName: string, _userId: string | null): Promise<void> {}
   async list(_clusterId: string): Promise<
     {
       id: string;

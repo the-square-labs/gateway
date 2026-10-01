@@ -131,6 +131,11 @@ export interface DockerContainerMutationContext {
   };
   accessResourceService?: DockerAccessResourceService;
   taskService?: DockerTaskService;
+  /**
+   * Releases the managed database and storage links that target a container name: the container that held it is
+   * gone, so they must never reach the next container of that name.
+   */
+  releaseContainerLinks?(nodeId: string, containerName: string, userId: string | null): Promise<void>;
   longDockerOperationTimeoutMs: number;
   validateDockerNode(nodeId: string): Promise<unknown>;
   assertDockerGpuCapability(nodeId: string): Promise<void>;
@@ -336,6 +341,25 @@ async function detachContainerSource(
   }
 }
 
+/** Release the links of a removed container; a failure never fails the removal that already happened. */
+async function releaseRemovedContainerLinks(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerName: string,
+  userId: string
+): Promise<void> {
+  try {
+    await ctx.releaseContainerLinks?.(nodeId, containerName, userId);
+  } catch (error) {
+    // The links stay saved for the name; the next container that takes the name releases them before it exists.
+    logger.error('Failed to release the managed links of a removed container', {
+      nodeId,
+      containerName,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function renameContainerSourceBinding(
   db: DrizzleClient,
   nodeId: string,
@@ -453,6 +477,12 @@ async function reconcileStoredEnvAfterImageChange(
   if (changed) await ctx.environmentService.replace(nodeId, name, next);
 }
 
+/** The full runtime ID of an inspected container (a request may name it by name or short ID). */
+function containerRuntimeId(inspect: Record<string, any> | null | undefined, containerId: string): string {
+  const id = inspect?.Id ?? inspect?.id;
+  return typeof id === 'string' && id ? id : containerId;
+}
+
 function asyncDaemonTaskId(data: any, expectedType: string): string | undefined {
   const status = String(data?.status ?? '');
   return data?.type === expectedType && ['pending', 'running', 'succeeded', 'failed'].includes(status)
@@ -493,6 +523,9 @@ export async function createContainer(
     : null;
   if (requestedName) {
     await ctx.assertNameAvailable(nodeId, requestedName, undefined, { sourceBindingId: options.sourceBindingId });
+    // The name is free, so links still saved for it belonged to a container that is gone. A Git source's first
+    // activation keeps the links saved for its reserved name: they are this container's.
+    if (!options.sourceBindingId) await ctx.releaseContainerLinks?.(nodeId, requestedName, userId);
     ctx.setTransition(nodeId, requestedName, 'creating');
   }
   let data: any;
@@ -910,6 +943,9 @@ export async function removeContainer(
     // Nor may it inherit the Git source (and its auto-build polling).
     detachContainerSource(ctx.db, nodeId, name, userId),
   ]);
+  // Nor its managed database and storage links (network, credentials). After the secrets above: the link secrets
+  // are gone with the container's.
+  await releaseRemovedContainerLinks(ctx, nodeId, name, userId);
   const removedScopeResourceId = accessResult;
   ctx.emitContainer(nodeId, name, containerId, 'removed', {
     ...(removedScopeResourceId ? { scopeResourceId: removedScopeResourceId } : {}),
@@ -958,8 +994,12 @@ export async function renameContainer(
       }
       throw error;
     }
+    // Everything that can refuse the rename is checked before anything changes.
     await ctx.accessResourceService?.assertContainerRenameAllowed?.(nodeId, oldName, newName);
     await ctx.assertNameAvailable(nodeId, newName, claim);
+    // A rename keeps the runtime ID: the rollback addresses the container by it, since the old name (which the
+    // request may have used) no longer exists once the daemon renamed it.
+    const runtimeId = containerRuntimeId(await ctx.inspectContainer(nodeId, containerId), containerId);
     // The checks above wait on the node: the names must still be this
     // rename's across processes before it changes anything.
     await confirmHeldAcrossProcesses(ctx, nodeId, [oldName, newName]);
@@ -973,9 +1013,13 @@ export async function renameContainer(
       ctx.accessResourceService?.removeContainer(nodeId, newName),
       deleteContainerWebhooks(ctx.db, nodeId, newName),
     ]);
+    await ctx.releaseContainerLinks?.(nodeId, newName, userId);
 
     try {
-      const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', { containerId, newName });
+      const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', {
+        containerId: runtimeId,
+        newName,
+      });
       ctx.parseResult(result);
     } catch (err) {
       ctx.translateNameConflict(err, newName);
@@ -983,6 +1027,15 @@ export async function renameContainer(
 
     const metadataRollbacks: Array<() => Promise<unknown>> = [];
     try {
+      // The access identity first: it moves the Git source binding with it in one transaction and checks the
+      // source again under its lock, so a build that started meanwhile refuses the rename before the rest moves.
+      if (ctx.accessResourceService) {
+        await ctx.accessResourceService.renameContainer(nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => ctx.accessResourceService!.renameContainer(nodeId, newName, oldName));
+      } else {
+        await renameContainerSourceBinding(ctx.db, nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => renameContainerSourceBinding(ctx.db, nodeId, newName, oldName));
+      }
       if (ctx.environmentService) {
         await ctx.environmentService.rename(nodeId, oldName, newName);
         metadataRollbacks.unshift(() => ctx.environmentService!.rename(nodeId, newName, oldName));
@@ -1003,16 +1056,10 @@ export async function renameContainer(
       metadataRollbacks.unshift(() => renameManagedBindingTargets(ctx.db, nodeId, newName, oldName));
       await renameContainerWebhooks(ctx.db, nodeId, oldName, newName);
       metadataRollbacks.unshift(() => renameContainerWebhooks(ctx.db, nodeId, newName, oldName));
-      await renameContainerSourceBinding(ctx.db, nodeId, oldName, newName);
-      metadataRollbacks.unshift(() => renameContainerSourceBinding(ctx.db, nodeId, newName, oldName));
-      if (ctx.accessResourceService) {
-        await ctx.accessResourceService.renameContainer(nodeId, oldName, newName);
-        metadataRollbacks.unshift(() => ctx.accessResourceService!.renameContainer(nodeId, newName, oldName));
-      }
     } catch (metadataError) {
       try {
         const rollbackResult = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', {
-          containerId,
+          containerId: runtimeId,
           newName: oldName,
         });
         ctx.parseResult(rollbackResult);
@@ -1045,7 +1092,7 @@ export async function renameContainer(
       resourceId: containerId,
       details: { nodeId, oldName, name: newName, containerName: newName },
     });
-    ctx.emitContainer(nodeId, newName, containerId, 'renamed', { oldName });
+    ctx.emitContainer(nodeId, newName, runtimeId, 'renamed', { oldName });
   } finally {
     ctx.releaseTransitions(claim);
   }
@@ -1085,6 +1132,8 @@ export async function duplicateContainer(
   });
   ctx.requireNoTransition(nodeId, sourceName);
   await ctx.assertNameAvailable(nodeId, name);
+  // The copy takes a free name: links still saved for it belonged to a container that is gone.
+  await ctx.releaseContainerLinks?.(nodeId, name, userId);
   ctx.setTransition(nodeId, name, 'creating');
   let data: any;
   try {
@@ -1221,7 +1270,8 @@ export async function updateContainer(
     throw error;
   }
   ctx.emitTransition(nodeId, name, containerId, 'updating');
-  const task = await ctx.createTask(nodeId, containerId, name, 'update');
+  // The task records the runtime it replaces: the replacement keeps the container's access identity from it.
+  const task = await ctx.createTask(nodeId, containerRuntimeId(inspect, containerId), name, 'update');
   try {
     await confirmHeldAcrossProcesses(ctx, nodeId, [name]);
   } catch (error) {
@@ -1413,7 +1463,8 @@ export async function recreateWithConfig(
   }
   const previousRuntimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
   ctx.emitTransition(nodeId, name, containerId, 'recreating');
-  const task = await ctx.createTask(nodeId, containerId, name, 'recreate');
+  // The task records the runtime it replaces: the replacement keeps the container's access identity from it.
+  const task = await ctx.createTask(nodeId, containerRuntimeId(inspect, containerId), name, 'recreate');
 
   const executeRecreate = async () => {
     try {
@@ -1525,8 +1576,13 @@ export async function recreateWithConfig(
   return executeRecreate();
 }
 
+/**
+ * Secure Runtime rules for a create, or for a recreate of `inspect`. A recreate that does not name a runtime profile
+ * keeps the container's runtime, so a Secure Runtime container is held to the rules with its new configuration.
+ */
 function assertSecureRuntimeConfiguration(config: Record<string, unknown>, inspect?: Record<string, any>) {
-  if (config.runtimeProfile !== 'secure') return;
+  const runtimeProfile = config.runtimeProfile ?? (inspect?.HostConfig?.Runtime === 'runsc' ? 'secure' : undefined);
+  if (runtimeProfile !== 'secure') return;
   const requestedNetworks = Array.isArray(config.networks) ? config.networks : undefined;
   const networkMode =
     requestedNetworks !== undefined
@@ -1642,6 +1698,7 @@ export async function updateContainerEnv(
   const expectedState = await ctx.resolveExpectedRecreateState(nodeId, containerId);
   const updateStopTimeout = await ctx.resolveContainerStopTimeout(nodeId, containerId, undefined);
   ctx.requireNoTransition(nodeId, name);
+  const runtimeInspect = await ctx.inspectContainer(nodeId, containerId);
 
   // Persist only user-set env on top of the stored baseline. The runtime env
   // also carries image defaults and masked secret placeholders; the daemon
@@ -1649,7 +1706,7 @@ export async function updateContainerEnv(
   const storedEnv = ctx.environmentService ? await ctx.environmentService.getDecryptedMap(nodeId, name) : {};
   const secrets = ctx.secretService ? await ctx.secretService.getDecryptedMap(nodeId, name) : {};
   const secretKeys = new Set(Object.keys(secrets));
-  const envBaseline = await storedEnvBaseline(ctx, nodeId, containerId, storedEnv);
+  const envBaseline = await storedEnvBaseline(ctx, nodeId, containerId, storedEnv, runtimeInspect);
   const desiredUserEnv = persistableUserEnv({ ...envBaseline, ...(env ?? {}) }, secretKeys);
   for (const key of removeEnv ?? []) delete desiredUserEnv[key];
   // Merge decrypted secrets so secrets persist across the recreate.
@@ -1668,7 +1725,8 @@ export async function updateContainerEnv(
     throw error;
   }
   ctx.emitTransition(nodeId, name, containerId, 'updating');
-  const task = await ctx.createTask(nodeId, containerId, name, 'update');
+  // The task records the runtime it replaces: the replacement keeps the container's access identity from it.
+  const task = await ctx.createTask(nodeId, containerRuntimeId(runtimeInspect, containerId), name, 'update');
   let data: any;
   try {
     // Persist with the mutation itself; a completion watcher is lost on restart.

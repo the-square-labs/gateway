@@ -91,7 +91,7 @@ Docker's default `json-file` log driver keeps container logs without a size limi
 - When the Docker node installer installs Docker Engine itself, it writes `/etc/docker/daemon.json` with `json-file` and 50 MB × 3 as Docker's default, so containers created outside Gateway rotate too. An existing `daemon.json` is left alone.
 - Alert rules can watch a container's **Log Size (MB)**.
 
-After a node's Docker daemon is updated to 2.11, the first apply of an unchanged Compose revision on a node where this limit applies recreates its services once, because the added log settings change their configuration. Plan that apply like any restart of the project.
+After a node's Docker daemon is updated to 2.11, the first apply of an unchanged Compose revision on a node where this limit applies recreates its services once, because the added log settings change their configuration. The first apply after Gateway and the daemon run 2.11 also recreates every service once, because each service then gets a label with its own configuration digest instead of the revision digest; from then on a new revision recreates only the services it changes. Plan that apply like any restart of the project.
 
 ## Configuration Reference
 

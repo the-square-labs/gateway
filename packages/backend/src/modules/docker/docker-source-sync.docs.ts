@@ -21,6 +21,17 @@ const syncResponses = {
   },
 };
 
+export const getContainerSourceRoute = appRoute({
+  method: 'get',
+  path: '/nodes/{nodeId}/containers/{containerName}/source',
+  tags,
+  summary: 'Get the Git source of a container',
+  description:
+    'The Git source binding of a container: connector, repository, branch, build settings and security policy, the desired and deployed commits, automatic build and deploy, and the last poll and webhook state. `data` is null when the container has no Git source. Works for a container that exists only as a queued first source build. Requires docker:containers:view on the container.',
+  request: { params: pathParamSchema('nodeId', 'containerName') },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const syncContainerSourceRoute = appRoute({
   method: 'post',
   path: '/nodes/{nodeId}/containers/{containerName}/source/sync',

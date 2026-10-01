@@ -339,13 +339,24 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 		pids := *params.PidsLimit
 		insp.HostConfig.PidsLimit = &pids
 	}
+	// A recreate that leaves the runtime profile as it is keeps the container's runtime, so a Secure Runtime
+	// container is held to the Secure Runtime rules with its new configuration: a GPU, device or host bind this
+	// recreate adds is refused, as it is when the profile is selected.
+	runtimeProfile := params.RuntimeProfile
+	if runtimeProfile == nil && insp.HostConfig.Runtime == "runsc" {
+		secure := "secure"
+		runtimeProfile = &secure
+	}
+	if runtimeProfile != nil && *runtimeProfile == "secure" && params.GPU != nil && len(params.GPU.DeviceIDs) > 0 {
+		return fmt.Errorf("Secure Runtime does not support GPU attachments")
+	}
 	if params.GPU != nil {
 		if err := c.applyGPUConfig(ctx, insp.Config, insp.HostConfig, params.GPU); err != nil {
 			return err
 		}
 	}
-	if params.RuntimeProfile != nil {
-		if err := c.applyRuntimeProfile(insp.HostConfig, *params.RuntimeProfile, params.GPU); err != nil {
+	if runtimeProfile != nil {
+		if err := c.applyRuntimeProfile(insp.HostConfig, *runtimeProfile, params.GPU); err != nil {
 			return err
 		}
 	}

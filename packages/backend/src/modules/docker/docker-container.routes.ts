@@ -112,6 +112,27 @@ const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_CONTAINER_PORT_PREVIEW_MAX = 64;
 const ARCHIVE_IMAGE_REFERENCE_LABEL = 'wiolett.gateway.archive.image.reference';
 
+/**
+ * The cached inspect of a container. Right after a recreate the container list can name the new runtime before its
+ * inspect is cached: the inspect is then read from the node once, instead of answering 404 for a container that
+ * exists.
+ */
+async function containerDetailSnapshot(nodeId: string, key: string) {
+  const snapshots = container.resolve(DockerSnapshotService);
+  try {
+    return await snapshots.getContainerDetailSnapshot(nodeId, key);
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'CONTAINER_NOT_FOUND') throw error;
+    try {
+      await container.resolve(DockerSnapshotReconciler).refreshNow(nodeId, 'container-detail', key);
+    } catch {
+      // Not in the node's container list either: it does not exist.
+      throw error;
+    }
+    return snapshots.getContainerDetailSnapshot(nodeId, key);
+  }
+}
+
 function assertUserContainerSnapshot(data: Record<string, any> | null | undefined): void {
   assertUserContainerAccessible(data);
 }
@@ -390,7 +411,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         await reconciler.refreshNow(inspectNodeId, 'containers');
         await reconciler.refreshNow(inspectNodeId, 'container-detail', inspectIdentifier);
       }
-      const detail = await snapshots.getContainerDetailSnapshot(inspectNodeId, inspectIdentifier);
+      const detail = await containerDetailSnapshot(inspectNodeId, inspectIdentifier);
       const resolved = await resolveDockerContainerByName(
         { inspectContainer: async () => detail.data },
         inspectNodeId,
@@ -428,7 +449,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         await reconciler.refreshNow(nodeId, 'containers');
         await reconciler.refreshNow(nodeId, 'container-detail', containerId);
       }
-      const detail = await snapshots.getContainerDetailSnapshot(nodeId, containerId);
+      const detail = await containerDetailSnapshot(nodeId, containerId);
       const availabilityIdentity = await container
         .resolve(DockerAvailabilityService)
         .resolveRuntimeAccessIdentity(nodeId, containerId);
@@ -525,8 +546,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
       await assertComposeChildMutationAllowed(nodeId, containerId);
-      const force = c.req.query('force') === 'true';
-      await service.removeContainer(nodeId, containerId, force, user.id);
+      // Gateway never removes an active container; a stopped one needs no force.
+      await service.removeContainer(nodeId, containerId, false, user.id);
       return c.json({ success: true });
     }
   );

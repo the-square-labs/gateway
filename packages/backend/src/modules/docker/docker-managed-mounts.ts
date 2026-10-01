@@ -23,6 +23,14 @@ export async function assertManagedMountMutation(args: {
     if (mount.type === 'bind') {
       throw new AppError(409, 'HOST_BIND_MOUNTS_DISABLED', 'New host bind mounts are not allowed');
     }
+    // A host path given as a volume name is a bind mount, not a legacy volume.
+    if (/^[/.~]/.test(mount.source) || mount.source.includes('/')) {
+      throw new AppError(
+        409,
+        'HOST_BIND_MOUNTS_DISABLED',
+        `"${mount.source}" is a host path. Host paths cannot be mounted; create a managed volume and mount it instead.`
+      );
+    }
     const [managed] = await args.db
       .select({ volumeName: dockerManagedVolumes.volumeName, storageKind: dockerManagedVolumes.storageKind })
       .from(dockerManagedVolumes)

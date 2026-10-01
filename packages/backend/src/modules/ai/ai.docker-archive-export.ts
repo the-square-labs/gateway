@@ -6,6 +6,7 @@ import { ContainerArchiveExportQuerySchema } from '@/modules/docker/docker.schem
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import {
+  assertDockerContainerArchiveContentAccess,
   assertDockerContainerArchiveExportAllowed,
   openDockerContainerArchiveExport,
 } from '@/modules/docker/docker-container-archive-operations.js';
@@ -78,8 +79,9 @@ export async function prepareDockerArchiveExport(
     includeEnvironment: args.includeEnvironment,
     includeSecrets: args.includeSecrets,
   });
-  // Refused before a transfer slot or spool directory exists; the shared export re-checks it.
+  // Refused before a transfer slot, spool directory or one-time link exists; the shared export re-checks it.
   assertDockerContainerArchiveExportAllowed(nodeId, containerId, inspected);
+  assertDockerContainerArchiveContentAccess(nodeId, inspected, query, user.scopes);
   return {
     access: {
       kind,

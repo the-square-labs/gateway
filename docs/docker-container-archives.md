@@ -55,14 +55,17 @@ The export/import UI is available only for standalone containers. Gateway deploy
 
 ## API
 
-- `GET /api/docker/nodes/{nodeId}/containers/{containerId}/archive?imageMode=portable&includeWritableLayer=false&includeEnvironment=false&includeSecrets=false` streams an archive. Export always requires the dedicated `docker:containers:export` scope. Portable mode additionally requires container file access; `includeEnvironment=true` requires environment access; and `includeSecrets=true` additionally requires secret access. `imageMode=registry` does not allow writable-layer capture. The API defaults `includeEnvironment` to `true` for existing clients.
+- `GET /api/docker/nodes/{nodeId}/containers/{containerId}/archive?imageMode=portable&includeWritableLayer=false&includeEnvironment=false&includeSecrets=false` streams an archive. Export always requires the dedicated `docker:containers:export` scope. Portable mode additionally requires container file access; `includeEnvironment=true` requires environment access; and `includeSecrets=true` additionally requires secret access. `imageMode=registry` references the image in its registry and cannot carry the writable layer: `includeWritableLayer=true` with it is refused with 400. A container that runs on Secure Runtime (gVisor) cannot be exported (409 `DOCKER_ARCHIVE_SECURE_RUNTIME`), and one whose settings an archive cannot reproduce is refused with 409 `DOCKER_ARCHIVE_UNSUPPORTED`, which names the settings. The API defaults `includeEnvironment` to `true` for existing clients.
 - `POST /api/docker/nodes/{nodeId}/containers/archive?name={newName}&resolution={json}` accepts an `application/vnd.wiolett.gwca` body and requires container-create on the target node. Importing an archive that contains environment or secret values additionally requires the corresponding environment or secret access. The optional `resolution` object can contain `networks`, `volumes`, and `ports` mappings plus `createNetworks` and `createVolumes` lists; creating archive-declared local volumes or missing networks requires the corresponding create permissions.
+
+`networks` and `volumes` map an archive's network or volume (the name in the archive manifest) to the one to use on the target node. `createNetworks` and `createVolumes` list archive networks and volumes, again by their name in the archive, that the import creates on the target node. A network that is both created and mapped is created under its mapped name: to create `source-app` as `target-app`, list `source-app` in `createNetworks` and map it in `networks`. Naming the target name in `createNetworks` is refused with 400 `GWCA_RESOLUTION_INVALID`.
 
 Example resolution:
 
 ```json
 {
   "networks": { "source-app": "target-app" },
+  "createNetworks": ["source-app"],
   "volumes": { "source-data": "managed-target-data" },
   "ports": { "8080/tcp:8080": 18080 }
 }
@@ -70,7 +73,7 @@ Example resolution:
 
 ## MCP agents
 
-Remote MCP clients use the MCP-only `download_docker_archive` (container or volume export) and `upload_docker_container_archive` (import) tools. With a shell, operation `link` runs the same checks as the API above and returns a one-time URL, valid for 15 minutes and usable once, with a ready curl command: `curl -fsS -o <file> <url>` streams an export from the node, and `curl -T container.gwca <url>` streams a `.gwca` archive into the import, whose response is the new stopped container. Using a link repeats the permission, license and node checks with the MCP token's scopes bounded by the owner's current grants. An interrupted upload imports nothing; an interrupted download makes curl exit non-zero and leaves an incomplete file. Without a shell, the tools keep a base64 `begin`/`chunk` workflow of at most 1 MiB per call.
+Remote MCP clients use the MCP-only `download_docker_archive` (container or volume export) and `upload_docker_container_archive` (import) tools. With a shell, operation `link` runs the same checks as the API above and returns a one-time URL, valid for 15 minutes and usable once, with a ready curl command: `curl -fsS -o <file> <url>` streams an export from the node, and `curl -T container.gwca <url>` streams a `.gwca` archive into the import, whose response is the new stopped container. An export link is issued only when the token holds every scope the export needs, file access for a portable image, environment and secret access when they are included; a missing one refuses the `link` call itself. Using a link repeats the permission, license and node checks with the MCP token's scopes bounded by the owner's current grants. An interrupted upload imports nothing; an interrupted download makes curl exit non-zero and leaves an incomplete file. Without a shell, the tools keep a base64 `begin`/`chunk` workflow of at most 1 MiB per call.
 
 ## Wire format and integrity
 

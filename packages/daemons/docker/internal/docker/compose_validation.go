@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -46,6 +47,10 @@ func composeActionStartsContainers(action string) bool {
 
 func validateAndInjectComposeYAML(request *composeRequest) error {
 	reservedPolicy := composeActionStartsContainers(request.action)
+	serviceDigests, err := composeServiceConfigDigests(request.normalizedModelJSON)
+	if err != nil {
+		return err
+	}
 	var document yaml.Node
 	if err := yaml.Unmarshal(request.composeYAML, &document); err != nil {
 		return errors.New("compose_yaml is invalid")
@@ -94,7 +99,11 @@ func validateAndInjectComposeYAML(request *composeRequest) error {
 		if err := validateComposeService(services.Content[i].Value, services.Content[i+1], services, volumes, networks, reservedPolicy); err != nil {
 			return err
 		}
-		injectComposeLabels(services.Content[i+1], request.projectID, request.configDigest)
+		digest := request.configDigest
+		if serviceDigest := serviceDigests[services.Content[i].Value]; serviceDigest != "" {
+			digest = serviceDigest
+		}
+		injectComposeLabels(services.Content[i+1], request.projectID, digest)
 	}
 	output, err := yaml.Marshal(&document)
 	if err != nil {
@@ -611,6 +620,26 @@ func validateServiceLabels(node *yaml.Node, reservedPolicy bool) error {
 		}
 	}
 	return nil
+}
+
+// composeServiceConfigDigests reads the configuration digest of each service that Gateway sends with the
+// normalized model (`serviceConfigDigests`). A service is labelled with its own digest, so a new revision changes
+// the label, and with it Compose's config hash, only of the services it changes: Compose recreates those and leaves
+// the others running. Without them (an older Gateway, Availability placements) every service carries the revision
+// digest, and every new revision recreates every service.
+func composeServiceConfigDigests(normalizedModelJSON string) (map[string]string, error) {
+	var model struct {
+		ServiceConfigDigests map[string]string `json:"serviceConfigDigests"`
+	}
+	if err := json.Unmarshal([]byte(normalizedModelJSON), &model); err != nil {
+		return nil, errors.New("docker compose normalized_model_json is invalid")
+	}
+	for service, digest := range model.ServiceConfigDigests {
+		if !composeDigestPattern.MatchString(digest) {
+			return nil, fmt.Errorf("docker compose service %q has an invalid configuration digest", service)
+		}
+	}
+	return model.ServiceConfigDigests, nil
 }
 
 func injectComposeLabels(service *yaml.Node, projectID, digest string) {

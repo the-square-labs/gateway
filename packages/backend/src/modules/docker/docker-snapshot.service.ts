@@ -121,6 +121,11 @@ export function sanitizeContainerInspect(value: unknown): unknown {
   return visit(value);
 }
 
+function observedAtOrZero(envelope: { observedAt: string | null }): number {
+  const observedAt = envelope.observedAt ? Date.parse(envelope.observedAt) : Number.NaN;
+  return Number.isFinite(observedAt) ? observedAt : 0;
+}
+
 function readString(record: Record<string, unknown>, camel: string, docker: string): string | undefined {
   const value = record[camel] ?? record[docker];
   return typeof value === 'string' ? value : undefined;
@@ -336,9 +341,17 @@ export class DockerSnapshotService {
         match = list.data.find((item) => String(item.name ?? item.Name ?? '').replace(/^\/+/, '') === directName);
       }
     }
+    // A container the list, read after its cached inspect, no longer has was removed: its inspect is not the
+    // container's state anymore. A cached inspect newer than the list is a container created since.
+    if (!match && direct && observedAtOrZero(list) > observedAtOrZero(direct)) {
+      throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Container snapshot not found');
+    }
     const liveId = String(match?.id ?? match?.Id ?? '');
     const directId = String(direct?.data?.id ?? direct?.data?.Id ?? '');
     if (direct && (!liveId || !directId || liveId === directId)) return direct;
+    // The list and the cached inspect name different runtimes of the container (a recreate): the one observed
+    // last is the current one.
+    if (direct && observedAtOrZero(direct) >= observedAtOrZero(list)) return direct;
 
     const name = String(match?.name ?? match?.Name ?? '').replace(/^\/+/, '');
     if (liveId && liveId !== key) {
@@ -351,6 +364,12 @@ export class DockerSnapshotService {
       if (byName && (!liveId || !byNameId || liveId === byNameId)) return byName;
     }
     throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Container snapshot not found');
+  }
+
+  /** Drops cached details, as when their resource was removed. */
+  async deleteDetails(nodeId: string, kind: DockerDetailKind, keys: readonly string[]): Promise<void> {
+    const fields = [...new Set(keys.filter(Boolean))];
+    if (fields.length > 0) await this.cache.getClient().hdel(this.detailKey(nodeId, kind), ...fields);
   }
 
   async getContainerDetail(nodeId: string, key: string): Promise<any> {

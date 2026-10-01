@@ -137,6 +137,9 @@ export async function createDockerSourceResource(
     if (deployment) {
       throw new AppError(409, 'CONTAINER_NAME_CONFLICT', 'A deployment with this name already exists');
     }
+    // The source reserves a free name: links still saved for it belonged to a container that is gone, and its
+    // first build would otherwise start with them.
+    await container.resolve(DockerManagementService).releaseContainerLinks(nodeId, input.resource.name, actor.id);
     target = { kind: 'container', nodeId, containerName: input.resource.name };
     const { kind: _kind, ...config } = input.resource;
     initialConfig = config;

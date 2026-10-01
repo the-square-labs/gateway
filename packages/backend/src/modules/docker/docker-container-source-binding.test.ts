@@ -125,19 +125,54 @@ describe('container Git source binding lifecycle', () => {
     expect(moved[0].values).toMatchObject({ containerName: 'api-2' });
   });
 
-  it('moves the source binding back when a later rename step fails', async () => {
+  it('moves the Git source with the access identity before any other record, and rolls back by runtime ID', async () => {
     const { db, updates } = recordingDb();
+    const runtimeId = 'f'.repeat(64);
+    const dispatch = vi.fn().mockResolvedValue({ success: true });
+    const ctx = baseContext(db, dispatch);
+    (ctx.inspectContainer as ReturnType<typeof vi.fn>).mockResolvedValue({
+      Id: runtimeId,
+      State: { Status: 'exited' },
+    });
+    const renameEnvironment = vi.fn().mockResolvedValue(undefined);
+    (ctx as { environmentService?: unknown }).environmentService = {
+      deleteImported: vi.fn().mockResolvedValue(undefined),
+      rename: renameEnvironment,
+    };
+    // The access identity moves the Git source binding in its own transaction and checks the source there: a
+    // source binding already moved to the new name would make it refuse the rename as "reserved by another source".
+    const renameIdentity = vi.fn(async () => {
+      if (sourceUpdates(updates).length > 0) throw new Error('This name is reserved by another build source');
+      throw new Error('A build started meanwhile');
+    });
+    (ctx as { accessResourceService?: unknown }).accessResourceService = {
+      assertContainerRenameAllowed: vi.fn().mockResolvedValue(undefined),
+      removeContainer: vi.fn().mockResolvedValue(null),
+      renameContainer: renameIdentity,
+    };
+
+    // The request names the container by its old name, which no longer exists after the daemon renamed it.
+    await expect(renameContainer(ctx, 'node-1', 'api', 'api-2', 'user-1')).rejects.toThrow('A build started meanwhile');
+
+    expect(renameIdentity).toHaveBeenCalledWith('node-1', 'api', 'api-2');
+    expect(sourceUpdates(updates)).toEqual([]);
+    expect(renameEnvironment).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith('node-1', 'rename', { containerId: runtimeId, newName: 'api-2' });
+    expect(dispatch).toHaveBeenLastCalledWith('node-1', 'rename', { containerId: runtimeId, newName: 'api' });
+  });
+
+  it('refuses a rename the Git source does not allow before the daemon renames anything', async () => {
+    const { db } = recordingDb();
     const dispatch = vi.fn().mockResolvedValue({ success: true });
     const ctx = baseContext(db, dispatch);
     (ctx as { accessResourceService?: unknown }).accessResourceService = {
-      removeContainer: vi.fn().mockResolvedValue(null),
-      renameContainer: vi.fn().mockRejectedValue(new Error('access rename failed')),
+      assertContainerRenameAllowed: vi.fn().mockRejectedValue(new Error('Wait for the current build to finish')),
+      removeContainer: vi.fn(),
+      renameContainer: vi.fn(),
     };
-    await expect(renameContainer(ctx, 'node-1', 'container-1', 'api-2', 'user-1')).rejects.toThrow(
-      'access rename failed'
-    );
-    const moved = sourceUpdates(updates);
-    expect(moved.map((u) => u.values?.containerName)).toEqual(['api-2', 'api']);
-    expect(dispatch).toHaveBeenLastCalledWith('node-1', 'rename', { containerId: 'container-1', newName: 'api' });
+
+    await expect(renameContainer(ctx, 'node-1', 'api', 'api-2', 'user-1')).rejects.toThrow('current build');
+
+    expect(dispatch).not.toHaveBeenCalledWith('node-1', 'rename', expect.anything());
   });
 });

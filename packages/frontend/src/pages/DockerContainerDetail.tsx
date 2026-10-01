@@ -707,13 +707,13 @@ export function DockerContainerDetail({
       if (runtimeReplacingRef.current) return;
       if (!nodeId || (!containerId && !routeContainerName)) return;
       if (!silent) setIsLoading(true);
-      try {
-        const data = await resolveMigrationTarget(!!migrationHandoff?.cutoverAt, async () => {
+      const load = (bypassCache: boolean) =>
+        resolveMigrationTarget(!!migrationHandoff?.cutoverAt, async () => {
           if (logicalWorkloadIdentity) {
             const inspected = (await api.inspectContainerByName(
               logicalWorkloadIdentity.managementNodeId || nodeId,
               logicalWorkloadIdentity.managementResourceId || routeContainerName,
-              noCache
+              bypassCache
             )) as InspectData;
             const replacementId = String(inspected.Id ?? inspected.id ?? containerId ?? "");
             if (replacementId) adoptReplacementContainerId(replacementId);
@@ -723,11 +723,21 @@ export function DockerContainerDetail({
             nodeId,
             containerId!,
             routeContainerName,
-            noCache
+            bypassCache
           );
           adoptReplacementContainerId(inspected.containerId);
           return inspected.container;
         });
+      try {
+        let data: InspectData;
+        try {
+          data = await load(noCache);
+        } catch (err) {
+          // Right after a recreate the cached inspect can lag behind the new runtime: the node is asked once
+          // before the container counts as gone (no error toast, the pin stays).
+          if (noCache || !(err instanceof ApiRequestError && err.status === 404)) throw err;
+          data = await load(true);
+        }
         setContainer(data);
         if ((data as any)?._transition) {
           clearMutationTransition();
@@ -1119,7 +1129,7 @@ export function DockerContainerDetail({
     setActionLoading(true);
     setPendingHeaderAction("Remove");
     try {
-      await api.removeContainer(nodeId!, containerId!, false);
+      await api.removeContainer(nodeId!, containerId!);
       usePinnedContainersStore.getState().removePin(containerId!);
       toast.success("Container removed");
       invalidate("containers", "tasks");

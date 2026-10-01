@@ -38,6 +38,7 @@ import {
   createDockerSourceResource,
 } from './docker-source-resource-creation.js';
 import {
+  getContainerSourceRoute,
   syncComposeSourceRoute,
   syncContainerSourceRoute,
   syncDeploymentSourceRoute,
@@ -170,9 +171,13 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
     }
   );
 
-  router.get(
-    '/nodes/:nodeId/containers/:containerName/source',
-    requireDockerContainerScope('docker:containers:view', 'containerName', { allowPendingSource: true }),
+  router.openapi(
+    {
+      ...getContainerSourceRoute,
+      middleware: requireDockerContainerScope('docker:containers:view', 'containerName', {
+        allowPendingSource: true,
+      }),
+    },
     async (c) => c.json({ data: await container.resolve(DockerSourceService).get(containerTarget(c)) })
   );
   router.put(

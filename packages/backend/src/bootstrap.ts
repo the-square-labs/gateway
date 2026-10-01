@@ -1279,6 +1279,11 @@ export async function initializeContainer(): Promise<void> {
   managedStorageBindingsService.setEventBus(eventBus);
   managedStorageBindingsService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(ManagedStorageBindingsService, managedStorageBindingsService);
+  // A removed container, or a free name a new container takes, releases the links saved for that name.
+  dockerManagementService.setManagedLinkReleaseHandler(async (nodeId, containerName, userId) => {
+    await managedDatabaseBindingService.releaseContainerLinks(nodeId, containerName, userId);
+    await managedStorageBindingsService.releaseContainerLinks(nodeId, containerName, userId);
+  });
   // Bindings own containers, networks and relay routes that the cluster's own
   // delete path knows nothing about; the FK cascade would drop only their rows.
   managedStorageService.setBindingsTeardown((cluster, userId) =>

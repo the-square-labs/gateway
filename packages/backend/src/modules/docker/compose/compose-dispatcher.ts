@@ -6,6 +6,12 @@ export interface DockerComposeDispatchInput {
   projectName: string;
   revisionId: string | null;
   configDigest: string | null;
+  /**
+   * Each service's configuration digest, the value of its revision label: a service the revision leaves unchanged
+   * keeps its label and Compose does not recreate it. Without them the daemon labels every service with
+   * `configDigest`.
+   */
+  serviceConfigDigests?: Record<string, string> | null;
   yaml: string | null;
   normalizedModel: DockerComposeNormalizedModel | null;
   variables: Record<string, string>;

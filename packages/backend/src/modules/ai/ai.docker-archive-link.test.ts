@@ -22,13 +22,15 @@ import { dockerArchiveLinkRoutes } from './ai.docker-archive-link.routes.js';
 import { executeDockerTool } from './ai.docker-tools.js';
 import { isImpersonationBlockedToolCall } from './ai-impersonation-policy.js';
 
-vi.mock('@/modules/docker/docker-container-archive-operations.js', async (importOriginal) => ({
-  assertDockerContainerArchiveExportAllowed: (
-    await importOriginal<typeof import('@/modules/docker/docker-container-archive-operations.js')>()
-  ).assertDockerContainerArchiveExportAllowed,
-  importDockerContainerArchive: vi.fn(),
-  openDockerContainerArchiveExport: vi.fn(),
-}));
+vi.mock('@/modules/docker/docker-container-archive-operations.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/modules/docker/docker-container-archive-operations.js')>();
+  return {
+    assertDockerContainerArchiveExportAllowed: actual.assertDockerContainerArchiveExportAllowed,
+    assertDockerContainerArchiveContentAccess: actual.assertDockerContainerArchiveContentAccess,
+    importDockerContainerArchive: vi.fn(),
+    openDockerContainerArchiveExport: vi.fn(),
+  };
+});
 vi.mock('@/modules/nodes/service-creation-lock.js', () => ({
   assertNodeAllowsServiceCreation: vi.fn().mockResolvedValue(undefined),
 }));
@@ -293,6 +295,23 @@ describe('Docker archive download links', () => {
       actorScopes: [CONTAINER_EXPORT],
       userId: 'user-1',
     });
+  });
+
+  it('refuses to make a portable export link without file access', async () => {
+    const user = userWith([CONTAINER_EXPORT]);
+    const { docker } = registerServices(user);
+
+    await expect(
+      executeDockerTool(toolContext(docker), user, 'download_docker_archive', {
+        operation: 'link',
+        kind: 'container',
+        nodeId: 'node-1',
+        containerId: 'api',
+        imageMode: 'portable',
+        includeEnvironment: false,
+      })
+    ).rejects.toMatchObject({ statusCode: 403, message: expect.stringContaining('files access') });
+    expect(openDockerContainerArchiveExport).not.toHaveBeenCalled();
   });
 
   it('refuses a download whose owner lost the export scope before anything is read', async () => {

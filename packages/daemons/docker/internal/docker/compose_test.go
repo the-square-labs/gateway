@@ -166,6 +166,48 @@ func TestComposePolicyRejectsBuildAndInjectsOwnershipLabels(t *testing.T) {
 	}
 }
 
+func TestComposeServicesCarryTheirOwnConfigurationDigest(t *testing.T) {
+	revisionLabels := func(command *pb.DockerComposeCommand) map[string]any {
+		t.Helper()
+		request, err := validateComposeCommand(command)
+		if err != nil {
+			t.Fatalf("validate accepted compose: %v", err)
+		}
+		var document map[string]any
+		if err := yaml.Unmarshal(request.composeYAML, &document); err != nil {
+			t.Fatalf("parse normalized yaml: %v", err)
+		}
+		labels := make(map[string]any)
+		for name, service := range document["services"].(map[string]any) {
+			labels[name] = service.(map[string]any)["labels"].(map[string]any)["wiolett.gateway.compose.revision"]
+		}
+		return labels
+	}
+	command := validComposeCommand("apply", "operation-service-digests")
+	command.ComposeYaml = []byte("services:\n  web:\n    image: nginx:alpine\n  worker:\n    image: busybox\n")
+	web, worker := strings.Repeat("b", 64), strings.Repeat("c", 64)
+	command.NormalizedModelJson = `{"services":{},"serviceConfigDigests":{"web":"` + web + `","worker":"` + worker + `"}}`
+	// A revision that changes only web keeps worker's label (and Compose's config hash): only web is recreated.
+	if got := revisionLabels(command); got["web"] != web || got["worker"] != worker {
+		t.Fatalf("service revision labels = %#v", got)
+	}
+
+	// A service without a digest of its own, and a Gateway that sends none, label it with the revision digest.
+	command.NormalizedModelJson = `{"serviceConfigDigests":{"web":"` + web + `"}}`
+	if got := revisionLabels(command); got["web"] != web || got["worker"] != command.ConfigDigest {
+		t.Fatalf("partial service revision labels = %#v", got)
+	}
+	command.NormalizedModelJson = "{}"
+	if got := revisionLabels(command); got["web"] != command.ConfigDigest || got["worker"] != command.ConfigDigest {
+		t.Fatalf("revision labels without service digests = %#v", got)
+	}
+
+	command.NormalizedModelJson = `{"serviceConfigDigests":{"web":"not-a-digest"}}`
+	if _, err := validateComposeCommand(command); err == nil || !strings.Contains(err.Error(), "configuration digest") {
+		t.Fatalf("invalid service digest error = %v", err)
+	}
+}
+
 func TestComposePolicyAcceptsManagedDatabaseExtraHosts(t *testing.T) {
 	command := validComposeCommand("apply", "operation-managed-database")
 	command.ComposeYaml = []byte(`services:

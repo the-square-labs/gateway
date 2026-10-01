@@ -228,6 +228,14 @@ export const ContainerArchiveExportQuerySchema = z
     ),
   })
   .superRefine((value, context) => {
+    if (value.imageMode === 'registry' && value.includeWritableLayer) {
+      context.addIssue({
+        code: 'custom',
+        path: ['includeWritableLayer'],
+        message:
+          'A registry archive references the image in its registry and cannot carry the writable layer; export a portable archive to include it',
+      });
+    }
     if (value.includeSecrets && !value.includeEnvironment) {
       context.addIssue({
         code: 'custom',
