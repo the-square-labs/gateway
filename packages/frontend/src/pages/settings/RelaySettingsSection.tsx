@@ -24,6 +24,7 @@ import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
+import { UnreleasedInstallerNote } from "@/components/nodes/UnreleasedInstallerNote";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { NumericInput } from "@/components/ui/numeric-input";
@@ -90,29 +91,6 @@ function admissionLabel(state: string | undefined) {
     default:
       return "Unknown";
   }
-}
-
-const RELAY_INSTALLER_URL =
-  "https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-relay-node.sh";
-
-/** The relay installer invocation that re-enrolls an existing relay host with a fresh token. */
-function relayReenrollmentCommand(reenrollment: RelayReenrollment, gateway: string): string {
-  const portArgument =
-    reenrollment.servicePort && reenrollment.servicePort !== 9443
-      ? ` \\\n  --service-port ${reenrollment.servicePort}`
-      : "";
-  const addressArgument = reenrollment.advertiseAddress
-    ? ` \\\n  --advertise-address ${reenrollment.advertiseAddress}`
-    : "";
-  // Reinstall the release the pool runs: "latest" can resolve to an older release whose
-  // supervisor ignores a re-enrollment token.
-  const versionArgument = reenrollment.relayVersion
-    ? ` \\\n  --version ${reenrollment.relayVersion}`
-    : "";
-  return `curl -sSL ${RELAY_INSTALLER_URL} | sudo bash -s -- \\
-  --gateway ${gateway} \\
-  --token ${reenrollment.enrollmentToken} \\
-  --gateway-cert-sha256 ${reenrollment.gatewayCertSha256}${addressArgument}${portArgument}${versionArgument}`;
 }
 
 /** Remote relays that need, or may need, a fresh enrollment to recover. */
@@ -1203,23 +1181,17 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             : null
         }
       >
-        {shownReenrollment
-          ? (["public", "local"] as const).map((target) => {
-              const gateway =
-                shownReenrollment.gatewayEnrollmentTargets?.[target]?.gateway ??
-                (target === "public" ? `${window.location.hostname}:9443` : null);
-              if (!gateway) return null;
-              const command = relayReenrollmentCommand(shownReenrollment, gateway);
-              return (
-                <CopyCodeBlock
-                  key={target}
-                  label={shownReenrollment.gatewayEnrollmentTargets?.[target]?.label ?? target}
-                  value={command}
-                  copyValue={command.replace(/\s*\\\n\s*/g, " ")}
-                />
-              );
-            })
-          : null}
+        {shownReenrollment ? (
+          <UnreleasedInstallerNote installerRelease={shownReenrollment.installerRelease} />
+        ) : null}
+        {shownReenrollment?.installCommands.map((command) => (
+          <CopyCodeBlock
+            key={command.target}
+            label={command.label}
+            value={command.curl}
+            copyValue={command.curl.replace(/\s*\\\n\s*/g, " ")}
+          />
+        ))}
       </OneTimeSecretDialog>
 
       <NodeEnrollmentDialog

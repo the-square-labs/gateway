@@ -455,29 +455,22 @@ Nodes are remote servers running Gateway daemons. Each daemon type manages diffe
 Go to **Nodes** page → click **Add Node** → select the node type (nginx, docker, builder, storage, databases, monitoring, or relay) → set a display name → click **Create Node**. Relay nodes also require the address advertised to participating hosts. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands. **Settings → Relay → Add relay node** opens the same flow with Relay preselected.
 
 ### Step 2: Run the setup script on the target server
-The UI shows ready-to-copy commands. Run one of these on the target server as root:
+The UI shows ready-to-copy commands, one per enrollment target, with curl or wget; create_node and manage_node regenerate_enrollment_token return the same commands as installCommands. Give the user the command for the target the host can reach, unchanged, and run it on the target server. On a release build the command downloads the installer from that Gateway release on GitHub, runs it only when it matches the release's \`gateway-daemon-installers.sha256\`, and pins with \`--version\` the daemon release of the Gateway's own minor line (a relay gets the release its pool runs). An unreleased build (version \`dev\`) runs the installer from the main branch instead. For Gateway v2.11.0 the nginx command looks like this:
 
-For **nginx** nodes:
 \`\`\`bash
-curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-node.sh | sudo bash -s -- \\
-  --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
+cd "$(mktemp -d)" && \\
+curl -fsSL -o setup-node.sh https://github.com/the-square-labs/gateway/releases/download/v2.11.0/setup-node.sh && \\
+curl -fsSL -o gateway-daemon-installers.sha256 https://github.com/the-square-labs/gateway/releases/download/v2.11.0/gateway-daemon-installers.sha256 && \\
+grep ' setup-node.sh$' gateway-daemon-installers.sha256 | sha256sum -c - && \\
+sudo bash setup-node.sh \\
+  --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint> --version v2.11.0
 \`\`\`
 
-For **docker** nodes:
-\`\`\`bash
-curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-docker-node.sh | sudo bash -s -- \\
-  --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
-\`\`\`
+The installers by node type: **nginx** setup-node.sh, **docker** and **builder** setup-docker-node.sh, **storage** setup-storage-node.sh, legacy **databases** setup-database-node.sh, **monitoring** setup-monitoring-node.sh, **relay** setup-relay-node.sh (with \`--advertise-address\`).
 
 For **builder** nodes, use the same installer with \`--mode builder\`. The host must use systemd. The installer downloads pinned upstream releases of \`containerd\`, \`buildkitd\`, \`buildctl\`, \`runc\`, CNI plugins, \`syft\`, and \`grype\`, verifies their embedded SHA-256 checksums, and installs required system packages such as \`git\` and \`iptables\`. It fails closed when the runtime is incomplete; do not add a Docker socket or convert it to a generic Docker profile as a workaround.
 
 For **storage** nodes, run setup-storage-node.sh with the generated Gateway address, enrollment token, and certificate fingerprint. It uses the same fixed-size ext4 storage preflight as the database installer, but enrolls the unified Storage profile with managed-database and managed-storage capabilities. For legacy **database** nodes, run setup-database-node.sh; they remain database-only. In either case, the interactive installer selects an eligible local storage root before enrollment. For automation, pass --storage-root <path> and --yes; stateful nodes always run the restricted docker-daemon profile as root. Before enrollment, the installer verifies the local Docker Engine and the complete fixed-size ext4 image lifecycle, including loop attach, mount/write, growth, resize, unmount, and detach. An LXC host must receive loop-control, a loop-device pool, and mount permission from its outer host; there is no unbounded-volume fallback.
-
-For **monitoring** nodes:
-\`\`\`bash
-curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-monitoring-node.sh | sudo bash -s -- \\
-  --gateway <gateway-host>:9443 --token <enrollment-token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>
-\`\`\`
 
 The setup script:
 1. Downloads the daemon binary to \`/usr/local/bin/<type>-daemon\`

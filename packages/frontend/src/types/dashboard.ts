@@ -1,4 +1,4 @@
-import type { CA, Node, ProxyHost } from "@/types";
+import type { CA, Node, NodeInstallation, ProxyHost } from "@/types";
 import type { InferenceSelfUsage } from "@/types/inference";
 import type { UpdateStatus } from "@/types/system";
 
@@ -190,7 +190,7 @@ export interface RelayPolicyTrustStatus {
 }
 
 /** A single-use token that re-enrolls an enrolled remote relay through the relay installer. */
-export interface RelayReenrollment {
+export interface RelayReenrollment extends NodeInstallation {
   instanceId: string;
   nodeId: string;
   displayName: string;

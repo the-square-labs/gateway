@@ -1,4 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
+import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { container } from '@/container.js';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
@@ -46,6 +47,7 @@ import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
 import { createNodeForActor, regenerateNodeEnrollmentTokenForActor, updateNodeForActor } from './node-actions.js';
 import { NodeFolderService } from './node-folders.service.js';
+import { browserHostGateway, enrollmentInstallation } from './node-installer.js';
 import { DOCKER_LIST_FOLDER_BASES, NODE_LIST_FOLDER_BASES } from './node-list-access.js';
 import { daemonLogMatcher, nginxLogEntryKey, nginxLogMatcher, splitLogFilterList } from './node-log-filters.js';
 import { compactMonitoringHistorySnapshot, NodeMonitoringService } from './node-monitoring.service.js';
@@ -578,12 +580,18 @@ nodesRoutes.openapi(
   }
 );
 
+/** The command for a public target nobody configured yet uses the host the browser reached Gateway on. */
+function requestFallbackGateway(c: Context<AppEnv>): string | null {
+  return browserHostGateway(c.req.header('x-forwarded-host') ?? c.req.header('host'));
+}
+
 nodesRoutes.openapi(createNodeRoute, async (c) => {
   // The response carries an enrollment token that outlives the impersonation session.
   assertNotImpersonating(c, 'Nodes cannot be created while impersonating');
   const input = CreateNodeSchema.parse(await c.req.json());
   const result = await createNodeForActor({ id: c.get('user')!.id, scopes: c.get('effectiveScopes') ?? [] }, input);
-  return c.json({ data: result }, 201);
+  const installation = await enrollmentInstallation(result, requestFallbackGateway(c));
+  return c.json({ data: { ...result, ...installation } }, 201);
 });
 
 nodesRoutes.openapi(regenerateNodeEnrollmentTokenRoute, async (c) => {
@@ -592,7 +600,8 @@ nodesRoutes.openapi(regenerateNodeEnrollmentTokenRoute, async (c) => {
     { id: c.get('user')!.id, scopes: c.get('effectiveScopes') ?? [] },
     c.req.param('id')!
   );
-  return c.json({ data: result }, 200);
+  const installation = await enrollmentInstallation(result, requestFallbackGateway(c));
+  return c.json({ data: { ...result, ...installation } }, 200);
 });
 
 nodesRoutes.openapi(updateNodeRoute, async (c) => {

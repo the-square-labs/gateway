@@ -23,6 +23,7 @@ import {
   regenerateNodeEnrollmentTokenForActor,
   updateNodeForActor,
 } from '@/modules/nodes/node-actions.js';
+import { enrollmentInstallation, publicUrlFallbackGateway } from '@/modules/nodes/node-installer.js';
 import {
   daemonLogMatcher,
   NODE_LOG_HISTORY_LIMIT,
@@ -180,7 +181,8 @@ export async function executeNodeTool(
           servicePort: a.servicePort,
         })
       );
-      return createNodeForActor({ id: user.id, scopes: user.scopes }, input, context.nodesService);
+      const created = await createNodeForActor({ id: user.id, scopes: user.scopes }, input, context.nodesService);
+      return { ...created, ...(await enrollmentInstallation(created, await publicUrlFallbackGateway())) };
     }
     case 'rename_node':
       return context.nodesService.update(a.nodeId, { displayName: a.displayName }, user.id);
@@ -311,9 +313,15 @@ async function executeManageNodeTool(context: NodeToolContext, user: User, args:
       );
       return updateNodeForActor({ id: user.id, scopes: user.scopes }, nodeId, input, context.nodesService);
     }
-    case 'regenerate_enrollment_token':
+    case 'regenerate_enrollment_token': {
       // Same check as POST /nodes/:id/enrollment-token: nodes:create where the node sits (folder grants included).
-      return regenerateNodeEnrollmentTokenForActor({ id: user.id, scopes: user.scopes }, nodeId, context.nodesService);
+      const issued = await regenerateNodeEnrollmentTokenForActor(
+        { id: user.id, scopes: user.scopes },
+        nodeId,
+        context.nodesService
+      );
+      return { ...issued, ...(await enrollmentInstallation(issued, await publicUrlFallbackGateway())) };
+    }
     case 'health_history':
       assertNodeScope(user, 'nodes:details', nodeId);
       return { nodeId, healthHistory: await context.nodesService.getHealthHistory(nodeId) };

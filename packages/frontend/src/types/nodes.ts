@@ -184,7 +184,22 @@ export interface NodeDetail extends Node {
   monitoringHistory?: NodeMonitoringSnapshot[];
 }
 
-export interface CreateNodeResponse {
+/** A node setup command for one enrollment target, built by Gateway for its own release. */
+export interface NodeInstallCommand {
+  target: "public" | "local";
+  label: string;
+  gateway: string;
+  curl: string;
+  wget: string;
+}
+
+export interface NodeInstallation {
+  /** Gateway release the installers come from; null for an unreleased build, which uses main. */
+  installerRelease: string | null;
+  installCommands: NodeInstallCommand[];
+}
+
+export interface CreateNodeResponse extends NodeInstallation {
   node: Node;
   enrollmentToken: string;
   /** ISO timestamp after which an unused enrollment token is rejected. */

@@ -8,6 +8,7 @@ import { RELEASE_VERSION_PATTERN } from '@/lib/semver.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { assertNotImpersonating, authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
 import { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
+import { browserHostGateway, relayReenrollmentInstallation } from '@/modules/nodes/node-installer.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { dispatchNodeDaemonUpdate } from '@/services/daemon-node-update.js';
@@ -130,11 +131,19 @@ systemRoutes.post('/relay/instances/:instanceId/reenroll', requireScope('admin:s
   z.object({ confirm: z.literal(true) }).parse(await c.req.json());
   const issued = await container.resolve(RelayPoolService).issueRelayReenrollment(instanceId, user.id);
   const nodesService = container.resolve(NodesService);
+  const gatewayCertSha256 = await nodesService.getGatewayEnrollmentCertificateFingerprint();
+  const gatewayEnrollmentTargets = await nodesService.getGatewayEnrollmentTargets();
   return c.json({
     data: {
       ...issued,
-      gatewayCertSha256: await nodesService.getGatewayEnrollmentCertificateFingerprint(),
-      gatewayEnrollmentTargets: await nodesService.getGatewayEnrollmentTargets(),
+      gatewayCertSha256,
+      gatewayEnrollmentTargets,
+      ...(await relayReenrollmentInstallation(
+        issued,
+        gatewayCertSha256,
+        gatewayEnrollmentTargets,
+        browserHostGateway(c.req.header('x-forwarded-host') ?? c.req.header('host'))
+      )),
     },
   });
 });

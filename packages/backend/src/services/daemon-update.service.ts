@@ -12,7 +12,13 @@ import {
   releaseArtifactSource,
   releaseNotes,
 } from '@/lib/release-artifacts.js';
-import { compareSemver, isNewerVersion, isReleaseCandidateVersion, parseSemver } from '@/lib/semver.js';
+import {
+  compareSemver,
+  isNewerVersion,
+  isReleaseCandidateVersion,
+  parseSemver,
+  RELEASE_VERSION_PATTERN,
+} from '@/lib/semver.js';
 import { type TrustedDaemonUpdateArtifact, verifyDaemonUpdateManifest } from '@/lib/update-artifact-trust.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { GeneralSettingsService, UpdateChannel } from '@/modules/settings/general-settings.service.js';
@@ -24,6 +30,9 @@ const NODE_UPDATE_RECONNECT_TIMEOUT_MS = 2 * 60 * 1000;
 const NODE_UPDATE_EXECUTION_TIMEOUT_MS = 6 * 60 * 1000;
 /** A queued update of a lease member waits at most this long for its lease peers (rollout timeout + margin). */
 const NODE_UPDATE_QUEUE_TIMEOUT_MS = 31 * 60 * 1000;
+/** Node creation waits this long at most for the daemon release a new node installs. */
+const INSTALL_VERSION_TIMEOUT_MS = 5_000;
+const INSTALL_VERSION_TTL_MS = 10 * 60 * 1000;
 /** Update phase of a lease member whose update waits for other members of its availability policies. */
 export const NODE_UPDATE_WAITING_PHASE = 'waiting_for_lease_peers';
 const NODE_UPDATE_METADATA_KEYS = [
@@ -108,6 +117,7 @@ export interface DaemonUpdateStatus {
 
 export class DaemonUpdateService {
   private readonly releasesUrl: string;
+  private readonly installVersions = new Map<string, { version: string | null; expiresAt: number }>();
   private eventBus?: EventBusService;
   private nodeRegistry?: NodeRegistryService;
 
@@ -122,7 +132,8 @@ export class DaemonUpdateService {
   private async fetchNextRelease(
     packageName: string,
     currentVersion: string,
-    channel: UpdateChannel
+    channel: UpdateChannel,
+    timeoutMs = 15_000
   ): Promise<ReleaseRecord | null> {
     const url = new URL(this.releasesUrl);
     url.searchParams.set('component', packageName);
@@ -130,7 +141,7 @@ export class DaemonUpdateService {
     url.searchParams.set('channel', channel);
     const response = await fetch(url, {
       headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (response.status === 204) return null;
     if (!response.ok) throw new Error(`Release resolver returned ${response.status}`);
@@ -248,6 +259,40 @@ export class DaemonUpdateService {
       releaseNotes: notes || null,
       releaseUrl: null,
     };
+  }
+
+  /**
+   * The daemon release a new node of this type installs: the newest one on the Gateway's own minor line and update
+   * channel, so a node set up from an older Gateway never gets a later line's daemon. Daemons are released only when
+   * they change, so the Gateway's own version usually has no daemon release of that name. Null for an unreleased
+   * Gateway, a line without a daemon release yet, or an unreachable release resolver: the installer then picks the
+   * latest stable daemon itself.
+   */
+  async installVersion(daemonType: DaemonType): Promise<string | null> {
+    const gateway = RELEASE_VERSION_PATTERN.test(this.env.APP_VERSION) ? parseSemver(this.env.APP_VERSION) : null;
+    if (!gateway) return null;
+    const channel = (await this.generalSettings?.getConfig())?.updateChannel ?? 'stable';
+    const key = `${daemonType}:${channel}:${gateway.major}.${gateway.minor}`;
+    const cached = this.installVersions.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.version;
+    let version: string | null = null;
+    try {
+      // rc.0 orders before every release of the line, so the resolver answers with the line's newest release.
+      const release = await this.fetchNextRelease(
+        DAEMON_PACKAGE_MAP[daemonType],
+        `v${gateway.major}.${gateway.minor}.0-rc.0`,
+        channel,
+        INSTALL_VERSION_TIMEOUT_MS
+      );
+      const candidate = release?.tag_name.replace(TAG_SUFFIX_MAP[daemonType], '') ?? '';
+      const parsed = RELEASE_VERSION_PATTERN.test(candidate) ? parseSemver(candidate) : null;
+      if (parsed?.major === gateway.major && parsed.minor === gateway.minor) version = candidate;
+    } catch (error) {
+      logger.warn('Could not resolve the daemon release for new nodes', { daemonType, error });
+      return null;
+    }
+    this.installVersions.set(key, { version, expiresAt: Date.now() + INSTALL_VERSION_TTL_MS });
+    return version;
   }
 
   async isNodeUpdateInProgress(nodeId: string): Promise<boolean> {

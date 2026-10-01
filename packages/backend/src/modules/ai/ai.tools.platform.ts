@@ -65,7 +65,7 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_node',
     description:
-      'Create (enroll) a new daemon node, including Relay Pool relays, and generate an enrollment token. Relay nodes require serviceAddresses (addresses daemons use to reach the relay) and optionally servicePort; other types reject them. IMPORTANT: The response contains enrollmentToken and gatewayCertSha256 — you MUST display both to the user and include --gateway-cert-sha256 in setup commands (curl/wget). The token is one-time-use and cannot be retrieved again; use manage_node regenerate_enrollment_token for a node that has not enrolled yet.',
+      'Create (enroll) a new daemon node, including Relay Pool relays, and generate an enrollment token. Relay nodes require serviceAddresses (addresses daemons use to reach the relay) and optionally servicePort; other types reject them. IMPORTANT: The response contains enrollmentToken, gatewayCertSha256 and installCommands — display the token and fingerprint, and give the user the installCommands entry (curl or wget) for the target the host can reach, unchanged: it downloads the installer of this Gateway release, checks its checksum and pins the matching daemon release. The token is one-time-use and cannot be retrieved again; use manage_node regenerate_enrollment_token for a node that has not enrolled yet.',
     parameters: {
       type: 'object',
       properties: {

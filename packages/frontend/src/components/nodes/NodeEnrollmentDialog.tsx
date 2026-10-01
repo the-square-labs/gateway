@@ -6,6 +6,7 @@ import { ContentLoading } from "@/components/common/ContentLoading";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { HostingNodeWizard } from "@/components/nodes/HostingNodeWizard";
+import { UnreleasedInstallerNote } from "@/components/nodes/UnreleasedInstallerNote";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -35,13 +36,8 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import { useResourceFolderStore } from "@/stores/resource-folders";
-import type { Node, NodeType, ResourceFolderTreeNode } from "@/types";
+import type { Node, NodeInstallation, NodeType, ResourceFolderTreeNode } from "@/types";
 import type { HostingOperation, HostingResource } from "@/types/hosting";
-
-type EnrollmentTargets = {
-  public?: { label: string; gateway: string | null };
-  local?: { label: string; gateway: string };
-};
 
 export const NODE_ENROLLMENT_TYPES: Array<{
   value: NodeType;
@@ -80,29 +76,15 @@ export const NODE_ENROLLMENT_TYPES: Array<{
   },
 ];
 
-const INSTALLER_BASE = "https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts";
-const INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
-  nginx: "setup-node.sh",
-  docker: "setup-docker-node.sh",
-  builder: "setup-docker-node.sh",
-  databases: "setup-database-node.sh",
-  storage: "setup-storage-node.sh",
-  monitoring: "setup-monitoring-node.sh",
-  relay: "setup-relay-node.sh",
-};
-
 function canonicalEnrollmentType(type: NodeType): NodeType {
   return type === "databases" ? "storage" : type;
 }
 
-type EnrollmentResult = {
+type EnrollmentResult = NodeInstallation & {
   nodeId: string;
   displayName: string;
   type: NodeType;
   token: string;
-  gatewayCertSha256: string;
-  targets?: EnrollmentTargets;
-  relayAddress?: string;
   reissued?: boolean;
 };
 
@@ -261,9 +243,8 @@ export function NodeEnrollmentDialog({
         displayName: displayName.trim(),
         type,
         token: response.enrollmentToken,
-        gatewayCertSha256: response.gatewayCertSha256,
-        targets: response.gatewayEnrollmentTargets,
-        relayAddress: type === "relay" ? normalizedRelayAddress : undefined,
+        installerRelease: response.installerRelease,
+        installCommands: response.installCommands,
       });
       completedNodeRef.current = null;
       setTargetId("public");
@@ -293,10 +274,8 @@ export function NodeEnrollmentDialog({
           displayName: reissueNode.displayName || reissueNode.hostname,
           type: reissueNode.type,
           token: response.enrollmentToken,
-          gatewayCertSha256: response.gatewayCertSha256,
-          targets: response.gatewayEnrollmentTargets,
-          relayAddress:
-            reissueNode.type === "relay" ? reissueNode.serviceAddresses?.[0] : undefined,
+          installerRelease: response.installerRelease,
+          installCommands: response.installCommands,
           reissued: true,
         });
         completedNodeRef.current = null;
@@ -315,49 +294,9 @@ export function NodeEnrollmentDialog({
     };
   }, [reissueNode, setResult]);
 
-  const fallbackGateway = `${window.location.hostname}:9443`;
-  const targets = useMemo(
-    () =>
-      result
-        ? [
-            {
-              id: "public",
-              label: result.targets?.public?.label ?? "Public node",
-              gateway: result.targets?.public?.gateway ?? fallbackGateway,
-            },
-            ...(result.targets?.local
-              ? [
-                  {
-                    id: "local",
-                    label: result.targets.local.label,
-                    gateway: result.targets.local.gateway,
-                  },
-                ]
-              : []),
-          ]
-        : [],
-    [fallbackGateway, result]
-  );
-  const selectedTarget = targets.find((target) => target.id === targetId) ?? targets[0];
-
-  const commandForTarget = (gateway: string) => {
-    if (!result) return "";
-    const installer = INSTALLER_BY_TYPE[result.type];
-    if (!installer) return "";
-    const fetcher =
-      transport === "curl"
-        ? `curl -sSL ${INSTALLER_BASE}/${installer}`
-        : `wget -qO- ${INSTALLER_BASE}/${installer}`;
-    const profileArgument = result.type === "builder" ? " \\\n  --mode builder" : "";
-    const relayArgument =
-      result.type === "relay" && result.relayAddress
-        ? ` \\\n  --advertise-address ${result.relayAddress}`
-        : "";
-    return `${fetcher} | sudo bash -s -- \\
-  --gateway ${gateway} \\
-  --token ${result.token} \\
-  --gateway-cert-sha256 ${result.gatewayCertSha256}${profileArgument}${relayArgument}`;
-  };
+  const targets = result?.installCommands ?? [];
+  const selectedTarget = targets.find((target) => target.target === targetId) ?? targets[0];
+  const command = selectedTarget?.[transport] ?? "";
 
   const setupDescription =
     result?.type === "relay"
@@ -556,6 +495,7 @@ export function NodeEnrollmentDialog({
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Setup Command</label>
             <p className="text-xs text-muted-foreground">{setupDescription}</p>
+            <UnreleasedInstallerNote installerRelease={result.installerRelease} />
             {targets.length > 1 && (
               <p className="text-xs text-muted-foreground">
                 Use the public command for remote hosts and the local command for nodes on the
@@ -564,10 +504,10 @@ export function NodeEnrollmentDialog({
             )}
             <div className="flex flex-wrap items-center gap-2">
               {targets.length > 1 && (
-                <Tabs value={selectedTarget?.id ?? "public"} onValueChange={setTargetId}>
+                <Tabs value={selectedTarget?.target ?? "public"} onValueChange={setTargetId}>
                   <TabsList>
                     {targets.map((target) => (
-                      <TabsTrigger key={target.id} value={target.id}>
+                      <TabsTrigger key={target.target} value={target.target}>
                         {target.label}
                       </TabsTrigger>
                     ))}
@@ -587,8 +527,8 @@ export function NodeEnrollmentDialog({
             {selectedTarget && (
               <CopyCodeBlock
                 label={`${transport} command`}
-                value={commandForTarget(selectedTarget.gateway)}
-                copyValue={commandForTarget(selectedTarget.gateway).replace(/\s*\\\n\s*/g, " ")}
+                value={command}
+                copyValue={command.replace(/\s*\\\n\s*/g, " ")}
                 className="[&>p]:hidden"
               />
             )}

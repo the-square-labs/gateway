@@ -1,10 +1,11 @@
 import { Check, Loader2, Server } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { UnreleasedInstallerNote } from "@/components/nodes/UnreleasedInstallerNote";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -44,22 +45,7 @@ const NODE_TYPES: Array<{ value: NodeType; label: string; description: string }>
     description: "Collect infrastructure health and metrics.",
   },
 ];
-const DAEMON_INSTALLER_URL =
-  "https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts";
-const DAEMON_INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
-  nginx: "setup-node.sh",
-  docker: "setup-docker-node.sh",
-  builder: "setup-docker-node.sh",
-  databases: "setup-database-node.sh",
-  storage: "setup-storage-node.sh",
-  monitoring: "setup-monitoring-node.sh",
-  relay: "setup-relay-node.sh",
-};
-
-type Enrollment = Pick<
-  CreateNodeResponse,
-  "node" | "enrollmentToken" | "gatewayCertSha256" | "gatewayEnrollmentTargets"
->;
+type Enrollment = Pick<CreateNodeResponse, "node" | "installerRelease" | "installCommands">;
 
 export function NodeSetupWizard({
   open,
@@ -122,26 +108,7 @@ export function NodeSetupWizard({
   }, [enrollment, online, open]);
 
   const selected = NODE_TYPES.find((item) => item.value === type)!;
-  const targets = useMemo(() => {
-    if (!enrollment) return [];
-    const fallback = `${window.location.hostname}:9443`;
-    return [
-      {
-        id: "public",
-        label: enrollment.gatewayEnrollmentTargets?.public?.label ?? "Public node",
-        gateway: enrollment.gatewayEnrollmentTargets?.public?.gateway ?? fallback,
-      },
-      ...(enrollment.gatewayEnrollmentTargets?.local
-        ? [
-            {
-              id: "local",
-              label: enrollment.gatewayEnrollmentTargets.local.label,
-              gateway: enrollment.gatewayEnrollmentTargets.local.gateway,
-            },
-          ]
-        : []),
-    ];
-  }, [enrollment]);
+  const targets = enrollment?.installCommands ?? [];
 
   const create = async () => {
     if (!name.trim()) return;
@@ -173,21 +140,8 @@ export function NodeSetupWizard({
     await onSkipped();
   };
 
-  const command = (gateway: string, transport: "curl" | "wget") => {
-    if (!enrollment) return "";
-    const scriptName = DAEMON_INSTALLER_BY_TYPE[enrollment.node.type];
-    if (!scriptName) return "";
-    const scriptUrl = `${DAEMON_INSTALLER_URL}/${scriptName}`;
-    const fetcher = transport === "curl" ? `curl -sSL ${scriptUrl}` : `wget -qO- ${scriptUrl}`;
-    const mode = enrollment.node.type === "builder" ? " \\\n  --mode builder" : "";
-    return `${fetcher} | sudo bash -s -- \\
-  --gateway ${gateway} \\
-  --token ${enrollment.enrollmentToken} \\
-  --gateway-cert-sha256 ${enrollment.gatewayCertSha256}${mode}`;
-  };
-
-  const copyCommand = (value: string) => value.replace(/\s*\\\n\s*/g, " ");
-  const selectedTarget = targets.find((target) => target.id === targetId) ?? targets[0];
+  const selectedTarget = targets.find((target) => target.target === targetId) ?? targets[0];
+  const command = selectedTarget?.[transport] ?? "";
 
   const stepKey = online ? "complete" : enrollment ? "enrollment" : "details";
   return (
@@ -254,12 +208,13 @@ export function NodeSetupWizard({
               Keep this wizard open. Gateway checks the node automatically every few seconds.
             </p>
           </div>
+          <UnreleasedInstallerNote installerRelease={enrollment.installerRelease} />
           <div className="flex flex-wrap items-center gap-2">
             {targets.length > 1 && (
-              <Tabs value={selectedTarget?.id ?? "public"} onValueChange={setTargetId}>
+              <Tabs value={selectedTarget?.target ?? "public"} onValueChange={setTargetId}>
                 <TabsList>
                   {targets.map((target) => (
-                    <TabsTrigger key={target.id} value={target.id}>
+                    <TabsTrigger key={target.target} value={target.target}>
                       {target.label}
                     </TabsTrigger>
                   ))}
@@ -279,8 +234,8 @@ export function NodeSetupWizard({
           {selectedTarget && (
             <CopyCodeBlock
               label={`${transport} command`}
-              value={command(selectedTarget.gateway, transport)}
-              copyValue={copyCommand(command(selectedTarget.gateway, transport))}
+              value={command}
+              copyValue={command.replace(/\s*\\\n\s*/g, " ")}
               className="[&>p]:hidden"
               codeClassName="min-h-0"
             />

@@ -80,7 +80,26 @@ const CreateNodeResponseSchema = dataResponseSchema(
       })
       .openapi({
         description:
-          'Backend-derived gRPC enrollment targets. Null public gateway means the UI should use the existing browser-host fallback.',
+          'Backend-derived gRPC enrollment targets. A null public gateway is not configured yet; installCommands then use the host of this request.',
+      }),
+    installerRelease: z.string().nullable().openapi({
+      description:
+        'Gateway release whose installers the setup commands download and verify. Null for an unreleased build, whose commands run the installers from main.',
+      example: 'v2.11.0',
+    }),
+    installCommands: z
+      .array(
+        z.object({
+          target: z.enum(['public', 'local']),
+          label: z.string(),
+          gateway: z.string(),
+          curl: z.string(),
+          wget: z.string(),
+        })
+      )
+      .openapi({
+        description:
+          'Setup command for each enrollment target, using curl or wget. A release build downloads the installer of its own release, checks it against gateway-daemon-installers.sha256 and pins the daemon release that matches this Gateway.',
       }),
   })
 );

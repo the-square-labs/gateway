@@ -33,6 +33,8 @@ export type {
   NodeDetail,
   NodeGpuDevice,
   NodeHealthReport,
+  NodeInstallation,
+  NodeInstallCommand,
   NodeMonitoringSnapshot,
   NodeStatsReport,
   NodeStatus,

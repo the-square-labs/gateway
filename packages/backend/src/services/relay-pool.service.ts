@@ -732,6 +732,11 @@ export class RelayPoolService {
     };
   }
 
+  /** The relay release a new relay node installs, so it joins the pool on the release the pool runs. */
+  currentRelayVersion(): Promise<string | null> {
+    return this.poolRelayVersion('system');
+  }
+
   /**
    * The relay release the pool runs, read from its local relay, which every Relay Pool update
    * moves too. The re-enrollment installer pins it: left to resolve "latest", it may install a
