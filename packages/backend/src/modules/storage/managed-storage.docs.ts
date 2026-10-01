@@ -206,6 +206,17 @@ export const deleteManagedStorageBindingRoute = appRoute({
   responses: okJson(z.object({ success: z.boolean() })),
 });
 
+export const getManagedStorageBindingRuntimeRoute = appRoute({
+  method: 'get',
+  path: '/{id}/bindings/{bindingId}/runtime',
+  tags: [TAG],
+  summary: 'Get managed object storage link runtime',
+  description:
+    "The link's Relay counters and its connections as the node running the workload reports them: activeStreams are the link's open connections (it carries up to 64), throttledTotal counts the connections refused at that limit by the node or a relay. connections is null while that node's daemon does not report links. Needs storage:view and view access to the linked workload.",
+  request: { params: bindingParams },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const removeManagedStorageAccessKeyRoute = appRoute({
   method: 'delete',
   path: '/{id}/iam-keys/{accessKeyId}',

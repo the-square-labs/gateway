@@ -1,7 +1,10 @@
 import { container } from '@/container.js';
 import { hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { assertWorkloadBindingTargetAccess } from '@/modules/ai/ai.binding-target-access.js';
+import {
+  assertWorkloadBindingTargetAccess,
+  assertWorkloadBindingTargetViewAccess,
+} from '@/modules/ai/ai.binding-target-access.js';
 import { directResourceIdsForScopes } from '@/modules/ai/ai.service-helpers.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import { BucketQuerySchema } from '@/modules/object-storage/object-storage.docs.js';
@@ -70,6 +73,7 @@ export const storageToolRuntime = {
   ManagedStorageBindingsService,
   directResourceIdsForScopes,
   assertWorkloadBindingTargetAccess,
+  assertWorkloadBindingTargetViewAccess,
   MoveManagedStorageBindingSchema,
   ImportManagedStorageAccessKeysSchema,
   RehomeManagedStorageBackupHistorySchema,

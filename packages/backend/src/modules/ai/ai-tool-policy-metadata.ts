@@ -466,7 +466,16 @@ const COMPOSITE_OPERATION_POLICIES: Record<
   manage_managed_storage: {
     arguments: ['action'],
     operations: operationPolicies({
-      read: ['catalog', 'list', 'get', 'list_bindings', 'list_access_keys', 'ca_certificate', 'certificate_status'],
+      read: [
+        'catalog',
+        'list',
+        'get',
+        'list_bindings',
+        'get_binding_runtime',
+        'list_access_keys',
+        'ca_certificate',
+        'certificate_status',
+      ],
       create: ['create', 'create_binding', 'create_access_key', 'import_access_keys'],
       update: ['update', 'retry', 'move_binding', 'rehome_backup_history', 'renew_certificate'],
       // A write freeze and its reversal change what every client of the cluster can do.

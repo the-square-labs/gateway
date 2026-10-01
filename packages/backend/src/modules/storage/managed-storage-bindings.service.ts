@@ -9,7 +9,7 @@ import type { LicensePolicyService } from '@/modules/license/license-policy.serv
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
-import type { RelayPolicyService } from '@/services/relay-policy.service.js';
+import type { RelayPolicyService, RelayRouteRuntime } from '@/services/relay-policy.service.js';
 import type { CreateManagedStorageBindingInput } from './managed-storage.schemas.js';
 export class ManagedStorageBindingsService {
   // biome-ignore lint/complexity/noUselessConstructor: Stable commercial constructor contract.
@@ -23,7 +23,14 @@ export class ManagedStorageBindingsService {
     _dockerSecrets: DockerSecretService,
     _connectorImage: string,
     _relayPolicy?:
-      | Pick<RelayPolicyService, 'ensureStorageBindingRoute' | 'getNodeGrantBundle' | 'revokeOwner' | 'syncNodeGrants'>
+      | Pick<
+          RelayPolicyService,
+          | 'ensureStorageBindingRoute'
+          | 'getManagedStorageBindingRouteRuntime'
+          | 'getNodeGrantBundle'
+          | 'revokeOwner'
+          | 'syncNodeGrants'
+        >
       | undefined,
     _storageCA?: import('@/services/storage-ca.service.js').StorageCAService | undefined,
     _objectStorage?: Pick<
@@ -82,6 +89,30 @@ export class ManagedStorageBindingsService {
     targetNodeId: string;
     targetType: 'container' | 'deployment';
     targetResourceId: string;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async getRuntime(
+    _clusterId: string,
+    _bindingId: string
+  ): Promise<{
+    binding: {
+      id: string;
+      clusterId: string;
+      targetNodeId: string;
+      targetType: 'container' | 'deployment';
+      targetResourceId: string;
+      connectorAlias: string;
+      environment: StorageBindingEnvironment;
+      buckets: string[];
+      accessKeyId: string | null;
+      status: 'error' | 'ready' | 'creating' | 'deleting';
+      observedState: 'target_applied' | 'active';
+      lastError: string | null;
+      createdAt: string;
+      updatedAt: string;
+    };
+    runtime: RelayRouteRuntime | null;
   }> {
     return commercialModuleUnavailable();
   }
