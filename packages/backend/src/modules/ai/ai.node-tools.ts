@@ -434,7 +434,7 @@ async function executeNodeFileTool(nodesService: NodesService, user: User, args:
     case 'list': {
       assertNodeFileScope(user, 'nodes:files:read', nodeId);
       const { path } = FileBrowseSchema.parse({ path: args.path });
-      const data = await nodesService.listFiles(nodeId, path);
+      const data = await nodesService.listFiles(nodeId, path, user.id);
       const files = Array.isArray(data) ? data : [];
       const truncated = files.length > NODE_FILE_LIST_MAX;
       return {
@@ -447,7 +447,7 @@ async function executeNodeFileTool(nodesService: NodesService, user: User, args:
     case 'read': {
       assertNodeFileScope(user, 'nodes:files:read', nodeId);
       const { path } = FileBrowseSchema.parse({ path: args.path });
-      const data = await nodesService.readFile(nodeId, path);
+      const data = await nodesService.readFile(nodeId, path, user.id);
       return compactNodeFileRead(data, args.encoding, args.limitBytes);
     }
     case 'write': {

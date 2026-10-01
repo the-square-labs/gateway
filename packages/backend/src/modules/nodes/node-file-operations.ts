@@ -89,12 +89,26 @@ function publishNodeFileChanged(
   });
 }
 
-export async function listNodeFiles(context: NodeFileOperationContext, nodeId: string, path: string) {
+/**
+ * `userId`: the user browsing through the API or an agent, recorded in the audit log like writes are (a node file can
+ * be any host file, keys included). Gateway's own reads (host inventory) pass none.
+ */
+export async function listNodeFiles(context: NodeFileOperationContext, nodeId: string, path: string, userId?: string) {
   const result = await context.nodeDispatch.sendNodeFileCommand(nodeId, 'list', { path });
-  return context.parseResult(result);
+  const data = context.parseResult(result);
+  if (userId) {
+    await context.auditService.log({
+      action: 'node.file.list',
+      userId,
+      resourceType: 'node',
+      resourceId: nodeId,
+      details: { path },
+    });
+  }
+  return data;
 }
 
-export async function readNodeFile(context: NodeFileOperationContext, nodeId: string, path: string) {
+export async function readNodeFile(context: NodeFileOperationContext, nodeId: string, path: string, userId?: string) {
   // One byte over the limit tells an oversized file apart from one exactly at it (any daemon version).
   const result = await context.nodeDispatch.sendNodeFileCommand(
     nodeId,
@@ -107,6 +121,15 @@ export async function readNodeFile(context: NodeFileOperationContext, nodeId: st
   }
   const data = commandResultDataToBuffer(result.data);
   assertDockerFileReadWithinLimit(data);
+  if (userId) {
+    await context.auditService.log({
+      action: 'node.file.read',
+      userId,
+      resourceType: 'node',
+      resourceId: nodeId,
+      details: { path, bytes: data.byteLength },
+    });
+  }
   return data;
 }
 

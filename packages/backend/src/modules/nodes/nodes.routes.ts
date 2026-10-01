@@ -442,7 +442,7 @@ nodesRoutes.openapi(
     const service = container.resolve(NodesService);
     const id = c.req.param('id')!;
     const { path } = FileBrowseSchema.parse(c.req.query());
-    const data = await service.listFiles(id, path);
+    const data = await service.listFiles(id, path, c.get('user')!.id);
     const truncated = Array.isArray(data) && data.length > NODE_FILE_LIST_MAX;
     return c.json({
       data: truncated ? data.slice(0, NODE_FILE_LIST_MAX) : data,
@@ -459,7 +459,7 @@ nodesRoutes.openapi(
     const service = container.resolve(NodesService);
     const id = c.req.param('id')!;
     const { path } = FileBrowseSchema.parse(c.req.query());
-    const data = await service.readFile(id, path);
+    const data = await service.readFile(id, path, c.get('user')!.id);
     return new Response(new Uint8Array(data), {
       status: 200,
       headers: {

@@ -5,7 +5,16 @@ import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { compareSemver, parseSemver } from '@/lib/semver.js';
-import { resolveWebSocketCredentialForScopeBase, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
+import {
+  auditWebSocketSession,
+  captureWebSocketAuditOrigin,
+  type WebSocketAuditOrigin,
+} from '@/modules/audit/websocket-session-audit.js';
+import {
+  resolveWebSocketCredentialForScopeBase,
+  type WebSocketAuthResult,
+  type WebSocketCredential,
+} from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
@@ -125,6 +134,9 @@ interface ExecWSState {
   credential: WebSocketCredential | null;
   scopeResourceId: string | null;
   scopeNodeId: string | null;
+  auditOrigin: WebSocketAuditOrigin;
+  /** The open exec session, audited when it opened and audited again when it closes. */
+  session: { nodeId: string; containerId: string; execId: string; auth: WebSocketAuthResult; openedAt: number } | null;
 }
 
 export interface DockerExecTerminalSize {
@@ -165,6 +177,16 @@ function cleanupExec(ws: WSContext, state: ExecWSState): void {
   if (wsStates.get(ws) !== state) return;
   wsStates.delete(ws);
   state.authenticated = false;
+  if (state.session) {
+    const { nodeId, containerId, execId, auth, openedAt } = state.session;
+    state.session = null;
+    auditWebSocketSession(state.auditOrigin, auth, state.credential, {
+      action: 'docker.exec.close',
+      resourceType: 'docker-container',
+      resourceId: containerId,
+      details: { nodeId, execId, durationMs: Date.now() - openedAt },
+    });
+  }
   if (state.execId && state.outputHandler) {
     container.resolve(NodeRegistryService).removeExecHandler(state.execId, state.outputHandler);
   }
@@ -238,6 +260,7 @@ export function createDockerExecWSHandlers(
   const registry = container.resolve(NodeRegistryService);
   const docker = container.resolve(DockerManagementService);
   const availability = container.resolve(DockerAvailabilityService);
+  const auditOrigin = captureWebSocketAuditOrigin();
 
   return {
     onOpen(_event: Event, ws: WSContext) {
@@ -255,6 +278,8 @@ export function createDockerExecWSHandlers(
         credential,
         scopeResourceId: null,
         scopeNodeId: null,
+        auditOrigin,
+        session: null,
       };
       wsStates.set(ws, state);
 
@@ -594,6 +619,13 @@ async function authenticateAndCreateExec(
   registry.registerExecHandler(execId, outputHandler);
 
   send(ws, { type: 'connected', execId, shell: usedShell, isNew });
+  state.session = { nodeId, containerId, execId, auth: initialAuth, openedAt: Date.now() };
+  auditWebSocketSession(state.auditOrigin, initialAuth, credential, {
+    action: 'docker.exec.open',
+    resourceType: 'docker-container',
+    resourceId: containerId,
+    details: { nodeId, execId, shell: usedShell, isNew },
+  });
 
   // Replay output captured while the daemon was creating the exec session.
   if (buffer.length > 0) {

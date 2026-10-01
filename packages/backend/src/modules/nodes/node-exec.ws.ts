@@ -5,7 +5,16 @@ import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { compareSemver, parseSemver } from '@/lib/semver.js';
-import { resolveWebSocketCredential, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
+import {
+  auditWebSocketSession,
+  captureWebSocketAuditOrigin,
+  type WebSocketAuditOrigin,
+} from '@/modules/audit/websocket-session-audit.js';
+import {
+  resolveWebSocketCredential,
+  type WebSocketAuthResult,
+  type WebSocketCredential,
+} from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
@@ -74,6 +83,9 @@ interface ExecWSState {
   drainingOutput: boolean;
   keepalivePending: boolean;
   credential: WebSocketCredential | null;
+  auditOrigin: WebSocketAuditOrigin;
+  /** The open console, audited when it opened and audited again when it closes. */
+  session: { nodeId: string; execId: string; auth: WebSocketAuthResult; openedAt: number } | null;
 }
 
 const wsStates = new WeakMap<WSContext, ExecWSState>();
@@ -84,6 +96,16 @@ function cleanupExec(ws: WSContext, state: ExecWSState): void {
   if (wsStates.get(ws) !== state) return;
   wsStates.delete(ws);
   state.authenticated = false;
+  if (state.session) {
+    const { nodeId, execId, auth, openedAt } = state.session;
+    state.session = null;
+    auditWebSocketSession(state.auditOrigin, auth, state.credential, {
+      action: 'node.console.close',
+      resourceType: 'node',
+      resourceId: nodeId,
+      details: { execId, durationMs: Date.now() - openedAt },
+    });
+  }
   if (state.execId && state.outputHandler) {
     container.resolve(NodeRegistryService).removeExecHandler(state.execId, state.outputHandler);
   }
@@ -142,6 +164,7 @@ async function drainOutput(ws: WSContext, state: ExecWSState, nodeId: string): P
 export function createNodeExecWSHandlers(nodeId: string, shell: string, credential: WebSocketCredential | null) {
   const dispatch = container.resolve(NodeDispatchService);
   const registry = container.resolve(NodeRegistryService);
+  const auditOrigin = captureWebSocketAuditOrigin();
 
   return {
     onOpen(_event: Event, ws: WSContext) {
@@ -156,6 +179,8 @@ export function createNodeExecWSHandlers(nodeId: string, shell: string, credenti
         drainingOutput: false,
         keepalivePending: false,
         credential,
+        auditOrigin,
+        session: null,
       };
       wsStates.set(ws, state);
 
@@ -368,6 +393,14 @@ async function authenticateAndCreateExec(
   }
 
   send(ws, { type: 'connected', execId, shell: usedShell, isNew });
+  // A root shell on the host: who opened it, as whom, and for how long belongs in the audit log.
+  state.session = { nodeId, execId, auth: authResult, openedAt: Date.now() };
+  auditWebSocketSession(state.auditOrigin, authResult, credential, {
+    action: 'node.console.open',
+    resourceType: 'node',
+    resourceId: nodeId,
+    details: { execId, shell: usedShell, isNew },
+  });
 }
 
 async function revalidateNodeExecAccess(

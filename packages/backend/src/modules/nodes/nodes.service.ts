@@ -989,14 +989,16 @@ export class NodesService {
     }
   }
 
-  async listFiles(nodeId: string, path: string) {
+  /** `userId`: the reading user, audited; Gateway's own reads pass none. */
+  async listFiles(nodeId: string, path: string, userId?: string) {
     await this.validateConnectedNode(nodeId);
-    return listNodeFiles(this.nodeFileOperationContext(), nodeId, path);
+    return listNodeFiles(this.nodeFileOperationContext(), nodeId, path, userId);
   }
 
-  async readFile(nodeId: string, path: string) {
+  /** `userId`: the reading user, audited; Gateway's own reads pass none. */
+  async readFile(nodeId: string, path: string, userId?: string) {
     await this.validateConnectedNode(nodeId);
-    return readNodeFile(this.nodeFileOperationContext(), nodeId, path);
+    return readNodeFile(this.nodeFileOperationContext(), nodeId, path, userId);
   }
 
   async writeFile(nodeId: string, path: string, content: string | Buffer, userId: string) {
