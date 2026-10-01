@@ -21,6 +21,9 @@ const (
 	availabilitySpecFingerprintLabel = "wiolett.gateway.availability.spec-fingerprint"
 )
 
+// deploymentCandidateStopTimeoutSeconds is the grace a failed rollout candidate gets to stop, as for a drained slot.
+const deploymentCandidateStopTimeoutSeconds = 10
+
 type deploymentRouteConfig struct {
 	HostPort      uint16 `json:"hostPort"`
 	HostIP        string `json:"hostIp"`
@@ -447,7 +450,7 @@ func (c *Client) DeployDeploymentSlot(ctx context.Context, payload deploymentCom
 		return nil, err
 	}
 	if err := c.waitDeploymentReady(ctx, dep.NetworkName, slotName, dep.Routes, dep.HealthConfig); err != nil {
-		return nil, err
+		return nil, c.stopFailedDeploymentCandidate(ctx, dep, payload.ToSlot, slotName, err)
 	}
 	return map[string]string{"containerId": id}, nil
 }
@@ -489,7 +492,7 @@ func (c *Client) SwitchDeployment(ctx context.Context, payload deploymentCommand
 	}
 	if !payload.Force {
 		if err := c.waitDeploymentReady(ctx, dep.NetworkName, slotName, dep.Routes, dep.HealthConfig); err != nil {
-			return nil, err
+			return nil, c.stopFailedDeploymentCandidate(ctx, dep, activeSlot, slotName, err)
 		}
 	}
 	// A deployment that was stopped or killed has a stopped router; switching
@@ -502,6 +505,21 @@ func (c *Client) SwitchDeployment(ctx context.Context, payload deploymentCommand
 		return nil, err
 	}
 	return map[string]string{"containerId": containerID}, nil
+}
+
+// stopFailedDeploymentCandidate stops a rollout candidate that failed readiness and returns the readiness error.
+// Left running, a crash-looping candidate keeps taking its links' sessions (database bindings, storage links share
+// one limit across both slots) from the slot that serves. The container stays for its logs. The slot the router
+// serves (the snapshot's active slot) is never stopped here, and neither is a candidate of a cancelled operation:
+// the emergency kill that cancelled it stops everything itself.
+func (c *Client) stopFailedDeploymentCandidate(ctx context.Context, dep deploymentSnapshot, slot, slotName string, readinessErr error) error {
+	if dep.ActiveSlot == "" || slot == dep.ActiveSlot || ctx.Err() != nil {
+		return readinessErr
+	}
+	if err := c.StopContainer(ctx, slotName, deploymentCandidateStopTimeoutSeconds); err != nil && !isNotFoundErr(err) {
+		return fmt.Errorf("%w; stopping the failed %s slot failed: %v", readinessErr, slot, err)
+	}
+	return fmt.Errorf("%w; the %s slot was stopped and kept for its logs", readinessErr, slot)
 }
 
 func (c *Client) UpdateDeploymentRouter(ctx context.Context, payload deploymentCommandPayload) (map[string]string, error) {
