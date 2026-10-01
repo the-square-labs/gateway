@@ -169,9 +169,12 @@ UPDATE "oauth_access_tokens"
 SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes", true)
 WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes", true);--> statement-breakpoint
 
+-- Only calls that can still run are checked against their required scopes; finished history keeps the
+-- names it ran with (rewriting it all, row trigger included, took minutes on large installs).
 UPDATE "ai_run_tool_calls"
 SET "required_scopes" = gateway_scope_catalog_cleanup_0200("required_scopes", false)
-WHERE "required_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("required_scopes", false);--> statement-breakpoint
+WHERE "status" IN ('created', 'pending_approval', 'approved', 'running')
+  AND "required_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("required_scopes", false);--> statement-breakpoint
 
 UPDATE "sandbox_jobs"
 SET "required_scopes" = gateway_scope_catalog_cleanup_0200("required_scopes", false)

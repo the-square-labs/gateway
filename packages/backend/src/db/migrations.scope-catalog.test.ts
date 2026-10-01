@@ -94,6 +94,8 @@ describe('0200 scope catalog cleanup migration', () => {
       );
     }
     expect(migration).toContain('WHERE matched.old_scope IS NULL OR keep_retired');
+    // Finished tool calls are history: only calls that can still run are rewritten.
+    expect(migration).toContain(`WHERE "status" IN ('created', 'pending_approval', 'approved', 'running')`);
     expect(migration).toContain('DROP FUNCTION gateway_scope_catalog_cleanup_0200(jsonb, boolean);');
     expect(migration).not.toMatch(/DELETE FROM|DROP TABLE|ALTER TABLE/i);
   });
