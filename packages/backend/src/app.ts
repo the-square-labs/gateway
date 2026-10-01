@@ -44,6 +44,8 @@ import { adminRoutes } from '@/modules/admin/admin.routes.js';
 import { DOCKER_ARCHIVE_LINK_PATH } from '@/modules/ai/ai.docker-archive-link.js';
 import { dockerArchiveLinkRoutes } from '@/modules/ai/ai.docker-archive-link.routes.js';
 import { aiRoutes } from '@/modules/ai/ai.routes.js';
+import { STORAGE_OBJECT_LINK_PATH } from '@/modules/ai/ai.storage-object-link.js';
+import { storageObjectLinkRoutes } from '@/modules/ai/ai.storage-object-link.routes.js';
 import { authenticateWSConnection, createWSHandlers } from '@/modules/ai/ai.ws.js';
 import { alertRoutes } from '@/modules/audit/alert.routes.js';
 import { auditRoutes } from '@/modules/audit/audit.routes.js';
@@ -815,6 +817,7 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/mcp', mcpRoutes);
   app.route(PAGE_UPLOAD_LINK_PATH, pageUploadLinkRoutes);
   app.route(DOCKER_ARCHIVE_LINK_PATH, dockerArchiveLinkRoutes);
+  app.route(STORAGE_OBJECT_LINK_PATH, storageObjectLinkRoutes);
 
   if (container.isRegistered(TOKENS.CommercialEdition)) {
     container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).registerRoutes({

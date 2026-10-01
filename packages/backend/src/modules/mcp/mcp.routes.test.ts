@@ -14,6 +14,11 @@ import { mcpRoutes } from './mcp.routes.js';
 import { McpSettingsService } from './mcp-settings.service.js';
 import { resetMcpDiscoveryStateForTests } from './mcp-tools.js';
 
+vi.mock('@/config/env.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/config/env.js')>()),
+  getEnv: () => ({ APP_VERSION: '2.11.0-rc.39' }),
+}));
+
 type JsonRecord = Record<string, any>;
 
 const USER: User = {
@@ -223,6 +228,18 @@ describe('MCP route authentication', () => {
     expect(response.headers.get('mcp-session-id')).toBeTruthy();
     const names = body.result.tools.map((tool: { name: string }) => tool.name);
     expect(names).toContain('list_nodes');
+  });
+
+  it('reports the Gateway release as the server version', async () => {
+    registerOAuth(['nodes:details']);
+
+    const { body } = await mcpRequest('initialize', {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: { name: 'test-client', version: '1.0.0' },
+    });
+
+    expect(body.result.serverInfo).toMatchObject({ name: 'gateway', version: '2.11.0-rc.39' });
   });
 
   it('rejects API-resource OAuth access tokens for MCP', async () => {

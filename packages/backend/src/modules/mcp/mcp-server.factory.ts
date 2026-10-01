@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { getEnv } from '@/config/env.js';
 import { accessSummaryPrincipal } from '@/lib/access-summary-resolver.js';
 import type { User } from '@/types.js';
 import { registerMcpAccessResource } from './mcp-access.js';
@@ -27,7 +28,8 @@ export const MCP_SERVER_INSTRUCTIONS =
 
 export function createMcpServer(options: CreateMcpServerOptions) {
   const server = new McpServer(
-    { name: 'gateway', version: '1.0.0' },
+    // Clients see the Gateway release they talk to (`dev` in a source checkout).
+    { name: 'gateway', version: getEnv().APP_VERSION },
     {
       instructions: options.accessInstructions
         ? `${MCP_SERVER_INSTRUCTIONS}\n\n${options.accessInstructions}`

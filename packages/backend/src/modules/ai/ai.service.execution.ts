@@ -49,6 +49,7 @@ import { executeStorageTool, STORAGE_TOOL_NAMES } from './ai.storage-tools.js';
 import { AI_TOOLS, TOOL_STORE_INVALIDATION_MAP } from './ai.tools.js';
 import type { ToolExecutionOptions, ToolExecutionResult } from './ai.types.js';
 import { assertToolCallAllowedUnderImpersonation } from './ai-impersonation-policy.js';
+import { describeToolError, formatToolError } from './ai-tool-errors.js';
 import {
   publishToolStoreInvalidation,
   resolveToolStoreInvalidations,
@@ -284,13 +285,21 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
           };
         }
       }
+      const toolError = describeToolError(err);
       const message =
         source === 'mcp' && err instanceof AppError && GIT_CREDENTIAL_REQUIRED_CODES.has(err.code)
           ? mcpGitCredentialRequiredMessage(err)
-          : err instanceof Error
-            ? err.message
-            : 'Tool execution failed';
-      logger.error(`Tool execution failed: ${toolName}`, { error: err, args: redactedArgs });
+          : formatToolError(toolError);
+      // Refusals (permission, validation, not found, conflict) are answers to the caller, not failures of Gateway.
+      if (toolError.expected) {
+        logger.warn(`Tool call refused: ${toolName}`, {
+          code: toolError.code,
+          message: toolError.message,
+          args: redactedArgs,
+        });
+      } else {
+        logger.error(`Tool execution failed: ${toolName}`, { error: err, args: redactedArgs });
+      }
       if (source === 'mcp' && !auditEmittedDuringTool()) {
         await this.auditService.log({
           ...auditBase,

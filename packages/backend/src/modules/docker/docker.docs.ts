@@ -576,7 +576,7 @@ export const deployDeploymentRoute = appRoute({
   tags: ['Docker Deployments'],
   summary: 'Deploy a new inactive slot',
   description:
-    'Rolls the deployment out to its standby slot, with the requested image or tag or the saved configuration. On a deployment with legacy host bind mounts, a requested image or tag needs docker:containers:mounts (new code gets that host access); redeploying the saved configuration needs none.',
+    'Rolls the deployment out to its standby slot, with the requested image or tag or the saved configuration. A requested env replaces the whole environment of the deployment and is saved as its configuration: send every variable the deployment should keep. On a deployment with legacy host bind mounts, a requested image or tag needs docker:containers:mounts (new code gets that host access); redeploying the saved configuration needs none.',
   request: { params: deploymentParams, ...optionalJsonBody(DockerDeploymentDeploySchema) },
   responses: okJson(UnknownDataResponseSchema),
 });

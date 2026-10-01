@@ -70,6 +70,7 @@ import {
 } from '@/modules/docker/docker-container-scope-requirements.js';
 import {
   DockerDeploymentCreateSchema,
+  type DockerDeploymentDeployInput,
   DockerDeploymentDeploySchema,
   DockerDeploymentSwitchSchema,
   DockerDeploymentUpdateSchema,
@@ -335,11 +336,19 @@ export async function executeDockerTool(
     case 'deploy_docker_deployment': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
       const { DockerDeploymentService } = await import('@/modules/docker/docker-deployment.service.js');
-      const input = DockerDeploymentDeploySchema.parse(args);
-      ensureDeploymentChangeAccess(context, user, a.nodeId, a.deploymentId, deploymentDeployRequiredScopes(input));
-      const data = await container
-        .resolve(DockerDeploymentService)
-        .deploy(a.nodeId, a.deploymentId, input, user.id, 'manual', user.scopes);
+      const service = container.resolve(DockerDeploymentService);
+      const requested = DockerDeploymentDeploySchema.parse(args);
+      const removeEnv = DeploymentEnvRemovalSchema.parse(a.removeEnv);
+      // removeEnv changes the environment as env does.
+      ensureDeploymentChangeAccess(
+        context,
+        user,
+        a.nodeId,
+        a.deploymentId,
+        deploymentDeployRequiredScopes({ ...requested, env: requested.env ?? removeEnv })
+      );
+      const input = await deployInputWithMergedEnv(service, a.nodeId, a.deploymentId, requested, removeEnv);
+      const data = await service.deploy(a.nodeId, a.deploymentId, input, user.id, 'manual', user.scopes);
       return { success: true, message: 'Deployment rollout started', data: presentDeployment(user, a, data) };
     }
     case 'switch_docker_deployment_slot': {
@@ -910,6 +919,27 @@ function ensureDockerDeploymentScope(
   deploymentId: string
 ): void {
   context.ensureToolScopeForResource(user, baseScope, `${nodeId}/${deploymentId}`);
+}
+
+const DeploymentEnvRemovalSchema = z.array(z.string()).optional();
+
+/**
+ * deploy_docker_deployment changes the environment as manage_docker_container update does: env sets variables over
+ * the saved environment and removeEnv removes keys, so changing one variable keeps the others. The REST deploy route
+ * replaces the whole environment with its env.
+ */
+export async function deployInputWithMergedEnv(
+  service: Pick<DockerDeploymentService, 'get'>,
+  nodeId: string,
+  deploymentId: string,
+  input: DockerDeploymentDeployInput,
+  removeEnv: string[] | undefined
+): Promise<DockerDeploymentDeployInput> {
+  if (input.env === undefined && removeEnv === undefined) return input;
+  const saved = await service.get(nodeId, deploymentId);
+  const env: Record<string, string> = { ...(saved.desiredConfig.env ?? {}), ...(input.env ?? {}) };
+  for (const key of removeEnv ?? []) delete env[key];
+  return { ...input, env };
 }
 
 /** The deploy and update route rule (assertDeploymentChangeAccess in docker-deployment.routes.ts). */

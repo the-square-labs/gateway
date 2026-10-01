@@ -367,7 +367,12 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         this.ensureToolScopeForResource(user, 'proxy:edit', String(a.routeId));
         const existing = await this.proxyService.getProxyHost(a.routeId);
         requireExistingPageRouteAccess(user, existing);
-        const toggleInput = { rawConfigEnabled: a.enabled };
+        // Leaving raw mode also leaves the raw Route type the UI sets on entry, as the UI does; otherwise the
+        // Route keeps serving its raw config.
+        const toggleInput =
+          a.enabled === false && existing?.type === 'raw'
+            ? { rawConfigEnabled: false, type: 'proxy' as const }
+            : { rawConfigEnabled: a.enabled };
         await this.proxyService.assertReferenceAccess(user.scopes, toggleInput as never, existing as never);
         return compactProxyHostForAgent(
           redactProxyHostForScopes(

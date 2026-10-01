@@ -33,7 +33,7 @@ Never repeat root credentials or key secrets in chat, even when a tool returns t
 
 ## Objects and copy jobs
 
-Bucket and object operations, the MCP-only chunked `upload_storage_object`, and server-side copy and sync jobs with their reports: [Objects and copy jobs](references/objects-and-copy-jobs.md). Paths are S3 bucket, key, and prefix paths, never Node filesystem paths.
+Bucket and object operations, the MCP-only `download_storage_object` link and chunked `upload_storage_object`, and server-side copy and sync jobs with their reports: [Objects and copy jobs](references/objects-and-copy-jobs.md). Paths are S3 bucket, key, and prefix paths, never Node filesystem paths.
 
 ## Migrating legacy MinIO to SeaweedFS
 

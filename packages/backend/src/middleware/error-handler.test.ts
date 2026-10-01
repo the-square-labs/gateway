@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { AppEnv } from '@/types.js';
-import { errorHandler } from './error-handler.js';
+import { AppError, errorHandler } from './error-handler.js';
 
 function appThrowing(error: unknown) {
   const app = new Hono<AppEnv>();
@@ -41,5 +41,53 @@ describe('errorHandler PostgreSQL uuid errors', () => {
       const res = await appThrowing(error).request('/boom');
       expect(res.status).toBe(500);
     }
+  });
+});
+
+describe('errorHandler permission denials', () => {
+  const FOLDER = '55555555-5555-4555-8555-555555555555';
+  const DENIED = 'Missing databases:create permission for the selected destination';
+
+  // The handler loads the folder lookup on its first 403; a cold load of the schema can outlast a test timeout.
+  beforeAll(async () => {
+    await Promise.all([import('@/lib/access-denied.js'), import('@/lib/access-summary-resolver.js')]);
+  }, 60_000);
+
+  function appDenying(scopes: string[]) {
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.post('/databases', (c) => {
+      c.set('effectiveScopes', scopes);
+      throw new AppError(403, 'FORBIDDEN', DENIED);
+    });
+    return app;
+  }
+
+  it('names the folders a folder-limited caller may create in', async () => {
+    const res = await appDenying([`databases:create:folder/${FOLDER}`]).request('/databases', { method: 'POST' });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      code: 'FORBIDDEN',
+      message: `${DENIED}. Your databases:create access is limited to folder ${FOLDER}: pass folderId for one of them. Call get_my_access to see every folder and node you can use.`,
+    });
+  });
+
+  it('names the folders of a folder-limited caller refused one resource outside them', async () => {
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.get('/pages/:id', (c) => {
+      c.set('effectiveScopes', [`pages:view:folder/${FOLDER}`]);
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: pages:view:${c.req.param('id')}`);
+    });
+    const res = await app.request('/pages/66666666-6666-4666-8666-666666666666');
+    expect(await res.json()).toEqual({
+      code: 'FORBIDDEN',
+      message: `Missing required scope: pages:view:66666666-6666-4666-8666-666666666666. Your pages:view access is limited to folder ${FOLDER} (and what they contain): act on resources inside them, which the list tools return. Call get_my_access for details.`,
+    });
+  });
+
+  it('keeps the message of a caller without a limited grant', async () => {
+    const res = await appDenying(['databases:view']).request('/databases', { method: 'POST' });
+    expect(await res.json()).toEqual({ code: 'FORBIDDEN', message: DENIED });
   });
 });

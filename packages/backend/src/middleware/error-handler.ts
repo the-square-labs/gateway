@@ -1,4 +1,4 @@
-import type { ErrorHandler } from 'hono';
+import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
 import { logger } from '@/lib/logger.js';
@@ -58,7 +58,7 @@ export class AppError extends Error {
  * so the SQLSTATE lives on `cause`; the message must sit on the same error
  * as the code (the wrapper's own message embeds the query text).
  */
-function isInvalidUuidError(err: unknown): boolean {
+export function isInvalidUuidError(err: unknown): boolean {
   const seen = new Set<unknown>();
   let current: unknown = err;
   while (current && typeof current === 'object' && !seen.has(current)) {
@@ -72,7 +72,42 @@ function isInvalidUuidError(err: unknown): boolean {
   return false;
 }
 
-export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
+/** A zod validation error, also one thrown by another copy of zod (a separately built edition module). */
+export function isZodError(err: unknown): err is ZodError {
+  return (
+    err instanceof ZodError ||
+    (err instanceof Error && err.name === 'ZodError' && Array.isArray((err as ZodError).errors))
+  );
+}
+
+/** The `details` of a VALIDATION_ERROR: one entry per failed field. */
+export function validationErrorDetails(err: ZodError): Array<{ path: string; message: string }> {
+  return err.errors.map((e) => ({
+    path: e.path.join('.'),
+    message: e.message,
+  }));
+}
+
+/**
+ * A 403 for a caller limited to folders, nodes or resources also names where it may act, as the MCP tool
+ * errors do (lib/access-denied.ts); anything else, or a failed lookup, keeps the message.
+ */
+async function withLimitedAccessPointer(c: Context<AppEnv>, statusCode: number, message: string): Promise<string> {
+  const scopes = c.get('effectiveScopes') ?? c.get('user')?.scopes;
+  if (statusCode !== 403 || !scopes?.length) return message;
+  try {
+    // Loaded on use: nearly every module imports this one for AppError, so it pulls in no folder lookup itself.
+    const [{ withLimitedAccessGuidance }, { accessSummaryDatabase }] = await Promise.all([
+      import('@/lib/access-denied.js'),
+      import('@/lib/access-summary-resolver.js'),
+    ]);
+    return await withLimitedAccessGuidance(message, scopes, accessSummaryDatabase());
+  } catch {
+    return message;
+  }
+}
+
+export const errorHandler: ErrorHandler<AppEnv> = async (err, c) => {
   const requestId = c.get('requestId');
 
   if (err instanceof AppError) {
@@ -92,7 +127,7 @@ export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
     return c.json<ApiError>(
       {
         code: err.code,
-        message: err.message,
+        message: await withLimitedAccessPointer(c, err.statusCode, err.message),
         details: err.details,
       },
       err.statusCode as 400
@@ -109,7 +144,7 @@ export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
     return c.json<ApiError>(
       {
         code: 'HTTP_ERROR',
-        message: err.message,
+        message: await withLimitedAccessPointer(c, err.status, err.message),
       },
       err.status
     );
@@ -132,7 +167,7 @@ export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
     );
   }
 
-  if (err instanceof ZodError) {
+  if (isZodError(err)) {
     logger.warn('Validation error', {
       requestId,
       errors: err.errors,
@@ -142,10 +177,7 @@ export const errorHandler: ErrorHandler<AppEnv> = (err, c) => {
       {
         code: 'VALIDATION_ERROR',
         message: 'Request validation failed',
-        details: err.errors.map((e) => ({
-          path: e.path.join('.'),
-          message: e.message,
-        })),
+        details: validationErrorDetails(err),
       },
       400
     );

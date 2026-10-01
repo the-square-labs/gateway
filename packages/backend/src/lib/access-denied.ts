@@ -4,8 +4,9 @@
  *
  * Services refusing a create at the root call `rootAccessDeniedMessage` (names already known) or
  * `describeRootAccessDenied` (looks the folder and node names up). The AI and MCP tool layers pass
- * every tool error through `withLimitedAccessGuidance`, which adds the same pointer when the caller's
- * grants of the missing scope are limited to folders, nodes or resources.
+ * every tool error, and the REST error handler every 403, through `withLimitedAccessGuidance`, which
+ * adds the same pointer when the caller's grants of the missing scope are limited to folders, nodes or
+ * resources.
  */
 
 import type { DrizzleClient } from '@/db/client.js';
@@ -161,10 +162,10 @@ export function scopeNamedInMessage(message: string): NamedScope | null {
  * the caller holds instead of root access:
  * - a refused create (a creation scope named bare or with a folder/node destination) lists the folders and
  *   nodes the caller may create in and says to pass folderId or nodeId;
- * - any other scope named bare (the caller asked at the root) lists the folders, nodes or resources that
- *   hold it.
- * Denials of one specific resource, genuine denials (no grant of the scope anywhere), messages that name
- * no scope and non-permission errors are returned unchanged.
+ * - any other scope, named bare (the caller asked at the root) or on one resource outside the caller's
+ *   grants, lists the folders, nodes or resources that hold it.
+ * Creation scopes on one resource (a CA to issue from), genuine denials (no grant of the scope anywhere),
+ * messages that name no scope and non-permission errors are returned unchanged.
  */
 export async function withLimitedAccessGuidance(
   message: string,
@@ -176,11 +177,11 @@ export async function withLimitedAccessGuidance(
   if (!named) return message;
   const { scope, qualifier } = named;
   const destinationQualifier = !qualifier || qualifier.startsWith('folder/') || qualifier.startsWith('node/');
-  if (!destinationQualifier) return message;
+  const creation = isCreationScope(scope);
+  if (creation && !destinationQualifier) return message;
   const destinations = grantedDestinations(scopes, scope);
   if (destinations.atRoot) return message;
   const separator = /[.!?]\s*$/.test(message) ? ' ' : '. ';
-  const creation = isCreationScope(scope);
   if (destinations.folderIds.length || destinations.nodeIds.length) {
     const places = db
       ? await namedDestinations(db, scopes, scope, destinations)

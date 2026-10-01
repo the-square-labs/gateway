@@ -184,7 +184,7 @@ Each route generates an nginx server block on its selected ingress node. Changes
 Config templates can customize the generated config (see templates topic).
 
 ## Raw Config Mode
-When rawConfigEnabled is true, the template rendering is bypassed and rawConfig is used directly as the nginx server block. Use get_route_rendered_config to view the current config, toggle_route_raw_mode to enable/disable, and update_route_raw_config to write raw config.`,
+When rawConfigEnabled is true and rawConfig is saved, template rendering is bypassed and rawConfig is used directly as the nginx server block. With rawConfigEnabled but no rawConfig yet, Gateway keeps rendering the managed config. A Route to a Docker container or deployment keeps its Secure Link in raw mode: keep its upstream (\`gateway_secure_link_<route id with - replaced by _>\`, as get_route_rendered_config shows it) in the raw config, or the Route loses its target. Use get_route_rendered_config to view the current config, toggle_route_raw_mode to enable/disable (disabling also returns a Route of type raw to proxy), and update_route_raw_config to write raw config.`,
 
   domains: `# Domains
 

@@ -669,6 +669,24 @@ export async function startContainer(
   ctx.emitContainer(nodeId, name, containerId, 'started');
 }
 
+/** States with a process for a stop to end. Docker leaves a created, exited or dead container as it is. */
+const STOPPABLE_CONTAINER_STATES = new Set(['running', 'restarting', 'paused']);
+
+/** False only when an inspect shows no process to stop; an inspect failure leaves the decision to the stop. */
+async function containerHasProcessToStop(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerId: string
+): Promise<boolean> {
+  try {
+    const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
+    const status = ctx.parseResult(result)?.State?.Status;
+    return typeof status !== 'string' || STOPPABLE_CONTAINER_STATES.has(status);
+  } catch {
+    return true;
+  }
+}
+
 export async function stopContainer(
   ctx: DockerContainerMutationContext,
   nodeId: string,
@@ -681,6 +699,25 @@ export async function stopContainer(
   const name = await ctx.resolveContainerName(nodeId, containerId);
   const stopTimeout = await ctx.resolveContainerStopTimeout(nodeId, containerId, timeout);
   ctx.requireNoTransition(nodeId, name);
+  if (!(await containerHasProcessToStop(ctx, nodeId, containerId))) {
+    // A container that never started (created) or already exited is stopped: the stop completes now instead of
+    // holding "stopping" until a watch for an `exited` state that never comes times out.
+    const task = await ctx.createTask(nodeId, containerId, name, 'stop');
+    if (task && ctx.taskService) {
+      await ctx.taskService
+        .update(task.id, { status: 'succeeded', progress: 'Container stopped', completedAt: new Date() })
+        .catch(() => undefined);
+    }
+    await ctx.auditService.log({
+      action: 'docker.container.stop',
+      userId,
+      resourceType: 'docker-container',
+      resourceId: containerId,
+      details: { nodeId, name, containerName: name },
+    });
+    ctx.emitContainer(nodeId, name, containerId, 'stopped');
+    return { taskId: task?.id, containerId, name };
+  }
   ctx.setTransition(nodeId, name, 'stopping');
   ctx.emitTransition(nodeId, name, containerId, 'stopping');
   const task = await ctx.createTask(nodeId, containerId, name, 'stop');

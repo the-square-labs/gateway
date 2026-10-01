@@ -198,11 +198,7 @@ sslRoutes.openapi(requestAcmeCertificateRoute, async (c) => {
   const body = await c.req.json();
   const input = RequestACMECertSchema.parse(body);
   if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'ssl:cert:issue', input.folderId)) {
-    throw new AppError(
-      403,
-      'FORBIDDEN',
-      'Missing authorized SSL certificate creation scope for the selected destination'
-    );
+    throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const result = await sslService.requestACMECert(input, user.id, user.email);
@@ -217,11 +213,7 @@ sslRoutes.openapi(uploadSslCertificateRoute, async (c) => {
   const body = await c.req.json();
   const input = UploadCertSchema.parse(body);
   if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'ssl:cert:issue', input.folderId)) {
-    throw new AppError(
-      403,
-      'FORBIDDEN',
-      'Missing authorized SSL certificate creation scope for the selected destination'
-    );
+    throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const cert = await sslService.uploadCert(input, user.id);
@@ -236,11 +228,7 @@ sslRoutes.openapi(linkInternalSslCertificateRoute, async (c) => {
   const body = await c.req.json();
   const input = LinkInternalCertSchema.parse(body);
   if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'ssl:cert:issue', input.folderId)) {
-    throw new AppError(
-      403,
-      'FORBIDDEN',
-      'Missing authorized SSL certificate creation scope for the selected destination'
-    );
+    throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const cert = await sslService.linkInternalCert(input, user.id, c.get('effectiveScopes') ?? []);
