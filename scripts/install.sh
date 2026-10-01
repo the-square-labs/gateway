@@ -4,6 +4,13 @@ IFS=$'\n\t'
 
 DEFAULT_IMAGE="ghcr.io/the-square-labs/gateway"
 DOCKER_COMPOSE_CLI_IMAGE_REF="docker.io/library/docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c"
+# Third-party service images, pinned by digest and mirrored to GHCR by the release pipeline
+# (config/third-party-images.json). The GHCR mirror is pulled first; Docker Hub serves the same
+# digest when the mirror cannot be pulled.
+THIRD_PARTY_MIRROR_REPOSITORY="ghcr.io/the-square-labs/gateway"
+REGISTRY_UPSTREAM_IMAGE_REF="docker.io/library/registry@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8" # 3.1.2
+POSTGRES_UPSTREAM_IMAGE_REF="docker.io/library/postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea" # 16.15-alpine
+REDIS_UPSTREAM_IMAGE_REF="docker.io/library/redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499" # 7.4.11-alpine
 DEFAULT_INSTALL_DIR="/opt/gateway"
 # Present from the start of a fresh install until its setup code is shown; a re-run resumes it.
 INSTALL_PENDING_MARKER=".gateway-install-pending"
@@ -157,6 +164,21 @@ run_quiet() {
     return
   fi
   die "${label} failed. Check ${LOG_FILE} for details."
+}
+
+# Pulls a pinned third-party image and prints the reference to run it from: the GHCR mirror, or
+# the upstream reference with the same digest when the mirror cannot be pulled.
+pull_third_party_image() {
+  local upstream="$1" repository mirror
+  repository="${upstream%@*}"
+  mirror="${THIRD_PARTY_MIRROR_REPOSITORY}/${repository##*/}@${upstream##*@}"
+  if "${DOCKER[@]}" pull "$mirror" </dev/null >>"$LOG_FILE" 2>&1; then
+    printf '%s' "$mirror"
+  elif "${DOCKER[@]}" pull "$upstream" </dev/null >>"$LOG_FILE" 2>&1; then
+    printf '%s' "$upstream"
+  else
+    return 1
+  fi
 }
 
 # ── Docker Engine bootstrap ─────────────────────────────────────────
@@ -863,6 +885,20 @@ print_gateway_urls() {
   done < <(detect_local_host_address_lines)
 }
 
+REGISTRY_IMAGE_REF="$(env_value GATEWAY_REGISTRY_IMAGE_REF)"
+if [[ "$FRESH" == 1 || -z "$REGISTRY_IMAGE_REF" ]]; then
+  info "Pulling the pinned registry image"
+  REGISTRY_IMAGE_REF="$(pull_third_party_image "$REGISTRY_UPSTREAM_IMAGE_REF")" ||
+    die "Registry image pull failed. Check ${LOG_FILE} for details."
+fi
+if [[ "$FRESH" == 1 ]]; then
+  info "Pulling the pinned PostgreSQL and Redis images"
+  POSTGRES_IMAGE_REF="$(pull_third_party_image "$POSTGRES_UPSTREAM_IMAGE_REF")" ||
+    die "PostgreSQL image pull failed. Check ${LOG_FILE} for details."
+  REDIS_IMAGE_REF="$(pull_third_party_image "$REDIS_UPSTREAM_IMAGE_REF")" ||
+    die "Redis image pull failed. Check ${LOG_FILE} for details."
+fi
+
 if [[ "$FRESH" == 1 ]]; then
   umask 077
   : >"$INSTALL_PENDING_MARKER"
@@ -877,7 +913,7 @@ ensure_env PKI_MASTER_KEY "$(openssl rand -hex 32)"
 ensure_env SETUP_BOOTSTRAP "$([[ "$FRESH" == 1 ]] && printf true || printf false)"
 ensure_env WEB_TLS_BOOTSTRAP_MODE "${TRANSPORT:-http}"
 ensure_env SANDBOX_RUNNER_WORKSPACE_DIR "/var/lib/gateway/sandbox-workspaces"
-ensure_env GATEWAY_REGISTRY_IMAGE_REF "registry:3"
+set_env GATEWAY_REGISTRY_IMAGE_REF "$REGISTRY_IMAGE_REF"
 ensure_env GATEWAY_REGISTRY_HTTP_SECRET "$(openssl rand -hex 32)"
 ensure_env GATEWAY_RELAY_MANAGED "$([[ -z "$SOURCE_DIR" ]] && printf true || printf false)"
 if [[ "$FRESH" == 1 ]]; then
@@ -885,6 +921,8 @@ if [[ "$FRESH" == 1 ]]; then
   set_env GATEWAY_RELAY_IMAGE_REF "$RELAY_IMAGE_REF"
   set_env GATEWAY_RELAY_BUILD_VERSION "$RELAY_BUILD_VERSION"
   set_env GATEWAY_RELAY_PROTOCOL_MAJOR "$RELAY_PROTOCOL_MAJOR"
+  set_env GATEWAY_POSTGRES_IMAGE_REF "$POSTGRES_IMAGE_REF"
+  set_env GATEWAY_REDIS_IMAGE_REF "$REDIS_IMAGE_REF"
 fi
 local_host_addresses="$(detect_local_host_addresses)"
 if [[ -n "$local_host_addresses" ]]; then
@@ -1024,7 +1062,7 @@ services:
         max-file: "3"
 
   postgres:
-    image: postgres:16-alpine
+    image: ${GATEWAY_POSTGRES_IMAGE_REF}
     restart: unless-stopped
     # A host shutdown stops every container at once. Smart shutdown (SIGTERM) lets the app finish its shutdown drain
     # on its open connections before postgres exits; the image's default (SIGINT) cuts them at once.
@@ -1048,7 +1086,7 @@ services:
         max-file: "3"
 
   redis:
-    image: redis:7-alpine
+    image: ${GATEWAY_REDIS_IMAGE_REF}
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
@@ -1127,7 +1165,7 @@ fi
 if [[ -z "$SOURCE_DIR" ]]; then
   info "Pulling ${IMAGE_REF}"
   if [[ "$FRESH" == 1 ]]; then
-    run_quiet "Gateway service image pull" "${DOCKER[@]}" compose pull
+    run_quiet "Gateway service image pull" "${DOCKER[@]}" compose pull app relay
   else
     run_quiet "Gateway service image pull" "${DOCKER[@]}" compose pull app
     if [[ "$RELAY_BOOTSTRAP" == 1 ]]; then
