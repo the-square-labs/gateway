@@ -1,6 +1,10 @@
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
+import {
+  assertComposeChildMutationAllowed,
+  assertComposeNetworkMutationAllowed,
+} from '@/modules/docker/compose/compose-child.guard.js';
 import { isComposeOwnedNetwork } from '@/modules/docker/compose/compose-discovery.service.js';
 import { NetworkConnectSchema, NetworkCreateSchema } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
@@ -59,6 +63,8 @@ export async function manageDockerNetworkForAgent(
   }
   if (operation === 'delete') {
     await assertNetworkScope(user, 'docker:networks:delete', nodeId, String(input.networkId));
+    // The network routes' Compose guards: a Compose project's network changes only through the project.
+    await assertComposeNetworkMutationAllowed(nodeId, String(input.networkId));
     await dockerService.removeNetwork(nodeId, String(input.networkId), user.id);
     return { success: true };
   }
@@ -66,6 +72,10 @@ export async function manageDockerNetworkForAgent(
     const network = NetworkConnectSchema.parse(args);
     await assertNetworkScope(user, 'docker:networks:edit', nodeId, String(input.networkId));
     await assertContainerEditScope(user, nodeId, network.containerId);
+    await Promise.all([
+      assertComposeNetworkMutationAllowed(nodeId, String(input.networkId)),
+      assertComposeChildMutationAllowed(nodeId, network.containerId),
+    ]);
     if (operation === 'connect') {
       await dockerService.connectContainerToNetwork(nodeId, String(input.networkId), network.containerId, user.id);
     } else {
