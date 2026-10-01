@@ -151,7 +151,9 @@ describe('Docker network scoped middleware', () => {
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
       code: 'HTTP_ERROR',
-      message: 'Missing required scope: docker:networks:delete:node-1/network-resource-2',
+      // The caller holds the scope on another network only, so the denial points at its grants.
+      message:
+        'Missing required scope: docker:networks:delete:node-1/network-resource-2. Your docker:networks:delete access is limited to specific resources: call get_my_access to see which ones and use one of them.',
     });
     expect(handler).not.toHaveBeenCalled();
   });
