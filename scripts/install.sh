@@ -5,6 +5,8 @@ IFS=$'\n\t'
 DEFAULT_IMAGE="ghcr.io/the-square-labs/gateway"
 DOCKER_COMPOSE_CLI_IMAGE_REF="docker.io/library/docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c"
 DEFAULT_INSTALL_DIR="/opt/gateway"
+# Present from the start of a fresh install until its setup code is shown; a re-run resumes it.
+INSTALL_PENDING_MARKER=".gateway-install-pending"
 RELEASES_API_URL="${RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"
 ARTIFACT_BASE_URL="${ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"
 INSTALL_DIR="${GATEWAY_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
@@ -671,7 +673,7 @@ print_install_details() {
   guide "  ${GRAY}Release:${NC}         ${VERSION}"
   guide "  ${GRAY}${ARTIFACT_KIND}:${NC} $(short_digest "$ARTIFACT_DIGEST")"
   guide "  ${GRAY}Target path:${NC}     ${INSTALL_DIR}"
-  guide "  ${GRAY}Mode:${NC}            $([[ "$FRESH" == 1 ]] && echo 'fresh install' || echo 'update')"
+  guide "  ${GRAY}Mode:${NC}            $([[ "$FRESH" == 1 ]] && echo 'fresh install' || echo 'update')$([[ "$RESUME" == 1 ]] && echo ' (resumed)')"
   guide_blank
 }
 
@@ -721,12 +723,13 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   fi
   cd "$INSTALL_DIR"
   INSTALL_DIR="$(pwd)"
-  FRESH=0
-  [[ -f .env ]] || FRESH=1
-else
-  FRESH=1
-  [[ -f "$INSTALL_DIR/.env" ]] && FRESH=0
 fi
+FRESH=1
+[[ -f "$INSTALL_DIR/.env" && ! -f "$INSTALL_DIR/$INSTALL_PENDING_MARKER" ]] && FRESH=0
+# A fresh install that stopped before showing its setup code keeps its .env: the secrets in it may
+# already be bound to the database volume.
+RESUME=0
+[[ "$FRESH" == 1 && -f "$INSTALL_DIR/.env" ]] && RESUME=1
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   command -v curl >/dev/null || die "curl is required to inspect the release in dry-run mode"
@@ -745,6 +748,9 @@ prepare_install_metadata
 guide_blank
 print_install_details
 
+if [[ "$RESUME" == 1 && -z "$TRANSPORT" ]]; then
+  TRANSPORT="$(env_value WEB_TLS_BOOTSTRAP_MODE)"
+fi
 if [[ "$FRESH" == 1 && -z "$TRANSPORT" ]]; then
   TRANSPORT="https"
   if [[ -r /dev/tty && -w /dev/tty ]]; then
@@ -859,11 +865,12 @@ print_gateway_urls() {
 
 if [[ "$FRESH" == 1 ]]; then
   umask 077
-  : >.env
+  : >"$INSTALL_PENDING_MARKER"
+  [[ "$RESUME" == 1 ]] || : >.env
 fi
 ensure_env GATEWAY_IMAGE_REF "$IMAGE_REF"
 if [[ -n "${SECURE_LINK_CONNECTOR_IMAGE_REF:-}" ]]; then
-  ensure_env SECURE_LINK_CONNECTOR_IMAGE "$SECURE_LINK_CONNECTOR_IMAGE_REF"
+  set_env SECURE_LINK_CONNECTOR_IMAGE "$SECURE_LINK_CONNECTOR_IMAGE_REF"
 fi
 ensure_env DB_PASSWORD "$(openssl rand -hex 24)"
 ensure_env PKI_MASTER_KEY "$(openssl rand -hex 32)"
@@ -874,10 +881,10 @@ ensure_env GATEWAY_REGISTRY_IMAGE_REF "registry:3"
 ensure_env GATEWAY_REGISTRY_HTTP_SECRET "$(openssl rand -hex 32)"
 ensure_env GATEWAY_RELAY_MANAGED "$([[ -z "$SOURCE_DIR" ]] && printf true || printf false)"
 if [[ "$FRESH" == 1 ]]; then
-  ensure_env GATEWAY_VERSION "$VERSION"
-  ensure_env GATEWAY_RELAY_IMAGE_REF "$RELAY_IMAGE_REF"
-  ensure_env GATEWAY_RELAY_BUILD_VERSION "$RELAY_BUILD_VERSION"
-  ensure_env GATEWAY_RELAY_PROTOCOL_MAJOR "$RELAY_PROTOCOL_MAJOR"
+  set_env GATEWAY_VERSION "$VERSION"
+  set_env GATEWAY_RELAY_IMAGE_REF "$RELAY_IMAGE_REF"
+  set_env GATEWAY_RELAY_BUILD_VERSION "$RELAY_BUILD_VERSION"
+  set_env GATEWAY_RELAY_PROTOCOL_MAJOR "$RELAY_PROTOCOL_MAJOR"
 fi
 local_host_addresses="$(detect_local_host_addresses)"
 if [[ -n "$local_host_addresses" ]]; then
@@ -1179,6 +1186,7 @@ if [[ "$FRESH" == 1 ]]; then
   guide "${GRAY}Reset:${NC}      cd ${INSTALL_DIR} && docker compose exec app node dist/cli/reset-setup.js"
   guide_blank
   guide "${GRAY}The setup code is shown once. Finish configuration in the browser.${NC}"
+  rm -f "$INSTALL_PENDING_MARKER"
 else
   guide "${GRAY}Existing installation updated; persisted Gateway settings were preserved.${NC}"
 fi
