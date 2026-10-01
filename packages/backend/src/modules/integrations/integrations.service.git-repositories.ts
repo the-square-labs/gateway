@@ -29,6 +29,28 @@ import { GIT_FILE_READ_LIMIT_BYTES, GIT_FILE_WRITE_LIMIT_BYTES, isPlainRecord } 
 import { invalidateGitHubRepositoryOwners } from './integrations.service.git-support.js';
 import { IntegrationsSourceService } from './integrations.service.sources.js';
 
+/**
+ * A path inside a GitHub repository for the contents API. The path is joined into the API URL, and URL parsing
+ * resolves `..` segments, literal or percent-encoded, so one could leave the granted repository for any other API
+ * path the connector credential reaches. Such paths are refused before any request.
+ */
+export function githubRepositoryContentPath(raw: string | undefined, options: { required: boolean }): string {
+  const path = (raw ?? '').trim().replace(/^\/+/, '');
+  const decoded = decodePathOrNull(path);
+  if ((options.required && !path) || decoded === null || decoded.includes('..') || decoded.includes('\0')) {
+    throw new AppError(400, 'INVALID_REPOSITORY_PATH', 'Repository path must be relative');
+  }
+  return path;
+}
+
+function decodePathOrNull(path: string): string | null {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+}
+
 interface GitHubScopeCatalogEntry {
   id: string;
   fullName: string;
@@ -141,7 +163,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
       input.repositoryUrl
     );
     const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
-    const path = input.path?.trim().replace(/^\/+/, '') ?? '';
+    const path = githubRepositoryContentPath(input.path, { required: false });
     const query = input.ref?.trim() ? `?ref=${encodeURIComponent(input.ref.trim())}` : '';
     const response = await this.githubConnectorRequest(
       connector,
@@ -174,10 +196,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
       input.repositoryUrl
     );
     const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
-    const path = input.path.trim().replace(/^\/+/, '');
-    if (!path || path.includes('..') || path.includes('\0')) {
-      throw new AppError(400, 'INVALID_REPOSITORY_PATH', 'Repository path must be relative');
-    }
+    const path = githubRepositoryContentPath(input.path, { required: true });
     const query = input.ref?.trim() ? `?ref=${encodeURIComponent(input.ref.trim())}` : '';
     const response = await this.githubConnectorRequest(
       connector,
@@ -327,10 +346,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
       'write'
     );
     const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
-    const path = input.path.trim().replace(/^\/+/, '');
-    if (!path || path.includes('..') || path.includes('\0')) {
-      throw new AppError(400, 'INVALID_REPOSITORY_PATH', 'Repository path must be relative');
-    }
+    const path = githubRepositoryContentPath(input.path, { required: true });
     if (Buffer.byteLength(input.content, 'utf8') > 524_288) {
       throw new AppError(413, 'GITHUB_FILE_TOO_LARGE', 'Repository file exceeds the 512 KiB write limit');
     }
