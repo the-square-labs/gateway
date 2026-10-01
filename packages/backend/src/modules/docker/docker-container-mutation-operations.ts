@@ -957,8 +957,12 @@ export async function renameContainer(
       }
       throw error;
     }
+    // Everything that can refuse the rename is checked before anything changes.
     await ctx.accessResourceService?.assertContainerRenameAllowed?.(nodeId, oldName, newName);
     await ctx.assertNameAvailable(nodeId, newName, claim);
+    // A rename keeps the runtime ID: the rollback addresses the container by it, since the old name (which the
+    // request may have used) no longer exists once the daemon renamed it.
+    const runtimeId = containerRuntimeId(await ctx.inspectContainer(nodeId, containerId), containerId);
     // The checks above wait on the node: the names must still be this
     // rename's across processes before it changes anything.
     await confirmHeldAcrossProcesses(ctx, nodeId, [oldName, newName]);
@@ -972,9 +976,13 @@ export async function renameContainer(
       ctx.accessResourceService?.removeContainer(nodeId, newName),
       deleteContainerWebhooks(ctx.db, nodeId, newName),
     ]);
+    await ctx.releaseContainerLinks?.(nodeId, newName, userId);
 
     try {
-      const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', { containerId, newName });
+      const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', {
+        containerId: runtimeId,
+        newName,
+      });
       ctx.parseResult(result);
     } catch (err) {
       ctx.translateNameConflict(err, newName);
@@ -982,6 +990,15 @@ export async function renameContainer(
 
     const metadataRollbacks: Array<() => Promise<unknown>> = [];
     try {
+      // The access identity first: it moves the Git source binding with it in one transaction and checks the
+      // source again under its lock, so a build that started meanwhile refuses the rename before the rest moves.
+      if (ctx.accessResourceService) {
+        await ctx.accessResourceService.renameContainer(nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => ctx.accessResourceService!.renameContainer(nodeId, newName, oldName));
+      } else {
+        await renameContainerSourceBinding(ctx.db, nodeId, oldName, newName);
+        metadataRollbacks.unshift(() => renameContainerSourceBinding(ctx.db, nodeId, newName, oldName));
+      }
       if (ctx.environmentService) {
         await ctx.environmentService.rename(nodeId, oldName, newName);
         metadataRollbacks.unshift(() => ctx.environmentService!.rename(nodeId, newName, oldName));
@@ -1002,16 +1019,10 @@ export async function renameContainer(
       metadataRollbacks.unshift(() => renameManagedBindingTargets(ctx.db, nodeId, newName, oldName));
       await renameContainerWebhooks(ctx.db, nodeId, oldName, newName);
       metadataRollbacks.unshift(() => renameContainerWebhooks(ctx.db, nodeId, newName, oldName));
-      await renameContainerSourceBinding(ctx.db, nodeId, oldName, newName);
-      metadataRollbacks.unshift(() => renameContainerSourceBinding(ctx.db, nodeId, newName, oldName));
-      if (ctx.accessResourceService) {
-        await ctx.accessResourceService.renameContainer(nodeId, oldName, newName);
-        metadataRollbacks.unshift(() => ctx.accessResourceService!.renameContainer(nodeId, newName, oldName));
-      }
     } catch (metadataError) {
       try {
         const rollbackResult = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'rename', {
-          containerId,
+          containerId: runtimeId,
           newName: oldName,
         });
         ctx.parseResult(rollbackResult);
@@ -1044,7 +1055,7 @@ export async function renameContainer(
       resourceId: containerId,
       details: { nodeId, oldName, name: newName, containerName: newName },
     });
-    ctx.emitContainer(nodeId, newName, containerId, 'renamed', { oldName });
+    ctx.emitContainer(nodeId, newName, runtimeId, 'renamed', { oldName });
   } finally {
     ctx.releaseTransitions(claim);
   }
