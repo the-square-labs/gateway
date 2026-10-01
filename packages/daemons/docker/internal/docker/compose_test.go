@@ -316,6 +316,27 @@ func TestComposePolicyMatchesBackendParityFixtures(t *testing.T) {
 	}
 }
 
+// Project variables and secrets reach the sidecar's environment; the names its
+// compose client reads itself are refused, and its own settings come last.
+func TestComposeBindingsCannotReconfigureTheSidecarClient(t *testing.T) {
+	for _, name := range []string{"DOCKER_HOST", "DOCKER_CONFIG", "COMPOSE_FILE", "PATH"} {
+		variable := validComposeCommand("apply", "operation-env")
+		variable.Variables = map[string]string{name: "tcp://203.0.113.1:2375"}
+		if _, err := validateComposeCommand(variable); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("variable %s: %v", name, err)
+		}
+		secret := validComposeCommand("apply", "operation-env")
+		secret.Secrets = map[string]string{name: "value"}
+		if _, err := validateComposeCommand(secret); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("secret %s: %v", name, err)
+		}
+	}
+	env := composeSidecarEnvironment(composeRequest{variables: map[string]string{"TAG": "1"}, secrets: map[string]string{"TOKEN": "x"}})
+	if len(env) != 3 || env[len(env)-1] != "DOCKER_HOST=unix:///var/run/docker.sock" {
+		t.Fatalf("sidecar environment = %v, want the project bindings then DOCKER_HOST", env)
+	}
+}
+
 func TestComposeSidecarCommandsPreservePullAndVolumesSemantics(t *testing.T) {
 	apply, err := composeSidecarCommands(composeRequest{action: "apply"})
 	if err != nil || len(apply) != 1 || strings.Join(apply[0], " ") != "up --detach --no-build --pull never" {

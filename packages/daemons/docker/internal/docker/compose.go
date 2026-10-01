@@ -362,6 +362,9 @@ func validateComposeEnvironment(variables, secrets map[string]string) error {
 		if !composeEnvironmentPattern.MatchString(key) || len(value) > 64*1024 {
 			return errors.New("docker compose variable binding is invalid")
 		}
+		if isReservedComposeEnvironmentName(key) {
+			return fmt.Errorf("docker compose variable %q is reserved for the compose client", key)
+		}
 		if _, conflicts := secrets[key]; conflicts {
 			return errors.New("docker compose variable and secret names must not overlap")
 		}
@@ -370,8 +373,20 @@ func validateComposeEnvironment(variables, secrets map[string]string) error {
 		if !composeEnvironmentPattern.MatchString(key) || len(value) > 64*1024 {
 			return errors.New("docker compose secret binding is invalid")
 		}
+		if isReservedComposeEnvironmentName(key) {
+			return fmt.Errorf("docker compose secret %q is reserved for the compose client", key)
+		}
 	}
 	return nil
+}
+
+// isReservedComposeEnvironmentName reports the variables the sidecar's docker
+// compose client reads itself: its daemon, config, context and TLS
+// (DOCKER_*), Compose settings (COMPOSE_*) and the executable search path.
+// Project variables and secrets reach the sidecar's environment for
+// interpolation and must not repoint or reconfigure the client.
+func isReservedComposeEnvironmentName(name string) bool {
+	return name == "PATH" || strings.HasPrefix(name, "DOCKER_") || strings.HasPrefix(name, "COMPOSE_")
 }
 
 func composeRequestFingerprint(request composeRequest) string {
@@ -571,8 +586,12 @@ func (s *dockerComposeSidecar) deleteVolumes(ctx context.Context, projectName st
 
 func (s *dockerComposeSidecar) cancelAll() {}
 
+// composeSidecarEnvironment lists the project variables and secrets, then the
+// sidecar's own settings last: Docker keeps the last value of a repeated name,
+// so nothing a project binds overrides them (validateComposeEnvironment
+// refuses those names as well).
 func composeSidecarEnvironment(request composeRequest) []string {
-	env := []string{"DOCKER_HOST=unix:///var/run/docker.sock"}
+	env := make([]string, 0, len(request.variables)+len(request.secrets)+1)
 	keys := make([]string, 0, len(request.variables)+len(request.secrets))
 	for key := range request.variables {
 		keys = append(keys, key)
@@ -588,5 +607,5 @@ func composeSidecarEnvironment(request composeRequest) []string {
 		}
 		env = append(env, key+"="+request.secrets[key])
 	}
-	return env
+	return append(env, "DOCKER_HOST=unix:///var/run/docker.sock")
 }
