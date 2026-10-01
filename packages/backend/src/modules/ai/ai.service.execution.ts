@@ -42,7 +42,7 @@ import {
   UNHANDLED_TOOL,
 } from './ai.service.runtime-helpers.js';
 import { AIServiceRuntimeSupport } from './ai.service.runtime-support.js';
-import { redactArgsForTool } from './ai.service.tool-helpers.js';
+import { redactArgsForAudit } from './ai.service.tool-helpers.js';
 import { getToolResourceId, hasToolExecutionScope, isMutatingTool } from './ai.service-helpers.js';
 import { executeSshTool, SSH_TOOL_NAMES } from './ai.ssh-tools.js';
 import { executeStorageTool, STORAGE_TOOL_NAMES } from './ai.storage-tools.js';
@@ -210,13 +210,13 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
 
     const source = options.source ?? 'ai';
     const shouldAudit = isMutatingTool(toolDef);
-    const redactedArgs = redactArgsForTool(toolName, args);
+    const redactedArgs = redactArgsForAudit(toolName, args);
     const mcpDetails =
       source === 'mcp'
         ? {
             toolName,
             category: toolDef.category,
-            arguments: redactedArgs as Record<string, unknown>,
+            arguments: redactedArgs,
             tokenId: options.tokenId,
             tokenPrefix: options.tokenPrefix,
             authType: options.authType,
@@ -290,7 +290,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
           : err instanceof Error
             ? err.message
             : 'Tool execution failed';
-      logger.error(`Tool execution failed: ${toolName}`, { error: err, args: redactArgsForTool(toolName, args) });
+      logger.error(`Tool execution failed: ${toolName}`, { error: err, args: redactedArgs });
       if (source === 'mcp' && !auditEmittedDuringTool()) {
         await this.auditService.log({
           ...auditBase,

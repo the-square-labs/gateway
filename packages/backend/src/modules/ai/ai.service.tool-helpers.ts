@@ -217,6 +217,48 @@ export function redactArgsForTool(toolName: string, args: Record<string, unknown
   return redactGitLabToolArgs(redacted);
 }
 
+/** Argument keys holding the body a tool writes: a file (node, container, volume, repository) or Compose YAML. */
+const WRITTEN_CONTENT_KEYS = new Set(['content', 'yaml']);
+const AUDIT_ARGUMENTS_MAX_BYTES = 16 * 1024;
+const AUDIT_ARGUMENT_TEXT_MAX = 256;
+const AUDIT_ARGUMENT_KEYS_MAX = 50;
+
+function summarizeWrittenContent(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value !== 'object' || depth > 8) return value;
+  if (Array.isArray(value)) return value.map((item) => summarizeWrittenContent(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+      key,
+      WRITTEN_CONTENT_KEYS.has(key) && typeof nested === 'string'
+        ? { redacted: true, bytes: Buffer.byteLength(nested) }
+        : summarizeWrittenContent(nested, depth + 1),
+    ])
+  );
+}
+
+/**
+ * Tool arguments as an audit row stores them. Beyond redactArgsForTool, a written file or Compose body is reduced to
+ * its size: a `.env` or an inline `environment:` carries secrets that the REST audit of the same write never stores,
+ * and every holder of admin:audit reads audit rows. The whole set is bounded, so a large call cannot bloat the log.
+ * The approval prompt keeps the full body (approvalDisplayArgs): a person approving a write must see it.
+ */
+export function redactArgsForAudit(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
+  const redacted = summarizeWrittenContent(redactArgsForTool(toolName, args));
+  const summary = isRecord(redacted) ? redacted : {};
+  const bytes = Buffer.byteLength(JSON.stringify(summary));
+  if (bytes <= AUDIT_ARGUMENTS_MAX_BYTES) return summary;
+  const scalars = Object.entries(summary)
+    .filter(([, value]) => value === null || ['string', 'number', 'boolean'].includes(typeof value))
+    .slice(0, AUDIT_ARGUMENT_KEYS_MAX)
+    .map(([key, value]) => [
+      key,
+      typeof value === 'string' && value.length > AUDIT_ARGUMENT_TEXT_MAX
+        ? `${value.slice(0, AUDIT_ARGUMENT_TEXT_MAX)}…`
+        : value,
+    ]);
+  return { ...Object.fromEntries(scalars), argumentsTruncated: true, argumentsBytes: bytes };
+}
+
 export function approvalDisplayArgs(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
   const redacted = redactArgsForTool(toolName, args);
   return isRecord(redacted) ? redacted : {};

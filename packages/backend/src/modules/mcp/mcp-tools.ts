@@ -8,7 +8,7 @@ import { container } from '@/container.js';
 import { withLimitedAccessGuidance } from '@/lib/access-denied.js';
 import { accessSummaryDatabase } from '@/lib/access-summary-resolver.js';
 import { AIService } from '@/modules/ai/ai.service.js';
-import { redactArgsForTool } from '@/modules/ai/ai.service.tool-helpers.js';
+import { redactArgsForAudit } from '@/modules/ai/ai.service.tool-helpers.js';
 import { AI_TOOLS, validateAIToolArguments } from '@/modules/ai/ai.tools.js';
 import type { AIToolDefinition, ToolExecutionResult } from '@/modules/ai/ai.types.js';
 import { getAIToolResourceId } from '@/modules/ai/ai-tool-policy-metadata.js';
@@ -404,7 +404,7 @@ async function auditDeniedMcpTool(
 ): Promise<void> {
   const category = tool?.category ?? 'Unknown';
   // Same per-tool redaction as executed calls, so denied and invalid calls never audit a secret either.
-  const redactedArgs = redactArgsForTool(toolName, args) as Record<string, unknown>;
+  const redactedArgs = redactArgsForAudit(toolName, args);
   setAuditMcpContext({
     toolName,
     category,
@@ -445,7 +445,7 @@ async function auditReplayedMcpTool(
   args: Record<string, unknown>,
   withheld: boolean
 ): Promise<void> {
-  const redactedArgs = redactArgsForTool(tool.name, args) as Record<string, unknown>;
+  const redactedArgs = redactArgsForAudit(tool.name, args);
   setAuditMcpContext({
     toolName: tool.name,
     category: tool.category,
