@@ -111,7 +111,7 @@ import type { DockerRuntimeOperationContext } from './docker-runtime-operations.
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
 import type { DockerSecretService } from './docker-secret.service.js';
 import { type DockerSecretEnvOwner, dockerSecretEnvMatcher, dockerSecretEnvOwners } from './docker-secret-env.js';
-import { readPendingDockerSourceContainers } from './docker-source.service.js';
+import { assertNotPendingSourceContainer, readPendingDockerSourceContainers } from './docker-source.service.js';
 import type { DockerTaskService } from './docker-task.service.js';
 import {
   abortVolumeFileUpload as abortDockerVolumeFileUpload,
@@ -1485,16 +1485,8 @@ export class DockerManagementService {
     try {
       await removeDockerContainerMutation(this.containerMutationContext(), nodeId, containerId, force, userId);
     } catch (error) {
-      if (
-        error instanceof AppError &&
-        error.code === 'CONTAINER_NOT_FOUND' &&
-        (await readPendingDockerSourceContainers(this.db, nodeId, containerId).catch(() => [])).length > 0
-      ) {
-        throw new AppError(
-          409,
-          'SOURCE_CONTAINER_NOT_BUILT',
-          'This container does not exist yet: the first build of its Git source creates it. Delete its Git source to remove it.'
-        );
+      if (error instanceof AppError && error.code === 'CONTAINER_NOT_FOUND') {
+        await assertNotPendingSourceContainer(nodeId, containerId);
       }
       throw error;
     }

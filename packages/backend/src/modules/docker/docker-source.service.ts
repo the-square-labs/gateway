@@ -1,6 +1,7 @@
 import { container } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
@@ -39,6 +40,24 @@ export interface PendingDockerSourceContainer {
     runtimeProfile: 'default' | 'secure';
   };
 }
+/**
+ * A Git-source container its first build has not created yet (queued, building or failed) is no Docker container:
+ * removing it as one is refused with 409 SOURCE_CONTAINER_NOT_BUILT, which says to delete its Git source.
+ */
+export async function assertNotPendingSourceContainer(nodeId: string, containerName: string): Promise<void> {
+  if (!container.isRegistered(DockerSourceService)) return;
+  const pending = await container
+    .resolve(DockerSourceService)
+    .getPendingContainer(nodeId, containerName)
+    .catch(() => null);
+  if (!pending) return;
+  throw new AppError(
+    409,
+    'SOURCE_CONTAINER_NOT_BUILT',
+    'This container does not exist yet: the first build of its Git source creates it. Delete its Git source to remove it.'
+  );
+}
+
 export async function readPendingDockerSourceContainers(
   _db: DrizzleClient,
   nodeId: string,
