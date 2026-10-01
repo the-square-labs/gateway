@@ -428,12 +428,21 @@ export const readContainerFileRoute = appRoute({
     },
   },
 });
+/** The raw body of a file write: the file's complete new content. */
+const fileContentBody = {
+  body: {
+    description:
+      "The file's complete new content as raw bytes (any Content-Type; the body is not JSON). The file at `path` is replaced with it.",
+    required: true,
+    content: { 'application/octet-stream': { schema: { type: 'string' as const, format: 'binary' } } },
+  },
+};
 export const writeContainerFileRoute = appRoute({
   method: 'put',
   path: '/nodes/{nodeId}/containers/{containerId}/files/write',
   tags: ['Docker Files'],
   summary: 'Write a container file',
-  request: { params: containerParams, query: FileBrowseSchema },
+  request: { params: containerParams, query: FileBrowseSchema, ...fileContentBody },
   responses: successJson,
 });
 export const createContainerFileRoute = appRoute({
@@ -834,7 +843,7 @@ export const writeVolumeFileRoute = appRoute({
   path: '/nodes/{nodeId}/volumes/{name}/files/write',
   tags: ['Docker Volumes'],
   summary: 'Write a volume file',
-  request: { params: volumeParams, query: FileBrowseSchema },
+  request: { params: volumeParams, query: FileBrowseSchema, ...fileContentBody },
   responses: successJson,
 });
 export const createVolumeFileRoute = appRoute({

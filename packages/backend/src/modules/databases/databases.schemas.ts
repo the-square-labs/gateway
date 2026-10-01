@@ -236,7 +236,9 @@ const bindingEnvironmentSchema = z
     username: bindingEnvironmentVariableSchema.optional(),
     password: bindingEnvironmentVariableSchema.optional(),
   })
-  .default({})
+  .describe(
+    'The environment variable names the link injects into its workload, by value. At least one is required (400 MANAGED_DATABASE_BINDING_ENV_REQUIRED).'
+  )
   .superRefine((value, context) => {
     const entries = Object.entries(value).filter(([, variable]) => variable !== undefined) as Array<[string, string]>;
     const seen = new Set<string>();
