@@ -1460,12 +1460,15 @@ export async function initializeContainer(): Promise<void> {
     removeBinding: (policyId, userId) => dockerAvailabilityService.removeManagedDatabaseBinding(policyId, userId),
   });
   dockerManagementService.setContainerRecreateCompletedHandler(async (nodeId, newContainerId) => {
+    await proxyService.reconcileDockerContainerRecreate(nodeId);
+    await dockerSnapshotReconciler.finalizeContainerRecreate(nodeId, newContainerId);
     // A recreated workload keeps its persisted binding metadata, but the
     // daemon-owned listeners and Relay lanes still need to be proven against
     // the replacement container before the lifecycle task can report success.
-    await managedDatabaseBindingService.reconcileBindingPrincipals(nodeId);
-    await proxyService.reconcileDockerContainerRecreate(nodeId);
-    await dockerSnapshotReconciler.finalizeContainerRecreate(nodeId, newContainerId);
+    // Without the commercial module there are no managed database bindings.
+    await managedDatabaseBindingService.reconcileBindingPrincipals(nodeId).catch((error: unknown) => {
+      if ((error as { code?: string } | null)?.code !== 'COMMERCIAL_MODULE_UNAVAILABLE') throw error;
+    });
   });
   if (relayPolicyService && relayRegistryService) {
     const relayRegistryIngressService = commercialEdition.createRegistryIngress(
