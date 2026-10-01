@@ -212,6 +212,10 @@ export interface DockerContainerMutationContext {
     timeoutMs?: number,
     isComplete?: (inspectData: Record<string, any>) => boolean
   ): void;
+  /**
+   * Waits for the container named `containerName` to run under a runtime other than `oldContainerId`, which must be
+   * the replaced container's runtime ID: a name would match the replaced container while it still runs.
+   */
   watchRecreateByName(
     nodeId: string,
     containerName: string,
@@ -1304,7 +1308,8 @@ export async function updateContainer(
   ctx.watchRecreateByName(
     nodeId,
     name,
-    containerId,
+    // The replacement is told apart from the replaced runtime by its ID, also when the request named it.
+    containerRuntimeId(inspect, containerId),
     task?.id,
     'Container updated',
     expectedState,
@@ -1526,7 +1531,8 @@ export async function recreateWithConfig(
       ctx.watchRecreateByName(
         nodeId,
         name,
-        containerId,
+        // The replacement is told apart from the replaced runtime by its ID, also when the request named it.
+        containerRuntimeId(inspect, containerId),
         task?.id,
         'Container recreated',
         expectedState,
@@ -1756,7 +1762,8 @@ export async function updateContainerEnv(
   ctx.watchRecreateByName(
     nodeId,
     name,
-    containerId,
+    // The replacement is told apart from the replaced runtime by its ID, also when the request named it.
+    containerRuntimeId(runtimeInspect, containerId),
     task?.id,
     'Container env updated',
     expectedState,
