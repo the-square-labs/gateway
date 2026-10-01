@@ -128,6 +128,32 @@ server {
     expect(result.errors).toContain('Forbidden directive "env" found on line 1');
   });
 
+  it.each([
+    'access_log /etc/cron.d/gateway gateway_combined;',
+    'error_log /root/.ssh/authorized_keys;',
+    'access_log /var/log/nginx/../../etc/cron.d/gateway;',
+    'access_log /var/log/nginx/$host.log;',
+  ])('keeps raw mode logs in the nginx log directory: %s', (snippet) => {
+    expect(service.validate(snippet, true).errors).toEqual([
+      expect.stringMatching(/^Directive "(access|error)_log" may only write to \/var\/log\/nginx\/ found on line 1$/),
+    ]);
+    expect(service.validate(snippet, true, true).valid).toBe(true);
+  });
+
+  it('allows raw mode logs in the nginx log directory, syslog and off', () => {
+    const result = service.validate(
+      [
+        'access_log /var/log/nginx/proxy-1.access.log gateway_combined;',
+        'error_log /var/log/nginx/proxy-1.error.log warn;',
+        'access_log syslog:server=127.0.0.1;',
+        'access_log off;',
+      ].join('\n'),
+      true
+    );
+
+    expect(result).toEqual({ valid: true, errors: [] });
+  });
+
   it('allows raw mode dangerous directives only with raw bypass', () => {
     const result = service.validate(
       `

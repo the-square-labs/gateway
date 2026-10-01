@@ -159,16 +159,25 @@ describe('NginxTemplateService template content', () => {
   });
 
   it.each([
-    ['include', 'server {\n    include /etc/nginx/nginx.conf;\n}'],
-    ['load_module', 'load_module /usr/lib/nginx/modules/evil.so;\nserver { listen 80; }'],
-    ['lua_', 'server {\n    location / { access_by_lua_file /tmp/a.lua; }\n}'],
-  ])('refuses %s without proxy:unrestricted and accepts it with it', async (directive, content) => {
+    ['include', 'server {\n    include /etc/nginx/nginx.conf;\n}', 'Forbidden directive "include"'],
+    [
+      'load_module',
+      'load_module /usr/lib/nginx/modules/evil.so;\nserver { listen 80; }',
+      'Forbidden directive "load_module"',
+    ],
+    ['lua_', 'server {\n    location / { access_by_lua_file /tmp/a.lua; }\n}', 'Forbidden directive "lua_"'],
+    [
+      'access_log',
+      "log_format cron '* * * * * root $arg_c';\nserver {\n    access_log /etc/cron.d/gateway cron;\n}",
+      'Directive "access_log" may only write to /var/log/nginx/',
+    ],
+  ])('refuses %s without proxy:unrestricted and accepts it with it', async (_directive, content, error) => {
     const { svc, writes } = templateService();
     const input = { name: 'T', type: 'proxy' as const, content, variables: [] };
 
     await expect(svc.createTemplate(input, 'user-1', manager)).rejects.toMatchObject({
       code: 'INVALID_TEMPLATE_CONTENT',
-      message: expect.stringContaining(`Forbidden directive "${directive}"`),
+      message: expect.stringContaining(error),
     });
     await expect(svc.updateTemplate(TEMPLATE, { content }, 'user-1', manager)).rejects.toMatchObject({
       code: 'INVALID_TEMPLATE_CONTENT',

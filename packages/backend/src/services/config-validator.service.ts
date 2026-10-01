@@ -31,6 +31,9 @@ export interface ConfigValidationResult {
   errors: string[];
 }
 
+/** `{{logPath}}`, the route's log file prefix, always renders inside nginx's log directory. */
+const TEMPLATE_LOG_PATH = /{{\s*logPath\s*}}/g;
+
 /** Statements with forbidden directive names that Gateway's own templates emit, in their template form. */
 const GATEWAY_TEMPLATE_STATEMENTS: readonly RegExp[] = [
   /include\s+{{\s*pagesRouteIncludePath\s*}}\s*;/g,
@@ -141,6 +144,24 @@ export class ConfigValidatorService {
   ];
 
   private static readonly ROOT_LOCATION_PATTERNS: readonly RegExp[] = [/^\/$/, /^=\s*\/$/, /^\^~\s*\/$/];
+
+  private static readonly NGINX_LOG_DIRECTORY = '/var/log/nginx/';
+
+  /**
+   * nginx opens log files as root when it loads the config, with a log_format of the config's choosing, so a raw
+   * config could write any file on the node through access_log or error_log. Outside unrestricted configs logs go
+   * to nginx's log directory, to syslog, or nowhere.
+   */
+  private static logTargetAllowed(name: string, target: string | undefined): boolean {
+    if (target === undefined || target.startsWith('syslog:')) return true;
+    if (name === 'access_log' && target === 'off') return true;
+    if (name === 'error_log' && (target === 'stderr' || target.startsWith('memory:'))) return true;
+    return (
+      target.startsWith(ConfigValidatorService.NGINX_LOG_DIRECTORY) &&
+      !target.includes('$') &&
+      !target.split('/').includes('..')
+    );
+  }
 
   private static matchesForbiddenDirective(name: string, directive: string): boolean {
     const forbidden = directive.trim().toLowerCase();
@@ -343,6 +364,14 @@ export class ConfigValidatorService {
             errors.push(`Forbidden directive "${directive.trim()}" found on line ${token.line}`);
           }
         }
+        if (
+          (name === 'access_log' || name === 'error_log') &&
+          !ConfigValidatorService.logTargetAllowed(name, token.words[1])
+        ) {
+          errors.push(
+            `Directive "${name}" may only write to ${ConfigValidatorService.NGINX_LOG_DIRECTORY} found on line ${token.line}`
+          );
+        }
         continue;
       }
 
@@ -480,13 +509,14 @@ export class ConfigValidatorService {
 
   /**
    * Validate custom nginx template content. A template is raw server configuration rendered by Handlebars:
-   * expressions are blanked as in advanced snippets and the raw deny-list applies. The Pages include and the
-   * access list password file that Gateway's own templates emit stay allowed in their template form.
+   * expressions are blanked as in advanced snippets and the raw deny-list applies. The Pages include, the access
+   * list password file and the `{{logPath}}` logs that Gateway's own templates emit stay allowed in their template
+   * form.
    */
   validateTemplate(content: string): ConfigValidationResult {
     const withoutGatewayStatements = GATEWAY_TEMPLATE_STATEMENTS.reduce(
       (text, pattern) => text.replace(pattern, blank),
-      content
+      content.replace(TEMPLATE_LOG_PATH, `${ConfigValidatorService.NGINX_LOG_DIRECTORY}proxy`)
     );
     return this.check(content, ConfigValidatorService.stripHandlebarsExpressions(withoutGatewayStatements), {
       denyList: 'raw',
