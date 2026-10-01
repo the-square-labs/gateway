@@ -150,7 +150,7 @@ export class ManagedDatabaseBindingService {
   async adoptAvailabilityPlacementAsSingle(_context: DockerAvailabilityAdapterContext): Promise<void> {
     return commercialModuleUnavailable();
   }
-  async reconcileBindingPrincipals(_nodeId?: string): Promise<void> {
+  async reconcileBindingPrincipals(_nodeId?: string, _containerId?: string): Promise<void> {
     return commercialModuleUnavailable();
   }
   async create(

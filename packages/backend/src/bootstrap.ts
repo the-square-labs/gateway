@@ -1436,8 +1436,9 @@ export async function initializeContainer(): Promise<void> {
     // A recreated workload keeps its persisted binding metadata, but the
     // daemon-owned listeners and Relay lanes still need to be proven against
     // the replacement container before the lifecycle task can report success.
+    // Only the bindings of the recreated container are reconciled.
     // Without the commercial module there are no managed database bindings.
-    await managedDatabaseBindingService.reconcileBindingPrincipals(nodeId).catch((error: unknown) => {
+    await managedDatabaseBindingService.reconcileBindingPrincipals(nodeId, newContainerId).catch((error: unknown) => {
       if ((error as { code?: string } | null)?.code !== 'COMMERCIAL_MODULE_UNAVAILABLE') throw error;
     });
   });
