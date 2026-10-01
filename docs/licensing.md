@@ -69,6 +69,7 @@ Entitlements schema version 5 is current. It adds storage connections, external 
 | Git Repository Push-To-Deploy for Containers, Deployments, Compose, and Pages; Isolated Build Workers | Ready | — | — | ✅ | ✅ |
 | External Docker-Client Access to the Internal Registry | Ready, opt-in | — | — | ✅ | ✅ |
 | Multi-node Workload Availability (Container, Deployment, Compose) | Ready | — | — | ✅ | ✅ |
+| Ingress Groups: Routes, Pages Routes, and Domains Served by Several Nginx Nodes | Ready | — | — | ✅ | ✅ |
 | Git Build Vulnerability Scanning and Admission Policy | Ready | — | — | ✅ | ✅ |
 | Structured Logging | Ready, opt-in | — | — | ✅ | ✅ |
 | Audit Log Export | Ready | — | — | ✅ | ✅ |
@@ -85,7 +86,7 @@ Entitlements schema version 5 is current. It adds storage connections, external 
 
 `In development` and `Expected in 2.x` identify future product availability separately from plan entitlement. A checkmark on such a row means the feature is intended to be included in that plan when released. Target versions are roadmap estimates, not currently available features.
 
-Workload Availability (HA) is available for mount-free Containers, Deployments, and whole Compose Projects on Business and Enterprise: 2–32 serving placements in Replicated mode or one serving placement with replacement in Failover mode. This is not HA for the Gateway control plane, nginx, registry storage, or shared volumes; metric autoscaling and same-node replicas remain in development.
+Workload Availability (HA) is available for mount-free Containers, Deployments, and whole Compose Projects on Business and Enterprise: 2–32 serving placements in Replicated mode or one serving placement with replacement in Failover mode. Once every node and relay of a workload runs 2.11, failover runs in the data plane (lease mode) and keeps working while Gateway is down; a license change never takes a policy out of lease mode (see [Data-Plane Failover](capabilities.md#data-plane-failover-lease-mode)). Ingress groups, which serve Routes, Pages Routes, and Domains from several nginx nodes, use the same Business and Enterprise entitlement; existing groups keep serving without it (see [Ingress Groups](capabilities.md#ingress-groups)). This is not HA for the Gateway control plane, registry storage, or shared volumes; metric autoscaling and same-node replicas remain in development.
 
 Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Storage-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
 

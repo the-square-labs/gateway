@@ -14,9 +14,9 @@ Gateway uses managed nginx nodes as public ingress. The Ingress workspace is spl
 
 Core ingress workflows:
 
-- Assign every registered domain to one eligible nginx ingress node with a detected public service address.
+- Serve every registered domain from one eligible nginx ingress node with a detected public service address, or from an [ingress group](#ingress-groups) of several nginx nodes.
 - Create, edit, order, and delete routes. The REST API and persisted model retain the `proxy-host` name for compatibility.
-- Keep each registered domain and every route using it on the same nginx node; Gateway rejects cross-node combinations.
+- Keep each registered domain and every route using it on the same nginx node or ingress group; Gateway rejects a route whose node or group differs from its registered domain's.
 - Configure SSL termination, manual upstream targets, or managed Docker container/deployment upstreams with published-port validation.
 - Connect managed Docker workloads to nginx through Gateway Secure Links without exposing the workload port as a normal public management endpoint.
 - Put an enabled managed route into maintenance mode to return HTTP 503, pause managed health checks, preserve its TLS paths, and expose maintenance state to alerts and status pages.
@@ -38,7 +38,20 @@ Nginx integration:
 
 - `managed` mode lets Gateway own a known-good base nginx config.
 - `integrate` mode keeps an existing host nginx config and injects Gateway-managed includes.
-- ACME HTTP-01 challenges are deployed only to the ingress node assigned to the registered domain. That node must be online, publicly reachable on port 80, and have a public service address.
+- ACME HTTP-01 challenges are deployed only to the ingress node assigned to the registered domain, or to every online member of its ingress group. That node must be online, publicly reachable on port 80, and have a public service address.
+
+### Ingress Groups
+
+An ingress group is a set of nginx ingress nodes, normally one per site, that serve the same Routes, Domains, and Pages Routes. Ingress groups are available on Business and Enterprise; a group that exists keeps serving without the entitlement, and removing members or deleting the group is always allowed. Manage them under **Ingress > Ingress Groups**, through `/api/ingress-groups`, or with the `manage_ingress_group` AI Workspace and MCP tool.
+
+- Every member renders all routes of the group itself and keeps its own replica of every certificate, access list, and Pages artifact plus its own Secure Link sources, so a member keeps serving while Gateway or another member is down. A reconciler repairs missing or stale configs and certificate replicas every minute and when a member reconnects.
+- Members are nginx nodes whose daemon advertises `ingress_group_v1` (the nginx daemon from 2.11), listed in site-preference order. A member is `joining` while it receives the group's configuration and is not yet published in DNS, `active` once it serves and is published, and `draining` while it is being removed: it keeps serving until no public name of the group resolves to it and the DNS TTL has passed (at most 24 hours), unless the removal is forced.
+- A Route or Domain targets either one node or one group, and a route uses the same target as its registered domain. Converting an existing route or domain onto a group sends configuration and certificates to the new members first and changes DNS last; moving back to one node changes DNS first and cleans up the other members afterwards. A domain that backs the Pages wildcard preview profile stays on one node.
+- Groups use node folders and node permissions: viewing needs `nodes:details` or `nodes:manage`, changes need `nodes:manage` on the group's folder, and adding a member also needs `nodes:manage` on that node. Placing a route or domain on a group needs the create permission for every member.
+- DNS failover mode `none` is the only mode: the Cloudflare records of a group's domains list the address of every active member (round robin). Plain DNS records are not health-checked, so an unreachable member keeps receiving its share of clients until it leaves the group. External DNS stays operator-managed; list the members' addresses there.
+- For health-based failover, put a load balancer in front of the members, for example Cloudflare Load Balancing; Gateway does not create it. Every Gateway-rendered server block and the node's default servers answer `/.well-known/gateway-ingress-health` with `200` and a JSON status while nginx runs the current configuration (and, on a node with Secure Link sources, at least one relay connection is usable), `503` otherwise, and `502` when the nginx daemon is not running. A probe that addresses a member by IP uses the host name `ingress-health.gateway.invalid` (as SNI and `Host`; the node answers it on ports 80 and 443 with a self-signed certificate), because the TLS catch-all refuses other unknown names.
+- Certificates for names on a Cloudflare-managed group domain are issued and renewed with DNS-01 through the Cloudflare connector, so they do not depend on any one member. HTTP-01 challenges go to every online member.
+- Route health is checked through every member: a route is degraded when some members fail it and offline when none serves it. The route shows which configuration and certificate each member confirmed, and its log view merges the members' nginx logs by time.
 
 ## Pages
 
@@ -103,7 +116,7 @@ Container workflows:
 - Review global build history, Build Worker assignment, logs, vulnerability findings/policy results, desired and deployed commits, Compose service names, and per-resource source settings. Repository, integration, branch, Dockerfile/Compose-file path, build context, separate automatic-build and automatic-deploy controls, and source-scoped Build Secrets remain part of the Docker or Compose resource rather than a separate application entity.
 - AI Workspace and remote MCP expose first-class Compose lifecycle/revision/secret/operation tools, Git-source management for containers, deployments, Compose Projects and Pages, Build Worker-filtered build history, build logs/cancel/retry, and resource search for Compose Projects and build jobs. Every operation reuses the same REST schemas, license checks, and resource-scoped permissions as the Console.
 - Use the Gateway-managed internal Distribution registry on every plan without assigning a domain or publishing a host port. It keeps three successful artifacts plus active, rollback, in-progress, and manually pinned digests. Optional Business+ external Docker-client access is configured under **Settings > Features** and is exposed only through a selected nginx node, domain, TLS certificate, and repository/action-scoped token. Entitlement loss disables that ingress and every public token request rechecks the current plan.
-- On Business and Enterprise, enable Availability for an existing standalone Container, managed Deployment, or whole Compose Project with no mounts. Replicated mode keeps 2–32 serving placements on independent eligible Docker nodes; Failover keeps one serving placement and replaces it after Gateway loses the node control channel. Gateway mirrors workload images into pinned immutable internal-registry digests, pre-pulls eligible standby nodes, projects managed-database bindings and Proxy Host/Additional Route/Advanced Secure Link targets per placement, and balances new ingress connections with least-connections. The nodes remain independent: Gateway does not create Swarm state, an overlay, node-to-node trust, or inbound cluster ports.
+- On Business and Enterprise, enable Availability for an existing standalone Container, managed Deployment, or whole Compose Project with no mounts. Replicated mode keeps 2–32 serving placements on independent eligible Docker nodes; Failover keeps one serving placement and replaces it on another node. Once every node and relay of the workload runs 2.11, failover runs in the data plane and keeps working while Gateway is down (see [Application Scaling](#application-scaling)). Gateway mirrors workload images into pinned immutable internal-registry digests, pre-pulls eligible standby nodes, projects managed-database bindings and Proxy Host/Additional Route/Advanced Secure Link targets per placement, and balances new ingress connections with least-connections. The nodes remain independent: Gateway does not create Swarm state, an overlay, node-to-node trust, or inbound cluster ports.
 - Configure a trusted HTTPS token-service origin only for registries whose Bearer auth service is intentionally hosted on a separate origin.
 - Track long-running Docker operations in the Tasks view.
 
@@ -160,16 +173,18 @@ Domain workflows:
 
 - Track domains independently from routes and certificates.
 - Use either external DNS or a Cloudflare connector. External DNS remains operator-managed; Cloudflare-managed domains can have their A/AAAA records created and reconciled automatically.
-- Select an eligible nginx ingress node for every domain. Nodes without a detected public service address are not eligible.
+- Select an eligible nginx ingress node or an [ingress group](#ingress-groups) for every domain. Nodes without a detected public service address are not eligible, and a group member without one is not published in DNS.
 - Validate DNS records such as A, AAAA, CNAME, CAA, MX, and TXT.
 - Track domain usage across routes and SSL certificates.
 - Surface DNS status in the UI.
 - Use scheduled DNS checks for ongoing validation.
-- Move a domain and its routes between eligible nginx nodes through the explicit ingress migration workflow. Cloudflare-managed DNS is updated during cutover; external DNS requires the operator to update records before completion.
+- Move a domain and its routes between eligible nginx nodes through the explicit ingress migration workflow, or onto an ingress group and back to one of its members without downtime. Cloudflare-managed DNS is updated during cutover; external DNS requires the operator to update records before completion.
 
 ## Databases
 
 Gateway can store external PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, and deploy managed Postgres, Redis, and ClickHouse instances on dedicated Storage nodes. Enrolling Storage nodes is available in every plan; creating managed database instances requires Personal or higher.
+
+External PostgreSQL and Redis connections that use TLS verify the server's certificate chain and host name. New connections verify by default; a connection to a server issued by a private CA takes that CA as a PEM bundle (`tlsCaCertificate`), and turning verification off (`tlsVerifyCertificate: false`) is an explicit, insecure choice per connection. Connections saved before 2.11 never verified the server certificate, so the upgrade keeps every existing external PostgreSQL and Redis connection with TLS working as unverified instead of breaking it. Such a connection shows **Enabled, not verified** and a **TLS certificate is not verified** notice with **Add CA certificate** and **Test and enable verification**; Gateway tests the connection with verification before it saves the change, so a certificate that does not verify leaves the connection as it was. Review these connections after the upgrade. ClickHouse connections already verified their certificate, and managed databases are verified against Gateway's Database CA. Backups of a verified external connection run only on a Storage node whose Docker daemon supports verification (2.11 or later); Gateway refuses to send the run to an older daemon rather than let it skip the check.
 
 AI Workspace and the remote MCP Databases toolset can read the managed catalog, provision/retry/delete instances, and create or remove standalone-container, deployment, or Compose-service bindings under the same license and database/Docker scopes as the Operations Console. The Operations Console also exposes per-binding Relay runtime telemetry for linked standalone containers, including active streams, throughput, setup latency, completion health, and admission rejects.
 
@@ -264,7 +279,7 @@ Node features:
 - Report local/public IP addresses and allow an explicit Docker service address for cross-node and proxy-upstream traffic.
 - Remotely update daemon binaries with SHA256 verification and atomic replacement.
 
-Managed services keep running if the Gateway app is offline. You lose central control until the app returns, but nginx, Docker, and managed database services continue using the last applied host state. With a healthy relay and PostgreSQL, private managed-database bindings continue independently of an app-only restart.
+Managed services keep running if the Gateway app is offline. You lose central control until the app returns, but nginx, Docker, and managed database services continue using the last applied host state. With a healthy relay and PostgreSQL, private managed-database bindings continue independently of an app-only restart. A relay admits new connections only while its last signed policy is valid, that is for the relay policy lease after Gateway last reached it (72 hours by default), and Availability policies in lease mode keep failing over without Gateway; see [Offline Behavior](nodes.md#offline-behavior).
 
 ## Structured Logging
 
@@ -305,12 +320,29 @@ Connector credentials are encrypted at rest. GitLab access is split between conn
 
 ## Application Scaling
 
-Gateway Availability (HA) is available and provides fixed-count multi-node placement for eligible mount-free Containers, Deployments, and whole Compose Projects on Business and Enterprise. Replicated mode maintains 2–32 serving placements; Failover maintains one serving placement and replaces it after loss of the node control channel. It deliberately does not create an application cluster or shared node network, and does not provide HA for Gateway itself, nginx, registry storage, or shared volumes.
+Gateway Availability (HA) is available and provides fixed-count multi-node placement for eligible mount-free Containers, Deployments, and whole Compose Projects on Business and Enterprise. Replicated mode maintains 2–32 serving placements; Failover maintains one serving placement and replaces it on another node. It deliberately does not create an application cluster or shared node network, and does not provide HA for Gateway itself, registry storage, or shared volumes. Nginx ingress is made redundant separately with [ingress groups](#ingress-groups).
+
+Priority mode orders the eligible nodes: serving placements go to the first available nodes of the order, and once a higher-priority node has stayed healthy for the failback delay (`failbackDelaySeconds`, 300 seconds by default, 0 to 3600) Gateway moves the workload back to it with a `failback` operation.
 
 The following scaling capabilities remain **In development**:
 
 - **Metric autoscaling:** change the placement count from CPU, memory, queue, or traffic metrics.
 - **Vertical workload scaling:** run multiple managed instances of one workload on the same managed machine.
+
+### Data-Plane Failover (Lease Mode)
+
+Without lease mode, Gateway itself drives failover: after it loses a node's control connection and the offline grace passes (`offlineReplacementGraceSeconds`, 15 seconds by default), it starts a prepared standby or creates a replacement elsewhere. That needs a running Gateway. In 2.11 a policy instead runs in lease mode, where the nodes and relays decide failover themselves and keep doing so while Gateway is down.
+
+- **How a policy enters it.** A policy switches to lease mode by itself; there is no setting to turn it on or off. Every candidate Docker node, every Nginx node of the workload's routes, every relay that carries it, and its witness must advertise `availability_lease_v2` (the 2.11 daemons and relays), each candidate Docker node needs a running [lease watchdog](nodes.md#lease-watchdog) and a reported lease identity, and enough members that can vote must exist for a quorum. All of these must have held for 2 minutes without a restart, so a fleet in the middle of an update never switches. Until then the policy's lease reason is `participants_settling` and names the nodes and relays still settling. Lease mode never interrupts the serving copy when it starts.
+- **Who decides.** Nodes and relays hold a lease per serving slot. The holder renews it every 5 seconds. In the default `strict` partition mode, a holder whose renewals have not reached a majority of the policy's voters for 15 seconds stops its own copy (the copy is dead within 24 seconds) and releases the slot. While a majority of the voters is reachable, the next candidate commits the lease within 45 seconds of the holder's loss and starts its copy, whether or not Gateway is up. Standbys are created ahead of time with the image pulled but not started.
+- **Voters.** Each policy votes with its candidate nodes, one per physical host, plus witnesses so the count is odd and at least 3 (at most 7). A witness is a relay or a Docker node on another host; set one with `witness` or let Gateway choose one. The automatic witness is never Gateway's local relay while a remote relay can witness, because the local relay stops with the Gateway host. The policy shows a voter margin: how many more voters may fail before a quorum is lost, counting only voters that can vote without Gateway.
+- **Partition modes.** `partitionMode: strict`, the default, never runs two copies of a slot, even during a network split, and a cut-off holder stops its copy as above. `available` never stops a holder on a timer: it keeps serving on both sides of a split and may run two copies at once until the split heals; do not use it for singletons such as queue consumers, indexers, or scheduled jobs.
+- **Planned moves.** A failback, drain, or manual move in lease mode is a handoff: the serving node stops its copy and releases the lease before the next node starts its own. A `strict` policy in Failover mode, which has one slot, does not serve during that handoff; in Replicated mode the other replicas keep serving.
+- **Excluded nodes.** A problem on one node never changes the policy's mode. A candidate that is `offline`, has no running lease watchdog (`watchdog_missing`), runs a daemon without `availability_lease_v2` (`daemon_outdated`), or has not reported a lease identity yet (`identity_pending`) is listed under **Excluded nodes** (`lease.excludedNodes` in the API) with that reason: it gets no new standby and takes no slot, and the next candidate takes its place. Fix the node (start the watchdog or re-run the node installer, or update the daemon) and it takes part again.
+- **Leaving lease mode.** Only when lease mode becomes impossible for the policy, for example too few voters, an Nginx node or relay of the workload without `availability_lease_v2`, or no candidate that can hold a slot, and only after that has lasted 2 minutes without a break; an explicit disable, stop, start, or restart leaves it at once. A license change never does. Leaving lease mode by itself never stops the serving copy: Gateway closes the lease, the holder keeps its copy running once a majority of the voters confirmed the close, and Gateway drives failover again.
+- **Audit.** An autonomous takeover is recorded as `docker.availability.lease_failover`, a planned move as `docker.availability.lease_handoff`, and a slot that lapsed and was taken again by the same node as `docker.availability.lease_reacquired`, dated when the holder acquired the slot, also when that happened while Gateway was down.
+
+Lease frames between nodes travel only through relays. Every Docker node of a lease-mode policy keeps a connection to every lease-capable relay of the Relay Pool, and the workload's member Secure Links are registered on each of those relays, so the policy's Docker nodes and the Nginx nodes of its routes must all reach every relay (see [Firewall Requirements](nodes.md#firewall-requirements)). Gateway's local relay stops with the Gateway host: to keep failover working when that host is lost, run at least one remote relay on another host.
 
 ## Vulnerability And Security Scanning
 

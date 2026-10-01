@@ -80,6 +80,13 @@ curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/se
 
 See [Storage nodes, external storage and database backups](storage-and-backups.md) for what runs on a Storage node.
 
+Monitoring node:
+
+```bash
+curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-monitoring-node.sh | \
+  sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
+```
+
 ## Docker Secure Runtime
 
 Gateway offers two workload isolation profiles:
@@ -148,12 +155,18 @@ The GPU must appear as attachable on the node before it can be selected. A devic
 - Gateway does not manage MIG, vGPU, SR-IOV, mediated devices, exclusive GPU allocation, or host driver/runtime installation. Existing unrecognized manual GPU mappings stay read-only so Gateway does not rewrite arbitrary host devices.
 - GPU-attached containers and deployments cannot migrate between nodes in v1. GPU-attached standalone containers also cannot be exported as `.gwca` archives. Detach the GPU and recreate the workload before using those portability workflows.
 
-Monitoring node:
+## Lease Watchdog
 
-```bash
-curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-monitoring-node.sh | \
-  sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
-```
+Docker Availability runs failover in the data plane once a policy is in lease mode (see [Data-Plane Failover](capabilities.md#data-plane-failover-lease-mode)). There, a node that loses its lease must stop its copy of the workload even if the Docker daemon or `dockerd` hangs. The lease watchdog enforces that: `gateway-lease-watchdog` is a separate service on every general Docker node (installer mode `docker`; Build Workers and Storage nodes do not need it).
+
+- **What it does.** The Docker daemon writes a deadline record for every lease-mode container to a tmpfs directory, `/run/gateway-lease-watchdog`. The watchdog checks those records four times a second and, once a container's lease deadline has passed, kills every process in that container's cgroup without going through the Docker daemon or `dockerd`. It keeps doing so on every pass, so a late start of that container dies too. It stops only containers that have such a record, opens no network listener, and runs as root because it must kill container processes of any user.
+- **Heartbeat.** The watchdog writes a heartbeat every second. A Docker daemon whose watchdog heartbeat is older than 3 seconds does not acquire a lease or start a lease-mode container; when it is older than 10 seconds the daemon treats the watchdog as gone, stops its lease-mode copies, releases their slots, and reports the node as `watchdog_missing`.
+- **Independent of the daemon.** It has its own binary (`/usr/local/bin/gateway-lease-watchdog`), its own systemd unit or OpenRC service (`gateway-lease-watchdog`), and its own release line (`vX.Y.Z-watchdog`), so updating, downgrading, or removing the Docker daemon never disarms it. Records stay enforced while no lease-aware Docker daemon runs and are removed only after 10 minutes without any sign of one, for example after a rollback to a daemon without leases.
+- **Installation.** The Docker node installer downloads it, verifies its checksum, and starts it in `docker` mode; `GATEWAY_LEASE_WATCHDOG_VERSION` pins a release instead of the latest one. If no release can be downloaded or no service manager is found, the installer warns and the node simply stays out of lease mode. On nodes installed before the watchdog existed, a 2.11 Docker daemon installs it by itself when it runs as root and finds systemd or OpenRC, and no watchdog binary, service file, or heartbeat is present yet; it verifies the signed release manifest first and retries with backoff if that fails. The daemon never updates, stops, or replaces an existing watchdog.
+- **Updates.** The watchdog checks for a newer release of its own line about every 6 hours (with jitter), verifies it, and never moves to an older release or from `stable` to a release candidate. A Docker daemon running as root keeps the watchdog on the daemon's own channel (`preview` for a release-candidate daemon, otherwise `stable`).
+- **Non-root nodes.** A Docker daemon installed with `--user <non-root user>`, or one on a host without systemd or OpenRC, cannot install the watchdog itself. It reports that, and Availability lists the node under **Excluded nodes** (`lease.excludedNodes`) with `watchdog_missing`; when all nodes that would hold the workload have this problem, the policy's lease reason is `watchdog_missing` too. Re-run the Docker node installer on the host with `sudo`: an enrolled node needs no new token, and the installer installs the watchdog as a root service for the daemon's user. Pass the same `--user <non-root user>` again, because a non-interactive run otherwise rewrites the daemon service to run as root.
+
+To check a node, run `sudo gateway-lease-watchdog status`: it prints whether the heartbeat is fresh and every deadline record with its policy, slot, and remaining time. `systemctl status gateway-lease-watchdog` (or `rc-service gateway-lease-watchdog status`) shows the service. An excluded node gets no new standby and takes no slot until the watchdog runs again; a holder whose watchdog stops running ends its own copy, and the next candidate takes over.
 
 ## Installer Options
 
@@ -174,7 +187,7 @@ Common daemon setup options:
 | `-y`, `--yes` | Non-interactive mode. |
 | `--help` | Show all supported options. |
 
-Every option also has an environment variable (`GATEWAY_NODE_ADDRESS`, `GATEWAY_NODE_TOKEN`, `GATEWAY_DOCKER_MODE`, and so on; `--help` lists them). `GATEWAY_LEASE_WATCHDOG_VERSION` pins the lease watchdog release that the Docker installer installs in `docker` mode (default: the latest release).
+Every option also has an environment variable (`GATEWAY_NODE_ADDRESS`, `GATEWAY_NODE_TOKEN`, `GATEWAY_DOCKER_MODE`, and so on; `--help` lists them). `GATEWAY_LEASE_WATCHDOG_VERSION` pins the [lease watchdog](#lease-watchdog) release that the Docker installer installs in `docker` mode (default: the latest release).
 
 The installers verify downloaded daemon binaries with SHA256 checksums and back up existing binaries during upgrades.
 
@@ -220,10 +233,12 @@ Setup commands always carry the fingerprint of the gRPC certificate Gateway curr
 | Direction | Port | Purpose |
 |-----------|------|---------|
 | Node to Gateway relay | `9443/tcp` | Public relay-backed gRPC control plane and tunnel endpoint; the app-side gRPC listener is internal. |
-| Managed node to remote relay | `9443/tcp` by default | mTLS relay data plane; required only for configured Relay Pool members. Every node of a Docker Availability policy in lease mode must reach every relay. |
+| Managed node to remote relay | `9443/tcp` by default | mTLS relay data plane; required only for configured Relay Pool members. In Docker Availability lease mode, every Docker node of the policy and every Nginx node of its routes must reach every relay of the pool. |
 | Internet to nginx node | `80/tcp`, `443/tcp` | Public HTTP/HTTPS traffic served by nginx. |
 
 Managed nodes do not need inbound management ports for Gateway.
+
+Lease-mode Availability needs that last row in full. Lease frames between the nodes of a policy travel only through relays, each Docker node of a lease-mode policy keeps a connection to every lease-capable relay, and the workload's member Secure Links are registered on every one of them, so the Nginx nodes that route to it must reach them all too. A node that cannot reach a relay loses that relay's vote and path, and a holder that reaches too few voters stops its copy in `strict` mode (see [Data-Plane Failover](capabilities.md#data-plane-failover-lease-mode)).
 
 ## Relay Nodes
 
@@ -282,6 +297,12 @@ From the UI:
 1. Open the node detail page.
 2. Review runtime and version status.
 3. Click **Update** when an update is available.
+
+To update several nodes at once, open **Nodes** and click **Update Nodes**. The dialog lists the nodes whose daemon is older than the latest release of its type and updates the selected ones together. Relay nodes are not listed: they update with the Relay Pool (**Settings > General**, **Update Relay Pool**), which drains them one at a time. Gateway refuses a daemon update for a node that is not connected, for a relay node, and for a node that already runs that release or a newer one, and it records the reason of a failed, rolled-back, or timed-out update on the node.
+
+Nodes that vote in or can hold a lease-mode Availability policy restart one after another, so the policy never loses its quorum to an update. Gateway sends such a node's update only once the other voters and candidates of its policies are online, have reported their lease state, and vote again; until then the node shows the update phase `waiting_for_lease_peers` and the peers it waits for. Requests that arrive together run standbys first and holders last, and nodes that share no policy update in parallel, so you can select all of them in **Update Nodes**. A peer that has not settled 3 minutes after its restart stops blocking, and a request that waited 30 minutes fails and names the peers. A queued update survives a Gateway restart, and Relay Pool updates wait for lease peers the same way.
+
+After a Docker node moves to the 2.11 daemon, the first apply of an unchanged Compose revision recreates its services once to add log rotation; see [Container Log Limits](operations.md#container-log-limits).
 
 Gateway verifies the signed daemon release manifest before dispatching an update. New daemons verify the signed manifest locally, download the binary, verify its SHA256 checksum, replace the binary atomically, and hand restart to the launcher on launcher-managed installations. The service manager supervises the launcher; older direct-run installations still rely on service-manager restart.
 
@@ -356,10 +377,12 @@ Published managed databases use native direct TLS by default. Gateway issues the
 
 If Gateway is offline:
 
-- Existing nginx configs keep serving traffic.
+- Existing nginx configs keep serving traffic, and an nginx node serves the last published status page from its cache.
 - Docker containers keep running.
 - Daemons keep retrying connection.
 - Operators temporarily lose centralized UI/API control.
 - New config changes cannot be pushed until Gateway is online again.
+- Relays keep working on the last signed policy Gateway sent them. That policy is valid for the relay policy lease, 72 hours by default (1 hour to 7 days in **Settings > Relay**, **Policy lease**), counted from Gateway's last refresh, which it repeats every few minutes while it runs. After the lease runs out, a relay admits no new connections until Gateway is back. Relays from before 2.11 keep a 15-minute lease until the Relay Pool update. Revocations and placement changes need Gateway.
+- Docker Availability policies in lease mode keep failing over without Gateway: in the default `strict` mode, a holder that is cut off from a majority of its policy's voters stops its own copy, and the next candidate takes over (see [Data-Plane Failover](capabilities.md#data-plane-failover-lease-mode)). Lease traffic between nodes runs through the relays, and Gateway's local relay stops when the Gateway host does, so failover that must survive the loss of the Gateway host needs a remote relay on another host. Policies that are not in lease mode are not failed over until Gateway is back.
 
-When Gateway returns, daemons reconnect and resume normal operation.
+When Gateway returns, daemons reconnect and resume normal operation. Gateway reconciles its records with the lease holders that took over while it was away and writes the takeovers to the audit log.

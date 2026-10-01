@@ -12,7 +12,9 @@ From the UI:
 
 1. Go to **Settings > General > About**.
 2. Click **Check for updates** and review the available version.
-3. Click **Update**.
+3. Click **Update Gateway to `<version>`**.
+
+A restart interrupts blue/green deploys, drains, Availability and Compose operations, build rollouts, and Docker migrations, so Gateway first waits for those that are running or queued. The update screen lists them and the latest time it waits: 15 minutes by default, longer when a running operation announces a later deadline, but never more than an hour. New operations of these kinds are refused until the update has finished. **Update now** stops waiting; Gateway then resumes or reconciles the interrupted operations after the restart, and it does the same when the wait runs out. A restart during the wait keeps the current version. This wait, and the database snapshot below, belong to the updater of the running version: they apply to updates started from 2.11 on, not to the update from 2.10 (see [Updating from 2.10](#updating-from-210)).
 
 Gateway verifies the signed release manifest, pulls the selected image by its immutable digest, runs the target image's foundation migrator, updates `GATEWAY_IMAGE_REF`, and recreates its own container. Relay has an independent immutable `GATEWAY_RELAY_IMAGE_REF`; Compose leaves it running when the digest is unchanged and replaces it when the signed `relayImageRef` changes. Automatic gateway updates fail closed when the signed manifest is missing, invalid, or does not match the requested version and running image repository.
 
@@ -30,7 +32,7 @@ docker compose up -d
 
 App-only updates leave established managed-database binding streams on the relay running. Updating the relay itself is an explicit data-plane maintenance event and may interrupt those streams. The one-time migration from a pre-relay deployment also has an expected interruption while public `9443/tcp` ownership moves from `app` to `relay`.
 
-Relay Pool updates are durable and one-at-a-time. With at least two ready physical fault domains, Gateway drains a remote instance, updates and verifies its signed worker and supervisor artifacts, returns it to service, and then continues. The local Compose relay is updated last. Drain waits up to 30 minutes and pauses instead of killing long-lived streams; the operator may wait again or use the explicitly confirmed **Force disconnect** action. A failed worker health/version check restores the previous binary, and a supervisor update is committed only after it reconnects at the expected version. Connector image references are promoted only after the whole pool succeeds.
+Relay Pool updates start from **Settings > General** with **Update Relay Pool**, which appears once Gateway runs the minimum version the relay release requires. They are durable and one-at-a-time. With at least two ready physical fault domains, Gateway drains a remote instance, updates and verifies its signed worker and supervisor artifacts, returns it to service, and then continues. The local Compose relay is updated last. Drain waits up to 30 minutes and pauses instead of killing long-lived streams; the operator may wait again or use the explicitly confirmed **Force disconnect** action. A failed worker health/version check restores the previous binary, and a supervisor update is committed only after it reconnects at the expected version. Connector image references are promoted only after the whole pool succeeds.
 
 Manual update:
 
@@ -41,9 +43,34 @@ docker compose pull
 docker compose up -d
 ```
 
+### Updating From 2.10
+
+The update from 2.10.x is run by the 2.10.x updater. It neither waits for running operations nor snapshots the Gateway database, so prepare it yourself:
+
+1. In the Gateway directory (`/opt/gateway` by default), take a database backup and keep a copy of `.env`, which holds `PKI_MASTER_KEY`:
+
+   ```bash
+   docker compose exec -T postgres pg_dump -Fc -U gateway gateway > gateway-2.10.dump
+   cp .env env-2.10.backup
+   ```
+
+2. Avoid deploys, backups, and Docker migrations while the update runs.
+3. Update Gateway first, then the node daemons (**Nodes > Update Nodes**: Docker, Nginx, Storage, and Monitoring nodes), then the Relay Pool (**Settings > General**, **Update Relay Pool**). Do not update node daemons or relays before Gateway: the 2.11 Relay requires Gateway 2.11, and many 2.11 features and fixes need the 2.11 daemons and relays. Relays from 2.10 keep the 15-minute relay policy lease until they are updated.
+
+If the update rolls back, 2.10.x starts again on the already migrated database. Fix the cause shown in the update container logs and update again. To return to the state before the update instead, put the saved `.env` back, stop every service except `postgres` (`docker compose stop app relay registry redis`), and restore `gateway-2.10.dump` with the `DROP DATABASE`, `pg_restore`, and `docker compose up -d` commands above.
+
+After the update:
+
+- Paid installations download the signed private core of the new release during the update, so the Gateway host must reach the license server; see [Commercial core](commercial-core.md).
+- Docker Availability policies switch to lease mode by themselves once every node and relay of the workload has run 2.11 for 2 minutes. Each Docker node needs the [lease watchdog](nodes.md#lease-watchdog); nodes whose daemon runs without root need the node installer re-run, or they stay under **Excluded nodes**. In lease mode every node of the policy must reach every relay (see [Firewall Requirements](nodes.md#firewall-requirements)).
+- After the Docker daemon update, the first apply of an unchanged Compose revision recreates its services once (see [Container Log Limits](#container-log-limits)).
+- External PostgreSQL and Redis connections with TLS stay unverified until you add their CA or enable verification (see [Databases](capabilities.md#databases)).
+- Storage nodes need outbound HTTPS to `ghcr.io` to pull the backup runner.
+- Review permission groups, user permissions, API tokens, and OAuth grants: retired scope names were migrated, some of them to broader permissions, and custom groups do not receive the new 2.11 permissions automatically (see [SCOPES.md](../SCOPES.md)).
+
 ### Daemon Updates
 
-From a node detail page, click **Update** when an update is available.
+From a node detail page, click **Update** when an update is available, or update several nodes together with **Nodes > Update Nodes**. Relay nodes update with the Relay Pool instead (**Settings > General**, **Update Relay Pool**). Gateway refuses daemon updates for disconnected nodes, relay nodes, and nodes that already run the release. Nodes that share a lease-mode Availability policy restart one after another: an update waits in the `waiting_for_lease_peers` phase until the policy's other voters and candidates are back and voting (see [Daemon Updates](nodes.md#daemon-updates) in the nodes guide).
 
 The update flow:
 
@@ -54,6 +81,17 @@ The update flow:
 5. The daemon reconnects and reports its new version.
 
 Existing daemons from before signed-manifest support can perform one transition update. In that case Gateway verifies the signed manifest before dispatch, and the old daemon enforces the verified SHA256 checksum. After that transition, daemon-side signature verification is enforced for future updates.
+
+## Container Log Limits
+
+Docker's default `json-file` log driver keeps container logs without a size limit, so one busy container can fill a node's disk. Gateway bounds them:
+
+- The services of the Gateway stack (`app`, `relay`, `registry`, `postgres`, and `redis`) rotate their logs at 50 MB × 3 files.
+- On Docker nodes, containers, blue/green deployments, and Compose services that Gateway creates or recreates without log options of their own get `json-file` rotation at 50 MB × 3 (`max-size: 50m`, `max-file: 3`). This applies only while the node's default Docker log driver is `json-file` and `/etc/docker/daemon.json` sets no default `log-opts`; a host with another default driver or its own default options keeps them. A Compose service's own `logging` with the `json-file`, `local`, or `none` driver is kept. Existing containers keep their log settings until Gateway recreates them.
+- When the Docker node installer installs Docker Engine itself, it writes `/etc/docker/daemon.json` with `json-file` and 50 MB × 3 as Docker's default, so containers created outside Gateway rotate too. An existing `daemon.json` is left alone.
+- Alert rules can watch a container's **Log Size (MB)**.
+
+After a node's Docker daemon is updated to 2.11, the first apply of an unchanged Compose revision on a node where this limit applies recreates its services once, because the added log settings change their configuration. Plan that apply like any restart of the project.
 
 ## Configuration Reference
 
