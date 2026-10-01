@@ -89,3 +89,42 @@ func TestReleaseResolutionAndForgedManifest(t *testing.T) {
 		t.Fatal("a manifest not signed by the update key must be rejected")
 	}
 }
+
+// The watchdog updates itself as root without an admin: whatever the update
+// service names, it moves only to a newer release, and never to a release
+// candidate on the stable channel (a first install included).
+func TestNextTagTakesOnlyNewerReleasesOfTheChannel(t *testing.T) {
+	offer := func(channel, current, tag string) (string, error) {
+		client := &http.Client{Transport: fakeTransport{"https://u.test/releases": `{"target":{"tag_name":"` + tag + `"}}`}}
+		return NextTag(context.Background(), client, "https://u.test/releases", channel, current)
+	}
+	for _, tc := range []struct {
+		channel, current, tag string
+		want                  string
+		refused               bool
+	}{
+		{channel: "stable", current: "v2.10.1", tag: "v2.11.0-watchdog", want: "v2.11.0-watchdog"},
+		{channel: "stable", current: "v2.11.0-rc.22", tag: "v2.11.0-watchdog", want: "v2.11.0-watchdog"},
+		{channel: "preview", current: "v2.11.0-rc.22", tag: "v2.11.0-rc.23-watchdog", want: "v2.11.0-rc.23-watchdog"},
+		{channel: "preview", current: "v2.11.0-rc.9", tag: "v2.11.0-rc.10-watchdog", want: "v2.11.0-rc.10-watchdog"},
+		{channel: "stable", current: "", tag: "v2.11.0-watchdog", want: "v2.11.0-watchdog"},
+		{channel: "stable", current: "v2.11.0", tag: "v2.11.0-watchdog", want: ""},
+		{channel: "stable", current: "v2.11.0", tag: "v2.10.1-watchdog", refused: true},
+		{channel: "preview", current: "v2.11.0-rc.22", tag: "v2.11.0-rc.21-watchdog", refused: true},
+		{channel: "preview", current: "v2.11.0", tag: "v2.11.0-rc.30-watchdog", refused: true},
+		{channel: "stable", current: "v2.10.1", tag: "v2.11.0-rc.30-watchdog", refused: true},
+		{channel: "", current: "", tag: "v2.11.0-rc.30-watchdog", refused: true},
+		{channel: "stable", current: "v2.10.1", tag: "v2.11-watchdog", refused: true},
+	} {
+		tag, err := offer(tc.channel, tc.current, tc.tag)
+		if tc.refused {
+			if err == nil || tag != "" {
+				t.Fatalf("%s on %q from %q: took %q (err %v), want a refusal", tc.tag, tc.channel, tc.current, tag, err)
+			}
+			continue
+		}
+		if err != nil || tag != tc.want {
+			t.Fatalf("%s on %q from %q: tag %q err %v, want %q", tc.tag, tc.channel, tc.current, tag, err, tc.want)
+		}
+	}
+}

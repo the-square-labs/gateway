@@ -14,7 +14,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/updateauth"
@@ -90,7 +92,14 @@ func ArtifactName() string {
 // NextTag asks the update service for the watchdog release to install after
 // current ("" for a first install: the latest on the channel). An empty tag
 // means no update.
+//
+// The signature of a release proves only that it was built by us, not which
+// one to run: the watchdog installs on its own as root, so it takes a tag only
+// if it is newer than current, and never a release candidate on the stable
+// channel. A compromised update service cannot make it downgrade or leave the
+// stable line.
 func NextTag(ctx context.Context, client *http.Client, releasesURL, channel, current string) (string, error) {
+	channel = orDefault(channel, "stable")
 	endpoint, err := url.Parse(orDefault(releasesURL, DefaultReleasesURL))
 	if err != nil {
 		return "", err
@@ -100,7 +109,7 @@ func NextTag(ctx context.Context, client *http.Client, releasesURL, channel, cur
 	if current != "" {
 		query.Set("current", current)
 	}
-	query.Set("channel", orDefault(channel, "stable"))
+	query.Set("channel", channel)
 	endpoint.RawQuery = query.Encode()
 	body, status, err := get(ctx, client, endpoint.String())
 	if err != nil {
@@ -125,7 +134,66 @@ func NextTag(ctx context.Context, client *http.Client, releasesURL, channel, cur
 	if !strings.HasSuffix(tag, "-"+DaemonType) || (current != "" && tag == current+"-"+DaemonType) {
 		return "", nil
 	}
+	offered, ok := parseReleaseVersion(strings.TrimSuffix(tag, "-"+DaemonType))
+	if !ok {
+		return "", fmt.Errorf("update service offered %q, which is not a release tag", tag)
+	}
+	if channel == "stable" && offered.candidate {
+		return "", fmt.Errorf("update service offered release candidate %s on the stable channel", tag)
+	}
+	if current == "" {
+		return tag, nil
+	}
+	running, ok := parseReleaseVersion(current)
+	if !ok {
+		// Not a release build: never replaced by a release artifact.
+		return "", nil
+	}
+	if !offered.newerThan(running) {
+		return "", fmt.Errorf("update service offered %s, which is not newer than the running %s", tag, current)
+	}
 	return tag, nil
+}
+
+var releaseVersionPattern = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$`)
+
+// releaseVersion is vX.Y.Z or the release candidate vX.Y.Z-rc.N, which comes
+// before vX.Y.Z.
+type releaseVersion struct {
+	parts     [4]uint64
+	candidate bool
+}
+
+func parseReleaseVersion(value string) (releaseVersion, bool) {
+	match := releaseVersionPattern.FindStringSubmatch(value)
+	if match == nil {
+		return releaseVersion{}, false
+	}
+	var version releaseVersion
+	for i, part := range match[1:] {
+		if part == "" {
+			continue
+		}
+		number, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return releaseVersion{}, false
+		}
+		version.parts[i] = number
+	}
+	version.candidate = match[4] != ""
+	return version, true
+}
+
+func (v releaseVersion) newerThan(other releaseVersion) bool {
+	for i := 0; i < 3; i++ {
+		if v.parts[i] != other.parts[i] {
+			return v.parts[i] > other.parts[i]
+		}
+	}
+	if v.candidate != other.candidate {
+		return other.candidate
+	}
+	return v.parts[3] > other.parts[3]
 }
 
 // FetchManifest downloads and verifies the signed update manifest of tag
