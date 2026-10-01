@@ -38,6 +38,13 @@ type createStoppedContainerRequest struct {
 const migrationOwnershipLabel = "wiolett.gateway.migration.id"
 const archiveImageReferenceLabel = "wiolett.gateway.archive.image.reference"
 
+// migrationManifestSchemaVersion 2: EnvKeys name the container's own
+// environment, not the image defaults it runs unchanged (see
+// migrationOwnEnvKeys). Gateway supplies the values of exactly these keys. A
+// Gateway that still sends the whole runtime environment cannot start a
+// migration with this daemon: the daemon advertises docker_migration_v2 only.
+const migrationManifestSchemaVersion = 2
+
 func configuredArchiveImageReference(image string, labels map[string]string) string {
 	if archivedReference := strings.TrimSpace(labels[archiveImageReferenceLabel]); archivedReference != "" {
 		return archivedReference
@@ -54,13 +61,21 @@ func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (docke
 	if ctr.Config == nil || ctr.HostConfig == nil {
 		return dockerMigrationManifest{}, fmt.Errorf("source inspect is missing create configuration")
 	}
+	sourceImage, err := c.cli.ImageInspect(ctx, ctr.Image)
+	if err != nil {
+		return dockerMigrationManifest{}, fmt.Errorf("inspect migration source image: %w", err)
+	}
+	var imageEnv []string
+	if sourceImage.Config != nil {
+		imageEnv = sourceImage.Config.Env
+	}
 	config := cloneContainerConfig(ctr.Config)
 	delete(config.Labels, migrationOwnershipLabel)
 	imageReference := configuredArchiveImageReference(ctr.Config.Image, config.Labels)
 	delete(config.Labels, archiveImageReferenceLabel)
 	hostConfig := cloneHostConfig(ctr.HostConfig)
 	manifest := dockerMigrationManifest{
-		SchemaVersion:  1,
+		SchemaVersion:  migrationManifestSchemaVersion,
 		SourceID:       ctr.ID,
 		Name:           strings.TrimPrefix(ctr.Name, "/"),
 		ImageID:        ctr.Image,
@@ -70,18 +85,7 @@ func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (docke
 		HostConfig:     hostConfig,
 	}
 
-	envSeen := map[string]bool{}
-	for _, value := range config.Env {
-		key, _, _ := strings.Cut(value, "=")
-		if key != "" {
-			if envSeen[key] {
-				manifest.Blockers = append(manifest.Blockers, fmt.Sprintf("duplicate environment key %q", key))
-			}
-			envSeen[key] = true
-			manifest.EnvKeys = append(manifest.EnvKeys, key)
-		}
-	}
-	sort.Strings(manifest.EnvKeys)
+	manifest.EnvKeys, manifest.Blockers = migrationOwnEnvKeys(config.Env, imageEnv, manifest.Blockers)
 	config.Env = nil
 	if len(hostConfig.LogConfig.Config) > 0 && !isGatewayDefaultLogConfig(hostConfig.LogConfig) {
 		manifest.Blockers = append(manifest.Blockers, "Docker log driver options may contain secrets and require explicit migration support")
@@ -145,6 +149,85 @@ func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (docke
 	return manifest, nil
 }
 
+// migrationOwnEnvKeys returns the keys of the container's own environment: its
+// runtime environment without the entries the image sets to the same value.
+// The target runs the same image, so Docker adds those entries again; a
+// container that overrides an image variable keeps the key. An environment
+// that cannot be rebuilt that way is a blocker: a duplicate key, an entry
+// without a value, or an image variable the container unset.
+func migrationOwnEnvKeys(containerEnv, imageEnv []string, blockers []string) ([]string, []string) {
+	imageEntries := make(map[string]bool, len(imageEnv))
+	for _, entry := range imageEnv {
+		imageEntries[entry] = true
+	}
+	var keys []string
+	seen := map[string]bool{}
+	for _, entry := range containerEnv {
+		key, _, hasValue := strings.Cut(entry, "=")
+		if key == "" {
+			continue
+		}
+		switch {
+		case seen[key]:
+			blockers = append(blockers, fmt.Sprintf("duplicate environment key %q", key))
+		case !hasValue:
+			blockers = append(blockers, fmt.Sprintf("environment variable %q has no value", key))
+		case !imageEntries[entry]:
+			keys = append(keys, key)
+		}
+		seen[key] = true
+	}
+	for _, entry := range imageEnv {
+		if key, _, _ := strings.Cut(entry, "="); key != "" && !seen[key] {
+			blockers = append(blockers, fmt.Sprintf("image environment variable %q is unset in the container", key))
+		}
+	}
+	sort.Strings(keys)
+	return keys, blockers
+}
+
+// validateMigrationEnv checks that Gateway supplied a value for exactly the
+// environment keys of the manifest, naming every key that differs.
+func validateMigrationEnv(manifestKeys []string, env []string) error {
+	expected := make(map[string]bool, len(manifestKeys))
+	for _, key := range manifestKeys {
+		expected[key] = true
+	}
+	supplied := make(map[string]bool, len(env))
+	var unexpected []string
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			return fmt.Errorf("invalid environment entry")
+		}
+		if supplied[key] {
+			return fmt.Errorf("environment key %s is supplied twice", key)
+		}
+		supplied[key] = true
+		if !expected[key] {
+			unexpected = append(unexpected, key)
+		}
+	}
+	var missing []string
+	for _, key := range manifestKeys {
+		if !supplied[key] {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) == 0 && len(unexpected) == 0 {
+		return nil
+	}
+	sort.Strings(unexpected)
+	var details []string
+	if len(missing) > 0 {
+		details = append(details, "missing "+strings.Join(missing, ", "))
+	}
+	if len(unexpected) > 0 {
+		details = append(details, "unexpected "+strings.Join(unexpected, ", "))
+	}
+	return fmt.Errorf("environment keys do not match manifest: %s", strings.Join(details, "; "))
+}
+
 func classifyMigrationMounts(
 	mounts []container.MountPoint,
 	blockers []string,
@@ -187,7 +270,9 @@ func portableNetworkAliases(aliases []string, containerID string) []string {
 
 func (c *Client) CreateContainerStopped(ctx context.Context, req createStoppedContainerRequest) (string, error) {
 	manifest := req.Manifest
-	if req.MigrationID == "" || manifest.SchemaVersion != 1 || manifest.Config == nil || manifest.HostConfig == nil {
+	// Version 1 is the manifest an archive import builds from its own keys.
+	if req.MigrationID == "" || (manifest.SchemaVersion != 1 && manifest.SchemaVersion != migrationManifestSchemaVersion) ||
+		manifest.Config == nil || manifest.HostConfig == nil {
 		return "", fmt.Errorf("unsupported or incomplete migration manifest")
 	}
 	if err := validateStoppedCreateNetworks(manifest.HostConfig, manifest.NetworkingConfig); err != nil {
@@ -202,20 +287,8 @@ func (c *Client) CreateContainerStopped(ctx context.Context, req createStoppedCo
 	if len(manifest.Blockers) > 0 {
 		return "", fmt.Errorf("migration manifest contains blockers")
 	}
-	if len(req.Env) != len(manifest.EnvKeys) {
-		return "", fmt.Errorf("environment value count does not match manifest")
-	}
-	actualKeys := make([]string, 0, len(req.Env))
-	for _, value := range req.Env {
-		key, _, ok := strings.Cut(value, "=")
-		if !ok || key == "" {
-			return "", fmt.Errorf("invalid environment entry")
-		}
-		actualKeys = append(actualKeys, key)
-	}
-	sort.Strings(actualKeys)
-	if strings.Join(actualKeys, "\x00") != strings.Join(manifest.EnvKeys, "\x00") {
-		return "", fmt.Errorf("environment keys do not match manifest")
+	if err := validateMigrationEnv(manifest.EnvKeys, req.Env); err != nil {
+		return "", err
 	}
 	config := cloneContainerConfig(manifest.Config)
 	config.Env = append([]string(nil), req.Env...)
