@@ -2,6 +2,7 @@ import { status as GrpcStatus } from '@grpc/grpc-js';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  managedDatabaseBindingPlacements,
   managedDatabaseInstances,
   managedStorageClusters,
   relayEndpointAssignmentGenerations,
@@ -150,8 +151,11 @@ interface RelayRouteRuntimeReport {
   metricsSinceUnixMilliseconds?: unknown;
 }
 
-/** The runtime of a group route's Secure Link: the sum of its per-member relay routes. */
-function sumProxyRouteRuntimes(runtimes: RelayRouteRuntimeReport[]): RelayRouteRuntime {
+/**
+ * The runtime of a link served by several relay routes: a group route's Secure Link (one route per member) or an
+ * Availability database link (one route per placement). It is the sum of those routes.
+ */
+function sumRouteRuntimes(runtimes: RelayRouteRuntimeReport[]): RelayRouteRuntime {
   const total = (pick: (runtime: RelayRouteRuntimeReport) => unknown) =>
     runtimes.reduce((sum, runtime) => sum + Number(pick(runtime) || 0), 0);
   const lastActivityMillis = Math.max(
@@ -1513,11 +1517,36 @@ export class RelayPolicyService {
     if (routes.length <= 1) return this.getOwnedRouteRuntime('proxy_host_secure_link', linkId);
     // A route on an ingress group has one relay route per member: its runtime is their sum.
     const runtimes = await Promise.all(routes.map((route) => this.relay.getRouteRuntime(route.id)));
-    return sumProxyRouteRuntimes(runtimes);
+    return sumRouteRuntimes(runtimes);
   }
 
   async getManagedDatabaseBindingRouteRuntime(bindingId: string): Promise<RelayRouteRuntime | null> {
-    return this.getOwnedRouteRuntime('managed_database_binding', bindingId);
+    const own = await this.getOwnedRouteRuntime('managed_database_binding', bindingId);
+    if (own) return own;
+    // Availability serves the link through one route per placement and drops the link's own route.
+    const placements = await this.db
+      .select({ id: managedDatabaseBindingPlacements.id })
+      .from(managedDatabaseBindingPlacements)
+      .where(eq(managedDatabaseBindingPlacements.bindingId, bindingId));
+    if (!placements.length) return null;
+    const routes = await this.db
+      .select({ id: relayRoutes.id })
+      .from(relayRoutes)
+      .where(
+        and(
+          eq(relayRoutes.ownerKind, 'managed_database_binding'),
+          inArray(
+            relayRoutes.ownerId,
+            placements.map(({ id }) => id)
+          )
+        )
+      );
+    if (!routes.length) return null;
+    // A placement whose route the relay does not run yet (or any more) adds nothing.
+    const results = await Promise.allSettled(routes.map((route) => this.relay.getRouteRuntime(route.id)));
+    const runtimes = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+    if (!runtimes.length) throw (results[0] as PromiseRejectedResult).reason;
+    return sumRouteRuntimes(runtimes);
   }
 
   async ensureGatewayRoute(

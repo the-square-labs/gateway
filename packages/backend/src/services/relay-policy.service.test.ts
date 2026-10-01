@@ -2,6 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  managedDatabaseBindingPlacements,
   relayEndpointAssignments,
   relayEndpoints,
   relayGrantSigningKeys,
@@ -315,6 +316,48 @@ describe('RelayPolicyService route runtime', () => {
       metricsSince: '2026-08-28T15:00:00.000Z',
     });
     expect(getRouteRuntime).toHaveBeenCalledWith('route-binding-1');
+  });
+
+  it('sums the placement routes of an Availability database link that has no route of its own', async () => {
+    const answers = new Map<unknown, unknown[][]>([
+      // The link's own route lookup, then the routes of its placements.
+      [relayRoutes, [[], [{ id: 'route-placement-1' }, { id: 'route-placement-2' }, { id: 'route-placement-3' }]]],
+      [managedDatabaseBindingPlacements, [[{ id: 'placement-1' }, { id: 'placement-2' }, { id: 'placement-3' }]]],
+    ]);
+    const query = (table: unknown) => {
+      const rows = Promise.resolve(answers.get(table)!.shift() ?? []);
+      return { where: () => Object.assign(rows, { limit: () => rows }) };
+    };
+    const db = { select: vi.fn(() => ({ from: query })) };
+    const report = (routeId: string, opened: number, throttled: number) => ({
+      routeId,
+      activeTunnels: '2',
+      openedTotal: String(opened),
+      completedTotal: String(opened - 2),
+      failedTotal: '0',
+      throttledTotal: String(throttled),
+      sourceToTargetBytes: '100',
+      targetToSourceBytes: '200',
+      setupLatencyP95Microseconds: '4000',
+      averageDurationMilliseconds: '50',
+      lastActivityUnixMilliseconds: '1787932800000',
+      metricsSinceUnixMilliseconds: '1787929200000',
+    });
+    const getRouteRuntime = vi.fn(async (routeId: string) => {
+      if (routeId === 'route-placement-3') throw new Error('relay route is not active');
+      return routeId === 'route-placement-1' ? report(routeId, 10, 3) : report(routeId, 6, 4);
+    });
+    const service = createService(db, { applySnapshot: vi.fn(), getRouteRuntime });
+
+    await expect(service.getManagedDatabaseBindingRouteRuntime('binding-1')).resolves.toMatchObject({
+      activeStreams: 4,
+      openedTotal: '16',
+      completedTotal: '12',
+      throttledTotal: '7',
+      sourceToTargetBytes: '200',
+      targetToSourceBytes: '400',
+    });
+    expect(getRouteRuntime).toHaveBeenCalledTimes(3);
   });
 
   it('recreates the adopted binding route when the previous owner route is already gone', async () => {
