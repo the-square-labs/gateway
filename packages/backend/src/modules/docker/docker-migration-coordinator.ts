@@ -28,6 +28,9 @@ export class DockerMigrationCoordinator {
   async refreshSourceSnapshots(_row: MigrationRow): Promise<void> {
     return commercialModuleUnavailable();
   }
+  async refreshSettledSnapshots(_row: MigrationRow): Promise<void> {
+    return commercialModuleUnavailable();
+  }
   async exitEnteredMaintenance(_row: MigrationRow): Promise<void> {
     return commercialModuleUnavailable();
   }
