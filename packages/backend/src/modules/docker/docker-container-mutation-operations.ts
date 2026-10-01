@@ -453,6 +453,12 @@ async function reconcileStoredEnvAfterImageChange(
   if (changed) await ctx.environmentService.replace(nodeId, name, next);
 }
 
+/** The full runtime ID of an inspected container (a request may name it by name or short ID). */
+function containerRuntimeId(inspect: Record<string, any> | null | undefined, containerId: string): string {
+  const id = inspect?.Id ?? inspect?.id;
+  return typeof id === 'string' && id ? id : containerId;
+}
+
 function asyncDaemonTaskId(data: any, expectedType: string): string | undefined {
   const status = String(data?.status ?? '');
   return data?.type === expectedType && ['pending', 'running', 'succeeded', 'failed'].includes(status)
@@ -1184,7 +1190,8 @@ export async function updateContainer(
     throw error;
   }
   ctx.emitTransition(nodeId, name, containerId, 'updating');
-  const task = await ctx.createTask(nodeId, containerId, name, 'update');
+  // The task records the runtime it replaces: the replacement keeps the container's access identity from it.
+  const task = await ctx.createTask(nodeId, containerRuntimeId(inspect, containerId), name, 'update');
   try {
     await confirmHeldAcrossProcesses(ctx, nodeId, [name]);
   } catch (error) {
@@ -1376,7 +1383,8 @@ export async function recreateWithConfig(
   }
   const previousRuntimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
   ctx.emitTransition(nodeId, name, containerId, 'recreating');
-  const task = await ctx.createTask(nodeId, containerId, name, 'recreate');
+  // The task records the runtime it replaces: the replacement keeps the container's access identity from it.
+  const task = await ctx.createTask(nodeId, containerRuntimeId(inspect, containerId), name, 'recreate');
 
   const executeRecreate = async () => {
     try {
@@ -1605,6 +1613,7 @@ export async function updateContainerEnv(
   const expectedState = await ctx.resolveExpectedRecreateState(nodeId, containerId);
   const updateStopTimeout = await ctx.resolveContainerStopTimeout(nodeId, containerId, undefined);
   ctx.requireNoTransition(nodeId, name);
+  const runtimeInspect = await ctx.inspectContainer(nodeId, containerId);
 
   // Persist only user-set env on top of the stored baseline. The runtime env
   // also carries image defaults and masked secret placeholders; the daemon
@@ -1612,7 +1621,7 @@ export async function updateContainerEnv(
   const storedEnv = ctx.environmentService ? await ctx.environmentService.getDecryptedMap(nodeId, name) : {};
   const secrets = ctx.secretService ? await ctx.secretService.getDecryptedMap(nodeId, name) : {};
   const secretKeys = new Set(Object.keys(secrets));
-  const envBaseline = await storedEnvBaseline(ctx, nodeId, containerId, storedEnv);
+  const envBaseline = await storedEnvBaseline(ctx, nodeId, containerId, storedEnv, runtimeInspect);
   const desiredUserEnv = persistableUserEnv({ ...envBaseline, ...(env ?? {}) }, secretKeys);
   for (const key of removeEnv ?? []) delete desiredUserEnv[key];
   // Merge decrypted secrets so secrets persist across the recreate.
@@ -1631,7 +1640,8 @@ export async function updateContainerEnv(
     throw error;
   }
   ctx.emitTransition(nodeId, name, containerId, 'updating');
-  const task = await ctx.createTask(nodeId, containerId, name, 'update');
+  // The task records the runtime it replaces: the replacement keeps the container's access identity from it.
+  const task = await ctx.createTask(nodeId, containerRuntimeId(runtimeInspect, containerId), name, 'update');
   let data: any;
   try {
     // Persist with the mutation itself; a completion watcher is lost on restart.

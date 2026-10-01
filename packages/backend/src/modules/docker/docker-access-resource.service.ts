@@ -1,6 +1,12 @@
 import { and, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
-import { dockerAccessResources, dockerBuilds, dockerDeployments, dockerSourceBindings } from '@/db/schema/index.js';
+import {
+  dockerAccessResources,
+  dockerBuilds,
+  dockerDeployments,
+  dockerSourceBindings,
+  dockerTasks,
+} from '@/db/schema/index.js';
 import { hasScope } from '@/lib/permissions.js';
 import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -52,6 +58,15 @@ type ContainerIdentity = {
   name: string;
   runtimeId: string;
 };
+
+/**
+ * Docker task types of the Gateway operations that replace a container's runtime under the same name (update,
+ * env change, recreate, link apply and removal). Their task records the runtime they replace.
+ */
+export const DOCKER_RECREATE_TASK_TYPES = ['update', 'recreate'] as const;
+
+/** How long a Gateway recreate vouches for the runtime it replaced and the one it created. */
+const RECREATE_LINEAGE_WINDOW = sql`now() - interval '1 hour'`;
 
 function containerName(container: Record<string, unknown>): string {
   return String(container.name ?? container.Name ?? '').replace(/^\/+/, '');
@@ -105,6 +120,11 @@ export class DockerAccessResourceService {
    * of a Git source container waiting for its first build: only that source's first activation adopts it
    * (`adoptReservation`). Any other runtime with the name gets no identity (''), so it never inherits the grants
    * of the reservation's creator.
+   *
+   * A runtime that replaced the identity's runtime through a Gateway recreate keeps the identity, and a runtime such
+   * a recreate replaced (a lagging snapshot still lists it) never takes it back. Both are read from the recreate's
+   * task, so they hold however the operation's in-memory transition and watcher end. Any other new runtime under
+   * the name is a different container: it gets a new identity, and the grants of the previous one are removed.
    */
   async ensureContainer(
     nodeId: string,
@@ -114,6 +134,7 @@ export class DockerAccessResourceService {
     executor?: DrizzleExecutor,
     options: { adoptReservation?: boolean } = {}
   ): Promise<string> {
+    let currentRuntimeId = runtimeId;
     const ensure = async (tx: DrizzleExecutor) => {
       await this.lockContainerIdentity(tx, nodeId, name);
       const [existing] = await tx
@@ -142,7 +163,15 @@ export class DockerAccessResourceService {
 
       if (runtimeId && !existing.runtimeId && !options.adoptReservation) return '';
 
-      if (!existing.runtimeId || existing.runtimeId === runtimeId || preserveExisting) {
+      const lineage =
+        existing.runtimeId && runtimeId && existing.runtimeId !== runtimeId && !preserveExisting
+          ? await this.recreateLineage(tx, nodeId, name, existing.runtimeId, runtimeId)
+          : 'unrelated';
+      if (lineage === 'superseded') {
+        currentRuntimeId = existing.runtimeId!;
+        return existing.id;
+      }
+      if (!existing.runtimeId || existing.runtimeId === runtimeId || preserveExisting || lineage === 'replacement') {
         if (existing.runtimeId !== runtimeId) {
           await tx
             .update(dockerAccessResources)
@@ -161,8 +190,38 @@ export class DockerAccessResourceService {
       return created.id;
     };
     const resourceId = executor ? await ensure(executor) : await this.db.transaction(ensure);
-    if (resourceId && runtimeId) this.rememberContainer(nodeId, name, runtimeId, resourceId);
+    if (resourceId && currentRuntimeId) this.rememberContainer(nodeId, name, currentRuntimeId, resourceId);
     return resourceId;
+  }
+
+  /**
+   * How a runtime seen under a container name relates to the identity's runtime, from the Gateway recreates of that
+   * name: `replacement` when a recreate replaced the identity's runtime (the new runtime is its result, even when
+   * the operation's transition and watcher ended before anyone saw it), `superseded` when a recreate replaced the
+   * seen runtime (a lagging snapshot), `unrelated` otherwise.
+   */
+  private async recreateLineage(
+    tx: DrizzleExecutor,
+    nodeId: string,
+    name: string,
+    identityRuntimeId: string,
+    seenRuntimeId: string
+  ): Promise<'replacement' | 'superseded' | 'unrelated'> {
+    const recreates = await tx
+      .select({ containerId: dockerTasks.containerId })
+      .from(dockerTasks)
+      .where(
+        and(
+          eq(dockerTasks.nodeId, nodeId),
+          eq(dockerTasks.containerName, name),
+          inArray(dockerTasks.type, [...DOCKER_RECREATE_TASK_TYPES]),
+          inArray(dockerTasks.containerId, [identityRuntimeId, seenRuntimeId]),
+          sql`${dockerTasks.createdAt} > ${RECREATE_LINEAGE_WINDOW}`
+        )
+      );
+    if (recreates.some((task) => task.containerId === seenRuntimeId)) return 'superseded';
+    if (recreates.some((task) => task.containerId === identityRuntimeId)) return 'replacement';
+    return 'unrelated';
   }
 
   /**
