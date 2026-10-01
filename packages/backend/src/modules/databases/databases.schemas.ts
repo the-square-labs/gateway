@@ -107,14 +107,18 @@ export const ManagedDatabaseListQuerySchema = z.object({
   type: managedDatabaseTypeSchema.optional(),
 });
 
-const managedDatabaseCreateStorageSizeGbSchema = z
-  .number()
-  .finite()
-  .min(0.1)
-  .max(16_384)
-  .refine((value) => Math.abs(value * 10 - Math.round(value * 10)) < 1e-9, {
-    message: 'Storage size supports at most one decimal place',
-  });
+const STORAGE_SIZE_GB_RULE = 'Storage size is in GB from 0.1 to 16384 with at most one decimal place';
+
+/**
+ * Managed database disk size, the same at create and resize. The daemon allocates and grows the storage image to the
+ * exact byte size (fallocate, then resize2fs to the device), so any 0.1 GB step works; Gateway rounds it to bytes once.
+ */
+const managedDatabaseStorageSizeGbSchema = z
+  .number({ invalid_type_error: STORAGE_SIZE_GB_RULE })
+  .finite(STORAGE_SIZE_GB_RULE)
+  .min(0.1, STORAGE_SIZE_GB_RULE)
+  .max(16_384, STORAGE_SIZE_GB_RULE)
+  .refine((value) => Math.abs(value * 10 - Math.round(value * 10)) < 1e-9, { message: STORAGE_SIZE_GB_RULE });
 
 export const CreateManagedDatabaseSchema = z
   .object({
@@ -123,7 +127,7 @@ export const CreateManagedDatabaseSchema = z
     type: managedDatabaseTypeSchema,
     version: managedDatabaseVersionSchema,
     nodeId: z.string().uuid(),
-    storageSizeGb: managedDatabaseCreateStorageSizeGbSchema,
+    storageSizeGb: managedDatabaseStorageSizeGbSchema,
     cpuCores: z.number().min(0.1).max(128),
     memoryMb: z.number().int().min(128).max(1_048_576),
     swapMb: z.number().int().min(0).max(1_048_576).default(0),
@@ -206,7 +210,7 @@ export const UpdateManagedDatabaseSchema = z
   .object({
     name: managedDatabaseNameSchema.optional(),
     tags: tagsSchema,
-    storageSizeGb: z.number().int().min(1).max(16_384).optional(),
+    storageSizeGb: managedDatabaseStorageSizeGbSchema.optional(),
     cpuCores: z.number().min(0.1).max(128).optional(),
     memoryMb: z.number().int().min(128).max(1_048_576).optional(),
     swapMb: z.number().int().min(0).max(1_048_576).optional(),

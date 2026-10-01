@@ -27,8 +27,10 @@ export function ResizeManagedDatabaseDialog({
   onResized: () => void;
 }) {
   const managed = database.managed!;
-  const currentStorageSizeGb = Math.max(1, Math.round(managed.storageSizeBytes / 1024 ** 3));
-  const [storageSizeGb, setStorageSizeGb] = useState(String(currentStorageSizeGb + 1));
+  // Sizes are in GB with at most one decimal place, as at create.
+  const currentStorageSizeGb = Math.round((managed.storageSizeBytes / 1024 ** 3) * 10) / 10;
+  const suggestedStorageSizeGb = Math.round((currentStorageSizeGb + 1) * 10) / 10;
+  const [storageSizeGb, setStorageSizeGb] = useState(String(suggestedStorageSizeGb));
   const [capacity, setCapacity] = useState<ManagedDatabaseCapacity | null>(null);
   // The node's free space sets the maximum size; cleared on close so each opening waits for it.
   const [capacityLoaded, setCapacityLoaded] = useState(false);
@@ -41,7 +43,7 @@ export function ResizeManagedDatabaseDialog({
     }
 
     let cancelled = false;
-    setStorageSizeGb(String(currentStorageSizeGb + 1));
+    setStorageSizeGb(String(suggestedStorageSizeGb));
     setCapacity(null);
     api
       .getNode(managed.nodeId)
@@ -57,15 +59,16 @@ export function ResizeManagedDatabaseDialog({
     return () => {
       cancelled = true;
     };
-  }, [currentStorageSizeGb, managed.nodeId, open]);
+  }, [managed.nodeId, open, suggestedStorageSizeGb]);
 
   const nextStorageSizeGb = Number(storageSizeGb);
   const maximumStorageSizeGb =
     capacity?.storageSizeGb === undefined
       ? undefined
-      : currentStorageSizeGb + capacity.storageSizeGb;
+      : Math.round((currentStorageSizeGb + capacity.storageSizeGb) * 10) / 10;
   const isValidSize =
-    Number.isInteger(nextStorageSizeGb) &&
+    Number.isFinite(nextStorageSizeGb) &&
+    Math.abs(nextStorageSizeGb * 10 - Math.round(nextStorageSizeGb * 10)) < 1e-9 &&
     nextStorageSizeGb > currentStorageSizeGb &&
     (maximumStorageSizeGb === undefined || nextStorageSizeGb <= maximumStorageSizeGb);
 
@@ -103,7 +106,8 @@ export function ResizeManagedDatabaseDialog({
             <Input
               id="managed-database-resize-storage"
               type="number"
-              min={currentStorageSizeGb + 1}
+              min={currentStorageSizeGb}
+              step="0.1"
               max={maximumStorageSizeGb}
               value={storageSizeGb}
               onChange={(event) => setStorageSizeGb(event.target.value)}
@@ -111,8 +115,8 @@ export function ResizeManagedDatabaseDialog({
             />
             <p className="text-xs text-muted-foreground">
               {maximumStorageSizeGb === undefined
-                ? `Enter a whole number greater than ${currentStorageSizeGb} GB.`
-                : `Maximum available now: ${maximumStorageSizeGb} GB.`}
+                ? `Enter a size greater than ${currentStorageSizeGb} GB, with at most one decimal place.`
+                : `Larger than ${currentStorageSizeGb} GB, at most one decimal place. Maximum available now: ${maximumStorageSizeGb} GB.`}
             </p>
           </div>
         </div>
