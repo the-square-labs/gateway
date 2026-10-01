@@ -97,6 +97,14 @@ export class LicenseServerRequestError extends Error {
   }
 }
 
+/** No answer at all, or the server itself failing; never a refusal or a state that failed verification. */
+function isLicenseServerUnreachable(error: unknown): error is LicenseServerRequestError {
+  return (
+    error instanceof LicenseServerRequestError &&
+    (error.code === 'LICENSE_SERVER_UNAVAILABLE' || (error.code === 'LICENSE_SERVER_ERROR' && error.status >= 500))
+  );
+}
+
 export class LicenseService {
   private registrationPromise: Promise<RegistrationCredential> | null = null;
   private installationIdPromise: Promise<string> | null = null;
@@ -207,80 +215,111 @@ export class LicenseService {
     return this.runSerialized(() => this.checkNowUnlocked());
   }
 
-  /** Update admission is online and strict; an offline cache must not authorize a new private download. */
-  async authorizeCommercialUpdate(hostVersion: string): Promise<CommercialUpdateGrant> {
+  /**
+   * Update admission is online and strict; an offline cache must not authorize a new private download.
+   * Only an installation with nothing paid to keep (no key, no paid plan in its state, no private core
+   * on the host) updates as Community while the license server cannot be reached: Community downloads
+   * nothing private and must stay self-hostable.
+   */
+  async authorizeCommercialUpdate(
+    hostVersion: string,
+    host: { privateCoreInstalled?: boolean } = {}
+  ): Promise<CommercialUpdateGrant> {
     commercialVersionKey(hostVersion);
     return this.runSerialized(async () => {
-      const cached = await this.getStoredCachedState();
-      const credential = await this.ensureRegistered(true, false);
-      if (!credential)
-        throw new LicenseServerRequestError(
-          503,
-          'LICENSE_SERVER_UNAVAILABLE',
-          'Installation registration is required for update'
-        );
-      if (credential.newlyRegistered && cached && !Object.hasOwn(cached, 'registrationStatus')) {
-        const key = await this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null);
-        if (key) {
-          await this.postSignedState('/api/v1/licenses/activate', 'activate', {
-            installationToken: credential.token,
-            licenseKey: this.cryptoService.decryptString(key),
-            entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
-          });
-        }
-      }
-      const binding = this.createBinding('release-authorize');
-      const result = await this.post<{ state: LicenseServerState; signedManifest?: string }>(
-        '/api/v1/releases/authorize',
-        {
-          installationToken: credential.token,
+      try {
+        return await this.authorizeCommercialUpdateOnline(hostVersion);
+      } catch (error) {
+        if (host.privateCoreInstalled !== false || !isLicenseServerUnreachable(error) || !(await this.heldNoPaidPlan()))
+          throw error;
+        logger.warn('License server is unreachable; preparing the update as Community', {
           hostVersion,
-          entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
-          ...this.bindingBody(binding),
-        }
-      );
-      // LICENSE ENFORCEMENT: The private core is authorized only by a signed state for this request.
-      const state = (await this.verifyServerState(result?.state, binding)).state;
-      if (!state.paidLicense) {
-        if (await this.getSetting(SETTINGS_KEYS.keyEncrypted, null)) {
-          throw new LicenseServerRequestError(
-            409,
-            'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
-            'Update cannot silently replace a paid installation with Community'
-          );
-        }
+          reason: error.message,
+        });
         return { edition: 'community' };
       }
-      // A valid plan, a plan in grace, and a plan lost after expiration, revocation,
-      // replacement, or deactivation all keep the private core: existing paid resources
-      // keep running under Community entitlements, so an update must not remove it.
-      if (typeof result.signedManifest !== 'string')
-        throw new LicenseServerRequestError(
-          403,
-          'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
-          'A signed private core release is required for this installation'
-        );
-      // The target-image preparer shares the running version's database. Never
-      // replace its cache with a newer entitlement format before activation.
-      return {
-        edition: 'commercial',
-        signedManifest: result.signedManifest,
-        readFile: (path, releaseId) =>
-          this.fetcher(`${LICENSE_SERVER_URL}/api/v1/releases/file`, {
-            method: 'POST',
-            redirect: 'error',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              installationToken: credential.token,
-              hostVersion,
-              releaseId,
-              path,
-              entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
-            }),
-            signal: AbortSignal.timeout(10 * 60_000),
-          }),
-      };
     });
+  }
+
+  private async heldNoPaidPlan(): Promise<boolean> {
+    if (await this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null)) return false;
+    for (const key of [SETTINGS_KEYS.cachedState, SETTINGS_KEYS.legacyCachedState]) {
+      const cached = await this.getSetting<Record<string, unknown> | null>(key, null);
+      if (cached && (cached.plan !== 'community' || cached.paidPlan || cached.retainedAttestation)) return false;
+    }
+    return true;
+  }
+
+  private async authorizeCommercialUpdateOnline(hostVersion: string): Promise<CommercialUpdateGrant> {
+    const cached = await this.getStoredCachedState();
+    const credential = await this.ensureRegistered(true, false);
+    if (!credential)
+      throw new LicenseServerRequestError(
+        503,
+        'LICENSE_SERVER_UNAVAILABLE',
+        'Installation registration is required for update'
+      );
+    if (credential.newlyRegistered && cached && !Object.hasOwn(cached, 'registrationStatus')) {
+      const key = await this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null);
+      if (key) {
+        await this.postSignedState('/api/v1/licenses/activate', 'activate', {
+          installationToken: credential.token,
+          licenseKey: this.cryptoService.decryptString(key),
+          entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
+        });
+      }
+    }
+    const binding = this.createBinding('release-authorize');
+    const result = await this.post<{ state: LicenseServerState; signedManifest?: string }>(
+      '/api/v1/releases/authorize',
+      {
+        installationToken: credential.token,
+        hostVersion,
+        entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
+        ...this.bindingBody(binding),
+      }
+    );
+    // LICENSE ENFORCEMENT: The private core is authorized only by a signed state for this request.
+    const state = (await this.verifyServerState(result?.state, binding)).state;
+    if (!state.paidLicense) {
+      if (await this.getSetting(SETTINGS_KEYS.keyEncrypted, null)) {
+        throw new LicenseServerRequestError(
+          409,
+          'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
+          'Update cannot silently replace a paid installation with Community'
+        );
+      }
+      return { edition: 'community' };
+    }
+    // A valid plan, a plan in grace, and a plan lost after expiration, revocation,
+    // replacement, or deactivation all keep the private core: existing paid resources
+    // keep running under Community entitlements, so an update must not remove it.
+    if (typeof result.signedManifest !== 'string')
+      throw new LicenseServerRequestError(
+        403,
+        'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
+        'A signed private core release is required for this installation'
+      );
+    // The target-image preparer shares the running version's database. Never
+    // replace its cache with a newer entitlement format before activation.
+    return {
+      edition: 'commercial',
+      signedManifest: result.signedManifest,
+      readFile: (path, releaseId) =>
+        this.fetcher(`${LICENSE_SERVER_URL}/api/v1/releases/file`, {
+          method: 'POST',
+          redirect: 'error',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            installationToken: credential.token,
+            hostVersion,
+            releaseId,
+            path,
+            entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
+          }),
+          signal: AbortSignal.timeout(10 * 60_000),
+        }),
+    };
   }
 
   private async checkNowUnlocked(): Promise<LicenseStatusView> {

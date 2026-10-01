@@ -42,7 +42,7 @@ Options:
   --docker-address-pool CIDR
                            default-address-pools base for the Docker the run installs (e.g. 10.201.0.0/16)
   --license-server MODE    block (default): reachable only while a Gateway update runs;
-                           block-all: never reachable (shows that Gateway updates are refused);
+                           block-all: never reachable (Community updates must succeed without it);
                            allow: never blocked. A license key implies allow until the fresh install.
   --max-api-downtime SEC   Longest acceptable API outage during a Gateway update (default: 120)
   --workdir DIR            Working directory (default: /var/tmp/gateway-e2e-<run>)

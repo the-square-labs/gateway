@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { installCommercialRelease } from './install.js';
 import { sha256, verifyCommercialRelease } from './loader.js';
@@ -29,13 +30,13 @@ export function commercialHostRoot(hostDir: string): string {
 export async function prepareCommercialUpdate(options: {
   hostDir: string;
   hostVersion: string;
-  authorize(version: string): Promise<CommercialUpdateGrant>;
+  authorize(version: string, host: { privateCoreInstalled: boolean }): Promise<CommercialUpdateGrant>;
   publicKey?: string | Buffer;
 }): Promise<PreparedCommercialUpdate> {
   const version = commercialVersionKey(options.hostVersion);
-  // Authorization must precede even a cached-release lookup or download.
-  const grant = await options.authorize(version);
   const root = commercialHostRoot(options.hostDir);
+  // Authorization must precede even a cached-release lookup or download.
+  const grant = await options.authorize(version, { privateCoreInstalled: await hasPrivateCore(root) });
   await ensureDirectory(root);
   await ensureDirectory(join(root, 'versions'));
   await ensureDirectory(join(root, 'prepared'));
@@ -151,6 +152,22 @@ export async function readPreparedCommercialUpdate(
 async function ensureDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   if (!(await lstat(path)).isDirectory()) throw new Error('Commercial update directory must not be a symlink');
+}
+
+/** Any version pointer means this host ran or prepared a private core; an unreadable one counts too. */
+async function hasPrivateCore(root: string): Promise<boolean> {
+  let versions: Dirent[];
+  try {
+    versions = await readdir(join(root, 'versions'), { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  for (const version of versions) {
+    if (!version.isDirectory()) continue;
+    if (await readExistingVersion(join(root, 'versions', version.name)).catch(() => 'unreadable')) return true;
+  }
+  return false;
 }
 
 async function readExistingVersion(directory: string): Promise<string | null> {

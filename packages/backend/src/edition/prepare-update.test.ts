@@ -67,6 +67,11 @@ describe('private core update preparation', () => {
     await prepareCommercialUpdate({ hostDir, hostVersion: version, authorize, publicKey });
     expect(authorize).toHaveBeenCalledTimes(2);
     expect(source.read).toHaveBeenCalledTimes(2);
+    // The admission learns whether the host already holds a private core it must not lose.
+    expect(authorize.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+      { privateCoreInstalled: false },
+      { privateCoreInstalled: true },
+    ]);
   });
 
   it('does not prepare or touch host configuration when license validation fails', async () => {
@@ -199,15 +204,17 @@ describe('private core update preparation', () => {
   it('prepares Community without downloading a private artifact', async () => {
     const hostDir = await host(),
       hostVersion = 'v3.0.0-rc.1';
-    await prepareCommercialUpdate({
-      hostDir,
-      hostVersion,
-      authorize: async () => ({ edition: 'community' }),
-      publicKey,
-    });
+    const authorize = vi.fn(async (): Promise<CommercialUpdateGrant> => ({ edition: 'community' }));
+    await prepareCommercialUpdate({ hostDir, hostVersion, authorize, publicKey });
     expect(await readPreparedCommercialUpdate(hostDir, hostVersion, publicKey)).toMatchObject({
       edition: 'community',
       releaseId: null,
     });
+    // A Community receipt is not a private core: the next update may still go without the license server.
+    await prepareCommercialUpdate({ hostDir, hostVersion: 'v3.0.0-rc.2', authorize, publicKey });
+    expect(authorize.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+      { privateCoreInstalled: false },
+      { privateCoreInstalled: false },
+    ]);
   });
 });

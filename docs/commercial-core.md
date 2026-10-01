@@ -59,6 +59,10 @@ primitives stay shared; user PKI entrypoints require the commercial core.
    activation (valid, in grace, or after expiration, revocation, replacement, or
    deactivation) receives the matching private core so its existing paid resources
    keep running; an installation that never held a paid plan updates as Community.
+   Such an installation (no key, no paid plan in its license state, no private core
+   on the host) also updates as Community while the license server cannot be
+   reached, since it downloads nothing private. A refusal or a state that fails
+   verification still stops the update.
 3. Store the prepared image/core pair under versioned local paths.
 4. Let Foundation wire the prepared local core into the target configuration.
 5. Replace Gateway and retain the previous image/core pair for rollback.

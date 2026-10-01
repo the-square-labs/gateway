@@ -301,6 +301,55 @@ describe('LicenseService', () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['unreachable', () => Promise.reject(new Error('offline'))],
+    ['failing', () => Promise.resolve(new Response('bad gateway', { status: 502 }))],
+  ])('prepares a Community update while the license server is %s if nothing paid can be lost', async (_, answer) => {
+    for (const registered of [false, true]) {
+      const db = createDb();
+      db.rows.set('license:cached_state', { registrationStatus: 'pending', plan: 'community', entitlementsVersion: 4 });
+      if (registered)
+        db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+      const service = createService(db, vi.fn().mockImplementation(answer));
+      await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1', { privateCoreInstalled: false })).resolves.toEqual({
+        edition: 'community',
+      });
+    }
+  });
+
+  it.each([
+    ['a paid key is stored', { privateCoreInstalled: false }, { 'license:key_encrypted': 'paid' }],
+    ['a private core is on the host', { privateCoreInstalled: true }, {}],
+    ['the caller did not check the host', {}, {}],
+    [
+      'the state names a paid plan',
+      { privateCoreInstalled: false },
+      { 'license:cached_state_v5': { plan: 'community', paidPlan: 'business' } },
+    ],
+    ['the legacy state is paid', { privateCoreInstalled: false }, { 'license:cached_state': { plan: 'business' } }],
+  ] as const)('keeps update admission online when %s', async (_, host, rows) => {
+    const db = createDb();
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    for (const [key, value] of Object.entries(rows))
+      db.rows.set(key, key === 'license:key_encrypted' ? createCrypto().encryptString(value as string) : value);
+    const service = createService(db, vi.fn().mockRejectedValue(new Error('offline')));
+    await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1', host)).rejects.toMatchObject({
+      code: 'LICENSE_SERVER_UNAVAILABLE',
+    });
+  });
+
+  it('does not treat a refusal as an unreachable license server', async () => {
+    const db = createDb();
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const service = createService(
+      db,
+      vi.fn().mockImplementation(() => errorResponse('INSTALLATION_REVOKED', 'Installation revoked', 403))
+    );
+    await expect(
+      service.authorizeCommercialUpdate('v3.0.0-rc.1', { privateCoreInstalled: false })
+    ).rejects.toMatchObject({ code: 'INSTALLATION_REVOKED' });
+  });
+
   it('refuses a silent Community downgrade while a local paid key remains', async () => {
     const db = createDb();
     db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
@@ -1169,6 +1218,14 @@ describe('LicenseService signed states', () => {
     await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).rejects.toMatchObject({
       code: 'INVALID_LICENSE_SIGNATURE',
     });
+    // An answer that fails verification is not an unreachable server, even with nothing paid to keep.
+    const community = unsignedService(
+      db,
+      rawServer(() => ({ state: communityState() }))
+    );
+    await expect(
+      community.authorizeCommercialUpdate('v3.0.0-rc.1', { privateCoreInstalled: false })
+    ).rejects.toMatchObject({ code: 'INVALID_LICENSE_SIGNATURE' });
   });
 
   it('clamps a forged cache in the database to Community with continuity', async () => {

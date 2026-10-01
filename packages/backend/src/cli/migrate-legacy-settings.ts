@@ -27,7 +27,7 @@ async function main() {
       await prepareCommercialUpdate({
         hostDir,
         hostVersion: env.APP_VERSION,
-        authorize: (version) => new LicenseService(db, crypto, env).authorizeCommercialUpdate(version),
+        authorize: (version, host) => new LicenseService(db, crypto, env).authorizeCommercialUpdate(version, host),
       });
       if (process.argv[3] === '--prepare-only') {
         process.stdout.write(`${JSON.stringify({ ok: true, commercialPrepared: true })}\n`);
