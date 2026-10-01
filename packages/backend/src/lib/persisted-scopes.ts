@@ -1,4 +1,4 @@
-import { eq, or, sql } from 'drizzle-orm';
+import { eq, or, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleExecutor } from '@/db/client.js';
 import {
   apiTokens,
@@ -55,18 +55,50 @@ export async function rewritePersistedScopes(
   candidates: readonly string[],
   rewrite: (scopes: readonly string[]) => string[]
 ): Promise<PersistedScopeChanges> {
-  const changes: PersistedScopeChanges = { userIds: [], groupIds: [] };
-  if (candidates.length === 0) return changes;
-  const candidateArray = sql`array[${sql.join(
-    candidates.map((scope) => sql`${scope}`),
+  if (candidates.length === 0) return { userIds: [], groupIds: [] };
+  const candidateArray = textArray(candidates);
+  return rewriteMatchingScopes(tx, (column) => sql`jsonb_exists_any(${column}, ${candidateArray})`, rewrite);
+}
+
+/**
+ * Rewrite every stored scope list holding one of `bases`, bare or with any qualifier (`<base>:<suffix>`). Rows are
+ * locked while they are rewritten, like `rewritePersistedScopes`.
+ */
+export async function rewritePersistedScopesNaming(
+  tx: DrizzleExecutor,
+  bases: readonly string[],
+  rewrite: (scopes: readonly string[]) => string[]
+): Promise<PersistedScopeChanges> {
+  if (bases.length === 0) return { userIds: [], groupIds: [] };
+  const baseArray = textArray(bases);
+  return rewriteMatchingScopes(
+    tx,
+    (column) =>
+      sql`exists (select 1 from jsonb_array_elements_text(${column}) as stored(scope), unnest(${baseArray}) as named(base)
+        where stored.scope = named.base or starts_with(stored.scope, named.base || ':'))`,
+    rewrite
+  );
+}
+
+function textArray(values: readonly string[]): SQL {
+  return sql`array[${sql.join(
+    values.map((value) => sql`${value}`),
     sql`, `
   )}]::text[]`;
+}
+
+async function rewriteMatchingScopes(
+  tx: DrizzleExecutor,
+  matches: (column: any) => SQL,
+  rewrite: (scopes: readonly string[]) => string[]
+): Promise<PersistedScopeChanges> {
+  const changes: PersistedScopeChanges = { userIds: [], groupIds: [] };
   for (const { table, columns, touch } of scopeTables()) {
     const keys = Object.keys(columns);
     const rows: Array<Record<string, any>> = await (tx as any)
       .select({ id: table.id, ...columns })
       .from(table)
-      .where(or(...keys.map((key) => sql`jsonb_exists_any(${columns[key]}, ${candidateArray})`)))
+      .where(or(...keys.map((key) => matches(columns[key]))))
       // One lock order, so two deletions that touch the same grants cannot deadlock.
       .orderBy(table.id)
       .for('update');

@@ -9,16 +9,17 @@ function readMigration(): string {
   return readFileSync(join(process.cwd(), `src/db/migrations/${MIGRATION_TAG}.sql`), 'utf8');
 }
 
-const SCOPE_COLUMNS: Array<[table: string, column: string]> = [
-  ['permission_groups', 'scopes'],
-  ['users', 'additional_scopes'],
-  ['api_tokens', 'scopes'],
-  ['oauth_authorization_codes', 'requested_scopes'],
-  ['oauth_authorization_codes', 'scopes'],
-  ['oauth_refresh_tokens', 'scopes'],
-  ['oauth_access_tokens', 'scopes'],
-  ['ai_run_tool_calls', 'required_scopes'],
-  ['sandbox_jobs', 'required_scopes'],
+// Grants keep their retired names for a rollback to a release before v2.11; required-scope lists are replaced.
+const SCOPE_COLUMNS: Array<[table: string, column: string, keepRetired: boolean]> = [
+  ['permission_groups', 'scopes', true],
+  ['users', 'additional_scopes', true],
+  ['api_tokens', 'scopes', true],
+  ['oauth_authorization_codes', 'requested_scopes', true],
+  ['oauth_authorization_codes', 'scopes', true],
+  ['oauth_refresh_tokens', 'scopes', true],
+  ['oauth_access_tokens', 'scopes', true],
+  ['ai_run_tool_calls', 'required_scopes', false],
+  ['sandbox_jobs', 'required_scopes', false],
 ];
 
 describe('0200 scope catalog cleanup migration', () => {
@@ -86,13 +87,14 @@ describe('0200 scope catalog cleanup migration', () => {
 
   it('rewrites every stored scope column idempotently and removes its helper', () => {
     const migration = readMigration();
-    for (const [table, column] of SCOPE_COLUMNS) {
+    for (const [table, column, keepRetired] of SCOPE_COLUMNS) {
       expect(migration, `${table}.${column}`).toContain(`UPDATE "${table}"`);
       expect(migration, `${table}.${column}`).toContain(
-        `"${column}" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("${column}")`
+        `"${column}" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("${column}", ${keepRetired})`
       );
     }
-    expect(migration).toContain('DROP FUNCTION gateway_scope_catalog_cleanup_0200(jsonb);');
+    expect(migration).toContain('WHERE matched.old_scope IS NULL OR keep_retired');
+    expect(migration).toContain('DROP FUNCTION gateway_scope_catalog_cleanup_0200(jsonb, boolean);');
     expect(migration).not.toMatch(/DELETE FROM|DROP TABLE|ALTER TABLE/i);
   });
 });

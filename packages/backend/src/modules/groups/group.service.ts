@@ -7,7 +7,7 @@ import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, isScopeSubset } from '@/lib/permissions.js';
 import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
-import { canonicalizeScopes } from '@/lib/scopes.js';
+import { canonicalizeScopes, withoutRetiredScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
@@ -303,6 +303,7 @@ export class GroupService {
 
     return groups.map((g) => ({
       ...g,
+      scopes: withoutRetiredScopes(g.scopes),
       inheritedScopes: this.computeInheritedScopes(g.id, groupMap),
       createdAt: g.createdAt.toISOString(),
       updatedAt: g.updatedAt.toISOString(),
@@ -329,6 +330,7 @@ export class GroupService {
 
     return {
       ...group,
+      scopes: withoutRetiredScopes(group.scopes),
       memberCount: Number(memberCount),
       inheritedScopes: this.computeInheritedScopes(group.id, groupMap),
       createdAt: group.createdAt.toISOString(),
@@ -475,6 +477,7 @@ export class GroupService {
 
     return {
       ...updated,
+      scopes: withoutRetiredScopes(updated.scopes),
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),
     };
@@ -550,7 +553,7 @@ export class GroupService {
     const visited = new Set<string>([groupId]);
     while (current && !visited.has(current.id)) {
       visited.add(current.id);
-      const parentScopes = (current.scopes as string[]) ?? [];
+      const parentScopes = withoutRetiredScopes((current.scopes as string[]) ?? []);
       for (const s of parentScopes) inherited.add(s);
       current = current.parentId ? groupMap.get(current.parentId) : null;
     }

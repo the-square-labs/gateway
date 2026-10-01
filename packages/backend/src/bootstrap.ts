@@ -612,37 +612,8 @@ export async function initializeContainer(): Promise<void> {
 
   // Upsert built-in groups (creates on fresh install, syncs scopes on upgrade)
   {
-    const { getBootstrapBuiltinGroups, canonicalizeScopes } = await import('@/lib/scopes.js');
-    const { permissionGroups } = await import('@/db/schema/index.js');
-    const { eq } = await import('drizzle-orm');
-    for (const bg of getBootstrapBuiltinGroups(env.GATEWAY_DEPLOYMENT_MODE)) {
-      await db
-        .insert(permissionGroups)
-        .values({
-          name: bg.name,
-          description: bg.description,
-          isBuiltin: true,
-          scopes: [...bg.scopes],
-        })
-        .onConflictDoUpdate({
-          target: permissionGroups.name,
-          set: { scopes: [...bg.scopes], description: bg.description, isBuiltin: true },
-        });
-    }
-    const groups = await db.select().from(permissionGroups);
-    for (const group of groups) {
-      const originalScopes = Array.isArray(group.scopes) ? group.scopes : [];
-      const canonicalScopes = canonicalizeScopes(originalScopes);
-      const originalKey = [...originalScopes].sort().join('\0');
-      const canonicalKey = [...canonicalScopes].sort().join('\0');
-      if (originalKey === canonicalKey) continue;
-      await db
-        .update(permissionGroups)
-        .set({ scopes: canonicalScopes, updatedAt: new Date() })
-        .where(eq(permissionGroups.id, group.id));
-      const removedScopes = originalScopes.filter((scope) => !canonicalScopes.includes(scope));
-      logger.info('Sanitized permission group scopes', { groupId: group.id, groupName: group.name, removedScopes });
-    }
+    const { syncPermissionGroupsAtStartup } = await import('@/lib/startup-scope-sync.js');
+    await syncPermissionGroupsAtStartup(db, env.GATEWAY_DEPLOYMENT_MODE);
   }
 
   // Ensure system user exists before system CA (it's the owner of bootstrap resources)

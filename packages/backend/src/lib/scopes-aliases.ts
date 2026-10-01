@@ -3,14 +3,17 @@ import { ALL_SCOPES } from './scopes-base.js';
 /**
  * Scope names retired by the v2.11 catalog cleanup, mapped to their replacements.
  *
- * Stored grants were rewritten by migration 0200_scope_catalog_cleanup. Clients, scripts, and MCP
- * agents keep sending the old names for a while, so inbound scope lists (OAuth authorize, API token
- * create/update, group create/update, user additional scopes, OAuth authorization edits) are
- * canonicalized with this table before validation. The mapping preserves resource, folder, and node
- * qualifiers: `old:<suffix>` becomes `new:<suffix>`. An empty replacement list drops the scope.
+ * Migration 0200_scope_catalog_cleanup added the replacements to stored grants and kept the retired
+ * names next to them, so a release before v2.11 that an updater rolls back to still reads its own
+ * names (`withRetiredScopeReplacements`). Clients, scripts, and MCP agents keep sending the old names
+ * for a while, so inbound scope lists (OAuth authorize, API token create/update, group create/update,
+ * user additional scopes, OAuth authorization edits) are canonicalized with this table before
+ * validation. The mapping preserves resource, folder, and node qualifiers: `old:<suffix>` becomes
+ * `new:<suffix>`. An empty replacement list drops the scope.
  *
- * Never consult this table while checking permissions: `hasScope` stays on the canonical catalog.
- * Remove the table two releases after v2.11.
+ * Never consult this table while checking permissions: `hasScope` stays on the canonical catalog and
+ * a stored retired name grants nothing (`isValidBaseScope` rejects it). Remove the table, and the
+ * retired names from stored grants, two releases after v2.11.
  */
 export const RETIRED_SCOPE_REPLACEMENTS: Readonly<Record<string, readonly string[]>> = {
   // Never enforced.
@@ -123,3 +126,21 @@ export function replaceRetiredScopes(scopes: readonly string[]): string[] {
   }
   return [...new Set(result)];
 }
+
+/**
+ * What migration 0200 does to a stored scope list: retired names stay and gain their replacements
+ * (qualifiers preserved), and scopes whose capabilities moved gain their additions. Nothing is removed,
+ * so a release before v2.11 still finds its own names after a rollback, and a second run changes nothing.
+ */
+export function withRetiredScopeReplacements(scopes: readonly string[]): string[] {
+  const current = replaceRetiredScopes(scopes);
+  return [...new Set([...scopes, ...current, ...current.flatMap(scopeCleanupAdditions)])];
+}
+
+/**
+ * Migration 0197 gave custom groups holding a connector's manage scope its sync scope. 0200 retired the
+ * Git providers' sync scopes again, so only Cloudflare's still stands on its own.
+ */
+export const PLATFORM_HARDENING_GROUP_ADDITIONS: Readonly<Record<string, string>> = {
+  'integrations:cloudflare:manage': 'integrations:cloudflare:sync',
+};

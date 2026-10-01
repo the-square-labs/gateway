@@ -1,10 +1,14 @@
--- v2.11 scope catalog cleanup. Rewrites every stored scope array to the current catalog:
--- retired names map to their replacements with resource, folder, and node qualifiers preserved
--- (`old:<suffix>` -> `new:<suffix>`), and removed scopes are dropped. Holders of a few scopes whose
--- capabilities moved to new scopes receive those scopes so nobody loses effective access; resource and
--- bare Docker node qualifiers are kept, folder and node destinations receive nothing.
+-- v2.11 scope catalog cleanup. Brings every stored scope array to the current catalog: retired names
+-- gain their replacements with resource, folder, and node qualifiers preserved (`old:<suffix>` ->
+-- `new:<suffix>`). Holders of a few scopes whose capabilities moved to new scopes receive those scopes so
+-- nobody loses effective access; resource and bare Docker node qualifiers are kept, folder and node
+-- destinations receive nothing.
+-- Grants keep the retired names next to their replacements (keep_retired): an updater of a release
+-- before v2.11 rolls back without restoring the database, and that release drops every name it does not
+-- know, so it must still find its own. Retired names grant nothing in v2.11, and its startup converts
+-- grants again when such a release wrote them. Required-scope lists of pending work are replaced.
 -- The mapping mirrors packages/backend/src/lib/scopes-aliases.ts. Re-running is a no-op.
-CREATE OR REPLACE FUNCTION gateway_scope_catalog_cleanup_0200(scopes jsonb)
+CREATE OR REPLACE FUNCTION gateway_scope_catalog_cleanup_0200(scopes jsonb, keep_retired boolean)
 RETURNS jsonb
 LANGUAGE sql
 IMMUTABLE
@@ -97,7 +101,7 @@ AS $$
   renamed AS (
     SELECT matched.scope, matched.position, 0 AS rank
     FROM matched
-    WHERE matched.old_scope IS NULL
+    WHERE matched.old_scope IS NULL OR keep_retired
     UNION ALL
     SELECT retired.new_scope || substr(matched.scope, length(matched.old_scope) + 1), matched.position, 1
     FROM matched
@@ -138,39 +142,39 @@ AS $$
 $$;--> statement-breakpoint
 
 UPDATE "permission_groups"
-SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes")
-WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes");--> statement-breakpoint
+SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes", true)
+WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes", true);--> statement-breakpoint
 
 UPDATE "users"
-SET "additional_scopes" = gateway_scope_catalog_cleanup_0200("additional_scopes")
-WHERE "additional_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("additional_scopes");--> statement-breakpoint
+SET "additional_scopes" = gateway_scope_catalog_cleanup_0200("additional_scopes", true)
+WHERE "additional_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("additional_scopes", true);--> statement-breakpoint
 
 UPDATE "api_tokens"
-SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes")
-WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes");--> statement-breakpoint
+SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes", true)
+WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes", true);--> statement-breakpoint
 
 UPDATE "oauth_authorization_codes"
 SET
-  "requested_scopes" = gateway_scope_catalog_cleanup_0200("requested_scopes"),
-  "scopes" = gateway_scope_catalog_cleanup_0200("scopes")
+  "requested_scopes" = gateway_scope_catalog_cleanup_0200("requested_scopes", true),
+  "scopes" = gateway_scope_catalog_cleanup_0200("scopes", true)
 WHERE
-  "requested_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("requested_scopes")
-  OR "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes");--> statement-breakpoint
+  "requested_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("requested_scopes", true)
+  OR "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes", true);--> statement-breakpoint
 
 UPDATE "oauth_refresh_tokens"
-SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes")
-WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes");--> statement-breakpoint
+SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes", true)
+WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes", true);--> statement-breakpoint
 
 UPDATE "oauth_access_tokens"
-SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes")
-WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes");--> statement-breakpoint
+SET "scopes" = gateway_scope_catalog_cleanup_0200("scopes", true)
+WHERE "scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("scopes", true);--> statement-breakpoint
 
 UPDATE "ai_run_tool_calls"
-SET "required_scopes" = gateway_scope_catalog_cleanup_0200("required_scopes")
-WHERE "required_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("required_scopes");--> statement-breakpoint
+SET "required_scopes" = gateway_scope_catalog_cleanup_0200("required_scopes", false)
+WHERE "required_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("required_scopes", false);--> statement-breakpoint
 
 UPDATE "sandbox_jobs"
-SET "required_scopes" = gateway_scope_catalog_cleanup_0200("required_scopes")
-WHERE "required_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("required_scopes");--> statement-breakpoint
+SET "required_scopes" = gateway_scope_catalog_cleanup_0200("required_scopes", false)
+WHERE "required_scopes" IS DISTINCT FROM gateway_scope_catalog_cleanup_0200("required_scopes", false);--> statement-breakpoint
 
-DROP FUNCTION gateway_scope_catalog_cleanup_0200(jsonb);
+DROP FUNCTION gateway_scope_catalog_cleanup_0200(jsonb, boolean);

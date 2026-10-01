@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { hasScope } from './permissions.js';
+import { hasScope, hasScopeBase } from './permissions.js';
 import {
   ALL_SCOPES,
   canonicalizeInboundScopes,
   canonicalizeScopes,
+  isApiTokenScope,
   isValidBaseScope,
   isValidInboundScope,
   RETIRED_SCOPE_REPLACEMENTS,
   replaceRetiredScopes,
   SCOPE_CLEANUP_MIGRATION_ADDITIONS,
   scopeCleanupAdditions,
+  withoutRetiredScopes,
+  withRetiredScopeReplacements,
 } from './scopes.js';
 import { delegatedScopeIssue } from './scopes-schemas.js';
 
@@ -124,6 +127,42 @@ describe('retired scope aliases', () => {
   it('does not alias inside permission checks', () => {
     expect(hasScope(['notifications:manage'], 'notifications:alerts:manage')).toBe(false);
     expect(hasScope(['docker:containers:folders:manage'], 'docker:folders:manage')).toBe(false);
+  });
+
+  it('never grants through retired names that read like qualified current scopes', () => {
+    const stored = [
+      'pki:ca:view:root',
+      'pki:ca:view:intermediate',
+      'proxy:advanced:bypass',
+      'proxy:advanced:bypass:h1',
+    ];
+    for (const scope of stored) {
+      expect(isValidBaseScope(scope), scope).toBe(false);
+      expect(isApiTokenScope(scope), scope).toBe(false);
+    }
+    expect(canonicalizeScopes(stored)).toEqual([]);
+    expect(hasScopeBase(canonicalizeScopes(stored), 'proxy:advanced')).toBe(false);
+    expect(withoutRetiredScopes([...stored, 'pki:ca:view:ca-1', 'proxy:advanced:h1'])).toEqual([
+      'pki:ca:view:ca-1',
+      'proxy:advanced:h1',
+    ]);
+  });
+
+  it('adds replacements next to the retired names stored grants keep for older releases', () => {
+    const legacy = ['notifications:manage', 'proxy:raw:bypass:h1', 'integrations:github:sync', 'pki:ca:create:root'];
+    const converted = withRetiredScopeReplacements(legacy);
+    expect(converted).toEqual([
+      ...legacy,
+      'notifications:alerts:manage',
+      'notifications:webhooks:manage',
+      'proxy:unrestricted:h1',
+      'integrations:github:manage',
+      'integrations:github:repo:read',
+      'integrations:github:repo:write',
+      'pki:ca:edit',
+      'pki:ca:export',
+    ]);
+    expect(withRetiredScopeReplacements(converted)).toEqual(converted);
   });
 });
 

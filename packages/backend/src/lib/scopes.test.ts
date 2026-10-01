@@ -686,6 +686,7 @@ describe('canonical scope definitions', () => {
   });
 
   it('models the stored-scope migration behavior for denied suffixes and overlapping resource scopes', () => {
+    // proxy:advanced:bypass is a retired name (scopes-aliases.ts) and never reads as a proxy:advanced grant.
     expect(
       migratedProgrammaticStoredScopes([
         'mcp:use:any',
@@ -699,12 +700,6 @@ describe('canonical scope definitions', () => {
         'proxy:view:host-1',
         'unknown:scope',
       ])
-    ).toEqual([
-      'proxy:advanced:bypass:host-1',
-      'proxy:advanced:bypasser',
-      'proxy:advanced:host-1',
-      'proxy:raw:write:host-1',
-      'proxy:view',
-    ]);
+    ).toEqual(['proxy:advanced:bypasser', 'proxy:advanced:host-1', 'proxy:raw:write:host-1', 'proxy:view']);
   });
 });

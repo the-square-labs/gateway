@@ -6,7 +6,7 @@
  * Resource-scopable scopes support suffixes: e.g. docker:containers:view:node-uuid
  */
 
-import { replaceRetiredScopes, retiredScopeBase } from './scopes-aliases.js';
+import { RETIRED_SCOPE_REPLACEMENTS, replaceRetiredScopes, retiredScopeBase } from './scopes-aliases.js';
 import { ALL_SCOPES, PROGRAMMATIC_DENIED_SCOPE_SET } from './scopes-base.js';
 import { gitScopeQualifierIssue, isGitScopeBase } from './scopes-git.js';
 import { RESOURCE_SCOPABLE } from './scopes-resource.js';
@@ -102,10 +102,21 @@ export function extractBaseScope(scope: string): string {
   return scope;
 }
 
-/** Check if a scope string has a valid base scope */
-export function isValidBaseScope(scope: string): boolean {
+function hasCatalogBase(scope: string): boolean {
   const base = extractBaseScope(scope);
   return ALL_SCOPES_SET.has(base) && (scope === base || RESOURCE_SCOPABLE_SET.has(base));
+}
+
+/**
+ * Retired names that read as a qualified current scope (`pki:ca:view:root` as `pki:ca:view` on CA "root"). Stored
+ * grants keep retired names for older releases (migration 0200), and they must never grant anything here.
+ */
+const RETIRED_CATALOG_LOOKALIKES = Object.keys(RETIRED_SCOPE_REPLACEMENTS).filter(hasCatalogBase);
+
+/** Check if a scope string has a valid base scope */
+export function isValidBaseScope(scope: string): boolean {
+  if (!hasCatalogBase(scope)) return false;
+  return !RETIRED_CATALOG_LOOKALIKES.some((retired) => scope === retired || scope.startsWith(`${retired}:`));
 }
 
 /** Check whether a scope may be delegated to an API token */
@@ -157,6 +168,11 @@ export function withoutManualApprovalScopes(scopes: readonly string[]): string[]
 /** Whether an inbound scope string is a retired name that will be rewritten or dropped. */
 export function isRetiredScope(scope: string): boolean {
   return retiredScopeBase(scope.trim()) !== null;
+}
+
+/** Stored scopes without the retired names kept there for older releases; they grant nothing in this one. */
+export function withoutRetiredScopes(scopes: readonly string[]): string[] {
+  return scopes.filter((scope) => !isRetiredScope(scope));
 }
 
 /**
