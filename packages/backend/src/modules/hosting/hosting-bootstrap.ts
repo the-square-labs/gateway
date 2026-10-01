@@ -14,13 +14,13 @@ const INSTALLERS: Record<HostingRole, string> = {
 };
 // Published revision containing the Storage wrapper and self-sufficient Relay installation.
 // Update revision and hashes together after publishing installer changes.
-export const HOSTING_INSTALLER_REVISION = 'c1554c5de547a9ed36f1ea29e5825288df60f74d';
+export const HOSTING_INSTALLER_REVISION = '58d708bef30110bcc70a48ece0d32785b21001f4';
 export const HOSTING_INSTALLER_BASE = `https://raw.githubusercontent.com/the-square-labs/gateway/${HOSTING_INSTALLER_REVISION}/scripts`;
 const INSTALLER_SHA256: Record<string, string> = {
   'setup-node.sh': 'c5afa65657389f9d3aa0a0b8c8e4e8410c598b6c6af4416e37c5db558450e560',
   'setup-docker-node.sh': '31368ab6e92df1f284eac18fc9abe85214893ab0940854c9b68e99dd4ce57b1c',
-  'setup-database-node.sh': '8587fad60d7227a05a304144efe65f3830ae04956242a05f94e0647b7294969c',
-  'setup-storage-node.sh': '8d988ce8e0c1021853f04585442390b628aed9a3bd674e9e6d581bdb6fe97d6a',
+  'setup-database-node.sh': '955cba6ef03e9685e60371085b5d5086bd010be1d684c90c6e867384b1356a60',
+  'setup-storage-node.sh': '2af126db47e45e8350873eb13d17f73446fa77824c92d4ccfe9b15461548fc08',
   'setup-monitoring-node.sh': '8915cd4c65a1af50948e2f367dde54a5e8b41f43c1abf906cf69b0519b2616a8',
   'setup-relay-node.sh': '6b5d2b3429b7dfe36c6270cbf4b02f0aea582d609b72b7221cd7eef8e314bf8d',
 };
