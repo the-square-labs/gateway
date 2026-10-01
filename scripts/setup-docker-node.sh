@@ -1199,11 +1199,13 @@ Options:
   --gateway <addr>         Gateway gRPC address as host:port (e.g. gateway.example.com:9443)
   --host <host>            Gateway hostname or IP (e.g. gateway.example.com)
   --port <port>            Gateway gRPC port (default: 9443)
-  --token <token>          Enrollment token from Gateway UI (Admin > Nodes > Add Node)
+  --token <token>          Enrollment token from Gateway UI (Nodes > Add Node)
   --gateway-cert-sha256 <fp>
                            Gateway gRPC TLS leaf fingerprint from the generated setup command
   --version <ver>          Daemon version to install (default: latest)
   --mode <profile>         Node profile: docker, builder, databases, or storage (default: docker)
+  --builder-egress <profile>
+                           Builder egress: internet or offline (default: internet)
   --user <user>            Run daemon as this user (default: root)
   --no-logo                Suppress the logo banner
   --dry-run                Validate inputs and show the plan without changing the host
@@ -1342,7 +1344,7 @@ if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
 
         # Enrollment token
         if [[ -z "$ENROLL_TOKEN" ]]; then
-            ENROLL_TOKEN=$(prompt_secret "Enrollment token (from Admin > Nodes)")
+            ENROLL_TOKEN=$(prompt_secret "Enrollment token (from Nodes > Add Node)")
             [[ -z "$ENROLL_TOKEN" ]] && die "Enrollment token is required"
         else
             guide "${GRAY}Token: ${ENROLL_TOKEN:0:12}...${ENROLL_TOKEN: -4}${NC}"
