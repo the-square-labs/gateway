@@ -474,6 +474,15 @@ func differentFilesystem(path string) bool {
 	return err == nil && dev != parent
 }
 
+// unreadableRecord is an instance record file that cannot be read (a damaged
+// file). Its id is taken from the file name; the repair leaves everything
+// named after that id alone and never deletes the file.
+type unreadableRecord struct {
+	ID   string
+	Path string
+	Err  error
+}
+
 // loopImageDomain is one image directory a manager owns. Predicates take base
 // names inside imageDir and mountDir.
 type loopImageDomain struct {
