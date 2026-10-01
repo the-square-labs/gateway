@@ -276,12 +276,16 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		if err != nil {
 			return fmt.Errorf("initialize managed database storage for storage profile: %w", err)
 		}
-		if err := p.databaseManager.reconcile(ctx); err != nil {
-			return fmt.Errorf("reconcile managed database storage for storage profile: %w", err)
-		}
 		p.storageManager, err = newManagedStorageManager(p.cfg, p.client, p.logger)
 		if err != nil {
 			return fmt.Errorf("initialize managed storage runtime: %w", err)
+		}
+		// Release what interrupted deletes and older releases left behind
+		// before remounting: on a fixed loop-device pool, leaked devices would
+		// keep live instances down.
+		p.repairLoopImages(ctx)
+		if err := p.databaseManager.reconcile(ctx); err != nil {
+			return fmt.Errorf("reconcile managed database storage for storage profile: %w", err)
 		}
 		if err := p.storageManager.reconcile(ctx); err != nil {
 			return fmt.Errorf("reconcile managed storage runtime: %w", err)
@@ -289,6 +293,8 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		p.registerCompiledBackupHandler()
 		// Copy jobs do not survive a daemon restart; remove their credentials now.
 		p.recoverStorageCopyJobs()
+		go p.runLoopImageRepair(context.Background())
+		go p.runManagedEngineSupervisor(context.Background())
 	}
 	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		composeExecutor, composeErr := newComposeExecutor(p.cfg, p.client, p.logger)
@@ -301,6 +307,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		if err != nil {
 			return fmt.Errorf("initialize disk-image volume storage: %w", err)
 		}
+		go p.runLoopImageRepair(context.Background())
 		// Before the secure-link restore, which binds links to the routers.
 		p.repairDeploymentRouters("", deploymentRouterRepairStartupTimeout)
 		go p.deploymentRouterRepairLoop(context.Background(), deploymentRouterRepairInterval)

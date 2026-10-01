@@ -246,6 +246,10 @@ type managedDatabaseRecord struct {
 	RedisConfigHash                 string `json:"redisConfigHash,omitempty"`
 	ClickhouseRuntimeProfileVersion int    `json:"clickhouseRuntimeProfileVersion,omitempty"`
 	OperationID                     string `json:"operationId"`
+	// Deleting is set before a delete tears anything down. An instance whose
+	// delete could not finish is never remounted; the repair pass and a
+	// repeated delete complete it.
+	Deleting bool `json:"deleting,omitempty"`
 }
 
 // managedDatabaseRuntimeStats is intentionally a narrow managed-database
@@ -276,6 +280,8 @@ type managedDatabaseManager struct {
 	// (see handleTLSReload); generations is guarded by mu.
 	generations lifecycleGenerations
 	tlsReloads  resourceLocks
+	// loops overrides the kernel loop-device surface (tests).
+	loops *loopHost
 }
 
 func newManagedDatabaseManager(cfg *config.Config, client *Client, logger *slog.Logger) (*managedDatabaseManager, error) {

@@ -47,10 +47,12 @@ func main() {
 			return
 		case "runtime":
 			os.Exit(runRuntimeCommand(os.Args[2:]))
+		case "mount-volume-images":
+			os.Exit(runMountVolumeImages(os.Args[2:]))
 		case "run":
 			// explicit run, continue below
 		default:
-			fmt.Fprintf(os.Stderr, "Usage: docker-daemon [run|install|runtime|version]\n")
+			fmt.Fprintf(os.Stderr, "Usage: docker-daemon [run|install|runtime|mount-volume-images|version]\n")
 			os.Exit(1)
 		}
 	}
@@ -108,6 +110,26 @@ func main() {
 		lifecycle.LogDaemonExit(logger, "daemon exited with error", err)
 		os.Exit(lifecycle.DaemonExitCode(err))
 	}
+}
+
+// runMountVolumeImages is the boot step the daemon installs before Docker:
+// it mounts the disk-image volume images, or makes the mount point of one
+// that cannot be mounted read-only (see docker.MountVolumeImagesAtBoot).
+func runMountVolumeImages(args []string) int {
+	flags := flag.NewFlagSet("mount-volume-images", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	stateDir := flags.String("state-dir", "/var/lib/docker-daemon", "daemon state directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	logger := setupLogger("info", "text")
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	if err := docker.MountVolumeImagesAtBoot(ctx, *stateDir, logger); err != nil {
+		logger.Error("disk-image volumes are not all mounted", "error", err)
+		return 1
+	}
+	return 0
 }
 
 func runRuntimeCommand(args []string) int {

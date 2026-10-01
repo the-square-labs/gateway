@@ -26,12 +26,19 @@ func (m *managedDatabaseManager) ensureCapacity(bytes int64) error {
 	return nil
 }
 
-func (m *managedDatabaseManager) createImage(ctx context.Context, record managedDatabaseRecord) error {
+// createImage removes its own partial image on failure; a leftover would make
+// every retry of the create fail on the existing file.
+func (m *managedDatabaseManager) createImage(ctx context.Context, record managedDatabaseRecord) (err error) {
 	file, err := os.OpenFile(record.ImagePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("create storage image: %w", err)
 	}
 	defer file.Close()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(record.ImagePath)
+		}
+	}()
 	if output, err := exec.CommandContext(ctx, "fallocate", "-l", fmt.Sprintf("%d", record.StorageSize), record.ImagePath).CombinedOutput(); err != nil {
 		return fmt.Errorf("preallocate non-sparse storage image: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -45,24 +52,15 @@ func (m *managedDatabaseManager) createImage(ctx context.Context, record managed
 }
 
 func (m *managedDatabaseManager) ensureMounted(ctx context.Context, record *managedDatabaseRecord) error {
-	if mounted(record.MountPath) {
-		return nil
+	if record.Deleting {
+		return errors.New("managed database is being deleted")
 	}
-	if err := os.MkdirAll(record.MountPath, 0700); err != nil {
-		return fmt.Errorf("create database mount point: %w", err)
-	}
-	loopDevice, err := attachDatabaseLoopDevice(ctx, record.ImagePath)
+	loopDevice, err := m.loopHost().mountImage(ctx, record.ImagePath, record.MountPath, "noatime")
 	if err != nil {
-		return err
+		return fmt.Errorf("mount database storage image: %w", err)
 	}
-	record.LoopDevice = loopDevice
-	if record.LoopDevice == "" {
-		return errors.New("losetup did not return a loop device")
-	}
-	if output, err := exec.CommandContext(ctx, "mount", "-o", "noatime", record.LoopDevice, record.MountPath).CombinedOutput(); err != nil {
-		_ = exec.Command("losetup", "-d", record.LoopDevice).Run()
-		record.LoopDevice = ""
-		return fmt.Errorf("mount database storage image: %w: %s", err, strings.TrimSpace(string(output)))
+	if loopDevice != "" {
+		record.LoopDevice = loopDevice
 	}
 	return nil
 }
@@ -125,7 +123,8 @@ func attachDatabaseLoopDevice(ctx context.Context, imagePath string) (string, er
 	// guest-invisible device. In that topology --find fails even though one of
 	// the explicitly delegated loop devices is free. Fall back to the visible
 	// device nodes without weakening the ordinary host path above.
-	if loopDevice, visibleErr := attachVisibleDatabaseLoopDevice(ctx, imagePath); visibleErr == nil {
+	loopDevice, visibleErr := attachVisibleDatabaseLoopDevice(ctx, imagePath)
+	if visibleErr == nil {
 		return loopDevice, nil
 	}
 
@@ -133,13 +132,19 @@ func attachDatabaseLoopDevice(ctx context.Context, imagePath string) (string, er
 	// database installer supports regular Ubuntu hosts first, and falls back to
 	// the portable two-step form for these local/DIND environments.
 	if !strings.Contains(strings.ToLower(string(output)), "unrecognized option") {
+		if errors.Is(visibleErr, errNoVisibleFreeLoopDevice) {
+			return "", errNoFreeLoopDevice
+		}
 		return "", fmt.Errorf("attach database storage image: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	found, findErr := exec.CommandContext(ctx, "losetup", "-f").CombinedOutput()
 	if findErr != nil {
+		if text := strings.ToLower(string(found)); strings.Contains(text, "free loop") || strings.Contains(text, "unused loop") {
+			return "", errNoFreeLoopDevice
+		}
 		return "", fmt.Errorf("find free database loop device: %w: %s", findErr, strings.TrimSpace(string(found)))
 	}
-	loopDevice := loopDeviceFromLosetupOutput(found)
+	loopDevice = loopDeviceFromLosetupOutput(found)
 	if loopDevice == "" {
 		return "", errors.New("losetup did not return a free loop device")
 	}
@@ -172,21 +177,33 @@ func attachDatabaseLoopDeviceFromCandidates(ctx context.Context, imagePath strin
 		}
 	}
 
+	// errNoVisibleFreeLoopDevice only when every candidate was in use; a free
+	// device that refused the attach is a different problem and is reported.
+	if len(candidates) == 0 {
+		return "", errors.New("no loop device is visible on this node")
+	}
+	var attachErr error
 	for _, candidate := range candidates {
 		if output, err := exec.CommandContext(ctx, "losetup", candidate).CombinedOutput(); err == nil {
 			continue
 		} else if !strings.Contains(strings.ToLower(string(output)), "no such file or directory") &&
 			!strings.Contains(strings.ToLower(string(output)), "no such device") {
+			attachErr = fmt.Errorf("inspect loop device %s: %w: %s", candidate, err, strings.TrimSpace(string(output)))
 			continue
 		}
 		if output, err := exec.CommandContext(ctx, "losetup", candidate, imagePath).CombinedOutput(); err == nil {
 			return candidate, nil
 		} else if !strings.Contains(strings.ToLower(string(output)), "device or resource busy") {
-			continue
+			attachErr = fmt.Errorf("attach database storage image to %s: %w: %s", candidate, err, strings.TrimSpace(string(output)))
 		}
 	}
-	return "", errors.New("no visible free database loop device is available")
+	if attachErr != nil {
+		return "", attachErr
+	}
+	return "", errNoVisibleFreeLoopDevice
 }
+
+var errNoVisibleFreeLoopDevice = errors.New("no visible free database loop device is available")
 
 func loopDeviceFromLosetupOutput(output []byte) string {
 	for _, line := range strings.Split(string(output), "\n") {
@@ -206,6 +223,13 @@ func loopDeviceFromLosetupAssociation(output []byte) string {
 		}
 	}
 	return ""
+}
+
+func (m *managedDatabaseManager) loopHost() *loopHost {
+	if m.loops != nil {
+		return m.loops
+	}
+	return systemLoopHost
 }
 
 func mounted(path string) bool {

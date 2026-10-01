@@ -129,15 +129,18 @@ type backupRuntime struct {
 	mu     sync.Mutex
 	runs   map[string]*backupRunStatus
 	cancel map[string]context.CancelFunc
+	// active holds the runs whose runTool is executing in this process; their
+	// workspaces are released by runTool itself, never by reconciliation.
+	active map[string]bool
 }
 
 // backupWorkspace is a non-sparse ext4 image in the same storage root and
 // reservation domain as managed databases. A Docker bind mount alone cannot
 // enforce workspaceBytes.
 type backupWorkspace struct {
-	imagePath  string
-	mountPath  string
-	loopDevice string
+	imagePath string
+	mountPath string
+	loops     *loopHost
 }
 
 var backupRuntimes sync.Map // map[*DockerPlugin]*backupRuntime; avoids parent-owned DockerPlugin edits.
@@ -153,22 +156,6 @@ type BackupRelayOpen func(context.Context, *DockerPlugin, string, string) (strin
 
 var OpenBackupRelayRouteForBackup BackupRelayOpen = func(_ context.Context, _ *DockerPlugin, _ string, _ string) (string, func(), error) {
 	return "", nil, errors.New("backup relay support is not integrated")
-}
-
-var backupWorkspaceUnmount = func(mountPath string) error {
-	return exec.Command("umount", mountPath).Run()
-}
-
-var backupWorkspaceLoopDevice = func(imagePath string) (string, error) {
-	output, err := exec.Command("losetup", "-j", imagePath).CombinedOutput()
-	if err != nil {
-		return "", err
-	}
-	return loopDeviceFromLosetupAssociation(output), nil
-}
-
-var backupWorkspaceDetach = func(loopDevice string) error {
-	return exec.Command("losetup", "-d", loopDevice).Run()
 }
 
 func backupRuntimeFor(plugin *DockerPlugin) (*backupRuntime, error) {
@@ -187,17 +174,21 @@ func backupRuntimeFor(plugin *DockerPlugin) (*backupRuntime, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, fmt.Errorf("create backup state directory: %w", err)
 	}
-	runtime := &backupRuntime{plugin: plugin, root: root, runs: map[string]*backupRunStatus{}, cancel: map[string]context.CancelFunc{}}
+	runtime := &backupRuntime{plugin: plugin, root: root, runs: map[string]*backupRunStatus{}, cancel: map[string]context.CancelFunc{}, active: map[string]bool{}}
 	runtime.reconcileWorkspaces()
 	backupRuntimes.Store(plugin, runtime)
 	return runtime, nil
 }
 
-// A daemon restart can interrupt defer-based teardown. Only terminal or
-// orphaned workspaces are reclaimed here; an active runner may still need its
-// mounted ext4 image and is reconciled through its persisted status instead.
+// A daemon restart can interrupt defer-based teardown, and a run nobody asks
+// about again is never reconciled through its status. This pass runs at the
+// first backup command and with the periodic loop-image repair. It reclaims
+// the workspace of every run that is not executing in this process and whose
+// runner is gone: terminal runs, runs whose runner finished or vanished, and
+// runs the daemon lost before it started a runner. A runner that is still
+// running keeps its mounted ext4 image.
 func (r *backupRuntime) reconcileWorkspaces() {
-	if r.plugin.databaseManager == nil {
+	if r.plugin.databaseManager == nil || r.plugin.client == nil {
 		return
 	}
 	imageDir := filepath.Join(r.plugin.databaseManager.root, "backups", "images")
@@ -207,20 +198,35 @@ func (r *backupRuntime) reconcileWorkspaces() {
 	}
 	for _, imagePath := range images {
 		runID := strings.TrimSuffix(filepath.Base(imagePath), ".img")
-		status, statusErr := r.load(runID)
-		if statusErr != nil {
-			// A missing status must not be treated as an orphan until the Docker
-			// ownership labels prove that no runner is still alive.
-			if r.plugin.client == nil {
-				continue
-			}
-			status, statusErr = r.status(runID)
-		}
-		if statusErr != nil || (status.Status != "completed" && status.Status != "failed" && status.Status != "cancelled") {
+		r.mu.Lock()
+		active := r.active[runID]
+		r.mu.Unlock()
+		if active {
 			continue
 		}
-		_, _ = r.reconcileTerminalCleanup(status, true)
+		_, loadErr := r.load(runID)
+		// status() reconciles a persisted run whose runner is gone, which
+		// releases its workspace.
+		status, statusErr := r.status(runID)
+		switch {
+		case statusErr == nil && isTerminalBackupStatus(status.Status) && workspaceImageExists(imagePath):
+			_, _ = r.reconcileTerminalCleanup(status, true)
+		case statusErr != nil && loadErr != nil && statusErr.Error() == "BACKUP_RUN_UNKNOWN":
+			// No status, no runner container and no result: the run was lost
+			// before its runner existed.
+			if err := r.removeWorkspace(runID, imagePath); err != nil {
+				r.plugin.databaseManager.logger.Warn("orphaned backup workspace could not be released", "run_id", runID, "error", err)
+			} else {
+				r.plugin.databaseManager.logger.Info("released orphaned backup workspace", "run_id", runID)
+			}
+		}
 	}
+}
+
+// workspaceImageExists is false once status() already released the workspace.
+func workspaceImageExists(imagePath string) bool {
+	_, err := os.Stat(imagePath)
+	return err == nil
 }
 
 func (r *backupRuntime) removeWorkspace(runID, imagePath string) error {
@@ -233,20 +239,10 @@ func (r *backupRuntime) removeWorkspace(runID, imagePath string) error {
 }
 
 func (r *backupRuntime) removeWorkspaceLocked(runID, imagePath string) error {
-	mountPath := filepath.Join(r.root, runID, "work")
-	if mounted(mountPath) {
-		if err := backupWorkspaceUnmount(mountPath); err != nil {
-			return fmt.Errorf("unmount backup workspace: %w", err)
-		}
-	}
-	loopDevice, err := backupWorkspaceLoopDevice(imagePath)
-	if err != nil {
-		return fmt.Errorf("inspect backup workspace loop device: %w", err)
-	}
-	if loopDevice != "" {
-		if err := backupWorkspaceDetach(loopDevice); err != nil {
-			return fmt.Errorf("detach backup workspace loop device: %w", err)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+	defer cancel()
+	if err := r.plugin.databaseManager.loopHost().release(ctx, imagePath, filepath.Join(r.root, runID, "work")); err != nil {
+		return fmt.Errorf("release backup workspace: %w", err)
 	}
 	if err := os.Remove(imagePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove backup workspace image: %w", err)
@@ -558,6 +554,15 @@ func (r *backupRuntime) start(runID string, payload backupPayload, fingerprint s
 }
 
 func (r *backupRuntime) runTool(ctx context.Context, runID string, payload backupPayload, fingerprint, operation string) (status backupRunStatus, err error) {
+	// First, so it is cleared last: after the workspace below is released.
+	r.mu.Lock()
+	r.active[runID] = true
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.active, runID)
+		r.mu.Unlock()
+	}()
 	workdir := filepath.Join(r.root, runID)
 	if err := os.MkdirAll(workdir, 0700); err != nil {
 		return backupRunStatus{}, err
@@ -784,11 +789,20 @@ func (r *backupRuntime) allocateWorkspace(ctx context.Context, runID, mountPath 
 		return nil, fmt.Errorf("create backup workspace image: %w", err)
 	}
 	defer image.Close()
+	loops := manager.loopHost()
 	removeImage := true
 	defer func() {
-		if removeImage {
-			_ = os.Remove(imagePath)
+		if !removeImage {
+			return
 		}
+		// The run context may be spent; the image goes only once released.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+		defer cancel()
+		if err := loops.release(cleanupCtx, imagePath, mountPath); err != nil {
+			manager.logger.Warn("failed backup workspace allocation left storage behind; the repair pass releases it", "run_id", runID, "error", err)
+			return
+		}
+		_ = os.Remove(imagePath)
 	}()
 	if output, err := exec.CommandContext(ctx, "fallocate", "-l", strconv.FormatInt(bytes, 10), imagePath).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("allocate bounded backup workspace: %w: %s", err, sanitizeBackupError(string(output)))
@@ -807,31 +821,25 @@ func (r *backupRuntime) allocateWorkspace(ctx context.Context, runID, mountPath 
 		return nil, fmt.Errorf("attach backup workspace loop device: %w", err)
 	}
 	if output, err := exec.CommandContext(ctx, "mount", "-o", "noatime", loopDevice, mountPath).CombinedOutput(); err != nil {
-		_ = exec.Command("losetup", "-d", loopDevice).Run()
 		return nil, fmt.Errorf("mount bounded backup workspace: %w: %s", err, sanitizeBackupError(string(output)))
 	}
 	if err := os.Chown(mountPath, 65532, 65532); err != nil {
-		_ = exec.Command("umount", mountPath).Run()
-		_ = exec.Command("losetup", "-d", loopDevice).Run()
 		return nil, fmt.Errorf("own backup workspace: %w", err)
 	}
 	removeImage = false
-	return &backupWorkspace{imagePath: imagePath, mountPath: mountPath, loopDevice: loopDevice}, nil
+	return &backupWorkspace{imagePath: imagePath, mountPath: mountPath, loops: loops}, nil
 }
 
+// close releases the workspace (mount, then loop device, waiting until the
+// kernel has let go of it) before its image is removed.
 func (w *backupWorkspace) close() error {
 	if w == nil {
 		return nil
 	}
-	if mounted(w.mountPath) {
-		if err := backupWorkspaceUnmount(w.mountPath); err != nil {
-			return fmt.Errorf("unmount backup workspace: %w", err)
-		}
-	}
-	if w.loopDevice != "" {
-		if err := backupWorkspaceDetach(w.loopDevice); err != nil {
-			return fmt.Errorf("detach backup workspace loop device: %w", err)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+	defer cancel()
+	if err := w.loops.release(ctx, w.imagePath, w.mountPath); err != nil {
+		return fmt.Errorf("release backup workspace: %w", err)
 	}
 	if err := os.Remove(w.imagePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove backup workspace image: %w", err)

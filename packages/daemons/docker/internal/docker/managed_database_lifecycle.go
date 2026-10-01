@@ -447,6 +447,11 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 		record.ClickhouseRuntimeProfileVersion = clickHouseRuntimeProfileVersion
 	}
 
+	// No record exists, so anything at these paths is left from a create that
+	// failed before (or from an older release) and is not an instance's data.
+	if err := m.cleanupStorage(ctx, &record, true); err != nil {
+		return managedDatabaseRecord{}, err
+	}
 	if err := m.createImage(ctx, record); err != nil {
 		return managedDatabaseRecord{}, err
 	}
@@ -455,7 +460,9 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 		if !created {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
 			defer cancel()
-			_ = m.cleanupStorage(cleanupCtx, &record, true)
+			if err := m.cleanupStorage(cleanupCtx, &record, true); err != nil {
+				m.logger.Warn("failed managed database create left storage behind; the repair pass releases it", "id", record.ID, "error", err)
+			}
 		}
 	}()
 	if err := m.ensureMounted(ctx, &record); err != nil {

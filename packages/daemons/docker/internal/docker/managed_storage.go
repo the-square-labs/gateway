@@ -148,6 +148,9 @@ type managedStorageRecord struct {
 	DesiredRunning  bool   `json:"desiredRunning"`
 	Removed         bool   `json:"removed"`
 	OperationID     string `json:"operationId"`
+	// DeleteData marks a removal that also deletes the data image; one that
+	// could not finish is completed by a repeated command or the repair pass.
+	DeleteData bool `json:"deleteData,omitempty"`
 }
 
 func newManagedStorageManager(cfg *config.Config, client *Client, logger *slog.Logger) (*managedStorageManager, error) {
@@ -530,39 +533,54 @@ func (m *managedStorageManager) create(ctx context.Context, id string, input man
 	if input.SFTP != nil {
 		record.SFTPPort = input.SFTP.Port
 	}
+	// No record exists, so anything at these paths is left from a create that
+	// failed before (or from an older release) and is not an instance's data.
+	if err := m.cleanupStorage(ctx, &record, true); err != nil {
+		return managedStorageRecord{}, err
+	}
 	if err := m.createImage(ctx, record); err != nil {
 		return managedStorageRecord{}, err
 	}
+	created := false
+	defer func() {
+		if created {
+			return
+		}
+		// The command context may already be spent (a readiness timeout).
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+		defer cancel()
+		if record.ContainerID != "" {
+			if err := m.client.RemoveContainer(cleanupCtx, record.ContainerID, true); err != nil && !isNotFoundErr(err) {
+				m.logger.Warn("failed managed storage create left its container behind", "id", record.ID, "error", err)
+			}
+		}
+		if err := m.cleanupStorage(cleanupCtx, &record, true); err != nil {
+			m.logger.Warn("failed managed storage create left storage behind; the repair pass releases it", "id", record.ID, "error", err)
+		}
+	}()
 	if err := m.ensureMounted(ctx, &record); err != nil {
-		_ = os.Remove(record.ImagePath)
 		return managedStorageRecord{}, err
 	}
 	if err := m.prepareEngineDataRoot(record); err != nil {
-		_ = m.cleanupStorage(ctx, &record, true)
 		return managedStorageRecord{}, err
 	}
 	if err := m.createNetwork(ctx, record); err != nil {
-		_ = m.cleanupStorage(ctx, &record, true)
 		return managedStorageRecord{}, err
 	}
 	containerID, err := m.createEngineContainer(ctx, &record, input)
 	if err != nil {
-		_ = m.cleanupStorage(ctx, &record, true)
 		return managedStorageRecord{}, err
 	}
 	record.ContainerID = containerID
 	if err := m.saveRecord(record); err != nil {
-		_ = m.client.RemoveContainer(ctx, containerID, true)
-		_ = m.cleanupStorage(ctx, &record, true)
 		return managedStorageRecord{}, err
 	}
 	if len(input.Members) <= 1 {
 		if err := m.waitForReady(ctx, record); err != nil {
-			_ = m.client.RemoveContainer(ctx, containerID, true)
-			_ = m.cleanupStorage(ctx, &record, true)
 			return managedStorageRecord{}, err
 		}
 	}
+	created = true
 	return record, nil
 }
 
@@ -741,7 +759,7 @@ func (m *managedStorageManager) createContainer(ctx context.Context, record *man
 		}
 		binds = append(binds, hostKeyPath+":/run/gateway-minio-sftp/host-key:ro")
 	}
-	hostCfg := &container.HostConfig{Binds: binds, RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}, Resources: container.Resources{Memory: record.MemoryBytes, MemorySwap: record.MemorySwapBytes, NanoCPUs: record.NanoCPUs}, LogConfig: container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "3"}}}
+	hostCfg := &container.HostConfig{Binds: binds, RestartPolicy: engineRestartPolicy, Resources: container.Resources{Memory: record.MemoryBytes, MemorySwap: record.MemorySwapBytes, NanoCPUs: record.NanoCPUs}, LogConfig: container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "3"}}}
 	if record.PublishS3 || record.PeerBindAddress != "" {
 		containerCfg.ExposedPorts = network.PortSet{s3Port: {}}
 		// Public S3 binds wildcard so the member is peer-reachable too. Private
