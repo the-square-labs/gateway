@@ -242,23 +242,36 @@ class DatabaseTlsVerificationTests(unittest.TestCase):
         return ran.call_args.args[0]
 
     def test_postgres_verifies_the_hostname_against_the_public_bundle_by_default(self):
-        env = runner.postgres_env({"host": "db.example.test", "tls": True, "tlsVerifyCertificate": True})
+        env = runner.postgres_env({"host": "db.example.test", "database": "app", "tls": True, "tlsVerifyCertificate": True})
         self.assertEqual(env["PGSSLMODE"], "verify-full")
         self.assertEqual(env["PGSSLROOTCERT"], runner.SYSTEM_CA_BUNDLE)
 
     def test_postgres_verifies_against_a_custom_ca(self):
-        env = runner.postgres_env({"host": "db.example.test", "tls": True, "tlsVerifyCertificate": True, "caPem": CA_PEM})
+        env = runner.postgres_env({"host": "db.example.test", "database": "app", "tls": True, "tlsVerifyCertificate": True, "caPem": CA_PEM})
         self.assertEqual(env["PGSSLMODE"], "verify-full")
         self.assertEqual(pathlib.Path(env["PGSSLROOTCERT"]).read_text(), CA_PEM)
 
     def test_postgres_opt_out_encrypts_without_verification(self):
-        env = runner.postgres_env({"host": "db.example.test", "tls": True, "tlsVerifyCertificate": False, "caPem": CA_PEM})
+        env = runner.postgres_env({"host": "db.example.test", "database": "app", "tls": True, "tlsVerifyCertificate": False, "caPem": CA_PEM})
         self.assertEqual(env["PGSSLMODE"], "require")
         self.assertNotIn("PGSSLROOTCERT", env)
 
     def test_postgres_without_the_setting_keeps_the_relay_behavior(self):
-        self.assertEqual(runner.postgres_env({"host": "127.0.0.1", "tls": True})["PGSSLMODE"], "require")
-        self.assertEqual(runner.postgres_env({"host": "127.0.0.1", "tls": True, "caPem": CA_PEM})["PGSSLMODE"], "verify-ca")
+        self.assertEqual(runner.postgres_env({"host": "127.0.0.1", "database": "app", "tls": True})["PGSSLMODE"], "require")
+        self.assertEqual(runner.postgres_env({"host": "127.0.0.1", "database": "app", "tls": True, "caPem": CA_PEM})["PGSSLMODE"], "verify-ca")
+
+    def test_postgres_database_travels_in_the_environment_and_never_as_a_connection_string(self):
+        endpoint = {"host": "db.example.test", "port": 5432, "database": "app", "tls": True, "tlsVerifyCertificate": True}
+        self.assertEqual(runner.postgres_env(endpoint)["PGDATABASE"], "app")
+        for name in ("dbname=app host=attacker.example sslmode=disable", "postgresql://attacker.example/app", "POSTGRES://attacker.example/app", "", "app\nx", None):
+            with self.assertRaises(runner.BackupError):
+                runner.postgres_env({**endpoint, "database": name})
+        with patch.object(runner, "run", return_value="1") as ran:
+            runner.postgres_major(endpoint)
+        args, env = ran.call_args.args[0], ran.call_args.args[1]
+        self.assertNotIn("-d", args)
+        self.assertNotIn("app", args)
+        self.assertEqual(env["PGDATABASE"], "app")
 
     def test_redis_verifies_with_sni_and_custom_ca(self):
         args = self.redis_args({"host": "redis.example.test", "port": 6380, "tls": True, "tlsVerifyCertificate": True, "caPem": CA_PEM})

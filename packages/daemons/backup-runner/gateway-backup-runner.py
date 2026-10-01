@@ -141,7 +141,7 @@ POSTGRES_TOOLS = pathlib.Path("/usr/lib/postgresql")
 
 
 def postgres_major(endpoint):
-    version = run(db_args(endpoint, "psql") + ["-d", endpoint["database"], "-Atqc", "SHOW server_version_num"], postgres_env(endpoint)).strip()
+    version = run(db_args(endpoint, "psql") + ["-Atqc", "SHOW server_version_num"], postgres_env(endpoint)).strip()
     return int(version) // 10000
 
 
@@ -185,8 +185,28 @@ def is_ip_address(value):
         return False
 
 
+def postgres_database(endpoint):
+    """The connection's database name, checked so libpq never reads it as a connection string.
+
+    libpq expands a dbname that contains "=" or starts with a postgres URI into connection settings, which
+    would override the host, port and TLS settings given separately. The name travels in PGDATABASE, which
+    libpq never expands; only pg_restore takes it as -d, so it must not have that form either.
+    """
+    name = endpoint.get("database")
+    if (
+        not isinstance(name, str)
+        or not name
+        or "=" in name
+        or name.lower().startswith(("postgresql://", "postgres://"))
+        or any(ord(character) < 32 for character in name)
+    ):
+        raise BackupError("PostgreSQL database name is invalid")
+    return name
+
+
 def postgres_env(endpoint):
     env = os.environ.copy()
+    env["PGDATABASE"] = postgres_database(endpoint)
     env["PGPASSWORD"] = endpoint.get("password", "")
     if endpoint.get("tls"):
         verify = tls_verification(endpoint)
@@ -210,7 +230,7 @@ def preflight(config):
     if config["direction"] == "backup":
         source = config["source"]
         if engine == "postgres":
-            run(db_args(source, "psql") + ["-d", source["database"], "-Atqc", "SELECT 1"], postgres_env(source))
+            run(db_args(source, "psql") + ["-Atqc", "SELECT 1"], postgres_env(source))
         elif engine == "redis":
             redis_command(source, ["PING"])
         else:
@@ -245,8 +265,8 @@ def backup(config):
     if engine == "postgres":
         artifact = artifact_dir / "database.dump"
         source = config["source"]
-        run(db_args(source, postgres_tool("pg_dump", postgres_major(source))) + ["-d", source["database"], "--format=custom", "--no-owner", "--no-privileges", "--file", str(artifact)], postgres_env(source))
-        engine_version = run(db_args(source, "psql") + ["-d", source["database"], "-Atqc", "SHOW server_version"], postgres_env(source)).strip()
+        run(db_args(source, postgres_tool("pg_dump", postgres_major(source))) + ["--format=custom", "--no-owner", "--no-privileges", "--file", str(artifact)], postgres_env(source))
+        engine_version = run(db_args(source, "psql") + ["-Atqc", "SHOW server_version"], postgres_env(source)).strip()
     elif engine == "redis":
         artifact = artifact_dir / "database.rdb"
         redis_command(config["source"], ["--rdb", str(artifact)])
@@ -279,7 +299,8 @@ def restore(config):
     if config["engine"] == "postgres":
         artifact = next(artifact_dir.glob("*.dump"))
         target = config["restoreTarget"]
-        run(db_args(target, postgres_restore_tool(target, artifact)) + ["-d", target["database"], "--no-owner", "--no-privileges", "--exit-on-error", str(artifact)], postgres_env(target))
+        # pg_restore restores into a database only with -d; a checked name is never read as a connection string.
+        run(db_args(target, postgres_restore_tool(target, artifact)) + ["-d", postgres_database(target), "--no-owner", "--no-privileges", "--exit-on-error", str(artifact)], postgres_env(target))
         if target.get("managedDatabaseId"):
             transfer_postgres_ownership(target)
     elif config["engine"] == "redis":
@@ -313,7 +334,7 @@ $gateway$;
 
 
 def transfer_postgres_ownership(target):
-    run(db_args(target, "psql") + ["-d", target["database"], "-v", "ON_ERROR_STOP=1", "-Atq"], postgres_env(target), POSTGRES_OWNERSHIP_TRANSFER_SQL)
+    run(db_args(target, "psql") + ["-v", "ON_ERROR_STOP=1", "-Atq"], postgres_env(target), POSTGRES_OWNERSHIP_TRANSFER_SQL)
 
 
 def upload_artifacts(config, artifact_dir, engine_version):
@@ -367,7 +388,7 @@ def redis_version(endpoint):
 def assert_empty_target(engine, target):
     if engine == "postgres":
         query = "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast' AND c.relkind IN ('r','p','m','v','S')"
-        if run(db_args(target, "psql") + ["-d", target["database"], "-Atqc", query], postgres_env(target)).strip() != "0": raise BackupError("PostgreSQL restore target is not empty")
+        if run(db_args(target, "psql") + ["-Atqc", query], postgres_env(target)).strip() != "0": raise BackupError("PostgreSQL restore target is not empty")
     elif engine == "redis":
         if redis_has_keys(target): raise BackupError("Redis restore target is not empty")
     else:
