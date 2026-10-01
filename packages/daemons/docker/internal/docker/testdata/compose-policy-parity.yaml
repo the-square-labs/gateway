@@ -405,6 +405,17 @@ cases:
           labels:
             wiolett.gateway.internal-workload: managed-storage-connector
 
+  - name: label key from a variable
+    valid: false
+    backendCode: RESERVED_LABEL
+    daemonError: cannot use variables in its key
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          labels:
+            - ${LABEL_KEY:-gateway.sandbox}=true
+
   - name: labels next to the reserved namespaces
     valid: true
     yaml: |

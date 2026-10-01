@@ -574,6 +574,10 @@ func validateServiceLabels(node *yaml.Node) error {
 		return errors.New("compose labels must be a mapping or KEY=value list")
 	}
 	for key := range mappingValues(node) {
+		// Compose interpolates a KEY=value list entry, so a variable could spell a reserved key.
+		if strings.Contains(key, "$") {
+			return fmt.Errorf("compose label %q cannot use variables in its key", key)
+		}
 		if isReservedDockerLabel(key) {
 			return fmt.Errorf("compose label %q is reserved by Docker Compose or Gateway", key)
 		}
