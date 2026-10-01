@@ -385,11 +385,12 @@ export class DockerSnapshotReconciler {
     }
 
     if (action === 'removed' || action === 'deleted') return;
-    const detailKey =
-      action === 'recreated'
-        ? event.id
-        : [event.name, event.id, event.ref].find((value): value is string => typeof value === 'string');
-    if (typeof detailKey === 'string' && detailKey) {
+    // A recreated container keeps its name: its detail is cached under the name, like every other refresh, so the
+    // name's cached inspect follows the new runtime at once instead of waiting for the periodic refresh.
+    const detailKey = [event.name, event.id, event.ref].find(
+      (value): value is string => typeof value === 'string' && value.length > 0
+    );
+    if (detailKey) {
       this.enqueue({ nodeId, kind: 'container-detail', key: detailKey }, { urgent: true });
     }
   }

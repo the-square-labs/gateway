@@ -121,6 +121,11 @@ export function sanitizeContainerInspect(value: unknown): unknown {
   return visit(value);
 }
 
+function observedAtOrZero(envelope: { observedAt: string | null }): number {
+  const observedAt = envelope.observedAt ? Date.parse(envelope.observedAt) : Number.NaN;
+  return Number.isFinite(observedAt) ? observedAt : 0;
+}
+
 function readString(record: Record<string, unknown>, camel: string, docker: string): string | undefined {
   const value = record[camel] ?? record[docker];
   return typeof value === 'string' ? value : undefined;
@@ -339,6 +344,9 @@ export class DockerSnapshotService {
     const liveId = String(match?.id ?? match?.Id ?? '');
     const directId = String(direct?.data?.id ?? direct?.data?.Id ?? '');
     if (direct && (!liveId || !directId || liveId === directId)) return direct;
+    // The list and the cached inspect name different runtimes of the container (a recreate): the one observed
+    // last is the current one.
+    if (direct && observedAtOrZero(direct) >= observedAtOrZero(list)) return direct;
 
     const name = String(match?.name ?? match?.Name ?? '').replace(/^\/+/, '');
     if (liveId && liveId !== key) {
