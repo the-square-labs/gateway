@@ -11,6 +11,12 @@ const (
 	echoSlots   = 4
 	acceptSlots = 6
 	maxReleased = 8
+	// maxBallotJump bounds how far a ballot may go above the highest round
+	// an acceptor knows of a key. Honest rounds grow by one per round (a
+	// renewal every RenewInterval: 2^32 rounds take centuries), so a larger
+	// jump is a forged ballot; promising it would push the key's rounds to
+	// the top of the range for every proposer.
+	maxBallotJump = 1 << 32
 )
 
 // acceptorKey is the acceptor state of one key. Only rec is persisted.
@@ -74,6 +80,13 @@ func restoreAcceptorKey(record keyRecord) *acceptorKey {
 }
 
 func (ak *acceptorKey) promised() Ballot { return maxBallot(ak.rec.Promised, ak.shadowPromised) }
+
+// farAbove reports a ballot more than maxBallotJump rounds above every round
+// this acceptor knows of the key: its promise and its commit.
+func (ak *acceptorKey) farAbove(ballot Ballot) bool {
+	known := max(ak.promised().Round, ak.commitBallot.Round)
+	return ballot.Round > known && ballot.Round-known > maxBallotJump
+}
 
 func (a acceptedLease) openAt(now time.Duration) bool { return a.open && now < a.at+AcceptorHold }
 
@@ -229,6 +242,9 @@ func (n *Node) onPrepare(from string, msg *pb.LeasePrepare, now time.Duration) {
 		return
 	}
 	ak := n.acceptorFor(key)
+	if ak.farAbove(ballot) {
+		return
+	}
 	if reason, holder := n.refuse(ak, manifest, key, ballot, from, now); reason != 0 {
 		n.nack(from, key, ballot, reason, holder, ak)
 		return
@@ -261,6 +277,9 @@ func (n *Node) onPropose(from string, msg *pb.LeasePropose, now time.Duration) {
 		return
 	}
 	ak := n.acceptorFor(key)
+	if ak.farAbove(ballot) {
+		return
+	}
 	if reason, holder := n.refuse(ak, manifest, key, ballot, from, now); reason != 0 {
 		n.nack(from, key, ballot, reason, holder, ak)
 		return

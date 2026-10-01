@@ -1,6 +1,7 @@
 package availabilitylease
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -32,11 +33,7 @@ func (n *Node) startRound(pk *proposerKey, manifest *Manifest, purpose Role, now
 	if config == nil || len(config.sets) == 0 || pk.key.Slot >= manifest.Slots {
 		return
 	}
-	next := pk.maxRound
-	if pk.lastIssued.Round > next {
-		next = pk.lastIssued.Round
-	}
-	ballot := Ballot{Round: next + 1, Incarnation: n.incarnation, Proposer: n.id}
+	ballot := Ballot{Round: nextRound(max(pk.maxRound, pk.lastIssued.Round)), Incarnation: n.incarnation, Proposer: n.id}
 	pk.lastIssued, pk.maxRound = ballot, ballot.Round
 	pk.retry = false
 	pk.settled = nil
@@ -53,6 +50,17 @@ func (n *Node) startRound(pk *proposerKey, manifest *Manifest, purpose Role, now
 		n.forwardOnce(id, pk.key.PolicyID)
 		n.queue(id, &pb.LeaseItem{Body: &pb.LeaseItem_Prepare{Prepare: prepare}})
 	}
+}
+
+// nextRound is the round after r. It saturates instead of wrapping to 0,
+// which acceptors drop: a key whose rounds wrapped could never be acquired
+// again. Acceptors refuse ballots far above what they know (maxBallotJump),
+// so honest rounds never come near the ceiling.
+func nextRound(r uint64) uint64 {
+	if r == math.MaxUint64 {
+		return r
+	}
+	return r + 1
 }
 
 func (n *Node) currentRound(key Key, ballot *pb.LeaseBallot) (*proposerKey, *round) {
@@ -265,9 +273,7 @@ func (n *Node) onNack(from string, msg *pb.LeaseNack, now time.Duration) {
 	}
 	pk, r := n.currentRound(key, msg.GetBallot())
 	if pk != nil {
-		if promised := ballotFromProto(msg.GetPromised()); promised.Round > pk.maxRound {
-			pk.maxRound = promised.Round
-		}
+		n.observeRound(pk, from, msg.GetPromised())
 		if pk.retain != nil && ballotFromProto(msg.GetBallot()) == pk.ballot {
 			n.onRetainRefused(from, pk, msg, now)
 			return

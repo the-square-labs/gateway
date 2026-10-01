@@ -140,6 +140,12 @@ func (m *Manifest) isCandidate(id string) bool {
 	return ok
 }
 
+// names reports whether id is a candidate or a coordination member of the
+// policy.
+func (m *Manifest) names(id string) bool {
+	return m.isCandidate(id) || (m.Voters != nil && m.Voters.isMember(id))
+}
+
 // retains reports whether this closed manifest names id the retained holder
 // of slot and can confirm it: it has at least one quorum set to count a
 // majority in.

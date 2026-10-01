@@ -29,7 +29,7 @@ func (n *Node) ReceiveFrame(frame *pb.CoordinationFrame) error {
 		// frames while manifests catch up (the sender dual-signs). Replay
 		// binding (A9) is unchanged: it works on the authenticated batch.
 		keys := n.identityKeys(batch.GetSenderId())
-		if len(keys) == 0 {
+		if len(keys) == 0 || !n.sharesPolicy(batch.GetSenderId()) {
 			n.reportUnknownSender(batch)
 			verr = ErrUnknownSender
 			return
@@ -43,9 +43,24 @@ func (n *Node) ReceiveFrame(frame *pb.CoordinationFrame) error {
 	return verr
 }
 
-// ErrUnknownSender means the frame's sender is in no config or manifest this
-// node holds; the frame is dropped and the sender is told this node lags.
+// ErrUnknownSender means no manifest this node holds names the frame's sender
+// together with this node; the frame is dropped and the sender is told this
+// node lags.
 var ErrUnknownSender = errors.New("lease frame from an unknown sender")
+
+// sharesPolicy reports whether an adopted manifest names both id and this
+// node. Only such peers coordinate with it (D3, A18). Identity keys come from
+// every adopted manifest, so a node or relay of an unrelated policy
+// authenticates; its items and its clock (D4) must still never reach this
+// node's leases.
+func (n *Node) sharesPolicy(id string) bool {
+	for _, manifest := range n.manifests {
+		if manifest.names(id) && manifest.names(n.id) {
+			return true
+		}
+	}
+	return false
+}
 
 // receive processes a batch without signature checks (simulator path). It
 // still drops frames from unknown senders like ReceiveFrame.
@@ -53,7 +68,7 @@ func (n *Node) receive(batch *pb.LeaseBatch) error {
 	var err error
 	n.run(func(now time.Duration) {
 		n.adoptForwarded(batch, now)
-		if len(n.identityKeys(batch.GetSenderId())) == 0 {
+		if len(n.identityKeys(batch.GetSenderId())) == 0 || !n.sharesPolicy(batch.GetSenderId()) {
 			n.reportUnknownSender(batch)
 			err = ErrUnknownSender
 			return

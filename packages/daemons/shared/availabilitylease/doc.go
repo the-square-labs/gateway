@@ -88,8 +88,8 @@
 // AdoptManifest for signed manifests, which include the policy's voters. It
 // returns true once the manifest is durably adopted: that is the "persisted
 // ack" the Gateway waits for (A4). A manifest whose voter epoch goes back is
-// rejected. Epoch(policy) and ManifestVersion(policy) report what is adopted. Nodes also adopt newer blocks and rotation links that
-// arrive inside frames, and forward theirs to lagging peers on first
+// rejected. Epoch(policy) and ManifestVersion(policy) report what is adopted. Nodes also adopt newer blocks (of a policy they hold
+// or that names them) and rotation links that arrive inside frames, and forward theirs to lagging peers on first
 // contact, on NACKs and on lag reports, so failover never waits for the
 // Gateway (A4, A14).
 //
@@ -97,8 +97,9 @@
 // (and an accept statement) is authentic when any of its signatures verifies
 // under any key listed for the sender in any adopted manifest or remembered
 // voter config; votes still count only in the key's own policy (A18) and
-// replay binding (A9) is unchanged. ErrUnknownSender means the node lacks
-// the blocks that name the sender; it answers with a lag report. Call Tick
+// replay binding (A9) is unchanged. Only a sender that an adopted manifest
+// names together with this node coordinates with it. ErrUnknownSender means
+// the node lacks such blocks; it answers with a lag report. Call Tick
 // at NextWakeup (a local clock value) or at least every 250 ms.
 //
 // Identity-key renewal (relay and daemon certificates). Call

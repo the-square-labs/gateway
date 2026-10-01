@@ -353,10 +353,21 @@ func (n *Node) onStatus(from string, msg *pb.LeaseStatus, now time.Duration) {
 	if pk.commit != nil && ballotFromProto(msg.GetLatestCommit().GetBallot()).Less(pk.commitBallot) {
 		n.queue(from, &pb.LeaseItem{Body: &pb.LeaseItem_Commit{Commit: pk.commit}})
 	}
-	if promised := ballotFromProto(msg.GetPromised()); promised.Round > pk.maxRound {
-		pk.maxRound = promised.Round
-	}
+	n.observeRound(pk, from, msg.GetPromised())
 	pk.obs[from] = observation{state: msg.GetState(), holder: msg.GetHolderId(), reservedFor: msg.GetReservedFor(), at: now}
+}
+
+// observeRound lets the next round go past a ballot a member of the key's
+// policy reports as promised (a status or a NACK). Members are listed in the
+// policy's own signed manifest (A18); a node or relay of another policy is
+// not, so it cannot move this policy's rounds, for example to the top of the
+// range where they would wrap.
+func (n *Node) observeRound(pk *proposerKey, from string, promised *pb.LeaseBallot) {
+	config := n.policyConfig(pk.key.PolicyID)
+	if config == nil || !config.isMember(from) {
+		return
+	}
+	pk.maxRound = max(pk.maxRound, promised.GetRound())
 }
 
 // observeCommit learns a verified commit. A holder fences immediately only on
@@ -370,9 +381,6 @@ func (n *Node) observeCommit(commit *pb.LeaseCommit, direct bool, now time.Durat
 		return
 	}
 	ballot := ballotFromProto(commit.GetBallot())
-	if ballot.Round > pk.maxRound {
-		pk.maxRound = ballot.Round
-	}
 	if pk.commit != nil && !pk.commitBallot.Less(ballot) {
 		return
 	}
@@ -380,6 +388,9 @@ func (n *Node) observeCommit(commit *pb.LeaseCommit, direct bool, now time.Durat
 	if err != nil {
 		return
 	}
+	// Only a quorum-certified ballot moves the next round: an unverified
+	// commit is just a number anyone can write.
+	pk.maxRound = max(pk.maxRound, ballot.Round)
 	pk.commit, pk.commitBallot = commit, ballot
 	if direct {
 		pk.freshCommitAt, pk.hasFreshCommit = now, true

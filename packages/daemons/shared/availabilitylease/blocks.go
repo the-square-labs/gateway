@@ -49,13 +49,27 @@ func (n *Node) AdoptManifest(block *pb.LeaseSignedBlock) (bool, error) {
 	return n.adoptPublic(block, pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST)
 }
 
+// AdoptForwardedManifest adopts a signed manifest that arrived inside a frame
+// from a peer, not from the Gateway: like the blocks of a frame addressed to
+// this node, it is adopted only when it names this node or updates a policy
+// this node already holds.
+func (n *Node) AdoptForwardedManifest(block *pb.LeaseSignedBlock) (bool, error) {
+	if block.GetKind() != pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST {
+		return false, errors.New("lease block kind mismatch")
+	}
+	var changed bool
+	var err error
+	n.run(func(now time.Duration) { changed, err = n.adoptBlock(block, true, now) })
+	return changed, err
+}
+
 func (n *Node) adoptPublic(block *pb.LeaseSignedBlock, kind pb.LeaseBlockKind) (bool, error) {
 	if block.GetKind() != kind {
 		return false, errors.New("lease block kind mismatch")
 	}
 	var changed bool
 	var err error
-	n.run(func(now time.Duration) { changed, err = n.adoptBlock(block, now) })
+	n.run(func(now time.Duration) { changed, err = n.adoptBlock(block, false, now) })
 	return changed, err
 }
 
@@ -117,19 +131,27 @@ func (n *Node) adoptForwarded(batch *pb.LeaseBatch, now time.Duration) {
 		n.persistChain()
 	}
 	for _, block := range batch.GetBlocks() {
-		if _, err := n.adoptBlock(block, now); err != nil {
+		if _, err := n.adoptBlock(block, true, now); err != nil {
 			n.logf("forwarded lease block rejected: %v", err)
 		}
 	}
 }
 
-func (n *Node) adoptBlock(block *pb.LeaseSignedBlock, now time.Duration) (bool, error) {
+// adoptBlock adopts a verified newer manifest. A forwarded one (carried by a
+// peer's frame, A4) must name this node or update a policy this node already
+// holds: peers forward the blocks they share with the destination, and the
+// manifest of an unrelated policy would only add identities that
+// authenticate here (D3).
+func (n *Node) adoptBlock(block *pb.LeaseSignedBlock, forwarded bool, now time.Duration) (bool, error) {
 	data, _ := proto.Marshal(block)
 	switch block.GetKind() {
 	case pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST:
 		manifest, err := parseManifest(block)
 		if err != nil {
 			return false, err
+		}
+		if forwarded && n.manifests[manifest.PolicyID] == nil && !manifest.names(n.id) {
+			return false, fmt.Errorf("forwarded lease manifest of policy %q does not name this node", manifest.PolicyID)
 		}
 		if current := n.manifests[manifest.PolicyID]; current != nil && manifest.Version <= current.Version {
 			if manifest.Version == current.Version && n.resigned(current.block, block, domainManifest) {
