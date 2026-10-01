@@ -34,6 +34,10 @@ const (
 	managedDatabaseHostListenerInspectTimeout  = 5 * time.Second
 )
 
+// errManagedDatabaseListenerUnverified marks a listener network that could not be inspected (a slow or failing
+// Docker API). That proves nothing about the network, so a running listener keeps serving its connections.
+var errManagedDatabaseListenerUnverified = errors.New("inspect managed database listener network")
+
 var managedDatabaseHostContainerName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 type managedDatabaseHostListenerConfig struct {
@@ -59,7 +63,7 @@ type managedDatabaseHostListenerStatus struct {
 type managedDatabaseHostListener struct {
 	listener *net.TCPListener
 	mu       sync.Mutex
-	// config changes in place when only the limit changes.
+	// config changes in place when only the limit or the binding changes (re-key on an Availability adopt).
 	config      managedDatabaseHostListenerConfig
 	closed      bool
 	connections map[net.Conn]struct{}
@@ -101,10 +105,16 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 ) map[string]managedDatabaseHostListenerStatus {
 	desired, statuses := m.desired(bundle)
 	resolved := make(map[string]managedDatabaseHostListenerConfig, len(desired))
+	// unverified holds the bindings whose network could not be inspected now. Their running listeners stay and
+	// report the error; only a sync that inspects the network again replaces or closes them.
+	unverified := map[string]managedDatabaseHostListenerConfig{}
 	for bindingID, config := range desired {
 		resolvedConfig, err := m.resolve(ctx, config)
 		if err != nil {
 			statuses[bindingID] = listenerStatus(config, "error", err)
+			if errors.Is(err, errManagedDatabaseListenerUnverified) {
+				unverified[bindingID] = config
+			}
 			continue
 		}
 		resolved[bindingID] = resolvedConfig
@@ -120,15 +130,47 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// released are the listeners of bindings that left the bundle. One may serve on as another binding.
+	var released []*managedDatabaseHostListener
 	for bindingID, listener := range m.listeners {
-		config, present := resolved[bindingID]
-		if present && listener.currentConfig().equal(config) {
+		current := listener.currentConfig()
+		if config, present := resolved[bindingID]; present && current.equal(config) {
 			listener.setConfig(config)
 			statuses[bindingID] = listenerStatus(config, "ready", nil)
 			continue
 		}
-		listener.close()
+		if config, present := unverified[bindingID]; present {
+			config.networkID = current.networkID
+			if current.equal(config) {
+				listener.setConfig(config)
+				continue
+			}
+		}
 		delete(m.listeners, bindingID)
+		_, stillDesired := desired[bindingID]
+		_, stillListed := statuses[bindingID]
+		if !stillDesired && !stillListed {
+			released = append(released, listener)
+			continue
+		}
+		listener.close()
+	}
+	for _, listener := range released {
+		previous := listener.currentConfig()
+		next, verified, found := m.successorLocked(previous, resolved, unverified)
+		if !found {
+			listener.close()
+			continue
+		}
+		// An Availability adopt or release moves the binding's route to another binding id with the same network,
+		// address, sources and route generation: the listener serves on under the new id and keeps its connections.
+		listener.setConfig(next)
+		m.listeners[next.bindingID] = listener
+		if verified {
+			statuses[next.bindingID] = listenerStatus(next, "ready", nil)
+		}
+		m.logger.Info("managed database host listener moved to another binding", "from_binding_id", previous.bindingID,
+			"binding_id", next.bindingID, "address", net.JoinHostPort(next.listenAddress.String(), fmt.Sprintf("%d", next.listenPort)))
 	}
 	for bindingID, config := range resolved {
 		if _, exists := m.listeners[bindingID]; exists {
@@ -143,6 +185,40 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 		statuses[bindingID] = listenerStatus(config, "ready", nil)
 	}
 	return statuses
+}
+
+// successorLocked finds the binding a released listener serves on as: one without a listener whose config is the
+// listener's except for the binding id. verified reports a successor whose network was inspected now.
+func (m *managedDatabaseHostListenerManager) successorLocked(
+	previous managedDatabaseHostListenerConfig,
+	resolved, unverified map[string]managedDatabaseHostListenerConfig,
+) (next managedDatabaseHostListenerConfig, verified bool, found bool) {
+	passes := []struct {
+		candidates map[string]managedDatabaseHostListenerConfig
+		verified   bool
+	}{{resolved, true}, {unverified, false}}
+	for _, pass := range passes {
+		bindingIDs := make([]string, 0, len(pass.candidates))
+		for bindingID := range pass.candidates {
+			bindingIDs = append(bindingIDs, bindingID)
+		}
+		sort.Strings(bindingIDs)
+		for _, bindingID := range bindingIDs {
+			if _, exists := m.listeners[bindingID]; exists {
+				continue
+			}
+			candidate := pass.candidates[bindingID]
+			if !pass.verified {
+				candidate.networkID = previous.networkID
+			}
+			moved := previous
+			moved.bindingID = bindingID
+			if moved.equal(candidate) {
+				return candidate, pass.verified, true
+			}
+		}
+	}
+	return managedDatabaseHostListenerConfig{}, false, false
 }
 
 func (m *managedDatabaseHostListenerManager) desired(bundle *pb.SyncRelayGrantsCommand) (map[string]managedDatabaseHostListenerConfig, map[string]managedDatabaseHostListenerStatus) {
@@ -273,8 +349,11 @@ func (m *managedDatabaseHostListenerManager) resolve(ctx context.Context, config
 	inspectCtx, cancel := context.WithTimeout(ctx, managedDatabaseHostListenerInspectTimeout)
 	defer cancel()
 	inspected, err := m.inspectNetwork(inspectCtx, config.networkName)
+	if isNotFoundErr(err) {
+		return config, fmt.Errorf("managed database listener network %s does not exist: %w", config.networkName, err)
+	}
 	if err != nil {
-		return config, fmt.Errorf("inspect managed database listener network: %w", err)
+		return config, fmt.Errorf("%w: %w", errManagedDatabaseListenerUnverified, err)
 	}
 	if inspected.Name != config.networkName || inspected.ID == "" || inspected.Driver != "bridge" || inspected.Ingress || inspected.ConfigOnly {
 		return config, errors.New("managed database listener network is not a dedicated bridge network")
@@ -415,11 +494,13 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 		reject(linkRejectedSourceNotAllowed, "container", strings.TrimPrefix(containerInspect.Container.Name, "/"))
 		return
 	}
+	// A re-key while the peer was checked moved the listener to another binding with the same network and sources:
+	// the connection belongs to the binding the listener serves now.
 	listener.mu.Lock()
-	active := !listener.closed
+	active, current := !listener.closed, listener.config
 	listener.mu.Unlock()
 	if active {
-		m.openBinding(connection, config.bindingID, config.routeGeneration)
+		m.openBinding(connection, current.bindingID, current.routeGeneration)
 	}
 }
 

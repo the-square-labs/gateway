@@ -296,6 +296,75 @@ func TestManagedDatabaseHostListenerDefaultsToTheLinkLimit(t *testing.T) {
 	}
 }
 
+// A Docker API that times out while a sync inspects the network says nothing about the network: the listener and its
+// connections stay. A network that is gone closes it.
+func TestManagedDatabaseHostListenerSurvivesAFailedNetworkInspect(t *testing.T) {
+	h := newListenerHarness(t)
+	assignment := h.assignment(testListenerBindingA, 3, 64)
+	h.reconcile(assignment)
+	listener := h.listener(testListenerBindingA)
+	held := h.dial()
+	h.waitOpened(1)
+
+	h.setInspectError(context.DeadlineExceeded)
+	status := h.reconcile(assignment)[testListenerBindingA]
+	if status.State != "error" || !strings.Contains(status.Error, "deadline exceeded") {
+		t.Fatalf("failed inspect status %+v", status)
+	}
+	if h.listener(testListenerBindingA) != listener {
+		t.Fatal("a failed inspect replaced the listener")
+	}
+	requireOpen(t, held)
+	// A new limit still applies meanwhile.
+	h.reconcile(h.assignment(testListenerBindingA, 3, 16))
+	if got := listener.currentConfig().maxConnections; got != 32 {
+		t.Fatalf("listener limit %d, want 32", got)
+	}
+
+	h.setInspectError(nil)
+	if status := h.reconcile(assignment)[testListenerBindingA]; status.State != "ready" || h.listener(testListenerBindingA) != listener {
+		t.Fatalf("listener after the Docker API recovered: %+v", status)
+	}
+	requireOpen(t, held)
+
+	h.setInspectError(errors.New("network " + testListenerNetwork + " not found"))
+	if status := h.reconcile(assignment)[testListenerBindingA]; status.State != "error" {
+		t.Fatalf("missing network status %+v", status)
+	}
+	if h.listener(testListenerBindingA) != nil {
+		t.Fatal("listener of a removed network kept")
+	}
+	requireClosed(t, held)
+}
+
+// An Availability adopt moves the binding's route to another binding id with the same network, address, sources and
+// route generation: the listener serves on as the new binding with its connections. A new route generation is
+// Gateway's request to replace the listener.
+func TestManagedDatabaseHostListenerMovesToTheAdoptingBinding(t *testing.T) {
+	h := newListenerHarness(t)
+	h.reconcile(h.assignment(testListenerBindingA, 3, 64))
+	listener := h.listener(testListenerBindingA)
+	held := h.dial()
+	h.waitOpened(1)
+
+	statuses := h.reconcile(h.assignment(testListenerBindingB, 3, 64))
+	if statuses[testListenerBindingB].State != "ready" || h.listener(testListenerBindingB) != listener || h.listener(testListenerBindingA) != nil {
+		t.Fatalf("adopt did not move the listener: %+v", statuses)
+	}
+	requireOpen(t, held)
+	h.dial()
+	h.waitOpened(1)
+	if opened := h.openedBindings(); opened[len(opened)-1] != (openedBinding{bindingID: testListenerBindingB, generation: 3}) {
+		t.Fatalf("new connection opened as %+v", opened[len(opened)-1])
+	}
+
+	statuses = h.reconcile(h.assignment(testListenerBindingA, 4, 64))
+	if statuses[testListenerBindingA].State != "ready" || h.listener(testListenerBindingA) == listener {
+		t.Fatalf("a new route generation kept the listener: %+v", statuses)
+	}
+	requireClosed(t, held)
+}
+
 // Rejections are logged per link and reason once per interval, with the count in between.
 func TestLinkRejectionLogIsRateLimited(t *testing.T) {
 	logger, output := newTestLogger()
