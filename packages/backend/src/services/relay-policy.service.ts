@@ -33,7 +33,13 @@ import {
 import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import type { CryptoService } from './crypto.service.js';
 import type { EventBusService } from './event-bus.service.js';
+import {
+  type ManagedLinkConnections,
+  sumManagedLinkReports,
+  withManagedLinkConnections,
+} from './managed-link-runtime.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
+import type { NodeRegistryService } from './node-registry.service.js';
 import { relayGrantBundleFingerprint } from './relay-grant-bundle-fingerprint.js';
 import {
   type RelayGrantBundle,
@@ -74,9 +80,17 @@ export interface RelayRouteRuntime {
   averageDurationMs: number;
   lastActivityAt: string | null;
   metricsSince: string;
+  /**
+   * Managed links: the connections the nodes running the link's workloads report. activeStreams and throttledTotal
+   * include them; null when a node does not report links (an older daemon).
+   */
+  connections?: ManagedLinkConnections | null;
 }
 
 export type ProxyRouteRuntime = RelayRouteRuntime;
+
+/** A link runtime older than this asks the link's nodes for a fresh report (they report every 30 s on their own). */
+const MANAGED_LINK_REPORT_FRESH_MS = 5_000;
 
 const logger = createChildLogger('RelayPolicyService');
 
@@ -149,6 +163,26 @@ interface RelayRouteRuntimeReport {
   averageDurationMilliseconds?: unknown;
   lastActivityUnixMilliseconds?: unknown;
   metricsSinceUnixMilliseconds?: unknown;
+}
+
+/** One route's runtime as the relay reports it. */
+function relayRouteRuntime(runtime: RelayRouteRuntimeReport): RelayRouteRuntime {
+  const lastActivityMillis = Number(runtime.lastActivityUnixMilliseconds || 0);
+  const metricsSinceMillis = Number(runtime.metricsSinceUnixMilliseconds || 0);
+  return {
+    routeId: runtime.routeId,
+    activeStreams: Number(runtime.activeTunnels || 0),
+    openedTotal: String(runtime.openedTotal ?? '0'),
+    completedTotal: String(runtime.completedTotal ?? '0'),
+    failedTotal: String(runtime.failedTotal ?? '0'),
+    throttledTotal: String(runtime.throttledTotal ?? '0'),
+    sourceToTargetBytes: String(runtime.sourceToTargetBytes ?? '0'),
+    targetToSourceBytes: String(runtime.targetToSourceBytes ?? '0'),
+    setupLatencyP95Ms: Number(runtime.setupLatencyP95Microseconds || 0) / 1000,
+    averageDurationMs: Number(runtime.averageDurationMilliseconds || 0),
+    lastActivityAt: lastActivityMillis > 0 ? new Date(lastActivityMillis).toISOString() : null,
+    metricsSince: new Date(metricsSinceMillis > 0 ? metricsSinceMillis : Date.now()).toISOString(),
+  };
 }
 
 /**
@@ -318,6 +352,8 @@ export class RelayPolicyService {
     endpoints: Array<{ id: string; ownerKind: string; ownerId: string }>,
     routes: Array<{ id: string; ownerKind: string; ownerId: string }>
   ) => Promise<{ endpoints: Map<string, string>; routes: Map<string, string> }>;
+  /** What the nodes running managed links' workloads report about the links' connections. */
+  private managedLinkReports?: Pick<NodeRegistryService, 'managedLinkReport' | 'requestHealthReport'>;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -328,6 +364,10 @@ export class RelayPolicyService {
     this.grantIssuer = new RelayGrantIssuerService(db, cryptoService, settings);
     this.grantKeys = new RelayGrantKeyService(db, cryptoService, settings);
     this.policyKeys = new RelayPolicySigningKeyService(db, cryptoService);
+  }
+
+  setManagedLinkReports(reports: Pick<NodeRegistryService, 'managedLinkReport' | 'requestHealthReport'>): void {
+    this.managedLinkReports = reports;
   }
 
   setNodeDispatch(
@@ -1489,24 +1529,7 @@ export class RelayPolicyService {
       .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId)))
       .limit(1);
     if (!route) return null;
-
-    const runtime = await this.relay.getRouteRuntime(route.id);
-    const lastActivityMillis = Number(runtime.lastActivityUnixMilliseconds || 0);
-    const metricsSinceMillis = Number(runtime.metricsSinceUnixMilliseconds || 0);
-    return {
-      routeId: runtime.routeId,
-      activeStreams: Number(runtime.activeTunnels || 0),
-      openedTotal: runtime.openedTotal,
-      completedTotal: runtime.completedTotal,
-      failedTotal: runtime.failedTotal,
-      throttledTotal: runtime.throttledTotal,
-      sourceToTargetBytes: runtime.sourceToTargetBytes,
-      targetToSourceBytes: runtime.targetToSourceBytes,
-      setupLatencyP95Ms: Number(runtime.setupLatencyP95Microseconds || 0) / 1000,
-      averageDurationMs: Number(runtime.averageDurationMilliseconds || 0),
-      lastActivityAt: lastActivityMillis > 0 ? new Date(lastActivityMillis).toISOString() : null,
-      metricsSince: new Date(metricsSinceMillis > 0 ? metricsSinceMillis : Date.now()).toISOString(),
-    };
+    return relayRouteRuntime(await this.relay.getRouteRuntime(route.id));
   }
 
   async getProxyRouteRuntime(linkId: string): Promise<ProxyRouteRuntime | null> {
@@ -1521,32 +1544,62 @@ export class RelayPolicyService {
   }
 
   async getManagedDatabaseBindingRouteRuntime(bindingId: string): Promise<RelayRouteRuntime | null> {
-    const own = await this.getOwnedRouteRuntime('managed_database_binding', bindingId);
-    if (own) return own;
+    const own = await this.managedLinkRoutes('managed_database_binding', [bindingId]);
+    if (own.length) return this.managedLinkRuntime(own);
     // Availability serves the link through one route per placement and drops the link's own route.
     const placements = await this.db
       .select({ id: managedDatabaseBindingPlacements.id })
       .from(managedDatabaseBindingPlacements)
       .where(eq(managedDatabaseBindingPlacements.bindingId, bindingId));
     if (!placements.length) return null;
-    const routes = await this.db
-      .select({ id: relayRoutes.id })
+    const routes = await this.managedLinkRoutes(
+      'managed_database_binding',
+      placements.map(({ id }) => id)
+    );
+    return routes.length ? this.managedLinkRuntime(routes) : null;
+  }
+
+  async getManagedStorageBindingRouteRuntime(bindingId: string): Promise<RelayRouteRuntime | null> {
+    const routes = await this.managedLinkRoutes('managed_storage_binding', [bindingId]);
+    return routes.length ? this.managedLinkRuntime(routes) : null;
+  }
+
+  private managedLinkRoutes(ownerKind: 'managed_database_binding' | 'managed_storage_binding', ownerIds: string[]) {
+    return this.db
+      .select({
+        id: relayRoutes.id,
+        ownerKind: relayRoutes.ownerKind,
+        ownerId: relayRoutes.ownerId,
+        sourceKind: relayRoutes.sourceKind,
+        sourceId: relayRoutes.sourceId,
+      })
       .from(relayRoutes)
-      .where(
-        and(
-          eq(relayRoutes.ownerKind, 'managed_database_binding'),
-          inArray(
-            relayRoutes.ownerId,
-            placements.map(({ id }) => id)
-          )
-        )
-      );
-    if (!routes.length) return null;
+      .where(and(eq(relayRoutes.ownerKind, ownerKind), inArray(relayRoutes.ownerId, ownerIds)));
+  }
+
+  /**
+   * A managed link's runtime: its relay routes (one, or one per Availability placement) and what the nodes running
+   * its workloads report. The node holds the link at its capacity whichever relay of the pool carries a connection,
+   * so its count is the link's open connections; the local relay sees only its share.
+   */
+  private async managedLinkRuntime(
+    routes: Array<{ id: string; ownerKind: string; ownerId: string; sourceKind: string; sourceId: string }>
+  ): Promise<RelayRouteRuntime> {
     // A placement whose route the relay does not run yet (or any more) adds nothing.
     const results = await Promise.allSettled(routes.map((route) => this.relay.getRouteRuntime(route.id)));
     const runtimes = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
     if (!runtimes.length) throw (results[0] as PromiseRejectedResult).reason;
-    return sumRouteRuntimes(runtimes);
+    const relayRuntime = runtimes.length === 1 ? relayRouteRuntime(runtimes[0]!) : sumRouteRuntimes(runtimes);
+    const now = Date.now();
+    const reports = routes.map((route) => {
+      if (route.sourceKind !== 'daemon' || !this.managedLinkReports) return null;
+      const report = this.managedLinkReports.managedLinkReport(route.sourceId, route.ownerKind, route.ownerId);
+      if (!report || now - report.reportedAt.getTime() > MANAGED_LINK_REPORT_FRESH_MS) {
+        this.managedLinkReports.requestHealthReport(route.sourceId, MANAGED_LINK_REPORT_FRESH_MS);
+      }
+      return report;
+    });
+    return withManagedLinkConnections(relayRuntime, sumManagedLinkReports(reports));
   }
 
   async ensureGatewayRoute(

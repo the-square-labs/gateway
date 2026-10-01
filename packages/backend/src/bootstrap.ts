@@ -744,6 +744,7 @@ export async function initializeContainer(): Promise<void> {
   const nodeDispatch = new NodeDispatchService(nodeRegistry, db);
   container.registerInstance(NodeDispatchService, nodeDispatch);
   relayPolicyService?.setNodeDispatch(nodeDispatch);
+  relayPolicyService?.setManagedLinkReports(nodeRegistry);
   relayPolicyService?.setEventBus(eventBus);
   relayPolicyService?.setAuditService(auditService);
   const relayPoolService = relayPolicyService

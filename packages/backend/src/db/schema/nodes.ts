@@ -134,6 +134,27 @@ export interface NodeHealthReport {
   relayLatencies?: Array<{ relayInstanceId: string; rttMs: number }>;
   // Nginx daemons with ingress groups (ingress_group_v1): what the reserved health endpoint answers.
   ingressHealth?: NodeIngressHealth;
+  // Docker daemons with managed_link_runtime_v1: the connections of the managed links whose workloads the node runs.
+  // Absent when the node has none.
+  managedLinks?: NodeManagedLinkReport[];
+}
+
+/**
+ * One managed database or storage link as the node that runs its workloads reports it. The node's host listener (the
+ * storage connector socket for a storage link) is the link's single gate, whichever relay carries a connection.
+ */
+export interface NodeManagedLinkReport {
+  /** managed_database_binding or managed_storage_binding. */
+  ownerKind: string;
+  /** The binding id; an Availability placement id for a placement's link. */
+  ownerId: string;
+  activeConnections: number;
+  /** The session limit Gateway signed into the link's grant. */
+  connectionLimit: number;
+  /** Connections the node refused at the link's or the node's limit since its daemon started. */
+  rejectedTotal: number;
+  lastRejectionReason: string | null;
+  lastRejectedAt: string | null;
 }
 
 /** What an nginx daemon's `/.well-known/gateway-ingress-health` endpoint answered when it last reported. */

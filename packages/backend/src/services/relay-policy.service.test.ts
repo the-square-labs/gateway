@@ -281,8 +281,7 @@ describe('RelayPolicyService route runtime', () => {
   });
 
   it('reads managed database binding runtime from its owned Relay route', async () => {
-    const limit = vi.fn().mockResolvedValue([{ id: 'route-binding-1' }]);
-    const where = vi.fn(() => ({ limit }));
+    const where = vi.fn().mockResolvedValue([{ id: 'route-binding-1' }]);
     const from = vi.fn(() => ({ where }));
     const db = { select: vi.fn(() => ({ from })) };
     const getRouteRuntime = vi.fn().mockResolvedValue({
@@ -314,6 +313,7 @@ describe('RelayPolicyService route runtime', () => {
       averageDurationMs: 350,
       lastActivityAt: '2026-08-28T16:00:00.000Z',
       metricsSince: '2026-08-28T15:00:00.000Z',
+      connections: null,
     });
     expect(getRouteRuntime).toHaveBeenCalledWith('route-binding-1');
   });
@@ -358,6 +358,196 @@ describe('RelayPolicyService route runtime', () => {
       targetToSourceBytes: '400',
     });
     expect(getRouteRuntime).toHaveBeenCalledTimes(3);
+  });
+
+  describe('managed link connections reported by the workload node', () => {
+    const relayReport = (routeId: string, active: number, throttled: number) => ({
+      routeId,
+      activeTunnels: String(active),
+      openedTotal: '90',
+      completedTotal: '20',
+      failedTotal: '0',
+      throttledTotal: String(throttled),
+      sourceToTargetBytes: '100',
+      targetToSourceBytes: '200',
+      setupLatencyP95Microseconds: '4000',
+      averageDurationMilliseconds: '50',
+      lastActivityUnixMilliseconds: '1787932800000',
+      metricsSinceUnixMilliseconds: '1787929200000',
+    });
+    const linkReport = (ownerKind: string, ownerId: string, active: number, rejected: number, at: string | null) => ({
+      ownerKind,
+      ownerId,
+      activeConnections: active,
+      connectionLimit: 64,
+      rejectedTotal: rejected,
+      lastRejectionReason: at ? 'link_limit' : null,
+      lastRejectedAt: at,
+    });
+    const routesDb = (...answers: unknown[][]) => {
+      const rows = [...answers];
+      return { select: vi.fn(() => ({ from: () => ({ where: async () => rows.shift() ?? [] }) })) };
+    };
+
+    it('counts the open connections the node holds on every relay and adds its refusals to the relay ones', async () => {
+      // The local relay carries 30 of the link's 64 connections; the pool's other relays carry the rest.
+      const db = routesDb([
+        {
+          id: 'route-1',
+          ownerKind: 'managed_database_binding',
+          ownerId: 'binding-1',
+          sourceKind: 'daemon',
+          sourceId: 'node-1',
+        },
+      ]);
+      const service = createService(db, {
+        applySnapshot: vi.fn(),
+        getRouteRuntime: vi.fn().mockResolvedValue(relayReport('route-1', 30, 2)),
+      });
+      const reportedAt = new Date();
+      const managedLinkReport = vi.fn(() => ({
+        link: linkReport('managed_database_binding', 'binding-1', 64, 6, '2026-10-02T10:00:00.000Z'),
+        reportedAt,
+      }));
+      const requestHealthReport = vi.fn();
+      service.setManagedLinkReports({ managedLinkReport, requestHealthReport });
+
+      const runtime = await service.getManagedDatabaseBindingRouteRuntime('binding-1');
+      expect(runtime).toMatchObject({
+        activeStreams: 64,
+        throttledTotal: '8',
+        openedTotal: '90',
+        connections: {
+          active: 64,
+          limit: 64,
+          rejectedTotal: '6',
+          lastRejectionReason: 'link_limit',
+          lastRejectedAt: '2026-10-02T10:00:00.000Z',
+          reportedAt: reportedAt.toISOString(),
+        },
+      });
+      expect(managedLinkReport).toHaveBeenCalledWith('node-1', 'managed_database_binding', 'binding-1');
+      // A fresh report needs no new one.
+      expect(requestHealthReport).not.toHaveBeenCalled();
+    });
+
+    it('asks the node for a fresh report when its last one is older than the runtime poll', async () => {
+      const db = routesDb([
+        {
+          id: 'route-1',
+          ownerKind: 'managed_storage_binding',
+          ownerId: 'storage-binding-1',
+          sourceKind: 'daemon',
+          sourceId: 'node-1',
+        },
+      ]);
+      const getRouteRuntime = vi.fn().mockResolvedValue(relayReport('route-1', 3, 0));
+      const service = createService(db, { applySnapshot: vi.fn(), getRouteRuntime });
+      const requestHealthReport = vi.fn();
+      service.setManagedLinkReports({
+        managedLinkReport: vi.fn(() => ({
+          link: linkReport('managed_storage_binding', 'storage-binding-1', 3, 0, null),
+          reportedAt: new Date(Date.now() - 20_000),
+        })),
+        requestHealthReport,
+      });
+
+      await expect(service.getManagedStorageBindingRouteRuntime('storage-binding-1')).resolves.toMatchObject({
+        activeStreams: 3,
+        throttledTotal: '0',
+        connections: { active: 3, limit: 64, rejectedTotal: '0', lastRejectionReason: null },
+      });
+      expect(getRouteRuntime).toHaveBeenCalledWith('route-1');
+      expect(requestHealthReport).toHaveBeenCalledWith('node-1', 5_000);
+    });
+
+    it('keeps the relay counts while a node does not report links (an older daemon)', async () => {
+      const db = routesDb(
+        [],
+        [{ id: 'placement-1' }, { id: 'placement-2' }],
+        [
+          {
+            id: 'route-1',
+            ownerKind: 'managed_database_binding',
+            ownerId: 'placement-1',
+            sourceKind: 'daemon',
+            sourceId: 'node-1',
+          },
+          {
+            id: 'route-2',
+            ownerKind: 'managed_database_binding',
+            ownerId: 'placement-2',
+            sourceKind: 'daemon',
+            sourceId: 'node-2',
+          },
+        ]
+      );
+      const service = createService(db, {
+        applySnapshot: vi.fn(),
+        getRouteRuntime: vi.fn(async (routeId: string) => relayReport(routeId, 5, 1)),
+      });
+      service.setManagedLinkReports({
+        managedLinkReport: vi.fn((nodeId: string, ownerKind: string, ownerId: string) =>
+          nodeId === 'node-1' ? { link: linkReport(ownerKind, ownerId, 9, 4, null), reportedAt: new Date() } : null
+        ),
+        requestHealthReport: vi.fn(),
+      });
+
+      await expect(service.getManagedDatabaseBindingRouteRuntime('binding-1')).resolves.toMatchObject({
+        activeStreams: 10,
+        throttledTotal: '2',
+        connections: null,
+      });
+    });
+
+    it('sums the reports of an Availability link across its placements', async () => {
+      const db = routesDb(
+        [],
+        [{ id: 'placement-1' }, { id: 'placement-2' }],
+        [
+          {
+            id: 'route-1',
+            ownerKind: 'managed_database_binding',
+            ownerId: 'placement-1',
+            sourceKind: 'daemon',
+            sourceId: 'node-1',
+          },
+          {
+            id: 'route-2',
+            ownerKind: 'managed_database_binding',
+            ownerId: 'placement-2',
+            sourceKind: 'daemon',
+            sourceId: 'node-2',
+          },
+        ]
+      );
+      const service = createService(db, {
+        applySnapshot: vi.fn(),
+        getRouteRuntime: vi.fn(async (routeId: string) => relayReport(routeId, 1, 0)),
+      });
+      const older = new Date(Date.now() - 1_000);
+      service.setManagedLinkReports({
+        managedLinkReport: vi.fn((nodeId: string, ownerKind: string, ownerId: string) =>
+          nodeId === 'node-1'
+            ? { link: linkReport(ownerKind, ownerId, 12, 1, '2026-10-02T09:00:00.000Z'), reportedAt: older }
+            : // The second placement's node runs none of the link's connections now.
+              { link: null, reportedAt: new Date() }
+        ),
+        requestHealthReport: vi.fn(),
+      });
+
+      await expect(service.getManagedDatabaseBindingRouteRuntime('binding-1')).resolves.toMatchObject({
+        activeStreams: 12,
+        throttledTotal: '1',
+        connections: {
+          active: 12,
+          limit: 64,
+          rejectedTotal: '1',
+          lastRejectedAt: '2026-10-02T09:00:00.000Z',
+          reportedAt: older.toISOString(),
+        },
+      });
+    });
   });
 
   it('recreates the adopted binding route when the previous owner route is already gone', async () => {

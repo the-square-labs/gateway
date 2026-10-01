@@ -1,3 +1,5 @@
+import type { NodeManagedLinkReport } from '@/db/schema/nodes.js';
+
 const managedStorageRootFilesystem = 'gateway-managed-storage-root';
 
 type DecodedHealthDiskMount = {
@@ -56,4 +58,37 @@ export function relayLatencyHealth(rawSamples: unknown): {
     return [{ relayInstanceId, rttMs: Math.round(micros) / 1000 }];
   });
   return relayLatencies.length ? { relayLatencies } : {};
+}
+
+const MANAGED_LINK_OWNER_KINDS = new Set(['managed_database_binding', 'managed_storage_binding']);
+
+/**
+ * The managed links of a docker daemon health report (managed_link_runtime_v1). Absent when the node reported none,
+ * so reports of other nodes keep their shape.
+ */
+export function managedLinkHealth(rawLinks: unknown): { managedLinks?: NodeManagedLinkReport[] } {
+  const managedLinks = (Array.isArray(rawLinks) ? rawLinks : []).flatMap((raw): NodeManagedLinkReport[] => {
+    const value = (raw ?? {}) as Record<string, unknown>;
+    const ownerKind = typeof value.ownerKind === 'string' ? value.ownerKind : '';
+    const ownerId = typeof value.ownerId === 'string' ? value.ownerId : '';
+    if (!MANAGED_LINK_OWNER_KINDS.has(ownerKind) || !ownerId) return [];
+    const count = (field: unknown) => {
+      const parsed = Number(field ?? 0);
+      return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+    };
+    const lastRejectedAtMs = count(value.lastRejectedAtUnixMs);
+    const lastRejectionReason = typeof value.lastRejectionReason === 'string' ? value.lastRejectionReason : '';
+    return [
+      {
+        ownerKind,
+        ownerId,
+        activeConnections: count(value.activeConnections),
+        connectionLimit: count(value.connectionLimit),
+        rejectedTotal: count(value.rejectedTotal),
+        lastRejectionReason: lastRejectionReason || null,
+        lastRejectedAt: lastRejectedAtMs > 0 ? new Date(lastRejectedAtMs).toISOString() : null,
+      },
+    ];
+  });
+  return managedLinks.length ? { managedLinks } : {};
 }

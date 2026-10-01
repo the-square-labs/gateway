@@ -236,6 +236,8 @@ export interface HealthReport {
   /** Present when the daemon advertises availability_lease_v1. */
   availabilityLease?: AvailabilityLeaseReport | null;
   relayLatencies?: RelayLatencySample[];
+  /** Docker daemons advertising managed_link_runtime_v1: the node's managed links (field 37). */
+  managedLinks?: ManagedLinkRuntime[];
   /** Present when the daemon advertises ingress_group_v1 (field 195). */
   ingressHealth?: IngressHealthReport | null;
 }
@@ -257,6 +259,19 @@ export interface IngressHealthReport {
 export interface RelayLatencySample {
   relayInstanceId: string;
   rttMicros: number;
+}
+
+/** One managed database or storage link on the node that runs its workloads. */
+export interface ManagedLinkRuntime {
+  ownerKind: string;
+  ownerId: string;
+  activeConnections: number;
+  connectionLimit: number;
+  /** uint64 as string (proto-loader). */
+  rejectedTotal: string;
+  lastRejectionReason: string;
+  /** int64 as string (proto-loader). */
+  lastRejectedAtUnixMs: string;
 }
 
 export interface StatsReport {

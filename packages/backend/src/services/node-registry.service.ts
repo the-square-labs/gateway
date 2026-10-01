@@ -3,7 +3,7 @@ import type { ServerDuplexStream } from '@grpc/grpc-js';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
-import type { NodeHealthReport, NodeStatsReport } from '@/db/schema/nodes.js';
+import type { NodeHealthReport, NodeManagedLinkReport, NodeStatsReport } from '@/db/schema/nodes.js';
 import type { CommandResult, DaemonMessage, GatewayCommand } from '@/grpc/generated/types.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -15,6 +15,8 @@ import { NodeOfflineDebounce } from '@/services/node-offline-debounce.js';
 const logger = createChildLogger('NodeRegistry');
 const TRAFFIC_STATS_CACHE_TTL_MS = 60_000;
 const TRAFFIC_STATS_CACHE_MAX_ENTRIES = 4_096;
+/** Docker daemons whose health report carries their managed links (HealthReport.managed_links). */
+export const MANAGED_LINK_RUNTIME_CAPABILITY = 'managed_link_runtime_v1';
 
 function hasUpdateInProgress(metadata: unknown): boolean {
   if (!metadata || typeof metadata !== 'object') return false;
@@ -89,6 +91,8 @@ export class NodeRegistryService {
   private trafficStatsInFlight = new Map<string, Promise<CommandResult>>();
   private trafficStatsNodeTails = new Map<string, Promise<void>>();
   private trafficStatsCache = new Map<string, { sampledAt: number; result: CommandResult }>();
+  /** When a connection was last asked for a health report outside its schedule (requestHealthReport). */
+  private readonly healthRequestedAt = new WeakMap<ConnectedNode, number>();
   private readonly offlineDebounce: NodeOfflineDebounce;
 
   constructor(
@@ -425,6 +429,45 @@ export class NodeRegistryService {
 
   hasCapability(nodeId: string, capability: string): boolean {
     return this.nodes.get(nodeId)?.capabilities.has(capability) ?? false;
+  }
+
+  /**
+   * What the node running a managed link's workloads last reported about the link: `link` is null when the report
+   * leaves it out (the link has no connections there). Null when the node is not connected, has not reported since it
+   * connected, or its daemon does not report links.
+   */
+  managedLinkReport(
+    nodeId: string,
+    ownerKind: string,
+    ownerId: string
+  ): { link: NodeManagedLinkReport | null; reportedAt: Date } | null {
+    const node = this.nodes.get(nodeId);
+    if (!node?.capabilities.has(MANAGED_LINK_RUNTIME_CAPABILITY) || !node.lastHealthReport || !node.lastReportAt) {
+      return null;
+    }
+    const link = node.lastHealthReport.managedLinks?.find(
+      (candidate) => candidate.ownerKind === ownerKind && candidate.ownerId === ownerId
+    );
+    return { link: link ?? null, reportedAt: node.lastReportAt };
+  }
+
+  /**
+   * Asks a connected node for a health report now, at most once per minIntervalMs (fire and forget): a link runtime
+   * being watched gets the node's current counts instead of a report up to 30 s old.
+   */
+  requestHealthReport(nodeId: string, minIntervalMs: number): void {
+    const node = this.nodes.get(nodeId);
+    if (!node || this.isNodeUpdateInProgress(nodeId)) return;
+    const now = Date.now();
+    if (now - (this.healthRequestedAt.get(node) ?? 0) < minIntervalMs) return;
+    this.healthRequestedAt.set(node, now);
+    try {
+      node.commandStream.write({ commandId: '', requestHealth: {} }, (error: Error | null | undefined) => {
+        if (error) logger.debug('Health request write failed', { nodeId, error: error.message });
+      });
+    } catch {
+      // The stream is closing; the next registration reports again.
+    }
   }
 
   getAllNodes(): ConnectedNode[] {
