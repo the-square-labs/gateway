@@ -1,3 +1,4 @@
+import { AppError } from '@/middleware/error-handler.js';
 import { DOCKER_DEPLOYMENT_ID_LABEL, DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import type { DockerSecretService } from './docker-secret.service.js';
 
@@ -66,3 +67,26 @@ export async function dockerSecretEnvMatcher(
   };
 }
 
+/** Docker daemons that leave named variables out of a duplicate advertise this capability. */
+export const DOCKER_DUPLICATE_ENV_REMOVAL_CAPABILITY = 'docker_duplicate_env_removal_v1';
+
+function hasDuplicateEnvRemovalCapability(capabilities: unknown): boolean {
+  if (!capabilities || typeof capabilities !== 'object') return false;
+  const list = (capabilities as { capabilities?: unknown }).capabilities;
+  return Array.isArray(list) && list.includes(DOCKER_DUPLICATE_ENV_REMOVAL_CAPABILITY);
+}
+
+/**
+ * A duplicate is not linked: the variables the source's database and storage links inject carry the link's
+ * credentials and are left out of the copy. Older daemons copy the whole environment, so duplicating a linked
+ * container there is refused.
+ */
+export function assertDuplicateDropsLinkEnvironment(linkEnvKeys: readonly string[], nodeCapabilities: unknown): void {
+  if (linkEnvKeys.length === 0 || hasDuplicateEnvRemovalCapability(nodeCapabilities)) return;
+  throw new AppError(
+    409,
+    'UNSUPPORTED_DAEMON',
+    `This container has database or storage links whose variables (${linkEnvKeys.join(', ')}) this Docker daemon ` +
+      'would copy into the duplicate. Update the Docker daemon before duplicating it.'
+  );
+}

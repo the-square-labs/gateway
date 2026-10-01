@@ -4,7 +4,17 @@ import { container } from '@/container.js';
 import { executeDockerTool } from '@/modules/ai/ai.docker-tools.js';
 import type { User } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
+import { duplicateContainer } from './docker-container-mutation-operations.js';
 import { getContainerEnv } from './docker-env-operations.js';
+import { DOCKER_DUPLICATE_ENV_REMOVAL_CAPABILITY } from './docker-secret-env.js';
+
+vi.mock('@/modules/nodes/service-creation-lock.js', () => ({
+  assertNodeAllowsServiceCreation: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('./docker-creation-access.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./docker-creation-access.js')>()),
+  placeCreatedDockerResource: vi.fn().mockResolvedValue(undefined),
+}));
 
 const NODE_ID = '11111111-1111-4111-8111-111111111111';
 const DEPLOYMENT_ID = '22222222-2222-4222-8222-222222222222';
@@ -124,5 +134,53 @@ describe('container inspect secrets', () => {
       'slot-id'
     );
     expect(env).toEqual(['MODE=prod']);
+  });
+});
+
+describe('container duplicate', () => {
+  function duplicateContext(capabilities: string[]) {
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({ success: true });
+    const copySecrets = vi.fn().mockResolvedValue(undefined);
+    const ctx = {
+      db: {},
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand },
+      secretService: {
+        getManagedSecretKeys: vi.fn().mockResolvedValue(['DATABASE_URL', 'AWS_SECRET_ACCESS_KEY']),
+        copySecrets,
+      },
+      validateDockerNode: vi.fn().mockResolvedValue({ capabilities: { capabilities } }),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('api'),
+      inspectContainer: vi.fn().mockResolvedValue({ Id: 'api-id', Name: '/api', Config: { Labels: {} } }),
+      requireNoTransition: vi.fn(),
+      assertNameAvailable: vi.fn().mockResolvedValue(undefined),
+      setTransition: vi.fn(),
+      clearTransition: vi.fn(),
+      parseResult: () => ({ Id: 'copy-id' }),
+      emitContainer: vi.fn(),
+    };
+    return { ctx, sendDockerContainerCommand, copySecrets };
+  }
+
+  it('leaves the source link variables out of the copy', async () => {
+    const { ctx, sendDockerContainerCommand, copySecrets } = duplicateContext([
+      DOCKER_DUPLICATE_ENV_REMOVAL_CAPABILITY,
+    ]);
+    await duplicateContainer(ctx as never, NODE_ID, 'api-id', 'api-copy', 'user-1');
+    expect(sendDockerContainerCommand).toHaveBeenCalledWith(NODE_ID, 'duplicate', {
+      containerId: 'api-id',
+      newName: 'api-copy',
+      configJson: JSON.stringify({ removeEnv: ['DATABASE_URL', 'AWS_SECRET_ACCESS_KEY'] }),
+    });
+    expect(copySecrets).toHaveBeenCalledWith(NODE_ID, 'api', 'api-copy', 'user-1');
+  });
+
+  it('refuses to duplicate a linked container on a daemon that would copy the link variables', async () => {
+    const { ctx, sendDockerContainerCommand } = duplicateContext([]);
+    await expect(duplicateContainer(ctx as never, NODE_ID, 'api-id', 'api-copy', 'user-1')).rejects.toMatchObject({
+      code: 'UNSUPPORTED_DAEMON',
+    });
+    expect(sendDockerContainerCommand).not.toHaveBeenCalled();
   });
 });
