@@ -13,7 +13,7 @@ Diagnosis and inventory requests stay read-only: use read queries and never run 
 
 `manage_database_backups({ action, databaseId, policyId?, runId?, config? })`:
 
-- `list_policies`; `create_policy` and `update_policy` with `config`: `destinationId` (a Storage connection, see `storage`), `bucket`, `prefix`, optional staging target, `executorNodeId`, `schedule` (cron, or `null` for manual only), `timezone`, `retentionCount`, resource limits, `enabled`; `delete_policy`.
+- `list_policies`; `create_policy` and `update_policy` with `config`: `destinationId` (a Storage connection, see `storage`), `bucket`, `prefix`, optional staging target, `executorNodeId`, `schedule` (cron, or `null` for manual only), `timezone`, `retentionCount`, `limits` (`workspaceBytes`, `timeoutSeconds`, `cpuCores`, `memoryMb`), `enabled`; a policy requires `timezone`, `retentionCount` and all four limits. `delete_policy`.
 - `run` starts a backup now; `cancel` stops one (`config.force` ends a run whose executor cannot confirm); `list_runs`.
 - `delete_run`: when files remain, `config.artifacts: "delete"` removes them first (the entry stays if that fails) and `"forget"` removes only the history entry, leaving files in storage. Ask the user which before calling.
 
@@ -21,7 +21,7 @@ Native PostgreSQL, Redis, and ClickHouse backups use the immutable runner bundle
 
 ## Restore
 
-`restore` creates a **new** managed database by default and refuses a non-empty target. It needs `config.executorNodeId` plus `newManagedDatabaseName` or `restoreTargetConnectionId`. An external Redis restore requires the target to reach the executor's service address for temporary replication. `databases:backups:restore` is an OAuth manual-approval scope; run a restore only when the user explicitly asks for one.
+`restore` creates a **new** managed database by default and refuses a non-empty target. It needs `config.executorNodeId` plus `newManagedDatabaseName` or `restoreTargetConnectionId`, which must be another connection than the source database. An external Redis restore requires the target to reach the executor's service address for temporary replication. `databases:backups:restore` is an OAuth manual-approval scope; run a restore only when the user explicitly asks for one.
 
 ## Verify backups
 

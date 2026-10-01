@@ -36,7 +36,7 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
         config: {
           type: 'object',
           description:
-            'Policy body for create/update_policy, restore body for restore, { force } for cancel, { artifacts } for delete_run.',
+            'create_policy and update_policy: the full policy, which requires destinationId, bucket, prefix, executorNodeId, timezone, retentionCount and limits with all four fields (schedule, staging and enabled are optional). restore: requires executorNodeId plus newManagedDatabaseName or restoreTargetConnectionId (another empty connection, never the source database); limits may set any of the four fields. cancel: { force }. delete_run: { artifacts }.',
           properties: {
             destinationId: { type: 'string' },
             bucket: { type: 'string' },
@@ -45,10 +45,18 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
             stagingBucket: { type: ['string', 'null'] },
             executorNodeId: { type: 'string' },
             schedule: { type: ['string', 'null'], description: 'Cron expression; null for manual runs only.' },
-            timezone: { type: 'string' },
-            retentionCount: { type: 'number' },
+            timezone: {
+              type: 'string',
+              description: 'IANA time zone of the schedule, such as UTC or Europe/Berlin. Required for a policy.',
+            },
+            retentionCount: {
+              type: 'number',
+              description: 'Completed backups to keep. Required for a policy.',
+            },
             limits: {
               type: 'object',
+              description:
+                'Runner limits. A policy requires all four fields; a restore may set any of them (the rest keep their defaults).',
               properties: {
                 workspaceBytes: { type: 'number' },
                 timeoutSeconds: { type: 'number' },
