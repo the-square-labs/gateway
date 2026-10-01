@@ -25,7 +25,9 @@ ERROR_TAG='\033[48;2;96;61;43m\033[38;2;245;221;202m'
 # ── Defaults ────────────────────────────────────────────────────────
 DAEMON_TYPE=""
 LOCAL_SCRIPT_DIR="${GATEWAY_SETUP_SCRIPT_DIR:-}"
-SETUP_VERSION="${GATEWAY_SETUP_VERSION:-latest}"
+# A release publishes this file with its own tag here, so the node installers come from the same release.
+INSTALLER_RELEASE=latest
+SETUP_VERSION="${GATEWAY_SETUP_VERSION:-$INSTALLER_RELEASE}"
 RELEASE_DOWNLOAD_BASE="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/the-square-labs/gateway/releases}"
 PASSTHROUGH_ARGS=()
 
@@ -154,7 +156,8 @@ Usage:
 
 Options:
   --type <type>            Node type: nginx, docker, storage, or monitoring (databases is a legacy alias)
-  --version <tag>          Gateway release tag containing the installers (default: latest stable)
+  --version <tag>          Gateway release tag containing the installers (default: the release
+                           this installer came from)
   --script-dir <path>      Run a daemon-specific installer from a local directory
   -h, --help               Show this help
 

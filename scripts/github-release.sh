@@ -99,17 +99,9 @@ push_image_with_digest() {
 
 publish_gateway() {
   local digest
-  local assets=(
-    CONTINUITY-MIT-GRANT.md
-    gateway-image.update.json
-    gateway-daemon-installers.sha256
-    scripts/setup-daemon.sh
-    scripts/setup-node.sh
-    scripts/setup-docker-node.sh
-    scripts/setup-database-node.sh
-    scripts/setup-storage-node.sh
-    scripts/setup-monitoring-node.sh
-  )
+  local installers_dir=release-installers
+  ./scripts/stage-installers.sh "$tag" "$installers_dir"
+  local assets=(CONTINUITY-MIT-GRANT.md gateway-image.update.json "$installers_dir"/*)
   prepare_release "Gateway ${tag}" "Gateway release ${tag}"
   if [[ "$release_already_published" -eq 1 ]]; then
     complete_release "${assets[@]}"
@@ -144,10 +136,6 @@ publish_gateway() {
     docker tag "${gateway_image}:${tag}" "${gateway_image}:latest"
     docker push "${gateway_image}:latest"
   fi
-  (
-    cd scripts
-    sha256sum setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-storage-node.sh setup-monitoring-node.sh > ../gateway-daemon-installers.sha256
-  )
   complete_release "${assets[@]}"
 }
 

@@ -67,7 +67,9 @@ prompt_choice() {
     echo "${reply:-$default}"
 }
 
-SETUP_VERSION="${GATEWAY_SETUP_VERSION:-latest}"
+# A release publishes this file with its own tag here, so setup-docker-node.sh comes from the same release.
+INSTALLER_RELEASE=latest
+SETUP_VERSION="${GATEWAY_SETUP_VERSION:-$INSTALLER_RELEASE}"
 RELEASE_DOWNLOAD_BASE="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/the-square-labs/gateway/releases}"
 STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-}"
 RUN_USER="root"
