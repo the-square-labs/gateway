@@ -32,7 +32,7 @@ For TLS-enabled PostgreSQL, the plain `connectionUri` works: the database Node's
 
 Provisioning, `restart`, `pause`, `unpause`, `retry`, `update`, credential rotation, certificate rotation, and `delete` are distinct operations; follow each returned Task and the reported state. `delete_binding` revokes one application's access; `delete` removes the managed database and its storage. A request to disconnect, redeploy, or remove an application never authorizes deleting its database. Delete bindings before deleting a database or workload when possible.
 
-- `list_bindings`, `get_binding_runtime` (relay telemetry: throughput, admission rejects), and `logs` (`tailLines`) help diagnosis.
+- `list_bindings`, `get_binding_runtime` (link telemetry: `activeStreams` are the link's open connections out of its 64, `throughput`, `throttledTotal` the connections refused at that limit, `connections.lastRejectionReason` why the latest one was refused), and `logs` (`tailLines`) help diagnosis.
 - `certificate_status` reads certificate state; `rotate_certificate` reloads in place and needs `allowRestart: true` when the engine cannot hot-reload.
 
 ## Credentials
