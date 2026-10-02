@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -43,8 +44,30 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 	oldConfig, _ := nginx.ReadFile(configPath)
 	pointers := make(map[string]nginx.CertPointer, len(cmd.Certificates))
 	restoreOwnership := func() {}
+	// The bundle nginx already runs (a reconnect resync re-sends every host): the same config and every
+	// certificate's current pointer on the same version. Its files are kept and nginx is not reloaded; the
+	// replica generations are still recorded below.
+	unchanged := oldConfig != nil && bytes.Equal(oldConfig, []byte(cmd.ConfigContent))
+	for _, cert := range cmd.Certificates {
+		if !isValidCertificateID(cert.CertId) || !certificateVersionRegex.MatchString(cert.Version) {
+			unchanged = false
+			break
+		}
+		unchanged = unchanged && nginx.CertVersionActive(h.cfg.Nginx.CertsDir, cert.CertId, cert.Version)
+	}
+	undoChange := func() {}
+	if !unchanged {
+		// Marked before the certificate pointers switch: from here the files may be ahead of nginx.
+		var err error
+		if undoChange, err = h.mgr.BeginChange(); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+	}
 
-	rollback := func() {
+	// reloaded: a reload was attempted, so nginx is brought back to the restored files as well.
+	rollback := func(reloaded bool) {
 		if oldConfig != nil {
 			_ = nginx.WriteAtomic(configPath, oldConfig)
 		} else {
@@ -56,8 +79,8 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 		// A failed test/reload must leave the loaded server on the last known
 		// valid pair as well as restoring files on disk. Best effort is correct
 		// here: the original failure remains the command result.
-		if valid, _ := h.mgr.TestConfig(); valid {
-			_ = h.mgr.Reload()
+		if valid, _ := h.mgr.TestConfig(); reloaded && valid {
+			_ = h.reloadNow()
 		}
 		restoreOwnership()
 	}
@@ -66,6 +89,8 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 		if !isValidCertificateID(cert.CertId) || !certificateVersionRegex.MatchString(cert.Version) || !replicaGenerationRegex.MatchString(cert.ReplicaGeneration) {
 			result.Success = false
 			result.Error = "invalid TLS certificate identifier"
+			rollback(false)
+			undoChange()
 			return
 		}
 		pointer, err := nginx.DeployVersionedCert(
@@ -78,7 +103,8 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 			cert.ChainPem,
 		)
 		if err != nil {
-			rollback()
+			rollback(false)
+			undoChange()
 			result.Success = false
 			result.Error = "stage TLS certificate failed"
 			return
@@ -87,14 +113,25 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 	}
 	restoreOwnership, err := h.setConfigOwnership(cmd.HostId, cmd.ConfigOwnership)
 	if err != nil {
-		rollback()
+		rollback(false)
+		undoChange()
 		result.Success = false
 		result.Error = "persist TLS config ownership failed"
 		return
 	}
 
+	if unchanged {
+		if err := h.settleUnchanged(cmd.DeferReload); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		h.recordTLSBundle(cmd)
+		return
+	}
 	if err := nginx.WriteAtomic(configPath, []byte(cmd.ConfigContent)); err != nil {
-		rollback()
+		rollback(false)
+		undoChange()
 		result.Success = false
 		result.Error = "write TLS proxy configuration failed"
 		return
@@ -103,21 +140,26 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 	result.Detail = output
 	if !valid {
 		h.logConfigTestFailure("apply TLS bundle", output, "host_id", cmd.HostId)
-		rollback()
+		rollback(false)
+		undoChange()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx config test failed: %s", strings.TrimSpace(output))
 		return
 	}
-	if err := h.mgr.Reload(); err != nil {
+	if err := h.commitChange(cmd.DeferReload); err != nil {
 		h.logger.Error("nginx reload failed", "action", "apply TLS bundle", "host_id", cmd.HostId, "error", err)
-		rollback()
+		rollback(true)
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
 		return
 	}
+	h.recordTLSBundle(cmd)
+	h.logger.Info("TLS bundle applied", "host_id", cmd.HostId, "certificate_count", len(cmd.Certificates), "reload_deferred", cmd.DeferReload)
+}
+
+func (h *Handler) recordTLSBundle(cmd *pb.ApplyTlsBundleCommand) {
 	h.state.SetExtra("last_tls_bundle_generation", cmd.Generation)
 	h.state.Save()
-	h.logger.Info("TLS bundle applied", "host_id", cmd.HostId, "certificate_count", len(cmd.Certificates))
 }
 
 func (h *Handler) handleInspectCertificates(cmd *pb.InspectCertificatesCommand, result *pb.CommandResult) {

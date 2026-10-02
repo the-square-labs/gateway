@@ -354,6 +354,11 @@ func (p *NginxPlugin) ensureIngressHealthConfig(logger *slog.Logger) (changed bo
 
 // renewIngressHealthCertificate replaces the reserved server's certificate before it expires and reloads nginx.
 func (p *NginxPlugin) renewIngressHealthCertificate(logger *slog.Logger) {
+	if p.handler != nil {
+		// Never between the write and the test of a command's change.
+		p.handler.mutationMu.Lock()
+		defer p.handler.mutationMu.Unlock()
+	}
 	renewed, err := nginx.EnsureIngressHealthCertificate(p.cfg.Nginx.CertsDir, time.Now())
 	if err != nil {
 		logger.Warn("failed to renew the ingress health certificate", "error", err)

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -154,6 +155,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	logger.Info("nginx detected", "version", version)
 	p.mgr = mgr
 	mgr.SetConfigTestObserver(p.observeConfigTest)
+	reloadPending := mgr.SetReloadPendingMarker(filepath.Join(baseCfg.StateDir, "nginx-reload-pending"))
 	p.maintenanceAccessSupported, err = mgr.HasSecureLinkModule()
 	if err != nil {
 		return err
@@ -285,6 +287,14 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		globalConfigModified = true
 	}
 
+	if reloadPending {
+		// A change written before the previous process stopped may not run yet.
+		if valid, output := mgr.TestConfig(); valid {
+			configDirModified = true
+		} else {
+			logger.Warn("nginx configuration changed before the daemon stopped is invalid and is not loaded", "output", output)
+		}
+	}
 	if globalConfigModified || configDirModified {
 		mgr.Reload()
 	}
@@ -334,6 +344,9 @@ func (p *NginxPlugin) reconcileRestoredSecureLinkPorts(
 	}
 	if len(changes) == 0 {
 		return nil
+	}
+	if _, err := p.mgr.BeginChange(); err != nil {
+		return err
 	}
 	rollback := func(applied int) {
 		for index := applied - 1; index >= 0; index-- {

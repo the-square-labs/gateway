@@ -6140,8 +6140,12 @@ type ApplyConfigCommand struct {
 	ConfigContent   string                 `protobuf:"bytes,2,opt,name=config_content,json=configContent,proto3" json:"config_content,omitempty"`
 	TestOnly        bool                   `protobuf:"varint,3,opt,name=test_only,json=testOnly,proto3" json:"test_only,omitempty"`
 	ConfigOwnership string                 `protobuf:"bytes,4,opt,name=config_ownership,json=configOwnership,proto3" json:"config_ownership,omitempty"` // "managed_secure_link", "user_owned", or empty to preserve
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The config is written and tested, and loaded with the reload of the batch it belongs to (reconnect resync):
+	// the next command that reloads nginx, or the daemon itself shortly after the last deferred change. Content
+	// equal to the file on disk is never rewritten or reloaded.
+	DeferReload   bool `protobuf:"varint,5,opt,name=defer_reload,json=deferReload,proto3" json:"defer_reload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ApplyConfigCommand) Reset() {
@@ -6200,6 +6204,13 @@ func (x *ApplyConfigCommand) GetConfigOwnership() string {
 		return x.ConfigOwnership
 	}
 	return ""
+}
+
+func (x *ApplyConfigCommand) GetDeferReload() bool {
+	if x != nil {
+		return x.DeferReload
+	}
+	return false
 }
 
 // Daemon also cleans up associated cache directory on removal
@@ -6327,6 +6338,7 @@ type ApplyTlsBundleCommand struct {
 	Certificates    []*VersionedCertBundle `protobuf:"bytes,3,rep,name=certificates,proto3" json:"certificates,omitempty"`
 	Generation      string                 `protobuf:"bytes,4,opt,name=generation,proto3" json:"generation,omitempty"`
 	ConfigOwnership string                 `protobuf:"bytes,5,opt,name=config_ownership,json=configOwnership,proto3" json:"config_ownership,omitempty"`
+	DeferReload     bool                   `protobuf:"varint,6,opt,name=defer_reload,json=deferReload,proto3" json:"defer_reload,omitempty"` // as in ApplyConfigCommand
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -6394,6 +6406,13 @@ func (x *ApplyTlsBundleCommand) GetConfigOwnership() string {
 		return x.ConfigOwnership
 	}
 	return ""
+}
+
+func (x *ApplyTlsBundleCommand) GetDeferReload() bool {
+	if x != nil {
+		return x.DeferReload
+	}
+	return false
 }
 
 type VersionedCertBundle struct {
@@ -12825,19 +12844,20 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\tmax_bytes\x18\x03 \x01(\x03R\bmaxBytes\x12\x18\n" +
 	"\acontent\x18\x04 \x01(\fR\acontent\x12\x1f\n" +
 	"\vtarget_path\x18\x05 \x01(\tR\n" +
-	"targetPath\"\x9c\x01\n" +
+	"targetPath\"\xbf\x01\n" +
 	"\x12ApplyConfigCommand\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12%\n" +
 	"\x0econfig_content\x18\x02 \x01(\tR\rconfigContent\x12\x1b\n" +
 	"\ttest_only\x18\x03 \x01(\bR\btestOnly\x12)\n" +
-	"\x10config_ownership\x18\x04 \x01(\tR\x0fconfigOwnership\".\n" +
+	"\x10config_ownership\x18\x04 \x01(\tR\x0fconfigOwnership\x12!\n" +
+	"\fdefer_reload\x18\x05 \x01(\bR\vdeferReload\".\n" +
 	"\x13RemoveConfigCommand\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\"}\n" +
 	"\x11DeployCertCommand\x12\x17\n" +
 	"\acert_id\x18\x01 \x01(\tR\x06certId\x12\x19\n" +
 	"\bcert_pem\x18\x02 \x01(\fR\acertPem\x12\x17\n" +
 	"\akey_pem\x18\x03 \x01(\fR\x06keyPem\x12\x1b\n" +
-	"\tchain_pem\x18\x04 \x01(\fR\bchainPem\"\xe7\x01\n" +
+	"\tchain_pem\x18\x04 \x01(\fR\bchainPem\"\x8a\x02\n" +
 	"\x15ApplyTlsBundleCommand\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12%\n" +
 	"\x0econfig_content\x18\x02 \x01(\tR\rconfigContent\x12C\n" +
@@ -12845,7 +12865,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\x04 \x01(\tR\n" +
 	"generation\x12)\n" +
-	"\x10config_ownership\x18\x05 \x01(\tR\x0fconfigOwnership\"\xc8\x01\n" +
+	"\x10config_ownership\x18\x05 \x01(\tR\x0fconfigOwnership\x12!\n" +
+	"\fdefer_reload\x18\x06 \x01(\bR\vdeferReload\"\xc8\x01\n" +
 	"\x13VersionedCertBundle\x12\x17\n" +
 	"\acert_id\x18\x01 \x01(\tR\x06certId\x12\x19\n" +
 	"\bcert_pem\x18\x02 \x01(\fR\acertPem\x12\x17\n" +

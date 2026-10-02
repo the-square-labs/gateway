@@ -77,8 +77,29 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 		}
 	}
 
+	// Content equal to what is on disk is not rewritten, and a sync that changes nothing does not reload nginx
+	// (a reconnect resync ends with this command). The first change marks the reload as pending.
+	changed := false
+	markChanged := func() error {
+		if changed {
+			return nil
+		}
+		changed = true
+		_, err := h.mgr.BeginChange()
+		return err
+	}
+
 	// Phase 1: Deploy certs
 	for _, cert := range cmd.Certs {
+		if nginx.CertMatches(h.cfg.Nginx.CertsDir, cert.CertId, cert.CertPem, cert.KeyPem, cert.ChainPem) {
+			continue
+		}
+		if err := markChanged(); err != nil {
+			rollback()
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
 		if err := nginx.DeployCert(h.cfg.Nginx.CertsDir, cert.CertId, cert.CertPem, cert.KeyPem, cert.ChainPem); err != nil {
 			rollback()
 			result.Success = false
@@ -92,7 +113,16 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	for _, hp := range cmd.HtpasswdFiles {
 		path := filepath.Join(h.cfg.Nginx.HtpasswdDir, fmt.Sprintf("access-list-%s", hp.AccessListId))
 		if previous, readErr := os.ReadFile(path); readErr == nil {
+			if string(previous) == hp.Content {
+				continue
+			}
 			preExistingHtpasswd[hp.AccessListId] = previous
+		}
+		if err := markChanged(); err != nil {
+			rollback()
+			result.Success = false
+			result.Error = err.Error()
+			return
 		}
 		if err := nginx.WriteAtomic(path, []byte(hp.Content)); err != nil {
 			rollback()
@@ -126,18 +156,34 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 			}
 		}
 		path := h.mgr.ConfigPath(host.HostId)
+		name := fmt.Sprintf("proxy-host-%s.conf", host.HostId)
+		activeHosts[name] = true
 		h.prepareSecureLinkListeners(host.ConfigContent)
+		if previous, ok := preExistingConfigs[name]; ok && string(previous) == host.ConfigContent {
+			continue
+		}
+		if err := markChanged(); err != nil {
+			rollback()
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
 		if err := nginx.WriteAtomic(path, []byte(host.ConfigContent)); err != nil {
 			rollback()
 			result.Success = false
 			result.Error = fmt.Sprintf("write config %s: %v", host.HostId, err)
 			return
 		}
-		activeHosts[fmt.Sprintf("proxy-host-%s.conf", host.HostId)] = true
 	}
 
 	// Phase 4: Update global config if provided
-	if cmd.GlobalConfig != "" {
+	if cmd.GlobalConfig != "" && string(preExistingGlobalConfig) != cmd.GlobalConfig {
+		if err := markChanged(); err != nil {
+			rollback()
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
 		if err := nginx.WriteAtomic(h.cfg.Nginx.GlobalConfig, []byte(cmd.GlobalConfig)); err != nil {
 			rollback()
 			result.Success = false
@@ -151,11 +197,29 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	existing, _ := nginx.ListConfigs(h.cfg.Nginx.ConfigDir)
 	for _, name := range existing {
 		if !activeHosts[name] && strings.HasPrefix(name, "proxy-host-") {
+			if err := markChanged(); err != nil {
+				rollback()
+				result.Success = false
+				result.Error = err.Error()
+				return
+			}
 			if data, ok := preExistingConfigs[name]; ok {
 				deletedStaleConfigs[name] = data
 			}
 			os.Remove(filepath.Join(h.cfg.Nginx.ConfigDir, name))
 		}
+	}
+
+	if !changed {
+		// nginx already runs this configuration; only changes still waiting for their reload are loaded.
+		if err := h.settleUnchanged(false); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		h.finishFullSync(cmd, nil)
+		h.logger.Info("full sync complete; nothing changed", "version_hash", cmd.VersionHash)
+		return
 	}
 
 	// Phase 6: Test and reload
@@ -170,13 +234,18 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 		return
 	}
 
-	if err := h.mgr.Reload(); err != nil {
+	if err := h.reloadNow(); err != nil {
 		rollback()
 		_, _ = h.mgr.TestConfig()
 		result.Success = false
 		result.Error = fmt.Sprintf("nginx reload failed: %v", err)
 		return
 	}
+	h.finishFullSync(cmd, deletedStaleConfigs)
+	h.logger.Info("full sync complete", "version_hash", cmd.VersionHash)
+}
+
+func (h *Handler) finishFullSync(cmd *pb.FullSyncCommand, deletedStaleConfigs map[string][]byte) {
 	// The configs of removed hosts are gone for good: so are their caches.
 	for name := range deletedStaleConfigs {
 		removeHostCache(strings.TrimSuffix(strings.TrimPrefix(name, "proxy-host-"), ".conf"))
@@ -190,8 +259,6 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	h.state.SetExtra("active_host_ids", hostIDs)
 	h.state.SetExtra("config_version_hash", cmd.VersionHash)
 	h.state.Save()
-
-	h.logger.Info("full sync complete", "version_hash", cmd.VersionHash)
 }
 
 func (h *Handler) handleUpdateGlobalConfig(cmd *pb.UpdateGlobalConfigCommand, result *pb.CommandResult) {
@@ -207,6 +274,18 @@ func (h *Handler) handleUpdateGlobalConfig(cmd *pb.UpdateGlobalConfigCommand, re
 			return nginx.WriteAtomic(h.cfg.Nginx.GlobalConfig, backup)
 		}
 		return nginx.RemoveFile(h.cfg.Nginx.GlobalConfig)
+	}
+	if backup != nil && string(backup) == cmd.Content {
+		if err := h.settleUnchanged(false); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+		}
+		return
+	}
+	if _, err := h.mgr.BeginChange(); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return
 	}
 
 	if err := nginx.WriteAtomic(h.cfg.Nginx.GlobalConfig, []byte(cmd.Content)); err != nil {
@@ -229,7 +308,7 @@ func (h *Handler) handleUpdateGlobalConfig(cmd *pb.UpdateGlobalConfigCommand, re
 		return
 	}
 
-	if err := h.mgr.Reload(); err != nil {
+	if err := h.reloadNow(); err != nil {
 		rollbackErr := rollback()
 		_, _ = h.mgr.TestConfig()
 		result.Success = false

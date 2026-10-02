@@ -33,6 +33,12 @@ type Manager struct {
 	reloadMu     sync.Mutex
 	generationMu sync.Mutex
 	generation   uint64
+	// The configuration on disk may be ahead of the one nginx runs: a change was written and its reload has not
+	// succeeded yet (deferred, failed, or the daemon stopped in between). See BeginChange.
+	pendingMu     sync.Mutex
+	reloadPending bool
+	pendingSeq    uint64
+	pendingMarker string
 }
 
 var effectivePIDDirectivePattern = regexp.MustCompile(`(?m)^\s*pid\s+(?:"([^"]+)"|'([^']+)'|([^;\s]+))\s*;`)
@@ -123,6 +129,9 @@ func (m *Manager) CachedConfigValidity() (valid bool, checkedAt time.Time, check
 func (m *Manager) Reload() error {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
+	m.pendingMu.Lock()
+	loadedSeq := m.pendingSeq
+	m.pendingMu.Unlock()
 	commit := m.stageNextGeneration()
 	args := []string{"-s", "reload"}
 	if m.globalCfg != "" {
@@ -137,7 +146,67 @@ func (m *Manager) Reload() error {
 		return fmt.Errorf("nginx reload failed: %s: %w", string(output), err)
 	}
 	commit(true)
+	// nginx runs what was on disk when the reload started; a change begun meanwhile still waits for one.
+	m.pendingMu.Lock()
+	if m.pendingSeq == loadedSeq {
+		m.clearReloadPendingLocked()
+	}
+	m.pendingMu.Unlock()
 	return nil
+}
+
+// SetReloadPendingMarker keeps the reload-pending state in a file, so a change written before the daemon stopped is
+// loaded when it starts again, and reports whether one is pending.
+func (m *Manager) SetReloadPendingMarker(path string) bool {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	m.pendingMarker = path
+	if _, err := os.Stat(path); err == nil {
+		m.reloadPending = true
+	}
+	return m.reloadPending
+}
+
+// ReloadPending reports a configuration on disk that nginx may not run yet.
+func (m *Manager) ReloadPending() bool {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	return m.reloadPending
+}
+
+// BeginChange is called before a change to the configuration on disk: until a reload succeeds, the configuration
+// is known to be ahead of what nginx runs, and content that equals the file on disk no longer means it is loaded.
+// The returned function takes the mark back for a change that was rolled back without a reload, unless the mark
+// predates the change or another change began since.
+func (m *Manager) BeginChange() (func(), error) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	wasPending := m.reloadPending
+	if !wasPending && m.pendingMarker != "" {
+		if err := WriteAtomic(m.pendingMarker, []byte("reload pending\n")); err != nil {
+			return func() {}, fmt.Errorf("record pending nginx reload: %w", err)
+		}
+	}
+	m.reloadPending = true
+	m.pendingSeq++
+	seq := m.pendingSeq
+	return func() {
+		m.pendingMu.Lock()
+		defer m.pendingMu.Unlock()
+		if !wasPending && m.pendingSeq == seq {
+			m.clearReloadPendingLocked()
+		}
+	}, nil
+}
+
+func (m *Manager) clearReloadPendingLocked() {
+	if !m.reloadPending {
+		return
+	}
+	m.reloadPending = false
+	if m.pendingMarker != "" {
+		_ = RemoveFile(m.pendingMarker)
+	}
 }
 
 func (m *Manager) GetVersion() (string, error) {
