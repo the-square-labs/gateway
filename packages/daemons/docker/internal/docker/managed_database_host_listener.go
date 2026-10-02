@@ -73,8 +73,15 @@ type managedDatabaseHostListenerManager struct {
 	global           chan struct{}
 	inspectNetwork   func(context.Context, string) (network.Inspect, error)
 	inspectContainer func(context.Context, string) (mobyclient.ContainerInspectResult, error)
+	events           func(context.Context, mobyclient.EventsListOptions) mobyclient.EventsResult
 	openBinding      func(net.Conn, string, uint64)
 	rejections       *linkRejectionLog
+	// peers names the container behind each address of the listeners' networks without asking dockerd for every
+	// connection (listenerPeers).
+	peers              listenerPeers
+	peerRefreshMu      sync.Mutex
+	peerRefreshRunning bool
+	peerRefreshPending *peerSnapshot
 }
 
 func newManagedDatabaseHostListenerManager(plugin *DockerPlugin) *managedDatabaseHostListenerManager {
@@ -93,6 +100,7 @@ func newManagedDatabaseHostListenerManager(plugin *DockerPlugin) *managedDatabas
 	manager.inspectContainer = func(ctx context.Context, id string) (mobyclient.ContainerInspectResult, error) {
 		return plugin.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
 	}
+	manager.events = plugin.client.cli.Events
 	manager.openBinding = plugin.openManagedDatabaseBinding
 	return manager
 }
@@ -106,8 +114,9 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 	// unverified holds the bindings whose network could not be inspected now. Their running listeners stay and
 	// report the error; only a sync that inspects the network again replaces or closes them.
 	unverified := map[string]managedDatabaseHostListenerConfig{}
+	peers := peerSnapshot{networks: map[string]network.Inspect{}, generation: m.peers.begin()}
 	for bindingID, config := range desired {
-		resolvedConfig, err := m.resolve(ctx, config)
+		resolvedConfig, inspected, err := m.resolve(ctx, config)
 		if err != nil {
 			statuses[bindingID] = listenerStatus(config, "error", err)
 			if errors.Is(err, errManagedDatabaseListenerUnverified) {
@@ -116,7 +125,9 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 			continue
 		}
 		resolved[bindingID] = resolvedConfig
+		peers.networks[resolvedConfig.networkID] = inspected
 	}
+	m.refreshPeers(peers)
 
 	for _, bindingIDs := range duplicateListenerAddresses(resolved) {
 		for _, bindingID := range bindingIDs {
@@ -343,28 +354,29 @@ func validManagedDatabaseSource(value string) bool {
 	}
 }
 
-func (m *managedDatabaseHostListenerManager) resolve(ctx context.Context, config managedDatabaseHostListenerConfig) (managedDatabaseHostListenerConfig, error) {
+// resolve checks a listener's network through dockerd and returns the config with its network id, and the inspect.
+func (m *managedDatabaseHostListenerManager) resolve(ctx context.Context, config managedDatabaseHostListenerConfig) (managedDatabaseHostListenerConfig, network.Inspect, error) {
 	inspectCtx, cancel := context.WithTimeout(ctx, managedDatabaseHostListenerInspectTimeout)
 	defer cancel()
 	inspected, err := m.inspectNetwork(inspectCtx, config.networkName)
 	if isNotFoundErr(err) {
-		return config, fmt.Errorf("managed database listener network %s does not exist: %w", config.networkName, err)
+		return config, inspected, fmt.Errorf("managed database listener network %s does not exist: %w", config.networkName, err)
 	}
 	if err != nil {
-		return config, fmt.Errorf("%w: %w", errManagedDatabaseListenerUnverified, err)
+		return config, inspected, fmt.Errorf("%w: %w", errManagedDatabaseListenerUnverified, err)
 	}
 	if inspected.Name != config.networkName || inspected.ID == "" || inspected.Driver != "bridge" || inspected.Ingress || inspected.ConfigOnly {
-		return config, errors.New("managed database listener network is not a dedicated bridge network")
+		return config, inspected, errors.New("managed database listener network is not a dedicated bridge network")
 	}
 	gateway, err := managedDatabaseNetworkGatewayAddress(inspected)
 	if err != nil {
-		return config, err
+		return config, inspected, err
 	}
 	if gateway != config.listenAddress {
-		return config, errors.New("managed database listener address is not the network gateway")
+		return config, inspected, errors.New("managed database listener address is not the network gateway")
 	}
 	config.networkID = inspected.ID
-	return config, nil
+	return config, inspected, nil
 }
 
 func managedDatabaseNetworkGatewayAddress(inspected network.Inspect) (netip.Addr, error) {
@@ -463,33 +475,18 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 		reject(linkRejectedUnknownPeer, "peer", remote.IP.String())
 		return
 	}
-	inspectCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseHostListenerInspectTimeout)
-	defer cancel()
-	inspected, err := m.inspectNetwork(inspectCtx, config.networkName)
-	if err != nil {
-		reject(linkRejectedNetworkUnverified, "error", err.Error())
-		return
+	address := remoteAddress.Unmap()
+	peer, known := m.peers.lookup(config.networkID, address)
+	if !known {
+		var reason string
+		var attrs []any
+		if peer, reason, attrs = m.verifyPeer(config, address); reason != "" {
+			reject(reason, attrs...)
+			return
+		}
 	}
-	if inspected.Name != config.networkName || inspected.ID != config.networkID {
-		reject(linkRejectedNetworkChanged)
-		return
-	}
-	if gateway, gatewayErr := managedDatabaseNetworkGatewayAddress(inspected); gatewayErr != nil || gateway != config.listenAddress {
-		reject(linkRejectedNetworkChanged)
-		return
-	}
-	containerID := managedDatabaseListenerPeerContainerID(inspected, remoteAddress.Unmap())
-	if containerID == "" {
-		reject(linkRejectedUnknownPeer, "peer", remoteAddress.Unmap().String())
-		return
-	}
-	containerInspect, err := m.inspectContainer(inspectCtx, containerID)
-	if err != nil {
-		reject(linkRejectedNetworkUnverified, "error", err.Error())
-		return
-	}
-	if !managedDatabaseListenerSourceAllowed(containerInspect, config.allowedSources) {
-		reject(linkRejectedSourceNotAllowed, "container", strings.TrimPrefix(containerInspect.Container.Name, "/"))
+	if !managedDatabaseListenerSourceAllowed(peer, config.allowedSources) {
+		reject(linkRejectedSourceNotAllowed, "container", peer.name)
 		return
 	}
 	// A re-key while the peer was checked moved the listener to another binding with the same network and sources:
@@ -500,6 +497,35 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 	if active {
 		m.openBinding(connection, current.bindingID, current.routeGeneration)
 	}
+}
+
+// verifyPeer asks dockerd which container has address on the listener's network, and remembers the answer (see
+// listenerPeers). A non-empty reason is the rejection.
+func (m *managedDatabaseHostListenerManager) verifyPeer(config managedDatabaseHostListenerConfig, address netip.Addr) (listenerPeer, string, []any) {
+	generation := m.peers.begin()
+	inspectCtx, cancel := context.WithTimeout(context.Background(), managedDatabaseHostListenerInspectTimeout)
+	defer cancel()
+	inspected, err := m.inspectNetwork(inspectCtx, config.networkName)
+	if err != nil {
+		return listenerPeer{}, linkRejectedNetworkUnverified, []any{"error", err.Error()}
+	}
+	if inspected.Name != config.networkName || inspected.ID != config.networkID {
+		return listenerPeer{}, linkRejectedNetworkChanged, nil
+	}
+	if gateway, gatewayErr := managedDatabaseNetworkGatewayAddress(inspected); gatewayErr != nil || gateway != config.listenAddress {
+		return listenerPeer{}, linkRejectedNetworkChanged, nil
+	}
+	containerID := managedDatabaseListenerPeerContainerID(inspected, address)
+	if containerID == "" {
+		return listenerPeer{}, linkRejectedUnknownPeer, []any{"peer", address.String()}
+	}
+	containerInspect, err := m.inspectContainer(inspectCtx, containerID)
+	if err != nil {
+		return listenerPeer{}, linkRejectedNetworkUnverified, []any{"error", err.Error()}
+	}
+	peer := listenerPeerFromInspect(containerID, containerInspect)
+	m.peers.store(config.networkID, address, peer, generation)
+	return peer, "", nil
 }
 
 // activeConnections returns the connections each binding's listener holds, by binding id.
@@ -531,9 +557,8 @@ func managedDatabaseListenerPeerContainerID(inspected network.Inspect, remote ne
 	return ""
 }
 
-func managedDatabaseListenerSourceAllowed(inspected mobyclient.ContainerInspectResult, allowed []string) bool {
-	name := strings.TrimPrefix(inspected.Container.Name, "/")
-	labels := inspected.Container.Config.Labels
+func managedDatabaseListenerSourceAllowed(peer listenerPeer, allowed []string) bool {
+	name, labels := peer.name, peer.labels
 	for _, selector := range allowed {
 		kind, identity, _ := strings.Cut(selector, ":")
 		switch kind {

@@ -256,6 +256,8 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	}
 	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		p.databaseListeners = newManagedDatabaseHostListenerManager(p)
+		// Runs for the life of the process: it keeps the listeners' address book (listenerPeers).
+		go p.databaseListeners.watchPeers(context.Background())
 		for bindingID, status := range p.databaseListeners.reconcile(ctx, p.relayGrants.get()) {
 			if status.State == "error" {
 				p.logger.Warn("managed database host listener restore deferred", "binding_id", bindingID, "error", status.Error)
