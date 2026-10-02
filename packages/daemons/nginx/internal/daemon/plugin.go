@@ -32,6 +32,7 @@ import (
 
 // NginxPlugin implements lifecycle.DaemonPlugin for the nginx daemon.
 type NginxPlugin struct {
+	handoverOnce                sync.Once
 	cfg                         *config.Config
 	baseCfg                     *lifecycle.BaseConfig
 	mgr                         *nginx.Manager
@@ -193,6 +194,28 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	}
 	p.availabilityLease = newAvailabilityLeaseCoordinator(baseCfg.StateDir, p.secureLinks, logger)
 	p.availabilityLease.start()
+	// Adopt the sockets the previous process kept before the slower start-up work (Pages storage, nginx
+	// checks): connections made during a restart wait in their backlog until this point (X1-9b).
+	removeStaleTemporarySockets(proxySecureLinkSocketDir)
+	removeStaleTemporarySockets(registrySecureLinkSocketDir)
+	if restored := p.secureLinkState.Get(); len(restored.Bindings) > 0 {
+		statuses, restoreErr := p.secureLinks.sync(restored)
+		if restoreErr != nil {
+			return fmt.Errorf("restore proxy secure-link listeners: %w", restoreErr)
+		}
+		if reconcileErr := p.reconcileRestoredSecureLinkPorts(restored, statuses); reconcileErr != nil {
+			return fmt.Errorf("reconcile restored proxy secure-link ports: %w", reconcileErr)
+		}
+		if saveErr := p.secureLinkState.Save(normalizeSourceBindings(restored, statuses)); saveErr != nil {
+			return fmt.Errorf("persist restored proxy secure-link listeners: %w", saveErr)
+		}
+	}
+	// Restoring adopted every proxy Secure Link socket the previous process
+	// kept for a binding it still has; the others were removed meanwhile.
+	if released := listenerkeep.ReleaseUnclaimed(proxySecureLinkSocketDir + "/"); len(released) > 0 {
+		logger.Info("released kept Secure Link sockets without a binding", "sockets", len(released))
+	}
+	p.registryListenersRelease = time.AfterFunc(registryListenerAdoptionWindow, p.releaseUnclaimedRegistryListeners)
 	p.pagesRuntime, err = pages.New(p.cfg.Nginx.PagesRoot, p.cfg.Nginx.ConfigDir, p.cfg.Nginx.CertsDir, p.mgr)
 	if err != nil {
 		logger.Warn("Gateway Pages runtime is unavailable; Pages capability is disabled", "error", err)
@@ -221,26 +244,6 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 			logger.Warn("Gateway Pages runtime configuration is unavailable; nginx was built without http_sub_module")
 		}
 	}
-	removeStaleTemporarySockets(proxySecureLinkSocketDir)
-	removeStaleTemporarySockets(registrySecureLinkSocketDir)
-	if restored := p.secureLinkState.Get(); len(restored.Bindings) > 0 {
-		statuses, restoreErr := p.secureLinks.sync(restored)
-		if restoreErr != nil {
-			return fmt.Errorf("restore proxy secure-link listeners: %w", restoreErr)
-		}
-		if reconcileErr := p.reconcileRestoredSecureLinkPorts(restored, statuses); reconcileErr != nil {
-			return fmt.Errorf("reconcile restored proxy secure-link ports: %w", reconcileErr)
-		}
-		if saveErr := p.secureLinkState.Save(normalizeSourceBindings(restored, statuses)); saveErr != nil {
-			return fmt.Errorf("persist restored proxy secure-link listeners: %w", saveErr)
-		}
-	}
-	// Restoring adopted every proxy Secure Link socket the previous process
-	// kept for a binding it still has; the others were removed meanwhile.
-	if released := listenerkeep.ReleaseUnclaimed(proxySecureLinkSocketDir + "/"); len(released) > 0 {
-		logger.Info("released kept Secure Link sockets without a binding", "sockets", len(released))
-	}
-	p.registryListenersRelease = time.AfterFunc(registryListenerAdoptionWindow, p.releaseUnclaimedRegistryListeners)
 
 	// Clean up leftover .tmp files from potential crashes
 	nginx.CleanTmpFiles(p.cfg.Nginx.ConfigDir)
