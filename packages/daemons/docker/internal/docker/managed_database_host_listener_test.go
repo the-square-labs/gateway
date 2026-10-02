@@ -72,9 +72,16 @@ type listenerHarness struct {
 
 	mu         sync.Mutex
 	inspectErr error
-	opened     []openedBinding
-	openedCh   chan struct{}
-	release    chan struct{}
+	// The container behind the peer address 127.0.0.1, and how often dockerd was asked.
+	containerErr      error
+	peerID            string
+	peerName          string
+	peerLabels        map[string]string
+	networkInspects   int
+	containerInspects int
+	opened            []openedBinding
+	openedCh          chan struct{}
+	release           chan struct{}
 }
 
 type openedBinding struct {
@@ -86,7 +93,8 @@ func newListenerHarness(t *testing.T) *listenerHarness {
 	t.Helper()
 	logger, output := newTestLogger()
 	h := &listenerHarness{t: t, plugin: &DockerPlugin{logger: logger}, log: output, port: freeLoopbackPort(t),
-		openedCh: make(chan struct{}, 1024), release: make(chan struct{})}
+		openedCh: make(chan struct{}, 1024), release: make(chan struct{}),
+		peerID: "container-1", peerName: "/app-blue", peerLabels: map[string]string{deploymentManagedLabel: "true", deploymentIDLabel: "deployment-1"}}
 	h.manager = &managedDatabaseHostListenerManager{
 		logger:     logger,
 		listeners:  map[string]*managedDatabaseHostListener{},
@@ -95,18 +103,28 @@ func newListenerHarness(t *testing.T) *listenerHarness {
 		inspectNetwork: func(context.Context, string) (network.Inspect, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
+			h.networkInspects++
 			if h.inspectErr != nil {
 				return network.Inspect{}, h.inspectErr
 			}
 			return network.Inspect{
 				Network: network.Network{Name: testListenerNetwork, ID: "network-1", Driver: "bridge",
 					IPAM: network.IPAM{Config: []network.IPAMConfig{{Gateway: netip.MustParseAddr("127.0.0.1")}}}},
-				Containers: map[string]network.EndpointResource{"container-1": {IPv4Address: netip.MustParsePrefix("127.0.0.1/8")}},
+				Containers: map[string]network.EndpointResource{h.peerID: {IPv4Address: netip.MustParsePrefix("127.0.0.1/8")}},
 			}, nil
 		},
-		inspectContainer: func(context.Context, string) (mobyclient.ContainerInspectResult, error) {
-			return mobyclient.ContainerInspectResult{Container: container.InspectResponse{Name: "/app-blue",
-				Config: &container.Config{Labels: map[string]string{deploymentManagedLabel: "true", deploymentIDLabel: "deployment-1"}}}}, nil
+		inspectContainer: func(_ context.Context, id string) (mobyclient.ContainerInspectResult, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.containerInspects++
+			if h.containerErr != nil {
+				return mobyclient.ContainerInspectResult{}, h.containerErr
+			}
+			if id != h.peerID {
+				return mobyclient.ContainerInspectResult{}, errors.New("no such container: " + id)
+			}
+			return mobyclient.ContainerInspectResult{Container: container.InspectResponse{ID: id, Name: h.peerName,
+				Config: &container.Config{Labels: h.peerLabels}}}, nil
 		},
 		openBinding: func(_ net.Conn, bindingID string, generation uint64) {
 			h.mu.Lock()
@@ -414,5 +432,36 @@ func TestLinkRejectionLogIsRateLimited(t *testing.T) {
 	}
 	if _, kept := rejections.counts(map[linkKey]struct{}{linkB: {}})[linkB]; kept {
 		t.Fatal("a forgotten link came back")
+	}
+}
+
+// An Availability disable narrows the link's source list to the survivor without a new route generation: the
+// listener stays with the connections of the sources it still allows, and only the others close.
+func TestManagedDatabaseHostListenerNarrowsItsSourcesInPlace(t *testing.T) {
+	h := newListenerHarness(t)
+	withSources := func(sources ...string) *pb.RelayGrantAssignment {
+		assignment := h.assignment(testListenerBindingA, 3, 64)
+		assignment.ManagedDatabaseListener.AllowedSources = sources
+		return assignment
+	}
+	h.reconcile(withSources("container:app-green", "deployment:deployment-1"))
+	listener := h.listener(testListenerBindingA)
+	held := h.dial()
+	h.waitOpened(1)
+
+	if status := h.reconcile(withSources("deployment:deployment-1"))[testListenerBindingA]; status.State != "ready" || h.listener(testListenerBindingA) != listener {
+		t.Fatalf("a narrowed source list replaced the listener: %+v", status)
+	}
+	requireOpen(t, held)
+	h.dial()
+	h.waitOpened(1)
+
+	if h.reconcile(withSources("container:app-green")); h.listener(testListenerBindingA) != listener {
+		t.Fatal("a new source list replaced the listener")
+	}
+	requireClosed(t, held)
+	requireClosed(t, h.dial())
+	if opened := len(h.openedBindings()); opened != 2 {
+		t.Fatalf("%d connections reached the binding, want 2", opened)
 	}
 }

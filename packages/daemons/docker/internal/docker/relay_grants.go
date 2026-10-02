@@ -58,7 +58,11 @@ func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
 		return store, nil
 	}
 	store.current = command
-	store.restoredUntil = time.Now().Add(relayGrantRestoreHold)
+	// After a restart announced to the relays (B-13) they hold this daemon's registrations for the next process: it
+	// takes them over at once, with the grants they were made with, instead of leaving them waiting for Gateway.
+	if !consumeRestartMarker(stateDir, time.Now()) {
+		store.restoredUntil = time.Now().Add(relayGrantRestoreHold)
+	}
 	return store, nil
 }
 

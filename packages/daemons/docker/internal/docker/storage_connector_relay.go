@@ -43,6 +43,14 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 		return fmt.Errorf("set storage connector relay directory ownership: %w", err)
 	}
 	path := filepath.Join(directory, storageConnectorSocketName)
+	// The socket the previous process handed over keeps the connections the connectors made meanwhile.
+	if listener, keptName := adoptKeptUnixListener(path); listener != nil {
+		p.storageConnectorListener = listener
+		p.storageConnectorSocket = path
+		p.storageConnectorKept.set(listener, keptName)
+		go p.serveStorageConnectorRelay(listener)
+		return nil
+	}
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
 			return errors.New("refusing to replace non-socket storage connector relay path")
@@ -67,6 +75,7 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 	}
 	p.storageConnectorListener = listener
 	p.storageConnectorSocket = path
+	p.storageConnectorKept.set(listener, keepUnixListener(listener, path))
 	go p.serveStorageConnectorRelay(listener)
 	return nil
 }
@@ -116,7 +125,10 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 		tunnel.close()
 		return
 	}
-	tunnel.bridge(p.linkTraffic.carry(link, connection))
+	// Tracked so a restart lets the request in flight finish (link_listener_handover.go).
+	flow, done := p.linkFlows.track(connection)
+	defer done()
+	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 
 func storageConnectorRelayRefusal(reason string, err error) string {

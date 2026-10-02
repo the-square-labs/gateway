@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"runtime"
 	"sort"
@@ -158,11 +159,13 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 
 const (
 	// A Gateway that comes back (restart, update, outage) hears from every
-	// node within this long. Availability lease reconciliation after a
-	// takeover waits for the voters' reports (stand run ha18/b: 33 s with a
-	// 60 s cap), and an attempt against a relay whose Gateway upstream is down
-	// fails at the relay without reaching the Gateway.
-	controlSessionMaxReconnectDelay = 15 * time.Second
+	// node within 15 s: the cap before jitter (connector.Jitter, up to 1.5
+	// times). Availability lease reconciliation after a takeover waits for the
+	// voters' reports (stand run ha18/b: 33 s with a 60 s cap), and an attempt
+	// against a relay whose Gateway upstream is down fails at the relay
+	// without reaching the Gateway. The transport's own retry
+	// (connector.MaxBackoff) has the same cap.
+	controlSessionMaxReconnectDelay = connector.MaxBackoff
 	// A session shorter than this that never received a command counts as a
 	// failed attempt for backoff purposes.
 	controlSessionQuickFailure      = 10 * time.Second
@@ -172,20 +175,27 @@ const (
 
 // controlSessionBackoff grows the reconnect delay while sessions keep failing
 // quickly without the gateway ever sending a command, and resets once a
-// session was accepted.
+// session was accepted. Every delay is jittered: the nodes that lost the same
+// Gateway or relay come back spread out, not in one burst.
 type controlSessionBackoff struct {
 	failures int
 	rejected int
+	// random draws the jitter from [0, 1); nil is math/rand.
+	random func() float64
 }
 
 func (b *controlSessionBackoff) next(receivedCommand bool, lasted time.Duration) time.Duration {
 	b.rejected = 0
+	random := b.random
+	if random == nil {
+		random = rand.Float64
+	}
 	if receivedCommand || lasted >= controlSessionQuickFailure {
 		b.failures = 0
-		return controlSessionReconnectDelay
+		return connector.Jitter(controlSessionReconnectDelay, random)
 	}
 	b.failures++
-	return exponentialDelay(controlSessionReconnectDelay, b.failures-1, controlSessionMaxReconnectDelay)
+	return connector.Jitter(exponentialDelay(controlSessionReconnectDelay, b.failures-1, controlSessionMaxReconnectDelay), random)
 }
 
 func (b *controlSessionBackoff) nextRejected() time.Duration {

@@ -605,6 +605,13 @@ func (p *DockerPlugin) startRelayListener() error {
 		return err
 	}
 	path := databaseTunnelSocketPath(p.cfg.StateDir)
+	// The socket the previous process handed over keeps the connections the sidecars made meanwhile.
+	if listener, keptName := adoptKeptUnixListener(path); listener != nil {
+		p.relayListener = listener
+		p.relayListenerKept.set(listener, keptName)
+		go p.acceptRelayLoop(listener)
+		return nil
+	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -617,6 +624,7 @@ func (p *DockerPlugin) startRelayListener() error {
 		return err
 	}
 	p.relayListener = listener
+	p.relayListenerKept.set(listener, keepUnixListener(listener, path))
 	go p.acceptRelayLoop(listener)
 	return nil
 }
@@ -666,13 +674,27 @@ func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID
 			"error", relayRefusalMessage(err))
 		return
 	}
-	tunnel.bridge(p.linkTraffic.carry(linkKey{kind: linkKindManagedDatabaseBinding, id: bindingID}, connection))
+	// Tracked so a restart lets the request in flight finish (link_listener_handover.go).
+	flow, done := p.linkFlows.track(connection)
+	defer done()
+	tunnel.bridge(p.linkTraffic.carry(linkKey{kind: linkKindManagedDatabaseBinding, id: bindingID}, flow))
 }
 
 // openRelaySource opens a source tunnel for assignment on the first of its relay candidates (in load and latency
 // order) that accepts it. When none does, the error is a capacity refusal if any relay gave one (the relay's own
-// reason), else the last refusal.
+// reason), else the last refusal. Right after this process started, a connection that finds no relay lane waits for
+// the first lanes (relayLaneStartupWait): the link sockets the previous process handed over are served before the
+// lanes are up.
 func (p *DockerPlugin) openRelaySource(assignment *pb.RelayGrantAssignment) (*relaySourceTunnel, error) {
+	for {
+		tunnel, err := p.openRelaySourceOnce(assignment)
+		if err == nil || !errors.Is(err, errRelayLaneUnavailable) || !p.waitForRelayLanes() {
+			return tunnel, err
+		}
+	}
+}
+
+func (p *DockerPlugin) openRelaySourceOnce(assignment *pb.RelayGrantAssignment) (*relaySourceTunnel, error) {
 	candidates := relaybridge.PoolCandidates(assignment, false)
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.GetGrant()}}
