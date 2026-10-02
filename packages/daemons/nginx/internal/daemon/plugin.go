@@ -33,6 +33,7 @@ import (
 // NginxPlugin implements lifecycle.DaemonPlugin for the nginx daemon.
 type NginxPlugin struct {
 	handoverOnce                sync.Once
+	shutdownOnce                sync.Once
 	cfg                         *config.Config
 	baseCfg                     *lifecycle.BaseConfig
 	mgr                         *nginx.Manager
@@ -461,12 +462,15 @@ func (p *NginxPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 	return report
 }
 
-// Shutdown stops the availability-lease coordinator's background loops.
+// Shutdown stops the availability-lease coordinator's background loops. A
+// stop that does not wait for the lifecycle (Daemon.Run) calls it too.
 func (p *NginxPlugin) Shutdown() {
-	if p.availabilityLease != nil {
-		p.availabilityLease.close()
-	}
-	p.ingressHealth.close()
+	p.shutdownOnce.Do(func() {
+		if p.availabilityLease != nil {
+			p.availabilityLease.close()
+		}
+		p.ingressHealth.close()
+	})
 }
 
 func (p *NginxPlugin) CollectStats() *pb.StatsReport {
