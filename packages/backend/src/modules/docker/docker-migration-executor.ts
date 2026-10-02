@@ -30,4 +30,7 @@ export class DockerMigrationExecutor {
   async restoreSourceRestartPolicy(_row: MigrationRow): Promise<void> {
     return commercialModuleUnavailable();
   }
+  async repairMigratedVolumeRecords(): Promise<void> {
+    return commercialModuleUnavailable();
+  }
 }

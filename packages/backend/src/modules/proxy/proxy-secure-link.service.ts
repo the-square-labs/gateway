@@ -1403,6 +1403,10 @@ export class ProxySecureLinkService {
       const retained =
         !isManagedStorageUpstream(binding.upstreamKind) &&
         (await this.relayPolicy.hasProxySecureLinkEndpoint?.(binding.id, binding.dockerNodeId)) === true;
+      // A link re-provisioned on another node (its target migrated) leaves a binding on the node it reached before.
+      const formerNodeId = isManagedStorageUpstream(binding.upstreamKind)
+        ? null
+        : ((await this.relayPolicy.proxySecureLinkTargetNodeId?.(binding.id)) ?? null);
       try {
         if (isManagedStorageUpstream(binding.upstreamKind)) {
           if (!binding.managedStorageId) throw new Error('Managed storage Secure Link is missing its storage identity');
@@ -1442,6 +1446,9 @@ export class ProxySecureLinkService {
             )
           )
           .returning();
+        if (formerNodeId && formerNodeId !== binding.dockerNodeId) {
+          await this.releaseFormerTargetNode(formerNodeId, binding.id);
+        }
         if (active) {
           this.emitAdditionalState(host, active, 'active');
           return active;
@@ -1660,14 +1667,24 @@ export class ProxySecureLinkService {
       host.dockerContainerPort !== target.applicationPort ||
       host.dockerHostPort !== target.targetPort;
     const cutoverCommitted = host.secureLinkMigratedAt != null;
+    // The relay endpoint names the node the link reaches. When the Route's target runs on another node now (its
+    // container or deployment migrated, or the Route names the same container on another node), the link follows it
+    // even though nothing else about the target changed.
+    const linkedNodeId = cutoverCommitted
+      ? ((await this.relayPolicy.proxySecureLinkTargetNodeId?.(host.id)) ?? null)
+      : null;
+    const moved = linkedNodeId !== null && linkedNodeId !== target.nodeId;
     // Another caller may already have prepared and probed this exact generation
     // and be between prepare() and commitCutover(). Keep that durable hand-off
     // intact instead of reverting it to provisioning from a second reconciler.
     if (!cutoverCommitted && host.secureLinkStatus === 'cutover_ready' && !changed) return host;
     const activeUpdate = cutoverCommitted && (changed || host.secureLinkStatus === 'updating');
     if (cutoverCommitted && host.secureLinkStatus === 'active' && !changed) {
-      if (!force) return host;
+      if (!force && !moved) return host;
       try {
+        // A moved link is re-pointed in place: the target node gets its binding first, then the relay endpoint
+        // moves to it (the former node's grant is withdrawn), and the source listener and Nginx config stay as
+        // they are.
         await this.syncTargetNode(target.nodeId, undefined, host.id);
         await this.relayPolicy.ensureProxySecureLink(host.id, relaySources(sources), target.nodeId);
         await this.syncSourceNodes(sources);
@@ -1678,6 +1695,7 @@ export class ProxySecureLinkService {
           timeoutSeconds: 10,
         });
         if (!probe.httpStatus) throw new Error(probe.error || 'Secure Link end-to-end probe failed');
+        if (moved) await this.releaseFormerTargetNode(linkedNodeId!, host.id);
         const [refreshed] = await this.db
           .update(proxyHosts)
           .set({ secureLinkLastError: null, updatedAt: new Date() })
@@ -1729,6 +1747,7 @@ export class ProxySecureLinkService {
         timeoutSeconds: 10,
       });
       if (!probe.httpStatus) throw new Error(probe.error || 'Secure Link end-to-end probe failed');
+      if (moved) await this.releaseFormerTargetNode(linkedNodeId!, host.id);
       await this.db
         .update(proxyHosts)
         .set({ secureLinkStatus: 'cutover_ready', secureLinkLastError: null, updatedAt: new Date() })
@@ -1909,6 +1928,34 @@ export class ProxySecureLinkService {
 
   async reconcileExisting(host: ProxyHostRow): Promise<ProxyHostRow> {
     return this.prepare(host, false, true, 'reconciliation');
+  }
+
+  /**
+   * Whether a committed Route link still reaches another Docker node than the one its target runs on: the target
+   * migrated, or the Route was pointed at the same container on another node. The reconciliation re-points it.
+   */
+  async targetMoved(host: ProxyHostRow): Promise<boolean> {
+    if (host.secureLinkGeneration < 1 || !host.secureLinkMigratedAt || !isDockerUpstream(host.upstreamKind)) {
+      return false;
+    }
+    const linkedNodeId = await this.relayPolicy.proxySecureLinkTargetNodeId?.(host.id);
+    if (!linkedNodeId) return false;
+    const target = await this.resolveTarget(host).catch(() => null);
+    return target !== null && target.nodeId !== linkedNodeId;
+  }
+
+  /**
+   * Drops the connector binding a link left on the Docker node it reached before it moved. A former node that cannot
+   * be reached now drops it when it reconnects and its target bindings are reconciled.
+   */
+  private async releaseFormerTargetNode(nodeId: string, linkId: string): Promise<void> {
+    await this.syncTargetNode(nodeId).catch((error) =>
+      logger.warn('A moved Secure Link keeps a binding on its former Docker node until that node reconciles', {
+        linkId,
+        nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
   }
 
   async reconcileTargetNode(nodeId: string): Promise<void> {

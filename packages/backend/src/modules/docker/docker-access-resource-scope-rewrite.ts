@@ -38,3 +38,55 @@ export async function rewritePersistedDockerResourceScopes(
     (scopes) => rewriteDockerResourceScopes(scopes, fromResourceId, toResourceId)
   );
 }
+
+const DOCKER_VOLUME_SCOPE_BASES = RESOURCE_SCOPABLE.filter((base) => base.startsWith('docker:volumes:'));
+
+function dockerVolumeScopes(nodeId: string, name: string): string[] {
+  return DOCKER_VOLUME_SCOPE_BASES.map((base) => `${base}:${nodeId}/${name}`);
+}
+
+/** `scopes` with the grants on volume `name` of `fromNodeId` granted on the same volume of `toNodeId` as well. */
+export function copyDockerVolumeScopes(
+  scopes: readonly string[],
+  fromNodeId: string,
+  toNodeId: string,
+  name: string
+): string[] {
+  const from = `${fromNodeId}/${name}`;
+  const copies = scopes.flatMap((scope) => {
+    const base = extractBaseScope(scope);
+    return DOCKER_VOLUME_SCOPE_BASES.includes(base) && scope === `${base}:${from}`
+      ? [`${base}:${toNodeId}/${name}`]
+      : [];
+  });
+  return copies.length ? [...new Set([...scopes, ...copies])].sort() : [...scopes];
+}
+
+/** `scopes` without the grants on volume `name` of `nodeId`. */
+export function dropDockerVolumeScopes(scopes: readonly string[], nodeId: string, name: string): string[] {
+  const named = new Set(dockerVolumeScopes(nodeId, name));
+  return scopes.filter((scope) => !named.has(scope));
+}
+
+/** Grants on a migrated volume also apply to its copy on the target node. */
+export async function copyPersistedDockerVolumeScopes(
+  tx: DrizzleExecutor,
+  fromNodeId: string,
+  toNodeId: string,
+  name: string
+): Promise<void> {
+  await rewritePersistedScopes(tx, dockerVolumeScopes(fromNodeId, name), (scopes) =>
+    copyDockerVolumeScopes(scopes, fromNodeId, toNodeId, name)
+  );
+}
+
+/** Drops the grants on a volume a migration removed from its node. */
+export async function dropPersistedDockerVolumeScopes(
+  tx: DrizzleExecutor,
+  nodeId: string,
+  name: string
+): Promise<void> {
+  await rewritePersistedScopes(tx, dockerVolumeScopes(nodeId, name), (scopes) =>
+    dropDockerVolumeScopes(scopes, nodeId, name)
+  );
+}
