@@ -30,6 +30,8 @@ type fakeEngine struct {
 	hung       bool
 	stopFails  bool
 	listFails  bool
+	// beforeStart runs before every start, as if Docker changed meanwhile.
+	beforeStart func(id string)
 }
 
 var errHung = errors.New("dockerd does not answer")
@@ -71,6 +73,12 @@ func (e *fakeEngine) Inspect(_ context.Context, id string) (Container, bool, err
 func (e *fakeEngine) Start(_ context.Context, id string) error {
 	if e.hung {
 		return errHung
+	}
+	if e.beforeStart != nil {
+		e.beforeStart(id)
+	}
+	if e.containers[id] == nil {
+		return fmt.Errorf("no such container: %s", id)
 	}
 	record, ok := e.host.fence.records[id]
 	if !ok || record.Stale(e.w.hostNow(e.host)) {

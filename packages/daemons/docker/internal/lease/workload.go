@@ -448,11 +448,15 @@ func (r *Runtime) startLocked(wl *workload, key availabilitylease.Key, serve, co
 			return nil
 		}
 		var failed []string
+		gone := false
 		for _, c := range containers {
 			callCtx, cancel := context.WithTimeout(ctx, dockerCallWait*2)
 			if err := r.opts.Engine.Start(callCtx, c.ID); err != nil {
 				failed = append(failed, c.ID)
 				r.logger.Warn("availability lease holder could not start its container", "policy_id", key.PolicyID, "container_id", c.ID, "error", err)
+				if _, found, inspectErr := r.opts.Engine.Inspect(callCtx, c.ID); inspectErr == nil && !found {
+					gone = true
+				}
 			}
 			cancel()
 		}
@@ -461,6 +465,13 @@ func (r *Runtime) startLocked(wl *workload, key availabilitylease.Key, serve, co
 			r.opts.Placements.MarkServing(key.PolicyID, true)
 		}
 		return func() {
+			if gone {
+				// The view listed a container that was removed since (its placement was prepared again): the next
+				// step starts the copy the node has now. Serving the old view would release the slot for a
+				// container that no longer exists and leave the new one never started.
+				r.logger.Info("availability lease holder found its container replaced; starting the current copy", "policy_id", key.PolicyID, "slot", key.Slot)
+				return
+			}
 			adoptServingLocked(wl, serve, r.opts.Clock.Now())
 			r.logger.Info("availability lease holder started its workload", "policy_id", key.PolicyID, "slot", key.Slot, "failed", len(failed))
 		}
