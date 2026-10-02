@@ -1363,8 +1363,12 @@ export function createControlHandlers(deps: GrpcServerDeps) {
           details,
         });
       };
-      const trackDisconnect = (details: Record<string, unknown>) =>
-        backgroundWrites
+      let disconnectTracked = false;
+      const trackDisconnect = (details: Record<string, unknown>) => {
+        // A stream reports its end once, whichever of end, error or cancelled comes first.
+        if (disconnectTracked) return;
+        disconnectTracked = true;
+        void backgroundWrites
           .track(handleDisconnect(details))
           .catch((error) =>
             logger.warn('Failed to record a node stream disconnect', {
@@ -1373,22 +1377,30 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             })
           )
           .finally(releaseShutdownSource);
+      };
 
       stream.on('end', () => {
         closed = true;
         if (nodeId) logger.info('Node stream ended', { nodeId });
-        void trackDisconnect({ reason: 'stream_ended' });
+        trackDisconnect({ reason: 'stream_ended' });
       });
 
       stream.on('error', (err) => {
         closed = true;
         if (nodeId) logger.warn('Node stream error', { nodeId, error: err.message });
-        void trackDisconnect({ reason: 'error', error: err.message });
+        trackDisconnect({ reason: 'error', error: err.message });
       });
 
-      // A cancelled or destroyed stream emits neither of the above; 'end' and 'error' come before
-      // 'close', so their tracked work is registered by the time the source is released.
-      stream.on('cancelled', () => setImmediate(releaseShutdownSource));
+      // A stream the gRPC server cut (its force stop at shutdown) is only cancelled and emits neither of the above.
+      // The node is gone all the same: commands still waiting for its answer fail now instead of at their timeout,
+      // which held the module drains of a stopping Gateway until its hard deadline.
+      stream.on('cancelled', () => {
+        closed = true;
+        if (nodeId) logger.info('Node stream cancelled', { nodeId });
+        trackDisconnect({ reason: 'cancelled' });
+      });
+      // 'end', 'error' and 'cancelled' come before 'close', so their tracked work is registered by the time the
+      // source is released.
       stream.on('close', () => setImmediate(releaseShutdownSource));
     },
   };
