@@ -46,8 +46,16 @@ type workload struct {
 	release       *releaseIntent
 	retryAt       time.Duration
 	cooldownUntil time.Duration
-	health        healthTracker
-	serveIDs      map[string]bool
+	// healthReleases counts the health releases since the copy last stayed
+	// up for healthStableAfter (the cooldown backoff).
+	healthReleases int
+	// healthRequest is a release Gateway asked for (the copy fails its HTTP
+	// health check), with when it was asked; served by the next step that
+	// finds the copy serving under the lease.
+	healthRequest   string
+	healthRequestAt time.Duration
+	health          healthTracker
+	serveIDs        map[string]bool
 	// retainChecked: the copy was found running (or released) once after
 	// the lease closed and this node was confirmed retained.
 	retainChecked bool
@@ -98,6 +106,9 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 	fresh := r.snapshot.at >= wl.lastOpDone
 	bootstrap := r.bootstrapPendingLocked(manifest)
 	held := status.Role == availabilitylease.RoleHolding || status.Role == availabilitylease.RoleRecovering
+	if wl.healthRequest != "" && (status.Role != availabilitylease.RoleHolding || now-wl.healthRequestAt > healthRequestTTL) {
+		wl.healthRequest = ""
+	}
 	if held && status.Key.Slot >= manifest.Slots && wl.release == nil {
 		// Scale-down: the slot left the manifest (surge lowered, replicas
 		// reduced). Acceptors refuse its renewals, so the holder stops,
@@ -283,16 +294,58 @@ func (r *Runtime) serveLocked(wl *workload, status availabilitylease.HolderStatu
 		adoptServingLocked(wl, serve, now)
 		return
 	}
+	if wl.healthRequest != "" {
+		issue := wl.healthRequest
+		wl.healthRequest = ""
+		r.releaseUnhealthyLocked(wl, status, containers, now, issue)
+		return
+	}
 	if r.sampleHealthLocked(wl, serve, now) {
-		wl.release = &releaseIntent{reason: "unhealthy"}
-		wl.cooldownUntil = now + healthCooldown
-		r.logger.Warn("availability lease holder is unhealthy; releasing the lease", "policy_id", wl.policyID, "issue", wl.health.lastIssue)
-		r.stopLocked(wl, status, containers, purposeRelease)
+		r.releaseUnhealthyLocked(wl, status, containers, now, wl.health.lastIssue)
 		return
 	}
 	if !wl.endpointsOn && r.readyLocked(wl, serve, now) {
 		r.setEndpointsLocked(wl, true)
 	}
+}
+
+// releaseUnhealthyLocked is the health release (D6): the copy stops, the slot
+// is released for the next candidate by rank, and this node is no candidate
+// for the backoff cooldown, after which it takes the slot back itself when
+// nobody else did (a restart in place).
+func (r *Runtime) releaseUnhealthyLocked(wl *workload, status availabilitylease.HolderStatus, containers []Container, now time.Duration, issue string) {
+	cooldown := healthCooldown(wl, now)
+	wl.release = &releaseIntent{reason: "unhealthy"}
+	wl.cooldownUntil = now + cooldown
+	r.logger.Warn("availability lease holder is unhealthy; releasing the lease", "policy_id", wl.policyID, "issue", issue, "cooldown", cooldown)
+	r.stopLocked(wl, status, containers, purposeRelease)
+}
+
+// ReleaseUnhealthy asks the holder of a policy's slot on this node to release
+// it for health, as its own health watch does after two bad samples (D6):
+// Gateway found the copy failing its HTTP health check while another copy
+// serves. False when this node does not serve the policy under a lease now.
+func (r *Runtime) ReleaseUnhealthy(policyID, issue string) bool {
+	holding := false
+	for _, status := range r.node.Holders() {
+		if status.Key.PolicyID == policyID && status.Role == availabilitylease.RoleHolding {
+			holding = true
+		}
+	}
+	if !holding {
+		return false
+	}
+	r.mu.Lock()
+	wl := r.workloads[policyID]
+	accepted := wl != nil && wl.phase == phaseServing && wl.release == nil
+	if accepted {
+		wl.healthRequest, wl.healthRequestAt = issue, r.opts.Clock.Now()
+	}
+	r.mu.Unlock()
+	if accepted {
+		r.kick()
+	}
+	return accepted
 }
 
 // disarmRetainedLocked removes the watchdog deadline records of this node's

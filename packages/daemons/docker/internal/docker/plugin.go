@@ -80,6 +80,9 @@ type DockerPlugin struct {
 	// (D6); memberProbe replaces its probe in tests.
 	memberReadiness *memberReadiness
 	memberProbe     func(ctx context.Context, links []string, cheap bool) memberProbeResult
+	// availabilityHealth probes the HTTP health checks Gateway hands over for
+	// the Availability copies on this node and holds a copy Gateway took out.
+	availabilityHealth *availabilityHealth
 	// relayTunnelOutcomes logs failing incoming relay tunnels per endpoint owner and state change (L-1).
 	relayTunnelOutcomes logepisode.Tracker
 	// linkRejections logs and counts the connections of database bindings and storage links the node or the relays
@@ -374,6 +377,9 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if availability != nil && p.lease == nil {
 		p.initAvailabilityLease()
 	}
+	if availability != nil && p.availabilityHealth == nil {
+		p.initAvailabilityHealth()
+	}
 	if p.lease == nil {
 		go alignInstalledWatchdogChannel(p.logger, p.cfg.Docker.LeaseWatchdogReleasesURL, p.cfg.Docker.LeaseWatchdogArtifactBaseURL)
 	}
@@ -505,6 +511,9 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		values := []string{"docker_deployments_v1", "docker_gpu_v1", dockerMigrationCapability, "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1", "docker_duplicate_label_filter_v1", "docker_duplicate_env_removal_v1"}
 		if p.cfg.Docker.Mode == "" && p.availability != nil {
 			values = append(values, dockerAvailabilityCapability)
+		}
+		if p.availabilityHealth != nil {
+			values = append(values, availabilityHTTPHealthCapability)
 		}
 		// Advertised only with a live watchdog (A12.4); the lease report's
 		// watchdog_ready carries later changes within the session.

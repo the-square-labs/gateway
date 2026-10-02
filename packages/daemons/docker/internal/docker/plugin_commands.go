@@ -177,6 +177,10 @@ func (p *DockerPlugin) handleAvailabilityCommand(cmd *pb.DockerAvailabilityComma
 		result.Error = "docker availability state manager is not initialized"
 		return
 	}
+	if cmd.GetAction() == availabilityActionHealth {
+		p.handleAvailabilityHealth(cmd, result)
+		return
+	}
 	detail, err := p.availability.apply(cmd)
 	if err != nil {
 		result.Success = false
