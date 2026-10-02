@@ -11,16 +11,43 @@ import (
 // container decides; missing outranks stopped, which outranks restarting,
 // which outranks a failing health check; a growing restart count is a loop.
 // The daemon samples every 5 s and releases after 2 bad samples in a row.
+// Gateway can ask for the same release when the copy fails its HTTP health
+// check (ReleaseUnhealthy).
 const (
 	healthSampleEvery  = 5 * time.Second
 	healthBadThreshold = 2
-	// healthCooldown keeps a node that released for health from
-	// re-acquiring at once: its own leftover lease counts as free for it.
-	healthCooldown = 60 * time.Second
+	// A node that released for health is not a candidate again for a
+	// cooldown that doubles with every release of a copy that did not stay
+	// up for healthStableAfter, from healthCooldownBase to healthCooldownMax:
+	// a crash loop slows down, a single failure is healed in about 25 s. The
+	// protocol keeps the node from taking its own key back for
+	// SuccessorWindow after the release anyway, so every other ready
+	// candidate takes over first (by rank) even with the base cooldown.
+	healthCooldownBase = 10 * time.Second
+	healthCooldownMax  = 5 * time.Minute
+	healthStableAfter  = 5 * time.Minute
+	// healthRequestTTL drops a release request from Gateway that could not
+	// be acted on (the copy was busy or not serving) instead of applying it
+	// to a later copy.
+	healthRequestTTL = 30 * time.Second
 	// stableBeforeReady is how long a container without a health check runs
 	// before its endpoint opens.
 	stableBeforeReady = 3 * time.Second
 )
+
+// healthCooldown is the cooldown of the next health release of wl at now,
+// and records that release.
+func healthCooldown(wl *workload, now time.Duration) time.Duration {
+	if wl.healthReleases > 0 && now-wl.servingSince >= healthStableAfter {
+		wl.healthReleases = 0
+	}
+	cooldown := healthCooldownBase
+	for i := 0; i < wl.healthReleases && cooldown < healthCooldownMax; i++ {
+		cooldown *= 2
+	}
+	wl.healthReleases++
+	return min(cooldown, healthCooldownMax)
+}
 
 const (
 	issueUnhealthy  = "unhealthy"
