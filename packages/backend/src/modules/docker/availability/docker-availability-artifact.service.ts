@@ -35,7 +35,7 @@ export declare class DockerAvailabilityArtifactService {
     dispatch: NodeDispatchService
   );
   releaseObsoletePins(policyId: string): Promise<void>;
-  collectUnusedArtifacts(): Promise<void>;
+  collectUnusedArtifacts(now?: number): Promise<void>;
   preflight(resource: DockerAvailabilityResolvedResource): Promise<void>;
   prepare(input: {
     policyId: string;

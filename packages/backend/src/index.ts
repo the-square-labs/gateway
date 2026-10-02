@@ -252,6 +252,7 @@ async function main() {
         availabilityLease: container.resolve(AvailabilityLeaseService),
       }
     );
+    registry.startAcceptingConnections();
     const relayFinalization = await container.resolve(RelayStartupFinalizerService).finalize();
     if (relayFinalization.status === 'degraded') {
       logger.error('Gateway relay startup finalization did not reach readiness', relayFinalization);

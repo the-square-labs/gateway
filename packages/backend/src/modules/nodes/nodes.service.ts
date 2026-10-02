@@ -250,7 +250,8 @@ export class NodesService {
         ...row,
         publicServiceAddresses: row.type === 'nginx' ? getReportedPublicNodeAddresses(row) : undefined,
         effectiveServiceAddress: getEffectiveServiceAddressForNode(row),
-        // A stream that closed moments ago keeps its status through the reconnect grace, as the DB does.
+        // A stream that closed moments ago keeps its status through the reconnect grace, as the DB does, and so does a
+        // node that has not reconnected yet to a Gateway that started moments ago.
         status:
           row.status === 'online' && !isConnected && !this.registry.isReconnecting(row.id) ? 'offline' : row.status,
         isConnected,
