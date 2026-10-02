@@ -1319,6 +1319,7 @@ describe('UpdateService interrupted updates', () => {
     const { service, audit } = serviceWith(db);
     const runtime = {
       drainInstance: vi.fn().mockRejectedValueOnce(new Error('node is not connected')).mockResolvedValue(undefined),
+      forceDisconnectInstance: vi.fn(),
       prepareWorkerUpdate: vi.fn(),
       dispatchWorkerUpdate: vi.fn(),
       prepareSupervisorUpdate: vi.fn(),
@@ -1357,6 +1358,7 @@ describe('UpdateService interrupted updates', () => {
     const { service } = serviceWith(db);
     const runtime = {
       drainInstance: vi.fn().mockResolvedValue(undefined),
+      forceDisconnectInstance: vi.fn(),
       prepareWorkerUpdate: vi.fn(),
       dispatchWorkerUpdate: vi.fn(),
       prepareSupervisorUpdate: vi.fn(),
@@ -1405,6 +1407,7 @@ describe('UpdateService interrupted updates', () => {
     const { service } = serviceWith(db);
     const runtime = {
       drainInstance: vi.fn().mockResolvedValue(undefined),
+      forceDisconnectInstance: vi.fn().mockResolvedValue(undefined),
       prepareWorkerUpdate: vi.fn().mockResolvedValue({}),
       dispatchWorkerUpdate: vi.fn().mockResolvedValue(undefined),
       prepareSupervisorUpdate: vi.fn().mockResolvedValue({}),
@@ -1441,6 +1444,26 @@ describe('UpdateService interrupted updates', () => {
     expect(events).toEqual(['lease peers settled', 'drain', 'worker update', 'relay votes again', 'resume']);
     expect(awaitLeasePeers).toHaveBeenCalledWith('remote-1', expect.any(AbortSignal));
     expect(awaitLeaseSettled).toHaveBeenCalledWith('remote-1', expect.any(Number), expect.any(AbortSignal));
+  });
+
+  it('disconnects the streams left after the drain grace and goes on instead of pausing', async () => {
+    const { service, runtime, verify } = rolloutHarness();
+    verify.mockResolvedValue(undefined);
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    vi.spyOn(internals, 'promoteRelayConnectorImages').mockResolvedValue(undefined);
+    const waitForDrain = vi.spyOn(internals, 'waitForRelayInstanceDrain');
+    // A database pool keeps its streams open through the whole grace and a little after the disconnect.
+    waitForDrain.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+
+    await service.performRelayUpdate('v2.4.3', {} as never, 'admin-1');
+
+    expect(runtime.forceDisconnectInstance).toHaveBeenCalledWith('remote-1', 'admin-1');
+    expect(runtime.forceDisconnectInstance.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.dispatchWorkerUpdate.mock.invocationCallOrder[0]
+    );
+    // Resumed after its update: the run completed rather than pausing with the relay drained.
+    expect(runtime.drainInstance).toHaveBeenLastCalledWith('remote-1', 'admin-1', false);
   });
 
   // Regression: a run that failed without a Gateway restart left the relay drained.
@@ -1527,6 +1550,7 @@ describe('UpdateService interrupted updates', () => {
     const { service } = serviceWith(db);
     service.setRelayPoolUpdateRuntime({
       drainInstance: vi.fn(),
+      forceDisconnectInstance: vi.fn(),
       prepareWorkerUpdate: vi.fn(),
       dispatchWorkerUpdate: vi.fn(),
       prepareSupervisorUpdate: vi.fn(),

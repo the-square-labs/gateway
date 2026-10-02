@@ -1777,11 +1777,16 @@ export class RelayPoolService {
     }
   }
 
-  async forceDisconnectInstance(instanceId: string, userId: string) {
-    return this.withDrainAction(instanceId, () => this.forceDisconnectDrainingInstance(instanceId, userId));
+  /** `options.update`: a Relay Pool update whose drain grace ended; it waits for an in-flight drain action. */
+  async forceDisconnectInstance(instanceId: string, userId: string | null, options: { update?: boolean } = {}) {
+    return this.withDrainAction(
+      instanceId,
+      () => this.forceDisconnectDrainingInstance(instanceId, userId, options.update === true),
+      { wait: options.update === true }
+    );
   }
 
-  private async forceDisconnectDrainingInstance(instanceId: string, userId: string) {
+  private async forceDisconnectDrainingInstance(instanceId: string, userId: string | null, update: boolean) {
     const [instance] = await this.db.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1);
     if (!instance) throw new AppError(404, 'RELAY_INSTANCE_NOT_FOUND', 'Relay instance not found');
     if (instance.kind === 'local')
@@ -1800,15 +1805,27 @@ export class RelayPoolService {
       action: 'relay.instance.force_disconnect',
       resourceType: 'relay_instance',
       resourceId: instance.id,
-      details: { activeTunnels: instance.health?.activeTunnels ?? 0 },
+      details: {
+        activeTunnels: instance.health?.activeTunnels ?? 0,
+        ...(update ? { reason: 'relay_pool_update_drain_grace_ended' } : {}),
+      },
     });
     this.events.publish('system.relay.health.changed', {
       poolId: instance.poolId,
       instanceId: instance.id,
       action: 'force_disconnect',
     });
-    await this.evacuateInstance(instance.id);
-    await this.retireDrainedGenerations();
+    try {
+      await this.evacuateInstance(instance.id);
+      await this.retireDrainedGenerations();
+    } catch (error) {
+      // An update goes on with the relay disconnected; later placement passes move and retire the rest.
+      if (!update) throw error;
+      logger.warn('Relay disconnected for an update; moving its workloads failed', {
+        instanceId: instance.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async evacuateInstance(instanceId: string): Promise<void> {

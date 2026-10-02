@@ -2107,6 +2107,8 @@ export async function initializeContainer(): Promise<void> {
     updateService.setRelayPoolUpdateRuntime({
       drainInstance: (instanceId, userId, enabled) =>
         relayPoolService.drainInstance(instanceId, userId, enabled, { manual: false }),
+      forceDisconnectInstance: (instanceId, userId) =>
+        relayPoolService.forceDisconnectInstance(instanceId, userId, { update: true }),
       prepareWorkerUpdate: (version, arch) =>
         daemonUpdateService.prepareTrustedDaemonUpdate('relay-worker', `${version}-relay`, version, arch),
       dispatchWorkerUpdate: async (nodeId, artifact) => {

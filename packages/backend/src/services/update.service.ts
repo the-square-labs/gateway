@@ -121,6 +121,10 @@ const UNFINISHED_RELAY_POOL_RUN_STATES = [...ACTIVE_RELAY_POOL_RUN_STATES, 'paus
 /** Step states in which the update may hold the relay drained. */
 const IN_FLIGHT_RELAY_POOL_STEP_STATES = ['draining', 'updating', 'verifying', 'rolling_back'] as const;
 const RELAY_DRAIN_RELEASE_RETRY_MS = 30_000;
+/** How long an update waits for a relay's streams to end on their own before it disconnects the rest. */
+const RELAY_UPDATE_DRAIN_GRACE_MS = 30 * 60_000;
+/** After the forced disconnect: time for the relay to report its streams closed. The update goes on either way. */
+const RELAY_UPDATE_FORCED_DRAIN_SETTLE_MS = 30_000;
 const RELAY_DRAIN_RELEASE_ATTEMPTS = 20;
 const RELAY_UPDATE_BLOCKS_GATEWAY_MESSAGE =
   'A Relay Pool update is in progress. Update Gateway after it finishes, or abandon the Relay Pool update first.';
@@ -169,6 +173,8 @@ export interface RelayUpdateRuntime {
 
 export interface RelayPoolUpdateRuntime {
   drainInstance(instanceId: string, userId: string | null, enabled: boolean): Promise<void>;
+  /** Closes the streams a drained relay still carries (audited as a forced disconnect). */
+  forceDisconnectInstance(instanceId: string, userId: string | null): Promise<void>;
   /**
    * Resolves once no other voter or candidate of the relay's availability lease policies is updating or still
    * settling after a restart (daemon updates included), so two members of one policy never restart together.
@@ -1382,16 +1388,23 @@ chmod 700 "$backup"
         // A voter or candidate of the relay's lease policies that is restarting or settling goes first.
         await runtime.awaitLeasePeers?.(instance.id, signal);
         throwIfAbandoned();
-        await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + 30 * 60 * 1000));
+        await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + RELAY_UPDATE_DRAIN_GRACE_MS));
         drainedInstanceId = instance.id;
         await runtime.drainInstance(instance.id, userId, true);
-        const drained = await this.waitForRelayInstanceDrain(instance.id, 30 * 60 * 1000, signal);
-        if (!drained) {
-          await this.db
-            .update(relayPoolUpdateRuns)
-            .set({ state: 'paused', terminalError: 'Relay drain is waiting for active streams', updatedAt: new Date() })
-            .where(eq(relayPoolUpdateRuns.id, run.id));
-          throw new Error(`Relay ${instance.displayName} still has active streams; rollout paused`);
+        // Long-lived streams (a database pool, a WebSocket) may never end on their own. After the grace they are
+        // disconnected, as a manual drain does after its own, and the update goes on: the worker restart would end
+        // them anyway, and a run that waited for an operator kept the relay out of the pool meanwhile.
+        if (!(await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_DRAIN_GRACE_MS, signal))) {
+          logger.warn('Relay drain grace ended with active streams; disconnecting them to continue the update', {
+            relayInstanceId: instance.id,
+            relay: instance.displayName,
+          });
+          await runtime.forceDisconnectInstance(instance.id, userId);
+          if (!(await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_FORCED_DRAIN_SETTLE_MS, signal))) {
+            logger.warn('Relay still reports streams after the forced disconnect; its update ends them', {
+              relayInstanceId: instance.id,
+            });
+          }
         }
         throwIfAbandoned();
         await this.updatePoolStep(step.id, 'updating');
