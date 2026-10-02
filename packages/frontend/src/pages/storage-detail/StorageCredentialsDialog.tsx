@@ -252,6 +252,13 @@ export function StorageCredentialsDialog({
             </Notice>
           ) : credentials ? (
             <>
+              {!endpoint && (
+                <Notice tone="warning" title="No reachable S3 endpoint">
+                  The storage node has no Service Address, so Gateway cannot show an address clients
+                  can reach. Add one on the node, or replace &lt;node-host&gt; below with an address
+                  that reaches the node.
+                </Notice>
+              )}
               <CredentialField label="S3 Endpoint" value={resolvedEndpoint} />
               <CredentialField label="Access Key" value={credentials.accessKey} />
               <CredentialField label="Secret Key" value={credentials.secretKey} sensitive />
