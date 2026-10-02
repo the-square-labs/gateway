@@ -1682,7 +1682,8 @@ function hasRegistryHost(imageRef: string) {
   return firstSegment === 'localhost' || firstSegment.includes('.') || firstSegment.includes(':');
 }
 
-function imageRefWithTag(imageRef: string | undefined, tag: string) {
+/** The image reference with another tag; a digest is dropped. Undefined without an image or a tag. */
+export function imageRefWithTag(imageRef: string | undefined, tag: string) {
   const trimmedTag = tag.trim();
   if (!imageRef || !trimmedTag) return undefined;
   const digestIndex = imageRef.indexOf('@');

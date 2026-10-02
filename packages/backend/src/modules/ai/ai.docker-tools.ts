@@ -467,7 +467,12 @@ export async function executeDockerTool(
         a.containerId,
         { image: String(a.imageTag ?? '') }
       );
-      const currentImage: string = (inspectData as any)?.Config?.Image ?? '';
+      // A container under Availability runs a mirrored image on every replica: its own image is the workload's.
+      const containerName = String((inspectData as any)?.Name ?? '').replace(/^\/+/, '');
+      const managed = containerName
+        ? await context.dockerService.getManagedContainerConfiguration(a.nodeId, containerName)
+        : null;
+      const currentImage: string = managed?.image || ((inspectData as any)?.Config?.Image ?? '');
       if (!currentImage) return { error: 'Cannot determine current container image' };
       if (currentImage.includes('@') || /^[a-f0-9]{64}$/i.test(currentImage)) {
         return {
@@ -490,7 +495,9 @@ export async function executeDockerTool(
       );
       return {
         success: true,
-        message: `Container image update accepted for ${targetRef}; track task ${String(data?.taskId ?? '')}`,
+        message: managed
+          ? `Image update to ${targetRef} rolls out to every Availability replica`
+          : `Container image update accepted for ${targetRef}; track task ${String(data?.taskId ?? '')}`,
         data,
       };
     }

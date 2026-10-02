@@ -36,6 +36,7 @@ import {
   createContainer as createDockerContainer,
   type DockerContainerMutationContext,
   duplicateContainer as duplicateDockerContainer,
+  imageRefWithTag,
   killContainer as killDockerContainer,
   liveUpdateContainer as liveUpdateDockerContainer,
   recreateWithConfig as recreateDockerContainerWithConfig,
@@ -162,6 +163,9 @@ function secureRuntimeUnavailableMessage(status: { state?: unknown; message?: un
       return `Secure Runtime is not healthy on this node${detail ? `: ${detail}` : ''}. Complete Setup in Node Details first.`;
   }
 }
+
+const AVAILABILITY_NETWORKS_MANAGED =
+  'This container is controlled by Availability: its replicas run on Gateway-managed networks on every node. Disable Availability to change its networks.';
 
 export class DockerManagementService {
   private static readonly LONG_DOCKER_OPERATION_TIMEOUT_MS = 600000; // 10 minutes
@@ -1495,6 +1499,11 @@ export class DockerManagementService {
 
   async renameContainer(nodeId: string, containerId: string, newName: string, userId: string) {
     await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
+    await this.assertNotAvailabilityManaged(
+      nodeId,
+      containerId,
+      'This container is controlled by Availability, and every replica keeps its name. Disable Availability to rename it.'
+    );
     await this.assertContainerMigrationAllowed(nodeId, containerId);
     await this.migrationGuard?.assertContainerNameAvailable(nodeId, newName);
     await renameDockerContainer(this.containerMutationContext(), nodeId, containerId, newName, userId);
@@ -1528,8 +1537,57 @@ export class DockerManagementService {
     actorScopes: string[] = []
   ) {
     await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
+    const managed = await this.updateAvailabilityContainer(nodeId, containerId, config, userId);
+    if (managed) return managed;
     await this.assertContainerMigrationAllowed(nodeId, containerId);
     return updateDockerContainer(this.containerMutationContext(), nodeId, containerId, config, userId, actorScopes);
+  }
+
+  /**
+   * POST .../update of a container under Availability: the new tag and environment roll out to every replica through
+   * Availability in one rollout, as PUT .../env and a recreate do. Updating the container the request names changed
+   * only that replica and took it out of service (stand run x1). Null for a container outside Availability.
+   */
+  private async updateAvailabilityContainer(
+    nodeId: string,
+    containerId: string,
+    config: Record<string, unknown>,
+    userId: string
+  ): Promise<{ availabilityManaged: true; containerId: string; name: string } | null> {
+    const coordinator = this.availabilityMutationCoordinator;
+    if (!coordinator?.getConfiguration) return null;
+    const managed =
+      (await coordinator.getConfiguration(nodeId, containerId)) ??
+      (await coordinator.getConfiguration(nodeId, await this.resolveContainerName(nodeId, containerId)));
+    if (!managed) return null;
+    const patch: Record<string, unknown> = {};
+    const tag = typeof config.tag === 'string' ? config.tag.trim() : '';
+    if (tag) {
+      const image = imageRefWithTag(managed.image, tag);
+      if (!image) throw new AppError(400, 'NO_IMAGE', 'Cannot determine the image of this Availability workload');
+      patch.image = image;
+    }
+    if (config.env !== undefined) patch.env = config.env;
+    if (config.removeEnv !== undefined) patch.removeEnv = config.removeEnv;
+    // Without a change it redeploys the current image, as an update of a single container does.
+    await coordinator.updateConfiguration(
+      managed.nodeId,
+      managed.containerName,
+      Object.keys(patch).length > 0 ? patch : { image: managed.image },
+      userId,
+      Object.keys(patch).length > 0 ? undefined : { forceRollout: true }
+    );
+    return { availabilityManaged: true, containerId, name: managed.containerName };
+  }
+
+  /**
+   * Refuses a change to one replica of a container under Availability that Availability cannot carry to the other
+   * replicas (its name, its networks): the replicas would differ until the next rollout undid it.
+   */
+  private async assertNotAvailabilityManaged(nodeId: string, containerId: string, message: string): Promise<void> {
+    if ((await this.workloadResolver?.resolveContainerRuntimeTarget(nodeId, containerId)) != null) {
+      throw new AppError(409, 'AVAILABILITY_PLACEMENT_MANAGED', message);
+    }
   }
 
   async getContainerLogs(nodeId: string, containerId: string, tail: number, timestamps: boolean) {
@@ -2222,11 +2280,13 @@ export class DockerManagementService {
 
   async connectContainerToNetwork(nodeId: string, networkId: string, containerId: string, userId: string) {
     await this.validateDockerNode(nodeId);
+    await this.assertNotAvailabilityManaged(nodeId, containerId, AVAILABILITY_NETWORKS_MANAGED);
     await connectDockerContainerToNetwork(this.volumeNetworkOperationContext(), nodeId, networkId, containerId, userId);
   }
 
   async disconnectContainerFromNetwork(nodeId: string, networkId: string, containerId: string, userId: string) {
     await this.validateDockerNode(nodeId);
+    await this.assertNotAvailabilityManaged(nodeId, containerId, AVAILABILITY_NETWORKS_MANAGED);
     await disconnectDockerContainerFromNetwork(
       this.volumeNetworkOperationContext(),
       nodeId,

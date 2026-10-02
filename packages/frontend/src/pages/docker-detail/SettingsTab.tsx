@@ -1224,7 +1224,7 @@ export function SettingsTab({
         networks={networks}
         setNetworks={setNetworks}
         networksChanged={networksChanged}
-        canManageNetworks={canManageNetworks}
+        canManageNetworks={canManageNetworks && !availabilityManaged}
         canListNetworks={canListNetworks}
       />
 
