@@ -130,6 +130,9 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 	if status.Role != availabilitylease.RoleRetained {
 		wl.retainChecked = false
 	}
+	if manifest.Closed && (status.Role == availabilitylease.RoleNone || status.Role == availabilitylease.RoleRetained) {
+		endLeasePeriodLocked(wl)
+	}
 	switch status.Role {
 	case availabilitylease.RoleRetained:
 		r.disarmRetainedLocked(wl, containers)
@@ -426,6 +429,23 @@ func (r *Runtime) recordsArmed(containers []Container, deadline time.Duration) b
 		}
 	}
 	return true
+}
+
+// endLeasePeriodLocked forgets the serving set this node ran under a lease
+// that closed while it holds no key of the policy (legacy runs the policy, or
+// the copy is retained). The legacy path may replace or remove those
+// containers (a disable keeps a copy under the workload's own name and
+// removes the others): when the policy enters lease mode again, its holder
+// adopts the copy it finds then. Watching the previous period's container ids
+// released every holder at once for containers that no longer exist. The
+// health backoff of that period ends with it too.
+func endLeasePeriodLocked(wl *workload) {
+	if wl.busy {
+		return
+	}
+	wl.phase, wl.serveIDs, wl.health = phaseIdle, nil, healthTracker{}
+	wl.healthReleases, wl.cooldownUntil = 0, 0
+	wl.healthRequest, wl.healthRequestAt = "", 0
 }
 
 // adoptServingLocked starts the health watch and readiness clock for the
