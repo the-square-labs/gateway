@@ -41,7 +41,14 @@ func connectKeeper(t *testing.T, store *listenerkeep.Store, inherited map[string
 	}
 	descriptors := []kept{}
 	for name, file := range inherited {
-		descriptors = append(descriptors, kept{Name: name, FD: int(file.Fd())})
+		// The process owns what it inherits and closes it once adopted: it gets
+		// its own descriptor, or the *os.File would close the same number again
+		// later, when another test may be using it for a connection.
+		descriptor, err := syscall.Dup(int(file.Fd()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		descriptors = append(descriptors, kept{Name: name, FD: descriptor})
 	}
 	encoded, _ := json.Marshal(descriptors)
 	t.Setenv("GATEWAY_DAEMON_LAUNCHER_MANAGED", "1")
