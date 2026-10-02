@@ -1,14 +1,19 @@
 import { createHash, X509Certificate } from 'node:crypto';
-import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  backupRuns,
   certificates,
   dockerAvailabilityPolicies,
+  dockerRegistryNodeBindings,
   managedDatabaseBindingPlacements,
   managedDatabaseBindings,
   managedDatabaseInstances,
   managedStorageBindings,
+  managedStorageClusters,
   nodes,
+  proxyAdditionalSecureLinks,
+  proxyHosts,
   relayEndpoints,
   relayPolicyState,
   relayRoutes,
@@ -293,5 +298,120 @@ export async function reconcileManagedStorageRelayPolicy(db: DrizzleClient): Pro
       changed = true;
     }
     if (changed) await bumpRelayPolicyRevision(tx);
+  });
+}
+
+type OwnerTable = { table: any; id: any };
+
+const PROXY_SECURE_LINK_OWNERS: OwnerTable[] = [
+  { table: proxyHosts, id: proxyHosts.id },
+  { table: proxyAdditionalSecureLinks, id: proxyAdditionalSecureLinks.id },
+];
+const MANAGED_STORAGE_OWNERS: OwnerTable[] = [{ table: managedStorageClusters, id: managedStorageClusters.id }];
+const BACKUP_RUN_OWNERS: OwnerTable[] = [{ table: backupRuns, id: backupRuns.id }];
+
+/**
+ * The rows that own relay state, per owner kind. Managed database endpoints and database and storage link routes
+ * are reconciled by the passes above; the internal registry and its ingress have fixed owners.
+ */
+const ENDPOINT_OWNERS: Record<string, OwnerTable[]> = {
+  proxy_host_secure_link: PROXY_SECURE_LINK_OWNERS,
+  managed_storage: MANAGED_STORAGE_OWNERS,
+};
+const ROUTE_OWNERS: Record<string, OwnerTable[]> = {
+  proxy_host_secure_link: PROXY_SECURE_LINK_OWNERS,
+  managed_storage_gateway: MANAGED_STORAGE_OWNERS,
+  managed_database_gateway: [{ table: managedDatabaseInstances, id: managedDatabaseInstances.id }],
+  database_backup_source: BACKUP_RUN_OWNERS,
+  database_backup_restore: BACKUP_RUN_OWNERS,
+  storage_backup_target: BACKUP_RUN_OWNERS,
+  storage_backup_staging: BACKUP_RUN_OWNERS,
+  registry_secure_link: [{ table: dockerRegistryNodeBindings, id: dockerRegistryNodeBindings.id }],
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Removes relay endpoints and routes whose owner no longer exists. Every owner revokes its relay state when it is
+ * deleted, but a revocation that failed, raced the owner's last provisioning step or was skipped by an earlier
+ * release left state behind: the daemons it names kept their grants and retried its tunnels forever. Returns the
+ * daemons whose grants lost something.
+ */
+export async function removeOrphanedRelayState(db: DrizzleClient): Promise<string[]> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-policy-reconciliation'))`);
+    // Relay state first: every owner row is committed before its relay state is created, so the owner of every row
+    // read here is visible to the reads below unless it is gone.
+    const endpoints = await tx
+      .select({
+        id: relayEndpoints.id,
+        ownerKind: relayEndpoints.ownerKind,
+        ownerId: relayEndpoints.ownerId,
+        subjectKind: relayEndpoints.subjectKind,
+        subjectId: relayEndpoints.subjectId,
+      })
+      .from(relayEndpoints)
+      .where(inArray(relayEndpoints.ownerKind, Object.keys(ENDPOINT_OWNERS)));
+    const routes = await tx
+      .select({
+        id: relayRoutes.id,
+        ownerKind: relayRoutes.ownerKind,
+        ownerId: relayRoutes.ownerId,
+        sourceKind: relayRoutes.sourceKind,
+        sourceId: relayRoutes.sourceId,
+      })
+      .from(relayRoutes)
+      .where(inArray(relayRoutes.ownerKind, Object.keys(ROUTE_OWNERS)));
+    if (endpoints.length === 0 && routes.length === 0) return [];
+
+    const existing = new Set<string>();
+    const candidates = new Map<OwnerTable, Set<string>>();
+    const collect = (owners: OwnerTable[] | undefined, ownerId: string) => {
+      if (!UUID.test(ownerId)) return;
+      for (const owner of owners ?? []) {
+        const ids = candidates.get(owner) ?? new Set<string>();
+        ids.add(ownerId);
+        candidates.set(owner, ids);
+      }
+    };
+    for (const endpoint of endpoints) collect(ENDPOINT_OWNERS[endpoint.ownerKind], endpoint.ownerId);
+    for (const route of routes) collect(ROUTE_OWNERS[route.ownerKind], route.ownerId);
+    for (const [owner, ids] of candidates) {
+      const rows: Array<{ id: string }> = await tx
+        .select({ id: owner.id })
+        .from(owner.table)
+        .where(inArray(owner.id, [...ids]));
+      for (const { id } of rows) existing.add(id);
+    }
+
+    const orphanEndpoints = endpoints.filter(({ ownerId }) => !existing.has(ownerId));
+    const orphanRoutes = routes.filter(({ ownerId }) => !existing.has(ownerId));
+    if (orphanEndpoints.length === 0 && orphanRoutes.length === 0) return [];
+    const orphanEndpointIds = orphanEndpoints.map(({ id }) => id);
+    // Routes of any owner that lead to a removed endpoint go with it (on delete cascade): their sources lose a grant.
+    const cascadedRoutes = orphanEndpointIds.length
+      ? await tx
+          .select({ sourceKind: relayRoutes.sourceKind, sourceId: relayRoutes.sourceId })
+          .from(relayRoutes)
+          .where(inArray(relayRoutes.targetEndpointId, orphanEndpointIds))
+      : [];
+    if (orphanRoutes.length) {
+      await tx.delete(relayRoutes).where(
+        inArray(
+          relayRoutes.id,
+          orphanRoutes.map(({ id }) => id)
+        )
+      );
+    }
+    if (orphanEndpointIds.length) await tx.delete(relayEndpoints).where(inArray(relayEndpoints.id, orphanEndpointIds));
+    await bumpRelayPolicyRevision(tx);
+    return [
+      ...new Set([
+        ...orphanEndpoints.filter(({ subjectKind }) => subjectKind === 'daemon').map(({ subjectId }) => subjectId),
+        ...[...orphanRoutes, ...cascadedRoutes]
+          .filter(({ sourceKind }) => sourceKind === 'daemon')
+          .map(({ sourceId }) => sourceId),
+      ]),
+    ];
   });
 }

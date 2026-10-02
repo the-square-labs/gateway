@@ -52,6 +52,7 @@ import {
   bumpRelayPolicyRevision,
   reconcileManagedDatabaseRelayPolicy,
   reconcileManagedStorageRelayPolicy,
+  removeOrphanedRelayState,
   updateManagedDatabaseRelayStatus,
 } from './relay-policy-reconciler.js';
 import { RelayPolicySigningKeyService, type RelayPolicyTrustAnchor } from './relay-policy-signing-key.service.js';
@@ -540,6 +541,8 @@ export class RelayPolicyService {
     await this.reconcileInternalRegistryEndpoint();
     await reconcileManagedDatabaseRelayPolicy(this.db);
     await reconcileManagedStorageRelayPolicy(this.db);
+    // Daemons are not connected yet: each gets its bundle without the removed state when it registers.
+    await removeOrphanedRelayState(this.db);
     await this.syncSnapshot().catch((error) => {
       logger.warn('Initial relay policy sync deferred until relay is reachable', {
         error: error instanceof Error ? error.message : String(error),
@@ -1023,6 +1026,7 @@ export class RelayPolicyService {
     await backfillRelayNodeFingerprints(this.db);
     await reconcileManagedDatabaseRelayPolicy(this.db);
     await reconcileManagedStorageRelayPolicy(this.db);
+    const orphanedNodeIds = await removeOrphanedRelayState(this.db);
     const revision = await this.syncSnapshot();
     await this.refreshAllNodeGrantsIfDue().then(
       () => {
@@ -1030,7 +1034,27 @@ export class RelayPolicyService {
       },
       (error) => this.reportPendingGrantRefresh(error)
     );
+    await this.withdrawOrphanedState(orphanedNodeIds);
     return revision;
+  }
+
+  /**
+   * Removes relay endpoints and routes whose owner no longer exists (a Route deleted while its link was being
+   * provisioned, or by an earlier release that left them behind) and withdraws them from the daemons they named.
+   */
+  async removeOrphanedState(): Promise<void> {
+    const nodeIds = await removeOrphanedRelayState(this.db);
+    if (nodeIds.length === 0) return;
+    await this.syncSnapshot();
+    await this.withdrawOrphanedState(nodeIds);
+  }
+
+  /**
+   * A daemon left without any relay state is not among the nodes a grant refresh reaches, and one the refresh just
+   * reached is skipped. A daemon that is offline gets its bundle when it reconnects.
+   */
+  private async withdrawOrphanedState(nodeIds: readonly string[]): Promise<void> {
+    await Promise.allSettled(nodeIds.map((nodeId) => this.syncNodeGrants(nodeId, ROUTINE_GRANT_SYNC)));
   }
 
   /**
