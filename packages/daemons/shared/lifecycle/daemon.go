@@ -348,7 +348,11 @@ func runRelayPoolTarget(
 ) {
 	for ctx.Err() == nil {
 		target := *currentTarget()
+		targetCtx, cancelTarget := context.WithCancel(ctx)
 		connections := make([]*grpc.ClientConn, 0, laneCount)
+		laneEnded := make(chan struct{}, laneCount)
+		// Each lane carries tunnels as soon as it is up: right after a start (a restart or update of the daemon) the
+		// connections the previous process handed over wait for the first lane, not for every lane of the relay.
 		for len(connections) < laneCount && ctx.Err() == nil {
 			var conn *grpc.ClientConn
 			var err error
@@ -361,24 +365,22 @@ func runRelayPoolTarget(
 				logger.Warn("relay target lane connection failed", "relay_instance_id", target.ID, "error", err)
 				break
 			}
-			connections = append(connections, conn)
-		}
-		if len(connections) == 0 {
-			if !waitForControlSessionReconnect(ctx) {
-				return
+			if len(connections) == 0 {
+				liveRelayTransports.set(target.ID, conn)
 			}
-			continue
-		}
-		targetCtx, cancelTarget := context.WithCancel(ctx)
-		liveRelayTransports.set(target.ID, connections[0])
-		laneEnded := make(chan struct{}, len(connections))
-		for _, conn := range connections {
-			conn := conn
+			connections = append(connections, conn)
 			go keepRelayLaneConnected(targetCtx, conn)
 			go func() {
 				plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
 				laneEnded <- struct{}{}
 			}()
+		}
+		if len(connections) == 0 {
+			cancelTarget()
+			if !waitForControlSessionReconnect(ctx) {
+				return
+			}
+			continue
 		}
 		select {
 		case <-ctx.Done():

@@ -2480,14 +2480,17 @@ export class ProxySecureLinkService {
       for (;;) {
         while (!result.success) {
           const message = result.error || 'Docker daemon rejected secure-link bindings';
-          const unavailableLinkId = this.parseUnavailableTargetLinkId(message);
-          // A link pinned for a network release whose container left its network: it serves nothing there.
-          const detachedLinkId = excludedNetwork ? this.parseDetachedTargetLinkId(message) : null;
-          const droppedLinkId = unavailableLinkId ?? detachedLinkId;
-          if (!droppedLinkId || droppedLinkId === requiredLinkId) throw new Error(message);
-          const nextBindings = appliedBindings.filter((binding) => binding.linkId !== droppedLinkId);
+          // One link whose target does not resolve (stopped, gone, or without a usable network) must not keep the
+          // node's other links from applying: it leaves this sync and keeps the error, and the rest apply.
+          const unresolved = this.parseUnresolvedTarget(message);
+          if (!unresolved || unresolved.linkId === requiredLinkId) throw new Error(message);
+          const nextBindings = appliedBindings.filter((binding) => binding.linkId !== unresolved.linkId);
           if (nextBindings.length === appliedBindings.length) throw new Error(message);
-          if (unavailableLinkId) unavailable.set(unavailableLinkId, message);
+          // A link pinned for a network release whose container left its network serves nothing there: no error.
+          const detached =
+            Boolean(excludedNetwork) &&
+            unresolved.reason.startsWith('target container is not attached to the selected network');
+          if (!detached) unavailable.set(unresolved.linkId, message);
           appliedBindings = nextBindings;
           result = await this.dispatch.sendProxySecureLinks(nodeId, appliedBindings);
         }
@@ -2586,18 +2589,12 @@ export class ProxySecureLinkService {
     }
   }
 
-  private parseUnavailableTargetLinkId(message: string): string | null {
+  /** The link and reason of a Docker daemon refusal that names one link whose target did not resolve. */
+  private parseUnresolvedTarget(message: string): { linkId: string; reason: string } | null {
     const match = message.match(
-      /resolve secure-link ([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}): target container is unavailable/i
+      /resolve secure-link ([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}): ([^\n]+)/i
     );
-    return match?.[1] ?? null;
-  }
-
-  private parseDetachedTargetLinkId(message: string): string | null {
-    const match = message.match(
-      /resolve secure-link ([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}): target container is not attached to the selected network/i
-    );
-    return match?.[1] ?? null;
+    return match ? { linkId: match[1]!.toLowerCase(), reason: match[2]!.trim() } : null;
   }
 
   private async recordUnavailableTargets(
