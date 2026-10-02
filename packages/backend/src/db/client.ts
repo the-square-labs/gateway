@@ -3,10 +3,11 @@ import pg from 'pg';
 import { acceptedOperations } from '@/edition/accepted-operations.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { firstShutdownReport, isShuttingDown } from '@/services/shutdown-state.js';
+import { releaseLostCheckedOutClients } from './checked-out-client-errors.js';
 import * as schema from './schema/index.js';
 
 const logger = createChildLogger('Database');
-const IDLE_CONNECTION_LOSS_LOG_INTERVAL_MS = 60_000;
+const CONNECTION_LOSS_LOG_INTERVAL_MS = 60_000;
 
 const { Pool } = pg;
 
@@ -25,7 +26,7 @@ export function createDrizzleClient(connectionString: string): DrizzleClient {
   // on the pool. Without a listener it was an uncaught exception, 13 of them at a host shutdown (N-19), and one
   // could end the process in the middle of its drain. The pool replaces the client on the next query.
   let lastReported = 0;
-  pool.on('error', (error) => {
+  const reportLostConnection = (message: string, error: Error) => {
     if (isShuttingDown()) {
       if (firstShutdownReport('postgres')) {
         logger.info('Database connections closed while Gateway shuts down', { error: error.message });
@@ -33,10 +34,17 @@ export function createDrizzleClient(connectionString: string): DrizzleClient {
       return;
     }
     const now = Date.now();
-    if (now - lastReported < IDLE_CONNECTION_LOSS_LOG_INTERVAL_MS) return;
+    if (now - lastReported < CONNECTION_LOSS_LOG_INTERVAL_MS) return;
     lastReported = now;
-    logger.warn('An idle database connection was lost; the next query opens a new one', { error: error.message });
-  });
+    logger.warn(message, { error: error.message });
+  };
+  pool.on('error', (error) =>
+    reportLostConnection('An idle database connection was lost; the next query opens a new one', error)
+  );
+  // A connection lost while a transaction or session lock holds it fails that operation, not the process.
+  releaseLostCheckedOutClients(pool, (error) =>
+    reportLostConnection('A database connection was lost while in use; the operation using it failed', error)
+  );
 
   refuseAbandonedOperations(pool);
   return drizzle(pool, { schema });

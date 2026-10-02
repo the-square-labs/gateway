@@ -77,6 +77,8 @@ import { drainWebSocketsForRestart, terminateRemainingWebSockets } from '@/servi
 async function runMigrations(databaseUrl: string) {
   logger.info('Running database migrations...');
   const client = new pg.Client({ connectionString: databaseUrl });
+  // A lost connection fails the running migration step, which reports it; unhandled, the event would end the process.
+  client.on('error', () => undefined);
   await client.connect();
   try {
     const { rows } = await client.query<{ version: number }>(
