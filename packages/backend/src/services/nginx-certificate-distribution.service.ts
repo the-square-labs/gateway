@@ -45,6 +45,18 @@ export type CertificatePaths = {
   sslChainPath: string | null;
 };
 
+/** How a host apply reaches the node (reconnect resync: deferred reload, the bundle the node already runs kept). */
+export type HostApplyOptions = {
+  /** The node loads the change with the reload of its batch instead of at once. */
+  deferReload?: boolean;
+  /**
+   * The node is re-sent a route it may already run: when its active deployment is this exact bundle and the
+   * replica is ready on that version, only the config is sent (no key material, no new replica generation). The
+   * full bundle follows when the node rejects that, e.g. because it lost the certificate files.
+   */
+  reuseActiveBundle?: boolean;
+};
+
 export type PreparedTlsCertificate = CertificatePaths & {
   assetId: string;
   nodeId: string;
@@ -396,10 +408,27 @@ export class NginxCertificateDistributionService {
     host: Pick<ProxyHostRow, 'id' | 'nodeId'>,
     configContent: string,
     prepared: PreparedTlsCertificate,
-    configOwnership = ''
+    configOwnership = '',
+    options: HostApplyOptions = {}
   ): Promise<void> {
     const targetNodeId = prepared.nodeId;
     const generation = deploymentGenerationFor(host.id, targetNodeId, configContent, prepared.version);
+    if (options.reuseActiveBundle && (await this.bundleIsActive(host.id, targetNodeId, generation, prepared))) {
+      const result = await this.nodeDispatch.applyConfig(
+        targetNodeId,
+        host.id,
+        configContent,
+        false,
+        configOwnership,
+        options.deferReload ?? false
+      );
+      if (result.success) return;
+      logger.info('The node rejected the config of its active TLS bundle; sending the full bundle', {
+        hostId: host.id,
+        nodeId: targetNodeId,
+        error: safeError(result.error ?? ''),
+      });
+    }
     const previousActive = await this.db.query.nginxProxyHostDeployments.findMany({
       where: and(
         eq(nginxProxyHostDeployments.hostId, host.id),
@@ -445,6 +474,7 @@ export class NginxCertificateDistributionService {
         configContent,
         generation,
         configOwnership,
+        deferReload: options.deferReload ?? false,
         certificates: [
           {
             certId: prepared.daemonCertId,
@@ -508,6 +538,40 @@ export class NginxCertificateDistributionService {
         )
       );
     }
+  }
+
+  /** The node already runs this exact bundle as far as Gateway recorded it: the deployment and a ready replica. */
+  private async bundleIsActive(
+    hostId: string,
+    nodeId: string,
+    generation: string,
+    prepared: PreparedTlsCertificate
+  ): Promise<boolean> {
+    const [deployment] = await this.db
+      .select({ id: nginxProxyHostDeployments.id })
+      .from(nginxProxyHostDeployments)
+      .where(
+        and(
+          eq(nginxProxyHostDeployments.hostId, hostId),
+          eq(nginxProxyHostDeployments.nodeId, nodeId),
+          eq(nginxProxyHostDeployments.state, 'active'),
+          eq(nginxProxyHostDeployments.generation, generation),
+          eq(nginxProxyHostDeployments.assetId, prepared.assetId)
+        )
+      )
+      .limit(1);
+    if (!deployment) return false;
+    const replica = await this.db.query.nginxCertificateReplicas.findFirst({
+      where: and(
+        eq(nginxCertificateReplicas.assetId, prepared.assetId),
+        eq(nginxCertificateReplicas.nodeId, nodeId),
+        eq(nginxCertificateReplicas.status, 'ready'),
+        eq(nginxCertificateReplicas.appliedVersion, prepared.version),
+        isNull(nginxCertificateReplicas.cleanupAfter)
+      ),
+      columns: { id: true },
+    });
+    return Boolean(replica);
   }
 
   /** Mark deployment inactive only after the caller has removed its config successfully. */

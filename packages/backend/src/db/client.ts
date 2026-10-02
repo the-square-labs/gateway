@@ -1,5 +1,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
+import { acceptedOperations } from '@/edition/accepted-operations.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { firstShutdownReport, isShuttingDown } from '@/services/shutdown-state.js';
 import * as schema from './schema/index.js';
@@ -37,5 +38,36 @@ export function createDrizzleClient(connectionString: string): DrizzleClient {
     logger.warn('An idle database connection was lost; the next query opens a new one', { error: error.message });
   });
 
+  refuseAbandonedOperations(pool);
   return drizzle(pool, { schema });
+}
+
+/** Thrown to work a stopping Gateway left to durable recovery when it reaches the database. */
+export class AbandonedOperationError extends Error {
+  constructor() {
+    super('Gateway is stopping; this operation is resumed by recovery after the restart');
+    this.name = 'AbandonedOperationError';
+  }
+}
+
+/**
+ * Work a stopping Gateway left to recovery (acceptedOperations.abandonRunning) keeps running until the process
+ * exits. It must not write anything from then on: a step that fails only because Gateway goes away would record the
+ * operation as failed, and recovery would no longer resume it (X1-10). A transaction already open completes.
+ */
+function refuseAbandonedOperations(pool: pg.Pool): void {
+  const query = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+  const connect = pool.connect.bind(pool) as (...args: unknown[]) => unknown;
+  const refuse = (args: unknown[]) => {
+    const callback = args.at(-1);
+    if (typeof callback === 'function') {
+      queueMicrotask(() => (callback as (error: Error) => void)(new AbandonedOperationError()));
+      return undefined;
+    }
+    return Promise.reject(new AbandonedOperationError());
+  };
+  pool.query = ((...args: unknown[]) =>
+    acceptedOperations.isAbandoned() ? refuse(args) : query(...args)) as unknown as typeof pool.query;
+  pool.connect = ((...args: unknown[]) =>
+    acceptedOperations.isAbandoned() ? refuse(args) : connect(...args)) as unknown as typeof pool.connect;
 }

@@ -11,15 +11,23 @@ import (
 // keeper (the daemon launcher, and systemd's file descriptor store) holds a
 // copy of every listening socket, so the socket keeps accepting connections
 // into its backlog while no daemon process runs; the next process adopts it
-// and serves them. Stopping, this process only stops accepting, lets the
-// requests it is serving finish, and closes connections that sit idle between
-// requests (nginx reconnects them into the backlog).
+// and serves them.
+//
+// The next process can only start once this one exited (systemctl restart
+// stops the unit before it starts it again), so the stopping process keeps
+// accepting while it lets the requests it serves finish and closes the
+// connections that sit idle between requests. It stops accepting only at the
+// end, gives the requests it accepted last a short moment, and exits: a new
+// connection waits in the backlog for the restart itself, not for the drain
+// as well (X1-9b: 1.7 s and two client timeouts at 50 rps).
 
 const (
-	// secureLinkHandoverDrain bounds how long a stopping daemon waits for the
-	// requests it is serving; the next process starts only after it exits,
-	// and new connections wait in the backlog meanwhile.
+	// secureLinkHandoverDrain bounds how long a stopping daemon keeps serving
+	// and accepting while the requests in flight finish.
 	secureLinkHandoverDrain = 1500 * time.Millisecond
+	// secureLinkHandoverFinish bounds the wait for the requests accepted just
+	// before the sockets were handed over; new connections queue meanwhile.
+	secureLinkHandoverFinish = 300 * time.Millisecond
 	// secureLinkIdleQuiet is how long a served connection must have carried no
 	// byte, with no request left unanswered, to count as idle between
 	// requests.
@@ -84,6 +92,29 @@ func (c *trackedConn) idle(now time.Time, quiet time.Duration) bool {
 		return false
 	}
 	return now.UnixNano()-write >= quiet.Nanoseconds()
+}
+
+// keptListeners counts the Unix listeners this process kept for its
+// successor.
+func (m *sourceLinkManager) keptListeners() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	bindings := make([]*sourceLinkBinding, 0, len(m.bindings))
+	for _, binding := range m.bindings {
+		bindings = append(bindings, binding)
+	}
+	m.mu.Unlock()
+	kept := 0
+	for _, binding := range bindings {
+		binding.leaseMu.Lock()
+		if binding.unix != nil && binding.keptName != "" {
+			kept++
+		}
+		binding.leaseMu.Unlock()
+	}
+	return kept
 }
 
 // suspendForHandover stops accepting on every Unix listener this process kept
@@ -155,23 +186,36 @@ func (m *sourceLinkManager) drainForHandover(limit time.Duration) {
 	}
 }
 
-// HandOverSecureLinks runs when the daemon is asked to stop, before it
-// disconnects from Gateway and the relays: the Secure Link sockets go to the
-// next daemon process, and the requests in flight finish on this one. Without
-// a listener keeper nothing changes: the sockets close with the process.
+// HandOverSecureLinks runs when the daemon is asked to stop or exits for an
+// update, before it disconnects from Gateway and the relays: the requests in
+// flight finish on this process, which keeps accepting meanwhile, and then the
+// Secure Link sockets go to the next daemon process. Without a listener keeper
+// nothing changes: the sockets close with the process.
 func (p *NginxPlugin) HandOverSecureLinks() {
-	handed := p.secureLinks.suspendForHandover() + p.registryLinks.suspendForHandover()
-	if handed == 0 {
-		return
-	}
-	if p.logger != nil {
-		p.logger.Info("handing Secure Link sockets over to the next daemon process", "sockets", handed)
-	}
-	done := make(chan struct{})
-	go func() {
-		p.registryLinks.drainForHandover(secureLinkHandoverDrain)
-		close(done)
-	}()
-	p.secureLinks.drainForHandover(secureLinkHandoverDrain)
-	<-done
+	p.handoverOnce.Do(func() {
+		if p.secureLinks.keptListeners()+p.registryLinks.keptListeners() == 0 {
+			return
+		}
+		drain := func(limit time.Duration) {
+			done := make(chan struct{})
+			go func() {
+				p.registryLinks.drainForHandover(limit)
+				close(done)
+			}()
+			p.secureLinks.drainForHandover(limit)
+			<-done
+		}
+		drain(secureLinkHandoverDrain)
+		handed := p.secureLinks.suspendForHandover() + p.registryLinks.suspendForHandover()
+		if p.logger != nil {
+			p.logger.Info("handing Secure Link sockets over to the next daemon process", "sockets", handed)
+		}
+		drain(secureLinkHandoverFinish)
+	})
+}
+
+// AnnounceRestart implements lifecycle.RestartAnnouncerPlugin: a daemon that
+// exits for its staged update hands its sockets over the same way.
+func (p *NginxPlugin) AnnounceRestart() {
+	p.HandOverSecureLinks()
 }

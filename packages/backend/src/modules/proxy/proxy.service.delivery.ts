@@ -1,5 +1,6 @@
 import { AppError } from '@/middleware/error-handler.js';
 import { resolveIngressNodes } from '@/modules/ingress-groups/ingress-nodes.js';
+import type { HostApplyOptions } from '@/services/nginx-certificate-distribution.service.js';
 import { type CertPathOptions, logger, type ProxyHostRow, ProxyServiceCore } from './proxy.service.core.js';
 import {
   forgetIngressMemberDeliveries,
@@ -15,6 +16,8 @@ export interface HostDeliveryOptions {
   pagesRouteIncludePathOverride?: string;
   /** Deliver only to these serving nodes (reconnect resync, member add, convergence). Group routes only. */
   nodeIds?: string[];
+  /** How the config reaches the node (the reconnect resync defers the reload and keeps the active bundle). */
+  apply?: HostApplyOptions;
 }
 
 export interface HostDeliveryResult {
@@ -54,7 +57,8 @@ export abstract class ProxyServiceDelivery extends ProxyServiceCore {
         host.nodeId,
         certPaths.preparedTls,
         configOwnership,
-        host.accessListId
+        host.accessListId,
+        options.apply
       );
       const nodeId = certPaths.preparedTls?.nodeId ?? host.nodeId ?? '';
       return {
@@ -107,7 +111,8 @@ export abstract class ProxyServiceDelivery extends ProxyServiceCore {
           nodeId,
           certPaths.preparedTls,
           configOwnership,
-          host.accessListId
+          host.accessListId,
+          options.apply
         );
         await markIngressMemberDelivery(this.db, host.id, nodeId, {
           ...desired,

@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
@@ -48,6 +51,12 @@ type Handler struct {
 	secureLinkListeners interface {
 		ensureReferencedListeners(config string) []string
 	}
+	// mutationMu serializes the changes to the nginx configuration: commands, the deferred reload and the
+	// daemon's own background changes (see reload_coalescing.go).
+	mutationMu    sync.Mutex
+	deferredMu    sync.Mutex
+	deferredTimer *time.Timer
+	deferredSince time.Time
 }
 
 // prepareSecureLinkListeners runs before a config is tested and reloaded: every
@@ -94,6 +103,8 @@ func (h *Handler) setConfigOwnership(hostID, ownership string) (func(), error) {
 // HandleCommand processes a GatewayCommand and returns a CommandResult.
 func (h *Handler) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+	h.mutationMu.Lock()
+	defer h.mutationMu.Unlock()
 
 	switch payload := cmd.Payload.(type) {
 	case *pb.GatewayCommand_ApplyConfig:
@@ -197,8 +208,26 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 	// Make-before-break (M-2): the sockets the new config proxies to listen
 	// before nginx can load it.
 	h.prepareSecureLinkListeners(cmd.ConfigContent)
+	if !cmd.TestOnly && oldConfig != nil && bytes.Equal(oldConfig, []byte(cmd.ConfigContent)) {
+		// nginx already runs this config: a reconnect resync must not reload it.
+		if err := h.settleUnchanged(cmd.DeferReload); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+		}
+		return
+	}
+	undoChange := func() {}
+	if !cmd.TestOnly {
+		if undoChange, err = h.mgr.BeginChange(); err != nil {
+			restoreOwnership()
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+	}
 	if err := nginx.WriteAtomic(path, []byte(cmd.ConfigContent)); err != nil {
 		restoreOwnership()
+		undoChange()
 		result.Success = false
 		result.Error = fmt.Sprintf("write config: %v", err)
 		return
@@ -209,7 +238,9 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 
 	if !valid {
 		h.logConfigTestFailure("apply proxy host config", output, "host_id", cmd.HostId)
-		_ = rollbackConfig()
+		if rollbackConfig() == nil {
+			undoChange()
+		}
 		restoreOwnership()
 		_, _ = h.mgr.TestConfig()
 		result.Success = false
@@ -225,7 +256,7 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 		return
 	}
 
-	if err := h.mgr.Reload(); err != nil {
+	if err := h.commitChange(cmd.DeferReload); err != nil {
 		rollbackErr := rollbackConfig()
 		restoreOwnership()
 		_, _ = h.mgr.TestConfig()
@@ -237,12 +268,26 @@ func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.Comma
 		}
 		return
 	}
-	h.logger.Info("config applied", "host_id", cmd.HostId)
+	h.logger.Info("config applied", "host_id", cmd.HostId, "reload_deferred", cmd.DeferReload)
 }
 
 func (h *Handler) handleRemoveConfig(cmd *pb.RemoveConfigCommand, result *pb.CommandResult) {
 	path := h.mgr.ConfigPath(cmd.HostId)
 	oldConfig, _ := nginx.ReadFile(path)
+	if oldConfig == nil {
+		// Nothing to remove: nginx does not serve the host from this node.
+		removeHostCache(cmd.HostId)
+		if err := h.settleUnchanged(false); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+		}
+		return
+	}
+	if _, err := h.mgr.BeginChange(); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return
+	}
 	if err := nginx.RemoveFile(path); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("remove config: %v", err)
@@ -265,7 +310,7 @@ func (h *Handler) handleRemoveConfig(cmd *pb.RemoveConfigCommand, result *pb.Com
 		return
 	}
 
-	if err := h.mgr.Reload(); err != nil {
+	if err := h.reloadNow(); err != nil {
 		if oldConfig != nil {
 			_ = nginx.WriteAtomic(path, oldConfig)
 		}

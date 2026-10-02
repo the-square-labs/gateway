@@ -796,6 +796,10 @@ message ApplyConfigCommand {
   string config_content = 2;
   bool test_only = 3;
   string config_ownership = 4; // "managed_secure_link", "user_owned", or empty to preserve
+  // The config is written and tested, and loaded with the reload of the batch it belongs to (reconnect resync):
+  // the next command that reloads nginx, or the daemon itself shortly after the last deferred change. Content
+  // equal to the file on disk is never rewritten or reloaded.
+  bool defer_reload = 5;
 }
 
 // Daemon also cleans up associated cache directory on removal
@@ -821,6 +825,7 @@ message ApplyTlsBundleCommand {
   repeated VersionedCertBundle certificates = 3;
   string generation = 4;
   string config_ownership = 5;
+  bool defer_reload = 6; // as in ApplyConfigCommand
 }
 
 message VersionedCertBundle {

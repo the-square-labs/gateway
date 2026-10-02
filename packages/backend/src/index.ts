@@ -23,6 +23,7 @@ import { createApp } from '@/app.js';
 import { container, initializeContainer } from '@/bootstrap.js';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
+import { acceptedOperations } from '@/edition/accepted-operations.js';
 import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { startGrpcServer, stopGrpcServer } from '@/grpc/server.js';
@@ -89,6 +90,13 @@ async function runMigrations(databaseUrl: string) {
   }
   logger.info('Database migrations completed');
 }
+
+/** Shutdown work that only waits for running orchestration, which durable recovery resumes after a restart. */
+const RESUMABLE_SHUTDOWN_WORK = new Set(['orchestration', 'commercial_drain']);
+/** How long the commercial module may still close once running orchestration was left to recovery. */
+const ABANDONED_WORK_CLOSE_MS = 1_000;
+/** A client that does not answer the close frame by then is cut. */
+const WEBSOCKET_CLOSE_WAIT_MS = 2_000;
 
 type GatewayWebSocketServer = ReturnType<typeof createApp>['wss'];
 
@@ -261,6 +269,8 @@ async function main() {
     await commercialEdition.start();
 
     let userDrainPromises: Promise<unknown>[] = [];
+    // Running orchestration the stop left to durable recovery (X1-10): the commercial module is not waited for.
+    let resumableWorkAbandoned = false;
     let loggingClosePromise: Promise<void> | null = null;
     let forceUserPromise: Promise<void> | null = null;
     const pendingShutdownWork = new Set<string>();
@@ -320,6 +330,17 @@ async function main() {
           return result.operations.reduce((total, operation) => total + operation.count, 0);
         },
         pendingWork: () => [...pendingShutdownWork],
+        resumableWorkOnly: async () => {
+          // Everything else settled; what is left is the wait for running orchestration and the requests on it.
+          if ([...pendingShutdownWork].some((name) => !RESUMABLE_SHUTDOWN_WORK.has(name))) return false;
+          const activity = await commercialEdition.activeOrchestrationOperations();
+          const running = (activity ?? []).reduce((total, operation) => total + Math.max(0, operation.running), 0);
+          return running > 0 && lifecycle.getActiveCount('user') <= running;
+        },
+        abandonResumableWork: () => {
+          resumableWorkAbandoned = true;
+          acceptedOperations.abandonRunning();
+        },
         forceCloseUserWork: async () => {
           forceUserPromise ??= shutdownWork(
             'force_close_user_work',
@@ -341,7 +362,7 @@ async function main() {
         closeHttp: async (deadline) => {
           // Keep established sessions alive through the expensive drain phases.
           // Signal restart only at the final transport shutdown boundary.
-          await drainWebSocketsForRestart(wss.clients, deadline);
+          await drainWebSocketsForRestart(wss.clients, Math.min(deadline, Date.now() + WEBSOCKET_CLOSE_WAIT_MS));
           terminateRemainingWebSockets(wss.clients);
           await closeWebSocketServer(wss);
           await closeHttpServer(server, deadline);
@@ -378,7 +399,13 @@ async function main() {
 
           await Promise.all([
             ...independentFinalizers,
-            settleShutdownTask('commercial_module', commercialEdition.close(deadline)),
+            settleShutdownTask(
+              'commercial_module',
+              // Abandoned orchestration would hold the close until the hard deadline: it ends with the process.
+              commercialEdition.close(
+                resumableWorkAbandoned ? Math.min(deadline, Date.now() + ABANDONED_WORK_CLOSE_MS) : deadline
+              )
+            ),
             settleShutdownTask('grpc', stopGrpcServer(Math.min(3000, Math.max(0, deadline - Date.now())))),
             settleShutdownTask(
               'sandbox_runner',

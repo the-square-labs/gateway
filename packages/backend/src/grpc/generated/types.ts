@@ -563,6 +563,8 @@ export interface ApplyConfigCommand {
   configContent: string;
   testOnly: boolean;
   configOwnership?: string;
+  /** Loaded with the reload of its batch (reconnect resync), see the proto. */
+  deferReload?: boolean;
 }
 
 export interface RemoveConfigCommand {
@@ -582,6 +584,7 @@ export interface ApplyTlsBundleCommand {
   certificates: VersionedCertBundle[];
   generation: string;
   configOwnership?: string;
+  deferReload?: boolean;
 }
 
 export interface VersionedCertBundle {

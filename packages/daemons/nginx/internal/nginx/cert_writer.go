@@ -16,17 +16,7 @@ func DeployCert(certsDir, certID string, certPem, keyPem, chainPem []byte) error
 		return fmt.Errorf("create cert dir: %w", err)
 	}
 
-	fullchainPem := certPem
-	if len(chainPem) > 0 {
-		fullchainPem = make([]byte, 0, len(certPem)+1+len(chainPem))
-		fullchainPem = append(fullchainPem, certPem...)
-		if len(certPem) > 0 && certPem[len(certPem)-1] != '\n' {
-			fullchainPem = append(fullchainPem, '\n')
-		}
-		fullchainPem = append(fullchainPem, chainPem...)
-	}
-
-	if err := WriteAtomic(filepath.Join(dir, "fullchain.pem"), fullchainPem); err != nil {
+	if err := WriteAtomic(filepath.Join(dir, "fullchain.pem"), fullchainOf(certPem, chainPem)); err != nil {
 		return fmt.Errorf("write cert: %w", err)
 	}
 
@@ -46,6 +36,34 @@ func DeployCert(certsDir, certID string, certPem, keyPem, chainPem []byte) error
 	}
 
 	return nil
+}
+
+func fullchainOf(certPem, chainPem []byte) []byte {
+	if len(chainPem) == 0 {
+		return certPem
+	}
+	fullchainPem := make([]byte, 0, len(certPem)+1+len(chainPem))
+	fullchainPem = append(fullchainPem, certPem...)
+	if len(certPem) > 0 && certPem[len(certPem)-1] != '\n' {
+		fullchainPem = append(fullchainPem, '\n')
+	}
+	return append(fullchainPem, chainPem...)
+}
+
+// CertMatches reports whether DeployCert would leave the files of certID as they are.
+func CertMatches(certsDir, certID string, certPem, keyPem, chainPem []byte) bool {
+	dir := filepath.Join(certsDir, certID)
+	expected := map[string][]byte{"fullchain.pem": fullchainOf(certPem, chainPem), "privkey.pem": keyPem}
+	if len(chainPem) > 0 {
+		expected["chain.pem"] = chainPem
+	}
+	for name, content := range expected {
+		current, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || !bytes.Equal(current, content) {
+			return false
+		}
+	}
+	return true
 }
 
 // RemoveCert removes a certificate directory.
@@ -104,16 +122,7 @@ func DeployVersionedCert(certsDir, certID, version, replicaGeneration string, ce
 	}
 	defer os.RemoveAll(stage)
 
-	fullchainPem := certPem
-	if len(chainPem) > 0 {
-		fullchainPem = make([]byte, 0, len(certPem)+1+len(chainPem))
-		fullchainPem = append(fullchainPem, certPem...)
-		if len(certPem) > 0 && certPem[len(certPem)-1] != '\n' {
-			fullchainPem = append(fullchainPem, '\n')
-		}
-		fullchainPem = append(fullchainPem, chainPem...)
-	}
-	if err := WriteAtomic(filepath.Join(stage, "fullchain.pem"), fullchainPem); err != nil {
+	if err := WriteAtomic(filepath.Join(stage, "fullchain.pem"), fullchainOf(certPem, chainPem)); err != nil {
 		return CertPointer{}, fmt.Errorf("write staged certificate: %w", err)
 	}
 	if err := WriteAtomic(filepath.Join(stage, "privkey.pem"), keyPem); err != nil {
@@ -144,6 +153,18 @@ func DeployVersionedCert(certsDir, certID, version, replicaGeneration string, ce
 		return CertPointer{}, err
 	}
 	return previous, nil
+}
+
+// CertVersionActive reports whether certID already serves the staged version: its current pointer names that
+// version and the version's certificate is in place.
+func CertVersionActive(certsDir, certID, version string) bool {
+	root := filepath.Join(certsDir, certID)
+	target, err := os.Readlink(filepath.Join(root, "current"))
+	if err != nil || target != filepath.Join("versions", version) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(root, "versions", version, "fullchain.pem"))
+	return err == nil && info.Mode().IsRegular()
 }
 
 func CurrentCertPointer(certsDir, certID string) (CertPointer, error) {

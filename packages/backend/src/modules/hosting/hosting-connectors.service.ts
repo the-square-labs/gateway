@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, notInArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { hostingOperations, hostingResources, integrationConnectors } from '@/db/schema/index.js';
+import { sameTimestamp } from '@/db/timestamp-equality.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { hasScope } from '@/lib/permissions.js';
 import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
@@ -108,7 +109,13 @@ export class HostingConnectorsService {
     await this.db
       .update(integrationConnectors)
       .set({ capabilities: { ...connector.capabilities, finance: false, topup: false } })
-      .where(and(eq(integrationConnectors.id, connector.id), eq(integrationConnectors.updatedAt, connector.updatedAt)));
+      .where(
+        and(
+          eq(integrationConnectors.id, connector.id),
+          // defaultNow() stores microseconds the Date read back does not carry.
+          sameTimestamp(integrationConnectors.updatedAt, connector.updatedAt)
+        )
+      );
     this.changed(connector.id);
   }
   constructor(

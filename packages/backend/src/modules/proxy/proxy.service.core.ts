@@ -13,6 +13,7 @@ import type { GeneralSettingsService } from '@/modules/settings/general-settings
 import type { CacheService } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type {
+  HostApplyOptions,
   NginxCertificateDistributionService,
   PreparedTlsCertificate,
 } from '@/services/nginx-certificate-distribution.service.js';
@@ -261,15 +262,21 @@ export abstract class ProxyServiceCore {
   /** Renders and applies a route on every node that serves it (see ProxyServiceDelivery.deliverHost). */
   protected abstract deliverHost(
     host: ProxyHostRow,
-    options?: { certOptions?: CertPathOptions; pagesRouteIncludePathOverride?: string; nodeIds?: string[] }
+    options?: {
+      certOptions?: CertPathOptions;
+      pagesRouteIncludePathOverride?: string;
+      nodeIds?: string[];
+      apply?: HostApplyOptions;
+    }
   ): Promise<{ config: string; configOwnership: string; epoch: number; configs: Map<string, string> }>;
 
   protected async renderAndApplyHost(
     host: ProxyHostRow,
     certOptions: CertPathOptions = {},
-    nodeIds?: string[]
+    nodeIds?: string[],
+    apply?: HostApplyOptions
   ): Promise<{ config: string; configOwnership: string; epoch: number; configs: Map<string, string> }> {
-    return this.deliverHost(host, { certOptions, nodeIds });
+    return this.deliverHost(host, { certOptions, nodeIds, apply });
   }
 
   async reconcileTemplateHosts(
@@ -354,15 +361,29 @@ export abstract class ProxyServiceCore {
     nodeId: string | null,
     preparedTls?: PreparedTlsCertificate | null,
     configOwnership = 'user_owned',
-    accessListId?: string | null
+    accessListId?: string | null,
+    applyOptions: HostApplyOptions = {}
   ): Promise<void> {
     const resolvedNodeId = preparedTls?.nodeId ?? (await this.nodeDispatch.resolveNodeId(nodeId));
     this.bumpHostConfigEpoch(hostId);
     await this.deployAccessListCredentials(resolvedNodeId, accessListId);
     if (preparedTls) {
-      await this.certificateDistribution.applyHostBundle({ id: hostId, nodeId }, config, preparedTls, configOwnership);
+      await this.certificateDistribution.applyHostBundle(
+        { id: hostId, nodeId },
+        config,
+        preparedTls,
+        configOwnership,
+        applyOptions
+      );
     } else {
-      const result = await this.nodeDispatch.applyConfig(resolvedNodeId, hostId, config, false, configOwnership);
+      const result = await this.nodeDispatch.applyConfig(
+        resolvedNodeId,
+        hostId,
+        config,
+        false,
+        configOwnership,
+        applyOptions.deferReload ?? false
+      );
       if (!result.success) {
         const error = result.error || 'Daemon config apply failed';
         throw nginxConfigRejection(error) ?? new Error(error);

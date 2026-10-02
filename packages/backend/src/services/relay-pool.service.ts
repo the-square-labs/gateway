@@ -16,6 +16,7 @@ import {
   relayPoolUpdateSteps,
   relayRoutes,
 } from '@/db/schema/index.js';
+import { sameTimestamp } from '@/db/timestamp-equality.js';
 import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -503,7 +504,8 @@ export class RelayPoolService {
               .where(
                 and(
                   eq(relayInstances.id, instance.id),
-                  eq(relayInstances.manualDrainStartedAt, instance.manualDrainStartedAt)
+                  // Written with now(): microseconds the Date read back does not carry.
+                  sameTimestamp(relayInstances.manualDrainStartedAt, instance.manualDrainStartedAt)
                 )
               );
         } catch (error) {
