@@ -21,7 +21,10 @@ import (
 )
 
 const (
-	MaxBackoff            = 60 * time.Second
+	// MaxBackoff caps the wait between connection attempts before jitter (Jitter: up to 1.5 times this). A relay or
+	// Gateway that comes back after a long outage hears from every node within 15 s: with a 60 s cap the nodes
+	// trickled back over 60-70 s after a five-minute outage of the local relay.
+	MaxBackoff            = 10 * time.Second
 	InitialBackoff        = 1 * time.Second
 	ConnectAttemptTimeout = 10 * time.Second
 	MaxMessageBytes       = 512 * 1024 * 1024
@@ -181,22 +184,32 @@ func (c *Connector) connectWithRetry(ctx context.Context, lane bool) (*grpc.Clie
 			_ = conn.Close()
 		}
 
+		delay := Jitter(backoff, rand.Float64)
 		c.Logger.Warn("connection failed, retrying",
 			"error", err,
 			"attempt_timeout", ConnectAttemptTimeout,
-			"backoff", backoff,
+			"backoff", delay.Round(time.Millisecond),
 		)
 
-		// Add jitter: 0.5x to 1.5x
-		jitter := time.Duration(float64(backoff) * (0.5 + rand.Float64()))
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(jitter):
+		case <-time.After(delay):
 		}
 
-		backoff = time.Duration(math.Min(float64(backoff)*2, float64(MaxBackoff)))
+		backoff = NextBackoff(backoff)
 	}
+}
+
+// NextBackoff doubles a retry backoff up to MaxBackoff.
+func NextBackoff(backoff time.Duration) time.Duration {
+	return time.Duration(math.Min(float64(backoff)*2, float64(MaxBackoff)))
+}
+
+// Jitter spreads a backoff over 0.5 to 1.5 times its value (random draws from [0, 1)), so nodes that lost the same
+// relay or Gateway do not all retry in the same instant.
+func Jitter(backoff time.Duration, random func() float64) time.Duration {
+	return time.Duration(float64(backoff) * (0.5 + random()))
 }
 
 func waitUntilReady(ctx context.Context, conn *grpc.ClientConn) error {
