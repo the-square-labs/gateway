@@ -198,11 +198,12 @@ export class NodeDispatchService {
     hostId: string,
     configContent: string,
     testOnly = false,
-    configOwnership = ''
+    configOwnership = '',
+    deferReload = false
   ): Promise<CommandResult> {
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(nodeId, {
-      applyConfig: { hostId, configContent, testOnly, configOwnership },
+      applyConfig: { hostId, configContent, testOnly, configOwnership, deferReload },
     });
   }
 
@@ -245,6 +246,8 @@ export class NodeDispatchService {
       configContent: string;
       generation: string;
       configOwnership?: string;
+      /** Loaded with the reload of its batch (reconnect resync). */
+      deferReload?: boolean;
       certificates: Array<{
         certId: string;
         certPem: Buffer;
@@ -264,6 +267,7 @@ export class NodeDispatchService {
           configContent: input.configContent,
           generation: input.generation,
           configOwnership: input.configOwnership ?? '',
+          deferReload: input.deferReload ?? false,
           certificates: input.certificates,
         },
       },

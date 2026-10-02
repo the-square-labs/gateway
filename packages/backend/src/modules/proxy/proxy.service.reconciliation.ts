@@ -404,10 +404,14 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
           // Existing hosts on an old daemon retain their legacy config and
           // certificate paths. A new bundle is never initiated for that fleet.
           // A group route is re-applied on this member only.
+          // Every route is re-sent: content the node already runs is neither rewritten nor reloaded, the changes
+          // load with one reload at the end of the resync (the full sync below), and an unchanged TLS bundle is not
+          // sent again.
           const delivered = await this.renderAndApplyHost(
             host,
             supportsDistribution ? {} : { legacy: true },
-            host.ingressGroupId ? [nodeId] : undefined
+            host.ingressGroupId ? [nodeId] : undefined,
+            { deferReload: true, reuseActiveBundle: true }
           );
           return { ...delivered, config: delivered.configs.get(nodeId) ?? delivered.config };
         });
