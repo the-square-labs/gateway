@@ -67,7 +67,12 @@ export class ShutdownCoordinator {
     const hardDeadline = logDeadline + settings.finalizationTimeoutSeconds * 1000;
     const watchdog = setTimeout(
       () => {
-        logger.error('Graceful shutdown hard deadline exceeded', { shutdownId, signal, hardDeadline });
+        logger.error('Graceful shutdown hard deadline exceeded', {
+          shutdownId,
+          signal,
+          hardDeadline,
+          pendingWork: this.options.hooks.pendingWork?.() ?? [],
+        });
         this.options.exit?.(1);
       },
       Math.max(0, hardDeadline - this.now())

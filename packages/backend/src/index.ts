@@ -97,6 +97,8 @@ async function runMigrations(databaseUrl: string) {
 const RESUMABLE_SHUTDOWN_WORK = new Set(['orchestration', 'commercial_drain']);
 /** How long the commercial module may still close once running orchestration was left to recovery. */
 const ABANDONED_WORK_CLOSE_MS = 1_000;
+/** Shutdown work that takes longer than this is named in the log with its duration. */
+const SLOW_SHUTDOWN_WORK_MS = 2_000;
 /** A client that does not answer the close frame by then is cut. */
 const WEBSOCKET_CLOSE_WAIT_MS = 2_000;
 
@@ -276,16 +278,22 @@ async function main() {
     let loggingClosePromise: Promise<void> | null = null;
     let forceUserPromise: Promise<void> | null = null;
     const pendingShutdownWork = new Set<string>();
-    // Names unsettled shutdown work, so a drain that times out says what it waited for.
+    // Names unsettled shutdown work, so a drain that times out says what it waited for, and work that held the
+    // stop for long, so a slow stop says what it waited for even when it finished in time.
     const shutdownWork = <T>(name: string, task: Promise<T>): Promise<T> => {
       pendingShutdownWork.add(name);
-      const settle = () => pendingShutdownWork.delete(name);
+      const startedAt = Date.now();
+      const settle = () => {
+        pendingShutdownWork.delete(name);
+        const durationMs = Date.now() - startedAt;
+        if (durationMs >= SLOW_SHUTDOWN_WORK_MS) logger.info('Slow shutdown work settled', { name, durationMs });
+      };
       task.then(settle, settle);
       return task;
     };
     const settleShutdownTask = async (name: string, task: Promise<unknown>): Promise<void> => {
       try {
-        await task;
+        await shutdownWork(name, task);
       } catch (error) {
         logger.warn('Shutdown task failed', { name, error });
       }
