@@ -399,6 +399,80 @@ func TestHandoverFinishClosesAnsweredConnectionsBeforeTheExit(t *testing.T) {
 	}
 }
 
+// slowCloseConn is a connection whose Close returns only once release is
+// closed, the way a daemon busy on one CPU closes a connection only after the
+// goroutines serving it ran, tens of milliseconds later each.
+type slowCloseConn struct {
+	*net.UnixConn
+	release <-chan struct{}
+}
+
+func (c slowCloseConn) Close() error {
+	<-c.release
+	return c.UnixConn.Close()
+}
+
+// A drain pass ends the connections that answered without waiting for each of
+// them to close: the wait after the handover stays within its limit on a busy
+// daemon, and nginx sees the connections end at once.
+func TestHandoverDrainDoesNotWaitForConnectionsToClose(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	statuses, err := manager.sync(sourceCommand(0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", manager.socketDir+"/pair.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	release := make(chan struct{})
+	defer close(release)
+	binding := manager.bindings[statuses[0].LinkID]
+	answeredAt := time.Now().Add(-time.Second).UnixNano()
+	peers := make([]net.Conn, 0, 5)
+	for range 5 {
+		peer, err := net.Dial("unix", listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = peer.Close() })
+		local, err := listener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = local.Close() })
+		tracked := newTrackedConn(slowCloseConn{UnixConn: local.(*net.UnixConn), release: release}).(*trackedConn)
+		tracked.lastRead.Store(answeredAt - 1)
+		tracked.lastWrite.Store(answeredAt)
+		binding.activeMu.Lock()
+		binding.active[tracked] = true
+		binding.activeMu.Unlock()
+		peers = append(peers, peer)
+	}
+
+	drained := make(chan time.Duration, 1)
+	go func() {
+		started := time.Now()
+		manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet)
+		drained <- time.Since(started)
+	}()
+	select {
+	case elapsed := <-drained:
+		if elapsed >= secureLinkHandoverFinish {
+			t.Fatalf("the drain took %s with every connection answered", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the drain waited for the connections it ended to close")
+	}
+	for index, peer := range peers {
+		_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+		if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Fatalf("connection %d did not end for nginx: %v", index, err)
+		}
+	}
+}
+
 func TestStaleTemporarySocketsAreRemoved(t *testing.T) {
 	directory := t.TempDir()
 	stale := directory + "/.1.7.tmp"

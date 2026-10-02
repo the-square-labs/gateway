@@ -36,6 +36,14 @@ import (
 // target, serving and accepting meanwhile, up to the restart hold. A Route
 // whose node restarts while this daemon updates (Update Nodes) is served once
 // the node registered again instead of failing on this process's exit.
+//
+// A drain ends a connection with a shutdown, not a close: nginx sees it end at
+// once, and the opener closes it when its tunnel ended. A close waits for the
+// goroutines reading and writing the connection to let go of it, and a busy
+// daemon on one CPU runs them tens of milliseconds later each: a drain pass
+// closing a handful of connections took 0.1 s, and the bounded wait after the
+// handover took 0.5-1 s instead of 0.3 s while new connections waited in the
+// backlog.
 
 const (
 	// secureLinkHandoverDrain bounds how long a stopping daemon keeps serving
@@ -104,6 +112,20 @@ func (c *trackedConn) CloseWrite() error {
 		return closer.CloseWrite()
 	}
 	return nil
+}
+
+// end ends the connection for its peer at once, without waiting for the
+// goroutines serving it: they see it end and close it.
+func (c *trackedConn) end() {
+	if connection, ok := c.Conn.(interface {
+		CloseRead() error
+		CloseWrite() error
+	}); ok {
+		_ = connection.CloseWrite()
+		_ = connection.CloseRead()
+		return
+	}
+	_ = c.Conn.Close()
 }
 
 // secureLinkHolding marks a connection its opener holds for its relay
@@ -184,7 +206,7 @@ func (m *sourceLinkManager) suspendForHandover() int {
 }
 
 // drainForHandover waits, up to limit, for the requests this process is
-// serving, closing each connection as soon as it answered and carried no byte
+// serving, ending each connection as soon as it answered and carried no byte
 // for quiet.
 func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration) {
 	if m == nil {
@@ -205,7 +227,7 @@ func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration) {
 			for connection := range binding.active {
 				tracked, ok := connection.(*trackedConn)
 				if ok && tracked.idle(now, quiet) {
-					_ = connection.Close()
+					tracked.end()
 					continue
 				}
 				busy++
