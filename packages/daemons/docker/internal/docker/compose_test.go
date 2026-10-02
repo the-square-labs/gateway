@@ -431,6 +431,14 @@ func TestComposeSidecarCommandsPreservePullAndVolumesSemantics(t *testing.T) {
 	if err != nil || strings.Contains(strings.Join(down[0], " "), "--volumes") {
 		t.Fatalf("down commands = %#v, %v", down, err)
 	}
+	for _, action := range []string{"apply", "pull_apply"} {
+		for _, noStart := range []bool{false, true} {
+			commands, err := composeSidecarCommands(composeRequest{action: action, noStart: noStart, removeOrphans: true})
+			if err != nil || !strings.HasSuffix(strings.Join(commands[len(commands)-1], " "), "--remove-orphans") {
+				t.Fatalf("%s (noStart %v) with removeOrphans = %#v, %v", action, noStart, commands, err)
+			}
+		}
+	}
 }
 
 func TestComposeSidecarUsesExplicitBinaryEntrypoint(t *testing.T) {

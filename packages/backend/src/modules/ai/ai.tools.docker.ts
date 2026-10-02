@@ -812,7 +812,11 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
           enum: ['apply', 'pull_apply', 'start', 'stop', 'restart', 'down', 'delete_volumes', 'cancel'],
         },
         idempotencyKey: { type: 'string' },
-        removeOrphans: { type: 'boolean' },
+        removeOrphans: {
+          type: 'boolean',
+          description:
+            'apply, pull_apply and down. Default true: services the revision no longer declares are removed.',
+        },
         volumeNames: { type: 'array', items: { type: 'string' } },
         secretId: { type: 'string' },
         key: { type: 'string' },

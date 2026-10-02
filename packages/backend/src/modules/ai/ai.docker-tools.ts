@@ -795,7 +795,7 @@ async function manageDockerCompose(context: DockerToolContext, user: User, args:
       ComposeOperationInputSchema.parse({
         revisionId: a.revisionId,
         idempotencyKey: a.idempotencyKey,
-        removeOrphans: a.removeOrphans ?? false,
+        removeOrphans: a.removeOrphans ?? true,
         volumeNames: a.volumeNames ?? [],
       }),
       user.id

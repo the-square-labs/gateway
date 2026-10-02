@@ -529,14 +529,22 @@ func (s *dockerComposeSidecar) run(ctx context.Context, request composeRequest) 
 	return nil
 }
 
+// withRemoveOrphans removes the services a revision no longer declares when the operation asks for it.
+func withRemoveOrphans(command []string, request composeRequest) []string {
+	if request.removeOrphans {
+		return append(command, "--remove-orphans")
+	}
+	return command
+}
+
 func composeSidecarCommands(request composeRequest) ([][]string, error) {
 	if request.noStart {
 		switch request.action {
 		case "apply":
 			// Images already on the node stay as they are; only a missing one is fetched.
-			return [][]string{{"up", "--no-start", "--no-build", "--pull", "missing"}}, nil
+			return [][]string{withRemoveOrphans([]string{"up", "--no-start", "--no-build", "--pull", "missing"}, request)}, nil
 		case "pull_apply":
-			return [][]string{{"pull"}, {"up", "--no-start", "--no-build", "--pull", "never"}}, nil
+			return [][]string{{"pull"}, withRemoveOrphans([]string{"up", "--no-start", "--no-build", "--pull", "never"}, request)}, nil
 		case "start":
 			return nil, nil
 		case "restart":
@@ -546,9 +554,9 @@ func composeSidecarCommands(request composeRequest) ([][]string, error) {
 	switch request.action {
 	case "apply":
 		// Images already on the node stay as they are; only a missing one is fetched.
-		return [][]string{{"up", "--detach", "--no-build", "--pull", "missing"}}, nil
+		return [][]string{withRemoveOrphans([]string{"up", "--detach", "--no-build", "--pull", "missing"}, request)}, nil
 	case "pull_apply":
-		return [][]string{{"pull"}, {"up", "--detach", "--no-build", "--pull", "never"}}, nil
+		return [][]string{{"pull"}, withRemoveOrphans([]string{"up", "--detach", "--no-build", "--pull", "never"}, request)}, nil
 	case composeActionPullCreate:
 		// A lease-mode standby (D7): pulled and created, never started.
 		create := []string{"create", "--no-build", "--pull", "never"}
