@@ -43,6 +43,7 @@ import {
   consistentTokenLimits,
   derivedSource,
   type InferenceModelMetadataSource,
+  inheritFamilyMetadata,
   isRecentCoreQuotaReading,
   latestQuota,
   latestValidQuota,
@@ -528,124 +529,131 @@ export class InferenceProviderService {
       const models = [...rowsById.values()].filter(
         (row) => row.disabled !== true && (liveModelIds === null || liveModelIds.includes(row.id))
       );
+      // OpenRouter-style rosters list each model's capabilities, so a model without "tools" there
+      // does not accept them. Other providers publish none at all, and the core sends tools to
+      // every model it routes: for them a missing list says nothing about tool support.
+      const rosterListsCapabilities = (liveModels ?? []).some((model) => model.capabilities !== undefined);
       await this.persistModels(
         connectionId,
-        models.map((row) => {
-          const known = knownProviderModel(connection.providerId, row.id);
-          const live = liveById.get(row.id);
-          // Record where every technical value came from so the admin UI can tell a live
-          // provider answer apart from a built-in fallback value or a Gateway calculation.
-          const coreSource = (field: string) => row.metadataSources?.[field] ?? (liveModels ? 'fallback' : undefined);
-          // A value equal to the live answer is provider-reported. A core value that differs from
-          // it was changed by operator configuration, so it is left unlabeled.
-          const sourceOf = (
-            field: string,
-            liveValue: unknown,
-            rowValue: unknown,
-            knownValue: unknown
-          ): InferenceModelMetadataSource | undefined =>
-            rowValue !== undefined
-              ? liveValue !== undefined
-                ? sameMetadataValue(liveValue, rowValue)
-                  ? 'provider'
-                  : undefined
-                : coreSource(field)
-              : knownValue !== undefined
-                ? 'fallback'
-                : undefined;
-          const coreAutoCompact =
-            row.autoCompactTokenLimit ??
-            (row.maxInputTokens !== undefined ? Math.floor(row.maxInputTokens * 0.9) : undefined);
-          const limits = consistentTokenLimits({
-            contextWindow: row.contextWindow ?? known?.contextWindow,
-            maxInputTokens: row.maxInputTokens ?? known?.maxInputTokens,
-            autoCompactTokenLimit: coreAutoCompact ?? known?.autoCompactTokenLimit,
-          });
-          const contextWindowSource = sourceOf(
-            'contextWindow',
-            live?.contextWindow,
-            row.contextWindow,
-            known?.contextWindow
-          );
-          const maxInputSource = limits.maxInputFromContextWindow
-            ? derivedSource(contextWindowSource)
-            : sourceOf('maxInputTokens', live?.maxInputTokens, row.maxInputTokens, known?.maxInputTokens);
-          const isIdLike = (name: string | undefined) =>
-            name !== undefined && (name === row.id || name.endsWith(`/${row.id}`));
-          const fieldSources = Object.fromEntries(
-            Object.entries({
-              // An id-like provider name is replaced by the catalog name, so the shown value is the catalog's.
-              displayName:
-                isIdLike(row.displayName) && known
+        inheritFamilyMetadata(
+          models.map((row) => {
+            const known = knownProviderModel(connection.providerId, row.id);
+            const live = liveById.get(row.id);
+            // Record where every technical value came from so the admin UI can tell a live
+            // provider answer apart from a built-in fallback value or a Gateway calculation.
+            const coreSource = (field: string) => row.metadataSources?.[field] ?? (liveModels ? 'fallback' : undefined);
+            // A value equal to the live answer is provider-reported. A core value that differs from
+            // it was changed by operator configuration, so it is left unlabeled.
+            const sourceOf = (
+              field: string,
+              liveValue: unknown,
+              rowValue: unknown,
+              knownValue: unknown
+            ): InferenceModelMetadataSource | undefined =>
+              rowValue !== undefined
+                ? liveValue !== undefined
+                  ? sameMetadataValue(liveValue, rowValue)
+                    ? 'provider'
+                    : undefined
+                  : coreSource(field)
+                : knownValue !== undefined
                   ? 'fallback'
-                  : sourceOf('displayName', live?.displayName, row.displayName, known?.displayName),
-              contextWindow: contextWindowSource,
-              maxInputTokens: maxInputSource,
-              maxOutputTokens: sourceOf(
-                'maxOutputTokens',
-                live?.maxOutputTokens,
-                row.maxOutputTokens,
-                known?.maxOutputTokens
-              ),
-              autoCompactTokenLimit:
-                limits.autoCompactFromMaxInput || coreAutoCompact !== undefined
-                  ? derivedSource(maxInputSource)
-                  : known
+                  : undefined;
+            const coreAutoCompact =
+              row.autoCompactTokenLimit ??
+              (row.maxInputTokens !== undefined ? Math.floor(row.maxInputTokens * 0.9) : undefined);
+            const limits = consistentTokenLimits({
+              contextWindow: row.contextWindow ?? known?.contextWindow,
+              maxInputTokens: row.maxInputTokens ?? known?.maxInputTokens,
+              autoCompactTokenLimit: coreAutoCompact ?? known?.autoCompactTokenLimit,
+            });
+            const contextWindowSource = sourceOf(
+              'contextWindow',
+              live?.contextWindow,
+              row.contextWindow,
+              known?.contextWindow
+            );
+            const maxInputSource = limits.maxInputFromContextWindow
+              ? derivedSource(contextWindowSource)
+              : sourceOf('maxInputTokens', live?.maxInputTokens, row.maxInputTokens, known?.maxInputTokens);
+            const isIdLike = (name: string | undefined) =>
+              name !== undefined && (name === row.id || name.endsWith(`/${row.id}`));
+            const fieldSources = Object.fromEntries(
+              Object.entries({
+                // An id-like provider name is replaced by the catalog name, so the shown value is the catalog's.
+                displayName:
+                  isIdLike(row.displayName) && known
                     ? 'fallback'
-                    : undefined,
-              reasoningEfforts: sourceOf(
-                'reasoningEfforts',
-                live?.reasoningEfforts,
-                row.reasoningEfforts,
-                known?.reasoningEfforts
-              ),
-              modalities: sourceOf('inputModalities', live?.inputModalities, row.inputModalities, known?.modalities),
-              capabilities: sourceOf('capabilities', live?.capabilities, row.capabilities, known?.capabilities),
-            }).filter((entry): entry is [string, InferenceModelMetadataSource] => entry[1] !== undefined)
-          );
-          const displayName = isIdLike(row.displayName)
-            ? (known?.displayName ?? row.id)
-            : (row.displayName ?? known?.displayName);
-          const modalities = row.inputModalities ?? known?.modalities ?? ['text'];
-          const reportedCapabilities = coreModelCapabilities(row);
-          const capabilities = {
-            ...reportedCapabilities,
-            ...(row.capabilities === undefined && known ? { tools: known.capabilities.tools === true } : {}),
-            ...(row.reasoningEfforts === undefined && known
-              ? { reasoning: known.capabilities.reasoning === true }
-              : {}),
-            ...(row.inputModalities === undefined && known ? { vision: known.capabilities.vision === true } : {}),
-          };
-          const pricing = coreModelPricing(row);
-          return {
-            // Gateway owns the provider/account selection. Keep the upstream
-            // model id account-agnostic so identical models from multiple
-            // connections pool together and no core provider name leaks into
-            // the admin UI or public model ids.
-            id: row.id,
-            ...(displayName ? { displayName } : {}),
-            ...(limits.contextWindow !== null ? { contextWindow: limits.contextWindow } : {}),
-            ...(limits.maxInputTokens !== null ? { maxInputTokens: limits.maxInputTokens } : {}),
-            ...(row.maxOutputTokens !== undefined ? { maxOutputTokens: row.maxOutputTokens } : {}),
-            ...(limits.autoCompactTokenLimit !== null ? { autoCompactTokenLimit: limits.autoCompactTokenLimit } : {}),
-            modalities,
-            capabilities,
-            reasoningEfforts: row.reasoningEfforts ?? known?.reasoningEfforts ?? [],
-            ...(pricing ? { pricing } : {}),
-            metadata: {
-              source: 'opencodex',
-              [CORE_MODEL_METADATA_KEY]: row.namespaced,
-              ...(row.inputModalities !== undefined ? { input_modalities: row.inputModalities } : {}),
-              ...(row.capabilities !== undefined ? { capabilities: row.capabilities } : {}),
-              ...(pricing ? { gatewayPricing: pricing } : {}),
-              ...(row.defaultReasoningEffort ? { default_reasoning_effort: row.defaultReasoningEffort } : {}),
-              ...(row.supportsReasoningSummaries !== undefined
-                ? { supports_reasoning_summaries: row.supportsReasoningSummaries }
+                    : sourceOf('displayName', live?.displayName, row.displayName, known?.displayName),
+                contextWindow: contextWindowSource,
+                maxInputTokens: maxInputSource,
+                maxOutputTokens: sourceOf(
+                  'maxOutputTokens',
+                  live?.maxOutputTokens,
+                  row.maxOutputTokens,
+                  known?.maxOutputTokens
+                ),
+                autoCompactTokenLimit:
+                  limits.autoCompactFromMaxInput || coreAutoCompact !== undefined
+                    ? derivedSource(maxInputSource)
+                    : known
+                      ? 'fallback'
+                      : undefined,
+                reasoningEfforts: sourceOf(
+                  'reasoningEfforts',
+                  live?.reasoningEfforts,
+                  row.reasoningEfforts,
+                  known?.reasoningEfforts
+                ),
+                modalities: sourceOf('inputModalities', live?.inputModalities, row.inputModalities, known?.modalities),
+                capabilities: sourceOf('capabilities', live?.capabilities, row.capabilities, known?.capabilities),
+              }).filter((entry): entry is [string, InferenceModelMetadataSource] => entry[1] !== undefined)
+            );
+            const displayName = isIdLike(row.displayName)
+              ? (known?.displayName ?? row.id)
+              : (row.displayName ?? known?.displayName);
+            const modalities = row.inputModalities ?? known?.modalities ?? ['text'];
+            const reportedCapabilities = coreModelCapabilities(row);
+            const capabilities = {
+              ...reportedCapabilities,
+              ...(row.capabilities === undefined && known ? { tools: known.capabilities.tools === true } : {}),
+              ...(row.capabilities === undefined && !known && !rosterListsCapabilities ? { tools: true } : {}),
+              ...(row.reasoningEfforts === undefined && known
+                ? { reasoning: known.capabilities.reasoning === true }
                 : {}),
-              ...(Object.keys(fieldSources).length ? { field_sources: fieldSources } : {}),
-            },
-          };
-        })
+              ...(row.inputModalities === undefined && known ? { vision: known.capabilities.vision === true } : {}),
+            };
+            const pricing = coreModelPricing(row);
+            return {
+              // Gateway owns the provider/account selection. Keep the upstream
+              // model id account-agnostic so identical models from multiple
+              // connections pool together and no core provider name leaks into
+              // the admin UI or public model ids.
+              id: row.id,
+              ...(displayName ? { displayName } : {}),
+              ...(limits.contextWindow !== null ? { contextWindow: limits.contextWindow } : {}),
+              ...(limits.maxInputTokens !== null ? { maxInputTokens: limits.maxInputTokens } : {}),
+              ...(row.maxOutputTokens !== undefined ? { maxOutputTokens: row.maxOutputTokens } : {}),
+              ...(limits.autoCompactTokenLimit !== null ? { autoCompactTokenLimit: limits.autoCompactTokenLimit } : {}),
+              modalities,
+              capabilities,
+              reasoningEfforts: row.reasoningEfforts ?? known?.reasoningEfforts ?? [],
+              ...(pricing ? { pricing } : {}),
+              metadata: {
+                source: 'opencodex',
+                [CORE_MODEL_METADATA_KEY]: row.namespaced,
+                ...(row.inputModalities !== undefined ? { input_modalities: row.inputModalities } : {}),
+                ...(row.capabilities !== undefined ? { capabilities: row.capabilities } : {}),
+                ...(pricing ? { gatewayPricing: pricing } : {}),
+                ...(row.defaultReasoningEffort ? { default_reasoning_effort: row.defaultReasoningEffort } : {}),
+                ...(row.supportsReasoningSummaries !== undefined
+                  ? { supports_reasoning_summaries: row.supportsReasoningSummaries }
+                  : {}),
+                ...(Object.keys(fieldSources).length ? { field_sources: fieldSources } : {}),
+              },
+            };
+          })
+        )
       );
       const sourceType = definition.subscription ? 'subscription' : 'api';
       await this.db

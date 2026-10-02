@@ -1,0 +1,35 @@
+{
+  "file_name": "bylv7s78_provider_model_discovery",
+  "edges": [
+    {
+      "from_id": "bylv7s78",
+      "to_id": "z36pcfh4",
+      "relation": "depends_on",
+      "weight": 0.9,
+      "reason": "Runtime routing eligibility and failover depend on accurate provider model discovery and handling of transient discovery omissions.",
+      "source": "auto",
+      "created_at": 1790946952769,
+      "updated_at": 1790946952769
+    },
+    {
+      "from_id": "bylv7s78",
+      "to_id": "gz01c8d5",
+      "relation": "same_workflow",
+      "weight": 0.86,
+      "reason": "Both document managed inference-core model discovery, local diagnosis, and provider model availability.",
+      "source": "auto",
+      "created_at": 1790946952769,
+      "updated_at": 1790946952769
+    },
+    {
+      "from_id": "bylv7s78",
+      "to_id": "ifp3c48s",
+      "relation": "same_workflow",
+      "weight": 0.72,
+      "reason": "Both define durable Gateway inference-core integration behavior across the control and data planes.",
+      "source": "auto",
+      "created_at": 1790946952769,
+      "updated_at": 1790946952769
+    }
+  ]
+}
