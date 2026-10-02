@@ -13,7 +13,7 @@ const constructors = {
 };
 export type DockerMigrationConstructors = typeof constructors;
 
-import { and, desc, eq, inArray, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import {
   dockerAvailabilityPlacements,
   dockerAvailabilityPolicies,
@@ -23,6 +23,7 @@ import {
   dockerEnvVars,
   dockerHealthChecks,
   dockerImageCleanupSettings,
+  dockerManagedVolumes,
   dockerMigrationArtifacts,
   dockerMigrationNodeLocks,
   dockerMigrations,
@@ -31,6 +32,8 @@ import {
   dockerSourceBindings,
   dockerWebhooks,
   nodes,
+  proxyAdditionalRoutes,
+  proxyAdditionalSecureLinks,
   proxyHosts,
 } from '@/db/schema/index.js';
 import { migrationTransferRelay } from '@/grpc/services/migration-transfer.js';
@@ -42,6 +45,10 @@ import {
   matchRuntimeIdentity,
 } from '@/modules/docker/availability/docker-workload-resolver.service.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import {
+  copyPersistedDockerVolumeScopes,
+  dropPersistedDockerVolumeScopes,
+} from '@/modules/docker/docker-access-resource-scope-rewrite.js';
 import { assertDockerCreationAccess, placeCreatedDockerResource } from '@/modules/docker/docker-creation-access.js';
 import { dockerGpuAttachmentFromInspect } from '@/modules/docker/docker-gpu-attachment.js';
 import { DockerMigrationCreateInputSchema } from '@/modules/docker/docker-migration.schemas.js';
@@ -97,4 +104,10 @@ export const dockerMigrationCommercialRuntime = {
   CryptoService,
   waitForShutdownTasks,
   loggerDockerMigrationService,
+  dockerManagedVolumes,
+  sql,
+  proxyAdditionalRoutes,
+  proxyAdditionalSecureLinks,
+  copyPersistedDockerVolumeScopes,
+  dropPersistedDockerVolumeScopes,
 };
