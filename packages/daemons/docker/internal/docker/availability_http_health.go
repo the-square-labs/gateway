@@ -105,6 +105,9 @@ type availabilityHealthCheckResult struct {
 	Error                string `json:"error,omitempty"`
 	CheckedAtUnixMs      int64  `json:"checkedAtUnixMs,omitempty"`
 	Instance             string `json:"instance,omitempty"`
+	// ContainerRunning is false when the last probe found the container
+	// stopped or gone: a Docker state problem, not an HTTP one.
+	ContainerRunning bool `json:"containerRunning"`
 }
 
 type availabilityHealthDetail struct {
@@ -119,6 +122,7 @@ type availabilityHealthDetail struct {
 // answer: no evidence either way.
 type availabilityHealthOutcome struct {
 	known     bool
+	running   bool
 	ok        bool
 	status    int
 	err       string
@@ -379,6 +383,7 @@ func nextAvailabilityHealthResult(spec availabilityHealthCheckSpec, previous ava
 		next.Instance = outcome.instance
 	}
 	next.HTTPStatus, next.Error, next.CheckedAtUnixMs = outcome.status, outcome.err, now.UnixMilli()
+	next.ContainerRunning = outcome.running
 	if outcome.ok {
 		next.State = "passing"
 		next.ConsecutiveSuccesses++
@@ -474,7 +479,7 @@ func (p *DockerPlugin) probeAvailabilityHealth(ctx context.Context, spec availab
 	if current.State == nil || !current.State.Running {
 		return availabilityHealthOutcome{known: true, err: "the container is not running"}
 	}
-	outcome := availabilityHealthOutcome{known: true, instance: current.ID + "@" + current.State.StartedAt}
+	outcome := availabilityHealthOutcome{known: true, running: true, instance: current.ID + "@" + current.State.StartedAt}
 	outcome.startedAt, _ = time.Parse(time.RFC3339Nano, current.State.StartedAt)
 	address := availabilityHealthAddress(current, spec.Network)
 	if address == "" {
