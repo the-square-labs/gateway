@@ -6,7 +6,11 @@ import type {
 import { AppError } from '@/middleware/error-handler.js';
 import { InferenceCoreClientError } from '../core/inference-core.client.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
-import type { InferenceProviderDefinition, InferenceQuotaWindow } from './inference-provider.types.js';
+import type {
+  DiscoveredInferenceModel,
+  InferenceProviderDefinition,
+  InferenceQuotaWindow,
+} from './inference-provider.types.js';
 import { knownProviderModel, pricingFromDiscoveredMetadata } from './inference-provider-model-catalog.js';
 
 export function validateBaseUrl(value: string, required: boolean): string {
@@ -274,6 +278,71 @@ function storedFieldSources(metadata: Record<string, unknown>): Partial<Record<s
         entry[1] === 'provider' || entry[1] === 'fallback' || entry[1] === 'derived'
     )
   );
+}
+
+/** `<family><major>.<minor>` with nothing after the version, such as grok-4.7 or glm-5.3. */
+const VERSIONED_MODEL_ID = /^(.*?\D)(\d+)\.(\d+)$/;
+
+function modelVersion(id: string): { family: string; minor: number } | null {
+  const match = VERSIONED_MODEL_ID.exec(id);
+  if (!match) return null;
+  return { family: `${match[1]!.toLowerCase()}${match[2]}`, minor: Number(match[3]) };
+}
+
+/**
+ * A provider can list a new version of a model family by id and name alone: xAI's subscription
+ * roster reported grok-4.7 that way, so Gateway published it without reasoning or image input.
+ * Such a model takes its input modalities and reasoning levels from the newest earlier version
+ * of the same family on the same account. Only the fields the model has no source for are filled,
+ * a variant id such as grok-4.7-build-fast never matches, and the copied values stay labelled as
+ * fallback with the model they came from, so an operator can still override them.
+ */
+export function inheritFamilyMetadata(models: DiscoveredInferenceModel[]): DiscoveredInferenceModel[] {
+  return models.map((model) => {
+    const version = modelVersion(model.id);
+    if (!version) return model;
+    const own = storedFieldSources(model.metadata);
+    const needsModalities = own.modalities === undefined;
+    const needsEfforts = model.reasoningEfforts.length === 0 && own.reasoningEfforts === undefined;
+    if (!needsModalities && !needsEfforts) return model;
+    let donor: { model: DiscoveredInferenceModel; minor: number } | undefined;
+    for (const candidate of models) {
+      const candidateVersion = modelVersion(candidate.id);
+      if (candidateVersion?.family !== version.family || candidateVersion.minor >= version.minor) continue;
+      const sources = storedFieldSources(candidate.metadata);
+      if (sources.modalities === undefined && sources.reasoningEfforts === undefined) continue;
+      if (!donor || candidateVersion.minor > donor.minor) donor = { model: candidate, minor: candidateVersion.minor };
+    }
+    if (!donor) return model;
+    const from = donor.model;
+    const fromSources = storedFieldSources(from.metadata);
+    const takeModalities = needsModalities && fromSources.modalities !== undefined;
+    const takeEfforts = needsEfforts && fromSources.reasoningEfforts !== undefined && from.reasoningEfforts.length > 0;
+    if (!takeModalities && !takeEfforts) return model;
+    const existingSources = (model.metadata.field_sources ?? {}) as Record<string, unknown>;
+    return {
+      ...model,
+      ...(takeModalities ? { modalities: [...from.modalities] } : {}),
+      ...(takeEfforts ? { reasoningEfforts: [...from.reasoningEfforts] } : {}),
+      capabilities: {
+        ...model.capabilities,
+        ...(takeModalities ? { vision: from.modalities.includes('image') } : {}),
+        ...(takeEfforts ? { reasoning: true } : {}),
+      },
+      metadata: {
+        ...model.metadata,
+        ...(takeEfforts && typeof from.metadata.default_reasoning_effort === 'string'
+          ? { default_reasoning_effort: from.metadata.default_reasoning_effort }
+          : {}),
+        inherited_from: from.id,
+        field_sources: {
+          ...existingSources,
+          ...(takeModalities ? { modalities: 'fallback' } : {}),
+          ...(takeEfforts ? { reasoningEfforts: 'fallback' } : {}),
+        },
+      },
+    };
+  });
 }
 
 export function serializeQuota(quota: typeof inferenceQuotaSnapshots.$inferSelect) {
