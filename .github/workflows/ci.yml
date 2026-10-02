@@ -158,7 +158,8 @@ jobs:
           mapfile -t suites < <(grep -rlE --include='*.test.ts' 'process\.env\.GATEWAY_MIGRATION_TEST_DATABASE_URL\b' src tests | sort)
           [ "${#suites[@]}" -gt 0 ] || { echo 'No opt-in database suites found' >&2; exit 1; }
           printf '%s\n' "${suites[@]}"
-          pnpm exec vitest run "${suites[@]}" \
+          # Every suite recreates the schema of the one test database, so they must not run side by side.
+          pnpm exec vitest run "${suites[@]}" --no-file-parallelism \
             --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/database-tests.json"
 
       # The suites are opt-in; a missing or renamed URL would skip them and still pass.
