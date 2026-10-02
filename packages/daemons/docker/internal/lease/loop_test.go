@@ -186,3 +186,28 @@ func TestLeaseClosedFencesHolderAndLiftsGate(t *testing.T) {
 		t.Fatalf("records must be removed once the lease is closed and the cgroup is empty, have %d", len(d1.fence.records))
 	}
 }
+
+// A lease that closed and is entered again watches the copy its holder finds
+// then. In between the legacy path replaced the copy (a disable keeps it under
+// the workload's own name); the holder of the new period must not release it
+// for the previous period's container, which no longer exists.
+func TestReenteredLeaseAdoptsTheCopyItFinds(t *testing.T) {
+	w := newWorld(t, worldSpec{relays: []string{"r1", "r2", "r3"}, daemons: []string{"d1", "d2"}, candidates: []string{"d1", "d2"}, bootstrap: "d1"})
+	d1 := w.daemon("d1")
+	previous := d1.addContainer(testPolicy, true)
+	w.daemon("d2").addContainer(testPolicy, false)
+	w.waitServing("d1", 45*time.Second)
+	w.run(15 * time.Second)
+	w.closeGracefully()
+	w.run(5 * time.Second)
+	delete(d1.engine.containers, previous.ID)
+	replacement := d1.addContainer(testPolicy, true)
+	w.run(5 * time.Second)
+	w.reopen(map[uint32]string{0: "d1"})
+	reopened := w.lastIndexOf("gateway reopens")
+	w.run(60 * time.Second)
+	w.requireClean()
+	if !replacement.Running || w.holderOf() != "d1" || w.lastIndexOf("d1 docker stop") > reopened {
+		t.Fatalf("the holder of the re-entered lease must keep serving the copy it found (holder %q)\n%s", w.holderOf(), w.dump())
+	}
+}
