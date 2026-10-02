@@ -17,6 +17,12 @@ const TRAFFIC_STATS_CACHE_TTL_MS = 60_000;
 const TRAFFIC_STATS_CACHE_MAX_ENTRIES = 4_096;
 /** Docker daemons whose health report carries their managed links (HealthReport.managed_links). */
 export const MANAGED_LINK_RUNTIME_CAPABILITY = 'managed_link_runtime_v1';
+/**
+ * After Gateway starts, nodes that were online reconnect to the new process within seconds (1–11 s on a test stand,
+ * over the relay). Until then they count as reconnecting, not offline; one still missing after this long is shown
+ * offline (stale-node detection marks it in the database later).
+ */
+export const NODE_STARTUP_RECONNECT_GRACE_MS = 30_000;
 
 function hasUpdateInProgress(metadata: unknown): boolean {
   if (!metadata || typeof metadata !== 'object') return false;
@@ -94,6 +100,8 @@ export class NodeRegistryService {
   /** When a connection was last asked for a health report outside its schedule (requestHealthReport). */
   private readonly healthRequestedAt = new WeakMap<ConnectedNode, number>();
   private readonly offlineDebounce: NodeOfflineDebounce;
+  /** When the control server started taking node connections; null until it does. */
+  private acceptingConnectionsSince: number | null = null;
 
   constructor(
     private db: DrizzleClient,
@@ -411,9 +419,21 @@ export class NodeRegistryService {
     return this.nodes.get(nodeId);
   }
 
-  /** The node's stream closed moments ago and it is still inside the reconnect grace before it counts as offline. */
-  isReconnecting(nodeId: string): boolean {
-    return !this.nodes.has(nodeId) && this.offlineDebounce.isPending(nodeId);
+  /** Called once the control server listens: the startup reconnect grace runs from here. */
+  startAcceptingConnections(now = Date.now()): void {
+    this.acceptingConnectionsSince ??= now;
+  }
+
+  /**
+   * The node is not connected but is expected back: its stream closed moments ago and it is still inside the
+   * reconnect grace, or Gateway itself started moments ago and the node has not reconnected to it yet.
+   */
+  isReconnecting(nodeId: string, now = Date.now()): boolean {
+    if (this.nodes.has(nodeId)) return false;
+    if (this.offlineDebounce.isPending(nodeId)) return true;
+    return (
+      this.acceptingConnectionsSince === null || now - this.acceptingConnectionsSince < NODE_STARTUP_RECONNECT_GRACE_MS
+    );
   }
 
   /**
