@@ -297,19 +297,37 @@ export class RelayRegistryService {
     }
     const desired = [];
     for (const binding of transportBindings) {
-      const requested = [{ repository: binding.repository, actions: binding.actions as Array<'pull' | 'push'> }];
-      const issued = await this.registry.issueToken({
-        subject: `${binding.role}:${nodeId}:${binding.contextKind}:${binding.contextId}`,
-        requested,
-        allowed: requested,
-        context:
-          binding.contextKind === 'build'
-            ? { nodeId, buildId: binding.contextId }
-            : binding.contextKind === 'container'
-              ? { nodeId, containerId: binding.contextId }
-              : { nodeId, deploymentId: binding.contextId },
-        ttlSeconds: 120,
-      });
+      const actions = binding.actions as Array<'pull' | 'push'>;
+      const issue = (granted: Array<'pull' | 'push'>) => {
+        const requested = [{ repository: binding.repository, actions: granted }];
+        return this.registry.issueToken({
+          subject: `${binding.role}:${nodeId}:${binding.contextKind}:${binding.contextId}`,
+          requested,
+          allowed: requested,
+          context:
+            binding.contextKind === 'build'
+              ? { nodeId, buildId: binding.contextId }
+              : binding.contextKind === 'container'
+                ? { nodeId, containerId: binding.contextId }
+                : { nodeId, deploymentId: binding.contextId },
+          ttlSeconds: 120,
+        });
+      };
+      let issued: Awaited<ReturnType<typeof issue>>;
+      try {
+        issued = await issue(actions);
+      } catch (error) {
+        // While the registry takes no writes (garbage collection), a grant that may push is renewed for pulls only.
+        // Failing the whole sync instead let every token of the node expire: its pulls failed too, and every
+        // Availability change on it waited for the collection although it pulls images that are mirrored already.
+        if (
+          !(error instanceof AppError && error.code === 'INTERNAL_REGISTRY_NOT_WRITABLE') ||
+          !actions.includes('pull')
+        ) {
+          throw error;
+        }
+        issued = await issue(actions.filter((action) => action !== 'push'));
+      }
       desired.push({
         bindingId: binding.id,
         role: binding.role,
