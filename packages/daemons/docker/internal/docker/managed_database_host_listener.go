@@ -30,6 +30,11 @@ const (
 	managedDatabaseHostListenerInspectTimeout    = 5 * time.Second
 )
 
+// managedDatabaseListenerSuccessorWait bounds how long a listener whose binding left the grant bundle keeps its socket
+// for the binding that takes over its route in a later bundle (an Availability adopt or release that reaches the node
+// in two syncs); connections wait for it meanwhile. A variable for tests.
+var managedDatabaseListenerSuccessorWait = 5 * time.Second
+
 // errManagedDatabaseListenerUnverified marks a listener network that could not be inspected (a slow or failing
 // Docker API). That proves nothing about the network, so a running listener keeps serving its connections.
 var errManagedDatabaseListenerUnverified = errors.New("inspect managed database listener network")
@@ -72,6 +77,10 @@ type managedDatabaseHostListener struct {
 	// keptName names the socket's copy in the listener keeper, which outlives this process ("" without a keeper,
 	// or once the copy was handed over to the next process).
 	keptName string
+	// successor is open while the listener's binding left the grant bundle and no binding took the socket over yet:
+	// connections accepted meanwhile wait for one (awaitBinding). It closes when a binding claims the listener or the
+	// listener closes.
+	successor chan struct{}
 }
 
 type managedDatabaseHostListenerManager struct {
@@ -97,6 +106,9 @@ type managedDatabaseHostListenerManager struct {
 	adoptionTimer *time.Timer
 	// handingOver is set once the listeners went to the next process: nothing changes them any more.
 	handingOver bool
+	// orphans are the listeners whose binding left the grant bundle without a successor on the same socket, by keeper
+	// name, until a later bundle's binding claims them or managedDatabaseListenerSuccessorWait ends; guarded by mu.
+	orphans map[string]*managedDatabaseHostListener
 	// stateDir holds the addresses of the open listeners for the boot step (link_listener_boot.go), last written as
 	// bootSetWritten; "" records nothing (tests).
 	stateDir       string
@@ -202,9 +214,9 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 		previous := listener.currentConfig()
 		next, verified, found := m.successorLocked(previous, resolved, unverified)
 		if !found {
-			m.logger.Info("managed database host listener closed: its binding left the grant bundle", "binding_id", previous.bindingID,
-				"address", net.JoinHostPort(previous.listenAddress.String(), fmt.Sprintf("%d", previous.listenPort)))
-			listener.close()
+			// The binding that takes the route over may reach the node in a later bundle: the socket and its
+			// connections wait for it instead of refusing the workload meanwhile.
+			m.orphanLocked(listener)
 			continue
 		}
 		// An Availability adopt or release moves the binding's route to another binding id on the same network and
@@ -217,8 +229,21 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 		m.logger.Info("managed database host listener moved to another binding", "from_binding_id", previous.bindingID,
 			"binding_id", next.bindingID, "address", net.JoinHostPort(next.listenAddress.String(), fmt.Sprintf("%d", next.listenPort)))
 	}
+	for bindingID, config := range unverified {
+		if _, exists := m.listeners[bindingID]; exists {
+			continue
+		}
+		if listener := m.claimOrphanLocked(config, false); listener != nil {
+			m.listeners[bindingID] = listener
+		}
+	}
 	for bindingID, config := range resolved {
 		if _, exists := m.listeners[bindingID]; exists {
+			continue
+		}
+		if listener := m.claimOrphanLocked(config, true); listener != nil {
+			m.listeners[bindingID] = listener
+			statuses[bindingID] = listenerStatus(config, "ready", nil)
 			continue
 		}
 		listener, err := m.listen(config)
@@ -231,6 +256,75 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 	}
 	m.persistBootSetLocked()
 	return statuses
+}
+
+// orphanLocked keeps a listener whose binding left the grant bundle for the binding that takes its socket over in a
+// later bundle, and closes it once managedDatabaseListenerSuccessorWait passes without one. Callers hold m.mu.
+func (m *managedDatabaseHostListenerManager) orphanLocked(listener *managedDatabaseHostListener) {
+	config := listener.currentConfig()
+	name := hostListenerKeepName(config.listenAddress, config.listenPort)
+	if previous := m.orphans[name]; previous != nil && previous != listener {
+		previous.close()
+	}
+	if m.orphans == nil {
+		m.orphans = map[string]*managedDatabaseHostListener{}
+	}
+	m.orphans[name] = listener
+	listener.mu.Lock()
+	if listener.successor == nil && !listener.closed {
+		listener.successor = make(chan struct{})
+	}
+	listener.mu.Unlock()
+	m.logger.Info("managed database host listener waits for the binding that takes its route over", "binding_id", config.bindingID,
+		"address", net.JoinHostPort(config.listenAddress.String(), fmt.Sprintf("%d", config.listenPort)),
+		"wait", managedDatabaseListenerSuccessorWait)
+	time.AfterFunc(managedDatabaseListenerSuccessorWait, func() {
+		m.mu.Lock()
+		expired := m.orphans[name] == listener
+		if expired {
+			delete(m.orphans, name)
+		}
+		m.mu.Unlock()
+		if !expired {
+			return
+		}
+		m.logger.Info("managed database host listener closed: its binding left the grant bundle", "binding_id", config.bindingID,
+			"address", net.JoinHostPort(config.listenAddress.String(), fmt.Sprintf("%d", config.listenPort)))
+		listener.close()
+	})
+}
+
+// claimOrphanLocked hands the orphaned listener at config's address to config's binding when it is the same socket
+// (verified: config's network was inspected now), and closes an orphan at that address that is another socket so
+// the binding can listen there. Callers hold m.mu.
+func (m *managedDatabaseHostListenerManager) claimOrphanLocked(config managedDatabaseHostListenerConfig, verified bool) *managedDatabaseHostListener {
+	name := hostListenerKeepName(config.listenAddress, config.listenPort)
+	listener := m.orphans[name]
+	if listener == nil {
+		return nil
+	}
+	previous := listener.currentConfig()
+	if !verified {
+		config.networkID = previous.networkID
+	}
+	if !previous.sameSocket(config) {
+		if verified {
+			delete(m.orphans, name)
+			listener.close()
+		}
+		return nil
+	}
+	delete(m.orphans, name)
+	listener.update(config)
+	listener.mu.Lock()
+	if listener.successor != nil {
+		close(listener.successor)
+		listener.successor = nil
+	}
+	listener.mu.Unlock()
+	m.logger.Info("managed database host listener moved to another binding", "from_binding_id", previous.bindingID,
+		"binding_id", config.bindingID, "address", net.JoinHostPort(config.listenAddress.String(), fmt.Sprintf("%d", config.listenPort)))
+	return listener
 }
 
 // successorLocked finds the binding a released listener serves on as: one without a listener on the same socket
@@ -512,6 +606,9 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 		<-m.global
 		_ = connection.Close()
 	}()
+	if !listener.awaitBinding() {
+		return
+	}
 	config := listener.currentConfig()
 	reject := func(reason string, attrs ...any) {
 		m.rejections.rejected(m.logger, linkKindManagedDatabaseBinding, config.bindingID, reason, attrs...)
@@ -638,6 +735,20 @@ func managedDatabaseListenerSourceAllowed(peer listenerPeer, allowed []string) b
 	return false
 }
 
+// awaitBinding waits, while the listener's binding left the grant bundle, for the binding that takes it over, and
+// reports whether the listener still serves.
+func (listener *managedDatabaseHostListener) awaitBinding() bool {
+	listener.mu.Lock()
+	successor := listener.successor
+	listener.mu.Unlock()
+	if successor != nil {
+		<-successor
+	}
+	listener.mu.Lock()
+	defer listener.mu.Unlock()
+	return !listener.closed
+}
+
 func (listener *managedDatabaseHostListener) currentConfig() managedDatabaseHostListenerConfig {
 	listener.mu.Lock()
 	defer listener.mu.Unlock()
@@ -676,6 +787,10 @@ func (listener *managedDatabaseHostListener) close() {
 		return
 	}
 	listener.closed = true
+	if listener.successor != nil {
+		close(listener.successor)
+		listener.successor = nil
+	}
 	connections := make([]net.Conn, 0, len(listener.connections))
 	for connection := range listener.connections {
 		connections = append(connections, connection)

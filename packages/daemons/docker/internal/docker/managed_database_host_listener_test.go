@@ -141,6 +141,9 @@ func newListenerHarness(t *testing.T) *listenerHarness {
 		for _, listener := range h.manager.listeners {
 			listener.close()
 		}
+		for _, listener := range h.manager.orphans {
+			listener.close()
+		}
 		h.manager.mu.Unlock()
 	})
 	return h
@@ -422,6 +425,59 @@ func TestManagedDatabaseHostListenerMovesToAnAdoptingBindingWithNewSources(t *te
 		t.Fatalf("adopt with a new source list did not move the listener: %+v", statuses)
 	}
 	requireOpen(t, held)
+}
+
+// Re-enabling Availability on a container moved its link's route to the placement's binding in two grant bundles: the
+// first carried neither binding, and the listener closed, refusing new connections for 2 s until the second opened a
+// new one. The listener waits for the binding that takes its socket over: connections made meanwhile reach it, and
+// the held ones stay.
+func TestManagedDatabaseHostListenerWaitsForASuccessorInALaterBundle(t *testing.T) {
+	h := newListenerHarness(t)
+	h.reconcile(h.assignment(testListenerBindingA, 3, 64))
+	listener := h.listener(testListenerBindingA)
+	held := h.dial()
+	h.waitOpened(1)
+
+	h.reconcile()
+	if h.listener(testListenerBindingA) != nil {
+		t.Fatal("the binding that left the bundle kept its listener")
+	}
+	waiting := h.dial()
+	select {
+	case <-h.openedCh:
+		t.Fatal("a connection reached a binding while none held the listener")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	statuses := h.reconcile(h.assignment(testListenerBindingB, 3, 64))
+	if statuses[testListenerBindingB].State != "ready" || h.listener(testListenerBindingB) != listener {
+		t.Fatalf("the successor did not take the listener over: %+v", statuses)
+	}
+	h.waitOpened(1)
+	if opened := h.openedBindings(); opened[len(opened)-1] != (openedBinding{bindingID: testListenerBindingB, generation: 3}) {
+		t.Fatalf("waiting connection opened as %+v", opened[len(opened)-1])
+	}
+	requireOpen(t, held, waiting)
+}
+
+// A binding that is gone for good closes its listener once the wait for a successor ends.
+func TestManagedDatabaseHostListenerClosesWithoutASuccessor(t *testing.T) {
+	previous := managedDatabaseListenerSuccessorWait
+	managedDatabaseListenerSuccessorWait = 100 * time.Millisecond
+	t.Cleanup(func() { managedDatabaseListenerSuccessorWait = previous })
+	h := newListenerHarness(t)
+	h.reconcile(h.assignment(testListenerBindingA, 3, 64))
+	held := h.dial()
+	h.waitOpened(1)
+
+	h.reconcile()
+	requireClosed(t, held)
+	if len(h.log.lines("closed: its binding left the grant bundle")) != 1 {
+		t.Fatalf("closing was not logged: %v", h.log.lines("listener"))
+	}
+	if _, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", fmt.Sprint(h.port)), time.Second); err == nil {
+		t.Fatal("the closed listener still accepted")
+	}
 }
 
 // Rejections are logged per link and reason once per interval, with the count in between.

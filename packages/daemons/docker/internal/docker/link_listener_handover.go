@@ -196,6 +196,10 @@ func (m *managedDatabaseHostListenerManager) suspendForHandover() int {
 	for _, listener := range m.listeners {
 		listeners = append(listeners, listener)
 	}
+	// An orphan's socket goes along: the next process's first bundle may name the binding that takes it over.
+	for _, listener := range m.orphans {
+		listeners = append(listeners, listener)
+	}
 	m.mu.Unlock()
 	handed := 0
 	for _, listener := range listeners {
