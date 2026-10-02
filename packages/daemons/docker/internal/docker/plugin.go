@@ -14,6 +14,7 @@ import (
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
+	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
@@ -88,6 +89,15 @@ type DockerPlugin struct {
 	linkRejections  linkRejectionLog
 	linkConnections linkConnectionCounts
 	linkTraffic     linkTraffic
+
+	// The link sockets' copies in the listener keeper, handed to the next process on a restart
+	// (link_listener_handover.go); linkFlows are the link connections it lets finish.
+	storageConnectorKept keptUnixListener
+	relayListenerKept    keptUnixListener
+	linkFlows            linkFlowSet
+	// startedAt is when Init began: link connections accepted before the relay lanes are up wait for them
+	// (relayLaneStartupWait).
+	startedAt time.Time
 	// logHandler sends the plugin's lines, those of the managers built at Init included, to the current session.
 	logHandler *sessionLogHandler
 
@@ -170,6 +180,7 @@ func (p *DockerPlugin) useLogger(logger *slog.Logger) {
 func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) error {
 	p.useLogger(logger)
 	p.availability = nil
+	p.startedAt = time.Now()
 	ctx := context.Background()
 
 	if p.cfg.Docker.Mode == "builder" {
@@ -254,15 +265,18 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if err != nil {
 		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
+	// Units installed before the template carried it get a file descriptor store, so the link sockets also survive
+	// a restart of the whole unit (link_listener_handover.go).
+	if installed, storeErr := listenerkeep.EnsureSystemdStore(); storeErr != nil {
+		p.logger.Warn("could not give the daemon unit a file descriptor store; a unit restart refuses link connections briefly", "error", storeErr)
+	} else if installed {
+		p.logger.Info("gave the daemon unit a file descriptor store for link sockets", "drop_in", listenerkeep.SystemdDropInName)
+	}
 	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		p.databaseListeners = newManagedDatabaseHostListenerManager(p)
 		// Runs for the life of the process: it keeps the listeners' address book (listenerPeers).
 		go p.databaseListeners.watchPeers(context.Background())
-		for bindingID, status := range p.databaseListeners.reconcile(ctx, p.relayGrants.get()) {
-			if status.State == "error" {
-				p.logger.Warn("managed database host listener restore deferred", "binding_id", bindingID, "error", status.Error)
-			}
-		}
+		p.restoreDatabaseListeners(ctx)
 	}
 	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		p.registryProxy, err = newDockerRegistryProxyManager(p)

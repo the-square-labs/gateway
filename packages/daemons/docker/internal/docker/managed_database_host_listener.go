@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"github.com/moby/moby/api/types/network"
 	mobyclient "github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 )
 
@@ -63,6 +66,9 @@ type managedDatabaseHostListener struct {
 	config      managedDatabaseHostListenerConfig
 	closed      bool
 	connections map[net.Conn]struct{}
+	// keptName names the socket's copy in the listener keeper, which outlives this process ("" without a keeper,
+	// or once the copy was handed over to the next process).
+	keptName string
 }
 
 type managedDatabaseHostListenerManager struct {
@@ -82,6 +88,16 @@ type managedDatabaseHostListenerManager struct {
 	peerRefreshMu      sync.Mutex
 	peerRefreshRunning bool
 	peerRefreshPending *peerSnapshot
+	// adopted are the listening sockets the previous process or the boot step handed over, by keeper name, until a
+	// reconcile claims them (link_listener_handover.go); guarded by mu.
+	adopted       map[string]*os.File
+	adoptionTimer *time.Timer
+	// handingOver is set once the listeners went to the next process: nothing changes them any more.
+	handingOver bool
+	// stateDir holds the addresses of the open listeners for the boot step (link_listener_boot.go), last written as
+	// bootSetWritten; "" records nothing (tests).
+	stateDir       string
+	bootSetWritten string
 }
 
 func newManagedDatabaseHostListenerManager(plugin *DockerPlugin) *managedDatabaseHostListenerManager {
@@ -100,7 +116,12 @@ func newManagedDatabaseHostListenerManager(plugin *DockerPlugin) *managedDatabas
 	manager.inspectContainer = func(ctx context.Context, id string) (mobyclient.ContainerInspectResult, error) {
 		return plugin.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
 	}
-	manager.events = plugin.client.cli.Events
+	manager.events = func(ctx context.Context, options mobyclient.EventsListOptions) mobyclient.EventsResult {
+		return plugin.client.cli.Events(ctx, options)
+	}
+	if plugin.cfg != nil {
+		manager.stateDir = plugin.cfg.StateDir
+	}
 	manager.openBinding = plugin.openManagedDatabaseBinding
 	return manager
 }
@@ -139,6 +160,10 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.handingOver {
+		// The process stops: its listeners belong to the next one.
+		return statuses
+	}
 	// released are the listeners of bindings that left the bundle. One may serve on as another binding.
 	var released []*managedDatabaseHostListener
 	for bindingID, listener := range m.listeners {
@@ -193,6 +218,7 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 		m.listeners[bindingID] = listener
 		statuses[bindingID] = listenerStatus(config, "ready", nil)
 	}
+	m.persistBootSetLocked()
 	return statuses
 }
 
@@ -403,23 +429,36 @@ func duplicateListenerAddresses(configs map[string]managedDatabaseHostListenerCo
 	return duplicates
 }
 
+// listen opens the host listener for config: the socket a previous process or the boot step handed over for its
+// address when there is one, else a new one. Callers hold m.mu.
 func (m *managedDatabaseHostListenerManager) listen(config managedDatabaseHostListenerConfig) (*managedDatabaseHostListener, error) {
-	addressBytes := config.listenAddress.As4()
-	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(addressBytes[0], addressBytes[1], addressBytes[2], addressBytes[3]), Port: int(config.listenPort)})
-	if err != nil {
-		return nil, fmt.Errorf("listen on managed database gateway: %w", err)
+	name := hostListenerKeepName(config.listenAddress, config.listenPort)
+	listener := m.takeAdoptedLocked(name, config)
+	if listener == nil {
+		var err error
+		if listener, err = bindHostListener(name, config); err != nil {
+			return nil, fmt.Errorf("listen on managed database gateway: %w", err)
+		}
 	}
-	managedListener := &managedDatabaseHostListener{config: config, listener: listener, connections: map[net.Conn]struct{}{}}
+	managedListener := &managedDatabaseHostListener{config: config, listener: listener, connections: map[net.Conn]struct{}{},
+		keptName: keepListener(listener, name)}
 	go m.accept(managedListener)
 	return managedListener, nil
 }
 
+// accept serves the listener until it is closed. A transient accept error (out of file descriptors) backs off and
+// retries instead of leaving the socket open but never accepting again (B-22).
 func (m *managedDatabaseHostListenerManager) accept(listener *managedDatabaseHostListener) {
+	var backoff netaccept.Backoff
 	for {
 		connection, err := listener.listener.AcceptTCP()
 		if err != nil {
+			if backoff.Retry(err, nil) {
+				continue
+			}
 			return
 		}
+		backoff.Reset()
 		if !m.acquire(listener, connection) {
 			_ = connection.Close()
 			continue
@@ -603,8 +642,13 @@ func (listener *managedDatabaseHostListener) close() {
 	for connection := range listener.connections {
 		connections = append(connections, connection)
 	}
+	keptName := listener.keptName
+	listener.keptName = ""
 	listener.mu.Unlock()
 	_ = listener.listener.Close()
+	if keptName != "" {
+		_ = listenerkeep.Drop(keptName)
+	}
 	for _, connection := range connections {
 		_ = connection.Close()
 	}

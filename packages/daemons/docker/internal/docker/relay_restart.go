@@ -35,8 +35,13 @@ const (
 	endpointRestartCapability = "endpoint_restart_v1"
 )
 
-// AnnounceRestart implements lifecycle.RestartAnnouncerPlugin.
+// AnnounceRestart implements lifecycle.RestartAnnouncerPlugin. The link sockets go to the next process first, so
+// the connections workloads open from here on wait in their backlog instead of reaching a process that stops
+// (link_listener_handover.go); the link connections in the middle of a request finish with the Secure Link tunnels.
 func (p *DockerPlugin) AnnounceRestart() {
+	if handed := p.suspendLinkListeners(); handed > 0 {
+		p.logger.Info("handing link sockets over to the next daemon process", "sockets", handed)
+	}
 	acks := p.announceRestartToRelays()
 	deadline := time.After(restartAnnounceWait)
 	for _, ack := range acks {
@@ -50,8 +55,17 @@ func (p *DockerPlugin) AnnounceRestart() {
 drain:
 	if len(acks) > 0 {
 		p.logger.Info("announced the restart to the relays", "registrations", len(acks))
+		// The next process takes over the registrations the relays hold for it without waiting for Gateway.
+		if err := writeRestartMarker(p.cfg.StateDir, time.Now()); err != nil {
+			p.logger.Warn("could not record the restart announcement; the next process waits for Gateway before it registers", "error", err)
+		}
 	}
+	links := make(chan int, 1)
+	go func() { links <- p.linkFlows.drain(restartDrainLimit) }()
 	p.proxyTunnels.drain(restartDrainLimit)
+	if busy := <-links; busy > 0 {
+		p.logger.Info("link connections still busy when the restart drain ended are cut", "connections", busy)
+	}
 }
 
 // announceRestartToRelays renews every serving registration RESTARTING on

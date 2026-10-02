@@ -49,10 +49,12 @@ func main() {
 			os.Exit(runRuntimeCommand(os.Args[2:]))
 		case "mount-volume-images":
 			os.Exit(runMountVolumeImages(os.Args[2:]))
+		case "hold-link-listeners":
+			os.Exit(runHoldLinkListeners(os.Args[2:]))
 		case "run":
 			// explicit run, continue below
 		default:
-			fmt.Fprintf(os.Stderr, "Usage: docker-daemon [run|install|runtime|mount-volume-images|version]\n")
+			fmt.Fprintf(os.Stderr, "Usage: docker-daemon [run|install|runtime|mount-volume-images|hold-link-listeners|version]\n")
 			os.Exit(1)
 		}
 	}
@@ -127,6 +129,23 @@ func runMountVolumeImages(args []string) int {
 	defer cancel()
 	if err := docker.MountVolumeImagesAtBoot(ctx, *stateDir, logger); err != nil {
 		logger.Error("disk-image volumes are not all mounted", "error", err)
+		return 1
+	}
+	return 0
+}
+
+// runHoldLinkListeners is the boot step the daemon installs before Docker: it opens the database link listeners the
+// daemon held last, so workloads Docker starts at boot are not refused (see docker.HoldLinkListenersAtBoot).
+func runHoldLinkListeners(args []string) int {
+	flags := flag.NewFlagSet("hold-link-listeners", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	stateDir := flags.String("state-dir", "/var/lib/docker-daemon", "daemon state directory")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	logger := setupLogger("info", "text")
+	if err := docker.HoldLinkListenersAtBoot(*stateDir, logger); err != nil {
+		logger.Error("database link listeners are not open before Docker", "error", err)
 		return 1
 	}
 	return 0
@@ -351,6 +370,9 @@ ExecStart=/usr/local/bin/docker-daemon run
 Restart=always
 RestartSec=5
 Environment=DOCKER_DAEMON_CONFIG=/etc/docker-daemon/config.yaml
+# Link sockets outlive a daemon restart in the file descriptor store.
+FileDescriptorStoreMax=4096
+NotifyAccess=main
 
 [Install]
 WantedBy=multi-user.target

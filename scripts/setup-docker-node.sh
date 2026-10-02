@@ -2047,6 +2047,9 @@ ExecStart=/usr/local/bin/docker-daemon run
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
+# Link sockets outlive a daemon restart in the file descriptor store.
+FileDescriptorStoreMax=4096
+NotifyAccess=main
 ${supplementary_groups}
 ${service_environment}
 
