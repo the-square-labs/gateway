@@ -145,7 +145,7 @@ export function AvailabilitySummary({
             </span>
           }
           icon={<ShieldCheck className="h-4 w-4" />}
-          description="Logical workload state across independent Docker nodes."
+          description="Logical workload state across independent Docker nodes. Replicas are judged by their container state and Docker health check, and by the HTTP health checks of their Routes and deployment."
           // Two columns filled row by row on wide screens: the row count depends on the mode and
           // the lease state, so rows pair up instead of splitting into two uneven lists. The
           // last row's bottom border slides under the panel edge.
