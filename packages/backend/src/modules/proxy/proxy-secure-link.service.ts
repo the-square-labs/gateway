@@ -1306,7 +1306,10 @@ export class ProxySecureLinkService {
       .set({ status: 'cleanup_pending', lastError: null, updatedAt: new Date() })
       .where(eq(proxyAdditionalSecureLinks.proxyHostId, host.id));
     for (const binding of bindings) {
-      await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id);
+      // After a provisioning step still running for the link: it would put the relay state back once revoked.
+      await this.withLinkOperation(binding.id, () =>
+        this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id)
+      );
     }
     const sourceNodes = [
       ...new Set([...bindings.map((binding) => binding.sourceNodeId), ...(await this.hostSources(host))]),
@@ -1861,6 +1864,18 @@ export class ProxySecureLinkService {
 
   async cleanup(host: ProxyHostRow): Promise<void> {
     await this.withLinkOperation(host.id, () => this.cleanupLocked(host));
+  }
+
+  /**
+   * Relay state of a deleted Route that its cleanup could not reach: a link revoked by an attempt that failed, or
+   * left by an earlier release. The periodic relay policy reconciliation removes it when this fails.
+   */
+  async releaseOrphanedRelayState(): Promise<void> {
+    await this.relayPolicy.removeOrphanedState().catch((error) =>
+      logger.warn('Relay state left by a deleted Route is removed by the next relay policy reconciliation', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
   }
 
   private async cleanupLocked(host: ProxyHostRow): Promise<void> {

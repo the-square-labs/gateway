@@ -86,6 +86,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
     }
 
     if (existing.ingressGroupId) await forgetIngressMemberDeliveries(this.db, id);
+    await this.secureLinks?.releaseOrphanedRelayState?.();
     this.forgetSecureLinkRuntime(id);
     this.hostConfigEpochs.delete(id);
     for (const binding of additionalLinks) this.forgetSecureLinkRuntime(`additional:${binding.id}`);
