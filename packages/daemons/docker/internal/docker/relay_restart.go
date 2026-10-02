@@ -142,12 +142,21 @@ func (s *proxyTunnelSet) add(connection *drainConn, cancel func()) func() {
 // drain waits up to limit for the tunnels serving a request, closing every
 // tunnel as soon as it is idle between requests.
 func (s *proxyTunnelSet) drain(limit time.Duration) {
+	s.drainWhere(func(*drainConn) bool { return true }, limit, restartDrainTick)
+}
+
+// drainWhere drains the tunnels match selects like drain, and reports how
+// many were still busy when limit ran out.
+func (s *proxyTunnelSet) drainWhere(match func(*drainConn) bool, limit, tick time.Duration) int {
 	deadline := time.Now().Add(limit)
 	for {
 		now := time.Now()
 		busy := 0
 		s.mu.Lock()
 		for connection, cancel := range s.tunnels {
+			if !match(connection) {
+				continue
+			}
 			if connection.idle(now, restartIdleQuiet) {
 				cancel()
 				delete(s.tunnels, connection)
@@ -157,9 +166,9 @@ func (s *proxyTunnelSet) drain(limit time.Duration) {
 		}
 		s.mu.Unlock()
 		if busy == 0 || !now.Before(deadline) {
-			return
+			return busy
 		}
-		time.Sleep(restartDrainTick)
+		time.Sleep(tick)
 	}
 }
 

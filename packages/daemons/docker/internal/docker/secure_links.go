@@ -27,7 +27,6 @@ const (
 	proxySecureLinkOwnerKind     = "proxy_host_secure_link"
 	secureLinkConnectorName      = "gateway-secure-link-connector"
 	secureLinkManagementNetwork  = "gateway-secure-links"
-	secureLinkControlSocket      = "/run/gateway/secure-link.sock"
 	secureLinkConnectorMemory    = 128 * 1024 * 1024
 	secureLinkConnectorNanoCPUs  = 250_000_000
 	secureLinkConnectorPidsLimit = int64(128)
@@ -35,6 +34,21 @@ const (
 	secureLinkConnectorPathEnv   = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	secureLinkRecoveryWindow     = time.Second
 )
+
+// secureLinkConnectorRetireLimit bounds how long a replaced connector keeps
+// the tunnels that are busy (a request in flight, a WebSocket); a variable for
+// tests.
+var secureLinkConnectorRetireLimit = 10 * time.Minute
+
+const secureLinkConnectorRetireTick = 100 * time.Millisecond
+
+// secureLinkConnectorSlots are the two connector containers that take turns:
+// a new connector image starts in the other slot while the serving one keeps
+// forwarding. Both share the control directory, each with its own socket.
+var secureLinkConnectorSlots = [2]struct{ name, socket string }{
+	{name: secureLinkConnectorName, socket: "secure-link.sock"},
+	{name: secureLinkConnectorName + "-next", socket: "secure-link-next.sock"},
+}
 
 var immutableConnectorImagePattern = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
 var officialConnectorReleaseTagPattern = regexp.MustCompile(`^ghcr\.io/the-square-labs/gateway/secure-link-connector:v[0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?-relay$`)
@@ -73,6 +87,8 @@ type dockerSecureLinkManager struct {
 	attached     map[string]struct{}
 	connectorID  string
 	managementIP string
+	// slot is the secureLinkConnectorSlots entry of connectorID.
+	slot int
 	// resolveTargetForDial replaces resolveTarget in dial validation (tests).
 	resolveTargetForDial func(ctx context.Context, containerName, networkName, expectedHost string, allowNetworkReselection bool) (string, string, error)
 
@@ -104,27 +120,33 @@ type dockerSecureLinkView struct {
 	bindings     map[string]dockerSecureLinkBinding
 	unbound      map[string]struct{}
 	managementIP string
+	connectorID  string
 }
 
 // publishViewLocked publishes the binding state for dials. Callers hold mu.
 // The maps are replaced, never changed in place, so the view may share them.
 func (m *dockerSecureLinkManager) publishViewLocked() {
 	m.viewMu.Lock()
-	m.view = &dockerSecureLinkView{bindings: m.bindings, unbound: m.unbound, managementIP: m.managementIP}
+	m.view = &dockerSecureLinkView{bindings: m.bindings, unbound: m.unbound, managementIP: m.managementIP, connectorID: m.connectorID}
 	m.viewMu.Unlock()
 }
 
-// dialState returns a link's binding for a dial without waiting for apply.
-func (m *dockerSecureLinkManager) dialState(linkID string) (binding dockerSecureLinkBinding, bound, unbound bool, host string) {
+func (m *dockerSecureLinkManager) currentView() *dockerSecureLinkView {
 	m.viewMu.RLock()
 	view := m.view
 	m.viewMu.RUnlock()
 	if view == nil {
 		// Built without newDockerSecureLinkManager (tests): read the fields.
 		m.mu.Lock()
-		view = &dockerSecureLinkView{bindings: m.bindings, unbound: m.unbound, managementIP: m.managementIP}
+		view = &dockerSecureLinkView{bindings: m.bindings, unbound: m.unbound, managementIP: m.managementIP, connectorID: m.connectorID}
 		m.mu.Unlock()
 	}
+	return view
+}
+
+// dialState returns a link's binding for a dial without waiting for apply.
+func (m *dockerSecureLinkManager) dialState(linkID string) (binding dockerSecureLinkBinding, bound, unbound bool, host string) {
+	view := m.currentView()
 	binding, bound = view.bindings[linkID]
 	_, unbound = view.unbound[linkID]
 	return binding, bound, unbound, view.managementIP
@@ -301,20 +323,31 @@ func (m *dockerSecureLinkManager) apply(
 			return nil, err
 		}
 	}
-	if err := m.ensureConnector(ctx, image); err != nil {
+	replacement, err := m.ensureConnector(ctx, image)
+	if err != nil {
 		var unchanged secureLinkConnectorUnchangedError
 		if !errors.As(err, &unchanged) {
 			m.failClosed(context.Background())
 		}
 		return nil, err
 	}
+	// A failure from here on refuses new tunnels until a retry, unless a
+	// replacement connector was being bound: then the previous connector
+	// keeps serving its links as before.
+	fail := func(err error) error {
+		if replacement != nil {
+			m.abortReplacement(replacement)
+		} else {
+			m.failClosed(context.Background())
+		}
+		return err
+	}
 	for networkName := range desiredNetworks {
 		if _, attached := m.attached[networkName]; attached {
 			continue
 		}
 		if _, err := m.plugin.client.cli.NetworkConnect(ctx, networkName, mobyclient.NetworkConnectOptions{Container: m.connectorID}); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
-			m.failClosed(context.Background())
-			return nil, fmt.Errorf("attach secure-link connector to %s: %w", networkName, err)
+			return nil, fail(fmt.Errorf("attach secure-link connector to %s: %w", networkName, err))
 		}
 		m.attached[networkName] = struct{}{}
 	}
@@ -331,16 +364,14 @@ func (m *dockerSecureLinkManager) apply(
 	}
 	response, err := securelink.Sync(ctx, m.socketPath, configs)
 	if err != nil {
-		m.failClosed(context.Background())
-		return nil, err
+		return nil, fail(err)
 	}
 	next := make(map[string]dockerSecureLinkBinding, len(response.Bindings))
 	statuses := make([]dockerSecureLinkStatus, 0, len(response.Bindings))
 	for _, status := range response.Bindings {
 		target, ok := resolvedByID[status.ID]
 		if !ok {
-			m.failClosed(context.Background())
-			return nil, fmt.Errorf("secure-link connector returned unknown binding %s", status.ID)
+			return nil, fail(fmt.Errorf("secure-link connector returned unknown binding %s", status.ID))
 		}
 		next[status.ID] = dockerSecureLinkBinding{
 			generation: status.Generation, port: status.Port,
@@ -350,8 +381,7 @@ func (m *dockerSecureLinkManager) apply(
 		statuses = append(statuses, dockerSecureLinkStatus{LinkID: status.ID, Generation: status.Generation, Port: status.Port, TargetNetwork: target.network})
 	}
 	if len(next) != len(resolved) {
-		m.failClosed(context.Background())
-		return nil, errors.New("secure-link connector returned an incomplete binding set")
+		return nil, fail(errors.New("secure-link connector returned an incomplete binding set"))
 	}
 	m.bindings = next
 	m.unbound = unbound
@@ -361,8 +391,7 @@ func (m *dockerSecureLinkManager) apply(
 			continue
 		}
 		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, networkName, mobyclient.NetworkDisconnectOptions{Container: m.connectorID, Force: true}); err != nil && !isNotFoundErr(err) {
-			m.failClosed(context.Background())
-			return nil, fmt.Errorf("detach secure-link connector from %s: %w", networkName, err)
+			return nil, fail(fmt.Errorf("detach secure-link connector from %s: %w", networkName, err))
 		}
 		delete(m.attached, networkName)
 	}
@@ -371,9 +400,14 @@ func (m *dockerSecureLinkManager) apply(
 			// The live apply cannot be treated as accepted when its committed
 			// snapshot failed. Refuse new tunnels and best-effort remove the
 			// connector bindings until control-plane reconciliation retries.
-			m.failClosed(context.Background())
-			return nil, fmt.Errorf("commit proxy secure-link state: %w", err)
+			return nil, fail(fmt.Errorf("commit proxy secure-link state: %w", err))
 		}
+	}
+	if replacement != nil {
+		if m.plugin.logger != nil {
+			m.plugin.logger.Info("secure-link connector replaced; the previous one is retired once its tunnels are idle", "image", image)
+		}
+		m.retireConnector(replacement.previous)
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
 	return statuses, nil
@@ -460,97 +494,305 @@ func (m *dockerSecureLinkManager) failClosed(ctx context.Context) {
 	_, _ = securelink.Sync(cleanupCtx, m.socketPath, nil)
 }
 
-func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image string) error {
+// ensureConnector makes the connector run the image. A connector that serves
+// links and runs another image (the connector image a Relay update promoted)
+// is not replaced in place: that left every Secure Link route of the node
+// without a connector until the new one was pulled, started and bound (seconds
+// of failed requests on every route). The new connector starts
+// in the other slot next to it instead; the returned replacement is switched
+// to by apply once its links are bound, and the previous connector is retired
+// after its tunnels drained.
+func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image string) (*connectorReplacement, error) {
 	managementNetwork, err := m.plugin.client.cli.NetworkInspect(ctx, secureLinkManagementNetwork, mobyclient.NetworkInspectOptions{})
 	if err == nil && !validSecureLinkManagementNetwork(managementNetwork.Network) {
-		return errors.New("refusing to use a non-managed or externally reachable secure-link management network")
+		return nil, errors.New("refusing to use a non-managed or externally reachable secure-link management network")
 	}
 	if err != nil {
 		if !isNotFoundErr(err) {
-			return secureLinkConnectorUnchangedError{fmt.Errorf("inspect secure-link management network: %w", err)}
+			return nil, secureLinkConnectorUnchangedError{fmt.Errorf("inspect secure-link management network: %w", err)}
 		}
 		if _, err := m.plugin.client.cli.NetworkCreate(ctx, secureLinkManagementNetwork, mobyclient.NetworkCreateOptions{
 			Driver: "bridge", Internal: true, Labels: map[string]string{"wiolett.gateway.managed": "secure-link"},
 		}); err != nil {
-			return fmt.Errorf("create secure-link management network: %w", err)
+			return nil, fmt.Errorf("create secure-link management network: %w", err)
 		}
 	}
 
-	inspect, err := m.plugin.client.cli.ContainerInspect(ctx, secureLinkConnectorName, mobyclient.ContainerInspectOptions{})
-	if err == nil && !validSecureLinkConnector(inspect.Container, image, filepath.Dir(m.socketPath)) {
-		if !ownedSecureLinkConnector(inspect.Container) {
-			return errors.New("refusing to replace a non-managed container using the secure-link connector name")
-		}
-		_, err = m.plugin.client.cli.ContainerRemove(ctx, secureLinkConnectorName, mobyclient.ContainerRemoveOptions{Force: true})
-		if err != nil {
-			return fmt.Errorf("replace unsafe or outdated secure-link connector: %w", err)
-		}
-		err = errors.New("connector configuration changed")
-	}
+	slot, inspect, err := m.findConnector(ctx, image)
 	if err != nil {
-		if !isNotFoundErr(err) && err.Error() != "connector configuration changed" {
-			return secureLinkConnectorUnchangedError{fmt.Errorf("inspect secure-link connector: %w", err)}
+		return nil, secureLinkConnectorUnchangedError{err}
+	}
+	controlDirectory := filepath.Dir(m.socketPath)
+	if inspect != nil && inspect.Config != nil && inspect.Config.Image != image &&
+		managedSecureLinkConnector(*inspect, controlDirectory) && inspect.State != nil && inspect.State.Running &&
+		inspect.ID == m.connectorID && len(m.bindings) > 0 {
+		return m.startReplacement(ctx, image, slot)
+	}
+	if inspect != nil && !validSecureLinkConnector(*inspect, image, controlDirectory) {
+		if !ownedSecureLinkConnector(*inspect) {
+			return nil, errors.New("refusing to replace a non-managed container using the secure-link connector name")
 		}
-		if image != developmentSecureLinkImage {
-			if err := m.plugin.client.EnsureImage(ctx, image, ""); err != nil {
-				return fmt.Errorf("ensure secure-link connector image: %w", err)
+		if _, err := m.plugin.client.cli.ContainerRemove(ctx, inspect.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil {
+			return nil, fmt.Errorf("replace unsafe or outdated secure-link connector: %w", err)
+		}
+		inspect = nil
+	}
+	if inspect == nil {
+		if inspect, err = m.createConnector(ctx, image, slot); err != nil {
+			return nil, err
+		}
+	} else if inspect.State == nil || !inspect.State.Running {
+		if _, err := m.plugin.client.cli.ContainerStart(ctx, inspect.ID, mobyclient.ContainerStartOptions{}); err != nil {
+			return nil, fmt.Errorf("start existing secure-link connector: %w", err)
+		}
+		started, err := m.plugin.client.cli.ContainerInspect(ctx, inspect.ID, mobyclient.ContainerInspectOptions{})
+		if err != nil {
+			return nil, err
+		}
+		inspect = &started.Container
+	}
+	runtime, err := connectorRuntimeOf(*inspect, slot, controlDirectory)
+	if err != nil {
+		return nil, err
+	}
+	m.useConnector(runtime)
+	m.publishViewLocked()
+	return nil, waitForConnectorSocket(ctx, m.socketPath)
+}
+
+// connectorRuntime is the connector container dials and syncs use.
+type connectorRuntime struct {
+	id, managementIP, socketPath string
+	slot                         int
+	attached                     map[string]struct{}
+}
+
+// connectorReplacement is a connector started next to the serving one. Until
+// apply switches to it, dials keep using previous, whose links stay bound.
+type connectorReplacement struct {
+	previous         connectorRuntime
+	previousBindings map[string]dockerSecureLinkBinding
+	previousUnbound  map[string]struct{}
+}
+
+func (m *dockerSecureLinkManager) useConnector(runtime connectorRuntime) {
+	m.connectorID = runtime.id
+	m.managementIP = runtime.managementIP
+	m.socketPath = runtime.socketPath
+	m.slot = runtime.slot
+	m.attached = runtime.attached
+}
+
+func connectorRuntimeOf(inspect container.InspectResponse, slot int, controlDirectory string) (connectorRuntime, error) {
+	if inspect.NetworkSettings == nil {
+		return connectorRuntime{}, errors.New("secure-link connector network settings are unavailable")
+	}
+	endpoint := inspect.NetworkSettings.Networks[secureLinkManagementNetwork]
+	if endpoint == nil || !endpoint.IPAddress.IsValid() {
+		return connectorRuntime{}, errors.New("secure-link connector management address is unavailable")
+	}
+	attached := map[string]struct{}{}
+	for name := range inspect.NetworkSettings.Networks {
+		if name != secureLinkManagementNetwork {
+			attached[name] = struct{}{}
+		}
+	}
+	return connectorRuntime{
+		id: inspect.ID, managementIP: endpoint.IPAddress.String(), slot: slot, attached: attached,
+		socketPath: filepath.Join(controlDirectory, secureLinkConnectorSlots[slot].socket),
+	}, nil
+}
+
+// findConnector returns the connector to keep using and its slot (nil when
+// there is none). The serving connector stays; after a daemon start, the one
+// already running the image wins and any other is left from an interrupted
+// replacement or retirement and is removed.
+func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image string) (int, *container.InspectResponse, error) {
+	found := [len(secureLinkConnectorSlots)]*container.InspectResponse{}
+	for slot, candidate := range secureLinkConnectorSlots {
+		if m.connectorID != "" && slot != m.slot {
+			// Serving: the other slot holds at most a connector being retired.
+			continue
+		}
+		inspect, err := m.plugin.client.cli.ContainerInspect(ctx, candidate.name, mobyclient.ContainerInspectOptions{})
+		if err != nil {
+			if isNotFoundErr(err) {
+				continue
+			}
+			return 0, nil, fmt.Errorf("inspect secure-link connector: %w", err)
+		}
+		found[slot] = &inspect.Container
+	}
+	if m.connectorID != "" {
+		return m.slot, found[m.slot], nil
+	}
+	controlDirectory := filepath.Dir(m.socketPath)
+	chosen := -1
+	for _, preferred := range []func(*container.InspectResponse) bool{
+		func(inspect *container.InspectResponse) bool {
+			return validSecureLinkConnector(*inspect, image, controlDirectory)
+		},
+		func(inspect *container.InspectResponse) bool {
+			return managedSecureLinkConnector(*inspect, controlDirectory)
+		},
+		func(*container.InspectResponse) bool { return true },
+	} {
+		for slot, inspect := range found {
+			if chosen < 0 && inspect != nil && preferred(inspect) {
+				chosen = slot
 			}
 		}
-		_ = os.Remove(m.socketPath)
-		pids := secureLinkConnectorPidsLimit
-		created, createErr := m.plugin.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
-			Config: &container.Config{
-				Image: image, User: "65532:65532",
-				Env:    []string{"GATEWAY_SECURE_LINK_SOCKET=" + secureLinkControlSocket},
-				Labels: map[string]string{"wiolett.gateway.managed": "secure-link-connector"},
-			},
-			HostConfig: &container.HostConfig{
-				Binds:          []string{filepath.Dir(m.socketPath) + ":/run/gateway"},
-				ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
-				RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
-				Resources:     container.Resources{Memory: secureLinkConnectorMemory, NanoCPUs: secureLinkConnectorNanoCPUs, PidsLimit: &pids},
-			},
-			NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{secureLinkManagementNetwork: {}}},
-			Name:             secureLinkConnectorName,
-		})
-		if createErr != nil {
-			return fmt.Errorf("create secure-link connector: %w", createErr)
+	}
+	if chosen < 0 {
+		return 0, nil, nil
+	}
+	for slot, inspect := range found {
+		if slot == chosen || inspect == nil || !ownedSecureLinkConnector(*inspect) {
+			continue
 		}
-		if _, startErr := m.plugin.client.cli.ContainerStart(ctx, created.ID, mobyclient.ContainerStartOptions{}); startErr != nil {
-			return fmt.Errorf("start secure-link connector: %w", startErr)
-		}
-		inspect, err = m.plugin.client.cli.ContainerInspect(ctx, created.ID, mobyclient.ContainerInspectOptions{})
-		if err != nil {
-			return fmt.Errorf("inspect created secure-link connector: %w", err)
-		}
-	} else if inspect.Container.State == nil || !inspect.Container.State.Running {
-		if _, err := m.plugin.client.cli.ContainerStart(ctx, inspect.Container.ID, mobyclient.ContainerStartOptions{}); err != nil {
-			return fmt.Errorf("start existing secure-link connector: %w", err)
-		}
-		inspect, err = m.plugin.client.cli.ContainerInspect(ctx, inspect.Container.ID, mobyclient.ContainerInspectOptions{})
-		if err != nil {
-			return err
+		if _, err := m.plugin.client.cli.ContainerRemove(ctx, inspect.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+			return 0, nil, fmt.Errorf("remove leftover secure-link connector: %w", err)
 		}
 	}
-	if inspect.Container.NetworkSettings == nil {
-		return errors.New("secure-link connector network settings are unavailable")
+	return chosen, found[chosen], nil
+}
+
+// startReplacement starts the connector for the image in the other slot. Any
+// failure leaves the serving connector and its links as they were.
+func (m *dockerSecureLinkManager) startReplacement(ctx context.Context, image string, slot int) (*connectorReplacement, error) {
+	unchanged := func(err error) (*connectorReplacement, error) {
+		return nil, secureLinkConnectorUnchangedError{err}
 	}
-	endpoint := inspect.Container.NetworkSettings.Networks[secureLinkManagementNetwork]
-	if endpoint == nil || !endpoint.IPAddress.IsValid() {
-		return errors.New("secure-link connector management address is unavailable")
+	if image != developmentSecureLinkImage {
+		// Pulled while the serving connector still forwards every link.
+		if err := m.plugin.client.EnsureImage(ctx, image, ""); err != nil {
+			return unchanged(fmt.Errorf("ensure secure-link connector image: %w", err))
+		}
 	}
-	m.connectorID = inspect.Container.ID
-	m.managementIP = endpoint.IPAddress.String()
+	next := 1 - slot
+	if err := m.removeConnectorSlot(ctx, next); err != nil {
+		return unchanged(err)
+	}
+	inspect, err := m.createConnector(ctx, image, next)
+	if err == nil {
+		var runtime connectorRuntime
+		runtime, err = connectorRuntimeOf(*inspect, next, filepath.Dir(m.socketPath))
+		if err == nil {
+			err = waitForConnectorSocket(ctx, runtime.socketPath)
+		}
+		if err == nil {
+			replacement := &connectorReplacement{
+				previous: connectorRuntime{
+					id: m.connectorID, managementIP: m.managementIP, socketPath: m.socketPath, slot: m.slot, attached: m.attached,
+				},
+				previousBindings: m.bindings, previousUnbound: m.unbound,
+			}
+			// Not published: dials go on to the previous connector until apply bound the links here.
+			m.useConnector(runtime)
+			return replacement, nil
+		}
+	}
+	if removeErr := m.removeConnectorSlot(context.Background(), next); removeErr != nil && m.plugin.logger != nil {
+		m.plugin.logger.Warn("could not remove the secure-link connector that failed to start", "error", removeErr)
+	}
+	return unchanged(fmt.Errorf("start replacement secure-link connector: %w", err))
+}
+
+// abortReplacement goes back to the connector that served before: its links
+// are bound as they were, and the new connector is removed.
+func (m *dockerSecureLinkManager) abortReplacement(replacement *connectorReplacement) {
+	failed := m.slot
+	m.useConnector(replacement.previous)
+	m.bindings = replacement.previousBindings
+	m.unbound = replacement.previousUnbound
 	m.publishViewLocked()
-	m.attached = map[string]struct{}{}
-	for name := range inspect.Container.NetworkSettings.Networks {
-		if name != secureLinkManagementNetwork {
-			m.attached[name] = struct{}{}
+	if err := m.removeConnectorSlot(context.Background(), failed); err != nil && m.plugin.logger != nil {
+		m.plugin.logger.Warn("could not remove the secure-link connector whose links failed to bind", "error", err)
+	}
+}
+
+// retireConnector removes a replaced connector once the tunnels through it
+// are done: each one closes as soon as it is idle between requests (nginx
+// then reconnects through the new connector), and the ones still busy after
+// the limit are cut with the container.
+func (m *dockerSecureLinkManager) retireConnector(previous connectorRuntime) {
+	limit := secureLinkConnectorRetireLimit
+	go func() {
+		busy := m.plugin.proxyTunnels.drainWhere(func(connection *drainConn) bool {
+			return connectionConnector(connection) == previous.id
+		}, limit, secureLinkConnectorRetireTick)
+		if busy > 0 && m.plugin.logger != nil {
+			m.plugin.logger.Info("tunnels still busy on the replaced secure-link connector are cut", "tunnels", busy)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := m.plugin.client.cli.ContainerRemove(ctx, previous.id, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) && m.plugin.logger != nil {
+			// The next daemon start removes it.
+			m.plugin.logger.Warn("could not remove the replaced secure-link connector", "error", err)
+		}
+	}()
+}
+
+func (m *dockerSecureLinkManager) createConnector(ctx context.Context, image string, slot int) (*container.InspectResponse, error) {
+	if image != developmentSecureLinkImage {
+		if err := m.plugin.client.EnsureImage(ctx, image, ""); err != nil {
+			return nil, fmt.Errorf("ensure secure-link connector image: %w", err)
 		}
 	}
+	controlDirectory := filepath.Dir(m.socketPath)
+	_ = os.Remove(filepath.Join(controlDirectory, secureLinkConnectorSlots[slot].socket))
+	pids := secureLinkConnectorPidsLimit
+	created, createErr := m.plugin.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
+		Config: &container.Config{
+			Image: image, User: "65532:65532",
+			Env:    []string{secureLinkConnectorSocketEnv(slot)},
+			Labels: map[string]string{"wiolett.gateway.managed": "secure-link-connector"},
+		},
+		HostConfig: &container.HostConfig{
+			Binds:          []string{controlDirectory + ":/run/gateway"},
+			ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
+			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+			Resources:     container.Resources{Memory: secureLinkConnectorMemory, NanoCPUs: secureLinkConnectorNanoCPUs, PidsLimit: &pids},
+		},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{secureLinkManagementNetwork: {}}},
+		Name:             secureLinkConnectorSlots[slot].name,
+	})
+	if createErr != nil {
+		return nil, fmt.Errorf("create secure-link connector: %w", createErr)
+	}
+	if _, startErr := m.plugin.client.cli.ContainerStart(ctx, created.ID, mobyclient.ContainerStartOptions{}); startErr != nil {
+		return nil, fmt.Errorf("start secure-link connector: %w", startErr)
+	}
+	inspect, err := m.plugin.client.cli.ContainerInspect(ctx, created.ID, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("inspect created secure-link connector: %w", err)
+	}
+	return &inspect.Container, nil
+}
+
+// removeConnectorSlot removes the managed connector in a slot, if any.
+func (m *dockerSecureLinkManager) removeConnectorSlot(ctx context.Context, slot int) error {
+	name := secureLinkConnectorSlots[slot].name
+	inspect, err := m.plugin.client.cli.ContainerInspect(ctx, name, mobyclient.ContainerInspectOptions{})
+	if isNotFoundErr(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect secure-link connector %s: %w", name, err)
+	}
+	if !managedSecureLinkConnector(inspect.Container, filepath.Dir(m.socketPath)) {
+		return fmt.Errorf("refusing to remove non-managed container %s", name)
+	}
+	if _, err := m.plugin.client.cli.ContainerRemove(ctx, inspect.Container.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+		return fmt.Errorf("remove secure-link connector %s: %w", name, err)
+	}
+	return nil
+}
+
+func waitForConnectorSocket(ctx context.Context, socketPath string) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if _, err := os.Stat(m.socketPath); err == nil {
+		if _, err := os.Stat(socketPath); err == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -577,16 +819,28 @@ func ownedSecureLinkConnector(inspect container.InspectResponse) bool {
 	return inspect.Config != nil && inspect.Config.Labels["wiolett.gateway.managed"] == "secure-link-connector"
 }
 
+// connectorSlot reports the slot of a container named like a connector.
+func connectorSlot(inspect container.InspectResponse) (int, bool) {
+	name := strings.TrimPrefix(inspect.Name, "/")
+	for slot, candidate := range secureLinkConnectorSlots {
+		if candidate.name == name {
+			return slot, true
+		}
+	}
+	return 0, false
+}
+
 func managedSecureLinkConnector(inspect container.InspectResponse, controlDirectory string) bool {
 	config := inspect.Config
 	host := inspect.HostConfig
-	if config == nil || host == nil ||
+	slot, named := connectorSlot(inspect)
+	if !named || config == nil || host == nil ||
 		(config.Image != developmentSecureLinkImage &&
 			!immutableConnectorImagePattern.MatchString(config.Image) &&
 			!officialConnectorReleaseTagPattern.MatchString(config.Image)) ||
 		config.User != "65532:65532" ||
 		config.Labels["wiolett.gateway.managed"] != "secure-link-connector" ||
-		!validSecureLinkConnectorEnv(config.Env) ||
+		!validSecureLinkConnectorEnv(config.Env, secureLinkConnectorSocketEnv(slot)) ||
 		len(config.ExposedPorts) != 0 || host.Privileged || host.PublishAllPorts || !host.ReadonlyRootfs ||
 		len(host.CapAdd) != 0 || !containsFold(host.CapDrop, "ALL") ||
 		(!containsFold(host.SecurityOpt, "no-new-privileges") && !containsFold(host.SecurityOpt, "no-new-privileges:true")) ||
@@ -600,8 +854,11 @@ func managedSecureLinkConnector(inspect container.InspectResponse, controlDirect
 	return inspect.NetworkSettings != nil && len(inspect.NetworkSettings.Ports) == 0
 }
 
-func validSecureLinkConnectorEnv(values []string) bool {
-	socket := "GATEWAY_SECURE_LINK_SOCKET=" + secureLinkControlSocket
+func secureLinkConnectorSocketEnv(slot int) string {
+	return "GATEWAY_SECURE_LINK_SOCKET=/run/gateway/" + secureLinkConnectorSlots[slot].socket
+}
+
+func validSecureLinkConnectorEnv(values []string, socket string) bool {
 	seenSocket := false
 	seenPath := false
 	for _, value := range values {
@@ -766,7 +1023,10 @@ func dialWithOneRestore(
 }
 
 func (m *dockerSecureLinkManager) dialCurrent(ctx context.Context, linkID string) (net.Conn, error) {
-	binding, ok, unbound, host := m.dialState(linkID)
+	view := m.currentView()
+	binding, ok := view.bindings[linkID]
+	_, unbound := view.unbound[linkID]
+	host := view.managementIP
 	if !ok && unbound && host != "" {
 		// Its target was unavailable at the last restore: a new restore
 		// right away would find the same, so the dial shares a recent one.
@@ -778,7 +1038,39 @@ func (m *dockerSecureLinkManager) dialCurrent(ctx context.Context, linkID string
 	if err := m.validateDialTarget(ctx, linkID, binding, time.Now()); err != nil {
 		return nil, fmt.Errorf("validate proxy secure-link target: %w", err)
 	}
-	return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", binding.port)))
+	connection, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", binding.port)))
+	if err != nil {
+		return nil, err
+	}
+	return &connectorConn{Conn: connection, connectorID: view.connectorID}, nil
+}
+
+// connectorConn is a connection through one connector container: the tunnels
+// of a replaced connector are drained before it is removed.
+type connectorConn struct {
+	net.Conn
+	connectorID string
+}
+
+// CloseWrite passes a half-close on to the workload.
+func (c *connectorConn) CloseWrite() error {
+	if closer, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return closer.CloseWrite()
+	}
+	return nil
+}
+
+func connectionConnector(connection net.Conn) string {
+	for {
+		switch current := connection.(type) {
+		case *connectorConn:
+			return current.connectorID
+		case *drainConn:
+			connection = current.Conn
+		default:
+			return ""
+		}
+	}
 }
 
 // validateDialTarget checks through dockerd that the link's target still is
@@ -877,21 +1169,15 @@ func (m *dockerSecureLinkManager) validateDialTargetNow(ctx context.Context, lin
 }
 
 func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
-	connectorID := m.connectorID
-	if connectorID == "" {
-		inspect, err := m.plugin.client.cli.ContainerInspect(ctx, secureLinkConnectorName, mobyclient.ContainerInspectOptions{})
-		if err == nil {
-			if !managedSecureLinkConnector(inspect.Container, filepath.Dir(m.socketPath)) {
-				return errors.New("refusing to remove a non-managed container using the secure-link connector name")
-			}
-			connectorID = inspect.Container.ID
-		} else if !isNotFoundErr(err) {
-			return fmt.Errorf("inspect secure-link connector for cleanup: %w", err)
+	if m.connectorID != "" {
+		if _, err := m.plugin.client.cli.ContainerRemove(ctx, m.connectorID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+			return fmt.Errorf("remove secure-link connector: %w", err)
 		}
 	}
-	if connectorID != "" {
-		if _, err := m.plugin.client.cli.ContainerRemove(ctx, connectorID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
-			return fmt.Errorf("remove secure-link connector: %w", err)
+	// Both slots: a replaced connector may still be retiring.
+	for slot := range secureLinkConnectorSlots {
+		if err := m.removeConnectorSlot(ctx, slot); err != nil {
+			return err
 		}
 	}
 	managementNetwork, err := m.plugin.client.cli.NetworkInspect(ctx, secureLinkManagementNetwork, mobyclient.NetworkInspectOptions{})
@@ -905,9 +1191,13 @@ func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
 	} else if !isNotFoundErr(err) {
 		return fmt.Errorf("inspect secure-link management network for cleanup: %w", err)
 	}
-	_ = os.Remove(m.socketPath)
+	for _, slot := range secureLinkConnectorSlots {
+		_ = os.Remove(filepath.Join(filepath.Dir(m.socketPath), slot.socket))
+	}
 	m.connectorID = ""
 	m.managementIP = ""
+	m.slot = 0
+	m.socketPath = filepath.Join(filepath.Dir(m.socketPath), secureLinkConnectorSlots[0].socket)
 	m.bindings = map[string]dockerSecureLinkBinding{}
 	m.unbound = nil
 	m.publishViewLocked()

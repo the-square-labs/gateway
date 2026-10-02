@@ -344,21 +344,30 @@ func (c *Client) releaseSecureLinkConnector(ctx context.Context, network string,
 	if err != nil {
 		return
 	}
-	attached := false
+	// Both connector slots: a replaced connector stays attached while it retires.
+	var attached []string
 	for _, endpoint := range inspected.Network.Containers {
-		if strings.TrimPrefix(endpoint.Name, "/") == secureLinkConnectorName {
-			attached = true
+		if name := strings.TrimPrefix(endpoint.Name, "/"); isSecureLinkConnectorName(name) {
+			attached = append(attached, name)
 		} else if !always {
 			return
 		}
 	}
-	if !attached {
-		return
+	for _, name := range attached {
+		_, err = c.cli.NetworkDisconnect(ctx, network, client.NetworkDisconnectOptions{Container: name, Force: true})
+		if err != nil && !isNotFoundErr(err) && c.logger != nil {
+			c.logger.Warn("cannot detach the secure-link connector from a network being removed", "network", network, "error", err)
+		}
 	}
-	_, err = c.cli.NetworkDisconnect(ctx, network, client.NetworkDisconnectOptions{Container: secureLinkConnectorName, Force: true})
-	if err != nil && !isNotFoundErr(err) && c.logger != nil {
-		c.logger.Warn("cannot detach the secure-link connector from a network being removed", "network", network, "error", err)
+}
+
+func isSecureLinkConnectorName(name string) bool {
+	for _, slot := range secureLinkConnectorSlots {
+		if slot.name == name {
+			return true
+		}
 	}
+	return false
 }
 
 // releaseSecureLinkConnectorFromProject disconnects the Secure Link connector from the networks of a Compose project
