@@ -398,7 +398,11 @@ export class GeneralSettingsService {
     // No configuration is carried by this event. It only lets cached,
     // permission-filtered read models refresh immediately.
     this.eventBus?.publish('system.config.changed', {
-      relayChanged: JSON.stringify(current.relay) !== JSON.stringify(next.relay),
+      // The policy lease is part of every relay snapshot: a change is published to all relays at once, not at
+      // their next lease refresh.
+      relayChanged:
+        JSON.stringify(current.relay) !== JSON.stringify(next.relay) ||
+        current.relayPolicyLeaseHours !== next.relayPolicyLeaseHours,
       externalBrandingChanged: current.hideExternalBranding !== next.hideExternalBranding,
     });
     if (current.features.inferenceEnabled !== next.features.inferenceEnabled) {
