@@ -29,13 +29,14 @@ import (
 // request cut with it at once, and nginx tries each member of an Availability
 // upstream (all of them sockets of this daemon) once per request: a 502.
 //
-// A connection the opener holds for its relay target (the target's daemon
-// announced a restart, or a relay or the target is not back yet) has sent
-// nothing to nginx, and nginx does not retry a single upstream: cutting it is
-// a 502. The handover therefore waits for held connections to reach their
-// target, serving and accepting meanwhile, up to the restart hold. A Route
-// whose node restarts while this daemon updates (Update Nodes) is served once
-// the node registered again instead of failing on this process's exit.
+// A connection that has not reached its relay tunnel yet (its opener holds it
+// because the target's daemon announced a restart, or a relay or the target is
+// not back yet, or the relay has not answered the tunnel yet) has sent nothing
+// to nginx, and nginx does not retry a single upstream: cutting it is a 502.
+// The handover therefore waits for such connections to reach their target,
+// serving and accepting meanwhile, up to the restart hold. A Route whose node
+// restarts while this daemon updates (Update Nodes) is served once the node
+// registered again instead of failing on this process's exit.
 //
 // A drain ends a connection with a shutdown, not a close: nginx sees it end at
 // once, and the opener closes it when its tunnel ended. A close waits for the
@@ -72,9 +73,9 @@ type trackedConn struct {
 	accepted  int64
 	lastRead  atomic.Int64
 	lastWrite atomic.Int64
-	// holding is set while the opener holds the connection for its relay
-	// target (secureLinkHolding).
-	holding atomic.Bool
+	// opened is set once the connection reached its relay tunnel
+	// (secureLinkEstablished).
+	opened atomic.Bool
 	// pending holds bytes read before the opener took over (awaitFirstBytes).
 	pending []byte
 	// established releases the connection's setup slot (secureLinkEstablished).
@@ -126,14 +127,6 @@ func (c *trackedConn) end() {
 		return
 	}
 	_ = c.Conn.Close()
-}
-
-// secureLinkHolding marks a connection its opener holds for its relay
-// target, or one that reached it or failed.
-func secureLinkHolding(connection net.Conn, holding bool) {
-	if tracked, ok := connection.(*trackedConn); ok {
-		tracked.holding.Store(holding)
-	}
 }
 
 // idle reports a connection that answered its last request and carried no
@@ -241,9 +234,9 @@ func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration) {
 	}
 }
 
-// held counts the connections whose opener holds them for their relay
-// target.
-func (m *sourceLinkManager) held() int {
+// opening counts the connections that have not reached their relay tunnel
+// yet: their opener holds them for their target or sets the tunnel up.
+func (m *sourceLinkManager) opening() int {
 	if m == nil {
 		return 0
 	}
@@ -253,17 +246,17 @@ func (m *sourceLinkManager) held() int {
 		bindings = append(bindings, binding)
 	}
 	m.mu.Unlock()
-	held := 0
+	opening := 0
 	for _, binding := range bindings {
 		binding.activeMu.Lock()
 		for connection := range binding.active {
-			if tracked, ok := connection.(*trackedConn); ok && tracked.holding.Load() {
-				held++
+			if tracked, ok := connection.(*trackedConn); ok && !tracked.opened.Load() {
+				opening++
 			}
 		}
 		binding.activeMu.Unlock()
 	}
-	return held
+	return opening
 }
 
 // HandOverSecureLinks runs when the daemon is asked to stop or exits for an
@@ -287,10 +280,11 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 			<-done
 		}
 		drain(secureLinkHandoverDrain, secureLinkIdleQuiet)
-		// The connections held for their target get it once it is back (its
-		// daemon registers again within a few seconds of a restart) and are
-		// answered by this process; cutting them would fail their requests.
-		for p.secureLinks.held()+p.registryLinks.held() > 0 && time.Since(started) < secureLinkRestartHold {
+		// The connections that have not reached their target yet get it once
+		// it is back (its daemon registers again within a few seconds of a
+		// restart) or the relay answered, and are answered by this process;
+		// cutting them would fail their requests.
+		for p.secureLinks.opening()+p.registryLinks.opening() > 0 && time.Since(started) < secureLinkRestartHold {
 			drain(secureLinkDrainTick, secureLinkIdleQuiet)
 		}
 		handed := p.secureLinks.suspendForHandover() + p.registryLinks.suspendForHandover()

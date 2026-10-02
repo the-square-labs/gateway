@@ -573,7 +573,7 @@ func TestHandoverWaitsForAConnectionHeldForARestartingTarget(t *testing.T) {
 		return connection
 	}
 	held := request()
-	waitForHeld(t, plugin.secureLinks, 1)
+	waitForOpening(t, plugin.secureLinks, 1)
 	handedOver := make(chan time.Time, 1)
 	started := time.Now()
 	go func() {
@@ -586,7 +586,7 @@ func TestHandoverWaitsForAConnectionHeldForARestartingTarget(t *testing.T) {
 	heldMeanwhile := request()
 	select {
 	case <-handedOver:
-		t.Fatalf("the daemon handed its sockets over while a connection was held for its target (held now %d)", plugin.secureLinks.held())
+		t.Fatalf("the daemon handed its sockets over while a connection was held for its target (held now %d)", plugin.secureLinks.opening())
 	default:
 	}
 	relay.back.Store(true)
@@ -608,20 +608,26 @@ func TestHandoverWaitsForAConnectionHeldForARestartingTarget(t *testing.T) {
 	}
 }
 
-// The wait for held connections is bounded: a target that does not come back
-// within the restart hold does not keep the daemon from restarting.
-func TestHandoverWaitForHeldConnectionsIsBounded(t *testing.T) {
+// A connection whose tunnel is still being set up when the drain ends (the
+// relay has not answered yet) is not cut either: the stopping process keeps
+// serving and accepting until it got through and answered, and only then
+// hands its sockets over.
+func TestHandoverWaitsForAConnectionStillOpeningItsTunnel(t *testing.T) {
 	store, err := listenerkeep.OpenStore(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	connectKeeper(t, store, nil)
-	release := make(chan struct{})
-	defer close(release)
+	through := make(chan struct{})
 	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
-		secureLinkHolding(connection, true)
-		<-release
+		defer connection.Close()
+		<-through
+		secureLinkEstablished(connection)
+		request := make([]byte, 4)
+		if _, err := io.ReadFull(connection, request); err == nil {
+			_, _ = connection.Write(request)
+		}
 	})
 	statuses, err := manager.sync(sourceCommand(0, 1))
 	if err != nil {
@@ -633,8 +639,59 @@ func TestHandoverWaitForHeldConnectionsIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
+	if _, err := connection.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	waitForOpening(t, manager, 1)
+	plugin := &NginxPlugin{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), secureLinks: manager}
+	handedOver := make(chan struct{})
+	go func() {
+		plugin.HandOverSecureLinks()
+		close(handedOver)
+	}()
+	time.Sleep(secureLinkHandoverDrain + secureLinkHandoverFinish + 100*time.Millisecond)
+	select {
+	case <-handedOver:
+		t.Fatal("the daemon handed its sockets over while a connection was still opening its tunnel")
+	default:
+	}
+	close(through)
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	reply := make([]byte, 4)
+	if _, err := io.ReadFull(connection, reply); err != nil || string(reply) != "ping" {
+		t.Fatalf("the connection was not answered once its tunnel was open: %q %v", reply, err)
+	}
+	select {
+	case <-handedOver:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the handover did not finish once every connection reached its tunnel")
+	}
+}
+
+// The wait for held connections is bounded: a target that does not come back
+// within the restart hold does not keep the daemon from restarting.
+func TestHandoverWaitForHeldConnectionsIsBounded(t *testing.T) {
+	store, err := listenerkeep.OpenStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	connectKeeper(t, store, nil)
+	release := make(chan struct{})
+	defer close(release)
+	manager := testSourceLinkManager(t, func(string, net.Conn) { <-release })
+	statuses, err := manager.sync(sourceCommand(0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Settle(time.Second)
+	connection, err := net.DialTimeout("unix", statuses[0].SocketPath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
 	_, _ = connection.Write([]byte("ping"))
-	waitForHeld(t, manager, 1)
+	waitForOpening(t, manager, 1)
 	plugin := &NginxPlugin{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), secureLinks: manager}
 	defer func(hold time.Duration) { secureLinkRestartHold = hold }(secureLinkRestartHold)
 	secureLinkRestartHold = secureLinkHandoverDrain + 500*time.Millisecond
@@ -645,12 +702,12 @@ func TestHandoverWaitForHeldConnectionsIsBounded(t *testing.T) {
 	}
 }
 
-func waitForHeld(t *testing.T, manager *sourceLinkManager, count int) {
+func waitForOpening(t *testing.T, manager *sourceLinkManager, count int) {
 	t.Helper()
 	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if manager.held() == count {
+		if manager.opening() == count {
 			return
 		}
 	}
-	t.Fatalf("held connections = %d, want %d", manager.held(), count)
+	t.Fatalf("connections opening their tunnel = %d, want %d", manager.opening(), count)
 }

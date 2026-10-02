@@ -49,9 +49,15 @@ func (l *setupLimiter) releaseOnce() func() {
 }
 
 // secureLinkEstablished tells the accept side that a connection reached its
-// relay tunnel: it no longer counts against the setup limit.
+// relay tunnel: it no longer counts against the setup limit, and a stopping
+// daemon no longer waits for it to get there (HandOverSecureLinks).
 func secureLinkEstablished(connection net.Conn) {
-	if tracked, ok := connection.(*trackedConn); ok && tracked.established != nil {
+	tracked, ok := connection.(*trackedConn)
+	if !ok {
+		return
+	}
+	tracked.opened.Store(true)
+	if tracked.established != nil {
 		tracked.established()
 	}
 }
