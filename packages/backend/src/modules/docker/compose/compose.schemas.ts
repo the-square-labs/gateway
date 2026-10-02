@@ -35,8 +35,9 @@ export const ComposeOperationActionSchema = z.enum([
 export const ComposeOperationInputSchema = z.object({
   revisionId: z.string().uuid().optional(),
   idempotencyKey: z.string().min(8).max(200),
-  // An apply removes the services the revision no longer declares unless the caller keeps them.
-  removeOrphans: z.boolean().default(true),
+  // Apply, Pull & Apply and down remove the services the revision no longer declares unless the caller passes false;
+  // the other actions never send the flag to the node.
+  removeOrphans: z.boolean().optional(),
   volumeNames: z.array(z.string().min(1).max(255)).max(100).default([]),
 });
 
