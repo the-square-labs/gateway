@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -14,7 +16,11 @@ import (
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const testMemberLinkID = "22222222-2222-4222-8222-222222222222"
@@ -408,4 +414,162 @@ func TestStaleTemporarySocketsAreRemoved(t *testing.T) {
 			t.Fatalf("%s removed: %v", path, err)
 		}
 	}
+}
+
+// restartingRelay answers every tunnel "target endpoint is restarting" until
+// the target is back, then admits it and echoes its bytes.
+type restartingRelay struct {
+	echoRelay
+	back atomic.Bool
+}
+
+func (r *restartingRelay) OpenTunnel(stream grpc.BidiStreamingServer[relayv1.TunnelFrame, relayv1.TunnelFrame]) error {
+	if !r.back.Load() {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		return status.Error(codes.Unavailable, "target endpoint is restarting")
+	}
+	return r.echoRelay.OpenTunnel(stream)
+}
+
+// A connection the daemon holds for a target whose node restarts is not cut
+// when the daemon itself restarts or updates meanwhile: the stopping process
+// keeps it until the node registered again and answers it, while it keeps
+// accepting, and only then hands its sockets over.
+func TestHandoverWaitsForAConnectionHeldForARestartingTarget(t *testing.T) {
+	store, err := listenerkeep.OpenStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	connectKeeper(t, store, nil)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := &restartingRelay{}
+	server := grpc.NewServer()
+	relayv1.RegisterTunnelBrokerServer(server, relay)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+
+	plugin := &NginxPlugin{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		relayGrants: &relayGrantStore{changed: make(chan struct{}, 1), current: &pb.SyncRelayGrantsCommand{
+			Grants: []*pb.RelayGrantAssignment{{
+				Role: "connect", OwnerKind: proxySecureLinkOwnerKind, OwnerId: testSecureLinkID, SchemaVersion: 2,
+				Candidates: []*pb.RelayDataCandidate{poolCandidate("relay-1", relaybridge.RolePrimary)},
+			}},
+		}},
+	}
+	plugin.secureLinks = testSourceLinkManager(t, plugin.openProxySecureLink)
+	statuses, err := plugin.secureLinks.sync(&pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{
+		{LinkId: testSecureLinkID, Role: "source", Generation: 1, SocketOnly: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Settle(time.Second)
+	if kept := plugin.secureLinks.keptListeners(); kept != 1 {
+		t.Fatalf("kept listeners = %d, want the link's socket", kept)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go plugin.RunRelayTargetTunnels(ctx, dialTestLane(t, listener.Addr().String()), "", "relay-1")
+	waitForRelayLanes(t, plugin, 1)
+
+	request := func() net.Conn {
+		connection, err := net.DialTimeout("unix", statuses[0].SocketPath, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = connection.Close() })
+		if _, err := connection.Write([]byte("ping")); err != nil {
+			t.Fatal(err)
+		}
+		return connection
+	}
+	held := request()
+	waitForHeld(t, plugin.secureLinks, 1)
+	handedOver := make(chan time.Time, 1)
+	started := time.Now()
+	go func() {
+		plugin.HandOverSecureLinks()
+		handedOver <- time.Now()
+	}()
+	// The node announced its restart; it registers again only after the drain
+	// and the last moment the handover gives the requests accepted last.
+	time.Sleep(secureLinkHandoverDrain + secureLinkHandoverFinish + 100*time.Millisecond)
+	heldMeanwhile := request()
+	select {
+	case <-handedOver:
+		t.Fatalf("the daemon handed its sockets over while a connection was held for its target (held now %d)", plugin.secureLinks.held())
+	default:
+	}
+	relay.back.Store(true)
+	back := time.Now()
+	for name, connection := range map[string]net.Conn{"held before the restart": held, "accepted meanwhile": heldMeanwhile} {
+		_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+		reply := make([]byte, 4)
+		if _, err := io.ReadFull(connection, reply); err != nil || string(reply) != "ping" {
+			t.Fatalf("connection %s was not answered once its target was back: %q %v", name, reply, err)
+		}
+	}
+	select {
+	case at := <-handedOver:
+		if at.Before(back) || at.Sub(started) > secureLinkRestartHold {
+			t.Fatalf("handed over %s after the start, the target was back after %s", at.Sub(started), back.Sub(started))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the handover did not finish once no connection was held")
+	}
+}
+
+// The wait for held connections is bounded: a target that does not come back
+// within the restart hold does not keep the daemon from restarting.
+func TestHandoverWaitForHeldConnectionsIsBounded(t *testing.T) {
+	store, err := listenerkeep.OpenStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	connectKeeper(t, store, nil)
+	release := make(chan struct{})
+	defer close(release)
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
+		secureLinkHolding(connection, true)
+		<-release
+	})
+	statuses, err := manager.sync(sourceCommand(0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Settle(time.Second)
+	connection, err := net.DialTimeout("unix", statuses[0].SocketPath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_, _ = connection.Write([]byte("ping"))
+	waitForHeld(t, manager, 1)
+	plugin := &NginxPlugin{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), secureLinks: manager}
+	defer func(hold time.Duration) { secureLinkRestartHold = hold }(secureLinkRestartHold)
+	secureLinkRestartHold = secureLinkHandoverDrain + 500*time.Millisecond
+	started := time.Now()
+	plugin.HandOverSecureLinks()
+	if elapsed := time.Since(started); elapsed < secureLinkRestartHold || elapsed > secureLinkRestartHold+secureLinkHandoverFinish+200*time.Millisecond {
+		t.Fatalf("handover took %s with a connection held past the restart hold of %s", elapsed, secureLinkRestartHold)
+	}
+}
+
+func waitForHeld(t *testing.T, manager *sourceLinkManager, count int) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if manager.held() == count {
+			return
+		}
+	}
+	t.Fatalf("held connections = %d, want %d", manager.held(), count)
 }
