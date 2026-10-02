@@ -20,6 +20,14 @@ import (
 // end, gives the requests it accepted last a short moment, and exits: a new
 // connection waits in the backlog for the restart itself, not for the drain
 // as well (1.7 s and two client timeouts at 50 rps).
+//
+// Once the sockets are handed over, a connection is closed as soon as it
+// answered and stayed silent briefly: nginx sends its next request on it only
+// after the whole answer, and under load it does so faster than the idle quiet,
+// so its connections stayed open until the exit cut them. A connection cut
+// that way while it sits in nginx's keep-alive pool fails the retry of a
+// request cut with it at once, and nginx tries each member of an Availability
+// upstream (all of them sockets of this daemon) once per request: a 502.
 
 const (
 	// secureLinkHandoverDrain bounds how long a stopping daemon keeps serving
@@ -32,7 +40,12 @@ const (
 	// byte, with no request left unanswered, to count as idle between
 	// requests.
 	secureLinkIdleQuiet = 100 * time.Millisecond
-	secureLinkDrainTick = 20 * time.Millisecond
+	// secureLinkFinishQuiet is that silence once the sockets were handed over:
+	// nginx is next to the socket, so a request it sends on the connection
+	// arrives at once, and the silence only has to outlast a pause inside an
+	// answer that arrives in several parts.
+	secureLinkFinishQuiet = 25 * time.Millisecond
+	secureLinkDrainTick   = 20 * time.Millisecond
 )
 
 // trackedConn records when bytes last moved in each direction, so a stopping
@@ -152,8 +165,9 @@ func (m *sourceLinkManager) suspendForHandover() int {
 }
 
 // drainForHandover waits, up to limit, for the requests this process is
-// serving, closing each connection as soon as it is idle between requests.
-func (m *sourceLinkManager) drainForHandover(limit time.Duration) {
+// serving, closing each connection as soon as it answered and carried no byte
+// for quiet.
+func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration) {
 	if m == nil {
 		return
 	}
@@ -171,7 +185,7 @@ func (m *sourceLinkManager) drainForHandover(limit time.Duration) {
 			binding.activeMu.Lock()
 			for connection := range binding.active {
 				tracked, ok := connection.(*trackedConn)
-				if ok && tracked.idle(now, secureLinkIdleQuiet) {
+				if ok && tracked.idle(now, quiet) {
 					_ = connection.Close()
 					continue
 				}
@@ -196,21 +210,26 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 		if p.secureLinks.keptListeners()+p.registryLinks.keptListeners() == 0 {
 			return
 		}
-		drain := func(limit time.Duration) {
+		drain := func(limit, quiet time.Duration) {
 			done := make(chan struct{})
 			go func() {
-				p.registryLinks.drainForHandover(limit)
+				p.registryLinks.drainForHandover(limit, quiet)
 				close(done)
 			}()
-			p.secureLinks.drainForHandover(limit)
+			p.secureLinks.drainForHandover(limit, quiet)
 			<-done
 		}
-		drain(secureLinkHandoverDrain)
+		drain(secureLinkHandoverDrain, secureLinkIdleQuiet)
 		handed := p.secureLinks.suspendForHandover() + p.registryLinks.suspendForHandover()
 		if p.logger != nil {
 			p.logger.Info("handing Secure Link sockets over to the next daemon process", "sockets", handed)
 		}
-		drain(secureLinkHandoverFinish)
+		drain(secureLinkHandoverFinish, secureLinkFinishQuiet)
+		// The exit cuts what is still open. The connections that answered are
+		// closed a tick before it, so nginx drops them from its keep-alive pool
+		// and the retries of the requests the exit cuts open new connections,
+		// which wait for the next process.
+		drain(secureLinkDrainTick, 0)
 	})
 }
 

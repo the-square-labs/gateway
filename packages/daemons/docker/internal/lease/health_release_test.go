@@ -6,7 +6,7 @@ import (
 )
 
 func TestHealthCooldownBacksOffUntilTheCopyStaysUp(t *testing.T) {
-	wl := &workload{}
+	wl := &workload{serveIDs: map[string]bool{"copy-1": true}}
 	now := time.Hour
 	want := []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 5 * time.Minute, 5 * time.Minute}
 	for i, expected := range want {
@@ -21,6 +21,30 @@ func TestHealthCooldownBacksOffUntilTheCopyStaysUp(t *testing.T) {
 	wl.servingSince = now - healthStableAfter
 	if got := healthCooldown(wl, now); got != healthCooldownBase {
 		t.Fatalf("cooldown after a stable copy %s, want %s", got, healthCooldownBase)
+	}
+}
+
+// The backoff belongs to one copy: after a rollout replaced the containers
+// that kept failing, the first failure of the new copy is healed after the
+// base cooldown, not after the doubled one of the old copy.
+func TestHealthCooldownStartsOverForANewCopy(t *testing.T) {
+	wl := &workload{serveIDs: map[string]bool{"old-copy": true}}
+	now := time.Hour
+	for range 3 {
+		wl.servingSince = now - time.Minute
+		healthCooldown(wl, now)
+		now += time.Minute
+	}
+	wl.serveIDs = map[string]bool{"new-copy": true}
+	wl.servingSince = now - 2*time.Minute
+	if got := healthCooldown(wl, now); got != healthCooldownBase {
+		t.Fatalf("first release of a new copy: cooldown %s, want %s", got, healthCooldownBase)
+	}
+	// The same copy restarted in place keeps backing off.
+	now += time.Minute
+	wl.servingSince = now - time.Minute
+	if got := healthCooldown(wl, now); got != 2*healthCooldownBase {
+		t.Fatalf("second release of the same copy: cooldown %s, want %s", got, 2*healthCooldownBase)
 	}
 }
 

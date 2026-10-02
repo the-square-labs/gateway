@@ -51,10 +51,11 @@ const (
 	// listener is then simply not kept.
 	sendTimeout = time.Second
 	maxMessage  = 8192
-
-	// systemdNotifySocket is where systemd receives service notifications.
-	systemdNotifySocket = "/run/systemd/notify"
 )
+
+// systemdNotifySocket is where systemd receives service notifications (a
+// variable for tests).
+var systemdNotifySocket = "/run/systemd/notify"
 
 type keptDescriptor struct {
 	Name string `json:"name"`
@@ -92,6 +93,9 @@ type client struct {
 	// own names the listeners this process kept or took over.
 	own  map[string]bool
 	send func(message string, file *os.File) error
+	// mirror stores what the launcher keeps in systemd's store as well, when
+	// the launcher cannot (see newClientFromEnvironment).
+	mirror *notifySocket
 }
 
 var (
@@ -175,6 +179,11 @@ func (c *client) take(name string) (*os.File, bool) {
 			c.own = map[string]bool{}
 		}
 		c.own[name] = true
+		if c.mirror != nil {
+			// The previous process kept it while nothing stored it in
+			// systemd's store; this process keeps it from now on.
+			_ = forwardToSystemd(c.mirror, messageKeep+"\n"+name, file)
+		}
 	}
 	return file, ok
 }
@@ -293,8 +302,30 @@ func newClientFromEnvironment() *client {
 		connection, err := net.FileConn(file)
 		_ = file.Close()
 		if unixConnection, ok := connection.(*net.UnixConn); err == nil && ok {
+			// The launcher stores what it keeps in systemd's store through the
+			// NOTIFY_SOCKET systemd gave it when the unit started. A unit that
+			// had no store and NotifyAccess then (the drop-in
+			// EnsureSystemdStore installs applies to the running unit) gave it
+			// none, so the listeners lived in the launcher alone and closed
+			// with it on the unit's next restart, the first one after the
+			// update: the connections waiting in their backlogs were reset. Its
+			// processes inherit its environment; without NOTIFY_SOCKET this
+			// process stores them itself, on the launcher's behalf, as under a
+			// launcher without a keeper.
+			if os.Getenv("NOTIFY_SOCKET") == "" {
+				current.mirror = dialNotifySocketFor(os.Getppid())
+			}
+			mirror := current.mirror
 			current.send = func(message string, file *os.File) error {
-				return sendMessage(unixConnection, message, file)
+				if err := sendMessage(unixConnection, message, file); err != nil {
+					return err
+				}
+				if mirror != nil {
+					// The launcher keeps it either way; a store that refuses
+					// it only loses it across a restart of the whole unit.
+					_ = forwardToSystemd(mirror, message, file)
+				}
+				return nil
 			}
 		}
 		return current
