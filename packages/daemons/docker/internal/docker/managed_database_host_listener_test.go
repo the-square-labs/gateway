@@ -373,9 +373,9 @@ func TestManagedDatabaseHostListenerSurvivesAFailedNetworkInspect(t *testing.T) 
 	requireClosed(t, held)
 }
 
-// An Availability adopt moves the binding's route to another binding id with the same network, address, sources and
-// route generation: the listener serves on as the new binding with its connections. A new route generation is
-// Gateway's request to replace the listener.
+// An Availability adopt moves the binding's route to another binding id on the same network and address: the
+// listener serves on as the new binding with its connections. A new route generation keeps the listening socket,
+// so no connection is refused meanwhile; only the connections opened on the previous generation close.
 func TestManagedDatabaseHostListenerMovesToTheAdoptingBinding(t *testing.T) {
 	h := newListenerHarness(t)
 	h.reconcile(h.assignment(testListenerBindingA, 3, 64))
@@ -395,10 +395,33 @@ func TestManagedDatabaseHostListenerMovesToTheAdoptingBinding(t *testing.T) {
 	}
 
 	statuses = h.reconcile(h.assignment(testListenerBindingA, 4, 64))
-	if statuses[testListenerBindingA].State != "ready" || h.listener(testListenerBindingA) == listener {
-		t.Fatalf("a new route generation kept the listener: %+v", statuses)
+	if statuses[testListenerBindingA].State != "ready" || h.listener(testListenerBindingA) != listener {
+		t.Fatalf("a new route generation replaced the listening socket: %+v", statuses)
 	}
 	requireClosed(t, held)
+	h.dial()
+	h.waitOpened(1)
+	if opened := h.openedBindings(); opened[len(opened)-1] != (openedBinding{bindingID: testListenerBindingA, generation: 4}) {
+		t.Fatalf("connection after the new generation opened as %+v", opened[len(opened)-1])
+	}
+}
+
+// Enabling Availability adopts the route of the workload's own link for its placement, with the placement's source
+// list: the listener moves with its connections from sources the new list still allows.
+func TestManagedDatabaseHostListenerMovesToAnAdoptingBindingWithNewSources(t *testing.T) {
+	h := newListenerHarness(t)
+	h.reconcile(h.assignment(testListenerBindingA, 3, 64))
+	listener := h.listener(testListenerBindingA)
+	held := h.dial()
+	h.waitOpened(1)
+
+	adopting := h.assignment(testListenerBindingB, 3, 64)
+	adopting.ManagedDatabaseListener.AllowedSources = []string{"container:app-placement", "deployment:deployment-1"}
+	statuses := h.reconcile(adopting)
+	if statuses[testListenerBindingB].State != "ready" || h.listener(testListenerBindingB) != listener {
+		t.Fatalf("adopt with a new source list did not move the listener: %+v", statuses)
+	}
+	requireOpen(t, held)
 }
 
 // Rejections are logged per link and reason once per interval, with the count in between.

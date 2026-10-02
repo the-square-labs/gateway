@@ -62,7 +62,8 @@ type managedDatabaseHostListenerStatus struct {
 type managedDatabaseHostListener struct {
 	listener *net.TCPListener
 	mu       sync.Mutex
-	// config changes in place when only the limit or the binding changes (re-key on an Availability adopt).
+	// config changes in place while the socket stays (sameSocket): a new limit, source list, route generation or
+	// binding (re-key on an Availability adopt).
 	config      managedDatabaseHostListenerConfig
 	closed      bool
 	connections map[net.Conn]struct{}
@@ -170,16 +171,20 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 	var released []*managedDatabaseHostListener
 	for bindingID, listener := range m.listeners {
 		current := listener.currentConfig()
-		// A new source list (an Availability disable narrows it to the survivor) keeps the listener: only the
-		// connections of sources it no longer allows close.
-		if config, present := resolved[bindingID]; present && current.sameRoute(config) {
+		// A new source list (an Availability disable narrows it to the survivor) or route generation keeps the
+		// listening socket: only the connections the new route no longer carries close (see update).
+		if config, present := resolved[bindingID]; present && current.sameSocket(config) {
+			if config.routeGeneration != current.routeGeneration {
+				m.logger.Info("managed database host listener took a new route generation", "binding_id", bindingID,
+					"route_generation", config.routeGeneration, "previous_route_generation", current.routeGeneration)
+			}
 			listener.update(config)
 			statuses[bindingID] = listenerStatus(config, "ready", nil)
 			continue
 		}
 		if config, present := unverified[bindingID]; present {
 			config.networkID = current.networkID
-			if current.sameRoute(config) {
+			if current.sameSocket(config) {
 				listener.update(config)
 				continue
 			}
@@ -197,12 +202,14 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 		previous := listener.currentConfig()
 		next, verified, found := m.successorLocked(previous, resolved, unverified)
 		if !found {
+			m.logger.Info("managed database host listener closed: its binding left the grant bundle", "binding_id", previous.bindingID,
+				"address", net.JoinHostPort(previous.listenAddress.String(), fmt.Sprintf("%d", previous.listenPort)))
 			listener.close()
 			continue
 		}
-		// An Availability adopt or release moves the binding's route to another binding id with the same network,
-		// address, sources and route generation: the listener serves on under the new id and keeps its connections.
-		listener.setConfig(next)
+		// An Availability adopt or release moves the binding's route to another binding id on the same network and
+		// address: the listener serves on under the new id, and keeps the connections the new route still carries.
+		listener.update(next)
 		m.listeners[next.bindingID] = listener
 		if verified {
 			statuses[next.bindingID] = listenerStatus(next, "ready", nil)
@@ -226,8 +233,8 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 	return statuses
 }
 
-// successorLocked finds the binding a released listener serves on as: one without a listener whose config is the
-// listener's except for the binding id. verified reports a successor whose network was inspected now.
+// successorLocked finds the binding a released listener serves on as: one without a listener on the same socket
+// (network, address and port). verified reports a successor whose network was inspected now.
 func (m *managedDatabaseHostListenerManager) successorLocked(
 	previous managedDatabaseHostListenerConfig,
 	resolved, unverified map[string]managedDatabaseHostListenerConfig,
@@ -250,9 +257,7 @@ func (m *managedDatabaseHostListenerManager) successorLocked(
 			if !pass.verified {
 				candidate.networkID = previous.networkID
 			}
-			moved := previous
-			moved.bindingID = bindingID
-			if moved.equal(candidate) {
+			if previous.sameSocket(candidate) {
 				return candidate, pass.verified, true
 			}
 		}
@@ -639,21 +644,23 @@ func (listener *managedDatabaseHostListener) currentConfig() managedDatabaseHost
 	return listener.config
 }
 
-func (listener *managedDatabaseHostListener) setConfig(config managedDatabaseHostListenerConfig) {
-	listener.mu.Lock()
-	listener.config = config
-	listener.mu.Unlock()
-}
-
-// update applies a config of the same route (sameRoute) in place and closes the connections whose source the new
-// source list no longer allows.
+// update applies a config of the same socket (sameSocket) in place. A new route generation (the route moved to
+// another source, target or listener) closes the connections opened on the previous one; otherwise only those whose
+// source the new source list no longer allows close. New connections are never refused meanwhile.
 func (listener *managedDatabaseHostListener) update(config managedDatabaseHostListenerConfig) {
 	listener.mu.Lock()
+	newRoute := listener.config.routeGeneration != config.routeGeneration
 	listener.config = config
 	var refused []net.Conn
-	for connection, peer := range listener.sources {
-		if !managedDatabaseListenerSourceAllowed(peer, config.allowedSources) {
+	if newRoute {
+		for connection := range listener.connections {
 			refused = append(refused, connection)
+		}
+	} else {
+		for connection, peer := range listener.sources {
+			if !managedDatabaseListenerSourceAllowed(peer, config.allowedSources) {
+				refused = append(refused, connection)
+			}
 		}
 	}
 	listener.mu.Unlock()
@@ -685,23 +692,12 @@ func (listener *managedDatabaseHostListener) close() {
 	}
 }
 
-// sameRoute reports a config of the same listener: binding, network, address, port and route generation. The source
-// list and the limit change on the running listener.
-func (config managedDatabaseHostListenerConfig) sameRoute(other managedDatabaseHostListenerConfig) bool {
-	return config.bindingID == other.bindingID && config.networkName == other.networkName && config.networkID == other.networkID &&
-		config.listenAddress == other.listenAddress && config.listenPort == other.listenPort && config.routeGeneration == other.routeGeneration
-}
-
-func (config managedDatabaseHostListenerConfig) equal(other managedDatabaseHostListenerConfig) bool {
-	if !config.sameRoute(other) || len(config.allowedSources) != len(other.allowedSources) {
-		return false
-	}
-	for index := range config.allowedSources {
-		if config.allowedSources[index] != other.allowedSources[index] {
-			return false
-		}
-	}
-	return true
+// sameSocket reports a config the running listening socket serves: the same network, address and port. The binding,
+// route generation, source list and limit change on the running listener (update), so a route change never closes
+// the socket and refuses the connections made meanwhile.
+func (config managedDatabaseHostListenerConfig) sameSocket(other managedDatabaseHostListenerConfig) bool {
+	return config.networkName == other.networkName && config.networkID == other.networkID &&
+		config.listenAddress == other.listenAddress && config.listenPort == other.listenPort
 }
 
 func listenerStatus(config managedDatabaseHostListenerConfig, state string, err error) managedDatabaseHostListenerStatus {
