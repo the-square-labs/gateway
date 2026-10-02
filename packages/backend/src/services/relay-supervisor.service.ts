@@ -156,6 +156,9 @@ export class RelaySupervisorService {
   private recoveryCycle: Promise<void> | null = null;
   private manualRetryStarting = false;
   private stopping = false;
+  /** Resolves when stop() is called, so recovery waits end at once instead of holding a stopping Gateway. */
+  private stopped: Promise<void>;
+  private signalStopped: () => void = () => undefined;
   private readonly probeIntervalMs: number;
   private readonly recoveryDelaysMs: readonly [number, number, number];
   private readonly readinessWaitMs: number;
@@ -187,6 +190,7 @@ export class RelaySupervisorService {
     this.readinessPollMs = options.readinessPollMs ?? 1_000;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.now = options.now ?? Date.now;
+    this.stopped = this.armStopSignal();
   }
 
   /** The local relay's acceptor and gate view goes to the availability lease service with every health probe. */
@@ -197,6 +201,7 @@ export class RelaySupervisorService {
   async start(): Promise<void> {
     if (!this.options.required || !this.relayClient) return;
     this.stopping = false;
+    this.stopped = this.armStopSignal();
     const persisted = await this.cache.get<RelaySupervisorState>(CONTROL_STATE_KEY).catch(() => null);
     if (persisted?.maxAttempts === MAX_ATTEMPTS) {
       // Maintenance belongs to the process that opened it (a relay update). Restored after a
@@ -212,6 +217,7 @@ export class RelaySupervisorService {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.signalStopped();
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     await this.recoveryCycle;
@@ -481,7 +487,7 @@ export class RelaySupervisorService {
       // A round whose action was superseded judges the relay again at once, on the same attempt.
       const delay = rejudge ? 0 : (this.recoveryDelaysMs[attempt - 1] ?? 0);
       rejudge = false;
-      if (delay > 0) await this.sleep(delay);
+      if (delay > 0) await this.pause(delay);
       if (this.stopping || this.inMaintenance()) return;
       // The relay may have recovered on its own meanwhile, or an update may have taken it over.
       // Restarting it then would only drop its tunnels.
@@ -535,13 +541,13 @@ export class RelaySupervisorService {
         });
         // Docker may carry an action out although its call failed (a restart that outlived the
         // request). Judge the relay, not the call: a relay that came back is healthy, not critical.
-        if (
-          error instanceof RelayRecoverySafetyError &&
-          error.reason === 'docker_unavailable' &&
-          (await this.waitForReadiness())
-        ) {
-          await this.markRecovered();
-          return;
+        if (error instanceof RelayRecoverySafetyError && error.reason === 'docker_unavailable') {
+          const recovered = await this.waitForReadiness();
+          if (!recovered && this.stopping) return;
+          if (recovered) {
+            await this.markRecovered();
+            return;
+          }
         }
         if (error instanceof RelayRecoverySafetyError) {
           await this.transition({
@@ -555,6 +561,8 @@ export class RelaySupervisorService {
         continue;
       }
       const healthy = await this.waitForReadiness();
+      // A stopping Gateway ends the wait; the next start judges the relay again.
+      if (!healthy && this.stopping) return;
       if (healthy) {
         this.updateAttempt(attempt, { result: 'healthy' });
         await this.transition({
@@ -650,7 +658,7 @@ export class RelaySupervisorService {
       if ((await this.checkRelay()).healthy) return { healthy: true };
       // Look at the container again every poll: a stop that ended turns into a fresh run or a
       // stopped relay, each judged on its own at once.
-      await this.sleep(Math.max(1, Math.min(this.readinessPollMs, wait.waitMs, cap - this.now())));
+      await this.pause(Math.max(1, Math.min(this.readinessPollMs, wait.waitMs, cap - this.now())));
     }
   }
 
@@ -665,12 +673,23 @@ export class RelaySupervisorService {
 
   private async waitForReadiness(waitMs = this.readinessWaitMs): Promise<boolean> {
     const deadline = this.now() + waitMs;
-    while (this.now() < deadline) {
+    while (!this.stopping && this.now() < deadline) {
       const result = await this.checkRelay();
       if (result.healthy) return true;
-      await this.sleep(Math.max(1, Math.min(this.readinessPollMs, deadline - this.now())));
+      await this.pause(Math.max(1, Math.min(this.readinessPollMs, deadline - this.now())));
     }
     return false;
+  }
+
+  /** Sleeps, but wakes as soon as the supervisor stops. */
+  private pause(ms: number): Promise<void> {
+    return Promise.race([this.sleep(ms), this.stopped]);
+  }
+
+  private armStopSignal(): Promise<void> {
+    return new Promise((resolve) => {
+      this.signalStopped = resolve;
+    });
   }
 
   private async checkRelay(): Promise<ProbeResult> {
