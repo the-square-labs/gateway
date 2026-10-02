@@ -319,7 +319,7 @@ func TestHandoverDrainClosesIdleConnectionsAndWaitsForRequests(t *testing.T) {
 	time.Sleep(2 * secureLinkIdleQuiet)
 
 	started := time.Now()
-	manager.drainForHandover(400*time.Millisecond, secureLinkIdleQuiet)
+	manager.drainForHandover(400*time.Millisecond, secureLinkIdleQuiet, endOldest)
 	if elapsed := time.Since(started); elapsed < 350*time.Millisecond {
 		t.Fatalf("drain returned after %s with a request unanswered", elapsed)
 	}
@@ -377,7 +377,7 @@ func TestHandoverFinishClosesAnsweredConnectionsBeforeTheExit(t *testing.T) {
 	keepalive := dial()
 	answered(keepalive)
 	started := time.Now()
-	manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet)
+	manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest)
 	if elapsed := time.Since(started); elapsed >= secureLinkIdleQuiet {
 		t.Fatalf("the answered connection was closed after %s", elapsed)
 	}
@@ -390,7 +390,7 @@ func TestHandoverFinishClosesAnsweredConnectionsBeforeTheExit(t *testing.T) {
 	answered(waiting)
 	_, _ = waiting.Write([]byte("slow request"))
 	time.Sleep(10 * time.Millisecond)
-	manager.drainForHandover(secureLinkDrainTick, 0)
+	manager.drainForHandover(secureLinkDrainTick, 0, endAll)
 	if !closed(justAnswered) {
 		t.Fatal("the last pass left an answered connection for the exit")
 	}
@@ -454,7 +454,7 @@ func TestHandoverDrainDoesNotWaitForConnectionsToClose(t *testing.T) {
 	drained := make(chan time.Duration, 1)
 	go func() {
 		started := time.Now()
-		manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet)
+		manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest)
 		drained <- time.Since(started)
 	}()
 	select {
@@ -470,6 +470,161 @@ func TestHandoverDrainDoesNotWaitForConnectionsToClose(t *testing.T) {
 		if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 			t.Fatalf("connection %d did not end for nginx: %v", index, err)
 		}
+	}
+}
+
+// After the handover a drain pass ends one answered connection per socket,
+// the one silent longest. nginx takes the connection it pooled last first and
+// retries a request whose connection ended under it on another entry of an
+// Availability upstream: a request meets at most one ended connection to a
+// socket, so its retry gets a live one or a new connection, not a second ended
+// one.
+func TestHandoverFinishEndsOneAnsweredConnectionPerSocketAtATime(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
+		buffer := make([]byte, 64)
+		for {
+			n, err := connection.Read(buffer)
+			if err != nil {
+				return
+			}
+			if string(buffer[:n]) == "request" {
+				_, _ = connection.Write([]byte("answer"))
+			}
+		}
+	})
+	statuses, err := manager.sync(sourceCommand(0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pooled := make([]net.Conn, 0, 3)
+	for range 3 {
+		connection, err := net.Dial("unix", statuses[0].SocketPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = connection.Close() })
+		_, _ = connection.Write([]byte("request"))
+		if _, err := io.ReadFull(connection, make([]byte, 6)); err != nil {
+			t.Fatal(err)
+		}
+		pooled = append(pooled, connection)
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(2 * secureLinkFinishQuiet)
+	ended := func(connection net.Conn) bool {
+		_ = connection.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		_, err := connection.Read(make([]byte, 6))
+		return err != nil && !errors.Is(err, os.ErrDeadlineExceeded)
+	}
+	for pass := range pooled {
+		// A limit of zero runs a single pass.
+		manager.drainForHandover(0, secureLinkFinishQuiet, endOldest)
+		for index, connection := range pooled[pass:] {
+			if got, want := ended(connection), index == 0; got != want {
+				t.Fatalf("pass %d: connection %d ended = %v, want %v", pass, pass+index, got, want)
+			}
+		}
+	}
+}
+
+// Until the sockets are handed over, a connection idle between requests stays
+// open while the stopping process waits for a connection still opening its
+// tunnel: nginx keeps reusing it, and ending it under a request nginx sends on
+// it fails that request. It ends once the sockets are handed over.
+func TestHandoverKeepsIdleConnectionsOpenUntilTheSocketsAreHandedOver(t *testing.T) {
+	store, err := listenerkeep.OpenStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	connectKeeper(t, store, nil)
+	through := make(chan struct{})
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
+		defer connection.Close()
+		buffer := make([]byte, 64)
+		for {
+			n, err := connection.Read(buffer)
+			if err != nil {
+				return
+			}
+			switch string(buffer[:n]) {
+			case "hold":
+				<-through
+				secureLinkEstablished(connection)
+				_, _ = connection.Write([]byte("held"))
+			case "request":
+				secureLinkEstablished(connection)
+				_, _ = connection.Write([]byte("answer"))
+			}
+		}
+	})
+	statuses, err := manager.sync(sourceCommand(0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Settle(time.Second)
+	dial := func() net.Conn {
+		connection, err := net.DialTimeout("unix", statuses[0].SocketPath, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = connection.Close() })
+		return connection
+	}
+	reply := func(connection net.Conn, request, answer string) error {
+		if _, err := connection.Write([]byte(request)); err != nil {
+			return err
+		}
+		_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+		got := make([]byte, len(answer))
+		if _, err := io.ReadFull(connection, got); err != nil {
+			return err
+		}
+		if string(got) != answer {
+			return errors.New("answered " + string(got))
+		}
+		return nil
+	}
+	keepalive := dial()
+	if err := reply(keepalive, "request", "answer"); err != nil {
+		t.Fatal(err)
+	}
+	held := dial()
+	if _, err := held.Write([]byte("hold")); err != nil {
+		t.Fatal(err)
+	}
+	waitForOpening(t, manager, 1)
+	plugin := &NginxPlugin{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), secureLinks: manager}
+	handedOver := make(chan struct{})
+	go func() {
+		plugin.HandOverSecureLinks()
+		close(handedOver)
+	}()
+	for started := time.Now(); time.Since(started) < secureLinkHandoverDrain+500*time.Millisecond; {
+		time.Sleep(2 * secureLinkIdleQuiet)
+		if err := reply(keepalive, "request", "answer"); err != nil {
+			t.Fatalf("an idle connection was ended %s after the stop, before the sockets were handed over: %v", time.Since(started), err)
+		}
+	}
+	select {
+	case <-handedOver:
+		t.Fatal("the daemon handed its sockets over while a connection was still opening its tunnel")
+	default:
+	}
+	close(through)
+	_ = held.SetReadDeadline(time.Now().Add(2 * time.Second))
+	answer := make([]byte, 4)
+	if _, err := io.ReadFull(held, answer); err != nil || string(answer) != "held" {
+		t.Fatalf("the held connection was not answered: %q %v", answer, err)
+	}
+	select {
+	case <-handedOver:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the handover did not finish once every connection reached its tunnel")
+	}
+	_ = keepalive.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := keepalive.Read(answer); !errors.Is(err, io.EOF) {
+		t.Fatalf("the idle connection did not end after the handover: %v", err)
 	}
 }
 

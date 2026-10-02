@@ -15,11 +15,21 @@ import (
 //
 // The next process can only start once this one exited (systemctl restart
 // stops the unit before it starts it again), so the stopping process keeps
-// accepting while it lets the requests it serves finish and closes the
-// connections that sit idle between requests. It stops accepting only at the
-// end, gives the requests it accepted last a short moment, and exits: a new
-// connection waits in the backlog for the restart itself, not for the drain
-// as well (1.7 s and two client timeouts at 50 rps).
+// accepting while it lets the requests it serves finish. It stops accepting
+// only at the end, gives the requests it accepted last a short moment, and
+// exits: a new connection waits in the backlog for the restart itself, not for
+// the drain as well (1.7 s and two client timeouts at 50 rps).
+//
+// Until the sockets are handed over, a connection that sits idle between
+// requests stays open: nginx reuses it, and this process serves it. Ending it
+// gains nothing, since nginx's next connection reaches this process as well,
+// and a connection ended at the moment nginx takes it from its keep-alive pool
+// fails the request sent on it. nginx retries such a request on the next
+// member of an Availability upstream, which lists every member twice (once as
+// a backup) and tries each entry once: with the other member down, the retry
+// takes the next pooled connection to the same socket, ended in the same pass,
+// and the request fails with a 502. Ending idle connections on every tick of
+// the restart hold (up to 8 s) did exactly that.
 //
 // Once the sockets are handed over, a connection is closed as soon as it
 // answered and stayed silent briefly: nginx sends its next request on it only
@@ -28,6 +38,11 @@ import (
 // that way while it sits in nginx's keep-alive pool fails the retry of a
 // request cut with it at once, and nginx tries each member of an Availability
 // upstream (all of them sockets of this daemon) once per request: a 502.
+// Ending them can still meet a request nginx sends at that moment, so a drain
+// pass ends one per socket, the one silent longest: nginx takes the connection
+// it pooled last first, a request meets at most one ended connection to a
+// socket, and its retry gets a live one or a new connection that waits for the
+// next process.
 //
 // A connection that has not reached its relay tunnel yet (its opener holds it
 // because the target's daemon announced a restart, or a relay or the target is
@@ -76,6 +91,8 @@ type trackedConn struct {
 	// opened is set once the connection reached its relay tunnel
 	// (secureLinkEstablished).
 	opened atomic.Bool
+	// ended is set once a drain ended the connection; its opener closes it.
+	ended atomic.Bool
 	// pending holds bytes read before the opener took over (awaitFirstBytes).
 	pending []byte
 	// established releases the connection's setup slot (secureLinkEstablished).
@@ -198,17 +215,30 @@ func (m *sourceLinkManager) suspendForHandover() int {
 	return handed
 }
 
+// drainEnds tells what a drain does with a connection that answered and
+// carried no byte for its quiet.
+type drainEnds int
+
+const (
+	// endNone leaves it to nginx: before the handover nginx reuses it.
+	endNone drainEnds = iota
+	// endOldest ends, per socket and pass, the one silent longest.
+	endOldest
+	// endAll ends every one: the last pass before the exit.
+	endAll
+)
+
 // drainForHandover waits, up to limit, for the requests this process is
-// serving, ending each connection as soon as it answered and carried no byte
-// for quiet.
-func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration) {
+// serving, and ends the connections that answered and carried no byte for
+// quiet as ends tells.
+func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration, ends drainEnds) {
 	if m == nil {
 		return
 	}
 	deadline := time.Now().Add(limit)
 	for {
 		now := time.Now()
-		busy := 0
+		waiting := 0
 		m.mu.Lock()
 		bindings := make([]*sourceLinkBinding, 0, len(m.bindings))
 		for _, binding := range m.bindings {
@@ -217,17 +247,42 @@ func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration) {
 		m.mu.Unlock()
 		for _, binding := range bindings {
 			binding.activeMu.Lock()
+			var oldest *trackedConn
 			for connection := range binding.active {
 				tracked, ok := connection.(*trackedConn)
-				if ok && tracked.idle(now, quiet) {
-					tracked.end()
+				if !ok {
+					waiting++
 					continue
 				}
-				busy++
+				if tracked.ended.Load() {
+					continue
+				}
+				if !tracked.idle(now, quiet) {
+					waiting++
+					continue
+				}
+				switch ends {
+				case endAll:
+					tracked.ended.Store(true)
+					tracked.end()
+				case endOldest:
+					// The others wait for a later pass.
+					if oldest != nil {
+						waiting++
+						if tracked.lastWrite.Load() >= oldest.lastWrite.Load() {
+							continue
+						}
+					}
+					oldest = tracked
+				}
+			}
+			if oldest != nil {
+				oldest.ended.Store(true)
+				oldest.end()
 			}
 			binding.activeMu.Unlock()
 		}
-		if busy == 0 || !now.Before(deadline) {
+		if waiting == 0 || !now.Before(deadline) {
 			return
 		}
 		time.Sleep(secureLinkDrainTick)
@@ -270,33 +325,33 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 			return
 		}
 		started := time.Now()
-		drain := func(limit, quiet time.Duration) {
+		drain := func(limit, quiet time.Duration, ends drainEnds) {
 			done := make(chan struct{})
 			go func() {
-				p.registryLinks.drainForHandover(limit, quiet)
+				p.registryLinks.drainForHandover(limit, quiet, ends)
 				close(done)
 			}()
-			p.secureLinks.drainForHandover(limit, quiet)
+			p.secureLinks.drainForHandover(limit, quiet, ends)
 			<-done
 		}
-		drain(secureLinkHandoverDrain, secureLinkIdleQuiet)
+		drain(secureLinkHandoverDrain, secureLinkIdleQuiet, endNone)
 		// The connections that have not reached their target yet get it once
 		// it is back (its daemon registers again within a few seconds of a
 		// restart) or the relay answered, and are answered by this process;
 		// cutting them would fail their requests.
 		for p.secureLinks.opening()+p.registryLinks.opening() > 0 && time.Since(started) < secureLinkRestartHold {
-			drain(secureLinkDrainTick, secureLinkIdleQuiet)
+			time.Sleep(secureLinkDrainTick)
 		}
 		handed := p.secureLinks.suspendForHandover() + p.registryLinks.suspendForHandover()
 		if p.logger != nil {
 			p.logger.Info("handing Secure Link sockets over to the next daemon process", "sockets", handed)
 		}
-		drain(secureLinkHandoverFinish, secureLinkFinishQuiet)
+		drain(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest)
 		// The exit cuts what is still open. The connections that answered are
 		// closed a tick before it, so nginx drops them from its keep-alive pool
 		// and the retries of the requests the exit cuts open new connections,
 		// which wait for the next process.
-		drain(secureLinkDrainTick, 0)
+		drain(secureLinkDrainTick, 0, endAll)
 	})
 }
 
