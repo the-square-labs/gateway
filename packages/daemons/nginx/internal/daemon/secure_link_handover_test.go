@@ -306,7 +306,7 @@ func TestHandoverDrainClosesIdleConnectionsAndWaitsForRequests(t *testing.T) {
 	time.Sleep(2 * secureLinkIdleQuiet)
 
 	started := time.Now()
-	manager.drainForHandover(400 * time.Millisecond)
+	manager.drainForHandover(400*time.Millisecond, secureLinkIdleQuiet)
 	if elapsed := time.Since(started); elapsed < 350*time.Millisecond {
 		t.Fatalf("drain returned after %s with a request unanswered", elapsed)
 	}
@@ -317,6 +317,72 @@ func TestHandoverDrainClosesIdleConnectionsAndWaitsForRequests(t *testing.T) {
 	_ = busy.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	if _, err := busy.Read(answer); err == nil || !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("the connection waiting for its answer was closed: %v", err)
+	}
+}
+
+// After the handover a connection that answered is closed once it was silent
+// for the short finish quiet, not the idle quiet nginx's reuse never leaves
+// it under load, and the last pass closes every answered connection before the
+// exit: only a request still waiting for its answer is left for the exit.
+func TestHandoverFinishClosesAnsweredConnectionsBeforeTheExit(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) {
+		buffer := make([]byte, 64)
+		for {
+			n, err := connection.Read(buffer)
+			if err != nil {
+				return
+			}
+			if string(buffer[:n]) == "request" {
+				_, _ = connection.Write([]byte("answer"))
+			}
+		}
+	})
+	statuses, err := manager.sync(sourceCommand(0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial := func() net.Conn {
+		connection, err := net.Dial("unix", statuses[0].SocketPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = connection.Close() })
+		return connection
+	}
+	answered := func(connection net.Conn) {
+		_, _ = connection.Write([]byte("request"))
+		if _, err := io.ReadFull(connection, make([]byte, 6)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closed := func(connection net.Conn) bool {
+		_ = connection.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		_, err := connection.Read(make([]byte, 6))
+		return err != nil && !errors.Is(err, os.ErrDeadlineExceeded)
+	}
+
+	keepalive := dial()
+	answered(keepalive)
+	started := time.Now()
+	manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet)
+	if elapsed := time.Since(started); elapsed >= secureLinkIdleQuiet {
+		t.Fatalf("the answered connection was closed after %s", elapsed)
+	}
+	if !closed(keepalive) {
+		t.Fatal("the answered connection was not closed")
+	}
+
+	justAnswered, waiting := dial(), dial()
+	answered(justAnswered)
+	answered(waiting)
+	_, _ = waiting.Write([]byte("slow request"))
+	time.Sleep(10 * time.Millisecond)
+	manager.drainForHandover(secureLinkDrainTick, 0)
+	if !closed(justAnswered) {
+		t.Fatal("the last pass left an answered connection for the exit")
+	}
+	if closed(waiting) {
+		t.Fatal("the last pass closed a connection waiting for its answer")
 	}
 }
 
