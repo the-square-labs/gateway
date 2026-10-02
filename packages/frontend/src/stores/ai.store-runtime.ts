@@ -1439,6 +1439,11 @@ export function nextMessageSequence(messages: AIMessage[]): number {
 
 export function sortMessagesBySequence(messages: AIMessage[]): AIMessage[] {
   return [...messages].sort((left, right) => {
+    // A pending steer joins the transcript only at the run's next step, after everything the
+    // run writes until then, so it stays below the live tool group and draft.
+    if (Boolean(left.steerPending) !== Boolean(right.steerPending)) {
+      return left.steerPending ? 1 : -1;
+    }
     const leftSequence = typeof left.sequence === "number" ? left.sequence : messages.indexOf(left);
     const rightSequence =
       typeof right.sequence === "number" ? right.sequence : messages.indexOf(right);

@@ -897,6 +897,8 @@ export class AIRunExecutor extends AIRunExecutorRuntime {
 
     const consumed = await this.consumePendingSteers(user.id, run.conversationId, run.id);
     if (consumed.length === 0) return messages;
+    // The accepted steer closes the current tool group: later calls open a new boundary below it.
+    this.toolBoundaryMessageIds.delete(run.id);
     this.publishConversationChanged(user.id, run.conversationId);
     this.conversationSearchService?.rebuildConversationIndexBestEffort(user.id, run.conversationId);
     return [...messages, ...consumed];
