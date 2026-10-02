@@ -269,7 +269,7 @@ async function main() {
     await commercialEdition.start();
 
     let userDrainPromises: Promise<unknown>[] = [];
-    // Running orchestration the stop left to durable recovery (X1-10): the commercial module is not waited for.
+    // Running orchestration the stop left to durable recovery: the commercial module is not waited for.
     let resumableWorkAbandoned = false;
     let loggingClosePromise: Promise<void> | null = null;
     let forceUserPromise: Promise<void> | null = null;

@@ -93,7 +93,7 @@ func tlsBundle(hostID, content, version, replicaGeneration string, deferred bool
 	}}}
 }
 
-// TestReconnectResyncOfUnchangedContentDoesNotReload is X1-9a: Gateway re-sends every route and TLS bundle when a
+// TestReconnectResyncOfUnchangedContentDoesNotReload: Gateway re-sends every route and TLS bundle when a
 // node reconnects; content nginx already runs causes no reload.
 func TestReconnectResyncOfUnchangedContentDoesNotReload(t *testing.T) {
 	h := newReloadTestHandler(t)
@@ -125,7 +125,7 @@ func TestReconnectResyncOfUnchangedContentDoesNotReload(t *testing.T) {
 	}
 }
 
-// TestDeferredChangesLoadWithOneReload is X1-9a: changes that arrive together (deferred by the reconnect resync) are
+// TestDeferredChangesLoadWithOneReload: changes that arrive together (deferred by the reconnect resync) are
 // each tested and loaded with a single reload, by the command that closes the batch or by the daemon itself.
 func TestDeferredChangesLoadWithOneReload(t *testing.T) {
 	h := newReloadTestHandler(t)

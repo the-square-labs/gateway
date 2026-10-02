@@ -24,7 +24,7 @@ func TestHealthCooldownBacksOffUntilTheCopyStaysUp(t *testing.T) {
 	}
 }
 
-// X1-14: a killed replica of a replicated policy whose other candidate holds
+// A killed replica of a replicated policy whose other candidate holds
 // the other slot is started again on its own node in well under a minute
 // (it took 68 s with the fixed 60 s cooldown).
 func TestKilledReplicaRestartsInPlaceWithinHalfAMinute(t *testing.T) {

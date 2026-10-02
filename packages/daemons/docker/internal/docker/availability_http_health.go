@@ -20,7 +20,7 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
 
-// Availability HTTP health (X1-7).
+// Availability HTTP health.
 //
 // Gateway's health watch hands this node the HTTP health checks of the
 // Availability copy it runs: the health check of every Route that serves the

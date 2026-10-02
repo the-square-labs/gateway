@@ -16,7 +16,7 @@ import (
 )
 
 // A restart or update of this daemon hands the sockets workloads reach their database and storage links through to
-// the next daemon process instead of closing them (X1-9c: a restart refused every new link connection until the next
+// the next daemon process instead of closing them (a restart refused every new link connection until the next
 // process listened again, and an update did the same). The listener keeper (the daemon launcher, and the unit's
 // systemd file descriptor store) holds a copy of each listening socket, so the socket keeps accepting into its
 // backlog while no daemon process runs, and the next process adopts it. Stopping, this process only stops accepting

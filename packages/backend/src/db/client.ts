@@ -53,7 +53,7 @@ export class AbandonedOperationError extends Error {
 /**
  * Work a stopping Gateway left to recovery (acceptedOperations.abandonRunning) keeps running until the process
  * exits. It must not write anything from then on: a step that fails only because Gateway goes away would record the
- * operation as failed, and recovery would no longer resume it (X1-10). A transaction already open completes.
+ * operation as failed, and recovery would no longer resume it. A transaction already open completes.
  */
 function refuseAbandonedOperations(pool: pg.Pool): void {
   const query = pool.query.bind(pool) as (...args: unknown[]) => unknown;

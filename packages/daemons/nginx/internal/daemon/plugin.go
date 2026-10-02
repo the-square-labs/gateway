@@ -195,7 +195,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	p.availabilityLease = newAvailabilityLeaseCoordinator(baseCfg.StateDir, p.secureLinks, logger)
 	p.availabilityLease.start()
 	// Adopt the sockets the previous process kept before the slower start-up work (Pages storage, nginx
-	// checks): connections made during a restart wait in their backlog until this point (X1-9b).
+	// checks): connections made during a restart wait in their backlog until this point.
 	removeStaleTemporarySockets(proxySecureLinkSocketDir)
 	removeStaleTemporarySockets(registrySecureLinkSocketDir)
 	if restored := p.secureLinkState.Get(); len(restored.Bindings) > 0 {

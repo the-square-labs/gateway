@@ -114,7 +114,7 @@ interface GatewayUpdateAttempt {
 
 /** States in which a Relay Pool update run is being driven by a Gateway process. */
 const ACTIVE_RELAY_POOL_RUN_STATES = ['preflight', 'draining', 'updating', 'verifying', 'rolling_back'] as const;
-/** How soon a Relay Pool run that failed is checked for an outcome that could not be recorded (X1-8). */
+/** How soon a Relay Pool run that failed is checked for an outcome that could not be recorded. */
 const ORPHANED_RELAY_POOL_RUN_CHECK_MS = 30_000;
 /** Active runs plus paused ones, which wait for an operator to retry or abandon them. */
 const UNFINISHED_RELAY_POOL_RUN_STATES = [...ACTIVE_RELAY_POOL_RUN_STATES, 'paused'] as const;
@@ -1306,7 +1306,7 @@ chmod 700 "$backup"
       await this.performRelayPoolUpdate(this.relayPoolRuntime, targetVersion, artifact, userId, control.signal);
     } catch (error) {
       // A run that failed records it on its row; when that write failed as well (Postgres stopped meanwhile), the row
-      // stays active and holds every other update until a restart (X1-8). It is failed once the database answers.
+      // stays active and holds every other update until a restart. It is failed once the database answers.
       this.settleOrphanedRelayPoolRunsLater();
       throw error;
     } finally {

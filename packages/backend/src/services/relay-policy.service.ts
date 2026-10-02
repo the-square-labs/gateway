@@ -112,7 +112,7 @@ type RegistryRouteOwnerKind = (typeof REGISTRY_ROUTE_OWNER_KINDS)[number];
 /**
  * Whether the daemon must open the listener anew: its network, address or port changed. A change of the workloads it
  * admits alone keeps the route's generation, so the relay keeps its tunnels and a daemon updates the listener in place
- * with the connections it holds (an Availability copy adopted as the standalone workload, X1-12).
+ * with the connections it holds (an Availability copy adopted as the standalone workload).
  */
 export function managedDatabaseListenerRestartRequired(
   current: RelayManagedDatabaseListenerConfig | null | undefined,

@@ -59,7 +59,7 @@ func inheritedFrom(t *testing.T, store *listenerkeep.Store) map[string]*os.File 
 	return inherited
 }
 
-// X1-9c: a restart of the daemon refused every new database link connection until the next process listened. The
+// A restart of the daemon refused every new database link connection until the next process listened. The
 // host listener goes to the next process: a connection made while no process serves waits in the backlog and is
 // served by the next one, and the connection the stopping process serves stays until its drain.
 func TestRestartHandsDatabaseLinkListenersToTheNextProcess(t *testing.T) {

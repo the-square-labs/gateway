@@ -36,7 +36,7 @@ function stop(hooks: Partial<ShutdownHooks>, userRequestDrainSeconds = 30) {
   return { lifecycle, exited };
 }
 
-describe('ShutdownCoordinator with running orchestration (X1-10)', () => {
+describe('ShutdownCoordinator with running orchestration', () => {
   it('stops in seconds when only resumable orchestration and the request waiting for it remain', async () => {
     const abandonResumableWork = vi.fn();
     const { lifecycle, exited } = stop({ resumableWorkOnly: async () => true, abandonResumableWork });

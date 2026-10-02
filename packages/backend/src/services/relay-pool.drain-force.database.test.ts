@@ -12,7 +12,7 @@ import { RelayPoolService } from './relay-pool.service.js';
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 
 /**
- * X1-11: a manual drain started with now() keeps microseconds that the Date read back does not carry. The forced
+ * A manual drain started with now() keeps microseconds that the Date read back does not carry. The forced
  * disconnect after the drain timeout must still be recorded, so it is not repeated on every pass.
  * Opt-in: point GATEWAY_MIGRATION_TEST_DATABASE_URL at a disposable database named gateway_migration_test_*.
  */

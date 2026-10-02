@@ -34,7 +34,7 @@ export const INTERNAL_DOCKER_REGISTRY_ID = 'gateway-internal-registry';
 const logger = createChildLogger('DockerInternalRegistryService');
 const DEFAULT_DISK_PRESSURE_RATIO = 0.9;
 const STORAGE_MEASURE_INTERVAL_MS = 5 * 60_000;
-/** How soon a failed maintenance run is checked for a failure that could not be recorded (X1-8). */
+/** How soon a failed maintenance run is checked for a failure that could not be recorded. */
 const UNFINISHED_MAINTENANCE_CHECK_MS = 30_000;
 
 export interface DockerRegistryExternalAccessConfig {
@@ -359,7 +359,7 @@ export class DockerInternalRegistryService {
       return await this.runMaintenance(input);
     } catch (error) {
       // A failed run restores writes and records it; when that write failed as well (Postgres stopped meanwhile) the
-      // registry would stay read-only, refusing builds and Availability until a restart (X1-8).
+      // registry would stay read-only, refusing builds and Availability until a restart.
       this.recoverUnfinishedMaintenanceLater();
       throw error;
     } finally {

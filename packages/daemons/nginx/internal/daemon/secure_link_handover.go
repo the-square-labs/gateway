@@ -19,7 +19,7 @@ import (
 // connections that sit idle between requests. It stops accepting only at the
 // end, gives the requests it accepted last a short moment, and exits: a new
 // connection waits in the backlog for the restart itself, not for the drain
-// as well (X1-9b: 1.7 s and two client timeouts at 50 rps).
+// as well (1.7 s and two client timeouts at 50 rps).
 
 const (
 	// secureLinkHandoverDrain bounds how long a stopping daemon keeps serving

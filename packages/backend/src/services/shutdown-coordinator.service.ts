@@ -23,7 +23,7 @@ export interface ShutdownHooks {
   pendingWork?: () => string[];
   /**
    * Whether all that still runs is orchestration that durable recovery resumes after the restart, with the user
-   * requests that wait for it: then the stop does not wait for it (X1-10).
+   * requests that wait for it: then the stop does not wait for it.
    */
   resumableWorkOnly?: () => Promise<boolean>;
   /** Leaves the running orchestration to recovery: it can no longer record anything (see acceptedOperations). */
