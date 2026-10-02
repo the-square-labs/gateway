@@ -106,6 +106,11 @@ export interface DockerAvailabilityAdapterContext {
   idempotencyKey: string;
   recovering?: boolean;
   targetActiveSlot?: 'blue' | 'green';
+  /**
+   * A Start or Restart brings up a copy while no other copy of the workload serves: it takes its routes as soon as
+   * it runs (healthy, with a Docker health check), since a stability wait would only extend the outage.
+   */
+  coldStart?: boolean;
   reportProgress?: (phase: DockerAvailabilityOperationPhase, message: string) => Promise<void>;
   resource: DockerAvailabilityResolvedResource;
 }
