@@ -28,6 +28,14 @@ import (
 // that way while it sits in nginx's keep-alive pool fails the retry of a
 // request cut with it at once, and nginx tries each member of an Availability
 // upstream (all of them sockets of this daemon) once per request: a 502.
+//
+// A connection the opener holds for its relay target (the target's daemon
+// announced a restart, or a relay or the target is not back yet) has sent
+// nothing to nginx, and nginx does not retry a single upstream: cutting it is
+// a 502. The handover therefore waits for held connections to reach their
+// target, serving and accepting meanwhile, up to the restart hold. A Route
+// whose node restarts while this daemon updates (Update Nodes) is served once
+// the node registered again instead of failing on this process's exit.
 
 const (
 	// secureLinkHandoverDrain bounds how long a stopping daemon keeps serving
@@ -56,6 +64,9 @@ type trackedConn struct {
 	accepted  int64
 	lastRead  atomic.Int64
 	lastWrite atomic.Int64
+	// holding is set while the opener holds the connection for its relay
+	// target (secureLinkHolding).
+	holding atomic.Bool
 	// pending holds bytes read before the opener took over (awaitFirstBytes).
 	pending []byte
 	// established releases the connection's setup slot (secureLinkEstablished).
@@ -93,6 +104,14 @@ func (c *trackedConn) CloseWrite() error {
 		return closer.CloseWrite()
 	}
 	return nil
+}
+
+// secureLinkHolding marks a connection its opener holds for its relay
+// target, or one that reached it or failed.
+func secureLinkHolding(connection net.Conn, holding bool) {
+	if tracked, ok := connection.(*trackedConn); ok {
+		tracked.holding.Store(holding)
+	}
 }
 
 // idle reports a connection that answered its last request and carried no
@@ -200,6 +219,31 @@ func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration) {
 	}
 }
 
+// held counts the connections whose opener holds them for their relay
+// target.
+func (m *sourceLinkManager) held() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	bindings := make([]*sourceLinkBinding, 0, len(m.bindings))
+	for _, binding := range m.bindings {
+		bindings = append(bindings, binding)
+	}
+	m.mu.Unlock()
+	held := 0
+	for _, binding := range bindings {
+		binding.activeMu.Lock()
+		for connection := range binding.active {
+			if tracked, ok := connection.(*trackedConn); ok && tracked.holding.Load() {
+				held++
+			}
+		}
+		binding.activeMu.Unlock()
+	}
+	return held
+}
+
 // HandOverSecureLinks runs when the daemon is asked to stop or exits for an
 // update, before it disconnects from Gateway and the relays: the requests in
 // flight finish on this process, which keeps accepting meanwhile, and then the
@@ -210,6 +254,7 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 		if p.secureLinks.keptListeners()+p.registryLinks.keptListeners() == 0 {
 			return
 		}
+		started := time.Now()
 		drain := func(limit, quiet time.Duration) {
 			done := make(chan struct{})
 			go func() {
@@ -220,6 +265,12 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 			<-done
 		}
 		drain(secureLinkHandoverDrain, secureLinkIdleQuiet)
+		// The connections held for their target get it once it is back (its
+		// daemon registers again within a few seconds of a restart) and are
+		// answered by this process; cutting them would fail their requests.
+		for p.secureLinks.held()+p.registryLinks.held() > 0 && time.Since(started) < secureLinkRestartHold {
+			drain(secureLinkDrainTick, secureLinkIdleQuiet)
+		}
 		handed := p.secureLinks.suspendForHandover() + p.registryLinks.suspendForHandover()
 		if p.logger != nil {
 			p.logger.Info("handing Secure Link sockets over to the next daemon process", "sockets", handed)

@@ -1138,6 +1138,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 	opened := func() {
 		// Through to its relay tunnel: no longer counts against the setup limit.
 		secureLinkEstablished(connection)
+		secureLinkHolding(connection, false)
 		if failedAttempts == 0 && !waited {
 			p.secureLinkOutcomes.Succeeded(p.logger, outcome)
 			return
@@ -1208,8 +1209,11 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 			break
 		}
 		waited = true
+		// A stopping daemon waits for it instead of cutting it (HandOverSecureLinks).
+		secureLinkHolding(connection, true)
 		time.Sleep(secureLinkTransientRetry)
 	}
+	secureLinkHolding(connection, false)
 	p.logger.Debug(logName+" connection failed on all relay candidates", "link_id", linkID, "failed_attempts", failedAttempts)
 	p.secureLinkOutcomes.Failed(p.logger, outcome, append(lastFailure.attrs(),
 		"failed_attempts", failedAttempts, "waited", time.Since(started).Round(time.Millisecond).String())...)
