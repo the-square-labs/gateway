@@ -114,6 +114,8 @@ interface GatewayUpdateAttempt {
 
 /** States in which a Relay Pool update run is being driven by a Gateway process. */
 const ACTIVE_RELAY_POOL_RUN_STATES = ['preflight', 'draining', 'updating', 'verifying', 'rolling_back'] as const;
+/** How soon a Relay Pool run that failed is checked for an outcome that could not be recorded (X1-8). */
+const ORPHANED_RELAY_POOL_RUN_CHECK_MS = 30_000;
 /** Active runs plus paused ones, which wait for an operator to retry or abandon them. */
 const UNFINISHED_RELAY_POOL_RUN_STATES = [...ACTIVE_RELAY_POOL_RUN_STATES, 'paused'] as const;
 /** Step states in which the update may hold the relay drained. */
@@ -1302,9 +1304,24 @@ chmod 700 "$backup"
     this.relayPoolRun = control;
     try {
       await this.performRelayPoolUpdate(this.relayPoolRuntime, targetVersion, artifact, userId, control.signal);
+    } catch (error) {
+      // A run that failed records it on its row; when that write failed as well (Postgres stopped meanwhile), the row
+      // stays active and holds every other update until a restart (X1-8). It is failed once the database answers.
+      this.settleOrphanedRelayPoolRunsLater();
+      throw error;
     } finally {
       if (this.relayPoolRun === control) this.relayPoolRun = null;
     }
+  }
+
+  private settleOrphanedRelayPoolRunsLater(): void {
+    const timer = setTimeout(() => {
+      if (this.relayPoolRun) return;
+      void this.failUnfinishedRelayPoolRuns(
+        'The Relay Pool update stopped without recording its outcome because the database was unavailable. Start it again.'
+      ).catch(() => this.settleOrphanedRelayPoolRunsLater());
+    }, ORPHANED_RELAY_POOL_RUN_CHECK_MS);
+    timer.unref?.();
   }
 
   private async performRelayPoolUpdate(
@@ -1790,6 +1807,11 @@ exit 1`,
   }
 
   private async recoverInterruptedRelayPoolUpdates(): Promise<void> {
+    await this.failUnfinishedRelayPoolRuns('Interrupted by a Gateway restart. Start the Relay Pool update again.');
+  }
+
+  /** Fails the active runs no update of this process runs, and releases the relays they drained. */
+  private async failUnfinishedRelayPoolRuns(message: string): Promise<void> {
     const interrupted = await this.db
       .select({ id: relayPoolUpdateRuns.id, targetArtifact: relayPoolUpdateRuns.targetArtifact })
       .from(relayPoolUpdateRuns)
@@ -1801,11 +1823,12 @@ exit 1`,
       );
     const drained = new Set<string>();
     for (const run of interrupted) {
-      const message = 'Interrupted by a Gateway restart. Start the Relay Pool update again.';
+      // A run started meanwhile is this process's own.
+      if (this.relayPoolRun) break;
       for (const instanceId of await this.failRelayPoolRun(run.id, message, ACTIVE_RELAY_POOL_RUN_STATES)) {
         drained.add(instanceId);
       }
-      logger.warn('Failed a Relay Pool update interrupted by a Gateway restart', {
+      logger.warn('Failed an unfinished Relay Pool update', {
         runId: run.id,
         targetVersion: run.targetArtifact.version,
       });

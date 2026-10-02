@@ -109,6 +109,23 @@ const INTERNAL_REGISTRY_CERTIFICATE_ID = 'local:gateway-internal-registry';
 const REGISTRY_ROUTE_OWNER_KINDS = ['registry_secure_link', 'registry_ingress'] as const;
 type RegistryRouteOwnerKind = (typeof REGISTRY_ROUTE_OWNER_KINDS)[number];
 
+/**
+ * Whether the daemon must open the listener anew: its network, address or port changed. A change of the workloads it
+ * admits alone keeps the route's generation, so the relay keeps its tunnels and a daemon updates the listener in place
+ * with the connections it holds (an Availability copy adopted as the standalone workload, X1-12).
+ */
+export function managedDatabaseListenerRestartRequired(
+  current: RelayManagedDatabaseListenerConfig | null | undefined,
+  desired: RelayManagedDatabaseListenerConfig | null | undefined
+): boolean {
+  if (!current || !desired) return !(current == null && desired == null);
+  return (
+    current.networkName !== desired.networkName ||
+    current.listenAddress !== desired.listenAddress ||
+    current.listenPort !== desired.listenPort
+  );
+}
+
 export function managedDatabaseListenerConfigsEqual(
   current: RelayManagedDatabaseListenerConfig | null | undefined,
   desired: RelayManagedDatabaseListenerConfig | null | undefined
@@ -1274,15 +1291,15 @@ export class RelayPolicyService {
       await tx
         .delete(relayRoutes)
         .where(and(eq(relayRoutes.ownerKind, 'managed_database_binding'), eq(relayRoutes.ownerId, bindingId)));
-      // Only a changed source, target or listener moves the generation. A new generation makes the
-      // relay close the route's tunnels and the daemon replace its listener; a workload that stays
+      // Only a changed source, target or listener address moves the generation. A new generation makes
+      // the relay close the route's tunnels and the daemon replace its listener; a workload that stays
       // on the same node and network keeps its open connections while the route changes owner.
       const changed =
         placementRoute.sourceKind !== 'daemon' ||
         placementRoute.sourceId !== sourceNodeId ||
         placementRoute.sourceCertificateSha256 !== source.certificateFingerprint ||
         placementRoute.targetEndpointId !== endpointId ||
-        !managedDatabaseListenerConfigsEqual(placementRoute.managedDatabaseListener, managedDatabaseListener);
+        managedDatabaseListenerRestartRequired(placementRoute.managedDatabaseListener, managedDatabaseListener);
       await tx
         .update(relayRoutes)
         .set({
@@ -2306,12 +2323,12 @@ export class RelayPolicyService {
         await bumpRelayPolicyRevision(tx);
         return created.id;
       }
-      if (
+      const moved =
         current.sourceId !== sourceId ||
         current.sourceCertificateSha256 !== sourceCertificateSha256 ||
         current.targetEndpointId !== targetEndpointId ||
-        !managedDatabaseListenerConfigsEqual(current.managedDatabaseListener, managedDatabaseListener)
-      ) {
+        managedDatabaseListenerRestartRequired(current.managedDatabaseListener, managedDatabaseListener);
+      if (moved || !managedDatabaseListenerConfigsEqual(current.managedDatabaseListener, managedDatabaseListener)) {
         await tx
           .update(relayRoutes)
           .set({
@@ -2320,7 +2337,8 @@ export class RelayPolicyService {
             sourceCertificateSha256,
             targetEndpointId,
             managedDatabaseListener: managedDatabaseListener ?? null,
-            generation: current.generation + 1,
+            // Only the admitted workloads changed: the route keeps its tunnels (see managedDatabaseListenerRestartRequired).
+            generation: moved ? current.generation + 1 : current.generation,
             updatedAt: new Date(),
           })
           .where(eq(relayRoutes.id, current.id));

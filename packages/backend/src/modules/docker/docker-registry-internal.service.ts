@@ -34,6 +34,8 @@ export const INTERNAL_DOCKER_REGISTRY_ID = 'gateway-internal-registry';
 const logger = createChildLogger('DockerInternalRegistryService');
 const DEFAULT_DISK_PRESSURE_RATIO = 0.9;
 const STORAGE_MEASURE_INTERVAL_MS = 5 * 60_000;
+/** How soon a failed maintenance run is checked for a failure that could not be recorded (X1-8). */
+const UNFINISHED_MAINTENANCE_CHECK_MS = 30_000;
 
 export interface DockerRegistryExternalAccessConfig {
   externalAccessEnabled: boolean;
@@ -54,6 +56,8 @@ export class DockerInternalRegistryService {
   private eventBus?: EventBusService;
   private readonly store: DockerRegistryMaintenanceStore;
   private storageMeasuredAt = 0;
+  /** Maintenance runs of this process in flight. */
+  private maintenanceRuns = 0;
 
   constructor(
     db: DrizzleClient,
@@ -82,7 +86,7 @@ export class DockerInternalRegistryService {
     await this.store.initialize();
   }
 
-  async recoverInterruptedMaintenance(): Promise<void> {
+  async recoverInterruptedMaintenance(cause = 'Gateway restarted'): Promise<void> {
     const state = await this.getState();
     if (state.maintenancePhase === 'idle' && state.status !== 'maintenance') return;
     const now = new Date();
@@ -90,7 +94,7 @@ export class DockerInternalRegistryService {
       await this.executor.restoreWrites();
       await this.store.markInterruptedRunsFailed?.(
         now,
-        `Gateway restarted during registry maintenance phase ${state.maintenancePhase}`
+        `Registry maintenance stopped in phase ${state.maintenancePhase}: ${cause}`
       );
       await this.store.updateState({
         status: 'ready',
@@ -345,6 +349,37 @@ export class DockerInternalRegistryService {
   }
 
   private async executeMaintenance(input: {
+    owner: string;
+    dryRun: boolean;
+    run?: MaintenanceRun;
+    retentionCount?: number;
+  }): Promise<MaintenanceRun> {
+    this.maintenanceRuns += 1;
+    try {
+      return await this.runMaintenance(input);
+    } catch (error) {
+      // A failed run restores writes and records it; when that write failed as well (Postgres stopped meanwhile) the
+      // registry would stay read-only, refusing builds and Availability until a restart (X1-8).
+      this.recoverUnfinishedMaintenanceLater();
+      throw error;
+    } finally {
+      this.maintenanceRuns -= 1;
+    }
+  }
+
+  private recoverUnfinishedMaintenanceLater(): void {
+    const timer = setTimeout(() => {
+      if (this.maintenanceRuns > 0) return;
+      void (async () => {
+        // Only a run whose failure was never recorded leaves the registry in maintenance.
+        if ((await this.getState()).status !== 'maintenance' || this.maintenanceRuns > 0) return;
+        await this.recoverInterruptedMaintenance('the database was unavailable when it stopped');
+      })().catch(() => this.recoverUnfinishedMaintenanceLater());
+    }, UNFINISHED_MAINTENANCE_CHECK_MS);
+    timer.unref?.();
+  }
+
+  private async runMaintenance(input: {
     owner: string;
     dryRun: boolean;
     run?: MaintenanceRun;

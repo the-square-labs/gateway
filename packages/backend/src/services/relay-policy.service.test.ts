@@ -675,8 +675,15 @@ describe('RelayPolicyService route runtime', () => {
       expect(route).toMatchObject({ ownerId: 'binding-1', generation: 5, managedDatabaseListener: listener });
     });
 
-    it('moves the generation when the listener or the source changes', async () => {
-      expect(await adopt({ ...listener, allowedSources: ['compose:api:web'] })).toMatchObject({ generation: 6 });
+    it('keeps the generation when only the admitted workloads change (X1-12)', async () => {
+      const allowedSources = ['compose:api:web'];
+      expect(await adopt({ ...listener, allowedSources })).toMatchObject({
+        generation: 5,
+        managedDatabaseListener: { ...listener, allowedSources },
+      });
+    });
+
+    it('moves the generation when the listener address or the source changes', async () => {
       expect(await adopt({ ...listener, listenAddress: '172.29.0.1' })).toMatchObject({ generation: 6 });
       expect(await adopt(listener, 'node-other')).toMatchObject({ generation: 6, sourceId: 'node-other' });
     });

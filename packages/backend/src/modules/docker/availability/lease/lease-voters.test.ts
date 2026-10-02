@@ -400,6 +400,20 @@ describe('availability lease capability gating (D10, D3)', () => {
     });
     // An outdated holder still serves: keep lease mode until it hands over or is updated.
     expect(evaluateLeaseGating({ ...eligible, candidates: unable, heldSlots: 1 })).toEqual({ eligible: true });
+    // HA-11: every candidate lost its watchdog and killed its copy: leave at once instead of after 2 minutes.
+    const watchdogsMissing = [
+      { nodeId: n1, exclusion: 'watchdog_missing' as const },
+      { nodeId: n2, exclusion: 'watchdog_missing' as const },
+    ];
+    expect(evaluateLeaseGating({ ...eligible, candidates: watchdogsMissing, heldSlots: 0 })).toMatchObject({
+      eligible: false,
+      immediate: true,
+      reason: { code: 'watchdog_missing' },
+    });
+    // A copy that still holds keeps lease mode: it stops by itself, and only then is nothing held.
+    expect(evaluateLeaseGating({ ...eligible, candidates: watchdogsMissing, heldSlots: 1 })).toEqual({
+      eligible: true,
+    });
     // Every node offline to Gateway says nothing about the data plane.
     expect(
       evaluateLeaseGating({

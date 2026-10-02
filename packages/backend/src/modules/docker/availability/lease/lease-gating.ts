@@ -125,7 +125,11 @@ export function evaluateLeaseGating(input: LeaseGatingInput): LeaseGatingResult 
   }
   const unable = input.candidates.filter((candidate) => candidate.exclusion && CANNOT_HOLD.has(candidate.exclusion));
   if (unable.length === input.candidates.length && (input.heldSlots ?? 0) === 0) {
-    return { eligible: false, immediate: false, reason: candidatesReason(unable) };
+    // HA-11: a node that loses its lease watchdog stops renewing and kills the copy it holds; once no slot is held,
+    // no copy runs and none can start in lease mode, so waiting out the 2 minutes only prolongs the outage. The close
+    // still waits for the voters to confirm it before the backend starts a copy, so two copies never run.
+    const watchdogsMissing = unable.every(({ exclusion }) => exclusion === 'watchdog_missing');
+    return { eligible: false, immediate: watchdogsMissing, reason: candidatesReason(unable) };
   }
   const incapableIngress = input.ingress.filter((node) => !node.capable).map(({ nodeId }) => nodeId);
   if (incapableIngress.length > 0) {
