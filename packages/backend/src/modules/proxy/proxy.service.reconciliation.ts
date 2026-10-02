@@ -190,7 +190,16 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
       host.dockerComposeServiceName !== resolved.dockerComposeServiceName ||
       host.dockerDeploymentId !== resolved.dockerDeploymentId ||
       (host.secureLinkGeneration > 0 && host.secureLinkTargetContainer !== resolved.dockerContainerName);
-    if (!changed && host.secureLinkStatus === 'active' && !force) return host;
+    // A link whose relay endpoint still reaches the node its target left (a migration) is re-pointed even when the
+    // Route row itself did not change.
+    if (
+      !changed &&
+      host.secureLinkStatus === 'active' &&
+      !force &&
+      !((await this.secureLinks?.targetMoved?.(host)) ?? false)
+    ) {
+      return host;
+    }
     let updated = host;
     if (changed) {
       const [persisted] = await this.db
@@ -237,70 +246,7 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     });
     for (const listedHost of hosts) {
       try {
-        const reconciled = await withProxyHostLock(listedHost.id, async () => {
-          // Re-read under the host lock: an edit that finished after the batch
-          // query must never be overwritten with the stale listed row.
-          const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, listedHost.id) });
-          if (
-            !host ||
-            (host.type !== 'proxy' && host.type !== 'raw') ||
-            !isDockerUpstream(host.upstreamKind) ||
-            host.secureLinkStatus === 'cleanup_pending'
-          ) {
-            return true;
-          }
-          // A raw-mode Route keeps its Secure Link (see rawRouteUsesSecureLink): it follows its target here like a
-          // managed Route's. Availability places the ingress of managed Routes only.
-          const rawMode = host.type === 'raw' || host.rawConfigEnabled;
-          const availabilityManaged = !rawMode && ((await this.availabilityIngressReconciler?.(host.id)) ?? false);
-          if (availabilityManaged) return true;
-          const updated = await this.resolveStoredDockerUpstream(host, force);
-          const secureLinkChanged =
-            updated.forwardHost !== host.forwardHost ||
-            updated.forwardPort !== host.forwardPort ||
-            updated.secureLinkGeneration !== host.secureLinkGeneration ||
-            updated.secureLinkStatus !== host.secureLinkStatus ||
-            updated.secureLinkListenerPort !== host.secureLinkListenerPort ||
-            updated.secureLinkTargetNetwork !== host.secureLinkTargetNetwork ||
-            updated.secureLinkTargetContainer !== host.secureLinkTargetContainer;
-          const cutoverPending =
-            updated.secureLinkGeneration > 0 &&
-            (updated.secureLinkStatus === 'provisioning' ||
-              updated.secureLinkStatus === 'updating' ||
-              updated.secureLinkStatus === 'cutover_ready');
-          if (!secureLinkChanged && !cutoverPending) return true;
-          let cutoverHost = updated;
-          if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
-            if (host.secureLinkGeneration === 0 && host.enabled) {
-              await this.withdrawHost(host);
-            }
-            cutoverHost = (await this.secureLinks?.commitCutover(updated.id)) ?? updated;
-          }
-          if (cutoverHost.enabled) {
-            try {
-              await this.deliverHost(cutoverHost, { certOptions: { preserveLegacyOnUnsupported: true } });
-              if (cutoverHost.secureLinkGeneration > 0) {
-                await this.secureLinks?.activate(cutoverHost.id);
-                this.queueSecureLinkRuntimeSample(cutoverHost);
-              }
-            } catch (error) {
-              // Keep the newly resolved endpoint. A disconnected Nginx node will
-              // receive it through the existing resync path after reconnecting.
-              logger.warn('Resolved Docker upstream but could not apply Nginx config yet', {
-                hostId: updated.id,
-                error,
-              });
-              this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
-              return false;
-            }
-          } else if (cutoverPending) {
-            await this.secureLinks?.activate(cutoverHost.id);
-            this.queueSecureLinkRuntimeSample(cutoverHost);
-          }
-          this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
-          return true;
-        });
-        if (!reconciled) retryNeeded = true;
+        if (!(await this.reconcileDockerHost(listedHost.id, force))) retryNeeded = true;
       } catch (error) {
         // External disappearance/offline state intentionally keeps the last
         // resolved endpoint and the existing Nginx configuration intact.
@@ -310,6 +256,101 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     }
     if (retryNeeded) this.scheduleDockerReconciliationRetry();
     else this.dockerReconcileBackoffMs = 5_000;
+  }
+
+  /**
+   * Reconciles one Docker Route under its host lock: resolves its target, provisions or re-points its Secure Link,
+   * and re-applies its Nginx config when the link changed. Returns false when the config could not be applied yet.
+   */
+  private async reconcileDockerHost(hostId: string, force: boolean): Promise<boolean> {
+    return withProxyHostLock(hostId, async () => {
+      // Re-read under the host lock: an edit that finished after the batch
+      // query must never be overwritten with the stale listed row.
+      const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
+      if (
+        !host ||
+        (host.type !== 'proxy' && host.type !== 'raw') ||
+        !isDockerUpstream(host.upstreamKind) ||
+        host.secureLinkStatus === 'cleanup_pending'
+      ) {
+        return true;
+      }
+      // A raw-mode Route keeps its Secure Link (see rawRouteUsesSecureLink): it follows its target here like a
+      // managed Route's. Availability places the ingress of managed Routes only.
+      const rawMode = host.type === 'raw' || host.rawConfigEnabled;
+      const availabilityManaged = !rawMode && ((await this.availabilityIngressReconciler?.(host.id)) ?? false);
+      if (availabilityManaged) return true;
+      const updated = await this.resolveStoredDockerUpstream(host, force);
+      const secureLinkChanged =
+        updated.forwardHost !== host.forwardHost ||
+        updated.forwardPort !== host.forwardPort ||
+        updated.secureLinkGeneration !== host.secureLinkGeneration ||
+        updated.secureLinkStatus !== host.secureLinkStatus ||
+        updated.secureLinkListenerPort !== host.secureLinkListenerPort ||
+        updated.secureLinkTargetNetwork !== host.secureLinkTargetNetwork ||
+        updated.secureLinkTargetContainer !== host.secureLinkTargetContainer;
+      const cutoverPending =
+        updated.secureLinkGeneration > 0 &&
+        (updated.secureLinkStatus === 'provisioning' ||
+          updated.secureLinkStatus === 'updating' ||
+          updated.secureLinkStatus === 'cutover_ready');
+      if (!secureLinkChanged && !cutoverPending) return true;
+      let cutoverHost = updated;
+      if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
+        if (host.secureLinkGeneration === 0 && host.enabled) {
+          await this.withdrawHost(host);
+        }
+        cutoverHost = (await this.secureLinks?.commitCutover(updated.id)) ?? updated;
+      }
+      if (cutoverHost.enabled) {
+        try {
+          await this.deliverHost(cutoverHost, { certOptions: { preserveLegacyOnUnsupported: true } });
+          if (cutoverHost.secureLinkGeneration > 0) {
+            await this.secureLinks?.activate(cutoverHost.id);
+            this.queueSecureLinkRuntimeSample(cutoverHost);
+          }
+        } catch (error) {
+          // Keep the newly resolved endpoint. A disconnected Nginx node will
+          // receive it through the existing resync path after reconnecting.
+          logger.warn('Resolved Docker upstream but could not apply Nginx config yet', {
+            hostId: updated.id,
+            error,
+          });
+          this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
+          return false;
+        }
+      } else if (cutoverPending) {
+        await this.secureLinks?.activate(cutoverHost.id);
+        this.queueSecureLinkRuntimeSample(cutoverHost);
+      }
+      this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
+      return true;
+    });
+  }
+
+  /**
+   * Points the Routes of a migrated container or deployment at its target node right away instead of on the next
+   * reconciliation pass: each Route's Secure Link follows the target (its relay endpoint moves, the former node's
+   * binding and grant are withdrawn). The Additional Secure Links and Additional Routes the cutover moved follow in a
+   * background pass, which does not hold up the end of the Route's maintenance. A Route that cannot follow now is
+   * retried by the reconciliation, which detects the move on its own. Returns whether every Route followed.
+   */
+  async followMigratedDockerRoutes(hostIds: readonly string[]): Promise<boolean> {
+    let followed = true;
+    for (const hostId of hostIds) {
+      try {
+        if (!(await this.reconcileDockerHost(hostId, false))) followed = false;
+      } catch (error) {
+        logger.warn('A migrated Route did not follow its target yet; the reconciliation retries it', {
+          hostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        followed = false;
+      }
+    }
+    this.queueDockerReconciliation();
+    if (!followed) this.scheduleDockerReconciliationRetry();
+    return followed;
   }
 
   // -----------------------------------------------------------------------

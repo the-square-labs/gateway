@@ -1341,13 +1341,29 @@ export class RelayPolicyService {
    * for the same endpoint, and routes of sources that no longer serve the link are removed. One source keeps today's
    * behaviour: a changed source moves the existing route in place.
    */
+  /** The Docker node a Route or Additional Secure Link reaches now: its relay endpoint's subject, if it has one. */
+  async proxySecureLinkTargetNodeId(linkId: string): Promise<string | null> {
+    const [endpoint] = await this.db
+      .select({ subjectId: relayEndpoints.subjectId })
+      .from(relayEndpoints)
+      .where(
+        and(
+          eq(relayEndpoints.ownerKind, 'proxy_host_secure_link'),
+          eq(relayEndpoints.ownerId, linkId),
+          eq(relayEndpoints.subjectKind, 'daemon')
+        )
+      )
+      .limit(1);
+    return endpoint?.subjectId ?? null;
+  }
+
   async ensureProxySecureLink(
     linkId: string,
     sourceNodeIds: string | readonly string[],
     targetNodeId: string
   ): Promise<string> {
     const target = await this.grantIssuer.requireNodeIdentity(targetNodeId);
-    const endpointId = await this.db.transaction(async (tx) => {
+    const { endpointId, formerTargetNodeId } = await this.db.transaction(async (tx) => {
       const [current] = await tx
         .select()
         .from(relayEndpoints)
@@ -1365,7 +1381,7 @@ export class RelayPolicyService {
           })
           .returning({ id: relayEndpoints.id });
         await bumpRelayPolicyRevision(tx);
-        return created.id;
+        return { endpointId: created.id, formerTargetNodeId: null };
       }
       if (current.subjectId !== targetNodeId || current.certificateSha256 !== target.certificateFingerprint) {
         await tx
@@ -1380,7 +1396,10 @@ export class RelayPolicyService {
           .where(eq(relayEndpoints.id, current.id));
         await bumpRelayPolicyRevision(tx);
       }
-      return current.id;
+      return {
+        endpointId: current.id,
+        formerTargetNodeId: current.subjectId !== targetNodeId ? current.subjectId : null,
+      };
     });
     // The routes first: whether the first assignment may leave the legacy shape depends on every daemon on the
     // path, its sources included.
@@ -1390,6 +1409,17 @@ export class RelayPolicyService {
     await Promise.all([
       this.syncProxyLinkSourceGrants(sourceNodeIds, removedSourceIds),
       this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC),
+      // A link that moved to another node (its container or deployment migrated) leaves its former node without a
+      // grant for it once the new node holds one. A former node that is offline gets its bundle when it reconnects.
+      formerTargetNodeId
+        ? this.syncNodeGrants(formerTargetNodeId, ROUTINE_GRANT_SYNC).catch((error) =>
+            logger.warn('A moved Secure Link left grants on its former node until it reconnects', {
+              linkId,
+              nodeId: formerTargetNodeId,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          )
+        : Promise.resolve(),
     ]);
     return routeIds[0]!;
   }
