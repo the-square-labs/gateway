@@ -17,9 +17,11 @@ const (
 	healthSampleEvery  = 5 * time.Second
 	healthBadThreshold = 2
 	// A node that released for health is not a candidate again for a
-	// cooldown that doubles with every release of a copy that did not stay
-	// up for healthStableAfter, from healthCooldownBase to healthCooldownMax:
-	// a crash loop slows down, a single failure is healed in about 25 s. The
+	// cooldown that doubles with every release of the same copy (the same
+	// containers, restarted in place) that did not stay up for
+	// healthStableAfter, from healthCooldownBase to healthCooldownMax: a
+	// crash loop slows down, a single failure is healed in about 25 s. A new
+	// copy (a rollout or recreate replaced the containers) starts over. The
 	// protocol keeps the node from taking its own key back for
 	// SuccessorWindow after the release anyway, so every other ready
 	// candidate takes over first (by rank) even with the base cooldown.
@@ -38,7 +40,7 @@ const (
 // healthCooldown is the cooldown of the next health release of wl at now,
 // and records that release.
 func healthCooldown(wl *workload, now time.Duration) time.Duration {
-	if wl.healthReleases > 0 && now-wl.servingSince >= healthStableAfter {
+	if wl.healthReleases > 0 && (now-wl.servingSince >= healthStableAfter || !sameIDs(wl.serveIDs, wl.healthReleasedIDs)) {
 		wl.healthReleases = 0
 	}
 	cooldown := healthCooldownBase
@@ -46,7 +48,20 @@ func healthCooldown(wl *workload, now time.Duration) time.Duration {
 		cooldown *= 2
 	}
 	wl.healthReleases++
+	wl.healthReleasedIDs = wl.serveIDs
 	return min(cooldown, healthCooldownMax)
+}
+
+func sameIDs(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if !b[id] {
+			return false
+		}
+	}
+	return true
 }
 
 const (

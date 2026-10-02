@@ -47,8 +47,10 @@ type workload struct {
 	retryAt       time.Duration
 	cooldownUntil time.Duration
 	// healthReleases counts the health releases since the copy last stayed
-	// up for healthStableAfter (the cooldown backoff).
-	healthReleases int
+	// up for healthStableAfter (the cooldown backoff); healthReleasedIDs is
+	// the serving set of the last one, so a new copy starts over.
+	healthReleases    int
+	healthReleasedIDs map[string]bool
 	// healthRequest is a release Gateway asked for (the copy fails its HTTP
 	// health check), with when it was asked; served by the next step that
 	// finds the copy serving under the lease.
