@@ -2,9 +2,11 @@ package supervisor
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
@@ -199,5 +201,34 @@ func TestInterruptedEnrollmentIsCompletedOnTheNextStart(t *testing.T) {
 	}
 	if completed, err := CompletePendingEnrollment(cfg); completed || err != nil {
 		t.Fatalf("nothing should be pending: %v %v", completed, err)
+	}
+}
+
+func TestEnrollmentOutcomeTellsTheInstallerWhetherTheTokenWorked(t *testing.T) {
+	stateDir := t.TempDir()
+	read := func() enrollmentResult {
+		t.Helper()
+		encoded, err := os.ReadFile(filepath.Join(stateDir, EnrollmentResultFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result enrollmentResult
+		if err := json.Unmarshal(encoded, &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	rejected := status.Error(codes.Unauthenticated, "enrollment token was already used")
+	if err := RecordEnrollmentOutcome(stateDir, rejected); err != nil {
+		t.Fatal(err)
+	}
+	if result := read(); result.Outcome != "failed" || !strings.Contains(result.Error, "already used") {
+		t.Fatalf("failed enrollment recorded as %+v", result)
+	}
+	if err := RecordEnrollmentOutcome(stateDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if result := read(); result.Outcome != "enrolled" || result.Error != "" {
+		t.Fatalf("enrollment recorded as %+v", result)
 	}
 }

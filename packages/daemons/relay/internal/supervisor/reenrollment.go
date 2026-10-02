@@ -1,10 +1,13 @@
 package supervisor
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"google.golang.org/grpc/codes"
@@ -102,4 +105,36 @@ func EnrollmentTokenRejected(err error) bool {
 	default:
 		return false
 	}
+}
+
+// EnrollmentResultFile, in the supervisor state directory, holds the outcome
+// of the last enrollment attempt with a token. The installer removes it before
+// it restarts the supervisor and waits for it, so a re-run with a used or
+// invalid token reports the failure instead of claiming success: a failed
+// re-enrollment otherwise looks like a healthy relay, which keeps running with
+// its previous identity.
+const EnrollmentResultFile = "enrollment-result.json"
+
+type enrollmentResult struct {
+	Outcome string `json:"outcome"`
+	Error   string `json:"error,omitempty"`
+	At      string `json:"at"`
+}
+
+// RecordEnrollmentOutcome writes the outcome of an enrollment attempt: nil
+// for an identity Gateway issued and this relay persisted, else the failure.
+func RecordEnrollmentOutcome(stateDir string, err error) error {
+	result := enrollmentResult{Outcome: "enrolled", At: time.Now().UTC().Format(time.RFC3339)}
+	if err != nil {
+		result.Outcome = "failed"
+		result.Error = err.Error()
+	}
+	encoded, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		return marshalErr
+	}
+	if mkdirErr := os.MkdirAll(stateDir, 0o700); mkdirErr != nil {
+		return mkdirErr
+	}
+	return atomicWrite(filepath.Join(stateDir, EnrollmentResultFile), encoded, 0o600)
 }

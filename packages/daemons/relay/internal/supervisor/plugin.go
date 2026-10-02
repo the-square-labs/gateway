@@ -71,7 +71,13 @@ func (p *Plugin) completeEnrollment(response *pb.EnrollResponse) error {
 		return err
 	}
 	discardStashedIdentity(&p.cfg.BaseConfig)
-	return removePendingEnrollment(p.cfg.StateDir)
+	if err := removePendingEnrollment(p.cfg.StateDir); err != nil {
+		return err
+	}
+	if err := RecordEnrollmentOutcome(p.cfg.StateDir, nil); err != nil && p.logger != nil {
+		p.logger.Warn("record the relay enrollment outcome", "error", err)
+	}
+	return nil
 }
 
 // CompletePendingEnrollment finishes an enrollment whose bundle arrived but

@@ -94,6 +94,7 @@ func main() {
 	} else if err != nil && reenrollment != nil && !cfg.IsEnrolled() && ctx.Err() == nil {
 		// The enrollment did not complete: keep running as the relay was.
 		logger.Error("re-enrollment failed; continuing with the previous identity", "error", err)
+		recordEnrollmentFailure(cfg, err, logger)
 		if !restoreIdentity(reenrollment, logger) {
 			os.Exit(1)
 		}
@@ -109,6 +110,10 @@ func main() {
 		}
 	}
 	if err != nil {
+		if ctx.Err() == nil && !cfg.IsEnrolled() {
+			// The first enrollment failed: the supervisor never got an identity.
+			recordEnrollmentFailure(cfg, err, logger)
+		}
 		lifecycle.LogDaemonExit(logger, "relay supervisor stopped", err)
 		os.Exit(lifecycle.DaemonExitCode(err))
 	}
@@ -130,6 +135,14 @@ func completeInterruptedEnrollment(cfg *config.Config, configPath string, logger
 		}
 	}
 	return nil
+}
+
+// recordEnrollmentFailure tells the installer, which waits for it, that the
+// token it wrote was not accepted.
+func recordEnrollmentFailure(cfg *config.Config, err error, logger *slog.Logger) {
+	if recordErr := supervisor.RecordEnrollmentOutcome(cfg.StateDir, err); recordErr != nil {
+		logger.Warn("record the relay enrollment outcome", "error", recordErr)
+	}
 }
 
 func restoreIdentity(reenrollment *supervisor.Reenrollment, logger *slog.Logger) bool {

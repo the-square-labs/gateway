@@ -15,6 +15,7 @@ RUN_GROUP="${GATEWAY_RELAY_RUN_GROUP:-root}"
 LOG_FILE="${GATEWAY_RELAY_SETUP_LOG:-/dev/null}"
 MANUAL_LAUNCH_TIMEOUT_SECONDS="${GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS:-30}"
 MANUAL_FALLBACK_USED=0
+ENROLLMENT_WAIT_SECONDS="${GATEWAY_RELAY_ENROLLMENT_WAIT_SECONDS:-90}"
 
 usage() {
   echo "Usage: setup-relay-node.sh --gateway host:port --token TOKEN --gateway-cert-sha256 sha256:HEX --advertise-address HOST [--service-port 9443] [--version vX.Y.Z]"
@@ -432,6 +433,12 @@ worker:
     - ${ADVERTISE_ADDRESS}
 CONFIG
 chmod 0600 /etc/gateway-relay-supervisor/config.yaml
+# The supervisor records whether Gateway accepted the token written above. A relay that is already enrolled keeps its
+# previous identity when the token is refused (used, expired, wrong node), so only this record tells the two apart.
+ENROLLMENT_RESULT=/var/lib/gateway-relay-supervisor/enrollment-result.json
+REENROLLMENT=0
+[[ ! -s /var/lib/gateway-relay-supervisor/supervisor-identity/node.pem ]] || REENROLLMENT=1
+rm -f "$ENROLLMENT_RESULT"
 
 start_relay_supervisor() {
   retire_legacy_update_guard "gateway-relay-supervisor" "/usr/local/bin/relay-supervisor"
@@ -515,5 +522,39 @@ UNIT
   manual_launcher_fallback "relay-supervisor" "/usr/local/bin/relay-supervisor" "/var/lib/gateway-relay-supervisor"
 }
 
+await_enrollment() {
+  local waited=0 outcome error
+  while [[ "$waited" -lt "$ENROLLMENT_WAIT_SECONDS" ]]; do
+    if [[ -s "$ENROLLMENT_RESULT" ]]; then
+      outcome=$(jq -r '.outcome // empty' "$ENROLLMENT_RESULT" 2>/dev/null || true)
+      error=$(jq -r '.error // empty' "$ENROLLMENT_RESULT" 2>/dev/null || true)
+      if [[ "$outcome" == "enrolled" ]]; then
+        echo "Relay enrolled with Gateway."
+        return 0
+      fi
+      if [[ "$outcome" == "failed" ]]; then
+        if [[ "$REENROLLMENT" -eq 1 ]]; then
+          echo "Relay re-enrollment failed: ${error}" >&2
+          echo "The relay keeps running with its previous identity. Issue a new re-enroll token in Gateway (Settings > Relay) and run the installer again." >&2
+        else
+          echo "Relay enrollment failed: ${error}" >&2
+          echo "Create a new enrollment token in Gateway and run the installer again." >&2
+        fi
+        return 1
+      fi
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "The relay supervisor has not reported its enrollment within ${ENROLLMENT_WAIT_SECONDS} s; check that Gateway at ${GATEWAY} is reachable and the supervisor log." >&2
+  return 2
+}
+
 start_relay_supervisor
+enrollment_status=0
+await_enrollment || enrollment_status=$?
+if [[ "$enrollment_status" -eq 1 ]]; then
+  echo "Relay supervisor ${VERSION} is installed, but the relay was not enrolled." >&2
+  exit 1
+fi
 echo "Relay supervisor ${VERSION} installed. Ensure TCP ${SERVICE_PORT} is reachable at ${ADVERTISE_ADDRESS}."
