@@ -32,7 +32,9 @@ import (
 // ready once its router reaches the active colour's app (an app health check,
 // when it has one, must pass as well). Readiness is probed in the background
 // (never on the data path) and a probe that cannot reach dockerd is no evidence
-// either way: the last result stands.
+// either way: the last result stands. A copy Gateway took out for failing its
+// HTTP health check is not ready until Gateway puts it back
+// (availability_http_health.go).
 
 var errMemberEndpointDormant = errors.New("availability member endpoint is dormant")
 
@@ -257,6 +259,11 @@ func (p *DockerPlugin) decideMemberEndpointState(linkID string) relayv1.Endpoint
 	if !p.lease.endpointAllowed(linkID) {
 		return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
 	}
+	if p.availabilityHealth.dormant(policyID) {
+		// Gateway took the copy out: it fails its HTTP health check while
+		// another copy serves.
+		return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
+	}
 	if entry, known := p.memberReadiness.entry(policyID); known {
 		if entry.ready {
 			return relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_SERVING
@@ -297,7 +304,7 @@ func (p *DockerPlugin) refreshMemberReadiness(ctx context.Context, now time.Time
 	changed := p.memberReadiness.keepOnly(policies)
 	p.memberReadiness.keepLinks(p.secureLinkTargets())
 	for policyID, links := range policies {
-		if len(links) == 0 || !p.lease.endpointAllowed(links[0]) {
+		if len(links) == 0 || !p.lease.endpointAllowed(links[0]) || p.availabilityHealth.dormant(policyID) {
 			if p.memberReadiness.reset(policyID) {
 				changed = true
 			}
