@@ -223,9 +223,11 @@ func managedConnectorIPAM(subnet string, gatewayAddr string) (network.IPAMConfig
 }
 
 // RemoveNetwork removes a network by ID. Endpoints left behind by containers that no longer exist are deleted
-// first; a network a container still uses is not removed.
+// first, and the Secure Link connector leaves a network it is the last container on; a network another container
+// still uses is not removed.
 func (c *Client) RemoveNetwork(ctx context.Context, id string) error {
 	c.removeOrphanedEndpoints(ctx, id)
+	c.releaseSecureLinkConnector(ctx, id, false)
 	_, err := c.cli.NetworkRemove(ctx, id, client.NetworkRemoveOptions{})
 	if err != nil {
 		return fmt.Errorf("network remove: %w", err)
@@ -331,3 +333,44 @@ func (c *Client) DisconnectContainerFromNetwork(ctx context.Context, networkID, 
 // ── Helpers ───────────────────────────────────────────────────────
 
 // ContainerName returns the canonical name of a container (without leading "/").
+
+// releaseSecureLinkConnector disconnects the Secure Link connector from a network Gateway removes. The connector
+// joins the networks of the link targets it serves; with them gone it serves nothing there, and its endpoint alone
+// kept the network (an Availability placement's deployment network: its replacement standby could never be prepared).
+// Unless always is set it leaves only a network it is the last container on. The connector's next link sync attaches
+// it to a network of the same name created again.
+func (c *Client) releaseSecureLinkConnector(ctx context.Context, network string, always bool) {
+	inspected, err := c.cli.NetworkInspect(ctx, network, client.NetworkInspectOptions{})
+	if err != nil {
+		return
+	}
+	attached := false
+	for _, endpoint := range inspected.Network.Containers {
+		if strings.TrimPrefix(endpoint.Name, "/") == secureLinkConnectorName {
+			attached = true
+		} else if !always {
+			return
+		}
+	}
+	if !attached {
+		return
+	}
+	_, err = c.cli.NetworkDisconnect(ctx, network, client.NetworkDisconnectOptions{Container: secureLinkConnectorName, Force: true})
+	if err != nil && !isNotFoundErr(err) && c.logger != nil {
+		c.logger.Warn("cannot detach the secure-link connector from a network being removed", "network", network, "error", err)
+	}
+}
+
+// releaseSecureLinkConnectorFromProject disconnects the Secure Link connector from the networks of a Compose project
+// that is taken down: compose removes them with the project, and the connector's endpoint would keep them.
+func (c *Client) releaseSecureLinkConnectorFromProject(ctx context.Context, projectName string) {
+	listed, err := c.cli.NetworkList(ctx, client.NetworkListOptions{
+		Filters: make(client.Filters).Add("label", "com.docker.compose.project="+projectName),
+	})
+	if err != nil {
+		return
+	}
+	for _, item := range listed.Items {
+		c.releaseSecureLinkConnector(ctx, item.ID, true)
+	}
+}

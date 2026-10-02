@@ -155,6 +155,11 @@ func (e *fakeRecreateEngine) serve(request *http.Request) (*http.Response, error
 			}
 			_ = json.NewDecoder(request.Body).Decode(&body)
 			if name := e.nameOf(body.Container); name != "" {
+				if id := e.containers[name]; endpoints[id] == name {
+					delete(endpoints, id)
+					e.deleted = append(e.deleted, network+"/"+name)
+					return respond(http.StatusOK, `{}`)
+				}
 				return respond(http.StatusForbidden, `{"message":"container `+body.Container+` is not connected to network `+network+`"}`)
 			}
 			if !body.Force {
@@ -237,5 +242,31 @@ func TestRemoveNetworkDeletesOrphanedEndpoints(t *testing.T) {
 	}
 	if got := engine.endpoints["in-use"]; len(got) != 1 || got["live-id"] != "live" {
 		t.Fatalf("in-use endpoints = %v, want only the live container", got)
+	}
+}
+
+// The Secure Link connector joined a deployment network to reach its router: removing the deployment takes the
+// connector off the network, which then goes (stand run x1: "network ... has active endpoints", so the replacement
+// standby was never prepared). A network another container still uses keeps the connector.
+func TestRemoveNetworkReleasesTheSecureLinkConnector(t *testing.T) {
+	engine := newFakeRecreateEngine(t)
+	engine.containers = map[string]string{secureLinkConnectorName: "connector-id", "live": "live-id"}
+	engine.endpoints = map[string]map[string]string{
+		"gwav-deployment-1-net": {"connector-id": secureLinkConnectorName},
+		"in-use":                {"connector-id": secureLinkConnectorName, "live-id": "live"},
+	}
+	cli := engine.client()
+
+	if err := cli.RemoveNetwork(context.Background(), "gwav-deployment-1-net"); err != nil {
+		t.Fatalf("remove network the connector alone is on: %v", err)
+	}
+	if _, exists := engine.endpoints["gwav-deployment-1-net"]; exists {
+		t.Fatal("network was not removed")
+	}
+	if err := cli.RemoveNetwork(context.Background(), "in-use"); err == nil {
+		t.Fatal("network another container uses was removed")
+	}
+	if got := engine.endpoints["in-use"]; got["connector-id"] != secureLinkConnectorName {
+		t.Fatalf("in-use endpoints = %v, want the connector kept next to the live container", got)
 	}
 }

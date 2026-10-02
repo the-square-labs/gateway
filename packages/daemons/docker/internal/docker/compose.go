@@ -512,6 +512,9 @@ func (s *dockerComposeSidecar) run(ctx context.Context, request composeRequest) 
 	if request.action == "delete_volumes" {
 		return s.deleteVolumes(ctx, request.projectName, request.volumeNames)
 	}
+	if request.action == "down" {
+		s.client.releaseSecureLinkConnectorFromProject(ctx, request.projectName)
+	}
 	stage, cleanup, err := stageComposeInput(request)
 	if err != nil {
 		return err
