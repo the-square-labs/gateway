@@ -197,8 +197,11 @@ const DEFINITIONS: readonly InferenceProviderDefinition[] = [
   chatProvider('firepass', 'Fire Pass (Fireworks Kimi)', 'https://api.fireworks.ai/inference/v1'),
   chatProvider('nvidia', 'NVIDIA NIM', 'https://integrate.api.nvidia.com/v1'),
   chatProvider('zai', 'Z.AI GLM Coding Plan', 'https://api.z.ai/api/coding/paas/v4', {
-    models: ['glm-5.2', 'glm-5.2[1m]', 'glm-5.1', 'glm-5'],
+    models: ['glm-5.3', 'glm-5.3[1m]', 'glm-5.2', 'glm-5.2[1m]', 'glm-5.1', 'glm-5'],
     subscription: true,
+    // The core lists the plan's models from Z.AI's own catalog, so a new GLM release appears
+    // without a Gateway or core update.
+    liveModels: true,
   }),
   chatProvider('siliconflow', 'SiliconFlow', 'https://api.siliconflow.cn/v1'),
   chatProvider('qwen-cloud', 'Qwen Cloud', 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', {
