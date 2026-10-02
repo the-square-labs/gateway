@@ -621,6 +621,33 @@ export class DockerComposeService {
   } | null> {
     return commercialModuleUnavailable();
   }
+  async moveManagedDatabaseBindingNetwork(
+    _nodeId: string,
+    _targetResourceId: string,
+    _bindingId: string,
+    _networkName: string,
+    _hostAlias: string,
+    _hostAddress: string | undefined,
+    _environment: Record<string, string>,
+    _userId: string
+  ): Promise<{
+    id: string;
+    createdAt: Date;
+    createdById: string | null;
+    projectId: string;
+    revisionNumber: number;
+    sourceYaml: string;
+    originalYaml: string;
+    normalizedModel: import('@/db/schema/index.js').DockerComposeNormalizedModel;
+    configDigest: string;
+    variables: Record<string, string>;
+    secretKeys: string[];
+    sourceBindingId: string | null;
+    buildBatchId: string | null;
+    sourceCommitSha: string | null;
+  } | null> {
+    return commercialModuleUnavailable();
+  }
   async waitForOperation(
     _operationId: string,
     _timeoutMs?: number
