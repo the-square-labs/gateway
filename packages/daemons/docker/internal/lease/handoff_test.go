@@ -86,3 +86,37 @@ func TestHandoffRefusedWithoutLeaseOrNewerManifest(t *testing.T) {
 		t.Fatal("holder accepted a successor outside the manifest")
 	}
 }
+
+// A standby prepared again just before it takes the slot: the view the holder started from lists the container
+// that was replaced. It starts the copy the node has now instead of serving, and later releasing, a container that
+// no longer exists.
+func TestHolderStartsTheContainerThatReplacedTheListedOne(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1, d2 := w.daemon("d1"), w.daemon("d2")
+	var listed *Container
+	for _, c := range d2.engine.containers {
+		listed = c
+	}
+	var replacement *Container
+	d2.engine.beforeStart = func(id string) {
+		if id != listed.ID || replacement != nil {
+			return
+		}
+		delete(d2.engine.containers, listed.ID)
+		replacement = d2.addContainer(testPolicy, false)
+		replacement.RestartPolicy = "no"
+	}
+	if err := d1.runtime.Handoff(handoffRequest(w, "d2")); err != nil {
+		t.Fatal(err)
+	}
+	w.waitServing("d2", 20*time.Second)
+	w.run(30 * time.Second)
+	w.requireClean()
+	if replacement == nil || !replacement.Running {
+		t.Fatalf("the replacing container must run\n%s", w.dump())
+	}
+	if holder := w.holderOf(); holder != "d2" {
+		t.Fatalf("d2 must keep the slot, holder %q\n%s", holder, w.dump())
+	}
+}

@@ -351,7 +351,7 @@ export class AvailabilityLeaseService {
   }
 
   async getPolicyLease(policyId: string, now = new Date()): Promise<DockerAvailabilityLeaseView> {
-    const [[state], observations, members, localRelays, placements] = await Promise.all([
+    const [[state], observations, members, localRelays, placements, [policy]] = await Promise.all([
       this.db
         .select()
         .from(dockerAvailabilityLeaseState)
@@ -373,7 +373,22 @@ export class AvailabilityLeaseService {
         })
         .from(dockerAvailabilityPlacements)
         .where(eq(dockerAvailabilityPlacements.policyId, policyId)),
+      this.db
+        .select({
+          mode: dockerAvailabilityPolicies.mode,
+          desiredReplicaCount: dockerAvailabilityPolicies.desiredReplicaCount,
+        })
+        .from(dockerAvailabilityPolicies)
+        .where(eq(dockerAvailabilityPolicies.id, policyId))
+        .limit(1),
     ]);
+    // A slot that left the manifest (fewer replicas, surge lowered) keeps its observation row; once nobody holds it, it
+    // is no slot of the policy any more and is not listed (stand run x4: Failover 1 showed an empty slot 1).
+    const slots = policy
+      ? policy.mode === 'replicated'
+        ? Math.min(32, policy.desiredReplicaCount + (state?.surgeSlots ?? 0))
+        : 1
+      : Number.POSITIVE_INFINITY;
     const candidateNodeIds = leaseCandidatePlacements(placements).map((placement) => placement.nodeId);
     const excludedNodes =
       state && state.mode !== 'legacy' && candidateNodeIds.length > 0
@@ -402,6 +417,7 @@ export class AvailabilityLeaseService {
       epoch: state?.voterEpoch ?? 0,
       publishedPartitionMode: state?.publishedPartitionMode ?? null,
       holders: observations
+        .filter((observation) => observation.slot < slots || observation.holderId !== null)
         .sort((left, right) => left.slot - right.slot)
         .map((observation) => ({
           slot: observation.slot,
