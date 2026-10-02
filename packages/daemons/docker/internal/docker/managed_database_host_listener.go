@@ -66,6 +66,8 @@ type managedDatabaseHostListener struct {
 	config      managedDatabaseHostListenerConfig
 	closed      bool
 	connections map[net.Conn]struct{}
+	// sources are the containers the connections the listener serves came from, by connection.
+	sources map[net.Conn]listenerPeer
 	// keptName names the socket's copy in the listener keeper, which outlives this process ("" without a keeper,
 	// or once the copy was handed over to the next process).
 	keptName string
@@ -168,15 +170,17 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 	var released []*managedDatabaseHostListener
 	for bindingID, listener := range m.listeners {
 		current := listener.currentConfig()
-		if config, present := resolved[bindingID]; present && current.equal(config) {
-			listener.setConfig(config)
+		// A new source list (an Availability disable narrows it to the survivor) keeps the listener: only the
+		// connections of sources it no longer allows close.
+		if config, present := resolved[bindingID]; present && current.sameRoute(config) {
+			listener.update(config)
 			statuses[bindingID] = listenerStatus(config, "ready", nil)
 			continue
 		}
 		if config, present := unverified[bindingID]; present {
 			config.networkID = current.networkID
-			if current.equal(config) {
-				listener.setConfig(config)
+			if current.sameRoute(config) {
+				listener.update(config)
 				continue
 			}
 		}
@@ -441,6 +445,7 @@ func (m *managedDatabaseHostListenerManager) listen(config managedDatabaseHostLi
 		}
 	}
 	managedListener := &managedDatabaseHostListener{config: config, listener: listener, connections: map[net.Conn]struct{}{},
+		sources:  map[net.Conn]listenerPeer{},
 		keptName: keepListener(listener, name)}
 	go m.accept(managedListener)
 	return managedListener, nil
@@ -497,6 +502,7 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 	defer func() {
 		listener.mu.Lock()
 		delete(listener.connections, connection)
+		delete(listener.sources, connection)
 		listener.mu.Unlock()
 		<-m.global
 		_ = connection.Close()
@@ -529,10 +535,18 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 		return
 	}
 	// A re-key while the peer was checked moved the listener to another binding with the same network and sources:
-	// the connection belongs to the binding the listener serves now.
+	// the connection belongs to the binding the listener serves now. A source list narrowed meanwhile applies.
 	listener.mu.Lock()
 	active, current := !listener.closed, listener.config
+	allowed := managedDatabaseListenerSourceAllowed(peer, current.allowedSources)
+	if active && allowed {
+		listener.sources[connection] = peer
+	}
 	listener.mu.Unlock()
+	if active && !allowed {
+		reject(linkRejectedSourceNotAllowed, "container", peer.name)
+		return
+	}
 	if active {
 		m.openBinding(connection, current.bindingID, current.routeGeneration)
 	}
@@ -631,6 +645,23 @@ func (listener *managedDatabaseHostListener) setConfig(config managedDatabaseHos
 	listener.mu.Unlock()
 }
 
+// update applies a config of the same route (sameRoute) in place and closes the connections whose source the new
+// source list no longer allows.
+func (listener *managedDatabaseHostListener) update(config managedDatabaseHostListenerConfig) {
+	listener.mu.Lock()
+	listener.config = config
+	var refused []net.Conn
+	for connection, peer := range listener.sources {
+		if !managedDatabaseListenerSourceAllowed(peer, config.allowedSources) {
+			refused = append(refused, connection)
+		}
+	}
+	listener.mu.Unlock()
+	for _, connection := range refused {
+		_ = connection.Close()
+	}
+}
+
 func (listener *managedDatabaseHostListener) close() {
 	listener.mu.Lock()
 	if listener.closed {
@@ -654,10 +685,15 @@ func (listener *managedDatabaseHostListener) close() {
 	}
 }
 
+// sameRoute reports a config of the same listener: binding, network, address, port and route generation. The source
+// list and the limit change on the running listener.
+func (config managedDatabaseHostListenerConfig) sameRoute(other managedDatabaseHostListenerConfig) bool {
+	return config.bindingID == other.bindingID && config.networkName == other.networkName && config.networkID == other.networkID &&
+		config.listenAddress == other.listenAddress && config.listenPort == other.listenPort && config.routeGeneration == other.routeGeneration
+}
+
 func (config managedDatabaseHostListenerConfig) equal(other managedDatabaseHostListenerConfig) bool {
-	if config.bindingID != other.bindingID || config.networkName != other.networkName || config.networkID != other.networkID ||
-		config.listenAddress != other.listenAddress || config.listenPort != other.listenPort || config.routeGeneration != other.routeGeneration ||
-		len(config.allowedSources) != len(other.allowedSources) {
+	if !config.sameRoute(other) || len(config.allowedSources) != len(other.allowedSources) {
 		return false
 	}
 	for index := range config.allowedSources {

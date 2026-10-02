@@ -434,3 +434,34 @@ func TestLinkRejectionLogIsRateLimited(t *testing.T) {
 		t.Fatal("a forgotten link came back")
 	}
 }
+
+// An Availability disable narrows the link's source list to the survivor without a new route generation: the
+// listener stays with the connections of the sources it still allows, and only the others close.
+func TestManagedDatabaseHostListenerNarrowsItsSourcesInPlace(t *testing.T) {
+	h := newListenerHarness(t)
+	withSources := func(sources ...string) *pb.RelayGrantAssignment {
+		assignment := h.assignment(testListenerBindingA, 3, 64)
+		assignment.ManagedDatabaseListener.AllowedSources = sources
+		return assignment
+	}
+	h.reconcile(withSources("container:app-green", "deployment:deployment-1"))
+	listener := h.listener(testListenerBindingA)
+	held := h.dial()
+	h.waitOpened(1)
+
+	if status := h.reconcile(withSources("deployment:deployment-1"))[testListenerBindingA]; status.State != "ready" || h.listener(testListenerBindingA) != listener {
+		t.Fatalf("a narrowed source list replaced the listener: %+v", status)
+	}
+	requireOpen(t, held)
+	h.dial()
+	h.waitOpened(1)
+
+	if h.reconcile(withSources("container:app-green")); h.listener(testListenerBindingA) != listener {
+		t.Fatal("a new source list replaced the listener")
+	}
+	requireClosed(t, held)
+	requireClosed(t, h.dial())
+	if opened := len(h.openedBindings()); opened != 2 {
+		t.Fatalf("%d connections reached the binding, want 2", opened)
+	}
+}
