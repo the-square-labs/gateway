@@ -96,7 +96,7 @@ export class DockerInternalRegistryService {
         now,
         `Registry maintenance stopped in phase ${state.maintenancePhase}: ${cause}`
       );
-      await this.store.updateState({
+      const recovered = await this.store.updateState({
         status: 'ready',
         writable: true,
         maintenancePhase: 'idle',
@@ -104,6 +104,7 @@ export class DockerInternalRegistryService {
         maintenanceLeaseExpiresAt: null,
         lastError: null,
       });
+      this.emitChanged('maintenance', recovered);
     } catch (error) {
       await this.store.updateState({
         status: 'unhealthy',
@@ -166,20 +167,24 @@ export class DockerInternalRegistryService {
     const diskPressure =
       capacityBytes !== null && capacityBytes > 0 && usedBytes / capacityBytes >= DEFAULT_DISK_PRESSURE_RATIO;
     const writable = input.healthy && input.writable && !maintenance && !diskPressure;
-    const status = !input.healthy
-      ? 'unhealthy'
-      : maintenance
-        ? 'maintenance'
+    // A maintenance run stops and restarts the registry itself and records how it ended: a probe that finds it down
+    // meanwhile does not turn it unhealthy.
+    const status = maintenance
+      ? 'maintenance'
+      : !input.healthy
+        ? 'unhealthy'
         : diskPressure
           ? 'degraded'
           : writable
             ? 'ready'
             : 'read_only';
-    const lastError = !input.healthy
-      ? 'Registry health report marked the service unhealthy'
-      : diskPressure
-        ? 'Registry storage is at or above the write-admission threshold'
-        : null;
+    const lastError = maintenance
+      ? current.lastError
+      : !input.healthy
+        ? 'Registry health report marked the service unhealthy'
+        : diskPressure
+          ? 'Registry storage is at or above the write-admission threshold'
+          : null;
     if (
       current.status === status &&
       current.writable === writable &&
@@ -432,15 +437,18 @@ export class DockerInternalRegistryService {
             error: null,
             completedAt: new Date(),
           });
-          await this.store.updateState({
-            status: 'ready',
-            writable: true,
-            maintenancePhase: 'idle',
-            maintenanceLeaseOwner: null,
-            maintenanceLeaseExpiresAt: null,
-            lastGcAt: new Date(),
-            lastError: null,
-          });
+          this.emitChanged(
+            'maintenance',
+            await this.store.updateState({
+              status: 'ready',
+              writable: true,
+              maintenancePhase: 'idle',
+              maintenanceLeaseOwner: null,
+              maintenanceLeaseExpiresAt: null,
+              lastGcAt: new Date(),
+              lastError: null,
+            })
+          );
           return run;
         }
       }
@@ -491,15 +499,19 @@ export class DockerInternalRegistryService {
         error: null,
         completedAt: new Date(),
       });
-      await this.store.updateState({
-        status: 'ready',
-        writable: true,
-        maintenancePhase: 'idle',
-        maintenanceLeaseOwner: null,
-        maintenanceLeaseExpiresAt: null,
-        lastGcAt: new Date(),
-        lastError: null,
-      });
+      // Changes waiting for writes (an Availability rollout mirroring images) go on now, not at their next retry.
+      this.emitChanged(
+        'maintenance',
+        await this.store.updateState({
+          status: 'ready',
+          writable: true,
+          maintenancePhase: 'idle',
+          maintenanceLeaseOwner: null,
+          maintenanceLeaseExpiresAt: null,
+          lastGcAt: new Date(),
+          lastError: null,
+        })
+      );
       return run;
     } catch (error) {
       let restoreError: unknown;
@@ -521,14 +533,17 @@ export class DockerInternalRegistryService {
         progress,
         error: restoreMessage ? `${message}; write restoration failed: ${restoreMessage}` : message,
       });
-      await this.store.updateState({
-        status: writesRestored ? 'degraded' : 'unhealthy',
-        writable: writesRestored,
-        maintenancePhase: 'failed',
-        maintenanceLeaseOwner: null,
-        maintenanceLeaseExpiresAt: null,
-        lastError: restoreMessage ? `${message}; write restoration failed: ${restoreMessage}` : message,
-      });
+      this.emitChanged(
+        'maintenance',
+        await this.store.updateState({
+          status: writesRestored ? 'degraded' : 'unhealthy',
+          writable: writesRestored,
+          maintenancePhase: 'failed',
+          maintenanceLeaseOwner: null,
+          maintenanceLeaseExpiresAt: null,
+          lastError: restoreMessage ? `${message}; write restoration failed: ${restoreMessage}` : message,
+        })
+      );
       throw error;
     }
   }
