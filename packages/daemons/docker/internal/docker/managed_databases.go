@@ -431,6 +431,9 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		if err := m.ensureMounted(ctx, &record); err != nil {
 			return "", err
 		}
+		if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
+			return "", runtimeFilesMissingError("managed database", missing)
+		}
 		if err := m.startContainer(ctx, record.ContainerID); err != nil {
 			return "", err
 		}
@@ -538,7 +541,7 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		if inspectErr == nil {
 			status = managedDatabaseContainerStatus(inspect.Container.State)
 		}
-		return marshalManagedDatabaseDetail(record, status)
+		return marshalManagedDatabaseInspect(record, status, m.missingRuntimeFiles(record))
 	case "clickhouse_principal_apply_v1":
 		var input clickHousePrincipalCommand
 		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {

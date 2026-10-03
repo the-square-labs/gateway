@@ -247,8 +247,28 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 		if record.Removed {
 			return "", errors.New("managed storage was removed")
 		}
+		// Gateway sends the member's settings with a restart, so runtime files
+		// the node lost are restaged from them; an older Gateway sends none.
+		var input *managedStorageCommand
+		if configJSON != "" {
+			parsed, err := parseManagedStorageCommand(configJSON, false)
+			if err != nil {
+				return "", err
+			}
+			if parsed.Engine != record.engine() {
+				return "", fmt.Errorf("managed storage engine mismatch: record is %s, restart is %s", record.engine(), parsed.Engine)
+			}
+			input = &parsed
+		}
 		if err := m.ensureMounted(ctx, &record); err != nil {
 			return "", err
+		}
+		missing, err := m.restageRuntimeFiles(record, input)
+		if err != nil {
+			return "", err
+		}
+		if len(missing) > 0 {
+			return "", runtimeFilesMissingError("managed storage", missing)
 		}
 		if action == "restart" {
 			_ = m.client.StopContainer(ctx, record.ContainerID, 20)
@@ -593,6 +613,13 @@ func (m *managedStorageManager) repairCreate(ctx context.Context, record *manage
 		inspect.Container.Config.Labels[managedStorageMemberLabel] == strconv.Itoa(record.MemberIndex) {
 		if err := m.ensureMounted(ctx, record); err != nil {
 			return err
+		}
+		missing, err := m.restageRuntimeFiles(*record, &input)
+		if err != nil {
+			return err
+		}
+		if len(missing) > 0 {
+			return runtimeFilesMissingError("managed storage", missing)
 		}
 		if err := m.startContainer(ctx, record.ContainerID); err != nil {
 			return err

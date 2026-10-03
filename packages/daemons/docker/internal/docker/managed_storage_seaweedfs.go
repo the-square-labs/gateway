@@ -243,9 +243,17 @@ func (m *managedStorageManager) createSeaweedFSContainer(ctx context.Context, re
 }
 
 // updateSeaweedFSInPlace applies payload changes that only need a restart:
-// rotated TLS material or root credentials.
+// rotated TLS material or root credentials, or runtime files the node lost.
 func (m *managedStorageManager) updateSeaweedFSInPlace(ctx context.Context, record *managedStorageRecord, input managedStorageCommand) error {
 	restartRequired := false
+	if missing := m.missingRuntimeFiles(*record); len(missing) > 0 {
+		if missing, err := m.restageRuntimeFiles(*record, &input); err != nil {
+			return err
+		} else if len(missing) > 0 {
+			return runtimeFilesMissingError("managed storage", missing)
+		}
+		restartRequired = true
+	}
 	if input.TLS != nil {
 		if !record.TLSEnabled {
 			return errors.New("enabling TLS on existing SeaweedFS storage requires recreation")
@@ -268,6 +276,9 @@ func (m *managedStorageManager) updateSeaweedFSInPlace(ctx context.Context, reco
 		return nil
 	}
 	if err := m.client.StopContainer(ctx, record.ContainerID, 20); err != nil {
+		return err
+	}
+	if err := m.ensureMounted(ctx, record); err != nil {
 		return err
 	}
 	if err := m.startContainer(ctx, record.ContainerID); err != nil {

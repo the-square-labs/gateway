@@ -64,6 +64,9 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	if err := m.ensureStorageSize(ctx, record, input.StorageSizeBytes); err != nil {
 		return err
 	}
+	if _, err := m.restageRuntimeFiles(*record, &input); err != nil {
+		return err
+	}
 	requiresRecreate := managedDatabaseRequiresRecreate(*record, input)
 	if !requiresRecreate {
 		var err error
@@ -262,6 +265,11 @@ func (m *managedDatabaseManager) restart(ctx context.Context, record *managedDat
 	if err := m.ensureMounted(ctx, record); err != nil {
 		return err
 	}
+	if missing, err := m.restageRuntimeFiles(*record, &input); err != nil {
+		return err
+	} else if len(missing) > 0 {
+		return runtimeFilesMissingError("managed database", missing)
+	}
 	needsPinning, err := m.publicationNeedsPinning(ctx, *record, input)
 	if err != nil {
 		return err
@@ -407,6 +415,11 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 		}
 		if err := m.ensureMounted(ctx, &existing); err != nil {
 			return managedDatabaseRecord{}, err
+		}
+		if missing, err := m.restageRuntimeFiles(existing, &input); err != nil {
+			return managedDatabaseRecord{}, err
+		} else if len(missing) > 0 {
+			return managedDatabaseRecord{}, runtimeFilesMissingError("managed database", missing)
 		}
 		if err := m.startContainer(ctx, existing.ContainerID); err != nil {
 			return managedDatabaseRecord{}, err

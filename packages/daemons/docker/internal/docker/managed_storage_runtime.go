@@ -430,6 +430,13 @@ func (m *managedStorageManager) reconcile(ctx context.Context) error {
 			m.logger.Warn("managed storage could not be mounted at startup", "id", id, "error", err)
 			continue
 		}
+		if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
+			m.logger.Warn("managed storage is not started at startup", "id", id, "error", runtimeFilesMissingError("managed storage", missing))
+			if err := m.saveRecord(record); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := m.startContainer(ctx, record.ContainerID); err != nil {
 			m.logger.Warn("managed storage could not be started at startup", "id", id, "error", err)
 			continue
@@ -589,7 +596,7 @@ func (m *managedStorageManager) marshalManagedStorageDetail(ctx context.Context,
 			privateEndpoint = endpoint
 		}
 	}
-	return jsonString(map[string]any{
+	detail := map[string]any{
 		"status": status, "id": record.ID, "operationId": record.OperationID,
 		"engine": record.engine(), "image": record.Image,
 		"containerName": record.ContainerName, "memberIndex": record.MemberIndex,
@@ -600,6 +607,12 @@ func (m *managedStorageManager) marshalManagedStorageDetail(ctx context.Context,
 		"memorySwapBytes": record.MemorySwapBytes, "ftpPort": record.FTPPort,
 		"ftpPassivePortStart": record.FTPPassiveStart, "ftpPassivePortCount": record.FTPPassiveCount,
 		"sftpPort": record.SFTPPort,
-	})
+	}
+	if !record.Removed {
+		if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
+			detail["runtimeMissing"] = missing
+		}
+	}
+	return jsonString(detail)
 }
 func jsonString(value any) (string, error) { raw, err := json.Marshal(value); return string(raw), err }
