@@ -99,7 +99,8 @@ func newVolumeImageManager(stateDir string, dockerClient *Client, logger *slog.L
 }
 
 func (m *volumeImageManager) preflight() bool {
-	if os.Geteuid() != 0 {
+	if runsWithoutRoot() {
+		m.logger.Info("disk-image volume support unavailable: it needs docker-daemon to run as root", "user", runUserName())
 		return false
 	}
 	for _, binary := range []string{"fallocate", "findmnt", "mkfs.ext4", "losetup", "mount", "umount", "mountpoint", "resize2fs"} {

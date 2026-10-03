@@ -24,6 +24,7 @@ export function isGatewayInternalContainer(container: Record<string, any>): bool
     labels[SECURE_LINK_MANAGED_LABEL] === 'secure-link-connector' ||
     labels[SECURE_LINK_MANAGED_LABEL] === 'backup-runner' ||
     labels[SECURE_LINK_MANAGED_LABEL] === 'backup-redis-stage' ||
+    labels[SECURE_LINK_MANAGED_LABEL] === 'connector-cleanup' ||
     (typeof labels[BACKUP_RUN_LABEL] === 'string' && labels[BACKUP_RUN_LABEL] !== '') ||
     labels[MANAGED_DATABASE_CONNECTOR_LABEL] === 'true' ||
     labels[MANAGED_STORAGE_CONNECTOR_LABEL] === 'true' ||

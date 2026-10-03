@@ -290,6 +290,8 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if err := p.startStorageConnectorRelay(); err != nil {
 		return err
 	}
+	// Storage connectors created while the daemon ran as another user (root or not) cannot reach this socket.
+	go p.reconcileStorageConnectorGroups(context.Background())
 	if p.cfg.Docker.IsStorageProfile() {
 		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
 		if err != nil {
@@ -330,43 +332,8 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		// Before the secure-link restore, which binds links to the routers.
 		p.repairDeploymentRouters("", deploymentRouterRepairStartupTimeout)
 		go p.deploymentRouterRepairLoop(context.Background(), deploymentRouterRepairInterval)
-		p.secureLinks, err = newDockerSecureLinkManager(p)
-		if err != nil {
-			return fmt.Errorf("initialize proxy secure links: %w", err)
-		}
-		p.secureLinkState, err = securelink.NewStateStore(p.cfg.StateDir)
-		if err != nil {
-			return fmt.Errorf("initialize proxy secure-link state: %w", err)
-		}
-		pending, hasPending, pendingErr := p.secureLinkState.Pending()
-		if pendingErr != nil {
-			return fmt.Errorf("read pending proxy secure-link state: %w", pendingErr)
-		}
-		restored := p.secureLinkState.Get()
-		if hasPending && len(pending.Bindings) == 0 {
-			// An interrupted last-link teardown must win over the older committed
-			// snapshot; otherwise restart would recreate the connector that the
-			// cleanup had already removed.
-			if cleanupErr := p.secureLinks.removeConnector(context.Background()); cleanupErr != nil {
-				p.logger.Warn("proxy secure-link pending cleanup deferred", "error", cleanupErr)
-			} else if commitErr := p.secureLinkState.Commit(pending); commitErr != nil {
-				return fmt.Errorf("commit pending proxy secure-link cleanup: %w", commitErr)
-			}
-		} else if len(restored.Bindings) > 0 {
-			statuses, restoreErr := p.secureLinks.restore(restored)
-			if restoreErr != nil {
-				p.logger.Warn("proxy secure-link restore deferred", "error", restoreErr)
-			} else if saveErr := p.secureLinkState.Commit(normalizeTargetBindings(restored, statuses)); saveErr != nil {
-				return fmt.Errorf("persist restored proxy secure links: %w", saveErr)
-			}
-		} else if hasPending {
-			// No committed bindings means an interrupted first apply or teardown.
-			// Empty cleanup discovers any surviving managed connector by name.
-			if cleanupErr := p.secureLinks.removeConnector(context.Background()); cleanupErr != nil {
-				p.logger.Warn("proxy secure-link pending cleanup deferred", "error", cleanupErr)
-			} else if discardErr := p.secureLinkState.DiscardPending(); discardErr != nil {
-				return fmt.Errorf("clear proxy secure-link pending state: %w", discardErr)
-			}
+		if err := p.initProxySecureLinks(); err != nil {
+			return err
 		}
 		if p.memberReadiness == nil {
 			p.memberReadiness = newMemberReadiness()
@@ -537,6 +504,9 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		values = append(values, "managed_database_binding_listener_v1", managedStorageLinkCapability, managedLinkRuntimeCapability)
 		if p.volumeImages != nil && p.volumeImages.supported {
 			values = append(values, "docker_volume_storage_images_v1")
+		}
+		if runsWithoutRoot() {
+			values = append(values, nonRootCapability)
 		}
 		if p.getRuntimeStatus().State == runtimemanager.StateHealthy {
 			values = append(values, "docker_runsc_healthy_v1")

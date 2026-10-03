@@ -190,7 +190,7 @@ Common daemon setup options:
 | `--gateway-cert-sha256 <sha256:hex>` | Gateway gRPC TLS leaf certificate fingerprint generated with the token. Required for first enrollment. |
 | `--host <host>` / `--port <port>` | Alternative to `--gateway` when specifying the Gateway address in separate parts. |
 | `--version <tag>` | Install a specific daemon version (default: the latest stable daemon release). |
-| `--user <username>` | Run nginx, Docker, or monitoring daemons as a specific user. Storage nodes (including legacy database nodes) accept only `--user root`. |
+| `--user <username>` | Run nginx, Docker, or monitoring daemons as a specific user (see [Running Daemons Without Root](#running-daemons-without-root)). Storage nodes (including legacy database nodes) accept only `--user root`. |
 | `--mode <profile>` | Docker installer only: `docker` (default), `builder`, or `storage`; `databases` is accepted as a legacy alias of the Storage profile. |
 | `--builder-egress <profile>` | Docker installer with `--mode builder` only: `internet` (default) permits public dependency downloads while blocking metadata, private, and control-plane ranges; `offline` disables build-step egress. |
 | `--nginx-mode <mode>` / `--skip-nginx` | Nginx installer only: `managed` or `integrate` (see [Nginx Node Modes](#nginx-node-modes)); `--skip-nginx` reuses an installed nginx 1.25.1 or newer. |
@@ -202,6 +202,29 @@ Common daemon setup options:
 Every option also has an environment variable (`GATEWAY_NODE_ADDRESS`, `GATEWAY_NODE_TOKEN`, `GATEWAY_DOCKER_MODE`, and so on; `--help` lists them). `GATEWAY_LEASE_WATCHDOG_VERSION` pins the [lease watchdog](#lease-watchdog) release that the Docker installer installs in `docker` mode (default: the latest release).
 
 The installers verify downloaded daemon binaries with SHA256 checksums and back up existing binaries during upgrades.
+
+## Running Daemons Without Root
+
+The monitoring, Docker (`docker` profile), nginx, and relay daemons can run as an existing non-root user: `--user <username>` for the monitoring, Docker, and nginx installers, and `GATEWAY_RELAY_RUN_USER` (optionally `GATEWAY_RELAY_RUN_GROUP`) for the relay installer. The installer itself still runs with `sudo`. The Storage profile (including legacy database nodes) and the builder profile run only as root; their installers stop with an error for any other user.
+
+In non-root mode every installer:
+
+- stops before changing the host when the user does not exist; the service group defaults to the user's primary group;
+- gives the user the daemon's configuration, state, and library directories, and writes the configuration as that user;
+- installs the daemon binary in `/usr/local/lib/<daemon>/bin`, owned by the user, so the daemon can update itself (for the relay: `/usr/local/lib/gateway-relay/bin/relay-supervisor`). `/usr/local/bin/<daemon>` is a root-owned wrapper that runs it; called as root (for example with `sudo`), the wrapper switches to the user first, so root never runs a binary that user can replace. The installers run their root-only steps from a root-owned copy;
+- gives the daemon a copy of the host identity in its state directory (`host_identity_path` in its configuration). The shared `/var/lib/gateway/host-identity` stays root-owned and readable only by root. The installer creates the shared file when it is missing, so root daemons installed later on the host report the same identity;
+- otherwise behaves as a root install.
+
+Every installer, root or not, waits for the daemon to enroll and exits with an error that names the daemon log (`journalctl -u <unit>`, the OpenRC log, or the manual launcher log) when enrollment fails or does not finish in time (90 s; `GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS`, `GATEWAY_MONITORING_ENROLLMENT_WAIT_SECONDS`, or `GATEWAY_RELAY_ENROLLMENT_WAIT_SECONDS`).
+
+A daemon whose state directory is not accessible to it keeps launcher supervision and self-update by placing its launcher in `~/.cache/gateway-daemon/<type>` or `/tmp/gateway-daemon-<uid>/<type>`.
+
+| Daemon | Requires | Not available without root |
+|--------|----------|----------------------------|
+| Monitoring | Nothing beyond the user. | None. Host metrics, console, and file operations work with the user's own permissions. |
+| Relay | `CAP_NET_BIND_SERVICE` only for a relay port below 1024. The installer adds it to the systemd unit or OpenRC service; manual mode cannot grant it. | None. |
+| Docker (`docker` profile) | Read and write access to the Docker socket. The installer adds the user to the `docker` group and stops when the user still cannot use the socket. Docker group membership is equivalent to root on the host. Proxy Secure Links and managed storage links work: their connector containers (uid 65532) get the daemon user's group as a supplementary group and share the socket directories through it. When a node switches between root and non-root (re-run the installer with the other `--user`), the daemon recreates the connector containers and socket directories of the previous mode by itself and removes the old socket directories once the new connectors run. | Disk-image volumes; moving volume data between nodes; installing Secure Runtime from Gateway (the installer installs it during setup, otherwise run `sudo docker-daemon runtime install runsc` on the node); the boot step that opens database link listeners before Docker after a reboot. The daemon reports `docker_daemon_non_root_v1`, and Gateway names this reason where these features are offered. The [lease watchdog](#lease-watchdog) still runs as a root service that the installer sets up. |
+| Nginx | An nginx whose master process already runs as the same user, because the daemon writes `/etc/nginx` and reloads nginx itself. Prepare it before installing: run the nginx service as the user with `CAP_NET_BIND_SERVICE` (systemd drop-in with `User=`, `Group=`, `AmbientCapabilities=CAP_NET_BIND_SERVICE`, `RuntimeDirectory=nginx`, `PIDFile=/run/nginx/nginx.pid`, and `pid /run/nginx/nginx.pid;` in `nginx.conf`), give the user `/etc/nginx`, `/var/log/nginx`, and nginx's temp directories, and make log rotation create files as the user. Use `--nginx-mode integrate`, because `managed` mode writes an `nginx.conf` for an nginx started as root. Running nginx as its distribution user (`www-data` or `nginx`) and installing the daemon with that user is the simplest setup. | None once nginx runs as the user. Otherwise the installer stops before changing anything and lists what to prepare. |
 
 ## Nginx Node Modes
 

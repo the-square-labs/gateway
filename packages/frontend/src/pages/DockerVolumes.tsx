@@ -271,6 +271,11 @@ export function DockerVolumes({
       selectedNodeCapabilities?.docker_volume_storage_images_v1 === true ||
       advertisedNodeCapabilities.includes("docker_volume_storage_images_v1")
   );
+  // A docker-daemon running without root cannot create disk-image volumes; say so instead of a generic refusal.
+  const nodeRunsWithoutRoot = Boolean(
+    selectedNodeCapabilities?.dockerDaemonNonRootV1 === true ||
+      advertisedNodeCapabilities.includes("docker_daemon_non_root_v1")
+  );
   const parsedCreateCapacityGb = Number(createCapacityGb);
   const createCapacityValid =
     Number.isInteger(parsedCreateCapacityGb) && parsedCreateCapacityGb >= 1;
@@ -697,7 +702,9 @@ export function DockerVolumes({
                           ? "Select a node to check support."
                           : supportsDiskImages
                             ? "Fixed-capacity ext4 storage that can be expanded later."
-                            : "The selected node did not advertise disk-image support."
+                            : nodeRunsWithoutRoot
+                              ? "Unavailable: disk-image volumes need docker-daemon to run as root, and this node runs it as a non-root user."
+                              : "The selected node did not advertise disk-image support."
                       }
                     >
                       Disk image

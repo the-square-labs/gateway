@@ -49,11 +49,12 @@ func New(cfg *config.Config, cfgPath string, logger *slog.Logger) (*Daemon, erro
 			ClientCert: cfg.TLS.ClientCert,
 			ClientKey:  cfg.TLS.ClientKey,
 		},
-		Console:   cfg.Console,
-		Files:     cfg.Files,
-		StateDir:  cfg.StateDir,
-		LogLevel:  cfg.LogLevel,
-		LogFormat: cfg.LogFormat,
+		Console:          cfg.Console,
+		Files:            cfg.Files,
+		StateDir:         cfg.StateDir,
+		HostIdentityPath: cfg.HostIdentityPath,
+		LogLevel:         cfg.LogLevel,
+		LogFormat:        cfg.LogFormat,
 	}
 
 	plugin := NewNginxPlugin(cfg)

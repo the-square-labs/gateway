@@ -557,6 +557,210 @@ command_exists() { command -v "$1" &>/dev/null; }
 has_systemd() { command_exists systemctl && [[ -d /run/systemd/system ]]; }
 has_openrc() { command_exists rc-service && command_exists rc-update; }
 
+# ── Non-root mode (standard profile) ─────────────────────────────────
+# A root daemon keeps its binary in /usr/local/bin. A daemon running as its own user must be able to replace its binary
+# when it updates itself, so the binary lives in a directory that user owns and /usr/local/bin holds a root-owned wrapper.
+DOCKER_DAEMON_BIN_LINK="/usr/local/bin/docker-daemon"
+DOCKER_DAEMON_OWN_DIR="/usr/local/lib/docker-daemon"
+DOCKER_DAEMON_OWN_BINARY="${DOCKER_DAEMON_OWN_DIR}/bin/docker-daemon"
+DOCKER_DAEMON_OWN_HOST_IDENTITY="/var/lib/docker-daemon/host-identity"
+SHARED_HOST_IDENTITY="/var/lib/gateway/host-identity"
+# Docker trusts the daemon's registry proxy through this directory; root creates it on demand.
+DOCKER_REGISTRY_PROXY_TRUST_DIR="/etc/docker/certs.d/127.0.0.1:5443"
+
+# Reads an installed binary's version. A binary another user can replace is never run as root.
+daemon_binary_version() {
+    local binary="$1" owner
+    owner=$(stat -Lc '%U' "$binary" 2>/dev/null || echo root)
+    if [[ "$owner" == "root" ]]; then
+        "$binary" version 2>/dev/null | awk '{print $2}'
+    elif command_exists runuser; then
+        runuser -u "$owner" -- "$binary" version 2>/dev/null | awk '{print $2}'
+    else
+        return 1
+    fi
+}
+
+# In non-root mode /usr/local/bin/<daemon> is a root-owned wrapper, not the binary: the binary belongs to the service
+# user, who replaces it on update, so root must never execute it. The wrapper switches a root caller to that user.
+DAEMON_WRAPPER_MARK="# gateway-daemon-wrapper: runs the service user's binary, never as root"
+write_daemon_wrapper() {
+    local command_path="$1" binary="$2" temporary
+    temporary=$(mktemp "$(dirname "$command_path")/.gateway-daemon-wrapper.XXXXXX") || return 1
+    if ! cat >"$temporary" <<WRAPPER
+#!/bin/sh
+${DAEMON_WRAPPER_MARK}
+if [ "\$(id -u)" = 0 ]; then
+    if command -v runuser >/dev/null 2>&1; then
+        exec runuser -u '${RUN_USER}' -- '${binary}' "\$@"
+    elif command -v setpriv >/dev/null 2>&1; then
+        exec setpriv --reuid='${RUN_USER}' --regid='${RUN_GROUP}' --init-groups -- '${binary}' "\$@"
+    fi
+    echo "Run this command as ${RUN_USER}: ${binary} belongs to that user and root never runs it." >&2
+    exit 1
+fi
+exec '${binary}' "\$@"
+WRAPPER
+    then
+        rm -f "$temporary"
+        return 1
+    fi
+    if ! chmod 0755 "$temporary" || ! chown 0:0 "$temporary" || ! mv -f "$temporary" "$command_path"; then
+        rm -f "$temporary"
+        return 1
+    fi
+}
+
+is_daemon_wrapper() {
+    [[ -f "$1" && ! -L "$1" ]] && grep -Fqx "$DAEMON_WRAPPER_MARK" "$1" 2>/dev/null
+}
+
+run_as_run_user() {
+    if [[ "$RUN_USER" == "root" ]]; then
+        "$@"
+    elif command_exists runuser; then
+        runuser -u "$RUN_USER" -g "$RUN_GROUP" -- "$@"
+    elif command_exists setpriv; then
+        setpriv "--reuid=${RUN_USER}" "--regid=${RUN_GROUP}" --init-groups -- "$@"
+    else
+        # Files written as root here are handed to the run user afterwards.
+        "$@"
+    fi
+}
+
+# Root-only installer steps (Secure Runtime) never run the binary the run user owns: they run a root-owned copy.
+ROOT_DAEMON_COPY=""
+root_daemon_binary() {
+    if [[ "$RUN_USER" == "root" ]]; then
+        printf '%s\n' "$DOCKER_DAEMON_BIN_LINK"
+        return
+    fi
+    if [[ -z "$ROOT_DAEMON_COPY" ]]; then
+        ROOT_DAEMON_COPY=$(mktemp -d /tmp/gateway-docker-daemon-root.XXXXXX) || die "Could not stage the docker-daemon binary."
+        install -m 0700 "$DOCKER_DAEMON_OWN_BINARY" "${ROOT_DAEMON_COPY}/docker-daemon" || die "Could not stage the docker-daemon binary."
+    fi
+    printf '%s\n' "${ROOT_DAEMON_COPY}/docker-daemon"
+}
+
+# A non-root daemon reaches Docker only through the socket; check it before anything is started.
+preflight_run_user_docker_access() {
+    [[ "$RUN_USER" != "root" && "$DOCKER_MODE" == "docker" ]] || return 0
+    local socket="${DOCKER_SOCKET#unix://}"
+    [[ "$DOCKER_SOCKET" == unix://* ]] || return 0
+    if ! runuser -u "$RUN_USER" -- test -r "$socket" -a -w "$socket" 2>/dev/null; then
+        die "User '${RUN_USER}' cannot use the Docker socket ${socket}. Add it to the group that owns the socket (usually 'docker'), or install docker-daemon as root (--user root)."
+    fi
+    ok "Docker socket is usable by ${RUN_USER}"
+}
+
+# Hands the daemon everything it writes: its configuration, state and binary, and Docker's trust directory for the
+# daemon's registry proxy.
+grant_daemon_paths_to_run_user() {
+    [[ "$RUN_USER" != "root" ]] || return 0
+    local path
+    for path in /etc/docker-daemon /var/lib/docker-daemon "$DOCKER_DAEMON_OWN_DIR"; do
+        [[ ! -e "$path" ]] || chown -hR "${RUN_USER}:${RUN_GROUP}" "$path"
+    done
+    if [[ "$DOCKER_MODE" == "docker" ]]; then
+        install -d -m 0755 "$(dirname "$DOCKER_REGISTRY_PROXY_TRUST_DIR")"
+        install -d -m 0755 -o "$RUN_USER" -g "$RUN_GROUP" "$DOCKER_REGISTRY_PROXY_TRUST_DIR"
+    fi
+}
+
+new_host_identity() {
+    local value
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+        value=$(cat /proc/sys/kernel/random/uuid) || return 1
+    else
+        value=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n') || return 1
+        value="${value:0:8}-${value:8:4}-4${value:13:3}-$(printf '%x' $(( (16#${value:16:1} & 3) | 8 )))${value:17:3}-${value:20:12}"
+    fi
+    printf '%s\n' "$value"
+}
+
+# A daemon running as its own user cannot read the host identity that root daemons share (root-owned, mode 0600). It
+# gets a copy of that same identity in its own state directory, so Gateway still sees one host and the shared file
+# keeps its owner and mode. Without a shared identity yet, one is created there exactly as a root daemon would.
+seed_host_identity_copy() {
+    local shared="$1" copy="$2" identity="" temporary
+    local pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    if [[ -f "$copy" && ! -L "$copy" ]]; then
+        identity=$(tr -d '[:space:]' <"$copy")
+        [[ ! "$identity" =~ $pattern ]] || return 0
+        identity=""
+    fi
+    if [[ -f "$shared" && ! -L "$shared" ]]; then
+        identity=$(tr -d '[:space:]' <"$shared")
+    elif [[ -e "$shared" || -L "$shared" ]]; then
+        err "${shared} is not a regular file; fix it and run the installer again."
+        return 1
+    fi
+    if [[ -z "$identity" && ! -e "$shared" ]]; then
+        identity=$(new_host_identity) || return 1
+        [[ -d "$(dirname "$shared")" ]] || mkdir -p -m 0700 "$(dirname "$shared")" || return 1
+        temporary=$(mktemp "$(dirname "$shared")/.host-identity-XXXXXX") || return 1
+        # Publish complete contents without replacing an identity another daemon wrote meanwhile.
+        if ! printf '%s\n' "$identity" >"$temporary" || ! ln "$temporary" "$shared" 2>/dev/null; then
+            identity=$(tr -d '[:space:]' <"$shared" 2>/dev/null || true)
+        fi
+        rm -f "$temporary"
+    fi
+    if [[ ! "$identity" =~ $pattern ]]; then
+        err "The host identity at ${shared} is not valid; fix it and run the installer again."
+        return 1
+    fi
+    temporary=$(mktemp "$(dirname "$copy")/.host-identity-XXXXXX") || return 1
+    if ! printf '%s\n' "$identity" >"$temporary" || ! chmod 0600 "$temporary" || ! mv -f "$temporary" "$copy"; then
+        rm -f "$temporary"
+        return 1
+    fi
+}
+
+# Points the daemon configuration at the host identity copy; the rest of the file is kept as written.
+set_config_host_identity_path() {
+    local config="$1" path="$2" temporary
+    [[ -f "$config" && ! -L "$config" ]] || return 1
+    grep -qx "host_identity_path: \"${path}\"" "$config" && return 0
+    temporary=$(mktemp) || return 1
+    grep -v '^host_identity_path:' "$config" >"$temporary" || true
+    printf 'host_identity_path: "%s"\n' "$path" >>"$temporary"
+    # Rewrite in place so the file keeps its owner and mode.
+    cat "$temporary" >"$config" || { rm -f "$temporary"; return 1; }
+    rm -f "$temporary"
+}
+
+# A daemon running as its own user enrolls with its copy of the host identity and owns everything it writes.
+prepare_run_user_identity() {
+    [[ "$RUN_USER" != "root" ]] || return 0
+    seed_host_identity_copy "$SHARED_HOST_IDENTITY" "$DOCKER_DAEMON_OWN_HOST_IDENTITY" \
+        || die "Could not prepare the host identity for ${RUN_USER}."
+    set_config_host_identity_path /etc/docker-daemon/config.yaml "$DOCKER_DAEMON_OWN_HOST_IDENTITY" \
+        || die "Could not point /etc/docker-daemon/config.yaml at ${DOCKER_DAEMON_OWN_HOST_IDENTITY}."
+    grant_daemon_paths_to_run_user
+}
+
+# The daemon enrolls when it starts; it has its certificate and state once Gateway accepted the token.
+await_enrollment() {
+    local waited=0 limit="${GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS:-90}"
+    while (( waited < limit )); do
+        if [[ -f /etc/docker-daemon/certs/node.pem && -f /var/lib/docker-daemon/state.json ]]; then
+            ok "docker-daemon enrolled with Gateway"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    err "docker-daemon has not enrolled with Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
+    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+        err "Check the daemon log: /var/lib/docker-daemon/launcher/manual.log"
+    elif has_systemd; then
+        err "Check the daemon log: journalctl -u docker-daemon"
+    elif has_openrc; then
+        err "Check the daemon log: /var/log/docker-daemon.err and /var/log/docker-daemon.log"
+    fi
+    return 1
+}
+
 launcher_pid_from_json() {
     local metadata="$1"
     local pid
@@ -660,7 +864,8 @@ launcher_foreground_command() {
     if [[ "$RUN_USER" == "root" ]]; then
         printf '%q run' "$daemon_binary"
     elif command_exists runuser; then
-        printf 'runuser -u %q -g %q -- %q run' "$RUN_USER" "$RUN_GROUP" "$daemon_binary"
+        # RUN_GROUP is the user's primary group; without -g runuser also keeps the docker group membership.
+        printf 'runuser -u %q -- %q run' "$RUN_USER" "$daemon_binary"
     elif command_exists sudo; then
         printf 'sudo -n -u %q -g %q -- %q run' "$RUN_USER" "$RUN_GROUP" "$daemon_binary"
     elif command_exists setpriv; then
@@ -696,7 +901,8 @@ detach_manual_launcher() {
 
     if [[ "$RUN_USER" != "root" ]]; then
         if command_exists runuser; then
-            user_prefix=(runuser -u "$RUN_USER" -g "$RUN_GROUP" --)
+            # RUN_GROUP is the user's primary group; without -g runuser also keeps the docker group membership.
+            user_prefix=(runuser -u "$RUN_USER" --)
         elif command_exists sudo; then
             user_prefix=(sudo -n -u "$RUN_USER" -g "$RUN_GROUP" --)
         elif command_exists setpriv; then
@@ -1146,7 +1352,7 @@ detect_existing_install() {
 
     if [[ -x "$target" ]]; then
         EXISTING_INSTALL=1
-        EXISTING_VERSION=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        EXISTING_VERSION=$(daemon_binary_version "$target" || echo "unknown")
     fi
 
     if [[ -f "$config_path" ]]; then
@@ -1508,6 +1714,7 @@ if [[ "$RUN_USER" != "root" ]]; then
         warn "Docker group was not found. docker-daemon will run without SupplementaryGroups=docker."
     fi
 fi
+preflight_run_user_docker_access
 
 # ── Step 1: Create directories ───────────────────────────────────────
 create_directories() {
@@ -1558,12 +1765,27 @@ verify_checksum() {
 }
 
 install_daemon() {
-    local target="/usr/local/bin/docker-daemon"
+    if [[ "$RUN_USER" == "root" ]]; then
+        # Never write a root binary through the link or wrapper left by an install that ran as another user.
+        if [[ -L "$DOCKER_DAEMON_BIN_LINK" ]] || is_daemon_wrapper "$DOCKER_DAEMON_BIN_LINK"; then
+            rm -f "$DOCKER_DAEMON_BIN_LINK"
+        fi
+        install_daemon_binary "$DOCKER_DAEMON_BIN_LINK"
+        return
+    fi
+    install -d -m 0755 "$DOCKER_DAEMON_OWN_DIR" "$(dirname "$DOCKER_DAEMON_OWN_BINARY")"
+    install_daemon_binary "$DOCKER_DAEMON_OWN_BINARY"
+    write_daemon_wrapper "$DOCKER_DAEMON_BIN_LINK" "$DOCKER_DAEMON_OWN_BINARY" || die "Could not write the docker-daemon command at $DOCKER_DAEMON_BIN_LINK."
+    grant_daemon_paths_to_run_user
+}
+
+install_daemon_binary() {
+    local target="$1"
     local binary_name="docker-daemon-linux-${ARCH}"
 
     if [[ -f "$target" ]]; then
         local existing_ver
-        existing_ver=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        existing_ver=$(daemon_binary_version "$target" || echo "unknown")
         if [[ "$RESOLVED_DAEMON_VERSION" == "$existing_ver" ]]; then
             ok "docker-daemon already installed (${existing_ver})"
             return 0
@@ -1582,7 +1804,7 @@ install_daemon() {
         mv "${target}.tmp" "$target"
         chmod +x "$target"
         local ver
-        ver=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        ver=$(daemon_binary_version "$target" || echo "unknown")
         ok "docker-daemon installed (${ver})"
     else
         rm -f "${target}.tmp"
@@ -1764,7 +1986,8 @@ install_builder_runtime() {
 setup_secure_runtime() {
     [[ "$DOCKER_MODE" == "docker" ]] || return 0
     [[ "$EXISTING_INSTALL" -eq 0 ]] || return 0
-    local target="/usr/local/bin/docker-daemon"
+    local target
+    target=$(root_daemon_binary)
     local preflight_status=0
     set +e
     "$target" runtime preflight runsc --silent
@@ -2068,6 +2291,7 @@ enroll_daemon() {
     # Check if already enrolled (certs exist)
     if [[ -f /etc/docker-daemon/certs/node.pem && -f /var/lib/docker-daemon/state.json ]]; then
         ok "Node already enrolled — skipping enrollment"
+        prepare_run_user_identity
         return 0
     fi
 
@@ -2076,9 +2300,10 @@ enroll_daemon() {
         if ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --mode builder >> "$LOG_FILE" 2>&1; then
             die "Failed to enroll builder docker-daemon. Check ${LOG_FILE} for details."
         fi
-    elif ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --docker-socket "$DOCKER_SOCKET" >> "$LOG_FILE" 2>&1; then
+    elif ! run_as_run_user "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --docker-socket "$DOCKER_SOCKET" >> "$LOG_FILE" 2>&1; then
         die "Failed to enroll docker-daemon. Check ${LOG_FILE} for details."
     fi
+    prepare_run_user_identity
     ok "Config written to /etc/docker-daemon/config.yaml"
 }
 
@@ -2223,12 +2448,17 @@ install_builder_runtime
 preflight_builder_runtime
 setup_secure_runtime
 remember_host_access_config /etc/docker-daemon/config.yaml
+[[ -z "$ROOT_DAEMON_COPY" ]] || rm -rf "$ROOT_DAEMON_COPY"
 enroll_daemon
 write_database_profile_config
 write_builder_profile_config
 apply_host_access_config /etc/docker-daemon/config.yaml
 start_lease_watchdog
 start_daemon
+# The daemon enrolls once it runs: an install whose daemon did not enroll is not done.
+if ! await_enrollment; then
+    die "docker-daemon is installed, but it did not enroll with Gateway."
+fi
 
 echo ""
 echo ""

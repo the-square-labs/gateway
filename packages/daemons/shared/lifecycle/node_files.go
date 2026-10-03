@@ -24,14 +24,18 @@ type nodeFileEntry struct {
 	IsWritable  bool   `json:"isWritable,omitempty"`
 }
 
-func handleNodeFile(_ context.Context, cmd *pb.GatewayCommand) *pb.CommandResult {
+// handleNodeFile serves node filesystem commands. hostIdentityPath is the
+// daemon's configured host identity file; empty means the shared default.
+func handleNodeFile(_ context.Context, cmd *pb.GatewayCommand, hostIdentityPath string) *pb.CommandResult {
 	nodeFile := cmd.GetNodeFile()
 	result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
 
 	switch nodeFile.GetAction() {
 	case "ensure-host-identity":
 		// Fixed canonical operation: callers cannot select a path or identity.
-		identity, err := loadOrCreateHostIdentity("")
+		// A daemon running as its own user answers from the copy of the host
+		// identity in its state directory, the one it enrolled with.
+		identity, err := loadOrCreateHostIdentity(hostIdentityPath)
 		if err != nil {
 			result.Success = false
 			result.Error = err.Error()

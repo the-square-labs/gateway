@@ -43,6 +43,9 @@ type migrationVolumeEntry struct {
 }
 
 func (p *DockerPlugin) prepareMigrationVolume(ctx context.Context, migrationID, artifactID, volumeName string) (migrationArtifactMetadata, error) {
+	if err := requireVolumeDataAccess("exporting a volume for migration"); err != nil {
+		return migrationArtifactMetadata{}, err
+	}
 	volume, err := p.client.cli.VolumeInspect(ctx, volumeName, mobyclient.VolumeInspectOptions{})
 	if err != nil {
 		return migrationArtifactMetadata{}, fmt.Errorf("inspect migration volume: %w", err)
@@ -234,6 +237,9 @@ func hasUnsupportedMigrationXattrs(path string) (bool, error) {
 }
 
 func (p *DockerPlugin) importMigrationVolume(ctx context.Context, migrationID, artifactID, configJSON string) (migrationArtifactMetadata, error) {
+	if err := requireVolumeDataAccess("importing a migrated volume"); err != nil {
+		return migrationArtifactMetadata{}, err
+	}
 	var req migrationVolumeImportRequest
 	if err := json.Unmarshal([]byte(configJSON), &req); err != nil {
 		return migrationArtifactMetadata{}, fmt.Errorf("parse volume import request: %w", err)

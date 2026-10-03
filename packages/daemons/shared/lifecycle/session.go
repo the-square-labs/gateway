@@ -341,7 +341,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 				if refused := refuseDisabledNodeFile(d.cfg, c); refused != nil {
 					return refused
 				}
-				return handleNodeFile(sessionCtx, c)
+				return handleNodeFile(sessionCtx, c, d.cfg.HostIdentityPath)
 			})
 			continue
 		case *pb.GatewayCommand_DockerImage,

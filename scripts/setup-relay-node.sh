@@ -11,7 +11,8 @@ VERSION="latest"
 RELEASES_API_URL="${GATEWAY_RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"
 ARTIFACT_BASE_URL="${GATEWAY_ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"
 RUN_USER="${GATEWAY_RELAY_RUN_USER:-root}"
-RUN_GROUP="${GATEWAY_RELAY_RUN_GROUP:-root}"
+# Defaults to the run user's primary group (root for root).
+RUN_GROUP="${GATEWAY_RELAY_RUN_GROUP:-}"
 LOG_FILE="${GATEWAY_RELAY_SETUP_LOG:-/dev/null}"
 MANUAL_LAUNCH_TIMEOUT_SECONDS="${GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS:-30}"
 MANUAL_FALLBACK_USED=0
@@ -101,6 +102,150 @@ ensure_dependencies() {
 }
 
 has_systemd() { command_exists systemctl && [[ -d /run/systemd/system ]]; }
+
+# Checks the service user before anything is installed: systemd would otherwise fail the unit with 217/USER on every
+# restart while the installer waits for an enrollment that cannot happen.
+resolve_run_identity() {
+  if [[ "$RUN_USER" == "root" ]]; then
+    RUN_GROUP="${RUN_GROUP:-root}"
+    return 0
+  fi
+  if ! id -u "$RUN_USER" >/dev/null 2>&1; then
+    echo "Relay run user '${RUN_USER}' (GATEWAY_RELAY_RUN_USER) does not exist; Relay installation stopped." >&2
+    echo "Create it first, for example: useradd --system --no-create-home --shell /usr/sbin/nologin ${RUN_USER}" >&2
+    return 1
+  fi
+  if [[ -z "$RUN_GROUP" ]]; then
+    if ! RUN_GROUP=$(id -gn "$RUN_USER" 2>/dev/null) || [[ -z "$RUN_GROUP" ]]; then
+      echo "Could not resolve the primary group of '${RUN_USER}'; set GATEWAY_RELAY_RUN_GROUP." >&2
+      return 1
+    fi
+  elif command_exists getent && ! getent group "$RUN_GROUP" >/dev/null 2>&1; then
+    echo "Relay run group '${RUN_GROUP}' (GATEWAY_RELAY_RUN_GROUP) does not exist; Relay installation stopped." >&2
+    return 1
+  fi
+}
+
+# Only a relay that runs as its own user needs the capability to bind a privileged port; root has it already.
+needs_bind_capability() { [[ "$RUN_USER" != "root" && "$SERVICE_PORT" -lt 1024 ]]; }
+
+new_host_identity() {
+  local value
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    value=$(cat /proc/sys/kernel/random/uuid) || return 1
+  else
+    value=$(openssl rand -hex 16) || return 1
+    value="${value:0:8}-${value:8:4}-4${value:13:3}-$(printf '%x' $(( (16#${value:16:1} & 3) | 8 )))${value:17:3}-${value:20:12}"
+  fi
+  printf '%s\n' "$value"
+}
+
+# A relay running as its own user cannot read the host identity that root daemons share (root-owned, mode 0600). It
+# gets a copy of that same identity in its own state directory, so Gateway still sees one host and the shared file
+# keeps its owner and mode. Without a shared identity yet, one is created there exactly as a root daemon would.
+seed_host_identity_copy() {
+  local shared="$1" copy="$2" identity="" temporary
+  local pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+  if [[ -f "$copy" && ! -L "$copy" ]]; then
+    identity=$(tr -d '[:space:]' <"$copy")
+    [[ ! "$identity" =~ $pattern ]] || return 0
+    identity=""
+  fi
+  if [[ -f "$shared" && ! -L "$shared" ]]; then
+    identity=$(tr -d '[:space:]' <"$shared")
+  elif [[ -e "$shared" || -L "$shared" ]]; then
+    echo "${shared} is not a regular file; fix it and run the installer again." >&2
+    return 1
+  fi
+  if [[ -z "$identity" && ! -e "$shared" ]]; then
+    identity=$(new_host_identity) || return 1
+    [[ -d "$(dirname "$shared")" ]] || mkdir -p -m 0700 "$(dirname "$shared")" || return 1
+    temporary=$(mktemp "$(dirname "$shared")/.host-identity-XXXXXX") || return 1
+    # Publish complete contents without replacing an identity another daemon wrote meanwhile.
+    if ! printf '%s\n' "$identity" >"$temporary" || ! ln "$temporary" "$shared" 2>/dev/null; then
+      identity=$(tr -d '[:space:]' <"$shared" 2>/dev/null || true)
+    fi
+    rm -f "$temporary"
+  fi
+  if [[ ! "$identity" =~ $pattern ]]; then
+    echo "The host identity at ${shared} is not valid; fix it and run the installer again." >&2
+    return 1
+  fi
+  temporary=$(mktemp "$(dirname "$copy")/.host-identity-XXXXXX") || return 1
+  if ! printf '%s\n' "$identity" >"$temporary" || ! chmod 0600 "$temporary" || ! mv -f "$temporary" "$copy"; then
+    rm -f "$temporary"
+    return 1
+  fi
+}
+
+# In non-root mode /usr/local/bin/<daemon> is a root-owned wrapper, not the binary: the binary belongs to the service
+# user, who replaces it on update, so root must never execute it. The wrapper switches a root caller to that user.
+DAEMON_WRAPPER_MARK="# gateway-daemon-wrapper: runs the service user's binary, never as root"
+write_daemon_wrapper() {
+  local command_path="$1" binary="$2" temporary
+  temporary=$(mktemp "$(dirname "$command_path")/.gateway-daemon-wrapper.XXXXXX") || return 1
+  if ! cat >"$temporary" <<WRAPPER
+#!/bin/sh
+${DAEMON_WRAPPER_MARK}
+if [ "\$(id -u)" = 0 ]; then
+    if command -v runuser >/dev/null 2>&1; then
+        exec runuser -u '${RUN_USER}' -- '${binary}' "\$@"
+    elif command -v setpriv >/dev/null 2>&1; then
+        exec setpriv --reuid='${RUN_USER}' --regid='${RUN_GROUP}' --init-groups -- '${binary}' "\$@"
+    fi
+    echo "Run this command as ${RUN_USER}: ${binary} belongs to that user and root never runs it." >&2
+    exit 1
+fi
+exec '${binary}' "\$@"
+WRAPPER
+  then
+    rm -f "$temporary"
+    return 1
+  fi
+  if ! chmod 0755 "$temporary" || ! chown 0:0 "$temporary" || ! mv -f "$temporary" "$command_path"; then
+    rm -f "$temporary"
+    return 1
+  fi
+}
+
+is_daemon_wrapper() {
+  [[ -f "$1" && ! -L "$1" ]] && grep -Fqx "$DAEMON_WRAPPER_MARK" "$1" 2>/dev/null
+}
+
+# A root relay keeps its binary in /usr/local/bin. A relay running as its own user must be able to replace its binary
+# when it updates itself, so the binary lives in the relay's own directory and /usr/local/bin holds a root-owned wrapper.
+install_supervisor_binary() {
+  local source="$1" link="$2" own_dir="$3"
+  if [[ "$RUN_USER" == "root" ]]; then
+    # Never write a root binary through the link or wrapper left by an install that ran as another user.
+    if [[ -L "$link" ]] || is_daemon_wrapper "$link"; then
+      rm -f "$link"
+    fi
+    install -m 0755 "$source" "$link"
+    return
+  fi
+  install -d -m 0755 "$own_dir"
+  install -m 0755 "$source" "${own_dir}/relay-supervisor"
+  write_daemon_wrapper "$link" "${own_dir}/relay-supervisor" \
+    || { echo "Could not write the relay-supervisor command at ${link}; Relay installation stopped." >&2; exit 1; }
+}
+
+# Hands every relay path to the run user: the supervisor reads its configuration, writes its state and identities and
+# replaces its own and the worker binary on update.
+grant_relay_paths_to_run_user() {
+  [[ "$RUN_USER" != "root" ]] || return 0
+  chown -hR "${RUN_USER}:${RUN_GROUP}" "$@"
+}
+
+supervisor_log_hint() {
+  if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+    echo "Check the supervisor log: /var/lib/gateway-relay-supervisor/launcher/manual.log" >&2
+  elif has_systemd; then
+    echo "Check the supervisor log: journalctl -u gateway-relay-supervisor" >&2
+  elif has_openrc; then
+    echo "Check the supervisor log: /var/log/gateway-relay-supervisor.err and /var/log/gateway-relay-supervisor.log" >&2
+  fi
+}
 has_openrc() { command_exists rc-service && command_exists rc-update; }
 
 launcher_pid_from_json() {
@@ -365,6 +510,7 @@ done
 [[ ${EUID} -eq 0 ]] || { echo "Run this installer as root" >&2; exit 1; }
 [[ -n "$GATEWAY" && -n "$TOKEN" && -n "$GATEWAY_CERT_SHA256" && -n "$ADVERTISE_ADDRESS" ]] || { usage >&2; exit 2; }
 [[ "$SERVICE_PORT" =~ ^[0-9]+$ && "$SERVICE_PORT" -ge 1 && "$SERVICE_PORT" -le 65535 ]] || { echo "Invalid service port" >&2; exit 2; }
+resolve_run_identity || exit 1
 ensure_dependencies
 
 case "$(uname -m)" in
@@ -423,7 +569,7 @@ fetch_verified "$SUPERVISOR" relay
 fetch_verified "$WORKER" relay-worker
 
 install -d -m 0700 /etc/gateway-relay-supervisor /var/lib/gateway-relay-supervisor /usr/local/lib/gateway-relay
-install -m 0755 "${TEMP_DIR}/${SUPERVISOR}" /usr/local/bin/relay-supervisor
+install_supervisor_binary "${TEMP_DIR}/${SUPERVISOR}" /usr/local/bin/relay-supervisor /usr/local/lib/gateway-relay/bin
 install -m 0755 "${TEMP_DIR}/${WORKER}" /usr/local/lib/gateway-relay/gateway-relay
 cat >/usr/local/lib/gateway-relay/run-supervisor <<'RUNNER'
 #!/bin/sh
@@ -433,6 +579,12 @@ RUNNER
 chmod 0755 /usr/local/lib/gateway-relay/run-supervisor
 if host_feature_disabled /etc/gateway-relay-supervisor/config.yaml console; then DISABLE_CONSOLE=1; fi
 if host_feature_disabled /etc/gateway-relay-supervisor/config.yaml files; then DISABLE_FILES=1; fi
+HOST_IDENTITY_PATH=/var/lib/gateway/host-identity
+if [[ "$RUN_USER" != "root" ]]; then
+  HOST_IDENTITY_PATH=/var/lib/gateway-relay-supervisor/host-identity
+  seed_host_identity_copy /var/lib/gateway/host-identity "$HOST_IDENTITY_PATH" \
+    || { echo "Could not prepare the relay host identity; Relay installation stopped." >&2; exit 1; }
+fi
 cat >/etc/gateway-relay-supervisor/config.yaml <<CONFIG
 gateway:
   address: ${GATEWAY}
@@ -443,7 +595,7 @@ tls:
   client_cert: /var/lib/gateway-relay-supervisor/supervisor-identity/node.pem
   client_key: /var/lib/gateway-relay-supervisor/supervisor-identity/node-key.pem
 state_dir: /var/lib/gateway-relay-supervisor
-host_identity_path: /var/lib/gateway/host-identity
+host_identity_path: ${HOST_IDENTITY_PATH}
 log_level: info
 log_format: json
 worker:
@@ -469,6 +621,13 @@ ENROLLMENT_RESULT=/var/lib/gateway-relay-supervisor/enrollment-result.json
 REENROLLMENT=0
 [[ ! -s /var/lib/gateway-relay-supervisor/supervisor-identity/node.pem ]] || REENROLLMENT=1
 rm -f "$ENROLLMENT_RESULT"
+grant_relay_paths_to_run_user /etc/gateway-relay-supervisor /var/lib/gateway-relay-supervisor /usr/local/lib/gateway-relay
+UNIT_CAPABILITIES=""
+OPENRC_CAPABILITIES=""
+if needs_bind_capability; then
+  UNIT_CAPABILITIES=$'\nAmbientCapabilities=CAP_NET_BIND_SERVICE'
+  OPENRC_CAPABILITIES=$'\ncapabilities="^cap_net_bind_service"'
+fi
 
 start_relay_supervisor() {
   retire_legacy_update_guard "gateway-relay-supervisor" "/usr/local/bin/relay-supervisor"
@@ -488,7 +647,7 @@ ExecStart=/usr/local/lib/gateway-relay/run-supervisor
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
-LimitNOFILE=1048576
+LimitNOFILE=1048576${UNIT_CAPABILITIES}
 
 [Install]
 WantedBy=multi-user.target
@@ -520,7 +679,7 @@ command="/usr/local/lib/gateway-relay/run-supervisor"
 command_user="${RUN_USER}:${RUN_GROUP}"
 pidfile="/run/\${RC_SVCNAME}.pid"
 supervisor="supervise-daemon"
-respawn_delay=3
+respawn_delay=3${OPENRC_CAPABILITIES}
 output_log="/var/log/gateway-relay-supervisor.log"
 error_log="/var/log/gateway-relay-supervisor.err"
 
@@ -581,10 +740,15 @@ await_enrollment() {
 }
 
 start_relay_supervisor
+if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]] && needs_bind_capability; then
+  echo "Manual mode cannot grant ${RUN_USER} the right to bind port ${SERVICE_PORT}; use a port from 1024 or a service manager." >&2
+fi
 enrollment_status=0
 await_enrollment || enrollment_status=$?
-if [[ "$enrollment_status" -eq 1 ]]; then
+if [[ "$enrollment_status" -ne 0 ]]; then
+  # A timeout is a failure too: a supervisor that cannot start never reports, and the relay is not usable.
   echo "Relay supervisor ${VERSION} is installed, but the relay was not enrolled." >&2
+  supervisor_log_hint
   exit 1
 fi
 echo "Relay supervisor ${VERSION} installed. Ensure TCP ${SERVICE_PORT} is reachable at ${ADVERTISE_ADDRESS}."
