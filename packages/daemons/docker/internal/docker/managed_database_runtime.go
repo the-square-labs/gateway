@@ -687,7 +687,9 @@ func (m *managedDatabaseManager) records() (records []managedDatabaseRecord, unr
 // plus loop devices left bound to deleted backup workspaces. It runs at start
 // and periodically; see loopHost.repair for what is never touched. A record
 // that cannot be read keeps everything named after its id (image, mount point,
-// loop device, container) and is reported; the rest is repaired as usual.
+// loop device, container) and is reported; so does an id that has a container
+// but no record. When the containers cannot be listed, no database storage is
+// released. The rest is repaired as usual.
 func (m *managedDatabaseManager) repairLoopImages(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -711,30 +713,40 @@ func (m *managedDatabaseManager) repairLoopImages(ctx context.Context) {
 			"id", bad.ID, "path", bad.Path, "error", bad.Err)
 	}
 	if records, unreadable, err = m.records(); err == nil {
-		ids := make(map[string]bool, len(records)+len(unreadable))
-		for _, record := range records {
-			ids[record.ID] = true
-		}
-		for _, bad := range unreadable {
-			ids[bad.ID] = true
-		}
-		imageOwned := func(name string) bool {
-			id, ok := strings.CutSuffix(name, ".img")
-			return ok && ids[id]
-		}
-		m.loopHost().repair(ctx, loopImageDomain{
-			label:      "managed database",
-			imageDir:   filepath.Join(m.root, "images"),
-			mountDir:   filepath.Join(m.root, "mounts"),
-			mountRoot:  filepath.Join(m.root, "mounts"),
-			imageInUse: func(name string, _ bool) bool { return imageOwned(name) },
-			imageKept:  imageOwned,
-			mountInUse: func(name string) bool { return ids[name] },
-			orphanImage: func(name string) bool {
+		// An id whose container outlived its record keeps its image: the image
+		// holds the data a retried create takes over.
+		labelled, listErr := m.labelledDatabaseIDs(ctx)
+		if listErr != nil {
+			m.logger.Warn("managed database storage repair skipped: its containers could not be listed", "error", listErr)
+		} else {
+			ids := make(map[string]bool, len(records)+len(unreadable)+len(labelled))
+			for id := range labelled {
+				ids[id] = true
+			}
+			for _, record := range records {
+				ids[record.ID] = true
+			}
+			for _, bad := range unreadable {
+				ids[bad.ID] = true
+			}
+			imageOwned := func(name string) bool {
 				id, ok := strings.CutSuffix(name, ".img")
-				return ok && managedDatabaseIDPattern.MatchString(id)
-			},
-		}, m.logger)
+				return ok && ids[id]
+			}
+			m.loopHost().repair(ctx, loopImageDomain{
+				label:      "managed database",
+				imageDir:   filepath.Join(m.root, "images"),
+				mountDir:   filepath.Join(m.root, "mounts"),
+				mountRoot:  filepath.Join(m.root, "mounts"),
+				imageInUse: func(name string, _ bool) bool { return imageOwned(name) },
+				imageKept:  imageOwned,
+				mountInUse: func(name string) bool { return ids[name] },
+				orphanImage: func(name string) bool {
+					id, ok := strings.CutSuffix(name, ".img")
+					return ok && managedDatabaseIDPattern.MatchString(id)
+				},
+			}, m.logger)
+		}
 	}
 	// Backup runs own their live workspace images and remove them themselves;
 	// only a loop device bound to a deleted workspace image is released here.
