@@ -357,6 +357,192 @@ detect_installed_nginx_mode() {
 has_systemd() { command_exists systemctl && [[ -d /run/systemd/system ]]; }
 has_openrc() { command_exists rc-service && command_exists rc-update; }
 
+# ── Non-root mode ────────────────────────────────────────────────────
+# A root daemon keeps its binary in /usr/local/bin. A daemon running as its own user must be able to replace its binary
+# when it updates itself, so the binary lives in a directory that user owns and /usr/local/bin only links to it.
+NGINX_DAEMON_BIN_LINK="/usr/local/bin/nginx-daemon"
+NGINX_DAEMON_OWN_DIR="/usr/local/lib/nginx-daemon"
+NGINX_DAEMON_OWN_BINARY="${NGINX_DAEMON_OWN_DIR}/bin/nginx-daemon"
+NGINX_DAEMON_OWN_HOST_IDENTITY="/var/lib/nginx-daemon/host-identity"
+SHARED_HOST_IDENTITY="/var/lib/gateway/host-identity"
+# Sockets the daemon serves to nginx and Secure Links; root creates them on demand, a run user needs them prepared.
+NGINX_DAEMON_RUNTIME_DIRS=(nginx-daemon gateway-secure-links gateway-registry-links gateway-ingress-health)
+
+# Reads an installed binary's version. A binary another user can replace is never run as root.
+daemon_binary_version() {
+    local binary="$1" owner
+    owner=$(stat -Lc '%U' "$binary" 2>/dev/null || echo root)
+    if [[ "$owner" == "root" ]]; then
+        "$binary" version 2>/dev/null | awk '{print $2}'
+    elif command_exists runuser; then
+        runuser -u "$owner" -- "$binary" version 2>/dev/null | awk '{print $2}'
+    else
+        return 1
+    fi
+}
+
+run_as_run_user() {
+    if [[ "$RUN_USER" == "root" ]]; then
+        "$@"
+    elif command_exists runuser; then
+        runuser -u "$RUN_USER" -g "$RUN_GROUP" -- "$@"
+    elif command_exists setpriv; then
+        setpriv "--reuid=${RUN_USER}" "--regid=${RUN_GROUP}" --init-groups -- "$@"
+    else
+        # Files written as root here are handed to the run user afterwards.
+        "$@"
+    fi
+}
+
+# The PID of the nginx master that serves this host's configuration, from its pid file.
+nginx_master_pid() {
+    local pid_path pid
+    pid_path=$(nginx -T 2>/dev/null | sed -nE 's/^[[:space:]]*pid[[:space:]]+([^;[:space:]]+)[[:space:]]*;.*/\1/p' | tail -n 1 || true)
+    [[ -n "$pid_path" ]] || pid_path=$(nginx -V 2>&1 | grep -o -- '--pid-path=[^ ]*' | cut -d= -f2 || true)
+    [[ -n "$pid_path" ]] || pid_path=/run/nginx.pid
+    [[ -s "$pid_path" ]] || return 1
+    pid=$(tr -dc '0-9' <"$pid_path")
+    [[ -n "$pid" && -d "/proc/${pid}" ]] || return 1
+    printf '%s\n' "$pid"
+}
+
+# The daemon writes /etc/nginx and reloads nginx itself, so a non-root daemon needs an nginx master that runs as the
+# same user. The installer does not convert the host's nginx service; it stops before changing anything instead.
+preflight_run_user_nginx() {
+    [[ "$RUN_USER" != "root" ]] || return 0
+    local run_uid master_pid master_uid problem=""
+    run_uid=$(id -u "$RUN_USER")
+    if ! command_exists nginx; then
+        problem="nginx is not installed"
+    elif ! master_pid=$(nginx_master_pid); then
+        problem="no running nginx master process was found"
+    else
+        master_uid=$(stat -c '%u' "/proc/${master_pid}")
+        if [[ "$master_uid" != "$run_uid" ]]; then
+            problem="the nginx master process (PID ${master_pid}) runs as $(id -nu "$master_uid" 2>/dev/null || echo "uid ${master_uid}")"
+        fi
+    fi
+    if [[ -z "$problem" && "$NGINX_MODE" == "managed" ]]; then
+        problem="managed nginx mode replaces nginx.conf with one for an nginx started as root"
+    fi
+    [[ -n "$problem" ]] || return 0
+    err "nginx-daemon can run as '${RUN_USER}' only next to an nginx whose master process runs as ${RUN_USER}; here ${problem}."
+    err "The daemon writes /etc/nginx and reloads nginx itself. Prepare nginx, then run this installer again with --nginx-mode integrate:"
+    err "  - run the nginx service as ${RUN_USER}:${RUN_GROUP} with CAP_NET_BIND_SERVICE and its pid file in a directory ${RUN_USER} owns"
+    err "    (systemd drop-in for nginx.service: User=, Group=, AmbientCapabilities=CAP_NET_BIND_SERVICE, RuntimeDirectory=nginx,"
+    err "    PIDFile=/run/nginx/nginx.pid, and 'pid /run/nginx/nginx.pid;' in nginx.conf);"
+    err "  - give ${RUN_USER} /etc/nginx, /var/log/nginx and the nginx temp directories, and make log rotation create files as ${RUN_USER};"
+    err "  - or install nginx-daemon as root (--user root)."
+    die "nginx is not prepared for a non-root nginx-daemon; nothing was changed."
+}
+
+# Hands the daemon everything it writes: its configuration, state and binary, nginx's configuration and logs, the ACME
+# challenge directory and its runtime socket directories.
+grant_daemon_paths_to_run_user() {
+    [[ "$RUN_USER" != "root" ]] || return 0
+    local path
+    for path in /etc/nginx-daemon /var/lib/nginx-daemon "$NGINX_DAEMON_OWN_DIR" /etc/nginx /var/log/nginx /var/www/acme-challenge; do
+        [[ ! -e "$path" ]] || chown -hR "${RUN_USER}:${RUN_GROUP}" "$path"
+    done
+    for path in "${NGINX_DAEMON_RUNTIME_DIRS[@]}"; do
+        install -d -m 0755 -o "$RUN_USER" -g "$RUN_GROUP" "/run/${path}"
+    done
+}
+
+new_host_identity() {
+    local value
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+        value=$(cat /proc/sys/kernel/random/uuid) || return 1
+    else
+        value=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n') || return 1
+        value="${value:0:8}-${value:8:4}-4${value:13:3}-$(printf '%x' $(( (16#${value:16:1} & 3) | 8 )))${value:17:3}-${value:20:12}"
+    fi
+    printf '%s\n' "$value"
+}
+
+# A daemon running as its own user cannot read the host identity that root daemons share (root-owned, mode 0600). It
+# gets a copy of that same identity in its own state directory, so Gateway still sees one host and the shared file
+# keeps its owner and mode. Without a shared identity yet, one is created there exactly as a root daemon would.
+seed_host_identity_copy() {
+    local shared="$1" copy="$2" identity="" temporary
+    local pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    if [[ -f "$copy" && ! -L "$copy" ]]; then
+        identity=$(tr -d '[:space:]' <"$copy")
+        [[ ! "$identity" =~ $pattern ]] || return 0
+        identity=""
+    fi
+    if [[ -f "$shared" && ! -L "$shared" ]]; then
+        identity=$(tr -d '[:space:]' <"$shared")
+    elif [[ -e "$shared" || -L "$shared" ]]; then
+        err "${shared} is not a regular file; fix it and run the installer again."
+        return 1
+    fi
+    if [[ -z "$identity" && ! -e "$shared" ]]; then
+        identity=$(new_host_identity) || return 1
+        [[ -d "$(dirname "$shared")" ]] || mkdir -p -m 0700 "$(dirname "$shared")" || return 1
+        temporary=$(mktemp "$(dirname "$shared")/.host-identity-XXXXXX") || return 1
+        # Publish complete contents without replacing an identity another daemon wrote meanwhile.
+        if ! printf '%s\n' "$identity" >"$temporary" || ! ln "$temporary" "$shared" 2>/dev/null; then
+            identity=$(tr -d '[:space:]' <"$shared" 2>/dev/null || true)
+        fi
+        rm -f "$temporary"
+    fi
+    if [[ ! "$identity" =~ $pattern ]]; then
+        err "The host identity at ${shared} is not valid; fix it and run the installer again."
+        return 1
+    fi
+    temporary=$(mktemp "$(dirname "$copy")/.host-identity-XXXXXX") || return 1
+    if ! printf '%s\n' "$identity" >"$temporary" || ! chmod 0600 "$temporary" || ! mv -f "$temporary" "$copy"; then
+        rm -f "$temporary"
+        return 1
+    fi
+}
+
+# Points the daemon configuration at the host identity copy; the rest of the file is kept as written.
+set_config_host_identity_path() {
+    local config="$1" path="$2" temporary
+    [[ -f "$config" && ! -L "$config" ]] || return 1
+    grep -qx "host_identity_path: \"${path}\"" "$config" && return 0
+    temporary=$(mktemp) || return 1
+    grep -v '^host_identity_path:' "$config" >"$temporary" || true
+    printf 'host_identity_path: "%s"\n' "$path" >>"$temporary"
+    # Rewrite in place so the file keeps its owner and mode.
+    cat "$temporary" >"$config" || { rm -f "$temporary"; return 1; }
+    rm -f "$temporary"
+}
+
+# A daemon running as its own user enrolls with its copy of the host identity and owns everything it writes.
+prepare_run_user_identity() {
+    [[ "$RUN_USER" != "root" ]] || return 0
+    seed_host_identity_copy "$SHARED_HOST_IDENTITY" "$NGINX_DAEMON_OWN_HOST_IDENTITY" \
+        || die "Could not prepare the host identity for ${RUN_USER}."
+    set_config_host_identity_path /etc/nginx-daemon/config.yaml "$NGINX_DAEMON_OWN_HOST_IDENTITY" \
+        || die "Could not point /etc/nginx-daemon/config.yaml at ${NGINX_DAEMON_OWN_HOST_IDENTITY}."
+    grant_daemon_paths_to_run_user
+}
+
+# The daemon enrolls when it starts; it has its certificate and state once Gateway accepted the token.
+await_enrollment() {
+    local waited=0 limit="${GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS:-90}"
+    while (( waited < limit )); do
+        if [[ -f /etc/nginx-daemon/certs/node.pem && -f /var/lib/nginx-daemon/state.json ]]; then
+            ok "nginx-daemon enrolled with Gateway"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    err "nginx-daemon has not enrolled with Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
+    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+        err "Check the daemon log: /var/lib/nginx-daemon/launcher/manual.log"
+    elif has_systemd; then
+        err "Check the daemon log: journalctl -u nginx-daemon"
+    elif has_openrc; then
+        err "Check the daemon log: /var/log/nginx-daemon.err and /var/log/nginx-daemon.log"
+    fi
+    return 1
+}
+
 launcher_pid_from_json() {
     local metadata="$1"
     local pid
@@ -628,7 +814,7 @@ detect_existing_install() {
 
     if [[ -x "$target" ]]; then
         EXISTING_INSTALL=1
-        EXISTING_VERSION=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        EXISTING_VERSION=$(daemon_binary_version "$target" || echo "unknown")
     fi
 
     if [[ -f "$config_path" ]]; then
@@ -907,6 +1093,7 @@ else
     fi
     RUN_GROUP=$(id -gn "$RUN_USER" 2>/dev/null)
 fi
+preflight_run_user_nginx
 
 resolve_download_url "$DAEMON_VERSION"
 detect_existing_install
@@ -1365,6 +1552,8 @@ nginx_worker_requires_restart() {
 
 ensure_nginx_openrc_pid_directory() {
     has_openrc || return 0
+    # An nginx running as the daemon's user keeps the pid directory its operator gave it.
+    [[ "$RUN_USER" == "root" ]] || return 0
     local service=/etc/init.d/nginx
     local original='checkpath --directory --owner nginx:nginx ${pidfile%/*}'
     local secured='checkpath --directory --mode 0755 --owner root:root ${pidfile%/*}'
@@ -1744,12 +1933,25 @@ verify_checksum() {
 }
 
 install_daemon() {
-    local target="/usr/local/bin/nginx-daemon"
+    if [[ "$RUN_USER" == "root" ]]; then
+        # Never write a root binary through a link left by an install that ran as another user.
+        [[ ! -L "$NGINX_DAEMON_BIN_LINK" ]] || rm -f "$NGINX_DAEMON_BIN_LINK"
+        install_daemon_binary "$NGINX_DAEMON_BIN_LINK"
+        return
+    fi
+    install -d -m 0755 "$NGINX_DAEMON_OWN_DIR" "$(dirname "$NGINX_DAEMON_OWN_BINARY")"
+    install_daemon_binary "$NGINX_DAEMON_OWN_BINARY"
+    ln -sfn "$NGINX_DAEMON_OWN_BINARY" "$NGINX_DAEMON_BIN_LINK"
+    grant_daemon_paths_to_run_user
+}
+
+install_daemon_binary() {
+    local target="$1"
     local binary_name="nginx-daemon-linux-${ARCH}"
 
     if [[ -f "$target" ]]; then
         local existing_ver
-        existing_ver=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        existing_ver=$(daemon_binary_version "$target" || echo "unknown")
         if [[ "$RESOLVED_DAEMON_VERSION" == "$existing_ver" ]]; then
             ok "nginx-daemon already installed (${existing_ver})"
             return 0
@@ -1768,7 +1970,7 @@ install_daemon() {
         mv "${target}.tmp" "$target"
         chmod +x "$target"
         local ver
-        ver=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        ver=$(daemon_binary_version "$target" || echo "unknown")
         ok "nginx-daemon installed (${ver})"
     else
         rm -f "${target}.tmp"
@@ -1835,11 +2037,12 @@ enroll_daemon() {
     # Check if already enrolled (certs exist)
     if [[ -f /etc/nginx-daemon/certs/node.pem && -f /var/lib/nginx-daemon/state.json ]]; then
         ok "Node already enrolled — skipping enrollment"
+        prepare_run_user_identity
         return 0
     fi
 
     log "Writing config and enrolling with Gateway..."
-    if ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" >> "$LOG_FILE" 2>&1; then
+    if ! run_as_run_user "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" >> "$LOG_FILE" 2>&1; then
         die "Failed to enroll nginx-daemon. Check ${LOG_FILE} for details."
     fi
     set_daemon_config_value config_dir "$NGINX_SITES_DIR"
@@ -1847,6 +2050,7 @@ enroll_daemon() {
     if [[ "$STUB_STATUS_URL" != "http://127.0.0.1/nginx_status" ]]; then
         set_daemon_config_value stub_status_url "$STUB_STATUS_URL"
     fi
+    prepare_run_user_identity
     ok "Config written to /etc/nginx-daemon/config.yaml"
 }
 
@@ -1854,6 +2058,14 @@ enroll_daemon() {
 start_daemon() {
     retire_legacy_update_guard "nginx-daemon" "/usr/local/bin/nginx-daemon"
     log "Enabling and starting nginx-daemon..."
+    # A daemon running as its own user cannot create its socket directories in /run; the service manager does.
+    local unit_runtime="" openrc_runtime="" runtime_dirs
+    if [[ "$RUN_USER" != "root" ]]; then
+        runtime_dirs=$(printf '%s ' "${NGINX_DAEMON_RUNTIME_DIRS[@]}")
+        runtime_dirs="${runtime_dirs% }"
+        unit_runtime=$'\nRuntimeDirectory='"${runtime_dirs}"$'\nRuntimeDirectoryMode=0755\nRuntimeDirectoryPreserve=yes'
+        openrc_runtime=$'\n\nstart_pre() {\n    for dir in '"${runtime_dirs}"$'; do\n        checkpath --directory --mode 0755 --owner '"${RUN_USER}:${RUN_GROUP}"$' "/run/${dir}"\n    done\n}'
+    fi
 
     if has_systemd; then
         # Write systemd unit with user/group support
@@ -1873,7 +2085,7 @@ RestartSec=5
 LimitNOFILE=65536
 # Secure Link sockets outlive a daemon restart in the file descriptor store.
 FileDescriptorStoreMax=4096
-NotifyAccess=main
+NotifyAccess=main${unit_runtime}
 
 [Install]
 WantedBy=multi-user.target
@@ -1924,7 +2136,7 @@ error_log="/var/log/nginx-daemon.err"
 depend() {
     need net
     use nginx
-}
+}${openrc_runtime}
 UNIT
         then
             warn "Could not write the nginx-daemon OpenRC service; using manual mode."
@@ -1970,6 +2182,10 @@ configure_nginx
 install_daemon
 enroll_daemon
 start_daemon
+# A daemon running as its own user can fail on permissions only once it runs; never report such an install as done.
+if [[ "$RUN_USER" != "root" ]] && ! await_enrollment; then
+    die "nginx-daemon is installed, but it did not enroll with Gateway."
+fi
 
 echo ""
 echo ""

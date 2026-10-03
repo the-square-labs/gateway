@@ -13,12 +13,15 @@ const (
 )
 
 type Config struct {
-	Gateway   GatewayConfig `yaml:"gateway"`
-	TLS       TLSConfig     `yaml:"tls"`
-	Nginx     NginxConfig   `yaml:"nginx"`
-	StateDir  string        `yaml:"state_dir"`
-	LogLevel  string        `yaml:"log_level"`
-	LogFormat string        `yaml:"log_format"`
+	Gateway  GatewayConfig `yaml:"gateway"`
+	TLS      TLSConfig     `yaml:"tls"`
+	Nginx    NginxConfig   `yaml:"nginx"`
+	StateDir string        `yaml:"state_dir"`
+	// HostIdentityPath overrides the shared host identity; a daemon running as
+	// its own user keeps a copy in its state directory. Empty means the default.
+	HostIdentityPath string `yaml:"host_identity_path"`
+	LogLevel         string `yaml:"log_level"`
+	LogFormat        string `yaml:"log_format"`
 }
 
 type GatewayConfig struct {
