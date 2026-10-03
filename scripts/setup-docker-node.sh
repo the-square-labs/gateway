@@ -36,6 +36,8 @@ GATEWAY_ADDR="${GATEWAY_NODE_ADDRESS:-}"
 ENROLL_TOKEN="${GATEWAY_NODE_TOKEN:-}"
 GATEWAY_CERT_SHA256="${GATEWAY_NODE_CERT_SHA256:-}"
 DAEMON_VERSION="${GATEWAY_NODE_DAEMON_VERSION:-latest}"
+DISABLE_CONSOLE="${GATEWAY_NODE_DISABLE_CONSOLE:-0}"
+DISABLE_FILES="${GATEWAY_NODE_DISABLE_FILES:-0}"
 RELEASES_API_URL="${GATEWAY_RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"
 ARTIFACT_BASE_URL="${GATEWAY_ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"
 RUN_USER=""
@@ -1207,6 +1209,8 @@ Options:
   --builder-egress <profile>
                            Builder egress: internet or offline (default: internet)
   --user <user>            Run daemon as this user (default: root)
+  --disable-console        Turn the host console off (console.enabled: false in the daemon config)
+  --disable-files          Turn host file access off (files.enabled: false in the daemon config)
   --no-logo                Suppress the logo banner
   --dry-run                Validate inputs and show the plan without changing the host
   -y, --yes                Non-interactive mode (no prompts, all values required via flags)
@@ -1222,6 +1226,8 @@ Environment variables:
   GATEWAY_LEASE_WATCHDOG_VERSION  Lease watchdog release (default: latest)
   GATEWAY_DOCKER_MODE           Same as --mode
   GATEWAY_BUILDER_EGRESS_PROFILE Same as --builder-egress (internet or offline; default: internet)
+  GATEWAY_NODE_DISABLE_CONSOLE  Set to 1 to disable the host console
+  GATEWAY_NODE_DISABLE_FILES    Set to 1 to disable host file access
   GATEWAY_RELEASES_API_URL      Override the Gateway release feed
   GATEWAY_ARTIFACT_BASE_URL     Override the Gateway artifact base URL
 
@@ -1249,6 +1255,8 @@ while [[ $# -gt 0 ]]; do
         --mode)           DOCKER_MODE="$2"; shift 2 ;;
         --builder-egress) BUILDER_EGRESS_PROFILE="$2"; shift 2 ;;
         --user)           RUN_USER="$2"; shift 2 ;;
+        --disable-console) DISABLE_CONSOLE=1; shift ;;
+        --disable-files)  DISABLE_FILES=1; shift ;;
         --no-logo)        NO_LOGO=1; shift ;;
         --dry-run)        DRY_RUN=1; shift ;;
         -y|--yes)         NON_INTERACTIVE=1; NO_LOGO=1; shift ;;
@@ -1477,6 +1485,7 @@ dry_run_preview() {
     elif [[ "$DOCKER_MODE" == "builder" ]]; then
         ok "Builder docker profile written (no Docker socket; dry run)"
     fi
+    preview_host_access_config /etc/docker-daemon/config.yaml
     log "Enabling and starting docker-daemon..."
     ok "docker-daemon is running (dry run)"
     complete_success "Dry run completed successfully — no host changes were made."
@@ -1987,6 +1996,71 @@ UNIT
     fi
 }
 
+# ── Host access switches ─────────────────────────────────────────────
+# --disable-console / --disable-files write console.enabled: false and
+# files.enabled: false to the daemon config on this node. The installer only
+# turns them off and keeps them off when enrollment rewrites the config;
+# turning one back on is an edit of the config file on the node.
+host_feature_disabled() {
+    local config_file="$1"
+    local section="$2"
+    [[ -f "$config_file" ]] || return 1
+    awk -v section="$section" '
+        $0 ~ ("^" section ":[[:space:]]*(#.*)?$") { in_section = 1; next }
+        in_section && /^[^[:space:]#]/ { in_section = 0 }
+        in_section && /^[[:space:]]+enabled:[[:space:]]*(false|False|FALSE)[[:space:]]*(#.*)?$/ { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$config_file"
+}
+
+disable_host_feature() {
+    local config_file="$1"
+    local section="$2"
+    local tmp_file
+    tmp_file=$(mktemp "${config_file}.XXXXXX") || die "Could not update ${section}.enabled in ${config_file}"
+    if ! awk -v section="$section" '
+        function emit() { if (!done) { print indent "enabled: false"; done = 1 } }
+        BEGIN { indent = "  " }
+        !in_section && $0 ~ ("^" section ":") {
+            if ($0 !~ ("^" section ":[[:space:]]*(#.*)?$")) { failed = 1; exit 3 }
+            print; in_section = 1; seen = 1; next
+        }
+        in_section && /^[^[:space:]#]/ { emit(); in_section = 0 }
+        in_section && /^[[:space:]]+[^[:space:]#]/ {
+            if (!child) { match($0, /^[[:space:]]+/); indent = substr($0, 1, RLENGTH); child = 1 }
+            if ($0 ~ ("^" indent "enabled:")) { emit(); next }
+        }
+        { print }
+        END {
+            if (failed) exit 3
+            if (in_section) emit()
+            if (!seen) { print ""; print section ":"; print "  enabled: false" }
+        }
+    ' "$config_file" > "$tmp_file"; then
+        rm -f "$tmp_file"
+        die "Could not set ${section}.enabled: false in ${config_file}; edit the file by hand."
+    fi
+    # Write in place so the config keeps its owner and mode.
+    cat "$tmp_file" > "$config_file" || die "Could not write ${config_file}"
+    rm -f "$tmp_file"
+    ok "${section}.enabled: false written to ${config_file}"
+}
+
+remember_host_access_config() {
+    if host_feature_disabled "$1" console; then DISABLE_CONSOLE=1; fi
+    if host_feature_disabled "$1" files; then DISABLE_FILES=1; fi
+}
+
+apply_host_access_config() {
+    if [[ "$DISABLE_CONSOLE" == "1" ]]; then disable_host_feature "$1" console; fi
+    if [[ "$DISABLE_FILES" == "1" ]]; then disable_host_feature "$1" files; fi
+}
+
+preview_host_access_config() {
+    if [[ "$DISABLE_CONSOLE" == "1" ]]; then ok "console.enabled: false written to $1 (dry run)"; fi
+    if [[ "$DISABLE_FILES" == "1" ]]; then ok "files.enabled: false written to $1 (dry run)"; fi
+}
+
 # ── Step 3: Install and enroll ───────────────────────────────────────
 enroll_daemon() {
     local target="/usr/local/bin/docker-daemon"
@@ -2148,9 +2222,11 @@ install_lease_watchdog
 install_builder_runtime
 preflight_builder_runtime
 setup_secure_runtime
+remember_host_access_config /etc/docker-daemon/config.yaml
 enroll_daemon
 write_database_profile_config
 write_builder_profile_config
+apply_host_access_config /etc/docker-daemon/config.yaml
 start_lease_watchdog
 start_daemon
 

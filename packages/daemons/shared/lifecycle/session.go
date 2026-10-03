@@ -140,6 +140,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 
 	// Send registration message
 	regMsg := d.plugin.BuildRegisterMessage(d.state.NodeID)
+	regMsg.Capabilities = append(regMsg.Capabilities, d.cfg.hostAccessCapabilities()...)
 	if err := writer.Send(&pb.DaemonMessage{
 		Payload: &pb.DaemonMessage_Register{Register: regMsg},
 	}); err != nil {
@@ -328,12 +329,18 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 		case *pb.GatewayCommand_NodeExec:
 			// Handle node-level console exec (create/resize)
 			sendAsyncCommandResult(cmd, func(c *pb.GatewayCommand) *pb.CommandResult {
+				if refused := refuseDisabledNodeExec(d.cfg, c); refused != nil {
+					return refused
+				}
 				return handleNodeExec(sessionCtx, nodeExecMgr, c, d.cfg.Console.User)
 			})
 			continue
 		case *pb.GatewayCommand_NodeFile:
 			// Handle node-level filesystem operations in shared lifecycle so all daemon types support them.
 			sendAsyncCommandResult(cmd, func(c *pb.GatewayCommand) *pb.CommandResult {
+				if refused := refuseDisabledNodeFile(d.cfg, c); refused != nil {
+					return refused
+				}
 				return handleNodeFile(sessionCtx, c)
 			})
 			continue

@@ -16,6 +16,7 @@ import {
   type WebSocketCredential,
 } from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import { NODE_CONSOLE_DISABLED_CAPABILITY, nodeHostFeatureDisabledError } from '@/services/node-host-access.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
 
@@ -296,6 +297,13 @@ async function authenticateAndCreateExec(
   if (!node) {
     send(ws, { type: 'error', message: `Node ${nodeId} is not connected` });
     closeExec(ws, state, 1011, 'Node not connected');
+    return;
+  }
+  if (registry.hasCapability(nodeId, NODE_CONSOLE_DISABLED_CAPABILITY)) {
+    // A final refusal like the unisolated-session one below: auth_error stops terminal clients from reconnecting.
+    const disabled = nodeHostFeatureDisabledError('console');
+    send(ws, { type: 'auth_error', code: disabled.code, message: disabled.message });
+    closeExec(ws, state, 1008, 'Console disabled on the node');
     return;
   }
 

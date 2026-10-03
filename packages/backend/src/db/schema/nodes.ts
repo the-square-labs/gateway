@@ -30,6 +30,10 @@ export interface NodeCapabilities {
   dockerVersion?: string;
   configDir?: string;
   daemonType?: string;
+  /** The daemon config on the node turned the host console off (`console.enabled: false`). */
+  nodeConsoleDisabled?: boolean;
+  /** The daemon config on the node turned host file access off (`files.enabled: false`). */
+  nodeFilesDisabled?: boolean;
   dockerRuntimeStatus?: {
     state: 'healthy' | 'installable' | 'unsupported' | 'unknown' | 'installing' | 'failed';
     installedVersion?: string;

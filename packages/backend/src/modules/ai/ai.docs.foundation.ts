@@ -511,6 +511,7 @@ All node types support an interactive console — a PTY shell session on the hos
 - Supports popout window, reconnection with output replay, and terminal resize.
 - Shell auto-detected from \`/etc/shells\` (prefers bash > zsh > ash > sh).
 - Can be configured to run as a specific OS user via \`console.user\` in daemon config.
+- The node operator can turn the host console and host file access off in the daemon config file on the node (\`console.enabled: false\`, \`files.enabled: false\`). The node then shows \`capabilities.nodeConsoleDisabled\` / \`capabilities.nodeFilesDisabled\`, and console commands and node file operations fail with NODE_CONSOLE_DISABLED / NODE_FILES_DISABLED. Gateway cannot re-enable them; do not retry. Docker container consoles and files are not affected.
 - The assistant has a separate one-shot \`execute_node_console_command\` tool for command execution when regular Gateway read/manage tools cannot answer the request. Prefer argv commands such as \`["sh","-lc","systemctl status nginx"]\`.
 - Treat every console command as destructive: risky commands require explicit approval and obviously host-breaking commands are blocked before reaching the daemon.
 - Use console tools for host-level inspection or repair only after identifying the exact node with get_current_context or find_resource. Do not guess node IDs from chat text.

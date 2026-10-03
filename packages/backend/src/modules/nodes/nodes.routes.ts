@@ -43,6 +43,7 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
+import { nodeHostAccessFlags } from '@/services/node-host-access.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
 import { createNodeForActor, regenerateNodeEnrollmentTokenForActor, updateNodeForActor } from './node-actions.js';
@@ -203,6 +204,7 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
       ...(advertisedCapabilities.includes('managed_databases_v1') ? { managedDatabasesV1: true } : {}),
       ...(advertisedCapabilities.includes('managed_storage_v1') ? { managedStorageV1: true } : {}),
       ...(advertisedCapabilities.includes('database_backups_v1') ? { databaseBackupsV1: true } : {}),
+      ...nodeHostAccessFlags(advertisedCapabilities),
     },
     lastSeenAt: node.lastSeenAt,
     lastHealthReport: health

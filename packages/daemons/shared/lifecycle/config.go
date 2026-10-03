@@ -25,7 +25,17 @@ type TLSConfig struct {
 
 // ConsoleConfig holds host-level interactive console settings.
 type ConsoleConfig struct {
-	User string `yaml:"user"` // OS user for console sessions; empty = daemon's own user
+	// Enabled turns the host console (interactive shell and one-shot
+	// commands) on or off. Unset means enabled.
+	Enabled *bool  `yaml:"enabled"`
+	User    string `yaml:"user"` // OS user for console sessions; empty = daemon's own user
+}
+
+// FilesConfig holds host file access settings.
+type FilesConfig struct {
+	// Enabled turns host file browsing, reads and writes on or off. Unset
+	// means enabled.
+	Enabled *bool `yaml:"enabled"`
 }
 
 // BaseConfig holds the configuration common to all daemons.
@@ -33,6 +43,7 @@ type BaseConfig struct {
 	Gateway  GatewayConfig `yaml:"gateway"`
 	TLS      TLSConfig     `yaml:"tls"`
 	Console  ConsoleConfig `yaml:"console"`
+	Files    FilesConfig   `yaml:"files"`
 	StateDir string        `yaml:"state_dir"`
 	// HostIdentityPath points at the one opaque identity shared by every
 	// installer-managed Gateway daemon on the physical host.

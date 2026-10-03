@@ -7,6 +7,7 @@ import type { CommandResult, GatewayCommand } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DaemonUpdateService } from './daemon-update.service.js';
+import { assertNodeHostFeatureEnabled } from './node-host-access.js';
 import type { DispatchedCommand, NodeRegistryService } from './node-registry.service.js';
 import type { RelayGrantBundle } from './relay-policy.service.js';
 
@@ -1337,6 +1338,7 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    assertNodeHostFeatureEnabled(this.registry, nodeId, 'console');
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(
       nodeId,
@@ -1358,6 +1360,8 @@ export class NodeDispatchService {
     } = {},
     timeoutMs?: number
   ): Promise<CommandResult> {
+    // ensure-host-identity is Gateway's own fixed operation, not host file access.
+    if (action !== 'ensure-host-identity') assertNodeHostFeatureEnabled(this.registry, nodeId, 'files');
     if (!['list', 'read'].includes(action)) {
       await this.assertNodeMutable(nodeId);
     }
