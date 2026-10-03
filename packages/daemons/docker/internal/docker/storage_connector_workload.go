@@ -42,7 +42,7 @@ func (p *DockerPlugin) createManagedStorageConnector(ctx context.Context, raw st
 	containerConfig := &container.Config{Image: config.Image, Env: config.Env, User: "65532:65532", Labels: config.Labels}
 	pids := secureLinkConnectorPidsLimit
 	hostConfig := &container.HostConfig{
-		Binds: config.Binds, ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
+		Binds: config.Binds, GroupAdd: connectorGroupAdd(), ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		Resources:     container.Resources{Memory: secureLinkConnectorMemory, NanoCPUs: secureLinkConnectorNanoCPUs, PidsLimit: &pids},
 	}

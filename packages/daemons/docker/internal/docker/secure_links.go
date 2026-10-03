@@ -206,7 +206,13 @@ func newDockerSecureLinkManager(plugin *DockerPlugin) (*dockerSecureLinkManager,
 	if err := os.MkdirAll(directory, 0o750); err != nil {
 		return nil, err
 	}
-	if err := os.Chown(directory, 65532, 65532); err != nil {
+	if runsWithoutRoot() {
+		// The connector creates its sockets here through the daemon's group (connectorGroupAdd); setgid gives them
+		// that group, so the daemon can connect to them.
+		if err := os.Chmod(directory, 0o770|os.ModeSetgid); err != nil {
+			return nil, fmt.Errorf("secure-link control directory permissions: %w", err)
+		}
+	} else if err := os.Chown(directory, 65532, 65532); err != nil {
 		return nil, fmt.Errorf("secure-link control directory ownership: %w", err)
 	}
 	manager := &dockerSecureLinkManager{
@@ -750,6 +756,7 @@ func (m *dockerSecureLinkManager) createConnector(ctx context.Context, image str
 		},
 		HostConfig: &container.HostConfig{
 			Binds:          []string{controlDirectory + ":/run/gateway"},
+			GroupAdd:       connectorGroupAdd(),
 			ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
 			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
 			Resources:     container.Resources{Memory: secureLinkConnectorMemory, NanoCPUs: secureLinkConnectorNanoCPUs, PidsLimit: &pids},
@@ -812,7 +819,8 @@ func validSecureLinkManagementNetwork(inspect network.Inspect) bool {
 }
 
 func validSecureLinkConnector(inspect container.InspectResponse, image, controlDirectory string) bool {
-	return inspect.Config != nil && inspect.Config.Image == image && managedSecureLinkConnector(inspect, controlDirectory)
+	return inspect.Config != nil && inspect.Config.Image == image && managedSecureLinkConnector(inspect, controlDirectory) &&
+		inspect.HostConfig != nil && sameConnectorGroups(inspect.HostConfig.GroupAdd)
 }
 
 func ownedSecureLinkConnector(inspect container.InspectResponse) bool {
@@ -842,7 +850,7 @@ func managedSecureLinkConnector(inspect container.InspectResponse, controlDirect
 		config.Labels["wiolett.gateway.managed"] != "secure-link-connector" ||
 		!validSecureLinkConnectorEnv(config.Env, secureLinkConnectorSocketEnv(slot)) ||
 		len(config.ExposedPorts) != 0 || host.Privileged || host.PublishAllPorts || !host.ReadonlyRootfs ||
-		len(host.CapAdd) != 0 || !containsFold(host.CapDrop, "ALL") ||
+		len(host.CapAdd) != 0 || !containsFold(host.CapDrop, "ALL") || !allowedConnectorGroups(host.GroupAdd) ||
 		(!containsFold(host.SecurityOpt, "no-new-privileges") && !containsFold(host.SecurityOpt, "no-new-privileges:true")) ||
 		string(host.NetworkMode) == "host" || len(host.PortBindings) != 0 ||
 		len(host.Binds) != 1 || host.Binds[0] != controlDirectory+":/run/gateway" ||
@@ -1206,9 +1214,6 @@ func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
 }
 
 func (p *DockerPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksCommand) (string, error) {
-	if p.cfg.Docker.Mode != "databases" && runsWithoutRoot() {
-		return "", fmt.Errorf("proxy secure links need docker-daemon to run as root; this node runs it as %s", runUserName())
-	}
 	if p.cfg.Docker.Mode == "databases" || p.secureLinks == nil {
 		return "", errors.New("proxy secure links require a general Docker daemon")
 	}

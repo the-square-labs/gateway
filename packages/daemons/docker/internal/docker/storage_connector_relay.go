@@ -35,17 +35,16 @@ func storageConnectorRelaySocketPath(stateDir string) string {
 // owned storage connector. The request identifies a relay grant by binding ID;
 // it cannot select a host, port, Docker bind, or arbitrary route target.
 func (p *DockerPlugin) startStorageConnectorRelay() error {
-	if runsWithoutRoot() {
-		// The connectors run as uid 65532 and only root can hand them the socket: managed storage links stay
-		// unavailable on this node and are not advertised.
-		p.logger.Info("managed storage links unavailable: they need docker-daemon to run as root", "user", runUserName())
-		return nil
-	}
 	directory := storageConnectorRelayDirectory(p.cfg.StateDir)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create storage connector relay directory: %w", err)
 	}
-	if err := os.Chown(directory, 65532, 65532); err != nil {
+	if runsWithoutRoot() {
+		// The connectors reach the socket through the daemon's group (connectorGroupAdd).
+		if err := os.Chmod(directory, 0o750); err != nil {
+			return fmt.Errorf("set storage connector relay directory permissions: %w", err)
+		}
+	} else if err := os.Chown(directory, 65532, 65532); err != nil {
 		return fmt.Errorf("set storage connector relay directory ownership: %w", err)
 	}
 	path := filepath.Join(directory, storageConnectorSocketName)
@@ -71,13 +70,20 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 	if err != nil {
 		return fmt.Errorf("listen storage connector relay socket: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = listener.Close()
-		return fmt.Errorf("set storage connector relay socket permissions: %w", err)
-	}
-	if err := os.Chown(path, 65532, 65532); err != nil {
-		_ = listener.Close()
-		return fmt.Errorf("set storage connector relay socket ownership: %w", err)
+	if runsWithoutRoot() {
+		if err := os.Chmod(path, 0o660); err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("set storage connector relay socket permissions: %w", err)
+		}
+	} else {
+		if err := os.Chmod(path, 0o600); err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("set storage connector relay socket permissions: %w", err)
+		}
+		if err := os.Chown(path, 65532, 65532); err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("set storage connector relay socket ownership: %w", err)
+		}
 	}
 	p.storageConnectorListener = listener
 	p.storageConnectorSocket = path

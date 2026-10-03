@@ -942,13 +942,6 @@ export class NodeDispatchService {
       .limit(1);
     if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
     const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
-    if (Array.isArray(reported) && reported.includes('docker_daemon_non_root_v1')) {
-      throw new AppError(
-        409,
-        'PROXY_SECURE_LINK_NON_ROOT_DAEMON',
-        'Docker proxy links need the docker-daemon on this node to run as root; it runs as a non-root user'
-      );
-    }
     if (!Array.isArray(reported) || !reported.includes('proxy_secure_links_v1')) {
       throw new AppError(
         409,

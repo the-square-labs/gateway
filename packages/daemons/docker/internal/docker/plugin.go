@@ -504,7 +504,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 			values = append(values, "docker_volume_storage_images_v1")
 		}
 		if runsWithoutRoot() {
-			values = append(withoutRootOnlyCapabilities(values), nonRootCapability)
+			values = append(values, nonRootCapability)
 		}
 		if p.getRuntimeStatus().State == runtimemanager.StateHealthy {
 			values = append(values, "docker_runsc_healthy_v1")

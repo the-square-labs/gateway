@@ -8,15 +8,8 @@ import (
 )
 
 // initProxySecureLinks starts the proxy Secure Link manager and restores its
-// committed bindings. Its connector containers reach the daemon through a
-// socket owned by their uid, which only root can hand over: a daemon running
-// without root leaves proxy Secure Links unavailable and does not advertise
-// them, and Gateway names that reason.
+// committed bindings.
 func (p *DockerPlugin) initProxySecureLinks() error {
-	if runsWithoutRoot() {
-		p.logger.Info("proxy secure links unavailable: they need docker-daemon to run as root", "user", runUserName())
-		return nil
-	}
 	secureLinks, err := newDockerSecureLinkManager(p)
 	if err != nil {
 		return fmt.Errorf("initialize proxy secure links: %w", err)

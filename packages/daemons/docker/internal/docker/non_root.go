@@ -14,13 +14,15 @@ var linkListenerBootSkipped sync.Once
 // nonRootCapability tells Gateway that this docker-daemon runs as a non-root
 // user, so the features that need root are shown as unavailable with that
 // reason instead of being offered and failing: disk-image volumes, moving
-// volume data between nodes, proxy Secure Links, managed storage links,
-// installing Secure Runtime from Gateway, and the boot step that opens
-// database link listeners before Docker.
+// volume data between nodes, installing Secure Runtime from Gateway, and the
+// boot step that opens database link listeners before Docker.
 const nonRootCapability = "docker_daemon_non_root_v1"
 
-// daemonEUID is the effective uid the root-only checks use.
-var daemonEUID = os.Geteuid
+// daemonEUID and daemonEGID are the ids the non-root checks use.
+var (
+	daemonEUID = os.Geteuid
+	daemonEGID = os.Getegid
+)
 
 func runsWithoutRoot() bool { return daemonEUID() != 0 }
 
@@ -42,22 +44,36 @@ func requireVolumeDataAccess(operation string) error {
 	return fmt.Errorf("%s needs docker-daemon to run as root: it reads volume data under the Docker data root, and this node runs docker-daemon as %s", operation, runUserName())
 }
 
-// rootOnlyCapabilities are features a daemon without root cannot serve: proxy
-// Secure Links and managed storage links hand their connector containers a
-// socket owned by uid 65532.
-var rootOnlyCapabilities = map[string]bool{
-	"proxy_secure_links_v1":      true,
-	managedStorageLinkCapability: true,
+// connectorGroupAdd is the supplementary group of the Secure Link and storage
+// connector containers (uid 65532). A root daemon hands them their socket
+// directories by ownership; a daemon without root cannot chown, so it shares
+// those directories and sockets through its own group instead, which only its
+// user and these containers hold.
+func connectorGroupAdd() []string {
+	if !runsWithoutRoot() {
+		return nil
+	}
+	return []string{strconv.Itoa(daemonEGID())}
 }
 
-// withoutRootOnlyCapabilities drops the root-only features from the advertised
-// list, keeping the order of the rest.
-func withoutRootOnlyCapabilities(values []string) []string {
-	kept := values[:0:0]
-	for _, value := range values {
-		if !rootOnlyCapabilities[value] {
-			kept = append(kept, value)
+// sameConnectorGroups reports whether a connector container has exactly the
+// groups this daemon gives connectors, so one created by a daemon running as
+// another user is replaced.
+func sameConnectorGroups(groups []string) bool {
+	want := connectorGroupAdd()
+	if len(groups) != len(want) {
+		return false
+	}
+	for index := range groups {
+		if groups[index] != want[index] {
+			return false
 		}
 	}
-	return kept
+	return true
+}
+
+// allowedConnectorGroups accepts a managed connector without extra groups or
+// with only the group of a daemon running as this process's user.
+func allowedConnectorGroups(groups []string) bool {
+	return len(groups) == 0 || (len(groups) == 1 && groups[0] == strconv.Itoa(daemonEGID()))
 }
