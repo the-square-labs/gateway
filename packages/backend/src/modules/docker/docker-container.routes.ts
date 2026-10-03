@@ -480,7 +480,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
       await assertComposeChildMutationAllowed(nodeId, containerId);
-      await service.startContainer(nodeId, containerId, user.id);
+      const started = await service.startContainer(nodeId, containerId, user.id);
+      await container.resolve(DockerSnapshotReconciler).refreshContainerNow(nodeId, [containerId, started?.name]);
       return c.json({ success: true });
     }
   );
@@ -496,7 +497,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json().catch(() => ({}));
       const { timeout } = ContainerStopSchema.parse(body);
-      await service.stopContainer(nodeId, containerId, timeout, user.id);
+      const stopped = await service.stopContainer(nodeId, containerId, timeout, user.id);
+      await container.resolve(DockerSnapshotReconciler).refreshContainerNow(nodeId, [containerId, stopped?.name]);
       return c.json({ success: true });
     }
   );
@@ -512,7 +514,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json().catch(() => ({}));
       const { timeout } = ContainerStopSchema.parse(body);
-      await service.restartContainer(nodeId, containerId, timeout, user.id);
+      const restarted = await service.restartContainer(nodeId, containerId, timeout, user.id);
+      await container.resolve(DockerSnapshotReconciler).refreshContainerNow(nodeId, [containerId, restarted?.name]);
       return c.json({ success: true });
     }
   );
@@ -533,7 +536,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json().catch(() => ({}));
       const { signal } = ContainerKillSchema.parse(body);
-      await service.killContainer(nodeId, containerId, signal, user.id);
+      const killed = await service.killContainer(nodeId, containerId, signal, user.id);
+      await container.resolve(DockerSnapshotReconciler).refreshContainerNow(nodeId, [containerId, killed.name]);
       return c.json({ success: true });
     }
   );
