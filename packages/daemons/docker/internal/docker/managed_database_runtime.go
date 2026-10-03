@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -321,31 +322,71 @@ func writeManagedRedisConfig(path, contents string) error {
 // waitForDatabaseReady keeps lifecycle completion aligned with actual engine
 // availability. Docker reports ContainerStart before a database has finished
 // initialization, which otherwise produces a false-ready/offline UI transition.
+// An engine that answers it is still loading its data makes progress: each
+// such answer gives it the readiness timeout again, within the operation's
+// own deadline, so a large dataset can finish loading.
 func (m *managedDatabaseManager) waitForDatabaseReady(ctx context.Context, containerID string, input managedDatabaseCommand) error {
-	readyCtx, cancel := context.WithTimeout(ctx, managedDatabaseReadinessTimeout)
-	defer cancel()
-
+	deadline := time.Now().Add(managedDatabaseReadinessTimeout)
 	for {
-		if err := m.probeDatabaseReady(readyCtx, containerID, input); err == nil {
+		probeCtx, cancel := context.WithDeadline(ctx, deadline)
+		err := m.probeDatabaseReady(probeCtx, containerID, input)
+		cancel()
+		if err == nil {
 			return nil
+		}
+		loading := errors.Is(err, errManagedDatabaseLoading)
+		if loading {
+			deadline = time.Now().Add(managedDatabaseReadinessTimeout)
 		}
 
 		timer := time.NewTimer(managedDatabaseReadinessInterval)
 		select {
-		case <-readyCtx.Done():
+		case <-ctx.Done():
 			timer.Stop()
+			if loading {
+				return errors.New("managed database did not finish loading its data before timeout")
+			}
 			return errors.New("managed database did not become ready before timeout")
 		case <-timer.C:
 		}
+		if !time.Now().Before(deadline) {
+			return errors.New("managed database did not become ready before timeout")
+		}
 	}
 }
+
+// errManagedDatabaseLoading is the readiness answer of an engine that runs and
+// is still loading its data into memory.
+var errManagedDatabaseLoading = errors.New("managed database is loading its data")
 
 func (m *managedDatabaseManager) probeDatabaseReady(ctx context.Context, containerID string, input managedDatabaseCommand) error {
 	command, env, err := managedDatabaseReadinessCommand(input)
 	if err != nil {
 		return err
 	}
-	return m.runManagedDatabaseExec(ctx, containerID, command, "", env)
+	if input.Type != "redis" {
+		return m.runManagedDatabaseExec(ctx, containerID, command, "", env)
+	}
+	var reply bytes.Buffer
+	err = m.runManagedDatabaseExecTo(ctx, containerID, command, "", env, &reply)
+	return managedRedisPingResult(reply.String(), err)
+}
+
+// managedRedisPingResult reads the answer of redis-cli PING. Redis accepts
+// connections while it loads its dataset and answers every command with a
+// LOADING error until the data is in memory; redis-cli prints that error and
+// can still exit 0, so only PONG means Redis serves.
+func managedRedisPingResult(reply string, err error) error {
+	reply = strings.TrimSpace(reply)
+	switch {
+	case strings.Contains(reply, "LOADING"):
+		return errManagedDatabaseLoading
+	case err != nil:
+		return err
+	case reply != "PONG":
+		return errors.New("managed Redis did not answer PING")
+	}
+	return nil
 }
 
 // managedDatabaseReadinessCommand only returns fixed engine client commands.

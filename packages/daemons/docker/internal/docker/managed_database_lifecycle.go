@@ -21,6 +21,12 @@ import (
 )
 
 func (m *managedDatabaseManager) runManagedDatabaseExec(ctx context.Context, containerID string, command []string, stdin string, env []string) error {
+	return m.runManagedDatabaseExecTo(ctx, containerID, command, stdin, env, io.Discard)
+}
+
+// runManagedDatabaseExecTo runs an engine client command and writes what it
+// prints to output, also when the command fails.
+func (m *managedDatabaseManager) runManagedDatabaseExecTo(ctx context.Context, containerID string, command []string, stdin string, env []string, output io.Writer) error {
 	created, err := m.client.cli.ExecCreate(ctx, containerID, mobyclient.ExecCreateOptions{
 		Cmd: command, Env: env, AttachStdin: stdin != "", AttachStdout: true, AttachStderr: true,
 	})
@@ -40,7 +46,7 @@ func (m *managedDatabaseManager) runManagedDatabaseExec(ctx context.Context, con
 			return errors.New("managed database engine command could not close input")
 		}
 	}
-	_, _ = stdcopy.StdCopy(io.Discard, io.Discard, attached.Reader)
+	_, _ = stdcopy.StdCopy(output, output, attached.Reader)
 	inspect, err := m.client.cli.ExecInspect(ctx, created.ID, mobyclient.ExecInspectOptions{})
 	if err != nil || inspect.ExitCode != 0 {
 		return errors.New("managed database engine command failed")
