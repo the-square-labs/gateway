@@ -23,6 +23,8 @@ const CONNECTIVITY_ERROR_CODES = new Set([
   'ETIMEDOUT',
   'ENETUNREACH',
   'EPIPE',
+  // A TLS handshake the server ended with an alert, e.g. while it is still loading its certificate.
+  'EPROTO',
   'SELF_SIGNED_CERT_IN_CHAIN',
   'DEPTH_ZERO_SELF_SIGNED_CERT',
   'CERT_HAS_EXPIRED',
@@ -41,6 +43,9 @@ const AUTH_ERROR_NAMES = new Set([
 ]);
 
 const NOT_FOUND_NAMES = new Set(['NoSuchBucket', 'NoSuchKey', 'NotFound']);
+
+/** Statuses of a server that is up but cannot serve the request right now (not 501: an unsupported operation). */
+const UNAVAILABLE_HTTP_STATUSES = new Set([500, 502, 503, 504]);
 
 interface AwsLikeError extends Error {
   code?: string;
@@ -77,6 +82,15 @@ export function mapObjectStorageError(error: unknown, operation: ObjectStorageOp
       404,
       'STORAGE_NOT_FOUND',
       /^unknown(error)?$/i.test(message) ? 'The bucket or object does not exist' : message
+    );
+  }
+
+  const httpStatus = err.$metadata?.httpStatusCode;
+  if (httpStatus !== undefined && UNAVAILABLE_HTTP_STATUSES.has(httpStatus)) {
+    return new AppError(
+      503,
+      'STORAGE_UNAVAILABLE',
+      `The storage server could not handle the request right now (${message}). Retry shortly.`
     );
   }
 
