@@ -341,6 +341,16 @@ func (m *managedStorageManager) repairLoopImages(ctx context.Context) {
 	for _, bad := range unreadable {
 		protected[bad.ID] = true
 	}
+	// A member whose container outlived its record keeps its image: the image
+	// holds the data a retried create takes over (see adoptLostRecord).
+	labelled, err := m.labelledStorageIDs(ctx)
+	if err != nil {
+		m.logger.Warn("managed storage repair skipped: its containers could not be listed", "error", err)
+		return
+	}
+	for id := range labelled {
+		protected[id] = true
+	}
 	for _, record := range records {
 		if filepath.Dir(record.ImagePath) != imageDir || filepath.Dir(record.MountPath) != mountDir {
 			m.logger.Warn("managed storage record names storage outside its directories; everything of its id is left alone", "id", record.ID)
