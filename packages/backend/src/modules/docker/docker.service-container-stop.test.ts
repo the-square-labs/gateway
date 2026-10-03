@@ -28,6 +28,7 @@ function createService(initialState: string) {
   const tasks = {
     create: vi.fn(async () => ({ id: `task-${tasks.create.mock.calls.length}` })),
     update: vi.fn().mockResolvedValue(undefined),
+    list: vi.fn(async () => [{ id: 'task-1', containerName: 'api', type: 'stop' }]),
   };
   const service = new DockerManagementService(
     dbWithOnlineDockerNode() as never,
@@ -127,21 +128,27 @@ describe('DockerManagementService.stopContainer', () => {
     }
   });
 
-  it('answers 504 naming the task when the container has not stopped in time', async () => {
+  it('answers a stop still running after 45 s as pending with its task, and the stop goes on', async () => {
     vi.useFakeTimers();
     try {
-      const { service, tasks } = createService('running');
+      const { service, tasks, setState } = createService('running');
 
-      const stop = service.stopContainer('node-1', 'container-1', 10, 'user-1');
-      const rejected = expect(stop).rejects.toMatchObject({
-        statusCode: 504,
-        code: 'CONTAINER_OPERATION_TIMEOUT',
-        details: { taskId: 'task-1' },
-      });
-      await vi.advanceTimersByTimeAsync(62_000);
-      await rejected;
+      const stop = track(service.stopContainer('node-1', 'container-1', 300, 'user-1'));
+      await vi.advanceTimersByTimeAsync(44_000);
+      expect(stop.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
 
-      expect(tasks.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'failed' }));
+      await expect(stop.promise).resolves.toMatchObject({ taskId: 'task-1', name: 'api', pending: 'stopping' });
+      expect(service.getContainerTransition('node-1', 'api')).toBe('stopping');
+
+      // A second stop waits as long as a request may, then answers with the stop that still runs.
+      const second = track(service.stopContainer('node-1', 'container-1', undefined, 'user-1'));
+      await vi.advanceTimersByTimeAsync(46_000);
+      await expect(second.promise).resolves.toMatchObject({ taskId: 'task-1', pending: 'stopping' });
+
+      setState('exited');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(tasks.update).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'succeeded' }));
       expect(service.getContainerTransition('node-1', 'api')).toBeUndefined();
     } finally {
       vi.clearAllTimers();

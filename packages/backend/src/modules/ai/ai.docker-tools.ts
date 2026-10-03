@@ -64,6 +64,10 @@ import {
 } from '@/modules/docker/docker-build.schemas.js';
 import { assertCreateNetworksAccess } from '@/modules/docker/docker-container-create-networks.js';
 import {
+  type ContainerOperationAnswer,
+  pendingOperationBody,
+} from '@/modules/docker/docker-container-lifecycle-operations.js';
+import {
   type DeploymentChangeRequirements,
   deploymentDeployRequiredScopes,
   deploymentUpdateRequiredScopes,
@@ -381,38 +385,44 @@ export async function executeDockerTool(
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       await context.dockerService.startContainer(a.nodeId, a.containerId, user.id);
       return { success: true };
-    case 'stop_docker_container':
+    case 'stop_docker_container': {
       await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
-      return {
-        success: true,
-        message: 'Container stopped',
-        data: await context.dockerService.stopContainer(
-          a.nodeId,
-          a.containerId,
-          ContainerStopSchema.parse({ timeout: a.timeout }).timeout,
-          user.id
-        ),
-      };
-    case 'restart_docker_container':
+      const stopped = await context.dockerService.stopContainer(
+        a.nodeId,
+        a.containerId,
+        ContainerStopSchema.parse({ timeout: a.timeout }).timeout,
+        user.id
+      );
+      return lifecycleToolResult(stopped, 'Container stopped', 'Container stop requested', 'State.Status is exited');
+    }
+    case 'restart_docker_container': {
       await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
-      return {
-        success: true,
-        message: 'Container restarted',
-        data: await context.dockerService.restartContainer(
-          a.nodeId,
-          a.containerId,
-          ContainerStopSchema.parse({ timeout: a.timeout }).timeout,
-          user.id
-        ),
-      };
+      const restarted = await context.dockerService.restartContainer(
+        a.nodeId,
+        a.containerId,
+        ContainerStopSchema.parse({ timeout: a.timeout }).timeout,
+        user.id
+      );
+      return lifecycleToolResult(
+        restarted,
+        'Container restarted',
+        'Container restart requested',
+        'State.Status is running again'
+      );
+    }
     case 'kill_docker_container': {
       await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       const { signal } = ContainerKillSchema.parse({ signal: a.signal });
-      await context.dockerService.killContainer(a.nodeId, a.containerId, signal, user.id);
-      return { success: true, message: `Sent ${signal} to the container` };
+      const killed = await context.dockerService.killContainer(a.nodeId, a.containerId, signal, user.id);
+      return lifecycleToolResult(
+        killed,
+        `Sent ${signal} to the container`,
+        `Sent ${signal} to the container`,
+        'State.Status is exited'
+      );
     }
     case 'remove_docker_container':
       // As DELETE /containers/:id: a Git-source container its first build has not created is authorized on its
@@ -426,8 +436,12 @@ export async function executeDockerTool(
       );
       await assertNotPendingSourceContainer(a.nodeId, a.containerId);
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
-      await context.dockerService.removeContainer(a.nodeId, a.containerId, a.force ?? false, user.id);
-      return { success: true };
+      return lifecycleToolResult(
+        await context.dockerService.removeContainer(a.nodeId, a.containerId, a.force ?? false, user.id),
+        'Container removed',
+        'Container removed',
+        'get_docker_container answers NOT_FOUND (the remove task removes it once the stop ended)'
+      );
     case 'rename_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:edit', a.nodeId, a.containerId);
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
@@ -916,6 +930,29 @@ async function ensureDockerContainerScopes(
     context.ensureToolScopeForResource(user, baseScope, `${nodeId}/${resourceId}`);
   }
   return inspected;
+}
+
+/**
+ * A container lifecycle answer for an agent. A request waits at most 45 s; an operation still running then goes on
+ * as its task, and the result says so and how to wait for it instead of reporting a failure.
+ */
+function lifecycleToolResult(
+  answer: ContainerOperationAnswer | undefined,
+  doneMessage: string,
+  requestedMessage: string,
+  waitUntil: string
+) {
+  if (!answer) return { success: true, message: requestedMessage };
+  if (!answer.pending) return { success: true, message: doneMessage, data: answer };
+  const task = answer.taskId
+    ? ` or follow task ${answer.taskId} with manage_docker_task (operation get) until it succeeded`
+    : '';
+  return {
+    success: true,
+    pending: true,
+    message: `The container is still ${answer.pending}: Gateway stopped waiting after 45 s and the operation goes on. Do not repeat the request. Read the container with get_docker_container until ${waitUntil}${task}.`,
+    data: pendingOperationBody({ ...answer, pending: answer.pending }),
+  };
 }
 
 function hasDockerContainerScope(user: User, baseScope: string, nodeId: string, inspected: any): boolean {

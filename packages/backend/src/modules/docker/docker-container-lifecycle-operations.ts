@@ -1,15 +1,18 @@
 import { AppError } from '@/middleware/error-handler.js';
-import { DOCKER_STOP_TIMEOUT_MAX_SECONDS } from './docker.schemas.js';
 import type { DockerContainerMutationContext } from './docker-container-mutation-operations.js';
-import type { ContainerTransition } from './docker-container-transitions.js';
 import type { DockerTransitionOutcome } from './docker-lifecycle-watch.js';
 import { validateDockerRuntimeResourceConfig } from './docker-runtime-operations.js';
 
 /** States with a process for a stop to end. Docker leaves a created, exited or dead container as it is. */
 const STOPPABLE_CONTAINER_STATES = new Set(['running', 'restarting', 'paused']);
 
+type StoppingTransition = 'stopping' | 'killing';
+
 /** Transitions that end with the container stopped: a stop or a removal waits for them instead of refusing. */
-const STOPPING_TRANSITIONS: readonly ContainerTransition[] = ['stopping', 'killing'];
+const STOPPING_TRANSITIONS: readonly StoppingTransition[] = ['stopping', 'killing'];
+
+/** The transition of a lifecycle operation a request answered before it ended. */
+export type PendingTransition = StoppingTransition | 'restarting';
 
 /** An inspect that shows no process left: the stop or kill is done. */
 function hasNoProcess(data: Record<string, any>): boolean {
@@ -23,29 +26,85 @@ function signalEndsProcess(signal: string): boolean {
 }
 
 /**
- * Waits for a stop or kill of `name` that runs in this process to end, as a second `docker stop` waits for the
- * first. The wait is bounded by the longest stop a request can ask for; the caller checks the transition again.
+ * How long a lifecycle request waits for its result before it answers that the operation still runs: well below the
+ * 60 s read timeout of a reverse proxy in front of Gateway, so a slow stop never ends in a proxy timeout.
  */
-export async function waitForStopInFlight(ctx: DockerContainerMutationContext, nodeId: string, name: string) {
-  await ctx.waitWhileTransition(
-    nodeId,
-    name,
-    STOPPING_TRANSITIONS,
-    ctx.lifecycleWatchTimeoutMs(DOCKER_STOP_TIMEOUT_MAX_SECONDS)
-  );
+export const LIFECYCLE_ANSWER_WAIT_MS = 45_000;
+
+/**
+ * What a lifecycle request answers. `pending` is set when the operation still ran when the request stopped waiting:
+ * the container's transition, with `taskId` the task to follow.
+ */
+export interface ContainerOperationAnswer {
+  taskId: string | undefined;
+  containerId: string;
+  name: string;
+  pending?: PendingTransition;
+}
+
+/** The body of a 202 answer: the task that still runs and the container's transition. */
+export function pendingOperationBody(answer: ContainerOperationAnswer & { pending: PendingTransition }) {
+  return {
+    taskId: answer.taskId ?? null,
+    containerId: answer.containerId,
+    name: answer.name,
+    transition: answer.pending,
+  };
 }
 
 /**
- * A lifecycle request answers once its task completed. One that did not complete is an error that names the task;
- * the task records the same outcome.
+ * Waits for a stop or kill of `name` that runs in this process to end, as a second `docker stop` waits for the
+ * first, for at most `timeoutMs`. Resolves with the stop transition still running then, undefined once none runs;
+ * the caller checks the transition again.
  */
-function requireCompleted(outcome: DockerTransitionOutcome, taskId: string | undefined, done: string) {
-  if (outcome.completed) return;
-  const details = taskId ? { taskId } : undefined;
+export async function waitForStopInFlight(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  name: string,
+  timeoutMs = LIFECYCLE_ANSWER_WAIT_MS
+): Promise<StoppingTransition | undefined> {
+  return (await ctx.waitWhileTransition(nodeId, name, STOPPING_TRANSITIONS, timeoutMs)) as
+    | StoppingTransition
+    | undefined;
+}
+
+/** The watch's outcome, or undefined when it has not settled within the request's wait. */
+async function settleWithinAnswerWait(watch: Promise<DockerTransitionOutcome>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waited = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), LIFECYCLE_ANSWER_WAIT_MS);
+  });
+  try {
+    return await Promise.race([watch, waited]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Answers once the watched operation completed. One still running after the request's wait is answered as pending
+ * (its task goes on); one that failed is an error that names its task, which records the same outcome.
+ */
+async function answerWhenDone(
+  watch: Promise<DockerTransitionOutcome>,
+  answer: ContainerOperationAnswer,
+  transition: PendingTransition,
+  done: string
+): Promise<ContainerOperationAnswer> {
+  const outcome = await settleWithinAnswerWait(watch);
+  if (!outcome) return { ...answer, pending: transition };
+  if (outcome.completed) return answer;
+  const details = answer.taskId ? { taskId: answer.taskId } : undefined;
   if (outcome.reason === 'disconnected') {
     throw new AppError(502, 'NODE_OFFLINE', `The Docker node disconnected before the container ${done}`, details);
   }
   throw new AppError(504, 'CONTAINER_OPERATION_TIMEOUT', `The container has not ${done} in time`, details);
+}
+
+/** The task of the stop or kill of `name` that still runs on the node, if any. */
+async function runningStopTaskId(ctx: DockerContainerMutationContext, nodeId: string, name: string) {
+  const tasks = await ctx.taskService?.list({ nodeId, status: 'running' }).catch(() => []);
+  return tasks?.find((task) => task.containerName === name && ['stop', 'kill'].includes(task.type))?.id;
 }
 
 export async function startContainer(
@@ -84,7 +143,7 @@ export async function startContainer(
     details: { nodeId, name, containerName: name },
   });
   ctx.emitContainer(nodeId, name, containerId, 'started');
-  return { containerId, name };
+  return { taskId: undefined, containerId, name };
 }
 
 /** False only when an inspect shows no process to stop; an inspect failure leaves the decision to the stop. */
@@ -104,7 +163,8 @@ async function containerHasProcessToStop(
 
 /**
  * Answers once the container has stopped, as `docker stop` does: a read or a removal right after the answer sees
- * it stopped. A stop already running here is waited for; this stop then finds the container stopped.
+ * it stopped. A stop already running here is waited for; this stop then finds the container stopped. A stop that
+ * outlasts the request's wait is answered as pending with its task.
  */
 export async function stopContainer(
   ctx: DockerContainerMutationContext,
@@ -112,11 +172,14 @@ export async function stopContainer(
   containerId: string,
   timeout: number | undefined,
   userId: string
-) {
+): Promise<ContainerOperationAnswer> {
   await ctx.validateDockerNode(nodeId);
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const name = await ctx.resolveContainerName(nodeId, containerId);
-  await waitForStopInFlight(ctx, nodeId, name);
+  const stopping = await waitForStopInFlight(ctx, nodeId, name);
+  if (stopping) {
+    return { taskId: await runningStopTaskId(ctx, nodeId, name), containerId, name, pending: stopping };
+  }
   const stopTimeout = await ctx.resolveContainerStopTimeout(nodeId, containerId, timeout);
   ctx.requireNoTransition(nodeId, name);
   if (!(await containerHasProcessToStop(ctx, nodeId, containerId))) {
@@ -171,18 +234,17 @@ export async function stopContainer(
     resourceId: containerId,
     details: { nodeId, name, containerName: name },
   });
-  requireCompleted(await stopped, task?.id, 'stopped');
-  return { taskId: task?.id, containerId, name };
+  return answerWhenDone(stopped, { taskId: task?.id, containerId, name }, 'stopping', 'stopped');
 }
 
-/** Answers once Docker has started the container again. */
+/** Answers once Docker has started the container again, or as pending with its task after the request's wait. */
 export async function restartContainer(
   ctx: DockerContainerMutationContext,
   nodeId: string,
   containerId: string,
   timeout: number | undefined,
   userId: string
-) {
+): Promise<ContainerOperationAnswer> {
   await ctx.validateDockerNode(nodeId);
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const name = await ctx.resolveContainerName(nodeId, containerId);
@@ -249,13 +311,12 @@ export async function restartContainer(
     resourceId: containerId,
     details: { nodeId, name, containerName: name },
   });
-  requireCompleted(await restarted, task?.id, 'restarted');
-  return { taskId: task?.id, containerId, name };
+  return answerWhenDone(restarted, { taskId: task?.id, containerId, name }, 'restarting', 'restarted');
 }
 
 /**
- * SIGKILL answers once the container has exited. Any other signal may leave the process running: the kill is done
- * once the daemon delivered it.
+ * SIGKILL answers once the container has exited (as pending with its task after the request's wait). Any other
+ * signal may leave the process running: the kill is done once the daemon delivered it.
  */
 export async function killContainer(
   ctx: DockerContainerMutationContext,
@@ -264,7 +325,7 @@ export async function killContainer(
   signal: string,
   userId: string,
   trustedStableName?: string
-) {
+): Promise<ContainerOperationAnswer> {
   await ctx.validateDockerNode(nodeId);
   // A trusted stable name is supplied only for an already-authorized lifecycle
   // transition whose runtime may be temporarily absent. Direct kill requests
@@ -314,6 +375,6 @@ export async function killContainer(
     resourceId: containerId,
     details: { nodeId, name, containerName: name, signal },
   });
-  if (exited) requireCompleted(await exited, task?.id, 'exited');
-  return { taskId: task?.id, containerId, name };
+  const answer = { taskId: task?.id, containerId, name };
+  return exited ? answerWhenDone(exited, answer, 'killing', 'exited') : answer;
 }

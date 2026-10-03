@@ -12,9 +12,10 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import { DOCKER_STOP_TIMEOUT_MAX_SECONDS } from './docker.schemas.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { containerAnonymousVolumes, removeContainerAnonymousVolumes } from './docker-container-anonymous-volumes.js';
-import { waitForStopInFlight } from './docker-container-lifecycle-operations.js';
+import { type ContainerOperationAnswer, waitForStopInFlight } from './docker-container-lifecycle-operations.js';
 import { detachRemovedContainerSource } from './docker-container-source-detach.js';
 import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
 import { placeCreatedDockerResource } from './docker-creation-access.js';
@@ -163,13 +164,15 @@ export interface DockerContainerMutationContext {
   inspectContainer(nodeId: string, containerId: string): Promise<any>;
   runtimeOperationContext(): DockerRuntimeOperationContext;
   requireNoTransition(nodeId: string, name: string): void;
-  /** Resolves once `name` holds none of `states` in this process, or after `timeoutMs`. */
+  /**
+   * Resolves once `name` holds none of `states` in this process, or after `timeoutMs` with the one it still holds.
+   */
   waitWhileTransition(
     nodeId: string,
     name: string,
     states: readonly ContainerTransition[],
     timeoutMs: number
-  ): Promise<void>;
+  ): Promise<ContainerTransition | undefined>;
   setTransition(
     nodeId: string,
     name: string,
@@ -677,19 +680,77 @@ export async function rollbackCreatedContainer(
   return { id: containerId, name };
 }
 
+/**
+ * Removes a stopped container. A removal right after a stop waits for the stop to end instead of refusing a
+ * container that is stopping. A stop that outlasts the request's wait is followed by a `remove` task: the removal
+ * runs once the stop ended, and the answer is pending with that task. `afterRemove` runs once the container is
+ * removed, either way.
+ */
 export async function removeContainer(
   ctx: DockerContainerMutationContext,
   nodeId: string,
   containerId: string,
   force: boolean,
-  userId: string
-) {
+  userId: string,
+  afterRemove?: () => Promise<void>
+): Promise<ContainerOperationAnswer> {
   await ctx.validateDockerNode(nodeId);
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const name = await ctx.resolveContainerName(nodeId, containerId);
   await assertContainerNotUsedByProxy(ctx.db, nodeId, name);
-  // A removal right after a stop waits for the stop to end instead of refusing a container that is stopping.
-  await waitForStopInFlight(ctx, nodeId, name);
+  const stopping = await waitForStopInFlight(ctx, nodeId, name);
+  if (stopping) {
+    const task = await ctx.createTask(nodeId, containerId, name, 'remove');
+    void removeWhenStopped(ctx, nodeId, containerId, name, force, userId, task?.id, afterRemove);
+    return { taskId: task?.id, containerId, name, pending: stopping };
+  }
+  await removeStoppedContainer(ctx, nodeId, containerId, name, force, userId);
+  await afterRemove?.();
+  return { taskId: undefined, containerId, name };
+}
+
+/** The removal a stop outlasted: it runs once the stop ended, and its task records the outcome. */
+async function removeWhenStopped(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerId: string,
+  name: string,
+  force: boolean,
+  userId: string,
+  taskId: string | undefined,
+  afterRemove?: () => Promise<void>
+) {
+  try {
+    // The stop's own watch ends it within its timeout; this bound only guards against a transition left behind.
+    await waitForStopInFlight(ctx, nodeId, name, ctx.lifecycleWatchTimeoutMs(DOCKER_STOP_TIMEOUT_MAX_SECONDS));
+    // A Route may have been pointed at the container meanwhile.
+    await assertContainerNotUsedByProxy(ctx.db, nodeId, name);
+    await removeStoppedContainer(ctx, nodeId, containerId, name, force, userId);
+    await afterRemove?.();
+    if (taskId) {
+      await ctx.taskService
+        ?.update(taskId, { status: 'succeeded', progress: 'Container removed', completedAt: new Date() })
+        .catch(() => undefined);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to remove container';
+    logger.warn('Could not remove a container after its stop', { nodeId, name, error: message });
+    if (taskId) {
+      await ctx.taskService
+        ?.update(taskId, { status: 'failed', error: message, completedAt: new Date() })
+        .catch(() => undefined);
+    }
+  }
+}
+
+async function removeStoppedContainer(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerId: string,
+  name: string,
+  force: boolean,
+  userId: string
+) {
   ctx.requireNoTransition(nodeId, name);
   const inspect = await ctx.inspectContainer(nodeId, containerId);
   const state = String(inspect?.State?.Status ?? inspect?.state ?? inspect?.State ?? '').toLowerCase();

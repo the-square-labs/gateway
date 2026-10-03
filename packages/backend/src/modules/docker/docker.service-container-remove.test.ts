@@ -186,4 +186,38 @@ describe('DockerManagementService.removeContainer', () => {
       vi.useRealTimers();
     }
   });
+
+  it('answers a removal whose stop outlasts the request as pending and removes the container once stopped', async () => {
+    vi.useFakeTimers();
+    try {
+      let state = 'running';
+      const dispatch = {
+        sendDockerContainerCommand: vi.fn(async (_node: string, action: string) =>
+          action === 'inspect' ? inspectResult(state) : { success: true }
+        ),
+      };
+      const { service } = createService(dispatch);
+
+      void service.stopContainer('node-1', 'container-1', 300, 'user-1');
+      await vi.advanceTimersByTimeAsync(0);
+      const removal = service.removeContainer('node-1', 'container-1', false, 'user-1');
+      await vi.advanceTimersByTimeAsync(46_000);
+
+      await expect(removal).resolves.toMatchObject({ name: 'api', pending: 'stopping' });
+      expect(dispatch.sendDockerContainerCommand).not.toHaveBeenCalledWith('node-1', 'remove', expect.anything());
+
+      state = 'exited';
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await vi.waitFor(() =>
+        expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledWith('node-1', 'remove', {
+          containerId: 'container-1',
+          force: false,
+        })
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });

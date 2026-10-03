@@ -89,6 +89,7 @@ import {
   planDockerContainerArchiveImport,
 } from './docker-container-archive-operations.js';
 import { assertCreateNetworksAccess } from './docker-container-create-networks.js';
+import { pendingOperationBody } from './docker-container-lifecycle-operations.js';
 import {
   getDockerContainerProcesses,
   getDockerContainerStatsHistory,
@@ -499,6 +500,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const { timeout } = ContainerStopSchema.parse(body);
       const stopped = await service.stopContainer(nodeId, containerId, timeout, user.id);
       await container.resolve(DockerSnapshotReconciler).refreshContainerNow(nodeId, [containerId, stopped?.name]);
+      if (stopped?.pending)
+        return c.json({ data: pendingOperationBody({ ...stopped, pending: stopped.pending }) }, 202);
       return c.json({ success: true });
     }
   );
@@ -516,6 +519,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const { timeout } = ContainerStopSchema.parse(body);
       const restarted = await service.restartContainer(nodeId, containerId, timeout, user.id);
       await container.resolve(DockerSnapshotReconciler).refreshContainerNow(nodeId, [containerId, restarted?.name]);
+      if (restarted?.pending)
+        return c.json({ data: pendingOperationBody({ ...restarted, pending: restarted.pending }) }, 202);
       return c.json({ success: true });
     }
   );
@@ -538,6 +543,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const { signal } = ContainerKillSchema.parse(body);
       const killed = await service.killContainer(nodeId, containerId, signal, user.id);
       await container.resolve(DockerSnapshotReconciler).refreshContainerNow(nodeId, [containerId, killed.name]);
+      if (killed.pending) return c.json({ data: pendingOperationBody({ ...killed, pending: killed.pending }) }, 202);
       return c.json({ success: true });
     }
   );
@@ -557,7 +563,8 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await assertNotPendingSourceContainer(nodeId, containerId);
       await assertComposeChildMutationAllowed(nodeId, containerId);
       // Gateway never removes an active container; a stopped one needs no force.
-      await service.removeContainer(nodeId, containerId, false, user.id);
+      const removal = await service.removeContainer(nodeId, containerId, false, user.id);
+      if (removal.pending) return c.json({ data: pendingOperationBody({ ...removal, pending: removal.pending }) }, 202);
       return c.json({ success: true });
     }
   );

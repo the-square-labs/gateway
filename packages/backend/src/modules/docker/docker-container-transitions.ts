@@ -85,15 +85,16 @@ export class DockerContainerTransitions {
   }
 
   /**
-   * Resolves once `name` holds none of `states` here (at once when it holds none), or after `timeoutMs`. The
-   * caller checks the transition again afterwards: another operation may have taken the name meanwhile.
+   * Resolves once `name` holds none of `states` here (at once when it holds none), or after `timeoutMs`: with the
+   * transition of `states` it still holds then, undefined once it holds none. The caller checks the transition again
+   * afterwards: another operation may have taken the name meanwhile.
    */
   async waitWhile(
     nodeId: string,
     name: string,
     states: readonly ContainerTransition[],
     timeoutMs: number
-  ): Promise<void> {
+  ): Promise<ContainerTransition | undefined> {
     const key = this.key(nodeId, name);
     const deadline = Date.now() + timeoutMs;
     while (this.holds(key, states) && Date.now() < deadline) {
@@ -110,6 +111,7 @@ export class DockerContainerTransitions {
         waiters.add(wake);
       });
     }
+    return this.holds(key, states) ? this.transitions.get(key) : undefined;
   }
 
   /**

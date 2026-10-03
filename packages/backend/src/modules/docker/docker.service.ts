@@ -1492,15 +1492,22 @@ export class DockerManagementService {
     const containerName = this.availabilityMutationCoordinator?.containerRemoved
       ? await this.resolveContainerName(nodeId, containerId)
       : undefined;
+    const coordinator = this.availabilityMutationCoordinator;
     try {
-      await removeDockerContainerMutation(this.containerMutationContext(), nodeId, containerId, force, userId);
+      return await removeDockerContainerMutation(
+        this.containerMutationContext(),
+        nodeId,
+        containerId,
+        force,
+        userId,
+        containerName ? async () => coordinator?.containerRemoved?.(nodeId, containerName) : undefined
+      );
     } catch (error) {
       if (error instanceof AppError && error.code === 'CONTAINER_NOT_FOUND') {
         await assertNotPendingSourceContainer(nodeId, containerId);
       }
       throw error;
     }
-    if (containerName) await this.availabilityMutationCoordinator?.containerRemoved?.(nodeId, containerName);
   }
 
   async renameContainer(nodeId: string, containerId: string, newName: string, userId: string) {
