@@ -39,6 +39,8 @@ const (
 	backupRunnerManagedLabel  = "wiolett.gateway.managed"
 	backupRunnerRunLabel      = "wiolett.gateway.backup-run-id"
 	backupRunnerDeadlineLabel = "wiolett.gateway.backup-deadline"
+	// The staging Redis of a Redis restore, labelled with backupRunnerRunLabel.
+	backupRedisStageManagedValue = "backup-redis-stage"
 	// A runner found after a daemon restart is stopped only once it is
 	// clearly past its deadline, so small clock differences never stop a
 	// runner that its original context would still have allowed.
@@ -225,6 +227,7 @@ func (r *backupRuntime) reconcileWorkspaces() {
 			}
 		}
 	}
+	r.removeOrphanedRedisStages()
 }
 
 // workspaceImageExists is false once status() already released the workspace.
@@ -245,6 +248,10 @@ func (r *backupRuntime) removeWorkspace(runID, imagePath string) error {
 func (r *backupRuntime) removeWorkspaceLocked(runID, imagePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
 	defer cancel()
+	// A staging Redis left by a daemon restart keeps the workspace mounted.
+	if err := r.removeRedisStages(ctx, runID); err != nil {
+		return err
+	}
 	if err := r.plugin.databaseManager.loopHost().release(ctx, imagePath, filepath.Join(r.root, runID, "work")); err != nil {
 		return fmt.Errorf("release backup workspace: %w", err)
 	}
@@ -255,6 +262,54 @@ func (r *backupRuntime) removeWorkspaceLocked(runID, imagePath string) error {
 		return fmt.Errorf("remove backup workspace state: %w", err)
 	}
 	return nil
+}
+
+// removeRedisStages removes the staging Redis containers of one run.
+func (r *backupRuntime) removeRedisStages(ctx context.Context, runID string) error {
+	containers, err := r.plugin.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{
+		All: true,
+		Filters: mobyclient.Filters{}.
+			Add("label", backupRunnerManagedLabel+"="+backupRedisStageManagedValue).
+			Add("label", backupRunnerRunLabel+"="+runID),
+	})
+	if err != nil {
+		return fmt.Errorf("list Redis staging containers: %w", err)
+	}
+	for _, candidate := range containers.Items {
+		if _, err := r.plugin.client.cli.ContainerRemove(ctx, candidate.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+			return fmt.Errorf("remove Redis staging container: %w", err)
+		}
+	}
+	return nil
+}
+
+// removeOrphanedRedisStages removes staging Redis containers no run owns any
+// more: their run is not executing in this process and its workspace is gone.
+// The workspace pass above keeps the workspace of every run whose runner is
+// still running, and runTool creates the stage only inside a workspace.
+func (r *backupRuntime) removeOrphanedRedisStages() {
+	ctx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+	defer cancel()
+	containers, err := r.plugin.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{
+		All:     true,
+		Filters: mobyclient.Filters{}.Add("label", backupRunnerManagedLabel+"="+backupRedisStageManagedValue),
+	})
+	if err != nil {
+		return
+	}
+	imageDir := filepath.Join(r.plugin.databaseManager.root, "backups", "images")
+	for _, candidate := range containers.Items {
+		runID := candidate.Labels[backupRunnerRunLabel]
+		r.mu.Lock()
+		active := r.active[runID]
+		r.mu.Unlock()
+		if active || (runID != "" && workspaceImageExists(filepath.Join(imageDir, runID+".img"))) {
+			continue
+		}
+		if _, err := r.plugin.client.cli.ContainerRemove(ctx, candidate.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+			r.plugin.databaseManager.logger.Warn("orphaned Redis staging container could not be removed", "run_id", runID, "error", err)
+		}
+	}
 }
 
 func (r *backupRuntime) apply(action, runID, raw string) (backupRunStatus, error) {
@@ -926,7 +981,7 @@ func (r *backupRuntime) startRedisStage(ctx context.Context, runID string, paylo
 	}
 	command := "until [ -f /work/redis-stage/dump.rdb ]; do sleep 0.1; done; exec redis-server /work/redis-stage/redis.conf"
 	created, err := r.plugin.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
-		Config: &container.Config{Image: stageImage, User: "65532:65532", Cmd: []string{"sh", "-ec", command}, Labels: map[string]string{"wiolett.gateway.managed": "backup-redis-stage", "wiolett.gateway.backup-run-id": runID}},
+		Config: &container.Config{Image: stageImage, User: "65532:65532", Cmd: []string{"sh", "-ec", command}, Labels: map[string]string{backupRunnerManagedLabel: backupRedisStageManagedValue, backupRunnerRunLabel: runID}},
 		HostConfig: func() *container.HostConfig {
 			hostConfig.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: workdir, Target: "/work"}}
 			return hostConfig
@@ -1061,7 +1116,24 @@ func (r *backupRuntime) reconcilePersistedRun(status backupRunStatus) (backupRun
 		return status, nil
 	}
 	if status.ContainerID == "" {
-		return r.recoverUnknownRun(status.RunID)
+		recovered, err := r.recoverUnknownRun(status.RunID)
+		r.mu.Lock()
+		active := r.active[status.RunID]
+		r.mu.Unlock()
+		if err == nil || err.Error() != "BACKUP_RUN_UNKNOWN" || active {
+			return recovered, err
+		}
+		// Accepted and persisted, but the daemon restarted before its runner
+		// existed: nothing will start it any more. It ends here, and its
+		// workspace and staging Redis go with it.
+		if status.Phase == "cancelling" {
+			status.Status, status.Phase, status.Error = "cancelled", "cancelled", ""
+		} else {
+			status.Status, status.Phase, status.Error = "failed", "interrupted", "The executor restarted before the backup runner started; start the run again"
+		}
+		now := time.Now().UTC()
+		status.CompletedAt = &now
+		return r.reconcileTerminalCleanup(status, true)
 	}
 	inspect, err := r.plugin.client.cli.ContainerInspect(context.Background(), status.ContainerID, mobyclient.ContainerInspectOptions{})
 	if err == nil {
