@@ -43,6 +43,16 @@ import type {
  */
 export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
   private reconciliationInFlight = false;
+  /**
+   * Operations this process is dispatching right now. Reconciliation (the
+   * scheduled pass, or a status read converging a lost response) leaves them
+   * to their dispatcher: a restart carries no operation id the node reports
+   * back, so a pass that saw the engine serve again before the dispatcher did
+   * would replay the restart and restart the engine a second time. An
+   * operation whose dispatch settled without an outcome (the node went away)
+   * is no longer in flight and is reconciled as before.
+   */
+  private readonly dispatching = new Set<string>();
 
   constructor(
     private readonly store: ManagedWorkloadStore,
@@ -57,7 +67,19 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
     publishNativeTcp: boolean,
     userId: string | null
   ): Promise<unknown> {
-    this.pendingOperation(row, 'create');
+    const operation = this.pendingOperation(row, 'create');
+    return this.whileDispatching(operation, () =>
+      this.runCreate(row, credentials, publishTcp, publishNativeTcp, userId)
+    );
+  }
+
+  private async runCreate(
+    row: TRow,
+    credentials: TCredentials,
+    publishTcp: boolean,
+    publishNativeTcp: boolean,
+    userId: string | null
+  ): Promise<unknown> {
     const direct = publishTcp ? await this.dispatch.ensureDirectAccess(row, userId, false) : null;
     const payload = await this.dispatch.renderCommandPayload(row, 'create');
     let result: DispatchResult;
@@ -94,7 +116,19 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
     publishNativeTcp: boolean,
     userId: string | null
   ): Promise<unknown> {
-    this.pendingOperation(row, 'update');
+    const operation = this.pendingOperation(row, 'update');
+    return this.whileDispatching(operation, () =>
+      this.runUpdate(row, credentials, publishTcp, publishNativeTcp, userId)
+    );
+  }
+
+  private async runUpdate(
+    row: TRow,
+    credentials: TCredentials,
+    publishTcp: boolean,
+    publishNativeTcp: boolean,
+    userId: string | null
+  ): Promise<unknown> {
     const direct = publishTcp ? await this.dispatch.ensureDirectAccess(row, userId, false) : null;
     const payload = await this.dispatch.renderCommandPayload(row, 'update');
     let result: DispatchResult;
@@ -133,7 +167,11 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
   }
 
   async dispatchDelete(row: TRow, userId: string | null): Promise<unknown> {
-    this.pendingOperation(row, 'delete');
+    const operation = this.pendingOperation(row, 'delete');
+    return this.whileDispatching(operation, () => this.runDelete(row, userId));
+  }
+
+  private async runDelete(row: TRow, userId: string | null): Promise<unknown> {
     try {
       await this.dispatch.beforeDelete?.(row, userId);
       const payload = await this.dispatch.renderCommandPayload(row, 'remove');
@@ -153,7 +191,11 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
    * service method this no longer takes a `credentials` argument.
    */
   async dispatchRestart(row: TRow, userId: string | null): Promise<unknown> {
-    this.pendingOperation(row, 'restart');
+    const operation = this.pendingOperation(row, 'restart');
+    return this.whileDispatching(operation, () => this.runRestart(row, userId));
+  }
+
+  private async runRestart(row: TRow, userId: string | null): Promise<unknown> {
     // Rendering the restart payload stays OUTSIDE the try, matching
     // `dispatchCreate`/`dispatchUpdate` and the pre-image service method: a
     // throw while building it (corrupt owner creds, or a CA/TLS-material fetch
@@ -188,10 +230,11 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
 
   async reconcilePendingRow(row: TRow): Promise<void> {
     const operation = row.pendingOperation;
-    if (!operation) return;
+    if (!operation || this.dispatching.has(operation.id)) return;
     try {
       const result = await this.dispatch.sendCommand(row.nodeId, 'inspect', row.id, '', 10_000);
-      if (!result.success) return;
+      // Another pass may have started dispatching it while this one inspected.
+      if (!result.success || this.dispatching.has(operation.id)) return;
       const state = this.dispatch.parseDaemonState(result);
       if (!state) return;
       if (state.status === 'missing' && operation.action === 'delete') {
@@ -286,6 +329,18 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
     targetStatus: 'ready' | 'paused'
   ): Promise<unknown> {
     const operation = this.pendingOperation(row, action);
+    return this.whileDispatching(operation, () =>
+      this.runLifecycleTransition(row, userId, action, targetStatus, operation)
+    );
+  }
+
+  private async runLifecycleTransition(
+    row: TRow,
+    userId: string | null,
+    action: string,
+    targetStatus: 'ready' | 'paused',
+    operation: WorkloadPendingOperation
+  ): Promise<unknown> {
     try {
       const payload = await this.dispatch.renderCommandPayload(row, action);
       const result = await this.dispatch.sendCommand(row.nodeId, action, row.id, payload);
@@ -366,6 +421,15 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
     }
     await this.dispatch.auditLifecycle('delete', row, userId);
     this.dispatch.emit({ ...row, status: 'deleting' } as TRow, 'deleted');
+  }
+
+  private async whileDispatching<T>(operation: WorkloadPendingOperation, run: () => Promise<T>): Promise<T> {
+    this.dispatching.add(operation.id);
+    try {
+      return await run();
+    } finally {
+      this.dispatching.delete(operation.id);
+    }
   }
 
   requireOperationClaim(row: TRow | undefined): TRow {
