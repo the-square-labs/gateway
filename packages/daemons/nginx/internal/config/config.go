@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 )
 
 const (
@@ -13,12 +15,15 @@ const (
 )
 
 type Config struct {
-	Gateway   GatewayConfig `yaml:"gateway"`
-	TLS       TLSConfig     `yaml:"tls"`
-	Nginx     NginxConfig   `yaml:"nginx"`
-	StateDir  string        `yaml:"state_dir"`
-	LogLevel  string        `yaml:"log_level"`
-	LogFormat string        `yaml:"log_format"`
+	Gateway GatewayConfig `yaml:"gateway"`
+	TLS     TLSConfig     `yaml:"tls"`
+	Nginx   NginxConfig   `yaml:"nginx"`
+	// Host console and file access settings shared by every daemon type.
+	Console   lifecycle.ConsoleConfig `yaml:"console"`
+	Files     lifecycle.FilesConfig   `yaml:"files"`
+	StateDir  string                  `yaml:"state_dir"`
+	LogLevel  string                  `yaml:"log_level"`
+	LogFormat string                  `yaml:"log_format"`
 }
 
 type GatewayConfig struct {

@@ -194,6 +194,7 @@ Common daemon setup options:
 | `--mode <profile>` | Docker installer only: `docker` (default), `builder`, or `storage`; `databases` is accepted as a legacy alias of the Storage profile. |
 | `--builder-egress <profile>` | Docker installer with `--mode builder` only: `internet` (default) permits public dependency downloads while blocking metadata, private, and control-plane ranges; `offline` disables build-step egress. |
 | `--nginx-mode <mode>` / `--skip-nginx` | Nginx installer only: `managed` or `integrate` (see [Nginx Node Modes](#nginx-node-modes)); `--skip-nginx` reuses an installed nginx 1.25.1 or newer. |
+| `--disable-console` / `--disable-files` | Turn the host console or host file access off on this node (writes `console.enabled: false` / `files.enabled: false`, see [Host Console And File Access](#host-console-and-file-access)). Environment: `GATEWAY_NODE_DISABLE_CONSOLE=1`, `GATEWAY_NODE_DISABLE_FILES=1`. |
 | `--dry-run` | Validate inputs and show the plan without changing the host. |
 | `-y`, `--yes` | Non-interactive mode. |
 | `--help` | Show all supported options. |
@@ -294,12 +295,36 @@ nginx:
   htpasswd_dir: "/etc/nginx/htpasswd"
   acme_challenge_dir: "/var/www/acme-challenge"
 
+console:
+  enabled: true  # host console; false turns it off on this node
+  user: ""       # OS user for console sessions; empty = daemon's user
+
+files:
+  enabled: true  # host file access; false turns it off on this node
+
 state_dir: "/var/lib/nginx-daemon"
 log_level: "info"
 log_format: "json"
 ```
 
 In `integrate` mode, the `stub_status_url` may use a local alternate port such as `http://127.0.0.1:8081/nginx_status`.
+
+### Host Console And File Access
+
+Every daemon type (nginx, Docker, Storage, Build Worker, Monitoring, Relay) accepts two host access switches in its config file:
+
+| Key | Default | When `false` |
+|-----|---------|--------------|
+| `console.enabled` | `true` | The daemon refuses the host console: the interactive shell on the node's **Console** tab and its popout, and one-shot commands from the assistant and MCP (`execute_node_console_command`). |
+| `files.enabled` | `true` | The daemon refuses host file access: browsing, reading, writing, uploading, moving, and deleting files on the node's **Files** tab, its file popout, the node file API, and the assistant and MCP node file tool. |
+
+The switches live only in the config file on the node, so a Gateway administrator cannot turn them back on remotely. To change one, edit the file on the node and restart the daemon (for example `systemctl restart docker-daemon`). The daemon reports disabled features when it connects; Gateway then refuses those requests with `409 NODE_CONSOLE_DISABLED` or `409 NODE_FILES_DISABLED`, and the node page explains where to turn them back on.
+
+Docker container consoles and container files are not affected: they reach into containers, not the host.
+
+**To remove host access, disable both.** Turning off only the console is not a boundary: the daemon usually runs as root, and writing files as that user can still change the host and run code — systemd units, cron jobs, `authorized_keys`, or this config file itself to turn the console back on at the next restart. The node page shows a warning while the console is off and file access is on.
+
+The node setup dialogs offer **Disable host console** and **Disable host files** checkboxes that add these flags to the generated command. Nodes ordered through a hosting provider are installed by Gateway itself with a pinned installer revision; turn the switches off on those nodes by editing the config file.
 
 ## Daemon Updates
 

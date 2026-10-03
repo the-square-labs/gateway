@@ -16,9 +16,27 @@ LOG_FILE="${GATEWAY_RELAY_SETUP_LOG:-/dev/null}"
 MANUAL_LAUNCH_TIMEOUT_SECONDS="${GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS:-30}"
 MANUAL_FALLBACK_USED=0
 ENROLLMENT_WAIT_SECONDS="${GATEWAY_RELAY_ENROLLMENT_WAIT_SECONDS:-90}"
+DISABLE_CONSOLE="${GATEWAY_NODE_DISABLE_CONSOLE:-0}"
+DISABLE_FILES="${GATEWAY_NODE_DISABLE_FILES:-0}"
 
 usage() {
-  echo "Usage: setup-relay-node.sh --gateway host:port --token TOKEN --gateway-cert-sha256 sha256:HEX --advertise-address HOST [--service-port 9443] [--version vX.Y.Z]"
+  echo "Usage: setup-relay-node.sh --gateway host:port --token TOKEN --gateway-cert-sha256 sha256:HEX --advertise-address HOST [--service-port 9443] [--version vX.Y.Z] [--disable-console] [--disable-files]"
+  echo "  --disable-console  Turn the host console off (console.enabled: false; env GATEWAY_NODE_DISABLE_CONSOLE=1)"
+  echo "  --disable-files    Turn host file access off (files.enabled: false; env GATEWAY_NODE_DISABLE_FILES=1)"
+}
+
+# Host access switches: the installer only turns them off, and keeps a switch a
+# previous install turned off when it rewrites the config. Turning one back on
+# is an edit of the config file on the node.
+host_feature_disabled() {
+  local config_file="$1" section="$2"
+  [[ -f "$config_file" ]] || return 1
+  awk -v section="$section" '
+    $0 ~ ("^" section ":[[:space:]]*(#.*)?$") { in_section = 1; next }
+    in_section && /^[^[:space:]#]/ { in_section = 0 }
+    in_section && /^[[:space:]]+enabled:[[:space:]]*(false|False|FALSE)[[:space:]]*(#.*)?$/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "$config_file"
 }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
@@ -337,6 +355,8 @@ while [[ $# -gt 0 ]]; do
     --advertise-address) ADVERTISE_ADDRESS="$2"; shift 2 ;;
     --service-port) SERVICE_PORT="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
+    --disable-console) DISABLE_CONSOLE=1; shift ;;
+    --disable-files) DISABLE_FILES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -411,6 +431,8 @@ set -eu
 exec /usr/local/bin/relay-supervisor run "$@"
 RUNNER
 chmod 0755 /usr/local/lib/gateway-relay/run-supervisor
+if host_feature_disabled /etc/gateway-relay-supervisor/config.yaml console; then DISABLE_CONSOLE=1; fi
+if host_feature_disabled /etc/gateway-relay-supervisor/config.yaml files; then DISABLE_FILES=1; fi
 cat >/etc/gateway-relay-supervisor/config.yaml <<CONFIG
 gateway:
   address: ${GATEWAY}
@@ -432,6 +454,14 @@ worker:
   advertised_addresses:
     - ${ADVERTISE_ADDRESS}
 CONFIG
+if [[ "$DISABLE_CONSOLE" == "1" ]]; then
+  printf 'console:\n  enabled: false\n' >>/etc/gateway-relay-supervisor/config.yaml
+  echo "console.enabled: false written to /etc/gateway-relay-supervisor/config.yaml"
+fi
+if [[ "$DISABLE_FILES" == "1" ]]; then
+  printf 'files:\n  enabled: false\n' >>/etc/gateway-relay-supervisor/config.yaml
+  echo "files.enabled: false written to /etc/gateway-relay-supervisor/config.yaml"
+fi
 chmod 0600 /etc/gateway-relay-supervisor/config.yaml
 # The supervisor records whether Gateway accepted the token written above. A relay that is already enrolled keeps its
 # previous identity when the token is refused (used, expired, wrong node), so only this record tells the two apart.

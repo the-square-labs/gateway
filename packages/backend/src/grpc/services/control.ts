@@ -16,6 +16,7 @@ import { NotificationEvaluatorService } from '@/modules/notifications/notificati
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { backgroundWrites } from '@/services/background-writes.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
+import { nodeHostAccessFlags } from '@/services/node-host-access.js';
 import { reportedPolicySigningKeyIds } from '@/services/relay-policy-signing-key.service.js';
 import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
@@ -725,6 +726,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                     ...(msg.register.capabilities?.includes('docker_compose_v1') ? { dockerComposeV1: true } : {}),
                     ...(msg.register.capabilities?.includes('docker_gpu_v1') ? { dockerGpuV1: true } : {}),
                     ...(msg.register.capabilities?.includes('docker_migration_v1') ? { dockerMigrationV1: true } : {}),
+                    ...nodeHostAccessFlags(msg.register.capabilities),
                     ...(reportedRuntimeStatus ? { dockerRuntimeStatus: reportedRuntimeStatus } : {}),
                     cpuModel: msg.register.cpuModel || undefined,
                     cpuCores: msg.register.cpuCores || undefined,

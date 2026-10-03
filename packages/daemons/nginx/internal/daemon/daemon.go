@@ -49,6 +49,8 @@ func New(cfg *config.Config, cfgPath string, logger *slog.Logger) (*Daemon, erro
 			ClientCert: cfg.TLS.ClientCert,
 			ClientKey:  cfg.TLS.ClientKey,
 		},
+		Console:   cfg.Console,
+		Files:     cfg.Files,
 		StateDir:  cfg.StateDir,
 		LogLevel:  cfg.LogLevel,
 		LogFormat: cfg.LogFormat,

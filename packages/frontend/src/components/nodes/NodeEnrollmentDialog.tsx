@@ -5,6 +5,7 @@ import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
+import { HostAccessInstallOptions } from "@/components/nodes/HostAccessInstallOptions";
 import { HostingNodeWizard } from "@/components/nodes/HostingNodeWizard";
 import { UnreleasedInstallerNote } from "@/components/nodes/UnreleasedInstallerNote";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,10 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { allowedCreationFolderId, creationFolderChoices } from "@/lib/creation-folders";
 import { nodeChangesFor } from "@/lib/node-changed";
+import {
+  DEFAULT_HOST_ACCESS_INSTALL_OPTIONS,
+  withHostAccessInstallFlags,
+} from "@/lib/node-host-access";
 import { canCreateInFolder } from "@/lib/scope-utils";
 import { STEP_ANIMATION } from "@/pages/notifications/template-editor";
 import { api } from "@/services/api";
@@ -137,6 +142,7 @@ export function NodeEnrollmentDialog({
   } = useDeferredDialogState<EnrollmentResult>();
   const [targetId, setTargetId] = useState("public");
   const [transport, setTransport] = useState<"curl" | "wget">("curl");
+  const [hostAccess, setHostAccess] = useState(DEFAULT_HOST_ACCESS_INSTALL_OPTIONS);
   const completedNodeRef = useRef<string | null>(null);
   const retainedHosting = useRetainedDialogValue(hosting ?? null, open);
   const [hostingModeLocked, setHostingModeLocked] = useState(false);
@@ -249,6 +255,7 @@ export function NodeEnrollmentDialog({
       completedNodeRef.current = null;
       setTargetId("public");
       setTransport("curl");
+      setHostAccess(DEFAULT_HOST_ACCESS_INSTALL_OPTIONS);
       onNodeCreated?.(response.node);
       onOpenChange(false);
     } catch (error) {
@@ -281,6 +288,7 @@ export function NodeEnrollmentDialog({
         completedNodeRef.current = null;
         setTargetId("public");
         setTransport("curl");
+        setHostAccess(DEFAULT_HOST_ACCESS_INSTALL_OPTIONS);
       } catch (error) {
         if (!cancelled) {
           toast.error(error instanceof Error ? error.message : "Failed to generate a new token");
@@ -296,7 +304,7 @@ export function NodeEnrollmentDialog({
 
   const targets = result?.installCommands ?? [];
   const selectedTarget = targets.find((target) => target.target === targetId) ?? targets[0];
-  const command = selectedTarget?.[transport] ?? "";
+  const command = withHostAccessInstallFlags(selectedTarget?.[transport] ?? "", hostAccess);
 
   const setupDescription =
     result?.type === "relay"
@@ -524,6 +532,7 @@ export function NodeEnrollmentDialog({
                 </TabsList>
               </Tabs>
             </div>
+            <HostAccessInstallOptions value={hostAccess} onChange={setHostAccess} />
             {selectedTarget && (
               <CopyCodeBlock
                 label={`${transport} command`}
