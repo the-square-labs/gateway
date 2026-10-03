@@ -11,6 +11,7 @@ import paramiko
 import pathlib
 import re
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
@@ -29,6 +30,12 @@ STARTED_AT = time.time()
 # Leaves time to detach replication, restore masterauth and report a result
 # before the executor enforces the run's deadline.
 DEADLINE_RESERVE_SECONDS = 30
+# A restore target that asks the staged Redis for a full copy this many times
+# could not load the earlier copies (for example an RDB format newer than it reads).
+REDIS_FULL_SYNC_ATTEMPTS = 3
+# The staged Redis listens as soon as it starts and answers LOADING while it
+# reads the dump. Refusing connections this long means it exited.
+REDIS_STAGE_START_SECONDS = 60
 
 
 class BackupError(Exception):
@@ -40,6 +47,9 @@ def main():
     if operation == "storage-copy":
         return storage_copy_main()
     config = load_config()
+    # The executor stops a cancelled or overdue runner with SIGTERM and waits
+    # before it kills it: raising here runs the cleanup of the current step.
+    signal.signal(signal.SIGTERM, stop_requested)
     try:
         if operation == "preflight":
             preflight(config)
@@ -56,6 +66,11 @@ def main():
         result(config, "failed", operation or "validation", error=sanitize(str(error)))
         return 1
     return 0
+
+
+def stop_requested(_signum, _frame):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    raise BackupError("the run was stopped: it was cancelled or reached its time limit")
 
 
 def load_config():
@@ -112,8 +127,16 @@ def remaining_seconds(config, minimum=1):
 def run(args, env=None, input_text=None):
     completed = subprocess.run(args, input=input_text, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, check=False)
     if completed.returncode:
-        raise BackupError("native command failed")
+        raise BackupError(command_failure(args[0], completed.stderr or completed.stdout))
     return completed.stdout
+
+
+def command_failure(program, output):
+    """The failed tool and the last lines it printed, which name the actual cause."""
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    detail = " ".join(lines[-3:])[:512]
+    name = os.path.basename(program)
+    return f"{name} failed: {detail}" if detail else f"{name} failed with no output"
 
 
 def safe_part(value):
@@ -233,6 +256,7 @@ def preflight(config):
             run(db_args(source, "psql") + ["-Atqc", "SELECT 1"], postgres_env(source))
         elif engine == "redis":
             redis_command(source, ["PING"])
+            assert_redis_replication_access(source)
         else:
             clickhouse_query(source, "SELECT 1")
             stage = config.get("staging") or config["destination"]
@@ -513,37 +537,126 @@ def restore_redis(config, artifact):
     # The staged Redis starts as soon as dump.rdb exists, so it must appear complete.
     shutil.copyfile(artifact, stage_dir / "dump.rdb.tmp")
     os.replace(stage_dir / "dump.rdb.tmp", stage_dir / "dump.rdb")
-    # A large dump takes long to load and to replicate: both waits use the
-    # run's remaining time rather than fixed limits.
-    deadline = time.time() + remaining_seconds(config)
-    while time.time() < deadline:
-        try:
-            redis_command(stage, ["PING"]); break
-        except BackupError: time.sleep(0.5)
-    else: raise BackupError("staged Redis did not become ready")
+    wait_for_redis_stage(config, stage)
     redis_command(target, ["PING"])
     previous_masterauth = redis_config_value(target, "masterauth")
-    replication_started = False
+    # From here on every outcome, a stop request included, detaches the target.
     try:
         if stage.get("password"):
             redis_command_secret_last(target, ["CONFIG", "SET", "masterauth"], stage["password"])
         redis_command(target, ["REPLICAOF", stage["host"], str(stage["port"])])
-        replication_started = True
-        deadline = time.time() + remaining_seconds(config)
-        while time.time() < deadline:
-            info = redis_command(target, ["INFO", "replication"])
-            if "master_sync_in_progress:0" in info and "master_link_status:up" in info and "role:slave" in info:
-                break
-            time.sleep(1)
-        else:
-            raise BackupError("Redis full synchronization did not complete")
-    finally:
-        if replication_started:
-            try:
-                redis_command(target, ["REPLICAOF", "NO", "ONE"])
-            finally:
-                redis_command_secret_last(target, ["CONFIG", "SET", "masterauth"], previous_masterauth)
-                redis_command(target, ["SAVE"])
+        wait_for_redis_sync(config, target, stage)
+    except BaseException as error:
+        problem = detach_redis_target(target, previous_masterauth)
+        if problem:
+            raise BackupError(f"{error}; {problem}") from error
+        raise
+    problem = detach_redis_target(target, previous_masterauth)
+    if problem:
+        raise BackupError(problem)
+
+
+def wait_for_redis_stage(config, stage):
+    # A large dump takes long to load: the wait uses the run's remaining time.
+    deadline = time.time() + remaining_seconds(config)
+    refused_since = None
+    while time.time() < deadline:
+        try:
+            redis_command(stage, ["PING"])
+            return
+        except BackupError as error:
+            if "refused" not in str(error).lower():
+                refused_since = None
+            elif refused_since is None:
+                refused_since = time.time()
+            elif time.time() - refused_since > REDIS_STAGE_START_SECONDS:
+                raise BackupError("the staged Redis exited before it was ready: it could not load the backup's dump")
+            time.sleep(0.5)
+    raise BackupError("staged Redis did not become ready")
+
+
+def wait_for_redis_sync(config, target, stage):
+    # Replicating a large dump takes long: the wait uses the run's remaining time.
+    started = time.time()
+    deadline = started + remaining_seconds(config)
+    while time.time() < deadline:
+        info = redis_command(target, ["INFO", "replication"])
+        if "master_sync_in_progress:0" in info and "master_link_status:up" in info and "role:slave" in info:
+            return
+        # A target that cannot load the copy drops it and asks for a new one,
+        # forever: only the staged Redis counts the attempts.
+        full_syncs = redis_info_number(redis_command(stage, ["INFO", "stats"]), "sync_full")
+        if full_syncs >= REDIS_FULL_SYNC_ATTEMPTS:
+            raise BackupError(redis_load_failure(target, stage))
+        if full_syncs == 0 and time.time() - started > REDIS_STAGE_START_SECONDS:
+            raise BackupError(
+                f"the restore target did not connect to the staged Redis at {stage['host']}:{stage['port']}: "
+                "it must reach the Storage node at that address"
+            )
+        time.sleep(1)
+    raise BackupError("Redis full synchronization did not complete")
+
+
+def redis_info_number(info, field):
+    for line in info.replace("\r", "").split("\n"):
+        name, separator, value = line.partition(":")
+        if separator and name == field and value.strip().isdigit():
+            return int(value.strip())
+    return 0
+
+
+def redis_load_failure(target, stage):
+    try:
+        target_version, stage_version = redis_version(target), redis_version(stage)
+    except BackupError:
+        return "the restore target could not load the data replicated to it; restore into the Redis version the backup was taken with or a newer one"
+    return (
+        f"the restore target runs Redis {target_version}, which could not load the data of this backup "
+        f"replicated from Redis {stage_version}; restore into Redis {stage_version} or newer"
+    )
+
+
+def detach_redis_target(target, previous_masterauth):
+    """Returns the target to a primary with its own masterauth and a dump it can load.
+
+    Every step is attempted and a failure is returned rather than raised, so the
+    cause of the run's outcome is kept. A stop request no longer interrupts it.
+    """
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+    steps = (
+        ("REPLICAOF NO ONE", lambda: redis_command(target, ["REPLICAOF", "NO", "ONE"])),
+        ("restore masterauth", lambda: redis_command_secret_last(target, ["CONFIG", "SET", "masterauth"], previous_masterauth)),
+        # A failed full synchronization leaves the target's dump.rdb replaced by
+        # the copy it could not load, so it would not start again. SAVE rewrites
+        # it from the data the target holds.
+        ("SAVE", lambda: redis_command(target, ["SAVE"])),
+    )
+    failures = []
+    for name, step in steps:
+        try:
+            step()
+        except BackupError as error:
+            failures.append(f"{name}: {error}")
+    if failures:
+        return "the restore target could not be returned to its previous state (" + "; ".join(failures) + ")"
+    return None
+
+
+def assert_redis_replication_access(source):
+    """redis-cli --rdb reads the data over replication (REPLCONF, then SYNC).
+
+    A user without those commands would fail only once the backup runs. Both are in
+    the @admin and @dangerous categories; REPLCONF is harmless on a client connection.
+    """
+    try:
+        reply = redis_command(source, ["REPLCONF", "capa", "eof"]).strip()
+    except BackupError as error:
+        reply = str(error)
+    if "NOPERM" in reply or "no permissions" in reply:
+        raise BackupError(
+            "the Redis user cannot run the replication commands a backup reads the data with (REPLCONF and SYNC): "
+            "allow them for this user (+replconf +sync) or use a user that has them. Redis said: " + reply
+        )
 
 
 def redis_config_value(endpoint, key):
