@@ -18,6 +18,9 @@ type migrationVolumeMeasure struct {
 }
 
 func (p *DockerPlugin) measureMigrationVolume(ctx context.Context, volumeName string) (migrationVolumeMeasure, error) {
+	if err := requireVolumeDataAccess("measuring a volume for migration"); err != nil {
+		return migrationVolumeMeasure{}, err
+	}
 	volume, err := p.client.cli.VolumeInspect(ctx, volumeName, mobyclient.VolumeInspectOptions{})
 	if err != nil {
 		return migrationVolumeMeasure{}, fmt.Errorf("inspect migration volume: %w", err)

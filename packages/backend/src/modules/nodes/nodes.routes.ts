@@ -198,6 +198,7 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
       ...(advertisedCapabilities.includes('docker_volume_storage_images_v1')
         ? { dockerVolumeStorageImagesV1: true }
         : {}),
+      ...(advertisedCapabilities.includes('docker_daemon_non_root_v1') ? { dockerDaemonNonRootV1: true } : {}),
       ...(advertisedCapabilities.includes('nginx_pages_v1') ? { nginx_pages_v1: true } : {}),
       ...(advertisedCapabilities.includes('nginx_pages_config_v1') ? { nginx_pages_config_v1: true } : {}),
       ...(advertisedCapabilities.includes('managed_databases_v1') ? { managedDatabasesV1: true } : {}),

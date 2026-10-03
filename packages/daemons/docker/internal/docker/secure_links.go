@@ -1206,6 +1206,9 @@ func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
 }
 
 func (p *DockerPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksCommand) (string, error) {
+	if p.cfg.Docker.Mode != "databases" && runsWithoutRoot() {
+		return "", fmt.Errorf("proxy secure links need docker-daemon to run as root; this node runs it as %s", runUserName())
+	}
 	if p.cfg.Docker.Mode == "databases" || p.secureLinks == nil {
 		return "", errors.New("proxy secure links require a general Docker daemon")
 	}

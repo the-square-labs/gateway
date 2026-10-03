@@ -416,6 +416,14 @@ func installLinkListenerBootUnit(host volumeImageBootHost, executable, stateDir 
 }
 
 func (p *DockerPlugin) ensureLinkListenerBootUnit() {
+	if runsWithoutRoot() {
+		// The boot step runs as root before Docker; a daemon without root can neither install it nor may it point
+		// root at a binary its own user can replace.
+		linkListenerBootSkipped.Do(func() {
+			p.logger.Info("database link listener boot step unavailable: it needs docker-daemon to run as root; after a reboot workloads may be refused until the daemon listens", "user", runUserName())
+		})
+		return
+	}
 	executable, err := os.Executable()
 	if err == nil {
 		executable, err = filepath.EvalSymlinks(executable)

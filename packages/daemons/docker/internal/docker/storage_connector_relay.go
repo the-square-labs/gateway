@@ -35,6 +35,12 @@ func storageConnectorRelaySocketPath(stateDir string) string {
 // owned storage connector. The request identifies a relay grant by binding ID;
 // it cannot select a host, port, Docker bind, or arbitrary route target.
 func (p *DockerPlugin) startStorageConnectorRelay() error {
+	if runsWithoutRoot() {
+		// The connectors run as uid 65532 and only root can hand them the socket: managed storage links stay
+		// unavailable on this node and are not advertised.
+		p.logger.Info("managed storage links unavailable: they need docker-daemon to run as root", "user", runUserName())
+		return nil
+	}
 	directory := storageConnectorRelayDirectory(p.cfg.StateDir)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create storage connector relay directory: %w", err)
