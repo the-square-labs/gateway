@@ -1,6 +1,9 @@
 package docker
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +11,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
 )
 
 func TestStorageConnectorConfigOfPassesValidation(t *testing.T) {
@@ -91,5 +95,52 @@ func TestClaimConnectorDirectorySetsAsideForeignDirectory(t *testing.T) {
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o750 {
 		t.Fatalf("new directory: %v %v", info, err)
+	}
+}
+
+func TestRootDaemonRemovesOnlySetAsideDirectories(t *testing.T) {
+	previous := daemonEUID
+	t.Cleanup(func() { daemonEUID = previous })
+	daemonEUID = func() int { return 0 }
+	stateDir := t.TempDir()
+	for _, name := range []string{
+		"secure-link-connector",
+		"secure-link-connector.previous-owner-1791053749357938628",
+		"secure-link-connector.previous-owner-12x",
+		"storage-connector.previous-owner-1791053749767670040",
+	} {
+		if err := os.MkdirAll(filepath.Join(stateDir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stateDir, name, "secure-link.sock"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(stateDir, "secure-link-connector.previous-owner-42")); err != nil {
+		t.Fatal(err)
+	}
+	p := &DockerPlugin{cfg: &config.Config{}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.cfg.StateDir = stateDir
+
+	p.removeSetAsideConnectorDirectories(context.Background(), "secure-link-connector", "")
+
+	for name, want := range map[string]bool{
+		"secure-link-connector": true,
+		"secure-link-connector.previous-owner-1791053749357938628": false,
+		"secure-link-connector.previous-owner-12x":                 true,
+		"storage-connector.previous-owner-1791053749767670040":     true,
+		"secure-link-connector.previous-owner-42":                  true,
+	} {
+		_, err := os.Lstat(filepath.Join(stateDir, name))
+		if exists := err == nil; exists != want {
+			t.Fatalf("%s exists = %v, want %v", name, exists, want)
+		}
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatal("the symlink target was touched")
 	}
 }

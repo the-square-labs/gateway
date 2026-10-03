@@ -15,6 +15,12 @@ import (
 )
 
 func main() {
+	if directory := os.Getenv(cleanDirectoryEnv); directory != "" {
+		if err := emptyCleanDirectory(directory); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	storageConfig, storageMode, err := storageConnectorConfigFromEnv(storageConnectorEnvironment())

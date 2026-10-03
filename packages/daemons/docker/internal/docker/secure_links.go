@@ -569,7 +569,14 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 	}
 	m.useConnector(runtime)
 	m.publishViewLocked()
-	return nil, waitForConnectorSocket(ctx, m.socketPath)
+	if err := waitForConnectorSocket(ctx, m.socketPath); err != nil {
+		return nil, err
+	}
+	// The connector of this mode serves: the control directory a mode switch set aside can go.
+	if m.plugin.cfg != nil && len(setAsideDirectories(m.plugin.cfg.StateDir, "secure-link-connector")) > 0 {
+		go m.plugin.removeSetAsideConnectorDirectories(context.Background(), "secure-link-connector", image)
+	}
+	return nil, nil
 }
 
 // connectorRuntime is the connector container dials and syncs use.
