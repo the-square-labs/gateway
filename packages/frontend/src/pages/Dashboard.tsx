@@ -51,7 +51,7 @@ import { NodeSetupWizard } from "./dashboard/finalize-setup/NodeSetupWizard";
 import { HealthOverviewCard } from "./dashboard/HealthOverviewCard";
 import { ManagedCertificatesNotice } from "./dashboard/ManagedCertificatesNotice";
 import { NodesCard } from "./dashboard/NodesCard";
-import { PinnedNodeCard, WARN_THRESHOLD } from "./dashboard/PinnedNodeCard";
+import { nodeHasCapacityWarning, PinnedNodeCard } from "./dashboard/PinnedNodeCard";
 import { PinnedProxyCard } from "./dashboard/PinnedProxyCard";
 import { PinnedDatabaseCard, PinnedDockerResourceCard } from "./dashboard/PinnedResourceCard";
 import { QuickStatsCard } from "./dashboard/QuickStatsCard";
@@ -820,11 +820,7 @@ export function Dashboard() {
 
           {/* Pinned + Warning Node Overview Cards */}
           {visibleNodesForCards
-            .filter((n) => {
-              if (dashboardPinnedIds.includes(n.id)) return true;
-              const disk = n.lastHealthReport?.diskMounts?.find((d) => d.mountPoint === "/");
-              return disk ? disk.usagePercent >= WARN_THRESHOLD : false;
-            })
+            .filter((n) => dashboardPinnedIds.includes(n.id) || nodeHasCapacityWarning(n))
             .map((node) => (
               <PinnedNodeCard key={node.id} node={node} />
             ))}
