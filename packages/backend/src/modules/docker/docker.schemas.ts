@@ -12,7 +12,7 @@ const ContainerNameSchema = z
     'Invalid container name (must start with alphanumeric, then alphanumerics, _, ., or -)'
   );
 const DOCKER_CONTAINER_PORTS_MAX = 256;
-const DOCKER_STOP_TIMEOUT_MAX_SECONDS = 300;
+export const DOCKER_STOP_TIMEOUT_MAX_SECONDS = 300;
 const DOCKER_GPU_DEVICE_IDS_MAX = 32;
 const DOCKER_MOUNTS_MAX = 128;
 const DOCKER_NETWORKS_MAX = 32;

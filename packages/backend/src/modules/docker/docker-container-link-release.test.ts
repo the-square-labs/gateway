@@ -36,6 +36,8 @@ function context(dispatch: ReturnType<typeof vi.fn>) {
     resolveContainerName: vi.fn().mockResolvedValue('api'),
     inspectContainer: vi.fn().mockResolvedValue({ State: { Status: 'exited' } }),
     requireNoTransition: vi.fn(),
+    waitWhileTransition: vi.fn().mockResolvedValue(undefined),
+    lifecycleWatchTimeoutMs: vi.fn().mockReturnValue(60000),
     setTransition: vi.fn(),
     clearTransition: vi.fn(),
     translateNameConflict: vi.fn((error: unknown) => {

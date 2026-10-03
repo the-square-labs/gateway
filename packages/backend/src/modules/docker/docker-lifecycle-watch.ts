@@ -1,3 +1,4 @@
+import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { getReplacementContainerFailureMessage } from './docker-recreate-watch.js';
@@ -39,6 +40,14 @@ export interface DockerLifecycleWatchContext {
   failTask: (taskId: string | undefined, error: string, nodeId?: string, containerName?: string) => Promise<void>;
 }
 
+/** How a watched lifecycle operation ended; its task records the same outcome. */
+export type DockerTransitionOutcome = { completed: true } | { completed: false; reason: 'timeout' | 'disconnected' };
+
+/**
+ * Polls the container until the operation reached its state, then completes its task and ends its transition.
+ * The returned promise settles once the task did; it never rejects. A container that no longer exists has no
+ * process left: an operation that waits for `exited` (stop, kill) is then complete.
+ */
 export function watchDockerTransition(
   context: DockerLifecycleWatchContext,
   nodeId: string,
@@ -50,42 +59,59 @@ export function watchDockerTransition(
   completedAction: ContainerAction,
   timeoutMs = 60000,
   isComplete?: (inspectData: Record<string, any>) => boolean
-) {
-  const start = Date.now();
-  const poll = setInterval(async () => {
-    try {
-      const result = await context.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
-      const data = context.parseResult(result) as Record<string, any>;
-      const state = data?.State?.Status;
-      const completed = isComplete ? isComplete(data) : state === expectedState;
-      if (completed) {
-        clearInterval(poll);
-        context.clearTransition(nodeId, name);
-        if (taskId && context.taskService) {
-          await context.taskService
-            .update(taskId, { status: 'succeeded', progress, completedAt: new Date() })
-            .catch(() => {});
+): Promise<DockerTransitionOutcome> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    let settled = false;
+    const complete = async () => {
+      settled = true;
+      clearInterval(poll);
+      context.clearTransition(nodeId, name);
+      if (taskId && context.taskService) {
+        await context.taskService
+          .update(taskId, { status: 'succeeded', progress, completedAt: new Date() })
+          .catch(() => {});
+      }
+      context.emitContainer(nodeId, name, containerId, completedAction);
+      resolve({ completed: true });
+    };
+    const fail = async (reason: 'timeout' | 'disconnected') => {
+      settled = true;
+      clearInterval(poll);
+      await context.failTask(
+        taskId,
+        reason === 'timeout' ? 'Timed out' : 'Docker node disconnected during container operation',
+        nodeId,
+        name
+      );
+      resolve({ completed: false, reason });
+    };
+    const poll = setInterval(async () => {
+      try {
+        const result = await context.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
+        if (settled) return;
+        const data = context.parseResult(result) as Record<string, any>;
+        const state = data?.State?.Status;
+        const completed = isComplete ? isComplete(data) : state === expectedState;
+        if (completed) {
+          await complete();
+          return;
         }
-        context.emitContainer(nodeId, name, containerId, completedAction);
-        return;
+        if (Date.now() - start > timeoutMs) await fail('timeout');
+      } catch (error) {
+        if (settled) return;
+        if (isNodeDisconnectedError(error)) {
+          await fail('disconnected');
+          return;
+        }
+        if (expectedState === 'exited' && error instanceof AppError && error.code === 'CONTAINER_NOT_FOUND') {
+          await complete();
+          return;
+        }
+        if (Date.now() - start > timeoutMs) await fail('timeout');
       }
-      if (Date.now() - start > timeoutMs) {
-        clearInterval(poll);
-        await context.failTask(taskId, 'Timed out', nodeId, name);
-      }
-    } catch (error) {
-      if (isNodeDisconnectedError(error)) {
-        clearInterval(poll);
-        await context.failTask(taskId, 'Docker node disconnected during container operation', nodeId, name);
-        return;
-      }
-      // Container might not exist during recreate — keep polling
-      if (Date.now() - start > timeoutMs) {
-        clearInterval(poll);
-        await context.failTask(taskId, 'Timed out', nodeId, name);
-      }
-    }
-  }, 2000);
+    }, 2000);
+  });
 }
 
 export function watchDockerRecreateByName(

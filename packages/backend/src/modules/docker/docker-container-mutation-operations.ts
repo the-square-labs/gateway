@@ -14,13 +14,14 @@ import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creatio
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { containerAnonymousVolumes, removeContainerAnonymousVolumes } from './docker-container-anonymous-volumes.js';
+import { waitForStopInFlight } from './docker-container-lifecycle-operations.js';
 import { detachRemovedContainerSource } from './docker-container-source-detach.js';
 import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
 import { placeCreatedDockerResource } from './docker-creation-access.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
-import type { ContainerAction } from './docker-lifecycle-watch.js';
+import type { ContainerAction, DockerTransitionOutcome } from './docker-lifecycle-watch.js';
 import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
@@ -162,6 +163,13 @@ export interface DockerContainerMutationContext {
   inspectContainer(nodeId: string, containerId: string): Promise<any>;
   runtimeOperationContext(): DockerRuntimeOperationContext;
   requireNoTransition(nodeId: string, name: string): void;
+  /** Resolves once `name` holds none of `states` in this process, or after `timeoutMs`. */
+  waitWhileTransition(
+    nodeId: string,
+    name: string,
+    states: readonly ContainerTransition[],
+    timeoutMs: number
+  ): Promise<void>;
   setTransition(
     nodeId: string,
     name: string,
@@ -193,7 +201,7 @@ export interface DockerContainerMutationContext {
     nodeId: string,
     name: string,
     id: string,
-    transition: 'stopping' | 'restarting' | 'killing' | 'updating' | 'recreating'
+    transition: 'stopping' | 'restarting' | 'killing' | 'updating' | 'recreating' | null
   ): void;
   createTask(
     nodeId: string,
@@ -212,7 +220,7 @@ export interface DockerContainerMutationContext {
     completedAction: ContainerAction,
     timeoutMs?: number,
     isComplete?: (inspectData: Record<string, any>) => boolean
-  ): void;
+  ): Promise<DockerTransitionOutcome>;
   /**
    * Waits for the container named `containerName` to run under a runtime other than `oldContainerId`, which must be
    * the replaced container's runtime ID: a name would match the replaced container while it still runs.
@@ -680,6 +688,8 @@ export async function removeContainer(
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const name = await ctx.resolveContainerName(nodeId, containerId);
   await assertContainerNotUsedByProxy(ctx.db, nodeId, name);
+  // A removal right after a stop waits for the stop to end instead of refusing a container that is stopping.
+  await waitForStopInFlight(ctx, nodeId, name);
   ctx.requireNoTransition(nodeId, name);
   const inspect = await ctx.inspectContainer(nodeId, containerId);
   const state = String(inspect?.State?.Status ?? inspect?.state ?? inspect?.State ?? '').toLowerCase();

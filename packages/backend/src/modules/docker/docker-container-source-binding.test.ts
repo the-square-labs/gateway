@@ -51,6 +51,8 @@ function baseContext(db: unknown, dispatch: ReturnType<typeof vi.fn>): DockerCon
     resolveContainerName: vi.fn().mockResolvedValue('api'),
     inspectContainer: vi.fn().mockResolvedValue({ State: { Status: 'exited' } }),
     requireNoTransition: vi.fn(),
+    waitWhileTransition: vi.fn().mockResolvedValue(undefined),
+    lifecycleWatchTimeoutMs: vi.fn().mockReturnValue(60000),
     claimTransitions: vi.fn().mockReturnValue({}),
     releaseTransitions: vi.fn(),
     acquireTransitionLeases: vi.fn().mockResolvedValue(undefined),
