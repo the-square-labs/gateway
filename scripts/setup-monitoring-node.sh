@@ -185,6 +185,134 @@ command_exists() { command -v "$1" &>/dev/null; }
 has_systemd() { command_exists systemctl && [[ -d /run/systemd/system ]]; }
 has_openrc() { command_exists rc-service && command_exists rc-update; }
 
+# A root daemon keeps its binary in /usr/local/bin. A daemon running as its own user must be able to replace its binary
+# when it updates itself, so the binary lives in a directory that user owns and /usr/local/bin only links to it.
+MONITORING_BIN_LINK="/usr/local/bin/monitoring-daemon"
+MONITORING_OWN_DIR="/usr/local/lib/monitoring-daemon"
+MONITORING_OWN_BINARY="${MONITORING_OWN_DIR}/bin/monitoring-daemon"
+MONITORING_OWN_HOST_IDENTITY="/var/lib/monitoring-daemon/host-identity"
+SHARED_HOST_IDENTITY="/var/lib/gateway/host-identity"
+
+# Reads an installed binary's version. A binary another user can replace is never run as root.
+daemon_binary_version() {
+    local binary="$1" owner
+    owner=$(stat -Lc '%U' "$binary" 2>/dev/null || echo root)
+    if [[ "$owner" == "root" ]]; then
+        "$binary" version 2>/dev/null | awk '{print $2}'
+    elif command_exists runuser; then
+        runuser -u "$owner" -- "$binary" version 2>/dev/null | awk '{print $2}'
+    else
+        return 1
+    fi
+}
+
+run_as_run_user() {
+    if [[ "$RUN_USER" == "root" ]]; then
+        "$@"
+    elif command_exists runuser; then
+        runuser -u "$RUN_USER" -g "$RUN_GROUP" -- "$@"
+    elif command_exists setpriv; then
+        setpriv "--reuid=${RUN_USER}" "--regid=${RUN_GROUP}" --init-groups -- "$@"
+    else
+        # Files written as root here are handed to the run user afterwards.
+        "$@"
+    fi
+}
+
+# Hands the daemon's configuration, state and binary to the run user: it reads its configuration, writes its
+# certificates and state and replaces its binary on update.
+grant_daemon_paths_to_run_user() {
+    [[ "$RUN_USER" != "root" ]] || return 0
+    local path
+    for path in /etc/monitoring-daemon /var/lib/monitoring-daemon "$MONITORING_OWN_DIR"; do
+        [[ ! -e "$path" ]] || chown -hR "${RUN_USER}:${RUN_GROUP}" "$path"
+    done
+}
+
+new_host_identity() {
+    local value
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+        value=$(cat /proc/sys/kernel/random/uuid) || return 1
+    else
+        value=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n') || return 1
+        value="${value:0:8}-${value:8:4}-4${value:13:3}-$(printf '%x' $(( (16#${value:16:1} & 3) | 8 )))${value:17:3}-${value:20:12}"
+    fi
+    printf '%s\n' "$value"
+}
+
+# A daemon running as its own user cannot read the host identity that root daemons share (root-owned, mode 0600). It
+# gets a copy of that same identity in its own state directory, so Gateway still sees one host and the shared file
+# keeps its owner and mode. Without a shared identity yet, one is created there exactly as a root daemon would.
+seed_host_identity_copy() {
+    local shared="$1" copy="$2" identity="" temporary
+    local pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    if [[ -f "$copy" && ! -L "$copy" ]]; then
+        identity=$(tr -d '[:space:]' <"$copy")
+        [[ ! "$identity" =~ $pattern ]] || return 0
+        identity=""
+    fi
+    if [[ -f "$shared" && ! -L "$shared" ]]; then
+        identity=$(tr -d '[:space:]' <"$shared")
+    elif [[ -e "$shared" || -L "$shared" ]]; then
+        err "${shared} is not a regular file; fix it and run the installer again."
+        return 1
+    fi
+    if [[ -z "$identity" && ! -e "$shared" ]]; then
+        identity=$(new_host_identity) || return 1
+        [[ -d "$(dirname "$shared")" ]] || mkdir -p -m 0700 "$(dirname "$shared")" || return 1
+        temporary=$(mktemp "$(dirname "$shared")/.host-identity-XXXXXX") || return 1
+        # Publish complete contents without replacing an identity another daemon wrote meanwhile.
+        if ! printf '%s\n' "$identity" >"$temporary" || ! ln "$temporary" "$shared" 2>/dev/null; then
+            identity=$(tr -d '[:space:]' <"$shared" 2>/dev/null || true)
+        fi
+        rm -f "$temporary"
+    fi
+    if [[ ! "$identity" =~ $pattern ]]; then
+        err "The host identity at ${shared} is not valid; fix it and run the installer again."
+        return 1
+    fi
+    temporary=$(mktemp "$(dirname "$copy")/.host-identity-XXXXXX") || return 1
+    if ! printf '%s\n' "$identity" >"$temporary" || ! chmod 0600 "$temporary" || ! mv -f "$temporary" "$copy"; then
+        rm -f "$temporary"
+        return 1
+    fi
+}
+
+# Points the daemon configuration at the host identity copy; the rest of the file is kept as written.
+set_config_host_identity_path() {
+    local config="$1" path="$2" temporary
+    [[ -f "$config" && ! -L "$config" ]] || return 1
+    grep -qx "host_identity_path: \"${path}\"" "$config" && return 0
+    temporary=$(mktemp) || return 1
+    grep -v '^host_identity_path:' "$config" >"$temporary" || true
+    printf 'host_identity_path: "%s"\n' "$path" >>"$temporary"
+    # Rewrite in place so the file keeps its owner and mode.
+    cat "$temporary" >"$config" || { rm -f "$temporary"; return 1; }
+    rm -f "$temporary"
+}
+
+# The daemon enrolls when it starts; it has its certificate and state once Gateway accepted the token.
+await_enrollment() {
+    local waited=0 limit="${GATEWAY_MONITORING_ENROLLMENT_WAIT_SECONDS:-90}"
+    while (( waited < limit )); do
+        if [[ -f /etc/monitoring-daemon/certs/node.pem && -f /var/lib/monitoring-daemon/state.json ]]; then
+            ok "monitoring-daemon enrolled with Gateway"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    err "monitoring-daemon has not enrolled with Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
+    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+        err "Check the daemon log: /var/lib/monitoring-daemon/launcher/manual.log"
+    elif has_systemd; then
+        err "Check the daemon log: journalctl -u monitoring-daemon"
+    elif has_openrc; then
+        err "Check the daemon log: /var/log/monitoring-daemon.err and /var/log/monitoring-daemon.log"
+    fi
+    return 1
+}
+
 launcher_pid_from_json() {
     local metadata="$1"
     local pid
@@ -473,7 +601,7 @@ detect_existing_install() {
 
     if [[ -x "$target" ]]; then
         EXISTING_INSTALL=1
-        EXISTING_VERSION=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        EXISTING_VERSION=$(daemon_binary_version "$target" || echo "unknown")
     fi
 
     if [[ -f "$config_path" ]]; then
@@ -929,12 +1057,25 @@ verify_checksum() {
 }
 
 install_daemon() {
-    local target="/usr/local/bin/monitoring-daemon"
+    if [[ "$RUN_USER" == "root" ]]; then
+        # Never write a root binary through a link left by an install that ran as another user.
+        [[ ! -L "$MONITORING_BIN_LINK" ]] || rm -f "$MONITORING_BIN_LINK"
+        install_daemon_binary "$MONITORING_BIN_LINK"
+        return
+    fi
+    install -d -m 0755 "$MONITORING_OWN_DIR" "$(dirname "$MONITORING_OWN_BINARY")"
+    install_daemon_binary "$MONITORING_OWN_BINARY"
+    ln -sfn "$MONITORING_OWN_BINARY" "$MONITORING_BIN_LINK"
+    grant_daemon_paths_to_run_user
+}
+
+install_daemon_binary() {
+    local target="$1"
     local binary_name="monitoring-daemon-linux-${ARCH}"
 
     if [[ -f "$target" ]]; then
         local existing_ver
-        existing_ver=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        existing_ver=$(daemon_binary_version "$target" || echo "unknown")
         if [[ "$RESOLVED_DAEMON_VERSION" == "$existing_ver" ]]; then
             ok "monitoring-daemon already installed (${existing_ver})"
             return 0
@@ -953,7 +1094,7 @@ install_daemon() {
         mv "${target}.tmp" "$target"
         chmod +x "$target"
         local ver
-        ver=$("$target" version 2>/dev/null | awk '{print $2}' || echo "unknown")
+        ver=$(daemon_binary_version "$target" || echo "unknown")
         ok "monitoring-daemon installed (${ver})"
     else
         rm -f "${target}.tmp"
@@ -968,14 +1109,26 @@ enroll_daemon() {
     # Check if already enrolled (certs exist)
     if [[ -f /etc/monitoring-daemon/certs/node.pem && -f /var/lib/monitoring-daemon/state.json ]]; then
         ok "Node already enrolled — skipping enrollment"
+        prepare_run_user_identity
         return 0
     fi
 
     log "Writing config and enrolling with Gateway..."
-    if ! "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" >> "$LOG_FILE" 2>&1; then
+    if ! run_as_run_user "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" >> "$LOG_FILE" 2>&1; then
         die "Failed to enroll monitoring-daemon. Check ${LOG_FILE} for details."
     fi
+    prepare_run_user_identity
     ok "Config written to /etc/monitoring-daemon/config.yaml"
+}
+
+# A daemon running as its own user enrolls with its copy of the host identity and owns everything it writes.
+prepare_run_user_identity() {
+    [[ "$RUN_USER" != "root" ]] || return 0
+    seed_host_identity_copy "$SHARED_HOST_IDENTITY" "$MONITORING_OWN_HOST_IDENTITY" \
+        || die "Could not prepare the host identity for ${RUN_USER}."
+    set_config_host_identity_path /etc/monitoring-daemon/config.yaml "$MONITORING_OWN_HOST_IDENTITY" \
+        || die "Could not point /etc/monitoring-daemon/config.yaml at ${MONITORING_OWN_HOST_IDENTITY}."
+    grant_daemon_paths_to_run_user
 }
 
 # ── Step 4: Start the daemon ──────────────────────────────────────
@@ -1090,6 +1243,10 @@ create_directories
 install_daemon
 enroll_daemon
 start_daemon
+# A daemon running as its own user can fail on permissions only once it runs; never report such an install as done.
+if [[ "$RUN_USER" != "root" ]] && ! await_enrollment; then
+    die "monitoring-daemon is installed, but it did not enroll with Gateway."
+fi
 
 echo ""
 echo ""
