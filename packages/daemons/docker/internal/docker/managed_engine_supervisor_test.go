@@ -27,6 +27,8 @@ type fakeEngineDocker struct {
 	policy  map[string]string
 	// users are the containers a container list returns.
 	users []string
+	// finishedAt is when a stopped container last exited, if set.
+	finishedAt map[string]time.Time
 }
 
 func (d *fakeEngineDocker) client() *Client {
@@ -37,6 +39,13 @@ func (d *fakeEngineDocker) client() *Client {
 		d.t.Fatal(err)
 	}
 	return &Client{cli: cli}
+}
+
+func (d *fakeEngineDocker) finished(id string) string {
+	if at, ok := d.finishedAt[id]; ok {
+		return at.Format(time.RFC3339Nano)
+	}
+	return "0001-01-01T00:00:00Z"
 }
 
 func (d *fakeEngineDocker) serve(request *http.Request) (*http.Response, error) {
@@ -65,13 +74,16 @@ func (d *fakeEngineDocker) serve(request *http.Request) (*http.Response, error) 
 	case request.Method == http.MethodGet && action == "/json":
 		raw, _ := json.Marshal(map[string]any{
 			"Id":         id,
-			"State":      map[string]any{"Running": running},
+			"State":      map[string]any{"Running": running, "FinishedAt": d.finished(id)},
 			"HostConfig": map[string]any{"RestartPolicy": map[string]any{"Name": d.policy[id]}},
 		})
 		return reply(http.StatusOK, string(raw))
 	case request.Method == http.MethodPost && action == "/stop":
 		*d.calls = append(*d.calls, "stop "+id)
 		d.running[id] = false
+		if d.finishedAt != nil {
+			d.finishedAt[id] = time.Now()
+		}
 		return reply(http.StatusNoContent, "")
 	case request.Method == http.MethodPost && action == "/start":
 		*d.calls = append(*d.calls, "start "+id)

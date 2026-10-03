@@ -121,6 +121,10 @@ func (m *managedStorageManager) startStoppedEngine(ctx context.Context, id, cont
 	if stopped, err := engineStopped(ctx, m.client, record.ContainerID); err != nil || !stopped {
 		return err
 	}
+	// Until it runs again it is neither serving nor coming back: an engine
+	// the supervisor cannot start is stopped, not starting.
+	run := m.engineRun(record.ContainerID)
+	m.setEngineRun(record.ContainerID, engineRun{exited: run.exited, restartedAt: run.restartedAt})
 	if err := m.ensureMounted(ctx, &record); err != nil {
 		return err
 	}
@@ -133,11 +137,7 @@ func (m *managedStorageManager) startStoppedEngine(ctx context.Context, id, cont
 	if _, err := m.client.cli.ContainerStart(ctx, record.ContainerID, mobyclient.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start managed storage container: %w", err)
 	}
-	if containerID != "" {
-		// It stopped on its own (a crash, an OOM kill): until it serves again
-		// it is reported stopped, not starting.
-		m.exitedEngines.Store(record.ContainerID, true)
-	}
+	m.setEngineRun(record.ContainerID, restartedEngineRun(run, containerID != "", time.Now()))
 	m.logger.Info("started managed storage engine after mounting its storage", "id", id)
 	return m.saveRecord(record)
 }
@@ -203,8 +203,10 @@ func (p *DockerPlugin) watchEngineEvents(ctx context.Context, restarts *engineRe
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stream := p.client.cli.Events(streamCtx, mobyclient.EventsListOptions{
-		Filters: mobyclient.Filters{}.Add("type", string(events.ContainerEventType)).Add("event", string(events.ActionDie)),
+		Filters: mobyclient.Filters{}.Add("type", string(events.ContainerEventType)).Add("event",
+			string(events.ActionDie), string(events.ActionKill), string(events.ActionOOM), string(events.ActionStart)),
 	})
+	stops := newEngineStops()
 	select {
 	case err := <-stream.Err:
 		// Docker is not answering (it is restarting); retried shortly.
@@ -225,12 +227,16 @@ func (p *DockerPlugin) watchEngineEvents(ctx context.Context, restarts *engineRe
 			}
 			return
 		case message := <-stream.Messages:
-			p.handleEngineStop(ctx, restarts, message)
+			if requested, died := stops.observe(message); died {
+				p.handleEngineStop(ctx, restarts, message, requested)
+			}
 		}
 	}
 }
 
-func (p *DockerPlugin) handleEngineStop(ctx context.Context, restarts *engineRestarts, message events.Message) {
+// handleEngineStop starts an engine that died while it should run.
+// requested is a stop asked for through Docker's API (see engineStops).
+func (p *DockerPlugin) handleEngineStop(ctx context.Context, restarts *engineRestarts, message events.Message, requested bool) {
 	containerID := message.Actor.ID
 	if id := message.Actor.Attributes[managedDatabaseLabel]; id != "" && p.databaseManager != nil {
 		restarts.schedule("database/"+id, func() {
@@ -242,6 +248,7 @@ func (p *DockerPlugin) handleEngineStop(ctx context.Context, restarts *engineRes
 		})
 	}
 	if id := message.Actor.Attributes[managedStorageLabel]; id != "" && p.storageManager != nil {
+		p.storageManager.recordEngineStop(containerID, requested)
 		restarts.schedule("storage/"+id, func() {
 			restartCtx, cancel := context.WithTimeout(ctx, engineRestartTimeout)
 			defer cancel()
@@ -250,6 +257,63 @@ func (p *DockerPlugin) handleEngineStop(ctx context.Context, restarts *engineRes
 			}
 		})
 	}
+}
+
+// engineStopRequestWindow bounds how long a stop signal may precede the
+// engine's exit to count as the cause of it (a stop's timeout ends in SIGKILL).
+const engineStopRequestWindow = 2 * time.Minute
+
+// engineStops tells why an engine container died, from the events before its
+// die. A stop asked for through Docker's API (docker stop, kill or restart, or
+// this daemon's own stop) sends a stop signal first, logged as a "kill"
+// event; a process that crashes dies without one, and the kernel's OOM kill
+// is logged as "oom". A start begins a new run. It is used by the event loop
+// alone.
+type engineStops struct {
+	signalled map[string]time.Time
+	oom       map[string]bool
+}
+
+func newEngineStops() *engineStops {
+	return &engineStops{signalled: map[string]time.Time{}, oom: map[string]bool{}}
+}
+
+// observe follows one container event. For a die of an engine container it
+// reports died and whether the stop was asked for: a stop signal within
+// engineStopRequestWindow before it and no OOM kill since the engine started.
+func (s *engineStops) observe(message events.Message) (requested, died bool) {
+	attributes := message.Actor.Attributes
+	if attributes[managedDatabaseLabel] == "" && attributes[managedStorageLabel] == "" {
+		return false, false
+	}
+	containerID := message.Actor.ID
+	at := time.Unix(0, message.TimeNano)
+	switch message.Action {
+	case events.ActionKill:
+		if engineStopSignals[strings.TrimPrefix(strings.ToUpper(attributes["signal"]), "SIG")] {
+			s.signalled[containerID] = at
+		}
+	case events.ActionOOM:
+		s.oom[containerID] = true
+	case events.ActionStart:
+		delete(s.signalled, containerID)
+		delete(s.oom, containerID)
+	case events.ActionDie:
+		signalled, ok := s.signalled[containerID]
+		requested = ok && !s.oom[containerID] && at.Sub(signalled) <= engineStopRequestWindow
+		delete(s.signalled, containerID)
+		delete(s.oom, containerID)
+		return requested, true
+	}
+	return false, false
+}
+
+// engineStopSignals are the signals that stop an engine, as Docker logs them
+// (a number) or as a name; a reload signal (SIGHUP for a certificate reload)
+// is not one.
+var engineStopSignals = map[string]bool{
+	"2": true, "3": true, "9": true, "15": true,
+	"INT": true, "QUIT": true, "KILL": true, "TERM": true,
 }
 
 // startStoppedEngines starts every engine that should run and does not.
