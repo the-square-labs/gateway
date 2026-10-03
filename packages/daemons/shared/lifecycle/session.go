@@ -334,7 +334,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 		case *pb.GatewayCommand_NodeFile:
 			// Handle node-level filesystem operations in shared lifecycle so all daemon types support them.
 			sendAsyncCommandResult(cmd, func(c *pb.GatewayCommand) *pb.CommandResult {
-				return handleNodeFile(sessionCtx, c)
+				return handleNodeFile(sessionCtx, c, d.cfg.HostIdentityPath)
 			})
 			continue
 		case *pb.GatewayCommand_DockerImage,
