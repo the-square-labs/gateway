@@ -774,6 +774,13 @@ func (m *managedDatabaseManager) reconcile(ctx context.Context) error {
 			m.logger.Warn("managed database storage could not be restored at startup", "id", id, "error", err)
 			continue
 		}
+		if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
+			m.logger.Warn("managed database is not started at startup", "id", id, "error", runtimeFilesMissingError("managed database", missing))
+			if err := m.saveRecord(record); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := m.startContainer(ctx, record.ContainerID); err != nil {
 			m.logger.Warn("managed database could not be started at startup", "id", id, "error", err)
 			continue
@@ -820,9 +827,19 @@ func (m *managedDatabaseManager) saveRecord(record managedDatabaseRecord) error 
 }
 
 func marshalManagedDatabaseDetail(record managedDatabaseRecord, status string) (string, error) {
-	value, err := json.Marshal(map[string]any{
+	return marshalManagedDatabaseInspect(record, status, nil)
+}
+
+// marshalManagedDatabaseInspect is the inspect detail; runtimeMissing names the
+// runtime files the node lost (see managed_runtime_files.go).
+func marshalManagedDatabaseInspect(record managedDatabaseRecord, status string, runtimeMissing []string) (string, error) {
+	detail := map[string]any{
 		"id": record.ID, "containerId": record.ContainerID, "status": status, "publishedPort": record.PublishedPort, "publishedNativePort": record.PublishedNativePort, "tlsEnabled": record.TLSEnabled, "operationId": record.OperationID,
-	})
+	}
+	if len(runtimeMissing) > 0 {
+		detail["runtimeMissing"] = runtimeMissing
+	}
+	value, err := json.Marshal(detail)
 	if err != nil {
 		return "", err
 	}

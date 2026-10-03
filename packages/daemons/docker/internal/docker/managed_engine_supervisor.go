@@ -90,6 +90,12 @@ func (m *managedDatabaseManager) startStoppedEngine(ctx context.Context, id, con
 	if err := m.ensureMounted(ctx, &record); err != nil {
 		return err
 	}
+	if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
+		if err := m.saveRecord(record); err != nil {
+			return err
+		}
+		return runtimeFilesMissingError("managed database", missing)
+	}
 	if _, err := m.client.cli.ContainerStart(ctx, record.ContainerID, mobyclient.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start managed database container: %w", err)
 	}
@@ -117,6 +123,12 @@ func (m *managedStorageManager) startStoppedEngine(ctx context.Context, id, cont
 	}
 	if err := m.ensureMounted(ctx, &record); err != nil {
 		return err
+	}
+	if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
+		if err := m.saveRecord(record); err != nil {
+			return err
+		}
+		return runtimeFilesMissingError("managed storage", missing)
 	}
 	if _, err := m.client.cli.ContainerStart(ctx, record.ContainerID, mobyclient.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start managed storage container: %w", err)

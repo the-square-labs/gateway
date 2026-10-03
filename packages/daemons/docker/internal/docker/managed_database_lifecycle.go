@@ -64,7 +64,17 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	if err := m.ensureStorageSize(ctx, record, input.StorageSizeBytes); err != nil {
 		return err
 	}
+	if _, err := m.restageRuntimeFiles(*record, &input); err != nil {
+		return err
+	}
 	requiresRecreate := managedDatabaseRequiresRecreate(*record, input)
+	// Redis derives maxmemory from the memory limit; a running Redis applies a
+	// new one without a restart, like the limit itself.
+	currentMaxmemory, liveMaxmemory := int64(0), false
+	if requiresRecreate && !managedDatabaseContainerSettingsChanged(*record, input) {
+		currentMaxmemory, liveMaxmemory = m.redisMaxmemoryOnlyChange(*record, input)
+		requiresRecreate = !liveMaxmemory
+	}
 	if !requiresRecreate {
 		var err error
 		requiresRecreate, err = m.publicationNeedsPinning(ctx, *record, input)
@@ -77,8 +87,22 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 			return err
 		}
 	} else {
+		// A lower maxmemory is applied before the lower memory limit, a higher
+		// one after the higher limit, so Redis never plans for memory its
+		// container does not have.
+		shrinking := liveMaxmemory && managedRedisMaxmemory(input) < currentMaxmemory
+		if shrinking {
+			if err := m.applyRedisMaxmemory(ctx, *record, input); err != nil {
+				return err
+			}
+		}
 		if err := m.client.LiveUpdateContainer(ctx, record.ContainerID, managedDatabaseRuntimeJSON(input)); err != nil {
 			return err
+		}
+		if liveMaxmemory && !shrinking {
+			if err := m.applyRedisMaxmemory(ctx, *record, input); err != nil {
+				return err
+			}
 		}
 		// A renewed certificate is loaded by the running engine (see
 		// reloadTLS) instead of recreating the container; a restart is the
@@ -142,7 +166,7 @@ func managedRedisConfigText(input managedDatabaseCommand) string {
 		save = fmt.Sprintf("save %d %d", config.RDBSaveSeconds, config.RDBSaveChanges)
 	}
 	return fmt.Sprintf("aclfile /data/users.acl\nmaxmemory %d\nmaxmemory-policy %s\nappendonly %s\nappendfsync %s\naof-use-rdb-preamble yes\nauto-aof-rewrite-percentage %d\nauto-aof-rewrite-min-size %dmb\n%s\nmaxclients %d\ntimeout %d\ntcp-keepalive %d\nslowlog-log-slower-than %d\nslowlog-max-len %d\nactivedefrag %s\n",
-		input.MemoryBytes*int64(config.MaxmemoryPercent)/100,
+		managedRedisMaxmemory(input),
 		config.MaxmemoryPolicy,
 		yesNo(config.AppendOnly),
 		config.AppendFsync,
@@ -156,6 +180,78 @@ func managedRedisConfigText(input managedDatabaseCommand) string {
 		config.SlowlogMaxLen,
 		yesNo(config.ActiveDefrag),
 	)
+}
+
+func managedRedisMaxmemory(input managedDatabaseCommand) int64 {
+	return input.MemoryBytes * int64(normalizedManagedRedisConfig(input).MaxmemoryPercent) / 100
+}
+
+// cutRedisMaxmemory splits a managed Redis config into its maxmemory value
+// and the rest of the file.
+func cutRedisMaxmemory(text string) (int64, string, bool) {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		value, ok := strings.CutPrefix(line, "maxmemory ")
+		if !ok {
+			continue
+		}
+		bytes, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, "", false
+		}
+		return bytes, strings.Join(append(lines[:i:i], lines[i+1:]...), "\n"), true
+	}
+	return 0, "", false
+}
+
+// managedRedisBoundConfigPath is the config file the container was created
+// with; a live maxmemory change rewrites it under that name.
+func managedRedisBoundConfigPath(record managedDatabaseRecord) string {
+	return filepath.Join(record.MountPath, "gateway-redis-"+record.RedisConfigHash+".conf")
+}
+
+// redisMaxmemoryOnlyChange reports whether the config file the container
+// reads differs from the requested config only in maxmemory, and the current
+// value.
+func (m *managedDatabaseManager) redisMaxmemoryOnlyChange(record managedDatabaseRecord, input managedDatabaseCommand) (int64, bool) {
+	if record.Type != "redis" || record.RedisConfigHash == "" {
+		return 0, false
+	}
+	raw, err := os.ReadFile(managedRedisBoundConfigPath(record))
+	if err != nil {
+		return 0, false
+	}
+	current, rest, ok := cutRedisMaxmemory(string(raw))
+	if !ok {
+		return 0, false
+	}
+	_, wanted, ok := cutRedisMaxmemory(managedRedisConfigText(input))
+	return current, ok && rest == wanted
+}
+
+// applyRedisMaxmemory sets maxmemory on a running Redis and writes it to the
+// bound config file for the next start. The file is rewritten in place: the
+// container sees it through a bind mount of that very file.
+func (m *managedDatabaseManager) applyRedisMaxmemory(ctx context.Context, record managedDatabaseRecord, input managedDatabaseCommand) error {
+	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect managed database container: %w", err)
+	}
+	if inspect.Container.State != nil && inspect.Container.State.Running {
+		if err := m.runManagedDatabaseExec(
+			ctx,
+			record.ContainerID,
+			[]string{"redis-cli", "--no-auth-warning", "--user", "default", "CONFIG", "SET", "maxmemory", strconv.FormatInt(managedRedisMaxmemory(input), 10)},
+			"",
+			[]string{"REDISCLI_AUTH=" + input.OwnerPassword},
+		); err != nil {
+			return fmt.Errorf("apply Redis maxmemory: %w", err)
+		}
+	}
+	if err := writeManagedRedisConfig(managedRedisBoundConfigPath(record), managedRedisConfigText(input)); err != nil {
+		return fmt.Errorf("write Redis managed config: %w", err)
+	}
+	return nil
 }
 
 func managedRedisConfigHash(input managedDatabaseCommand) string {
@@ -196,14 +292,20 @@ func writeClickHouseOwnerOverride(path, config string) error {
 // creation. A changed TLS certificate is not one of them: update applies it
 // to the running engine through reloadTLS.
 func managedDatabaseRequiresRecreate(record managedDatabaseRecord, input managedDatabaseCommand) bool {
+	return managedDatabaseContainerSettingsChanged(record, input) ||
+		(record.Type == "redis" && managedRedisConfigHash(input) != record.RedisConfigHash)
+}
+
+// managedDatabaseContainerSettingsChanged reports the settings fixed at
+// container creation other than the Redis config file.
+func managedDatabaseContainerSettingsChanged(record managedDatabaseRecord, input managedDatabaseCommand) bool {
 	return input.PublishedPort != record.PublishedPort ||
 		input.PublishedNativePort != record.PublishedNativePort ||
 		(input.PublishNativeTCP != (record.PublishedNativePort != 0)) ||
 		input.TLSEnabled != record.TLSEnabled ||
 		(input.PublishTCP != (record.PublishedPort != 0)) ||
 		(record.Type == "clickhouse" && (clickHouseConfigHash(input.ClickhouseConfig) != record.ClickhouseConfigHash ||
-			record.ClickhouseRuntimeProfileVersion != clickHouseRuntimeProfileVersion)) ||
-		(record.Type == "redis" && managedRedisConfigHash(input) != record.RedisConfigHash)
+			record.ClickhouseRuntimeProfileVersion != clickHouseRuntimeProfileVersion))
 }
 
 func portBindingNeedsPinning(bindings network.PortMap, containerPort network.Port, expected uint16) bool {
@@ -261,6 +363,11 @@ func (m *managedDatabaseManager) restart(ctx context.Context, record *managedDat
 	}
 	if err := m.ensureMounted(ctx, record); err != nil {
 		return err
+	}
+	if missing, err := m.restageRuntimeFiles(*record, &input); err != nil {
+		return err
+	} else if len(missing) > 0 {
+		return runtimeFilesMissingError("managed database", missing)
 	}
 	needsPinning, err := m.publicationNeedsPinning(ctx, *record, input)
 	if err != nil {
@@ -407,6 +514,11 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 		}
 		if err := m.ensureMounted(ctx, &existing); err != nil {
 			return managedDatabaseRecord{}, err
+		}
+		if missing, err := m.restageRuntimeFiles(existing, &input); err != nil {
+			return managedDatabaseRecord{}, err
+		} else if len(missing) > 0 {
+			return managedDatabaseRecord{}, runtimeFilesMissingError("managed database", missing)
 		}
 		if err := m.startContainer(ctx, existing.ContainerID); err != nil {
 			return managedDatabaseRecord{}, err
