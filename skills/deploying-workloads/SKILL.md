@@ -69,7 +69,7 @@ Registries, Gateway-managed volumes, networks, folders, cross-node migration (`p
 
 - Transitions (stopping, restarting, recreating, deploying, switching) block concurrent operations on the same resource. Follow the Task instead of retrying.
 - Pulls use the target Node's registry access; images are not copied between Docker Nodes.
-- Stop, restart, kill, recreate, update, build, and migration are Tasks. Stop, restart, and SIGKILL answer once the container has stopped or started again, so a delete right after a stop works. A slow response is not a failure; never repeat a create or delete after a timeout before reconciling.
+- Stop, restart, kill, recreate, update, build, and migration are Tasks. Stop, restart, and SIGKILL answer once the container has stopped or started again, so a delete right after a stop works. A request waits at most 45 s: an operation still running then answers `pending: true` with its task (a delete of a stopping container: a remove task that removes it once the stop ends). Wait as the result says; do not repeat the request. A slow response is not a failure; never repeat a create or delete after a timeout before reconciling.
 - Never introduce host bind mounts, privileged mode, device access, or Docker socket access.
 
 Further reading: [Docker overview](https://docs.goodgateway.dev/en/docker/overview/), [Git builds](https://docs.goodgateway.dev/en/docker/git-builds/).
