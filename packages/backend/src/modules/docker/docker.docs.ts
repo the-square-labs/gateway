@@ -199,6 +199,8 @@ export const stopContainerRoute = appRoute({
   path: '/nodes/{nodeId}/containers/{containerId}/stop',
   tags: ['Docker Containers'],
   summary: 'Stop a container',
+  description:
+    'Answers once the container has stopped (or with an error naming its task when it did not stop in time), so a read or a removal right after sees it stopped. A stop already running is waited for.',
   request: { params: containerParams, ...optionalJsonBody(ContainerStopSchema) },
   responses: successJson,
 });
@@ -207,6 +209,7 @@ export const restartContainerRoute = appRoute({
   path: '/nodes/{nodeId}/containers/{containerId}/restart',
   tags: ['Docker Containers'],
   summary: 'Restart a container',
+  description: 'Answers once Docker has started the container again.',
   request: { params: containerParams, ...optionalJsonBody(ContainerStopSchema) },
   responses: successJson,
 });
@@ -215,6 +218,8 @@ export const killContainerRoute = appRoute({
   path: '/nodes/{nodeId}/containers/{containerId}/kill',
   tags: ['Docker Containers'],
   summary: 'Kill a container',
+  description:
+    'SIGKILL (the default) answers once the container has exited. Another signal answers once it was delivered; the container may keep running.',
   request: { params: containerParams, ...optionalJsonBody(ContainerKillSchema) },
   responses: successJson,
 });
@@ -224,7 +229,7 @@ export const removeContainerRoute = appRoute({
   tags: ['Docker Containers'],
   summary: 'Remove a container',
   description:
-    'Removes a stopped container. A running, paused or restarting container is refused (409 CONTAINER_RUNNING): stop it first. A container a Route reaches is refused (409 PROXY_UPSTREAM_IN_USE). Its managed database and storage links are removed with it.',
+    'Removes a stopped container. A container that is stopping is removed once the stop ends. A running, paused or restarting container is refused (409 CONTAINER_RUNNING): stop it first. A container a Route reaches is refused (409 PROXY_UPSTREAM_IN_USE). Its managed database and storage links are removed with it.',
   request: { params: containerParams },
   responses: successJson,
 });

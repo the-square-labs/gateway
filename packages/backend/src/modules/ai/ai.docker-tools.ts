@@ -386,7 +386,7 @@ export async function executeDockerTool(
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       return {
         success: true,
-        message: 'Container stopping',
+        message: 'Container stopped',
         data: await context.dockerService.stopContainer(
           a.nodeId,
           a.containerId,
@@ -399,7 +399,7 @@ export async function executeDockerTool(
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       return {
         success: true,
-        message: 'Container restarting',
+        message: 'Container restarted',
         data: await context.dockerService.restartContainer(
           a.nodeId,
           a.containerId,

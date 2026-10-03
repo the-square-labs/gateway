@@ -1528,7 +1528,7 @@ export function DockerContainerDetail({
             onClick: () =>
               doAction(
                 () => api.stopContainer(managementNodeId, managementContainerId),
-                "Container stopping",
+                "Container stopped",
                 "Stop"
               ),
             disabled: actionDisabled,
@@ -1542,7 +1542,7 @@ export function DockerContainerDetail({
                   onClick: () =>
                     doAction(
                       () => api.restartContainer(managementNodeId, managementContainerId),
-                      "Container restarting",
+                      "Container restarted",
                       "Restart"
                     ),
                   disabled: actionDisabled,
