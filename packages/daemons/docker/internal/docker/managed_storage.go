@@ -270,13 +270,23 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 		if len(missing) > 0 {
 			return "", runtimeFilesMissingError("managed storage", missing)
 		}
-		if action == "restart" {
+		// The restart's operation is recorded, so Gateway sees it applied. A
+		// restart Gateway sends again for an operation the node already
+		// applied (its answer was lost) does not stop the engine again.
+		operationID := ""
+		if action == "restart" && input != nil {
+			operationID = input.OperationID
+		}
+		if action == "restart" && (operationID == "" || operationID != record.OperationID) {
 			_ = m.client.StopContainer(ctx, record.ContainerID, 20)
 		}
 		if err := m.startContainer(ctx, record.ContainerID); err != nil {
 			return "", err
 		}
 		record.DesiredRunning = true
+		if operationID != "" {
+			record.OperationID = operationID
+		}
 		if err := m.saveRecord(record); err != nil {
 			return "", err
 		}
