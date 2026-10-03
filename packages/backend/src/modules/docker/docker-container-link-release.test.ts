@@ -36,6 +36,8 @@ function context(dispatch: ReturnType<typeof vi.fn>) {
     resolveContainerName: vi.fn().mockResolvedValue('api'),
     inspectContainer: vi.fn().mockResolvedValue({ State: { Status: 'exited' } }),
     requireNoTransition: vi.fn(),
+    waitWhileTransition: vi.fn().mockResolvedValue(undefined),
+    lifecycleWatchTimeoutMs: vi.fn().mockReturnValue(60000),
     setTransition: vi.fn(),
     clearTransition: vi.fn(),
     translateNameConflict: vi.fn((error: unknown) => {
@@ -69,7 +71,11 @@ describe('managed links of a container name', () => {
     const { ctx, releaseContainerLinks } = context(dispatch);
     releaseContainerLinks.mockRejectedValue(new Error('database unavailable'));
 
-    await expect(removeContainer(ctx, 'node-1', 'container-1', false, 'user-1')).resolves.toBeUndefined();
+    await expect(removeContainer(ctx, 'node-1', 'container-1', false, 'user-1')).resolves.toEqual({
+      taskId: undefined,
+      containerId: 'container-1',
+      name: 'api',
+    });
     expect(ctx.emitContainer).toHaveBeenCalled();
   });
 

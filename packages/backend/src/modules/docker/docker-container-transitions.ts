@@ -53,6 +53,8 @@ export class DockerContainerTransitions {
   private readonly leases = new Map<string, { hold: ContainerLeaseHold; leaseKey: string }>();
   /** Lease keys this map holds or is claiming. */
   private readonly activeLeaseKeys = new Set<string>();
+  /** Callers of `waitWhile`, woken when the name's transition here changes. */
+  private readonly waiters = new Map<string, Set<() => void>>();
 
   setLeaseStore(store: OperationLeaseStore) {
     this.leaseStore = store;
@@ -70,6 +72,7 @@ export class DockerContainerTransitions {
     const key = this.key(nodeId, name);
     this.transitions.set(key, state);
     this.owners.delete(key);
+    this.wake(key);
     return true;
   }
 
@@ -78,6 +81,37 @@ export class DockerContainerTransitions {
     this.transitions.delete(key);
     this.owners.delete(key);
     this.dropLease(key);
+    this.wake(key);
+  }
+
+  /**
+   * Resolves once `name` holds none of `states` here (at once when it holds none), or after `timeoutMs`: with the
+   * transition of `states` it still holds then, undefined once it holds none. The caller checks the transition again
+   * afterwards: another operation may have taken the name meanwhile.
+   */
+  async waitWhile(
+    nodeId: string,
+    name: string,
+    states: readonly ContainerTransition[],
+    timeoutMs: number
+  ): Promise<ContainerTransition | undefined> {
+    const key = this.key(nodeId, name);
+    const deadline = Date.now() + timeoutMs;
+    while (this.holds(key, states) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        const waiters = this.waiters.get(key) ?? new Set<() => void>();
+        this.waiters.set(key, waiters);
+        const wake = () => {
+          clearTimeout(timer);
+          waiters.delete(wake);
+          if (waiters.size === 0 && this.waiters.get(key) === waiters) this.waiters.delete(key);
+          resolve();
+        };
+        const timer = setTimeout(wake, Math.max(0, deadline - Date.now()));
+        waiters.add(wake);
+      });
+    }
+    return this.holds(key, states) ? this.transitions.get(key) : undefined;
   }
 
   /**
@@ -100,6 +134,7 @@ export class DockerContainerTransitions {
       const key = this.key(nodeId, name);
       this.transitions.set(key, state);
       this.owners.set(key, token);
+      this.wake(key);
     }
     return { nodeId, names: [...unique.keys()], token };
   }
@@ -112,6 +147,7 @@ export class DockerContainerTransitions {
       this.transitions.delete(key);
       this.owners.delete(key);
       this.dropLease(key);
+      this.wake(key);
     }
   }
 
@@ -230,6 +266,15 @@ export class DockerContainerTransitions {
 
   private key(nodeId: string, name: string) {
     return `${nodeId}:${name}`;
+  }
+
+  private holds(key: string, states: readonly ContainerTransition[]): boolean {
+    const current = this.transitions.get(key);
+    return current !== undefined && states.includes(current);
+  }
+
+  private wake(key: string) {
+    for (const wake of [...(this.waiters.get(key) ?? [])]) wake();
   }
 
   private dropLease(key: string) {

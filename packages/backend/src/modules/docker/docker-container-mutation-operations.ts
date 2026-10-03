@@ -12,15 +12,17 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import { DOCKER_STOP_TIMEOUT_MAX_SECONDS } from './docker.schemas.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { containerAnonymousVolumes, removeContainerAnonymousVolumes } from './docker-container-anonymous-volumes.js';
+import { type ContainerOperationAnswer, waitForStopInFlight } from './docker-container-lifecycle-operations.js';
 import { detachRemovedContainerSource } from './docker-container-source-detach.js';
 import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
 import { placeCreatedDockerResource } from './docker-creation-access.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
-import type { ContainerAction } from './docker-lifecycle-watch.js';
+import type { ContainerAction, DockerTransitionOutcome } from './docker-lifecycle-watch.js';
 import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
@@ -162,6 +164,15 @@ export interface DockerContainerMutationContext {
   inspectContainer(nodeId: string, containerId: string): Promise<any>;
   runtimeOperationContext(): DockerRuntimeOperationContext;
   requireNoTransition(nodeId: string, name: string): void;
+  /**
+   * Resolves once `name` holds none of `states` in this process, or after `timeoutMs` with the one it still holds.
+   */
+  waitWhileTransition(
+    nodeId: string,
+    name: string,
+    states: readonly ContainerTransition[],
+    timeoutMs: number
+  ): Promise<ContainerTransition | undefined>;
   setTransition(
     nodeId: string,
     name: string,
@@ -193,7 +204,7 @@ export interface DockerContainerMutationContext {
     nodeId: string,
     name: string,
     id: string,
-    transition: 'stopping' | 'restarting' | 'killing' | 'updating' | 'recreating'
+    transition: 'stopping' | 'restarting' | 'killing' | 'updating' | 'recreating' | null
   ): void;
   createTask(
     nodeId: string,
@@ -212,7 +223,7 @@ export interface DockerContainerMutationContext {
     completedAction: ContainerAction,
     timeoutMs?: number,
     isComplete?: (inspectData: Record<string, any>) => boolean
-  ): void;
+  ): Promise<DockerTransitionOutcome>;
   /**
    * Waits for the container named `containerName` to run under a runtime other than `oldContainerId`, which must be
    * the replaced container's runtime ID: a name would match the replaced container while it still runs.
@@ -669,250 +680,77 @@ export async function rollbackCreatedContainer(
   return { id: containerId, name };
 }
 
-export async function startContainer(
-  ctx: DockerContainerMutationContext,
-  nodeId: string,
-  containerId: string,
-  userId: string
-) {
-  await ctx.validateDockerNode(nodeId);
-  await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
-  const name = await ctx.resolveContainerName(nodeId, containerId);
-  ctx.requireNoTransition(nodeId, name);
-  if (ctx.runtimeSettingsService) {
-    const persistedRuntime = await ctx.runtimeSettingsService.get(nodeId, name);
-    if (persistedRuntime) {
-      await validateDockerRuntimeResourceConfig(
-        ctx.runtimeOperationContext(),
-        nodeId,
-        containerId,
-        persistedRuntime as Record<string, unknown>
-      );
-      const updateResult = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'live_update', {
-        containerId,
-        configJson: JSON.stringify(persistedRuntime),
-      });
-      ctx.parseResult(updateResult);
-    }
-  }
-  const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'start', { containerId });
-  ctx.parseResult(result);
-  await ctx.auditService.log({
-    action: 'docker.container.start',
-    userId,
-    resourceType: 'docker-container',
-    resourceId: containerId,
-    details: { nodeId, name, containerName: name },
-  });
-  ctx.emitContainer(nodeId, name, containerId, 'started');
-}
-
-/** States with a process for a stop to end. Docker leaves a created, exited or dead container as it is. */
-const STOPPABLE_CONTAINER_STATES = new Set(['running', 'restarting', 'paused']);
-
-/** False only when an inspect shows no process to stop; an inspect failure leaves the decision to the stop. */
-async function containerHasProcessToStop(
-  ctx: DockerContainerMutationContext,
-  nodeId: string,
-  containerId: string
-): Promise<boolean> {
-  try {
-    const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
-    const status = ctx.parseResult(result)?.State?.Status;
-    return typeof status !== 'string' || STOPPABLE_CONTAINER_STATES.has(status);
-  } catch {
-    return true;
-  }
-}
-
-export async function stopContainer(
-  ctx: DockerContainerMutationContext,
-  nodeId: string,
-  containerId: string,
-  timeout: number | undefined,
-  userId: string
-) {
-  await ctx.validateDockerNode(nodeId);
-  await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
-  const name = await ctx.resolveContainerName(nodeId, containerId);
-  const stopTimeout = await ctx.resolveContainerStopTimeout(nodeId, containerId, timeout);
-  ctx.requireNoTransition(nodeId, name);
-  if (!(await containerHasProcessToStop(ctx, nodeId, containerId))) {
-    // A container that never started (created) or already exited is stopped: the stop completes now instead of
-    // holding "stopping" until a watch for an `exited` state that never comes times out.
-    const task = await ctx.createTask(nodeId, containerId, name, 'stop');
-    if (task && ctx.taskService) {
-      await ctx.taskService
-        .update(task.id, { status: 'succeeded', progress: 'Container stopped', completedAt: new Date() })
-        .catch(() => undefined);
-    }
-    await ctx.auditService.log({
-      action: 'docker.container.stop',
-      userId,
-      resourceType: 'docker-container',
-      resourceId: containerId,
-      details: { nodeId, name, containerName: name },
-    });
-    ctx.emitContainer(nodeId, name, containerId, 'stopped');
-    return { taskId: task?.id, containerId, name };
-  }
-  ctx.setTransition(nodeId, name, 'stopping');
-  ctx.emitTransition(nodeId, name, containerId, 'stopping');
-  const task = await ctx.createTask(nodeId, containerId, name, 'stop');
-  try {
-    const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'stop', {
-      containerId,
-      timeoutSeconds: stopTimeout,
-      configJson: JSON.stringify({ timeoutProvided: true }),
-    });
-    ctx.parseResult(result);
-  } catch (err) {
-    await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to stop container', nodeId, name);
-    throw err;
-  }
-  ctx.watchTransition(
-    nodeId,
-    containerId,
-    name,
-    task?.id,
-    'exited',
-    'Container stopped',
-    'stopped',
-    ctx.lifecycleWatchTimeoutMs(stopTimeout)
-  );
-  await ctx.auditService.log({
-    action: 'docker.container.stop',
-    userId,
-    resourceType: 'docker-container',
-    resourceId: containerId,
-    details: { nodeId, name, containerName: name },
-  });
-  return { taskId: task?.id, containerId, name };
-}
-
-export async function restartContainer(
-  ctx: DockerContainerMutationContext,
-  nodeId: string,
-  containerId: string,
-  timeout: number | undefined,
-  userId: string
-) {
-  await ctx.validateDockerNode(nodeId);
-  await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
-  const name = await ctx.resolveContainerName(nodeId, containerId);
-  const stopTimeout = await ctx.resolveContainerStopTimeout(nodeId, containerId, timeout);
-  let previousStartedAt: string | undefined;
-  try {
-    const inspectResult = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId });
-    previousStartedAt = ctx.parseResult(inspectResult)?.State?.StartedAt;
-  } catch {
-    previousStartedAt = undefined;
-  }
-  ctx.requireNoTransition(nodeId, name);
-  ctx.setTransition(nodeId, name, 'restarting');
-  ctx.emitTransition(nodeId, name, containerId, 'restarting');
-  const task = await ctx.createTask(nodeId, containerId, name, 'restart');
-  try {
-    if (ctx.runtimeSettingsService) {
-      const persistedRuntime = await ctx.runtimeSettingsService.get(nodeId, name);
-      if (persistedRuntime) {
-        await validateDockerRuntimeResourceConfig(
-          ctx.runtimeOperationContext(),
-          nodeId,
-          containerId,
-          persistedRuntime as Record<string, unknown>
-        );
-        const updateResult = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'live_update', {
-          containerId,
-          configJson: JSON.stringify(persistedRuntime),
-        });
-        ctx.parseResult(updateResult);
-      }
-    }
-    const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'restart', {
-      containerId,
-      timeoutSeconds: stopTimeout,
-      configJson: JSON.stringify({ timeoutProvided: true }),
-    });
-    ctx.parseResult(result);
-  } catch (err) {
-    await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to restart container', nodeId, name);
-    throw err;
-  }
-  ctx.watchTransition(
-    nodeId,
-    containerId,
-    name,
-    task?.id,
-    'running',
-    'Container restarted',
-    'restarted',
-    ctx.lifecycleWatchTimeoutMs(stopTimeout, 60),
-    (data) => {
-      const state = data?.State;
-      return state?.Status === 'running' && (!previousStartedAt || state.StartedAt !== previousStartedAt);
-    }
-  );
-  await ctx.auditService.log({
-    action: 'docker.container.restart',
-    userId,
-    resourceType: 'docker-container',
-    resourceId: containerId,
-    details: { nodeId, name, containerName: name },
-  });
-  return { taskId: task?.id, containerId, name };
-}
-
-export async function killContainer(
-  ctx: DockerContainerMutationContext,
-  nodeId: string,
-  containerId: string,
-  signal: string,
-  userId: string,
-  trustedStableName?: string
-) {
-  await ctx.validateDockerNode(nodeId);
-  // A trusted stable name is supplied only for an already-authorized lifecycle
-  // transition whose runtime may be temporarily absent. Direct kill requests
-  // must still prove that the target is not a Gateway-owned container.
-  if (!trustedStableName) await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
-  const name = trustedStableName ?? (await ctx.resolveContainerName(nodeId, containerId));
-  ctx.setTransition(nodeId, name, 'killing');
-  ctx.emitTransition(nodeId, name, containerId, 'killing');
-  const task = await ctx.createTask(nodeId, containerId, name, 'kill');
-  try {
-    const result = await ctx.nodeDispatch.sendDockerContainerCommand(nodeId, 'kill', {
-      containerId,
-      signal,
-      configJson: JSON.stringify({ containerName: name, emergency: true }),
-    });
-    ctx.parseResult(result);
-  } catch (err) {
-    await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to kill container', nodeId, name);
-    throw err;
-  }
-  ctx.watchTransition(nodeId, containerId, name, task?.id, 'exited', `Container killed (${signal})`, 'killed');
-  await ctx.auditService.log({
-    action: 'docker.container.kill',
-    userId,
-    resourceType: 'docker-container',
-    resourceId: containerId,
-    details: { nodeId, name, containerName: name, signal },
-  });
-  return { taskId: task?.id, containerId, name };
-}
-
+/**
+ * Removes a stopped container. A removal right after a stop waits for the stop to end instead of refusing a
+ * container that is stopping. A stop that outlasts the request's wait is followed by a `remove` task: the removal
+ * runs once the stop ended, and the answer is pending with that task. `afterRemove` runs once the container is
+ * removed, either way.
+ */
 export async function removeContainer(
   ctx: DockerContainerMutationContext,
   nodeId: string,
   containerId: string,
   force: boolean,
-  userId: string
-) {
+  userId: string,
+  afterRemove?: () => Promise<void>
+): Promise<ContainerOperationAnswer> {
   await ctx.validateDockerNode(nodeId);
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const name = await ctx.resolveContainerName(nodeId, containerId);
   await assertContainerNotUsedByProxy(ctx.db, nodeId, name);
+  const stopping = await waitForStopInFlight(ctx, nodeId, name);
+  if (stopping) {
+    const task = await ctx.createTask(nodeId, containerId, name, 'remove');
+    void removeWhenStopped(ctx, nodeId, containerId, name, force, userId, task?.id, afterRemove);
+    return { taskId: task?.id, containerId, name, pending: stopping };
+  }
+  await removeStoppedContainer(ctx, nodeId, containerId, name, force, userId);
+  await afterRemove?.();
+  return { taskId: undefined, containerId, name };
+}
+
+/** The removal a stop outlasted: it runs once the stop ended, and its task records the outcome. */
+async function removeWhenStopped(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerId: string,
+  name: string,
+  force: boolean,
+  userId: string,
+  taskId: string | undefined,
+  afterRemove?: () => Promise<void>
+) {
+  try {
+    // The stop's own watch ends it within its timeout; this bound only guards against a transition left behind.
+    await waitForStopInFlight(ctx, nodeId, name, ctx.lifecycleWatchTimeoutMs(DOCKER_STOP_TIMEOUT_MAX_SECONDS));
+    // A Route may have been pointed at the container meanwhile.
+    await assertContainerNotUsedByProxy(ctx.db, nodeId, name);
+    await removeStoppedContainer(ctx, nodeId, containerId, name, force, userId);
+    await afterRemove?.();
+    if (taskId) {
+      await ctx.taskService
+        ?.update(taskId, { status: 'succeeded', progress: 'Container removed', completedAt: new Date() })
+        .catch(() => undefined);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to remove container';
+    logger.warn('Could not remove a container after its stop', { nodeId, name, error: message });
+    if (taskId) {
+      await ctx.taskService
+        ?.update(taskId, { status: 'failed', error: message, completedAt: new Date() })
+        .catch(() => undefined);
+    }
+  }
+}
+
+async function removeStoppedContainer(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerId: string,
+  name: string,
+  force: boolean,
+  userId: string
+) {
   ctx.requireNoTransition(nodeId, name);
   const inspect = await ctx.inspectContainer(nodeId, containerId);
   const state = String(inspect?.State?.Status ?? inspect?.state ?? inspect?.State ?? '').toLowerCase();

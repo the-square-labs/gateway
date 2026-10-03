@@ -28,6 +28,31 @@ import { withDockerMigrationApi } from "./api-docker-migrations";
 import { withDockerWebhookApi } from "./api-docker-webhooks";
 import type { ApiClientBaseConstructor } from "./api-mixins";
 
+/**
+ * A container stop, restart, kill or removal still running when the request stopped waiting (45 s): the container is
+ * in `transition`, and `taskId` finishes the operation.
+ */
+export type DockerContainerOperationPending = {
+  taskId: string | null;
+  containerId: string;
+  name: string;
+  transition: "stopping" | "restarting" | "killing";
+};
+
+/** Whether a lifecycle call's result is an operation that still runs. */
+export function isPendingContainerOperation(
+  value: unknown
+): value is DockerContainerOperationPending {
+  return !!value && typeof value === "object" && "transition" in value;
+}
+
+/** A lifecycle request answers 200 when done, or 202 with the operation that still runs. */
+function pendingContainerOperation(
+  body: { data?: DockerContainerOperationPending } | null | undefined
+): DockerContainerOperationPending | null {
+  return body?.data?.transition ? body.data : null;
+}
+
 type DockerListEnvelope<T> = {
   data: T[];
   total?: number;
@@ -818,31 +843,55 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       });
     }
 
-    async stopContainer(nodeId: string, containerId: string, timeout?: number): Promise<void> {
-      await this.request<void>(`/docker/nodes/${nodeId}/containers/${containerId}/stop`, {
-        method: "POST",
-        body: JSON.stringify(timeout === undefined ? {} : { timeout }),
-      });
+    async stopContainer(
+      nodeId: string,
+      containerId: string,
+      timeout?: number
+    ): Promise<DockerContainerOperationPending | null> {
+      return pendingContainerOperation(
+        await this.request<{ data?: DockerContainerOperationPending }>(
+          `/docker/nodes/${nodeId}/containers/${containerId}/stop`,
+          { method: "POST", body: JSON.stringify(timeout === undefined ? {} : { timeout }) }
+        )
+      );
     }
 
-    async restartContainer(nodeId: string, containerId: string, timeout?: number): Promise<void> {
-      await this.request<void>(`/docker/nodes/${nodeId}/containers/${containerId}/restart`, {
-        method: "POST",
-        body: JSON.stringify(timeout === undefined ? {} : { timeout }),
-      });
+    async restartContainer(
+      nodeId: string,
+      containerId: string,
+      timeout?: number
+    ): Promise<DockerContainerOperationPending | null> {
+      return pendingContainerOperation(
+        await this.request<{ data?: DockerContainerOperationPending }>(
+          `/docker/nodes/${nodeId}/containers/${containerId}/restart`,
+          { method: "POST", body: JSON.stringify(timeout === undefined ? {} : { timeout }) }
+        )
+      );
     }
 
-    async killContainer(nodeId: string, containerId: string, signal = "SIGKILL"): Promise<void> {
-      await this.request<void>(`/docker/nodes/${nodeId}/containers/${containerId}/kill`, {
-        method: "POST",
-        body: JSON.stringify({ signal }),
-      });
+    async killContainer(
+      nodeId: string,
+      containerId: string,
+      signal = "SIGKILL"
+    ): Promise<DockerContainerOperationPending | null> {
+      return pendingContainerOperation(
+        await this.request<{ data?: DockerContainerOperationPending }>(
+          `/docker/nodes/${nodeId}/containers/${containerId}/kill`,
+          { method: "POST", body: JSON.stringify({ signal }) }
+        )
+      );
     }
 
-    async removeContainer(nodeId: string, containerId: string): Promise<void> {
-      await this.request<void>(`/docker/nodes/${nodeId}/containers/${containerId}`, {
-        method: "DELETE",
-      });
+    async removeContainer(
+      nodeId: string,
+      containerId: string
+    ): Promise<DockerContainerOperationPending | null> {
+      return pendingContainerOperation(
+        await this.request<{ data?: DockerContainerOperationPending }>(
+          `/docker/nodes/${nodeId}/containers/${containerId}`,
+          { method: "DELETE" }
+        )
+      );
     }
 
     async renameContainer(nodeId: string, containerId: string, name: string): Promise<void> {

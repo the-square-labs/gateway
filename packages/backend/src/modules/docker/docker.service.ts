@@ -33,19 +33,21 @@ import {
 } from './docker-access-resource.service.js';
 import type { DockerBuildRolloutGuard, DockerBuildRolloutTarget } from './docker-build-rollout-guard.js';
 import {
+  killContainer as killDockerContainer,
+  restartContainer as restartDockerContainer,
+  startContainer as startDockerContainer,
+  stopContainer as stopDockerContainer,
+} from './docker-container-lifecycle-operations.js';
+import {
   createContainer as createDockerContainer,
   type DockerContainerMutationContext,
   duplicateContainer as duplicateDockerContainer,
   imageRefWithTag,
-  killContainer as killDockerContainer,
   liveUpdateContainer as liveUpdateDockerContainer,
   recreateWithConfig as recreateDockerContainerWithConfig,
   removeContainer as removeDockerContainerMutation,
   renameContainer as renameDockerContainer,
-  restartContainer as restartDockerContainer,
   rollbackCreatedContainer as rollbackDockerCreatedContainer,
-  startContainer as startDockerContainer,
-  stopContainer as stopDockerContainer,
   updateContainer as updateDockerContainer,
   updateContainerEnv as updateDockerContainerEnv,
 } from './docker-container-mutation-operations.js';
@@ -81,6 +83,7 @@ import { dockerImageId, findGatewayInternalImage, resolveDockerImageByIdentifier
 import {
   type ContainerAction,
   type DockerLifecycleWatchContext,
+  type DockerTransitionOutcome,
   watchDockerRecreateByName,
   watchDockerTransition,
 } from './docker-lifecycle-watch.js';
@@ -809,7 +812,8 @@ export class DockerManagementService {
 
   /**
    * Poll container state to detect when an async operation completes,
-   * then mark the task as succeeded and clear the transition.
+   * then mark the task as succeeded and clear the transition. Settles once
+   * the task did.
    */
   private watchTransition(
     nodeId: string,
@@ -821,8 +825,8 @@ export class DockerManagementService {
     completedAction: ContainerAction,
     timeoutMs = 60000,
     isComplete?: (inspectData: Record<string, any>) => boolean
-  ) {
-    watchDockerTransition(
+  ): Promise<DockerTransitionOutcome> {
+    return watchDockerTransition(
       this.lifecycleWatchContext(),
       nodeId,
       containerId,
@@ -1358,6 +1362,8 @@ export class DockerManagementService {
       inspectContainer: (nodeId, containerId) => this.inspectContainer(nodeId, containerId),
       runtimeOperationContext: () => this.runtimeOperationContext(),
       requireNoTransition: (nodeId, name) => this.requireNoTransition(nodeId, name),
+      waitWhileTransition: (nodeId, name, states, timeoutMs) =>
+        this.containerTransitions.waitWhile(nodeId, name, states, timeoutMs),
       setTransition: (nodeId, name, state) => this.setTransition(nodeId, name, state),
       clearTransition: (nodeId, name) => this.clearTransition(nodeId, name),
       claimTransitions: (nodeId, entries) => this.containerTransitions.claim(nodeId, entries),
@@ -1446,7 +1452,7 @@ export class DockerManagementService {
     const containerName = await this.resolveContainerName(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.setRunning(nodeId, containerName, true, userId)) return;
     await this.assertContainerMigrationAllowed(nodeId, containerId);
-    await startDockerContainer(this.containerMutationContext(), nodeId, containerId, userId);
+    return startDockerContainer(this.containerMutationContext(), nodeId, containerId, userId);
   }
 
   async stopContainer(nodeId: string, containerId: string, timeout: number | undefined, userId: string) {
@@ -1486,15 +1492,22 @@ export class DockerManagementService {
     const containerName = this.availabilityMutationCoordinator?.containerRemoved
       ? await this.resolveContainerName(nodeId, containerId)
       : undefined;
+    const coordinator = this.availabilityMutationCoordinator;
     try {
-      await removeDockerContainerMutation(this.containerMutationContext(), nodeId, containerId, force, userId);
+      return await removeDockerContainerMutation(
+        this.containerMutationContext(),
+        nodeId,
+        containerId,
+        force,
+        userId,
+        containerName ? async () => coordinator?.containerRemoved?.(nodeId, containerName) : undefined
+      );
     } catch (error) {
       if (error instanceof AppError && error.code === 'CONTAINER_NOT_FOUND') {
         await assertNotPendingSourceContainer(nodeId, containerId);
       }
       throw error;
     }
-    if (containerName) await this.availabilityMutationCoordinator?.containerRemoved?.(nodeId, containerName);
   }
 
   async renameContainer(nodeId: string, containerId: string, newName: string, userId: string) {

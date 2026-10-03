@@ -3,6 +3,7 @@ import {
   ApiErrorSchema,
   appRoute,
   createdJson,
+  dataResponseSchema,
   jsonBody,
   jsonContent,
   okJson,
@@ -194,29 +195,46 @@ export const startContainerRoute = appRoute({
   request: { params: containerParams },
   responses: successJson,
 });
+const ContainerOperationPendingSchema = z.object({
+  taskId: z.string().nullable(),
+  containerId: z.string(),
+  name: z.string(),
+  transition: z.enum(['stopping', 'restarting', 'killing']),
+});
+/** A lifecycle request waits at most 45 s; an operation still running then is answered 202 with its task. */
+const operationPendingJson = (description: string) => ({
+  202: { description, content: jsonContent(dataResponseSchema(ContainerOperationPendingSchema)) },
+});
+
 export const stopContainerRoute = appRoute({
   method: 'post',
   path: '/nodes/{nodeId}/containers/{containerId}/stop',
   tags: ['Docker Containers'],
   summary: 'Stop a container',
+  description:
+    'Answers 200 once the container has stopped, so a read or a removal right after sees it stopped; a stop already running is waited for. The request waits at most 45 s: a stop still running then (a long stop timeout) is answered 202 with its task and `transition: stopping`. Follow the task (GET /docker/tasks/{taskId}) or read the container until it is exited.',
   request: { params: containerParams, ...optionalJsonBody(ContainerStopSchema) },
-  responses: successJson,
+  responses: { ...successJson, ...operationPendingJson('The stop still runs; follow its task') },
 });
 export const restartContainerRoute = appRoute({
   method: 'post',
   path: '/nodes/{nodeId}/containers/{containerId}/restart',
   tags: ['Docker Containers'],
   summary: 'Restart a container',
+  description:
+    'Answers 200 once Docker has started the container again. The request waits at most 45 s: a restart still running then is answered 202 with its task and `transition: restarting`.',
   request: { params: containerParams, ...optionalJsonBody(ContainerStopSchema) },
-  responses: successJson,
+  responses: { ...successJson, ...operationPendingJson('The restart still runs; follow its task') },
 });
 export const killContainerRoute = appRoute({
   method: 'post',
   path: '/nodes/{nodeId}/containers/{containerId}/kill',
   tags: ['Docker Containers'],
   summary: 'Kill a container',
+  description:
+    'SIGKILL (the default) answers 200 once the container has exited, or 202 with its task and `transition: killing` when it has not within 45 s. Another signal answers 200 once it was delivered; the container may keep running.',
   request: { params: containerParams, ...optionalJsonBody(ContainerKillSchema) },
-  responses: successJson,
+  responses: { ...successJson, ...operationPendingJson('The kill still runs; follow its task') },
 });
 export const removeContainerRoute = appRoute({
   method: 'delete',
@@ -224,9 +242,12 @@ export const removeContainerRoute = appRoute({
   tags: ['Docker Containers'],
   summary: 'Remove a container',
   description:
-    'Removes a stopped container. A running, paused or restarting container is refused (409 CONTAINER_RUNNING): stop it first. A container a Route reaches is refused (409 PROXY_UPSTREAM_IN_USE). Its managed database and storage links are removed with it.',
+    'Removes a stopped container. A container that is stopping is removed once the stop ends: the request waits up to 45 s for it, then answers 202 with a `remove` task (and `transition: stopping`) that removes the container once the stop ended; the task records the outcome. A running, paused or restarting container is refused (409 CONTAINER_RUNNING): stop it first. A container a Route reaches is refused (409 PROXY_UPSTREAM_IN_USE). Its managed database and storage links are removed with it.',
   request: { params: containerParams },
-  responses: successJson,
+  responses: {
+    ...successJson,
+    ...operationPendingJson('The container is still stopping; its remove task removes it then'),
+  },
 });
 export const renameContainerRoute = appRoute({
   method: 'post',

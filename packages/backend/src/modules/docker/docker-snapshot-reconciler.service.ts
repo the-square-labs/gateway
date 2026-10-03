@@ -180,6 +180,25 @@ export class DockerSnapshotReconciler {
     await this.refreshDetail(nodeId, kind as DockerDetailKind, key);
   }
 
+  /**
+   * Reads a container back from its node now: the container list and its cached inspect under each of `keys` (the
+   * request's reference and the name). A lifecycle request calls it before it answers, so a read right after the
+   * answer sees the new state. A failed read is left to the refresh the container's event queued.
+   */
+  async refreshContainerNow(nodeId: string, keys: readonly (string | undefined)[]): Promise<void> {
+    try {
+      await this.refreshNow(nodeId, 'containers');
+      for (const key of new Set(keys.filter((value): value is string => !!value))) {
+        await this.refreshNow(nodeId, 'container-detail', key);
+      }
+    } catch (error) {
+      logger.debug('Docker container read-back failed', {
+        nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async finalizeContainerRecreate(nodeId: string, newContainerId: string): Promise<void> {
     if (this.snapshots.isNodeDeleted(nodeId)) return;
     const result = await this.dispatch.sendDockerContainerCommand(nodeId, 'list', {}, DAEMON_TIMEOUT_MS);

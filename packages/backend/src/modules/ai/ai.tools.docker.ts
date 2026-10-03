@@ -349,7 +349,8 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'stop_docker_container',
-    description: 'Stop a running Docker container.',
+    description:
+      'Stop a running Docker container. Answers once it has stopped, so it can be removed right away; a stop already under way is waited for. A stop still running after 45 s is answered with pending: true, its task and how to wait for it.',
     parameters: {
       type: 'object',
       properties: {
@@ -371,7 +372,8 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'restart_docker_container',
-    description: 'Restart a Docker container.',
+    description:
+      'Restart a Docker container. Answers once Docker has started it again, or after 45 s with pending: true, its task and how to wait for it.',
     parameters: {
       type: 'object',
       properties: {
@@ -393,7 +395,8 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'remove_docker_container',
-    description: 'Remove a Docker container. The container must be stopped first.',
+    description:
+      'Remove a Docker container. The container must be stopped first; one that is still stopping is removed once the stop ends (after 45 s the result is pending: true with a remove task that finishes the removal).',
     parameters: {
       type: 'object',
       properties: {
@@ -1091,7 +1094,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'kill_docker_container',
     description:
-      'Send a signal (default SIGKILL) to a Docker container. Prefer stop_docker_container unless an immediate kill is explicitly requested. Compose-owned containers must be changed through their Compose project.',
+      'Send a signal (default SIGKILL) to a Docker container. SIGKILL answers once the container has exited (after 45 s with pending: true and its task); another signal answers once it was delivered. Prefer stop_docker_container unless an immediate kill is explicitly requested. Compose-owned containers must be changed through their Compose project.',
     parameters: {
       type: 'object',
       properties: {
