@@ -43,6 +43,7 @@ type fakeConnectorEngine struct {
 
 type fakeConnectorContainer struct {
 	id, name, image, ip string
+	groups              []string
 	slot                int
 	running             bool
 	syncFails           bool
@@ -132,6 +133,7 @@ func (e *fakeConnectorEngine) connectorInspect(current *fakeConnectorContainer) 
 			"Binds": []string{e.controlDir + ":/run/gateway"}, "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
 			"SecurityOpt": []string{"no-new-privileges:true"}, "RestartPolicy": map[string]any{"Name": "unless-stopped"},
 			"Memory": secureLinkConnectorMemory, "NanoCpus": secureLinkConnectorNanoCPUs, "PidsLimit": pids,
+			"GroupAdd": current.groups,
 		},
 		"State":           map[string]any{"Running": current.running},
 		"NetworkSettings": map[string]any{"Networks": networks},
@@ -169,7 +171,10 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 		if e.containers[name] != nil {
 			return respond(http.StatusConflict, `{"message":"name in use"}`)
 		}
-		var body struct{ Image string }
+		var body struct {
+			Image      string
+			HostConfig struct{ GroupAdd []string }
+		}
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		e.created++
 		slot := 0
@@ -177,7 +182,7 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 			slot = 1
 		}
 		e.containers[name] = &fakeConnectorContainer{
-			id: fmt.Sprintf("created-%d", e.created), name: name, image: body.Image, slot: slot,
+			id: fmt.Sprintf("created-%d", e.created), name: name, image: body.Image, groups: body.HostConfig.GroupAdd, slot: slot,
 			ip: fmt.Sprintf("10.99.0.%d", 10+e.created), syncFails: e.syncFails,
 		}
 		return respond(http.StatusCreated, map[string]any{"Id": e.containers[name].id})
@@ -329,8 +334,9 @@ func TestFailedConnectorReplacementKeepsTheServingConnector(t *testing.T) {
 func TestDaemonStartKeepsTheConnectorRunningTheImage(t *testing.T) {
 	engine := newFakeConnectorEngine(t)
 	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
-	old := &fakeConnectorContainer{id: "old-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage, ip: "10.99.0.2", running: true}
-	current := &fakeConnectorContainer{id: "next-id", name: secureLinkConnectorSlots[1].name, image: replaceTestNewImage, ip: "10.99.0.3", running: true, slot: 1}
+	// Both were created by this daemon before its restart, so they carry the groups it gives connectors.
+	old := &fakeConnectorContainer{id: "old-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage, groups: connectorGroupAdd(), ip: "10.99.0.2", running: true}
+	current := &fakeConnectorContainer{id: "next-id", name: secureLinkConnectorSlots[1].name, image: replaceTestNewImage, groups: connectorGroupAdd(), ip: "10.99.0.3", running: true, slot: 1}
 	engine.containers[old.name], engine.containers[current.name] = old, current
 	engine.serveControl(old)
 	engine.serveControl(current)
