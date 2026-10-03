@@ -359,7 +359,7 @@ has_openrc() { command_exists rc-service && command_exists rc-update; }
 
 # ── Non-root mode ────────────────────────────────────────────────────
 # A root daemon keeps its binary in /usr/local/bin. A daemon running as its own user must be able to replace its binary
-# when it updates itself, so the binary lives in a directory that user owns and /usr/local/bin only links to it.
+# when it updates itself, so the binary lives in a directory that user owns and /usr/local/bin holds a root-owned wrapper.
 NGINX_DAEMON_BIN_LINK="/usr/local/bin/nginx-daemon"
 NGINX_DAEMON_OWN_DIR="/usr/local/lib/nginx-daemon"
 NGINX_DAEMON_OWN_BINARY="${NGINX_DAEMON_OWN_DIR}/bin/nginx-daemon"
@@ -379,6 +379,40 @@ daemon_binary_version() {
     else
         return 1
     fi
+}
+
+# In non-root mode /usr/local/bin/<daemon> is a root-owned wrapper, not the binary: the binary belongs to the service
+# user, who replaces it on update, so root must never execute it. The wrapper switches a root caller to that user.
+DAEMON_WRAPPER_MARK="# gateway-daemon-wrapper: runs the service user's binary, never as root"
+write_daemon_wrapper() {
+    local command_path="$1" binary="$2" temporary
+    temporary=$(mktemp "$(dirname "$command_path")/.gateway-daemon-wrapper.XXXXXX") || return 1
+    if ! cat >"$temporary" <<WRAPPER
+#!/bin/sh
+${DAEMON_WRAPPER_MARK}
+if [ "\$(id -u)" = 0 ]; then
+    if command -v runuser >/dev/null 2>&1; then
+        exec runuser -u '${RUN_USER}' -- '${binary}' "\$@"
+    elif command -v setpriv >/dev/null 2>&1; then
+        exec setpriv --reuid='${RUN_USER}' --regid='${RUN_GROUP}' --init-groups -- '${binary}' "\$@"
+    fi
+    echo "Run this command as ${RUN_USER}: ${binary} belongs to that user and root never runs it." >&2
+    exit 1
+fi
+exec '${binary}' "\$@"
+WRAPPER
+    then
+        rm -f "$temporary"
+        return 1
+    fi
+    if ! chmod 0755 "$temporary" || ! chown 0:0 "$temporary" || ! mv -f "$temporary" "$command_path"; then
+        rm -f "$temporary"
+        return 1
+    fi
+}
+
+is_daemon_wrapper() {
+    [[ -f "$1" && ! -L "$1" ]] && grep -Fqx "$DAEMON_WRAPPER_MARK" "$1" 2>/dev/null
 }
 
 run_as_run_user() {
@@ -1934,14 +1968,16 @@ verify_checksum() {
 
 install_daemon() {
     if [[ "$RUN_USER" == "root" ]]; then
-        # Never write a root binary through a link left by an install that ran as another user.
-        [[ ! -L "$NGINX_DAEMON_BIN_LINK" ]] || rm -f "$NGINX_DAEMON_BIN_LINK"
+        # Never write a root binary through the link or wrapper left by an install that ran as another user.
+        if [[ -L "$NGINX_DAEMON_BIN_LINK" ]] || is_daemon_wrapper "$NGINX_DAEMON_BIN_LINK"; then
+            rm -f "$NGINX_DAEMON_BIN_LINK"
+        fi
         install_daemon_binary "$NGINX_DAEMON_BIN_LINK"
         return
     fi
     install -d -m 0755 "$NGINX_DAEMON_OWN_DIR" "$(dirname "$NGINX_DAEMON_OWN_BINARY")"
     install_daemon_binary "$NGINX_DAEMON_OWN_BINARY"
-    ln -sfn "$NGINX_DAEMON_OWN_BINARY" "$NGINX_DAEMON_BIN_LINK"
+    write_daemon_wrapper "$NGINX_DAEMON_BIN_LINK" "$NGINX_DAEMON_OWN_BINARY" || die "Could not write the nginx-daemon command at $NGINX_DAEMON_BIN_LINK."
     grant_daemon_paths_to_run_user
 }
 

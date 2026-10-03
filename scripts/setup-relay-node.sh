@@ -160,19 +160,56 @@ seed_host_identity_copy() {
   fi
 }
 
+# In non-root mode /usr/local/bin/<daemon> is a root-owned wrapper, not the binary: the binary belongs to the service
+# user, who replaces it on update, so root must never execute it. The wrapper switches a root caller to that user.
+DAEMON_WRAPPER_MARK="# gateway-daemon-wrapper: runs the service user's binary, never as root"
+write_daemon_wrapper() {
+  local command_path="$1" binary="$2" temporary
+  temporary=$(mktemp "$(dirname "$command_path")/.gateway-daemon-wrapper.XXXXXX") || return 1
+  if ! cat >"$temporary" <<WRAPPER
+#!/bin/sh
+${DAEMON_WRAPPER_MARK}
+if [ "\$(id -u)" = 0 ]; then
+    if command -v runuser >/dev/null 2>&1; then
+        exec runuser -u '${RUN_USER}' -- '${binary}' "\$@"
+    elif command -v setpriv >/dev/null 2>&1; then
+        exec setpriv --reuid='${RUN_USER}' --regid='${RUN_GROUP}' --init-groups -- '${binary}' "\$@"
+    fi
+    echo "Run this command as ${RUN_USER}: ${binary} belongs to that user and root never runs it." >&2
+    exit 1
+fi
+exec '${binary}' "\$@"
+WRAPPER
+  then
+    rm -f "$temporary"
+    return 1
+  fi
+  if ! chmod 0755 "$temporary" || ! chown 0:0 "$temporary" || ! mv -f "$temporary" "$command_path"; then
+    rm -f "$temporary"
+    return 1
+  fi
+}
+
+is_daemon_wrapper() {
+  [[ -f "$1" && ! -L "$1" ]] && grep -Fqx "$DAEMON_WRAPPER_MARK" "$1" 2>/dev/null
+}
+
 # A root relay keeps its binary in /usr/local/bin. A relay running as its own user must be able to replace its binary
-# when it updates itself, so the binary lives in the relay's own directory and /usr/local/bin only links to it.
+# when it updates itself, so the binary lives in the relay's own directory and /usr/local/bin holds a root-owned wrapper.
 install_supervisor_binary() {
   local source="$1" link="$2" own_dir="$3"
   if [[ "$RUN_USER" == "root" ]]; then
-    # Never write a root binary through a link left by an install that ran as another user.
-    [[ ! -L "$link" ]] || rm -f "$link"
+    # Never write a root binary through the link or wrapper left by an install that ran as another user.
+    if [[ -L "$link" ]] || is_daemon_wrapper "$link"; then
+      rm -f "$link"
+    fi
     install -m 0755 "$source" "$link"
     return
   fi
   install -d -m 0755 "$own_dir"
   install -m 0755 "$source" "${own_dir}/relay-supervisor"
-  ln -sfn "${own_dir}/relay-supervisor" "$link"
+  write_daemon_wrapper "$link" "${own_dir}/relay-supervisor" \
+    || { echo "Could not write the relay-supervisor command at ${link}; Relay installation stopped." >&2; exit 1; }
 }
 
 # Hands every relay path to the run user: the supervisor reads its configuration, writes its state and identities and

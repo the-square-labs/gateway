@@ -203,7 +203,7 @@ In non-root mode every installer:
 
 - stops before changing the host when the user does not exist; the service group defaults to the user's primary group;
 - gives the user the daemon's configuration, state, and library directories, and writes the configuration as that user;
-- installs the daemon binary in `/usr/local/lib/<daemon>/bin`, owned by the user, with `/usr/local/bin/<daemon>` as a link to it, so the daemon can update itself (for the relay: `/usr/local/lib/gateway-relay/bin/relay-supervisor`);
+- installs the daemon binary in `/usr/local/lib/<daemon>/bin`, owned by the user, so the daemon can update itself (for the relay: `/usr/local/lib/gateway-relay/bin/relay-supervisor`). `/usr/local/bin/<daemon>` is a root-owned wrapper that runs it; called as root (for example with `sudo`), the wrapper switches to the user first, so root never runs a binary that user can replace. The installers run their root-only steps from a root-owned copy;
 - gives the daemon a copy of the host identity in its state directory (`host_identity_path` in its configuration). The shared `/var/lib/gateway/host-identity` stays root-owned and readable only by root. The installer creates the shared file when it is missing, so root daemons installed later on the host report the same identity;
 - waits for the daemon to enroll and exits with an error that names the daemon log (`journalctl -u <unit>`, the OpenRC log, or the manual launcher log) when it does not enroll. Root installs keep their previous behaviour, except that the relay installer now also fails when the supervisor does not report an enrollment in time.
 
