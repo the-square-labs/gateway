@@ -203,17 +203,23 @@ type resolvedSecureLinkTarget struct {
 
 func newDockerSecureLinkManager(plugin *DockerPlugin) (*dockerSecureLinkManager, error) {
 	directory := filepath.Join(plugin.cfg.StateDir, "secure-link-connector")
-	if err := os.MkdirAll(directory, 0o750); err != nil {
-		return nil, err
-	}
 	if runsWithoutRoot() {
 		// The connector creates its sockets here through the daemon's group (connectorGroupAdd); setgid gives them
 		// that group, so the daemon can connect to them.
-		if err := os.Chmod(directory, 0o770|os.ModeSetgid); err != nil {
+		if err := claimConnectorDirectory(directory, 0o770|os.ModeSetgid); err != nil {
+			return nil, fmt.Errorf("secure-link control directory: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(directory, 0o750); err != nil {
+			return nil, err
+		}
+		if err := os.Chown(directory, 65532, 65532); err != nil {
+			return nil, fmt.Errorf("secure-link control directory ownership: %w", err)
+		}
+		// A directory a non-root daemon left behind is group-writable for that daemon's user.
+		if err := os.Chmod(directory, 0o750); err != nil {
 			return nil, fmt.Errorf("secure-link control directory permissions: %w", err)
 		}
-	} else if err := os.Chown(directory, 65532, 65532); err != nil {
-		return nil, fmt.Errorf("secure-link control directory ownership: %w", err)
 	}
 	manager := &dockerSecureLinkManager{
 		plugin: plugin, socketPath: filepath.Join(directory, "secure-link.sock"),

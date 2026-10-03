@@ -36,16 +36,22 @@ func storageConnectorRelaySocketPath(stateDir string) string {
 // it cannot select a host, port, Docker bind, or arbitrary route target.
 func (p *DockerPlugin) startStorageConnectorRelay() error {
 	directory := storageConnectorRelayDirectory(p.cfg.StateDir)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create storage connector relay directory: %w", err)
-	}
 	if runsWithoutRoot() {
 		// The connectors reach the socket through the daemon's group (connectorGroupAdd).
-		if err := os.Chmod(directory, 0o750); err != nil {
+		if err := claimConnectorDirectory(directory, 0o750); err != nil {
+			return fmt.Errorf("storage connector relay directory: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return fmt.Errorf("create storage connector relay directory: %w", err)
+		}
+		if err := os.Chown(directory, 65532, 65532); err != nil {
+			return fmt.Errorf("set storage connector relay directory ownership: %w", err)
+		}
+		// A directory a non-root daemon left behind is readable by that daemon's group.
+		if err := os.Chmod(directory, 0o700); err != nil {
 			return fmt.Errorf("set storage connector relay directory permissions: %w", err)
 		}
-	} else if err := os.Chown(directory, 65532, 65532); err != nil {
-		return fmt.Errorf("set storage connector relay directory ownership: %w", err)
 	}
 	path := filepath.Join(directory, storageConnectorSocketName)
 	// The socket the previous process handed over keeps the connections the connectors made meanwhile.

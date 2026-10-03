@@ -290,6 +290,8 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if err := p.startStorageConnectorRelay(); err != nil {
 		return err
 	}
+	// Storage connectors created while the daemon ran as another user (root or not) cannot reach this socket.
+	go p.reconcileStorageConnectorGroups(context.Background())
 	if p.cfg.Docker.IsStorageProfile() {
 		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
 		if err != nil {
