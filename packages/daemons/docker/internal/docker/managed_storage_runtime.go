@@ -45,6 +45,10 @@ type managedStorageManager struct {
 	tlsReloads  resourceLocks
 	// loops overrides the kernel loop-device surface (tests).
 	loops *loopHost
+	// exitedEngines holds the containers of engines that stopped on their own
+	// and that the supervisor started again, until they serve: an engine that
+	// keeps exiting is down, although its container runs most of the time.
+	exitedEngines sync.Map
 }
 
 func (m *managedStorageManager) loopHost() *loopHost {
@@ -207,6 +211,8 @@ func (m *managedStorageManager) ensureStorageSize(ctx context.Context, record *m
 }
 
 func (m *managedStorageManager) startContainer(ctx context.Context, id string) error {
+	// An engine started on purpose is starting, whatever it did before.
+	m.exitedEngines.Delete(id)
 	inspect, err := m.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
 	if err != nil {
 		return err
@@ -481,9 +487,20 @@ func (m *managedStorageManager) storageStatus(ctx context.Context, record manage
 		return "stopped"
 	}
 	if err := m.checkReady(ctx, record); err != nil {
+		if m.engineKeepsExiting(record) {
+			return "stopped"
+		}
 		return "starting"
 	}
+	m.exitedEngines.Delete(record.ContainerID)
 	return "ready"
+}
+
+// engineKeepsExiting reports an engine that stopped on its own and has not
+// served since the supervisor started it again.
+func (m *managedStorageManager) engineKeepsExiting(record managedStorageRecord) bool {
+	_, exited := m.exitedEngines.Load(record.ContainerID)
+	return exited
 }
 
 func (m *managedStorageManager) waitForReady(ctx context.Context, record managedStorageRecord) error {
@@ -611,6 +628,9 @@ func (m *managedStorageManager) marshalManagedStorageDetail(ctx context.Context,
 	if !record.Removed {
 		if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
 			detail["runtimeMissing"] = missing
+		}
+		if status == "stopped" && m.engineKeepsExiting(record) {
+			detail["engineExited"] = true
 		}
 	}
 	return jsonString(detail)

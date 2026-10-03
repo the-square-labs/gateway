@@ -33,8 +33,9 @@ func newTestStorageEngine(t *testing.T) (*managedStorageManager, *fakeEngineDock
 }
 
 type inspectedStorage struct {
-	Status      string `json:"status"`
-	OperationID string `json:"operationId"`
+	Status       string `json:"status"`
+	OperationID  string `json:"operationId"`
+	EngineExited bool   `json:"engineExited"`
 }
 
 func inspectStorage(t *testing.T, m *managedStorageManager, id string) inspectedStorage {
@@ -48,6 +49,42 @@ func inspectStorage(t *testing.T, m *managedStorageManager, id string) inspected
 		t.Fatal(err)
 	}
 	return inspected
+}
+
+// An engine that keeps exiting runs most of the time (the supervisor starts it
+// after every exit) without ever serving. It is reported stopped, not starting,
+// until it serves or is started on purpose.
+func TestStorageEngineThatKeepsExitingIsStopped(t *testing.T) {
+	m, docker, _, id := newTestStorageEngine(t)
+	ctx := context.Background()
+
+	// Started when the daemon starts: it is starting.
+	if err := m.startStoppedEngine(ctx, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := inspectStorage(t, m, id); got.Status != "starting" || got.EngineExited {
+		t.Fatalf("after a start: %+v, want starting", got)
+	}
+
+	// It exits on its own and the supervisor starts it again.
+	docker.running["s1"] = false
+	if err := m.startStoppedEngine(ctx, id, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if !docker.running["s1"] {
+		t.Fatal("supervisor did not start the engine")
+	}
+	if got := inspectStorage(t, m, id); got.Status != "stopped" || !got.EngineExited {
+		t.Fatalf("after an exit: %+v, want stopped with engineExited", got)
+	}
+
+	// A restart starts it on purpose: starting again.
+	if _, err := m.handle(ctx, "restart", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := inspectStorage(t, m, id); got.Status != "starting" || got.EngineExited {
+		t.Fatalf("after a restart: %+v, want starting", got)
+	}
 }
 
 // A restart is recorded with its operation, and the same restart sent again

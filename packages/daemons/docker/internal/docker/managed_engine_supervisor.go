@@ -133,6 +133,11 @@ func (m *managedStorageManager) startStoppedEngine(ctx context.Context, id, cont
 	if _, err := m.client.cli.ContainerStart(ctx, record.ContainerID, mobyclient.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start managed storage container: %w", err)
 	}
+	if containerID != "" {
+		// It stopped on its own (a crash, an OOM kill): until it serves again
+		// it is reported stopped, not starting.
+		m.exitedEngines.Store(record.ContainerID, true)
+	}
 	m.logger.Info("started managed storage engine after mounting its storage", "id", id)
 	return m.saveRecord(record)
 }
