@@ -2379,8 +2379,8 @@ write_database_profile_config
 write_builder_profile_config
 start_lease_watchdog
 start_daemon
-# A daemon running as its own user can fail on permissions only once it runs; never report such an install as done.
-if [[ "$RUN_USER" != "root" ]] && ! await_enrollment; then
+# The daemon enrolls once it runs: an install whose daemon did not enroll is not done.
+if ! await_enrollment; then
     die "docker-daemon is installed, but it did not enroll with Gateway."
 fi
 

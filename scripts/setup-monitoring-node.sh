@@ -1279,8 +1279,8 @@ create_directories
 install_daemon
 enroll_daemon
 start_daemon
-# A daemon running as its own user can fail on permissions only once it runs; never report such an install as done.
-if [[ "$RUN_USER" != "root" ]] && ! await_enrollment; then
+# The daemon enrolls once it runs: an install whose daemon did not enroll is not done.
+if ! await_enrollment; then
     die "monitoring-daemon is installed, but it did not enroll with Gateway."
 fi
 
