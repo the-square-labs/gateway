@@ -33,19 +33,21 @@ import {
 } from './docker-access-resource.service.js';
 import type { DockerBuildRolloutGuard, DockerBuildRolloutTarget } from './docker-build-rollout-guard.js';
 import {
+  killContainer as killDockerContainer,
+  restartContainer as restartDockerContainer,
+  startContainer as startDockerContainer,
+  stopContainer as stopDockerContainer,
+} from './docker-container-lifecycle-operations.js';
+import {
   createContainer as createDockerContainer,
   type DockerContainerMutationContext,
   duplicateContainer as duplicateDockerContainer,
   imageRefWithTag,
-  killContainer as killDockerContainer,
   liveUpdateContainer as liveUpdateDockerContainer,
   recreateWithConfig as recreateDockerContainerWithConfig,
   removeContainer as removeDockerContainerMutation,
   renameContainer as renameDockerContainer,
-  restartContainer as restartDockerContainer,
   rollbackCreatedContainer as rollbackDockerCreatedContainer,
-  startContainer as startDockerContainer,
-  stopContainer as stopDockerContainer,
   updateContainer as updateDockerContainer,
   updateContainerEnv as updateDockerContainerEnv,
 } from './docker-container-mutation-operations.js';
