@@ -62,6 +62,7 @@ import { dockerContainerRoute, dockerDeploymentRoute } from "@/lib/resource-rout
 import { createReturnNavigationState } from "@/lib/return-navigation";
 import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
+import { isPendingContainerOperation } from "@/services/api-docker";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { hasSavedFolderExpansion, useDockerFolderStore } from "@/stores/docker-folders";
@@ -476,7 +477,7 @@ export function DockerContainers({
   );
 
   const doAction = useCallback(
-    async (container: DockerContainerListItem, action: string, fn: () => Promise<void>) => {
+    async (container: DockerContainerListItem, action: string, fn: () => Promise<unknown>) => {
       const transitionByAction: Record<string, string> = {
         start: "starting",
         stop: "stopping",
@@ -495,8 +496,11 @@ export function DockerContainers({
         );
       }
       try {
-        await fn();
-        toast.success(`Container ${action} successful`);
+        const result = await fn();
+        // A stop or restart still running after the request's wait goes on; the list shows its transition.
+        if (isPendingContainerOperation(result))
+          toast.info(`Container is still ${result.transition}`);
+        else toast.success(`Container ${action} successful`);
         await refreshData(true);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : `Failed to ${action} container`);
@@ -533,7 +537,7 @@ export function DockerContainers({
           await api.stopDockerDeployment(container._nodeId, container.deploymentId ?? container.id);
           return;
         }
-        await api.stopContainer(container._nodeId, container.id);
+        return api.stopContainer(container._nodeId, container.id);
       }),
     [doAction]
   );
@@ -548,7 +552,7 @@ export function DockerContainers({
           );
           return;
         }
-        await api.restartContainer(container._nodeId, container.id);
+        return api.restartContainer(container._nodeId, container.id);
       }),
     [doAction]
   );

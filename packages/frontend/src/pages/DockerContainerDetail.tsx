@@ -75,6 +75,7 @@ import { getReturnNavigationTarget, preserveReturnNavigationState } from "@/lib/
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import { isPendingContainerOperation } from "@/services/api-docker";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
@@ -1097,12 +1098,15 @@ export function DockerContainerDetail({
   // ── Action helpers ──
   // The header action whose request is running, so its button shows the pending state.
   const [pendingHeaderAction, setPendingHeaderAction] = useState<string | null>(null);
-  const doAction = async (fn: () => Promise<void>, successMsg: string, actionLabel?: string) => {
+  const doAction = async (fn: () => Promise<unknown>, successMsg: string, actionLabel?: string) => {
     setActionLoading(true);
     setPendingHeaderAction(actionLabel ?? null);
     try {
-      await fn();
-      toast.success(successMsg);
+      const result = await fn();
+      // A stop or restart still running after the request's wait goes on; the badge shows it until it ends.
+      if (isPendingContainerOperation(result))
+        toast.info(`Container is still ${result.transition}`);
+      else toast.success(successMsg);
       invalidate("containers", "tasks");
       // A cached pre-action inspect can overwrite the fresh realtime result.
       // Read the authoritative state without remounting the detail page.
@@ -1129,9 +1133,11 @@ export function DockerContainerDetail({
     setActionLoading(true);
     setPendingHeaderAction("Remove");
     try {
-      await api.removeContainer(nodeId!, containerId!);
+      const pending = await api.removeContainer(nodeId!, containerId!);
       usePinnedContainersStore.getState().removePin(containerId!);
-      toast.success("Container removed");
+      toast.success(
+        pending ? "Container will be removed once it has stopped" : "Container removed"
+      );
       invalidate("containers", "tasks");
       navigate(backTarget);
     } catch (err) {
