@@ -134,6 +134,19 @@ export class HostingInventoryService {
     return result;
   }
 
+  // The daemon answers from the host identity it enrolled with: a daemon running as its own user keeps a copy in its
+  // state directory, because the shared /var/lib/gateway/host-identity is root's. Daemons without the command, or a
+  // node that refuses it, are read at the shared path as before.
+  private async readNodeHostIdentity(nodeId: string): Promise<string> {
+    try {
+      const result = await this.dispatch.sendNodeFileCommand?.(nodeId, 'ensure-host-identity');
+      if (result?.success) return commandResultDataToBuffer(result.data).toString('utf8').trim();
+    } catch {
+      // Fall back to the shared path below.
+    }
+    return (await this.nodeService.readFile(nodeId, '/var/lib/gateway/host-identity')).toString('utf8').trim();
+  }
+
   async initialize(connectorId: string) {
     const result = await this.sync(connectorId, undefined, true);
     if ('skipped' in result)
@@ -1073,9 +1086,7 @@ export class HostingInventoryService {
               }
               identity = commandResultDataToBuffer(result.data).toString('utf8').trim();
             } else {
-              identity = (await this.nodeService.readFile(node.id, '/var/lib/gateway/host-identity'))
-                .toString('utf8')
-                .trim();
+              identity = await this.readNodeHostIdentity(node.id);
               if (source.hostIdentityId !== identity) return;
             }
             if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity)) return;
