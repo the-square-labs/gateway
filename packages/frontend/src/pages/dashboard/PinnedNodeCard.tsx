@@ -12,6 +12,18 @@ import { effectiveNodeStatus } from "@/types";
 
 export const WARN_THRESHOLD = 80;
 
+/**
+ * The same rule as the server's dashboard attention (`node-capacity`): CPU, memory, or root disk at the
+ * threshold. A node that raises the sidebar dot must also get its card here, pinned or not.
+ */
+export function nodeHasCapacityWarning(node: Pick<Node, "lastHealthReport">): boolean {
+  const h = node.lastHealthReport;
+  if (!h) return false;
+  const memory = h.systemMemoryTotalBytes > 0 ? (h.systemMemoryUsedBytes / h.systemMemoryTotalBytes) * 100 : 0;
+  const disk = h.diskMounts?.find((mount) => mount.mountPoint === "/");
+  return h.cpuPercent >= WARN_THRESHOLD || memory >= WARN_THRESHOLD || (disk?.usagePercent ?? 0) >= WARN_THRESHOLD;
+}
+
 function warnStyle(
   pct: number,
   boundaries: { left: boolean; right: boolean }
