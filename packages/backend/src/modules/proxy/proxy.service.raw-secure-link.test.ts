@@ -124,7 +124,16 @@ describe('Raw Config Mode on a Docker Route', () => {
       'user-id'
     );
 
-    expect(applyConfig).toHaveBeenCalledWith('nginx-node', HOST_ID, SEEDED_RAW_CONFIG, false, 'user_owned', false);
+    // The node does not report maintenance flags: the apply carries no maintenance state.
+    expect(applyConfig).toHaveBeenCalledWith(
+      'nginx-node',
+      HOST_ID,
+      SEEDED_RAW_CONFIG,
+      false,
+      'user_owned',
+      false,
+      undefined
+    );
     expect(secureLinks.cleanup).not.toHaveBeenCalled();
     // The link stays maintained (a raw config is never a reason to re-provision) and its listener reconciled.
     expect(secureLinks.prepare).toHaveBeenCalledWith(updated, false, false);

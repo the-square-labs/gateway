@@ -269,7 +269,12 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
 
     try {
       if (updated.enabled) {
-        await this.deliverHost(updated, { certOptions: { preserveLegacyOnUnsupported: true } });
+        // On a node that keeps maintenance flags the route's config is the same in and out of maintenance: the node
+        // only switches the flag, without a reload, and an unchanged TLS bundle is not sent again.
+        await this.deliverHost(updated, {
+          certOptions: { preserveLegacyOnUnsupported: true },
+          apply: { reuseActiveBundle: true },
+        });
       }
     } catch (error) {
       logger.error('Failed to apply nginx config during maintenance transition, rolling back DB', {

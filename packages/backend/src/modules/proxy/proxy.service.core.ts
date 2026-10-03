@@ -24,6 +24,7 @@ import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPoolService } from '@/services/relay-pool.service.js';
 import type { AdditionalRouteService } from './additional-route.service.js';
 import { supportsPagesRouteTemplate } from './additional-route-template.js';
+import { MAINTENANCE_FLAG_CAPABILITY } from './nginx-maintenance-flag-guard.js';
 import type { NginxTemplateService } from './nginx-template.service.js';
 import type { CreateProxyHostInput, UpdateProxyHostInput } from './proxy.schemas.js';
 import {
@@ -250,11 +251,11 @@ export abstract class ProxyServiceCore {
    * Additional Routes, access-list credentials and config ownership).
    * Returns the applied host, or null when the host is missing or disabled.
    */
-  async reapplyHostConfig(hostId: string): Promise<ProxyHostRow | null> {
+  async reapplyHostConfig(hostId: string, apply?: HostApplyOptions): Promise<ProxyHostRow | null> {
     return withProxyHostLock(hostId, async () => {
       const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
       if (!host?.enabled) return null;
-      await this.renderAndApplyHost(host, { preserveLegacyOnUnsupported: true });
+      await this.renderAndApplyHost(host, { preserveLegacyOnUnsupported: true }, undefined, apply);
       return host;
     });
   }
@@ -382,7 +383,8 @@ export abstract class ProxyServiceCore {
         config,
         false,
         configOwnership,
-        applyOptions.deferReload ?? false
+        applyOptions.deferReload ?? false,
+        applyOptions.maintenance
       );
       if (!result.success) {
         const error = result.error || 'Daemon config apply failed';
@@ -793,8 +795,19 @@ export abstract class ProxyServiceCore {
       host.nginxTemplateId ?? null,
       hideExternalBranding
     );
-    let result = rendered;
-    if (host.maintenanceEnabled) {
+    // On a node that keeps maintenance flags the guard is part of the config in and out of maintenance, so a toggle
+    // reloads nothing (nginx-maintenance-flag-guard.ts). Otherwise, and for a config that cannot carry it, the guard
+    // is rendered only during maintenance and each toggle reloads nginx.
+    const flagGuard =
+      this.maintenanceAccess && (await this.nodeKeepsMaintenanceFlag(host))
+        ? this.nginxTemplateService.applyMaintenanceFlagGuard(
+            rendered,
+            { hostId: host.id, secret: this.maintenanceAccess.secretForHost(host.id) },
+            hideExternalBranding
+          )
+        : null;
+    let result = flagGuard ?? rendered;
+    if (!flagGuard && host.maintenanceEnabled) {
       const access =
         this.maintenanceAccess && (await this.maintenanceAccess.isNodeSupported(host.nodeId))
           ? { hostId: host.id, secret: this.maintenanceAccess.secretForHost(host.id) }
@@ -807,11 +820,39 @@ export abstract class ProxyServiceCore {
   }
 
   protected async nodeServesIngressHealth(nodeId: string | null): Promise<boolean> {
+    return this.nodeReports(nodeId, INGRESS_GROUP_CAPABILITY);
+  }
+
+  /** Whether the route can enter maintenance and its node switches maintenance by flag instead of by reload. */
+  protected async nodeKeepsMaintenanceFlag(
+    host: Pick<ProxyHostRow, 'type' | 'rawConfigEnabled' | 'isSystem' | 'nodeId'>
+  ): Promise<boolean> {
+    if (host.type !== 'proxy' || host.rawConfigEnabled || host.isSystem) return false;
+    return this.nodeKeepsMaintenanceFlags(host.nodeId);
+  }
+
+  /**
+   * The maintenance state a route's apply carries to a node that keeps maintenance flags; undefined for a node that
+   * does not (the flag stays as it is).
+   */
+  protected async maintenanceFlagFor(
+    host: Pick<ProxyHostRow, 'enabled' | 'maintenanceEnabled'>,
+    nodeId: string | null
+  ): Promise<boolean | undefined> {
+    if (!(await this.nodeKeepsMaintenanceFlags(nodeId))) return undefined;
+    return host.enabled && host.maintenanceEnabled;
+  }
+
+  protected async nodeKeepsMaintenanceFlags(nodeId: string | null): Promise<boolean> {
+    return this.nodeReports(nodeId, MAINTENANCE_FLAG_CAPABILITY);
+  }
+
+  private async nodeReports(nodeId: string | null, capability: string): Promise<boolean> {
     if (!nodeId) return false;
     const node = await this.db.query?.nodes?.findFirst?.({
       where: eq(nodes.id, nodeId),
       columns: { capabilities: true },
     });
-    return nodeReportsCapability(node?.capabilities, INGRESS_GROUP_CAPABILITY);
+    return nodeReportsCapability(node?.capabilities, capability);
   }
 }
