@@ -713,14 +713,26 @@ func ensureStableLauncher(preferredStateDir, daemonType, executable string) (str
 		candidates = append(candidates, filepath.Join(cacheDir, "gateway-daemon", daemonType))
 	}
 	candidates = append(candidates, filepath.Join(os.TempDir(), fmt.Sprintf("gateway-daemon-%d", os.Getuid()), daemonType))
+	return ensureStableLauncherIn(candidates, executable, os.Lstat)
+}
+
+// ensureStableLauncherIn uses the first candidate directory that holds or can
+// take the launcher copy. A directory this user may not search (a state
+// directory owned by root, for a daemon running as another user) is skipped
+// like one where the copy cannot be created; any other error stops the search.
+func ensureStableLauncherIn(candidates []string, executable string, lstat func(string) (os.FileInfo, error)) (string, string, error) {
 	var failures []error
 	for _, stateDir := range candidates {
 		launcherPath := canonicalLauncherPath(stateDir, executable)
-		if _, statErr := os.Lstat(launcherPath); statErr == nil {
+		if _, statErr := lstat(launcherPath); statErr == nil {
 			if err := ensureLauncherCopy(executable, launcherPath, stateDir); err != nil {
 				return "", "", err
 			}
 			return stateDir, launcherPath, nil
+		} else if errors.Is(statErr, os.ErrPermission) {
+			// EACCES and EPERM: this user cannot use the directory at all.
+			failures = append(failures, statErr)
+			continue
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return "", "", statErr
 		}
