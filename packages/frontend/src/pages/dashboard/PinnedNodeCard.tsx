@@ -19,9 +19,14 @@ export const WARN_THRESHOLD = 80;
 export function nodeHasCapacityWarning(node: Pick<Node, "lastHealthReport">): boolean {
   const h = node.lastHealthReport;
   if (!h) return false;
-  const memory = h.systemMemoryTotalBytes > 0 ? (h.systemMemoryUsedBytes / h.systemMemoryTotalBytes) * 100 : 0;
+  const memory =
+    h.systemMemoryTotalBytes > 0 ? (h.systemMemoryUsedBytes / h.systemMemoryTotalBytes) * 100 : 0;
   const disk = h.diskMounts?.find((mount) => mount.mountPoint === "/");
-  return h.cpuPercent >= WARN_THRESHOLD || memory >= WARN_THRESHOLD || (disk?.usagePercent ?? 0) >= WARN_THRESHOLD;
+  return (
+    h.cpuPercent >= WARN_THRESHOLD ||
+    memory >= WARN_THRESHOLD ||
+    (disk?.usagePercent ?? 0) >= WARN_THRESHOLD
+  );
 }
 
 function warnStyle(
