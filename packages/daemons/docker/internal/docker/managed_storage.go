@@ -331,7 +331,7 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 	case "inspect":
 		record, err := m.loadRecord(id)
 		if errors.Is(err, os.ErrNotExist) {
-			return `{"status":"missing"}`, nil
+			return m.missingRecordDetail(ctx, id)
 		}
 		if err != nil {
 			return "", err
@@ -535,6 +535,12 @@ func (m *managedStorageManager) create(ctx context.Context, id string, input man
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return managedStorageRecord{}, err
 	}
+	// The member's container outlived its record: its image holds the data.
+	if containerID, err := m.ownedMemberContainer(ctx, id, input.MemberIndex); err != nil {
+		return managedStorageRecord{}, err
+	} else if containerID != "" {
+		return m.adoptLostRecord(ctx, m.newRecord(id, input, ""), containerID, input)
+	}
 	if err := m.ensureCapacity(input.Resources.StorageBytes); err != nil {
 		return managedStorageRecord{}, err
 	}
@@ -544,27 +550,10 @@ func (m *managedStorageManager) create(ctx context.Context, id string, input man
 	if err != nil {
 		return managedStorageRecord{}, err
 	}
-	record := managedStorageRecord{
-		ID: id, Engine: input.Engine, ContainerName: fmt.Sprintf("gateway-storage-%s-%d", id, input.MemberIndex), NetworkName: "gateway-storage-" + id,
-		ImagePath: filepath.Join(m.root, "storage", "images", fmt.Sprintf("%s-%d.img", id, input.MemberIndex)), MountPath: filepath.Join(m.root, "storage", "mounts", fmt.Sprintf("%s-%d", id, input.MemberIndex)),
-		StorageBytes: input.Resources.StorageBytes, NanoCPUs: input.Resources.NanoCPUs, MemoryBytes: input.Resources.MemoryBytes,
-		MemorySwapBytes: input.Resources.MemorySwapBytes, Image: image, MemberIndex: input.MemberIndex, MemberCount: max(1, len(input.Members)), PublishS3: input.PublishS3,
-		PublishedPort: input.PublishedPort, PeerBindAddress: input.PeerBindAddress, TLSEnabled: input.TLS != nil,
-		DesiredRunning: true, OperationID: input.OperationID,
-	}
-	if input.TLS != nil {
-		record.TLSServerName = input.TLS.ServerName
-	}
-	if input.FTP != nil {
-		record.FTPPort = input.FTP.Port
-		record.FTPPassiveStart = input.FTP.PassivePortStart
-		record.FTPPassiveCount = input.FTP.PassivePortCount
-	}
-	if input.SFTP != nil {
-		record.SFTPPort = input.SFTP.Port
-	}
-	// No record exists, so anything at these paths is left from a create that
-	// failed before (or from an older release) and is not an instance's data.
+	record := m.newRecord(id, input, image)
+	// No record and no container exist, so anything at these paths is left
+	// from a create that failed before (or from an older release) and is not
+	// an instance's data.
 	if err := m.cleanupStorage(ctx, &record, true); err != nil {
 		return managedStorageRecord{}, err
 	}

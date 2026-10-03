@@ -529,7 +529,7 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 	case "inspect":
 		record, err := m.loadRecord(id)
 		if errors.Is(err, os.ErrNotExist) {
-			return `{"status":"missing"}`, nil
+			return m.missingRecordDetail(ctx, id)
 		}
 		if err != nil {
 			return "", err

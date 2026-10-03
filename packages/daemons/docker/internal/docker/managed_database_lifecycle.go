@@ -540,33 +540,20 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return managedDatabaseRecord{}, err
 	}
+	record := m.newRecord(id, input)
+	// The instance's container outlived its record: its image holds the data.
+	if containerID, err := m.ownedDatabaseContainer(ctx, id); err != nil {
+		return managedDatabaseRecord{}, err
+	} else if containerID != "" {
+		return m.adoptLostRecord(ctx, record, containerID, input)
+	}
 	if err := m.ensureCapacity(input.StorageSizeBytes); err != nil {
 		return managedDatabaseRecord{}, err
 	}
 
-	record := managedDatabaseRecord{
-		ID:                   id,
-		Type:                 input.Type,
-		ContainerName:        "gwdb-" + id,
-		NetworkName:          "gwdb-" + id + "-net",
-		ImagePath:            filepath.Join(m.root, "images", id+".img"),
-		MountPath:            filepath.Join(m.root, "mounts", id),
-		StorageSize:          input.StorageSizeBytes,
-		DesiredRunning:       true,
-		PublishedPort:        input.PublishedPort,
-		PublishedNativePort:  input.PublishedNativePort,
-		TLSEnabled:           input.TLSEnabled,
-		TLSCertificateID:     input.TLSCertificateID,
-		ClickhouseConfigHash: clickHouseConfigHash(input.ClickhouseConfig),
-		RedisConfigHash:      managedRedisConfigHash(input),
-		OperationID:          input.OperationID,
-	}
-	if input.Type == "clickhouse" {
-		record.ClickhouseRuntimeProfileVersion = clickHouseRuntimeProfileVersion
-	}
-
-	// No record exists, so anything at these paths is left from a create that
-	// failed before (or from an older release) and is not an instance's data.
+	// No record and no container exist, so anything at these paths is left
+	// from a create that failed before (or from an older release) and is not
+	// an instance's data.
 	if err := m.cleanupStorage(ctx, &record, true); err != nil {
 		return managedDatabaseRecord{}, err
 	}
