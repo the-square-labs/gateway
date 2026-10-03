@@ -291,3 +291,50 @@ export function evaluateDockerArtifactPolicy(
       }
     : { decision: 'approved', reason: null };
 }
+
+export interface BuilderOrderNode {
+  id: string;
+  folderId: string | null;
+  sortOrder: number;
+  createdAt: Date | string;
+}
+
+export interface BuilderOrderFolder {
+  id: string;
+  parentId: string | null;
+  sortOrder: number;
+}
+
+/**
+ * Build Workers take queued builds in the order of the Nodes list, so that order is their priority: the
+ * first worker fills its parallel slots, then builds go to the next. The list shows top-level folders by
+ * position, inside a folder its subfolders first and then its nodes, and nodes outside any folder last.
+ */
+export function orderBuildersLikeNodeList<T extends BuilderOrderNode>(
+  builders: readonly T[],
+  folders: readonly BuilderOrderFolder[]
+): T[] {
+  const byPosition = (a: { sortOrder: number; id: string }, b: { sortOrder: number; id: string }) =>
+    a.sortOrder - b.sortOrder || a.id.localeCompare(b.id);
+  const known = new Set(folders.map((folder) => folder.id));
+  const children = new Map<string | null, BuilderOrderFolder[]>();
+  for (const folder of folders) {
+    const parent = folder.parentId && known.has(folder.parentId) ? folder.parentId : null;
+    children.set(parent, [...(children.get(parent) ?? []), folder]);
+  }
+  // A folder's nodes follow all of its subfolders, so number folders in post-order.
+  const blockOf = new Map<string, number>();
+  const visit = (parent: string | null) => {
+    for (const folder of [...(children.get(parent) ?? [])].sort(byPosition)) {
+      visit(folder.id);
+      blockOf.set(folder.id, blockOf.size);
+    }
+  };
+  visit(null);
+  const block = (node: T) =>
+    node.folderId && blockOf.has(node.folderId) ? (blockOf.get(node.folderId) as number) : blockOf.size;
+  const created = (node: T) => new Date(node.createdAt).getTime();
+  return [...builders].sort(
+    (a, b) => block(a) - block(b) || a.sortOrder - b.sortOrder || created(a) - created(b) || a.id.localeCompare(b.id)
+  );
+}
