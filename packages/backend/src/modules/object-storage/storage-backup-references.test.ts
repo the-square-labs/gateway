@@ -4,6 +4,7 @@ import { backupPolicies, backupRuns } from '@/db/schema/index.js';
 import {
   assertStorageBucketHasNoBackupReferences,
   assertStorageHasNoBackupReferences,
+  forgetOrphanedBucketBackupHistory,
   forgetStorageBackupHistory,
 } from './storage-backup-references.js';
 
@@ -127,7 +128,30 @@ describe('storage bucket backup reference protection', () => {
     expect(policies.params).toEqual(['storage', 'backups', 'storage', 'backups']);
     expect(runs.sql).toContain('"destination_bucket"');
     expect(runs.sql).toContain('"staging_bucket"');
-    expect(runs.params).toEqual(['storage', 'backups', 'storage', 'backups']);
+    expect(runs.params.slice(0, 4)).toEqual(['storage', 'backups', 'storage', 'backups']);
+    // Finished history of a deleted database is reachable through no API, so it does not keep the bucket.
+    expect(runs.sql).toMatch(/not \(.*"database_connection_id" is null.*"runtime_cleanup_pending"/);
+  });
+  it('forgets, after the bucket is gone, only finished history of deleted databases whose files were in it', async () => {
+    let condition: unknown;
+    const db = {
+      delete: vi.fn((table) => {
+        expect(table).toBe(backupRuns);
+        return {
+          where: vi.fn((value) => {
+            condition = value;
+            return { returning: vi.fn().mockResolvedValue([{ id: 'orphan-1' }, { id: 'orphan-2' }]) };
+          }),
+        };
+      }),
+    };
+    await expect(forgetOrphanedBucketBackupHistory(db as never, 'storage', 'backups')).resolves.toBe(2);
+    const query = new PgDialect().sqlToQuery(condition as never);
+    expect(query.sql).toContain('"destination_bucket"');
+    expect(query.sql).not.toContain('"staging_bucket"');
+    expect(query.sql).toContain('"database_connection_id" is null');
+    expect(query.sql).toContain('"backup_runs"."status" not in');
+    expect(query.params).toEqual(expect.arrayContaining(['storage', 'backups', 'queued', 'running', false]));
   });
   it('allows deleting a bucket no policy or retained history uses', async () => {
     await expect(
