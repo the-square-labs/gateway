@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +22,34 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 )
 
+// createContainer creates and starts the engine container and waits until it
+// serves. A published port the controller leaves to the node is picked before
+// the container is created (see pickManagedDatabaseHostPorts), so the engine
+// starts once, already on the binding it keeps across restarts, and record
+// gets the ports it publishes.
 func (m *managedDatabaseManager) createContainer(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) (string, error) {
+	for attempt := 1; ; attempt++ {
+		pinned, picked, err := pickManagedDatabaseHostPorts(input)
+		if err != nil {
+			return "", err
+		}
+		containerID, err := m.createPinnedContainer(ctx, record, pinned)
+		if err != nil && picked && dockerHostPortTaken(err) && attempt < maxHostPortPicks {
+			m.logger.Info("a picked managed database host port was taken before Docker bound it; picking again", "id", record.ID)
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		record.PublishedPort = pinned.PublishedPort
+		record.PublishedNativePort = pinned.PublishedNativePort
+		return containerID, nil
+	}
+}
+
+// createPinnedContainer creates the container with the host ports in input,
+// which are all chosen.
+func (m *managedDatabaseManager) createPinnedContainer(ctx context.Context, record *managedDatabaseRecord, input managedDatabaseCommand) (string, error) {
 	dataPath, port := engineDataPathAndPort(input.Type, input.TLSEnabled)
 	dataSource, err := prepareManagedDatabaseDataSource(*record, input.Type)
 	if err != nil {
@@ -145,22 +171,14 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 			return "", fmt.Errorf("parse managed database port: %w", err)
 		}
 		containerCfg.ExposedPorts = network.PortSet{containerPort: {}}
-		hostPort := ""
-		if input.PublishedPort != 0 {
-			hostPort = fmt.Sprintf("%d", input.PublishedPort)
-		}
-		hostCfg.PortBindings = network.PortMap{containerPort: {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: hostPort}}}
+		hostCfg.PortBindings = network.PortMap{containerPort: {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: fmt.Sprintf("%d", input.PublishedPort)}}}
 		if input.Type == "clickhouse" && input.PublishNativeTCP {
 			nativePort, parseErr := network.ParsePort(clickHouseNativePort(input.TLSEnabled))
 			if parseErr != nil {
 				return "", fmt.Errorf("parse ClickHouse native port: %w", parseErr)
 			}
 			containerCfg.ExposedPorts[nativePort] = struct{}{}
-			nativeHostPort := ""
-			if input.PublishedNativePort != 0 {
-				nativeHostPort = fmt.Sprintf("%d", input.PublishedNativePort)
-			}
-			hostCfg.PortBindings[nativePort] = []network.PortBinding{{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: nativeHostPort}}
+			hostCfg.PortBindings[nativePort] = []network.PortBinding{{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: fmt.Sprintf("%d", input.PublishedNativePort)}}
 		}
 	}
 	created, err := m.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
@@ -178,14 +196,6 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		_ = m.client.RemoveContainer(ctx, created.ID, true)
 		return "", fmt.Errorf("start managed database container: %w", err)
 	}
-	if retry, err := m.discardExcludedPickedPort(ctx, created.ID, input, port); err != nil || retry {
-		if err != nil {
-			return "", err
-		}
-		next := input
-		next.pickedPortAttempts++
-		return m.createContainer(ctx, record, next)
-	}
 	if err := m.waitForDatabaseReady(ctx, created.ID, input); err != nil {
 		_ = m.client.RemoveContainer(ctx, created.ID, true)
 		return "", err
@@ -194,55 +204,6 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		if err := m.cleanupClickHouseSystemLogs(ctx, created.ID, input); err != nil {
 			m.logger.Warn("cleanup legacy ClickHouse system logs", "id", record.ID, "error", err)
 		}
-	}
-	if input.PublishTCP && (input.PublishedPort == 0 || (input.Type == "clickhouse" && input.PublishNativeTCP && input.PublishedNativePort == 0)) {
-		inspect, err := m.client.cli.ContainerInspect(ctx, created.ID, mobyclient.ContainerInspectOptions{})
-		if err != nil {
-			_ = m.client.RemoveContainer(ctx, created.ID, true)
-			return "", fmt.Errorf("inspect allocated managed database port: %w", err)
-		}
-		primaryPort, parseErr := network.ParsePort(port)
-		if parseErr != nil {
-			return "", fmt.Errorf("parse allocated managed database port: %w", parseErr)
-		}
-		bindings := inspect.Container.NetworkSettings.Ports[primaryPort]
-		if len(bindings) != 1 || bindings[0].HostPort == "" {
-			_ = m.client.RemoveContainer(ctx, created.ID, true)
-			return "", errors.New("Docker did not allocate one managed database host port")
-		}
-		allocated, parseErr := strconv.ParseUint(bindings[0].HostPort, 10, 16)
-		if parseErr != nil || allocated == 0 {
-			_ = m.client.RemoveContainer(ctx, created.ID, true)
-			return "", errors.New("Docker returned an invalid managed database host port")
-		}
-		record.PublishedPort = uint16(allocated)
-		if input.Type == "clickhouse" && input.PublishNativeTCP {
-			nativePort, parseErr := network.ParsePort(clickHouseNativePort(input.TLSEnabled))
-			if parseErr != nil {
-				return "", fmt.Errorf("parse allocated ClickHouse native port: %w", parseErr)
-			}
-			nativeBindings := inspect.Container.NetworkSettings.Ports[nativePort]
-			if len(nativeBindings) != 1 || nativeBindings[0].HostPort == "" {
-				_ = m.client.RemoveContainer(ctx, created.ID, true)
-				return "", errors.New("Docker did not allocate one ClickHouse native host port")
-			}
-			allocatedNative, parseNativeErr := strconv.ParseUint(nativeBindings[0].HostPort, 10, 16)
-			if parseNativeErr != nil || allocatedNative == 0 {
-				_ = m.client.RemoveContainer(ctx, created.ID, true)
-				return "", errors.New("Docker returned an invalid ClickHouse native host port")
-			}
-			record.PublishedNativePort = uint16(allocatedNative)
-		}
-	}
-	if input.PublishTCP &&
-		(input.PublishedPort == 0 || (input.Type == "clickhouse" && input.PublishNativeTCP && input.PublishedNativePort == 0)) {
-		pinned := input
-		pinned.PublishedPort = record.PublishedPort
-		pinned.PublishedNativePort = record.PublishedNativePort
-		if err := m.client.RemoveContainer(ctx, created.ID, true); err != nil && !cerrdefs.IsNotFound(err) {
-			return "", fmt.Errorf("replace auto-assigned managed database publication: %w", err)
-		}
-		return m.createContainer(ctx, record, pinned)
 	}
 	return created.ID, nil
 }
@@ -885,72 +846,4 @@ func marshalManagedDatabaseInspect(record managedDatabaseRecord, status string, 
 		return "", err
 	}
 	return string(value), nil
-}
-
-// maxExcludedPortPicks bounds how often a Docker-picked published port that
-// another Gateway workload reserves is discarded before the create fails.
-const maxExcludedPortPicks = 16
-
-// discardExcludedPickedPort removes the just-started container when Docker
-// picked one of input.ExcludedHostPorts for a published port the controller
-// left to Docker, so the caller creates it again and Docker picks another
-// port. It reports whether to retry.
-func (m *managedDatabaseManager) discardExcludedPickedPort(ctx context.Context, containerID string, input managedDatabaseCommand, primaryPort string) (bool, error) {
-	if len(input.ExcludedHostPorts) == 0 || !input.PublishTCP {
-		return false, nil
-	}
-	var pickedPorts []string
-	if input.PublishedPort == 0 {
-		pickedPorts = append(pickedPorts, primaryPort)
-	}
-	if input.Type == "clickhouse" && input.PublishNativeTCP && input.PublishedNativePort == 0 {
-		pickedPorts = append(pickedPorts, clickHouseNativePort(input.TLSEnabled))
-	}
-	if len(pickedPorts) == 0 {
-		return false, nil
-	}
-	inspect, err := m.client.cli.ContainerInspect(ctx, containerID, mobyclient.ContainerInspectOptions{})
-	if err != nil {
-		_ = m.client.RemoveContainer(ctx, containerID, true)
-		return false, fmt.Errorf("inspect picked managed database port: %w", err)
-	}
-	var hostPorts []string
-	for _, name := range pickedPorts {
-		containerPort, parseErr := network.ParsePort(name)
-		if parseErr != nil {
-			continue
-		}
-		for _, binding := range inspect.Container.NetworkSettings.Ports[containerPort] {
-			hostPorts = append(hostPorts, binding.HostPort)
-		}
-	}
-	excluded, found := excludedHostPort(hostPorts, input.ExcludedHostPorts)
-	if !found {
-		return false, nil
-	}
-	if err := m.client.RemoveContainer(ctx, containerID, true); err != nil && !cerrdefs.IsNotFound(err) {
-		return false, fmt.Errorf("discard managed database container on a reserved host port: %w", err)
-	}
-	if input.pickedPortAttempts+1 >= maxExcludedPortPicks {
-		return false, fmt.Errorf("Docker kept picking host ports other Gateway workloads reserve (last %d); publish a chosen port instead", excluded)
-	}
-	m.logger.Info("Docker picked a reserved host port for a managed database; picking again", "port", excluded)
-	return true, nil
-}
-
-// excludedHostPort returns the first of hostPorts (as Docker reports them)
-// that is in excluded.
-func excludedHostPort(hostPorts []string, excluded []uint16) (uint16, bool) {
-	for _, value := range hostPorts {
-		port, err := strconv.ParseUint(value, 10, 16)
-		if err != nil {
-			continue
-		}
-		for _, candidate := range excluded {
-			if uint16(port) == candidate {
-				return candidate, true
-			}
-		}
-	}
-	return 0, false
 }
