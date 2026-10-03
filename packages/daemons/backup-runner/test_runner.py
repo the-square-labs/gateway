@@ -223,6 +223,130 @@ class RestoreHardeningTests(unittest.TestCase):
         self.assertEqual(env["REDISCLI_AUTH"], "owner-secret")
 
 
+class FakeRedis:
+    """Answers redis_command for a restore target and a staged Redis by host."""
+
+    def __init__(self, stage_full_syncs=1, link_up=False, fail=()):
+        self.calls = []
+        self.secrets = []
+        self.stage_full_syncs = stage_full_syncs
+        self.link_up = link_up
+        self.fail = set(fail)
+
+    def command(self, endpoint, command, last_argument=None):
+        name = " ".join(command)
+        self.calls.append((endpoint["host"], name))
+        if last_argument is not None:
+            self.secrets.append((name, last_argument))
+        if name in self.fail:
+            raise runner.BackupError(f"redis-cli failed: {name} refused")
+        if endpoint["host"] == "stage":
+            if name == "INFO stats":
+                return f"# Stats\r\nsync_full:{self.stage_full_syncs}\r\n"
+            if name == "INFO server":
+                return "# Server\r\nredis_version:8.10.0\r\n"
+            return "PONG"
+        if name == "CONFIG GET masterauth":
+            return "masterauth\nprevious-secret\n"
+        if name == "INFO replication":
+            return "role:slave\r\nmaster_link_status:up\r\nmaster_sync_in_progress:0\r\n" if self.link_up else "role:slave\r\nmaster_link_status:down\r\nmaster_sync_in_progress:0\r\n"
+        if name == "INFO server":
+            return "# Server\r\nredis_version:8.2.10\r\n"
+        return "OK"
+
+
+class RedisRestoreTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.original_work = runner.WORK
+        runner.WORK = pathlib.Path(self.directory.name)
+        self.artifact = runner.WORK / "database.rdb"
+        self.artifact.write_bytes(b"REDIS0012")
+        self.config = {
+            "limits": {"timeoutSeconds": 3600},
+            "restoreTarget": {"host": "target", "port": 6379},
+            "redisStaging": {"host": "stage", "port": 21345, "password": "stage-secret"},
+        }
+
+    def tearDown(self):
+        runner.WORK = self.original_work
+        self.directory.cleanup()
+
+    def restore(self, fake):
+        with patch.object(runner, "redis_command", side_effect=fake.command), patch.object(runner.time, "sleep"), patch.object(runner.signal, "pthread_sigmask"):
+            runner.restore_redis(self.config, self.artifact)
+
+    def assert_detached(self, fake):
+        target_calls = [name for host, name in fake.calls if host == "target"]
+        self.assertIn("REPLICAOF NO ONE", target_calls)
+        self.assertEqual(target_calls[-1], "SAVE")
+        self.assertEqual(fake.secrets[-1], ("CONFIG SET masterauth", "previous-secret"))
+
+    def test_a_target_that_cannot_load_the_copy_fails_fast_and_is_detached(self):
+        fake = FakeRedis(stage_full_syncs=runner.REDIS_FULL_SYNC_ATTEMPTS)
+        with self.assertRaises(runner.BackupError) as raised:
+            self.restore(fake)
+        self.assertIn("Redis 8.2.10", str(raised.exception))
+        self.assertIn("Redis 8.10.0 or newer", str(raised.exception))
+        self.assert_detached(fake)
+
+    def test_a_stop_request_while_replicating_detaches_the_target(self):
+        fake = FakeRedis()
+        original = fake.command
+
+        def stopped(endpoint, command, last_argument=None):
+            if endpoint["host"] == "target" and command == ["INFO", "replication"]:
+                runner.stop_requested(None, None)
+            return original(endpoint, command, last_argument)
+
+        fake.command = stopped
+        with patch.object(runner.signal, "signal"), self.assertRaises(runner.BackupError) as raised:
+            self.restore(fake)
+        self.assertIn("stopped", str(raised.exception))
+        self.assert_detached(fake)
+
+    def test_masterauth_is_restored_even_when_replication_could_not_start(self):
+        fake = FakeRedis(fail={"REPLICAOF stage 21345", "REPLICAOF NO ONE"})
+        with self.assertRaises(runner.BackupError) as raised:
+            self.restore(fake)
+        self.assertIn("REPLICAOF NO ONE", str(raised.exception))
+        self.assertEqual(fake.secrets[-1], ("CONFIG SET masterauth", "previous-secret"))
+        self.assertEqual([name for host, name in fake.calls if host == "target"][-1], "SAVE")
+
+    def test_a_completed_copy_is_detached_and_saved(self):
+        fake = FakeRedis(link_up=True)
+        self.restore(fake)
+        self.assert_detached(fake)
+
+    def test_a_target_that_never_connects_fails_instead_of_waiting_for_the_deadline(self):
+        fake = FakeRedis(stage_full_syncs=0)
+        clock = iter(range(0, 10_000, 30))
+        with patch.object(runner.time, "time", side_effect=lambda: float(next(clock))), self.assertRaises(runner.BackupError) as raised:
+            self.restore(fake)
+        self.assertIn("did not connect to the staged Redis at stage:21345", str(raised.exception))
+        self.assert_detached(fake)
+
+
+class RunnerDiagnosticsTests(unittest.TestCase):
+    def test_a_failed_tool_reports_what_it_printed(self):
+        completed = Mock(returncode=1, stdout="", stderr="Entering replica output mode...\nNOPERM User app has no permissions to run the 'sync' command\n")
+        with patch.object(runner.subprocess, "run", return_value=completed), self.assertRaises(runner.BackupError) as raised:
+            runner.run(["/usr/bin/redis-cli", "--rdb", "/work/database.rdb"])
+        self.assertIn("redis-cli failed:", str(raised.exception))
+        self.assertIn("NOPERM", str(raised.exception))
+
+    def test_a_redis_user_without_replication_access_fails_preflight(self):
+        source = {"host": "redis.example.test", "port": 6379, "username": "app"}
+        for reply in ("NOPERM User app has no permissions to run the 'replconf' command", runner.BackupError("redis-cli failed: NOPERM User app has no permissions to run the 'replconf' command")):
+            effect = reply if isinstance(reply, Exception) else None
+            with self.subTest(reply=str(reply)), patch.object(runner, "redis_command", return_value=reply, side_effect=effect):
+                with self.assertRaises(runner.BackupError) as raised:
+                    runner.assert_redis_replication_access(source)
+                self.assertIn("+replconf +sync", str(raised.exception))
+        with patch.object(runner, "redis_command", return_value="OK"):
+            runner.assert_redis_replication_access(source)
+
+
 CA_PEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
 
 

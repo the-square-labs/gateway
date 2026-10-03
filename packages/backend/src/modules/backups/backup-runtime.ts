@@ -32,6 +32,7 @@ import { authMiddleware, requireScopeForResource } from '@/modules/auth/auth.mid
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import { CreateManagedDatabaseSchema } from '@/modules/databases/databases.schemas.js';
+import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
 import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
 import { StartStorageCopyJobSchema, StorageCopyJobListQuerySchema } from '@/modules/storage/storage-copy.schemas.js';
@@ -85,6 +86,7 @@ export const backupRuntime = {
   CreateManagedDatabaseSchema,
   DatabaseFolderService,
   BackupService,
+  DatabaseConnectionService,
   ManagedDatabaseService,
   ObjectStorageService,
   AuditService,

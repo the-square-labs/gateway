@@ -39,10 +39,16 @@ const (
 	backupRunnerManagedLabel  = "wiolett.gateway.managed"
 	backupRunnerRunLabel      = "wiolett.gateway.backup-run-id"
 	backupRunnerDeadlineLabel = "wiolett.gateway.backup-deadline"
+	// The staging Redis of a Redis restore, labelled with backupRunnerRunLabel.
+	backupRedisStageManagedValue = "backup-redis-stage"
 	// A runner found after a daemon restart is stopped only once it is
 	// clearly past its deadline, so small clock differences never stop a
 	// runner that its original context would still have allowed.
 	backupRunnerDeadlineGrace = 30 * time.Second
+	// A cancelled or overdue runner gets SIGTERM and this long to undo what it
+	// changed outside its workspace (a Redis restore target it made a replica)
+	// before it is killed.
+	backupRunnerStopGrace = 30 * time.Second
 )
 
 type backupPayload struct {
@@ -221,6 +227,7 @@ func (r *backupRuntime) reconcileWorkspaces() {
 			}
 		}
 	}
+	r.removeOrphanedRedisStages()
 }
 
 // workspaceImageExists is false once status() already released the workspace.
@@ -241,6 +248,10 @@ func (r *backupRuntime) removeWorkspace(runID, imagePath string) error {
 func (r *backupRuntime) removeWorkspaceLocked(runID, imagePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
 	defer cancel()
+	// A staging Redis left by a daemon restart keeps the workspace mounted.
+	if err := r.removeRedisStages(ctx, runID); err != nil {
+		return err
+	}
 	if err := r.plugin.databaseManager.loopHost().release(ctx, imagePath, filepath.Join(r.root, runID, "work")); err != nil {
 		return fmt.Errorf("release backup workspace: %w", err)
 	}
@@ -251,6 +262,54 @@ func (r *backupRuntime) removeWorkspaceLocked(runID, imagePath string) error {
 		return fmt.Errorf("remove backup workspace state: %w", err)
 	}
 	return nil
+}
+
+// removeRedisStages removes the staging Redis containers of one run.
+func (r *backupRuntime) removeRedisStages(ctx context.Context, runID string) error {
+	containers, err := r.plugin.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{
+		All: true,
+		Filters: mobyclient.Filters{}.
+			Add("label", backupRunnerManagedLabel+"="+backupRedisStageManagedValue).
+			Add("label", backupRunnerRunLabel+"="+runID),
+	})
+	if err != nil {
+		return fmt.Errorf("list Redis staging containers: %w", err)
+	}
+	for _, candidate := range containers.Items {
+		if _, err := r.plugin.client.cli.ContainerRemove(ctx, candidate.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+			return fmt.Errorf("remove Redis staging container: %w", err)
+		}
+	}
+	return nil
+}
+
+// removeOrphanedRedisStages removes staging Redis containers no run owns any
+// more: their run is not executing in this process and its workspace is gone.
+// The workspace pass above keeps the workspace of every run whose runner is
+// still running, and runTool creates the stage only inside a workspace.
+func (r *backupRuntime) removeOrphanedRedisStages() {
+	ctx, cancel := context.WithTimeout(context.Background(), managedDatabaseCleanupTimeout)
+	defer cancel()
+	containers, err := r.plugin.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{
+		All:     true,
+		Filters: mobyclient.Filters{}.Add("label", backupRunnerManagedLabel+"="+backupRedisStageManagedValue),
+	})
+	if err != nil {
+		return
+	}
+	imageDir := filepath.Join(r.plugin.databaseManager.root, "backups", "images")
+	for _, candidate := range containers.Items {
+		runID := candidate.Labels[backupRunnerRunLabel]
+		r.mu.Lock()
+		active := r.active[runID]
+		r.mu.Unlock()
+		if active || (runID != "" && workspaceImageExists(filepath.Join(imageDir, runID+".img"))) {
+			continue
+		}
+		if _, err := r.plugin.client.cli.ContainerRemove(ctx, candidate.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+			r.plugin.databaseManager.logger.Warn("orphaned Redis staging container could not be removed", "run_id", runID, "error", err)
+		}
+	}
 }
 
 func (r *backupRuntime) apply(action, runID, raw string) (backupRunStatus, error) {
@@ -631,7 +690,12 @@ func (r *backupRuntime) runTool(ctx context.Context, runID string, payload backu
 	if err != nil {
 		return backupRunStatus{}, fmt.Errorf("create backup runner: %w", err)
 	}
-	defer r.plugin.client.cli.ContainerRemove(context.Background(), created.ID, mobyclient.ContainerRemoveOptions{Force: true})
+	// Runs before the Redis stage, relay and workspace cleanups below: a runner
+	// stopped by a cancel or its deadline still reaches what it has to undo.
+	defer func() {
+		_ = r.stopRunnerContainer(created.ID)
+		_, _ = r.plugin.client.cli.ContainerRemove(context.Background(), created.ID, mobyclient.ContainerRemoveOptions{Force: true})
+	}()
 	if err := r.recordRunnerContainer(runID, operation, created.ID); err != nil {
 		return backupRunStatus{}, err
 	}
@@ -730,10 +794,7 @@ func backupRunOverdue(deadline *time.Time, label string, created, now time.Time)
 // A stop failure other than a missing container is returned so the control
 // plane retries instead of seeing a terminal status for a live runner.
 func (r *backupRuntime) stopOverdueRunner(status backupRunStatus) (backupRunStatus, error) {
-	stopTimeout := 10
-	stopContext, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer stopCancel()
-	if _, err := r.plugin.client.cli.ContainerStop(stopContext, status.ContainerID, mobyclient.ContainerStopOptions{Timeout: &stopTimeout}); err != nil && !isNotFoundErr(err) {
+	if err := r.stopRunnerContainer(status.ContainerID); err != nil {
 		return backupRunStatus{}, fmt.Errorf("stop overdue backup runner: %w", err)
 	}
 	now := time.Now().UTC()
@@ -749,6 +810,18 @@ func (r *backupRuntime) stopOverdueRunner(status backupRunStatus) (backupRunStat
 		DeadlineAt:  status.DeadlineAt,
 	}
 	return r.reconcileTerminalCleanup(stopped, true)
+}
+
+// stopRunnerContainer stops a runner with SIGTERM, killing it only after
+// backupRunnerStopGrace. A runner that already exited or is gone is no error.
+func (r *backupRuntime) stopRunnerContainer(containerID string) error {
+	stopTimeout := int(backupRunnerStopGrace / time.Second)
+	stopContext, stopCancel := context.WithTimeout(context.Background(), backupRunnerStopGrace+15*time.Second)
+	defer stopCancel()
+	if _, err := r.plugin.client.cli.ContainerStop(stopContext, containerID, mobyclient.ContainerStopOptions{Timeout: &stopTimeout}); err != nil && !isNotFoundErr(err) {
+		return err
+	}
+	return nil
 }
 
 func (r *backupRuntime) recordRunnerContainer(runID, operation, containerID string) error {
@@ -908,7 +981,7 @@ func (r *backupRuntime) startRedisStage(ctx context.Context, runID string, paylo
 	}
 	command := "until [ -f /work/redis-stage/dump.rdb ]; do sleep 0.1; done; exec redis-server /work/redis-stage/redis.conf"
 	created, err := r.plugin.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
-		Config: &container.Config{Image: stageImage, User: "65532:65532", Cmd: []string{"sh", "-ec", command}, Labels: map[string]string{"wiolett.gateway.managed": "backup-redis-stage", "wiolett.gateway.backup-run-id": runID}},
+		Config: &container.Config{Image: stageImage, User: "65532:65532", Cmd: []string{"sh", "-ec", command}, Labels: map[string]string{backupRunnerManagedLabel: backupRedisStageManagedValue, backupRunnerRunLabel: runID}},
 		HostConfig: func() *container.HostConfig {
 			hostConfig.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: workdir, Target: "/work"}}
 			return hostConfig
@@ -1043,7 +1116,24 @@ func (r *backupRuntime) reconcilePersistedRun(status backupRunStatus) (backupRun
 		return status, nil
 	}
 	if status.ContainerID == "" {
-		return r.recoverUnknownRun(status.RunID)
+		recovered, err := r.recoverUnknownRun(status.RunID)
+		r.mu.Lock()
+		active := r.active[status.RunID]
+		r.mu.Unlock()
+		if err == nil || err.Error() != "BACKUP_RUN_UNKNOWN" || active {
+			return recovered, err
+		}
+		// Accepted and persisted, but the daemon restarted before its runner
+		// existed: nothing will start it any more. It ends here, and its
+		// workspace and staging Redis go with it.
+		if status.Phase == "cancelling" {
+			status.Status, status.Phase, status.Error = "cancelled", "cancelled", ""
+		} else {
+			status.Status, status.Phase, status.Error = "failed", "interrupted", "The executor restarted before the backup runner started; start the run again"
+		}
+		now := time.Now().UTC()
+		status.CompletedAt = &now
+		return r.reconcileTerminalCleanup(status, true)
 	}
 	inspect, err := r.plugin.client.cli.ContainerInspect(context.Background(), status.ContainerID, mobyclient.ContainerInspectOptions{})
 	if err == nil {
@@ -1068,9 +1158,17 @@ func (r *backupRuntime) reconcilePersistedRun(status backupRunStatus) (backupRun
 		return backupRunStatus{}, fmt.Errorf("inspect persisted backup runner: %w", err)
 	}
 	if recovered, resultErr := r.readPersistedRunnerResult(status); resultErr == nil {
+		if status.Phase == "cancelling" && recovered.Status == "failed" {
+			// The runner reports the stop that the cancel asked for as a failure.
+			recovered.Status, recovered.Phase, recovered.Error = "cancelled", "cancelled", ""
+		}
 		return r.reconcileTerminalCleanup(recovered, true)
 	}
-	status.Status, status.Phase, status.Error = "failed", "runner_lost", "Backup runner exited without a verified result"
+	if status.Phase == "cancelling" {
+		status.Status, status.Phase, status.Error = "cancelled", "cancelled", ""
+	} else {
+		status.Status, status.Phase, status.Error = "failed", "runner_lost", "Backup runner exited without a verified result"
+	}
 	now := time.Now().UTC()
 	status.CompletedAt = &now
 	return r.reconcileTerminalCleanup(status, true)
@@ -1152,12 +1250,15 @@ func (r *backupRuntime) cancelRun(runID string) (backupRunStatus, error) {
 	if cancel != nil {
 		cancel()
 	} else if current.ContainerID != "" {
-		stopTimeout := 10
-		stopContext, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer stopCancel()
-		if _, err := r.plugin.client.cli.ContainerStop(stopContext, current.ContainerID, mobyclient.ContainerStopOptions{Timeout: &stopTimeout}); err != nil && !isNotFoundErr(err) {
-			return backupRunStatus{}, fmt.Errorf("cancel recovered backup runner: %w", err)
-		}
+		// The runner gets its stop grace period, longer than the control plane
+		// waits for this answer. A failed stop leaves the run cancelling, and
+		// the control plane cancels again.
+		containerID := current.ContainerID
+		go func() {
+			if err := r.stopRunnerContainer(containerID); err != nil && r.plugin.databaseManager != nil {
+				r.plugin.databaseManager.logger.Warn("cancelled backup runner could not be stopped", "run_id", runID, "error", err)
+			}
+		}()
 	}
 	result := *current
 	result.Status, result.Phase = "running", "cancelling"

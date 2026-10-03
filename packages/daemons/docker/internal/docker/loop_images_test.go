@@ -397,14 +397,34 @@ func TestReadLoopDevicesAndMountInfo(t *testing.T) {
 // Every exit of a backup run must release its workspace: a run of this
 // process releases its own, and after a daemon restart reconciliation does
 // it for runs whose runner is gone or never existed, but not for a runner
-// that is still running.
+// that is still running. A staging Redis goes with its run's workspace, and
+// one whose run has no workspace left is removed as well.
 func TestBackupWorkspaceReconcileReleasesRunsWithoutRunner(t *testing.T) {
 	loops := newFakeLoops(t)
 	m := newTestDatabaseManager(t, loops)
 	created := time.Now().UTC().Format(time.RFC3339Nano)
+	stages := map[string]string{"stage-done": "done", "stage-alive": "alive", "stage-ancient": "ancient", "stage-interrupted": "interrupted"}
+	removed := map[string]bool{}
 	engine := func(request *http.Request) (*http.Response, error) {
 		body, code := "[]", http.StatusOK
 		switch {
+		case request.Method == http.MethodDelete && strings.Contains(request.URL.Path, "/containers/stage-"):
+			removed[filepath.Base(request.URL.Path)] = true
+			code, body = http.StatusNoContent, ""
+		case strings.HasSuffix(request.URL.Path, "/containers/json") && strings.Contains(request.URL.Query().Get("filters"), backupRedisStageManagedValue):
+			var filters map[string]map[string]bool
+			if err := json.Unmarshal([]byte(request.URL.Query().Get("filters")), &filters); err != nil {
+				t.Fatal(err)
+			}
+			items := []map[string]any{}
+			for id, runID := range stages {
+				if removed[id] || (len(filters["label"]) > 1 && !filters["label"][backupRunnerRunLabel+"="+runID]) {
+					continue
+				}
+				items = append(items, map[string]any{"Id": id, "Labels": map[string]string{backupRunnerManagedLabel: backupRedisStageManagedValue, backupRunnerRunLabel: runID}})
+			}
+			encoded, _ := json.Marshal(items)
+			body = string(encoded)
 		case strings.HasSuffix(request.URL.Path, "/containers/alive/json"):
 			body = `{"Id":"alive","Created":"` + created + `","State":{"Running":true,"Status":"running"},` +
 				`"Config":{"Labels":{"` + backupRunnerManagedLabel + `":"backup-runner","` + backupRunnerRunLabel + `":"alive"}}}`
@@ -439,8 +459,11 @@ func TestBackupWorkspaceReconcileReleasesRunsWithoutRunner(t *testing.T) {
 	gone := workspace("gone", "3")   // runner vanished while the daemon was down
 	alive := workspace("alive", "4") // runner still running after a restart
 	busy := workspace("busy", "5")   // executing in this process
+	// accepted and persisted, but the daemon restarted before its runner existed
+	interrupted := workspace("interrupted", "6")
 	runtime.active["busy"] = true
 	for _, status := range []backupRunStatus{
+		{RunID: "interrupted", Status: "queued", Phase: "queued"},
 		{RunID: "done", Status: "completed", Phase: "backup"},
 		{RunID: "gone", Status: "running", Phase: "backup", ContainerID: "gone"},
 		{RunID: "alive", Status: "running", Phase: "backup", ContainerID: "alive"},
@@ -452,7 +475,7 @@ func TestBackupWorkspaceReconcileReleasesRunsWithoutRunner(t *testing.T) {
 
 	runtime.reconcileWorkspaces()
 
-	for image, device := range map[string]string{lost: "/dev/loop1", done: "/dev/loop2", gone: "/dev/loop3"} {
+	for image, device := range map[string]string{lost: "/dev/loop1", done: "/dev/loop2", gone: "/dev/loop3", interrupted: "/dev/loop6"} {
 		if exists(image) || loops.bound(device) {
 			t.Errorf("workspace %s of a run without a runner was not released", filepath.Base(image))
 		}
@@ -460,6 +483,14 @@ func TestBackupWorkspaceReconcileReleasesRunsWithoutRunner(t *testing.T) {
 	for image, device := range map[string]string{alive: "/dev/loop4", busy: "/dev/loop5"} {
 		if !exists(image) || !loops.bound(device) {
 			t.Errorf("workspace %s of a live run was released", filepath.Base(image))
+		}
+	}
+	if status, err := runtime.load("interrupted"); err != nil || status.Status != "failed" || status.Phase != "interrupted" {
+		t.Errorf("interrupted run = %+v, %v; want failed/interrupted", status, err)
+	}
+	for id, want := range map[string]bool{"stage-done": true, "stage-ancient": true, "stage-interrupted": true, "stage-alive": false} {
+		if removed[id] != want {
+			t.Errorf("staging Redis %s removed = %v, want %v", id, removed[id], want)
 		}
 	}
 }

@@ -22,6 +22,7 @@ import { isFileProtocolProvider, resolveFileProtocolPort } from './object-storag
 import {
   assertStorageBucketHasNoBackupReferences,
   assertStorageHasNoBackupReferences,
+  forgetOrphanedBucketBackupHistory,
   forgetStorageBackupHistory,
 } from './storage-backup-references.js';
 
@@ -52,6 +53,7 @@ export const storageCommercialRuntime = {
   resolveFileProtocolPort,
   assertStorageHasNoBackupReferences,
   assertStorageBucketHasNoBackupReferences,
+  forgetOrphanedBucketBackupHistory,
   forgetStorageBackupHistory,
   storageWritesFrozenError,
 };

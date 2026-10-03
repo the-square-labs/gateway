@@ -1,4 +1,4 @@
-import { and, eq, notInArray, or, sql } from 'drizzle-orm';
+import { and, eq, isNull, not, notInArray, or, sql } from 'drizzle-orm';
 import type { DrizzleExecutor } from '@/db/client.js';
 import { backupPolicies, backupRuns } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -24,6 +24,14 @@ function referencesConnection(connectionId: string) {
 
 function finishedRun() {
   return and(notInArray(backupRuns.status, [...ACTIVE_RUN_STATUSES]), eq(backupRuns.runtimeCleanupPending, false));
+}
+
+/**
+ * Finished history of a deleted database. It is kept with its files, but no
+ * API lists, restores or deletes it any more, so it does not keep a bucket.
+ */
+function orphanedFinishedRun() {
+  return and(isNull(backupRuns.databaseConnectionId), finishedRun());
 }
 
 /**
@@ -110,7 +118,10 @@ export async function forgetStorageBackupHistory(db: DrizzleExecutor, connection
   };
 }
 
-/** Check before deleting one bucket: backup history and policies read and write through it by name. */
+/**
+ * Check before deleting one bucket: backup history and policies read and write through it by name. History of
+ * deleted databases does not count (see {@link forgetOrphanedBucketBackupHistory}).
+ */
 export async function assertStorageBucketHasNoBackupReferences(
   db: DrizzleExecutor,
   connectionId: string,
@@ -131,9 +142,12 @@ export async function assertStorageBucketHasNoBackupReferences(
       .select({ id: backupRuns.id })
       .from(backupRuns)
       .where(
-        or(
-          and(eq(backupRuns.destinationId, connectionId), eq(backupRuns.destinationBucket, bucket)),
-          and(eq(backupRuns.stagingStorageConnectionId, connectionId), eq(backupRuns.stagingBucket, bucket))
+        and(
+          or(
+            and(eq(backupRuns.destinationId, connectionId), eq(backupRuns.destinationBucket, bucket)),
+            and(eq(backupRuns.stagingStorageConnectionId, connectionId), eq(backupRuns.stagingBucket, bucket))
+          ),
+          not(orphanedFinishedRun()!)
         )
       )
       .limit(1),
@@ -144,6 +158,20 @@ export async function assertStorageBucketHasNoBackupReferences(
       'STORAGE_BUCKET_REFERENCED_BY_BACKUPS',
       'Bucket is referenced by backup policies or retained history. Remove those references before deleting it.'
     );
+}
+
+/**
+ * After a bucket was deleted: removes the finished history of deleted databases whose backup files were in it.
+ * Nothing could reach that history any more, and its files went with the bucket. Returns how many records it removed.
+ */
+export async function forgetOrphanedBucketBackupHistory(db: DrizzleExecutor, connectionId: string, bucket: string) {
+  const removed = await db
+    .delete(backupRuns)
+    .where(
+      and(eq(backupRuns.destinationId, connectionId), eq(backupRuns.destinationBucket, bucket), orphanedFinishedRun())
+    )
+    .returning({ id: backupRuns.id });
+  return removed.length;
 }
 
 /** Reads the target storage for {@link rehomeStorageBackupHistory}; both may throw, which counts as missing. */
