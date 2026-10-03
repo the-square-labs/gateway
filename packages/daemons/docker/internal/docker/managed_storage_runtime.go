@@ -45,10 +45,14 @@ type managedStorageManager struct {
 	tlsReloads  resourceLocks
 	// loops overrides the kernel loop-device surface (tests).
 	loops *loopHost
-	// exitedEngines holds the containers of engines that stopped on their own
-	// and that the supervisor started again, until they serve: an engine that
-	// keeps exiting is down, although its container runs most of the time.
-	exitedEngines sync.Map
+	// engineRuns holds what the daemon saw of each engine container since it
+	// last started it (see engineRun): an engine an operator stopped is
+	// starting while the supervisor brings it back, and one that keeps
+	// crashing is down, although its container runs most of the time.
+	engineRunsMu sync.Mutex
+	engineRuns   map[string]engineRun
+	// probeReady overrides the engine readiness check (tests).
+	probeReady func(ctx context.Context, record managedStorageRecord) error
 }
 
 func (m *managedStorageManager) loopHost() *loopHost {
@@ -212,7 +216,7 @@ func (m *managedStorageManager) ensureStorageSize(ctx context.Context, record *m
 
 func (m *managedStorageManager) startContainer(ctx context.Context, id string) error {
 	// An engine started on purpose is starting, whatever it did before.
-	m.exitedEngines.Delete(id)
+	m.forgetEngineRun(id)
 	inspect, err := m.client.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{})
 	if err != nil {
 		return err
@@ -483,32 +487,34 @@ func (m *managedStorageManager) storageStatus(ctx context.Context, record manage
 		return "deleted"
 	}
 	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
-	if err != nil || inspect.Container.State == nil || !inspect.Container.State.Running {
+	if err != nil || inspect.Container.State == nil {
+		return "stopped"
+	}
+	if !inspect.Container.State.Running {
+		if m.engineRestarting(record, inspect.Container.State) {
+			return "starting"
+		}
 		return "stopped"
 	}
 	if err := m.checkReady(ctx, record); err != nil {
-		if m.engineKeepsExiting(record) {
+		if m.engineKeepsExiting(record) || m.engineDidNotComeBack(record) {
 			return "stopped"
 		}
 		return "starting"
 	}
-	m.exitedEngines.Delete(record.ContainerID)
+	m.engineServed(record.ContainerID)
 	return "ready"
 }
 
-// engineKeepsExiting reports an engine that stopped on its own and has not
-// served since the supervisor started it again.
-func (m *managedStorageManager) engineKeepsExiting(record managedStorageRecord) bool {
-	_, exited := m.exitedEngines.Load(record.ContainerID)
-	return exited
+func managedStorageReadyTimeout(record managedStorageRecord) time.Duration {
+	if record.engine() == managedStorageEngineSeaweedFS {
+		return seaweedfsReadyTimeout
+	}
+	return 90 * time.Second
 }
 
 func (m *managedStorageManager) waitForReady(ctx context.Context, record managedStorageRecord) error {
-	timeout := 90 * time.Second
-	if record.engine() == managedStorageEngineSeaweedFS {
-		timeout = seaweedfsReadyTimeout
-	}
-	deadline := time.NewTimer(timeout)
+	deadline := time.NewTimer(managedStorageReadyTimeout(record))
 	defer deadline.Stop()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -540,6 +546,9 @@ func managedStorageHealthPath(record managedStorageRecord) string {
 }
 
 func (m *managedStorageManager) checkReady(ctx context.Context, record managedStorageRecord) error {
+	if m.probeReady != nil {
+		return m.probeReady(ctx, record)
+	}
 	if record.engine() == managedStorageEngineSeaweedFS {
 		return m.checkSeaweedFSReady(ctx, record)
 	}
