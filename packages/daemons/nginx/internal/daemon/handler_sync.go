@@ -37,6 +37,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	preExistingHtpasswd := make(map[string][]byte)
 	deletedStaleConfigs := make(map[string][]byte)
 	ownershipRollback := make(map[string]bool)
+	var flagRollback []func()
 
 	rollback := func() {
 		// Restore original configs
@@ -74,6 +75,9 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 		}
 		for hostID, previous := range ownershipRollback {
 			_, _, _ = h.secureLinkState.SetSourceConfigManaged(hostID, previous)
+		}
+		for _, restore := range flagRollback {
+			restore()
 		}
 	}
 
@@ -155,6 +159,14 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 				ownershipRollback[host.HostId] = previous
 			}
 		}
+		restoreFlag, err := h.setMaintenanceFlag(host.HostId, host.Maintenance)
+		if err != nil {
+			rollback()
+			result.Success = false
+			result.Error = fmt.Sprintf("maintenance flag %s: %v", host.HostId, err)
+			return
+		}
+		flagRollback = append(flagRollback, restoreFlag)
 		path := h.mgr.ConfigPath(host.HostId)
 		name := fmt.Sprintf("proxy-host-%s.conf", host.HostId)
 		activeHosts[name] = true
@@ -256,6 +268,7 @@ func (h *Handler) finishFullSync(cmd *pb.FullSyncCommand, deletedStaleConfigs ma
 	for _, host := range cmd.Hosts {
 		hostIDs = append(hostIDs, host.HostId)
 	}
+	h.retainMaintenanceFlags(hostIDs)
 	h.state.SetExtra("active_host_ids", hostIDs)
 	h.state.SetExtra("config_version_hash", cmd.VersionHash)
 	h.state.Save()

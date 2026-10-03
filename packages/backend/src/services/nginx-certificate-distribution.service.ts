@@ -55,6 +55,11 @@ export type HostApplyOptions = {
    * full bundle follows when the node rejects that, e.g. because it lost the certificate files.
    */
   reuseActiveBundle?: boolean;
+  /**
+   * The route's maintenance state, for a node that keeps maintenance flags (see ProxyMaintenanceFlag in the proto);
+   * undefined leaves the node's flag as it is.
+   */
+  maintenance?: boolean;
 };
 
 export type PreparedTlsCertificate = CertificatePaths & {
@@ -420,7 +425,8 @@ export class NginxCertificateDistributionService {
         configContent,
         false,
         configOwnership,
-        options.deferReload ?? false
+        options.deferReload ?? false,
+        options.maintenance
       );
       if (result.success) return;
       logger.info('The node rejected the config of its active TLS bundle; sending the full bundle', {
@@ -475,6 +481,7 @@ export class NginxCertificateDistributionService {
         generation,
         configOwnership,
         deferReload: options.deferReload ?? false,
+        maintenance: options.maintenance,
         certificates: [
           {
             certId: prepared.daemonCertId,

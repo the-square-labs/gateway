@@ -3,7 +3,7 @@ import { parseDocument } from 'yaml';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
 import type { ManagedStorageEngine } from '@/db/schema/managed-storage.js';
-import type { CommandResult, GatewayCommand } from '@/grpc/generated/types.js';
+import type { CommandResult, GatewayCommand, ProxyMaintenanceFlag } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DaemonUpdateService } from './daemon-update.service.js';
@@ -56,6 +56,12 @@ function withoutComposeLogging(composeYaml: Buffer | undefined, normalizedModelJ
     yaml = Buffer.from(document.toString(), 'utf8');
   }
   return { composeYaml: yaml, normalizedModelJson: JSON.stringify(model) };
+}
+
+/** The maintenance field of a route apply: sent only when Gateway knows the node keeps maintenance flags. */
+function maintenanceFlagField(maintenance: boolean | undefined): { maintenance?: ProxyMaintenanceFlag } {
+  if (maintenance === undefined) return {};
+  return { maintenance: maintenance ? 'PROXY_MAINTENANCE_FLAG_ON' : 'PROXY_MAINTENANCE_FLAG_OFF' };
 }
 
 export class NodeDispatchService {
@@ -199,11 +205,19 @@ export class NodeDispatchService {
     configContent: string,
     testOnly = false,
     configOwnership = '',
-    deferReload = false
+    deferReload = false,
+    maintenance?: boolean
   ): Promise<CommandResult> {
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(nodeId, {
-      applyConfig: { hostId, configContent, testOnly, configOwnership, deferReload },
+      applyConfig: {
+        hostId,
+        configContent,
+        testOnly,
+        configOwnership,
+        deferReload,
+        ...maintenanceFlagField(maintenance),
+      },
     });
   }
 
@@ -248,6 +262,8 @@ export class NodeDispatchService {
       configOwnership?: string;
       /** Loaded with the reload of its batch (reconnect resync). */
       deferReload?: boolean;
+      /** The route's maintenance state on a node that keeps maintenance flags; undefined keeps the flag. */
+      maintenance?: boolean;
       certificates: Array<{
         certId: string;
         certPem: Buffer;
@@ -268,6 +284,7 @@ export class NodeDispatchService {
           generation: input.generation,
           configOwnership: input.configOwnership ?? '',
           deferReload: input.deferReload ?? false,
+          ...maintenanceFlagField(input.maintenance),
           certificates: input.certificates,
         },
       },
@@ -393,7 +410,7 @@ export class NodeDispatchService {
   /** Send a pre-built FullSyncCommand to a node */
   async fullSync(
     nodeId: string,
-    hosts: { hostId: string; configContent: string; configOwnership?: string }[],
+    hosts: { hostId: string; configContent: string; configOwnership?: string; maintenance?: boolean }[],
     certs: { certId: string; certPem: Buffer; keyPem: Buffer; chainPem: Buffer }[],
     globalConfig: string,
     htpasswdFiles: { accessListId: string; content: string }[],
@@ -409,6 +426,7 @@ export class NodeDispatchService {
             hostId: h.hostId,
             configContent: h.configContent,
             configOwnership: h.configOwnership ?? '',
+            ...maintenanceFlagField(h.maintenance),
           })),
           certs: certs.map((c) => ({ certId: c.certId, certPem: c.certPem, keyPem: c.keyPem, chainPem: c.chainPem })),
           globalConfig,

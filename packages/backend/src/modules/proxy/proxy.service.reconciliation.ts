@@ -42,14 +42,23 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
   }
 
   protected async refreshExternalBranding(): Promise<void> {
+    // The 404 page, and the maintenance page: rendered during maintenance, and in every managed route on a node that
+    // keeps maintenance flags. The changes of a node load with one reload.
     const hosts = await this.db.query.proxyHosts.findMany({
-      where: and(eq(proxyHosts.enabled, true), or(eq(proxyHosts.type, '404'), eq(proxyHosts.maintenanceEnabled, true))),
+      where: and(
+        eq(proxyHosts.enabled, true),
+        or(
+          eq(proxyHosts.type, '404'),
+          eq(proxyHosts.maintenanceEnabled, true),
+          and(eq(proxyHosts.type, 'proxy'), eq(proxyHosts.isSystem, false), eq(proxyHosts.rawConfigEnabled, false))
+        )
+      ),
     });
     for (const host of hosts) {
       // A node without a control session renders the current branding in its reconnect sync.
       if (host.nodeId && !this.nodeDispatch.isNodeConnected(host.nodeId)) continue;
       try {
-        await this.reapplyHostConfig(host.id);
+        await this.reapplyHostConfig(host.id, { deferReload: true, reuseActiveBundle: true });
       } catch (error) {
         if (!isNodeNotConnectedError(error)) throw error;
       }
@@ -489,7 +498,7 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     await withProxyLocks([...[...applied.keys()].map(proxyHostLockKey), proxyNodeLockKey(nodeId)], async () => {
       const current = await this.db.query.proxyHosts.findMany({
         where: and(proxyHostsServedByNode(this.db, nodeId), eq(proxyHosts.enabled, true)),
-        columns: { id: true },
+        columns: { id: true, enabled: true, maintenanceEnabled: true },
       });
       const unchanged =
         current.length === applied.size &&
@@ -501,12 +510,16 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
         logger.info('Skipping stale proxy config cleanup: hosts changed during resync', { nodeId });
         return;
       }
+      // The full set of the node's routes carries their maintenance flags; the node drops the flags of other routes.
+      const keepsFlags = await this.nodeKeepsMaintenanceFlags(nodeId);
+      const maintenance = new Map(current.map((host) => [host.id, host.enabled && host.maintenanceEnabled]));
       const result = await this.nodeDispatch.fullSync(
         nodeId,
         [...applied].map(([hostId, entry]) => ({
           hostId,
           configContent: entry.config,
           configOwnership: entry.configOwnership,
+          maintenance: keepsFlags ? maintenance.get(hostId) : undefined,
         })),
         [],
         '',

@@ -558,6 +558,12 @@ export interface PagesRemoveRuntimeConfigCommand {
   generation?: string;
 }
 
+/** A route's maintenance flag on a daemon that reports proxy_maintenance_flag_v1, see the proto. */
+export type ProxyMaintenanceFlag =
+  | 'PROXY_MAINTENANCE_FLAG_UNSPECIFIED'
+  | 'PROXY_MAINTENANCE_FLAG_OFF'
+  | 'PROXY_MAINTENANCE_FLAG_ON';
+
 export interface ApplyConfigCommand {
   hostId: string;
   configContent: string;
@@ -565,6 +571,7 @@ export interface ApplyConfigCommand {
   configOwnership?: string;
   /** Loaded with the reload of its batch (reconnect resync), see the proto. */
   deferReload?: boolean;
+  maintenance?: ProxyMaintenanceFlag;
 }
 
 export interface RemoveConfigCommand {
@@ -585,6 +592,7 @@ export interface ApplyTlsBundleCommand {
   generation: string;
   configOwnership?: string;
   deferReload?: boolean;
+  maintenance?: ProxyMaintenanceFlag;
 }
 
 export interface VersionedCertBundle {
@@ -626,6 +634,7 @@ export interface HostConfig {
   hostId: string;
   configContent: string;
   configOwnership?: string;
+  maintenance?: ProxyMaintenanceFlag;
 }
 
 export interface CertBundle {

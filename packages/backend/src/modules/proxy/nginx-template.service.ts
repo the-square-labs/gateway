@@ -29,6 +29,7 @@ import {
   supportsAdditionalRoutesTemplate,
 } from './additional-route-template.js';
 import { managedSecureLinkUpstreamBody, withAvailabilityNextUpstream } from './nginx-availability-upstream.js';
+import { renderMaintenanceFlagGuard } from './nginx-maintenance-flag-guard.js';
 import type { CreateNginxTemplateInput, UpdateNginxTemplateInput } from './nginx-template.schemas.js';
 import { withoutReservedTemplateVariables } from './proxy-template-variables.js';
 import { withStatusPageStaleCache } from './status-page-stale-cache.js';
@@ -1361,6 +1362,21 @@ ${managedSecureLinkUpstreamBody(socketPaths, Boolean(host.secureLinkSocketPaths?
     return `${declaration}
 
 ${rendered}`;
+  }
+
+  /**
+   * The maintenance guard a node that keeps maintenance flags runs in and out of maintenance (see
+   * nginx-maintenance-flag-guard.ts), or null when the config keeps the guard below.
+   */
+  applyMaintenanceFlagGuard(
+    renderedConfig: string,
+    access: { hostId: string; secret: string },
+    hideExternalBranding = false
+  ): string | null {
+    return renderMaintenanceFlagGuard(renderedConfig, {
+      ...access,
+      pageText: escapeNginxReturnText(gatewayMaintenanceHtml(hideExternalBranding)),
+    });
   }
 
   applyMaintenanceGuard(

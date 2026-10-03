@@ -58,7 +58,7 @@ export abstract class ProxyServiceDelivery extends ProxyServiceCore {
         certPaths.preparedTls,
         configOwnership,
         host.accessListId,
-        options.apply
+        { ...options.apply, maintenance: await this.maintenanceFlagFor(host, host.nodeId) }
       );
       const nodeId = certPaths.preparedTls?.nodeId ?? host.nodeId ?? '';
       return {
@@ -112,7 +112,7 @@ export abstract class ProxyServiceDelivery extends ProxyServiceCore {
           certPaths.preparedTls,
           configOwnership,
           host.accessListId,
-          options.apply
+          { ...options.apply, maintenance: await this.maintenanceFlagFor(memberHost, nodeId) }
         );
         await markIngressMemberDelivery(this.db, host.id, nodeId, {
           ...desired,
