@@ -69,6 +69,8 @@ type NginxPlugin struct {
 	conn                       *grpc.ClientConn
 	maintenanceAccess          *maintenanceAccessServer
 	maintenanceAccessSupported bool
+	// maintenanceFlagsSupported: routes enter and leave maintenance through their flag files (maintenance_flags.go).
+	maintenanceFlagsSupported bool
 }
 
 var _ lifecycle.ProxySecureLinkPlugin = (*NginxPlugin)(nil)
@@ -164,6 +166,10 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	}
 	if !p.maintenanceAccessSupported {
 		logger.Warn("nginx secure_link module is unavailable; maintenance access codes are disabled")
+	} else if err := prepareMaintenanceFlagDir(maintenanceFlagDir); err != nil {
+		logger.Warn("maintenance flag directory is unavailable; maintenance changes reload nginx", "path", maintenanceFlagDir, "error", err)
+	} else {
+		p.maintenanceFlagsSupported = true
 	}
 	p.relayGrants, err = newRelayGrantStore(baseCfg.StateDir)
 	if err != nil {
@@ -266,6 +272,24 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	if healthChanged {
 		configDirModified = true
 	}
+	// The shared maps of the flag-checked maintenance guard; without them Gateway keeps rendering the guard only
+	// during maintenance. They need no reload of their own: only route configs Gateway renders for this capability
+	// use them, and the reload that loads those configs loads the maps.
+	if p.maintenanceFlagsSupported {
+		if written, err := nginx.EnsureMaintenanceGuardConfig(p.cfg.Nginx.ConfigDir); err != nil {
+			logger.Warn("maintenance guard maps are unavailable; maintenance changes reload nginx", "error", err)
+			p.maintenanceFlagsSupported = false
+		} else if written {
+			// Kept only when nginx accepts the configuration with them (the routes that use them were rendered
+			// against an earlier copy, so an unchanged file is never removed).
+			if valid, output := p.mgr.TestConfig(); !valid {
+				_ = nginx.RemoveFile(nginx.MaintenanceGuardConfigPath(p.cfg.Nginx.ConfigDir))
+				logger.Warn("maintenance guard maps conflict with this node's nginx configuration; maintenance changes reload nginx", "output", output)
+				p.maintenanceFlagsSupported = false
+			}
+		}
+	}
+
 	if healthReady {
 		if responder, err := startIngressHealthResponder(p, logger); err != nil {
 			logger.Warn("ingress health responder is unavailable; this node cannot join ingress groups", "error", err)
@@ -381,6 +405,9 @@ func (p *NginxPlugin) SetState(st *sharedstate.State) {
 	p.state = st
 	p.reporter = NewReporter(p.cfg, p.mgr, p.logger)
 	p.handler = NewHandler(p.cfg, p.mgr, st, p.logger, p.secureLinkState, p.pagesRuntime, p.pagesRuntimeConfigAvailable)
+	if p.maintenanceFlagsSupported {
+		p.handler.maintenanceFlagDir = maintenanceFlagDir
+	}
 	if p.secureLinks != nil {
 		p.handler.secureLinkListeners = p.secureLinks
 	}
@@ -481,6 +508,9 @@ func (p *NginxPlugin) capabilities() []string {
 	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "nginx_secure_link_socket_only_v1", "nginx_registry_ingress_v1"}
 	if p.maintenanceAccessSupported {
 		capabilities = append(capabilities, "proxy_maintenance_access_v1")
+	}
+	if p.maintenanceFlagsSupported {
+		capabilities = append(capabilities, maintenanceFlagCapability)
 	}
 	if p.pagesV1Available && p.pagesRuntime != nil {
 		capabilities = append(capabilities, "nginx_pages_v1", "nginx_pages_route_probe_v1", "nginx_pages_preview_revocation_v1", "nginx_pages_preview_access_v1")

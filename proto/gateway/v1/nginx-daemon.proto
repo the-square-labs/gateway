@@ -800,9 +800,20 @@ message ApplyConfigCommand {
   // the next command that reloads nginx, or the daemon itself shortly after the last deferred change. Content
   // equal to the file on disk is never rewritten or reloaded.
   bool defer_reload = 5;
+  // The route's maintenance flag (ignored for test_only). See ProxyMaintenanceFlag.
+  ProxyMaintenanceFlag maintenance = 6;
 }
 
-// Daemon also cleans up associated cache directory on removal
+// Maintenance of a route on a daemon that reports proxy_maintenance_flag_v1. Its config carries a guard that answers
+// with the maintenance page only while the daemon keeps the route's flag file, so maintenance starts and ends without
+// an nginx reload. UNSPECIFIED (older gateways, certificate renewals) leaves the flag as it is.
+enum ProxyMaintenanceFlag {
+  PROXY_MAINTENANCE_FLAG_UNSPECIFIED = 0;
+  PROXY_MAINTENANCE_FLAG_OFF = 1;
+  PROXY_MAINTENANCE_FLAG_ON = 2;
+}
+
+// Daemon also cleans up associated cache directory and maintenance flag on removal
 message RemoveConfigCommand {
   string host_id = 1;
 }
@@ -826,6 +837,7 @@ message ApplyTlsBundleCommand {
   string generation = 4;
   string config_ownership = 5;
   bool defer_reload = 6; // as in ApplyConfigCommand
+  ProxyMaintenanceFlag maintenance = 7; // as in ApplyConfigCommand
 }
 
 message VersionedCertBundle {
@@ -865,10 +877,13 @@ message FullSyncCommand {
   string version_hash = 5;
 }
 
+// A full sync lists every route the node serves: the daemon also removes the maintenance flags of routes it does not
+// list.
 message HostConfig {
   string host_id = 1;
   string config_content = 2;
   string config_ownership = 3;
+  ProxyMaintenanceFlag maintenance = 4; // as in ApplyConfigCommand
 }
 
 message CertBundle {

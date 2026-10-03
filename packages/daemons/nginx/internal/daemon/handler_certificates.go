@@ -40,6 +40,20 @@ func (h *Handler) handleApplyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb
 		result.Error = "invalid TLS bundle identifier"
 		return
 	}
+	// As in handleApplyConfig: the flag first, restored when the bundle is not applied.
+	restoreFlag, err := h.setMaintenanceFlag(cmd.HostId, cmd.Maintenance)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return
+	}
+	h.applyTlsBundle(cmd, result)
+	if !result.Success {
+		restoreFlag()
+	}
+}
+
+func (h *Handler) applyTlsBundle(cmd *pb.ApplyTlsBundleCommand, result *pb.CommandResult) {
 	configPath := h.mgr.ConfigPath(cmd.HostId)
 	oldConfig, _ := nginx.ReadFile(configPath)
 	pointers := make(map[string]nginx.CertPointer, len(cmd.Certificates))

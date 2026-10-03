@@ -46,6 +46,9 @@ type Handler struct {
 	pagesRuntime                *pages.Runtime
 	pagesRuntimeConfigAvailable bool
 	reporter                    *Reporter
+	// maintenanceFlagDir holds the routes' maintenance flags (maintenance_flags.go); empty when this node cannot
+	// serve maintenance without a reload.
+	maintenanceFlagDir string
 	// secureLinkListeners provides the Secure Link sockets a config references
 	// before nginx loads it (M-2); nil when the daemon runs without them.
 	secureLinkListeners interface {
@@ -188,6 +191,24 @@ func (h *Handler) logConfigTestFailure(action, output string, attrs ...any) {
 }
 
 func (h *Handler) handleApplyConfig(cmd *pb.ApplyConfigCommand, result *pb.CommandResult) {
+	if cmd.TestOnly {
+		h.applyConfig(cmd, result)
+		return
+	}
+	// The flag first: a config that does not check it yet ignores it, and the new config sees it once loaded.
+	restoreFlag, err := h.setMaintenanceFlag(cmd.HostId, cmd.Maintenance)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return
+	}
+	h.applyConfig(cmd, result)
+	if !result.Success {
+		restoreFlag()
+	}
+}
+
+func (h *Handler) applyConfig(cmd *pb.ApplyConfigCommand, result *pb.CommandResult) {
 	path := h.mgr.ConfigPath(cmd.HostId)
 
 	// Read old config for rollback
@@ -277,6 +298,7 @@ func (h *Handler) handleRemoveConfig(cmd *pb.RemoveConfigCommand, result *pb.Com
 	if oldConfig == nil {
 		// Nothing to remove: nginx does not serve the host from this node.
 		removeHostCache(cmd.HostId)
+		h.removeMaintenanceFlag(cmd.HostId)
 		if err := h.settleUnchanged(false); err != nil {
 			result.Success = false
 			result.Error = err.Error()
@@ -320,6 +342,7 @@ func (h *Handler) handleRemoveConfig(cmd *pb.RemoveConfigCommand, result *pb.Com
 		return
 	}
 
+	h.removeMaintenanceFlag(cmd.HostId)
 	h.logger.Info("config removed", "host_id", cmd.HostId)
 }
 
