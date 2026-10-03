@@ -72,7 +72,11 @@ import {
   nodeTypeLabel,
 } from "@/lib/node-appearance";
 import { nodeChangesFor } from "@/lib/node-changed";
-import { isNodeHostFeatureDisabled, nodeHostFeatureDisabledMessage } from "@/lib/node-host-access";
+import {
+  isNodeHostFeatureDisabled,
+  nodeHostFeatureDisabledMessage,
+  nodeHostFileAccessWarning,
+} from "@/lib/node-host-access";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { dockerNodeListRoute, nodeRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
@@ -534,6 +538,12 @@ export function AdminNodeDetail({
   // The node operator turned these off in the daemon config file; Gateway cannot turn them back on.
   const nodeConsoleDisabled = isNodeHostFeatureDisabled(node, "console");
   const nodeFilesDisabled = isNodeHostFeatureDisabled(node, "files");
+  const hostFileAccessWarning = nodeHostFileAccessWarning(node);
+  const hostFileAccessNotice = hostFileAccessWarning && (
+    <Notice tone="warning" className="mb-3" title={hostFileAccessWarning.title}>
+      {hostFileAccessWarning.message}
+    </Notice>
+  );
   const canManageServiceCreationLock =
     !!node &&
     (node.type === "nginx" || node.type === "docker") &&
@@ -1366,6 +1376,7 @@ export function AdminNodeDetail({
                 {activeTab === "files" && nodeFilesDisabled && (
                   <EmptyState message={nodeHostFeatureDisabledMessage(node, "files")} />
                 )}
+                {activeTab === "files" && !nodeOffline && hostFileAccessNotice}
                 {activeTab === "files" && !nodeOffline && !nodeFilesDisabled && (
                   <FilesTab
                     nodeId={node.id}
@@ -1388,7 +1399,10 @@ export function AdminNodeDetail({
               <TabsContent value="console" className="flex flex-col flex-1 min-h-0">
                 {activeTab === "console" &&
                   (nodeConsoleDisabled ? (
-                    <EmptyState message={nodeHostFeatureDisabledMessage(node, "console")} />
+                    <div>
+                      {hostFileAccessNotice}
+                      <EmptyState message={nodeHostFeatureDisabledMessage(node, "console")} />
+                    </div>
                   ) : (
                     <NodeConsoleTab nodeId={node.id} />
                   ))}

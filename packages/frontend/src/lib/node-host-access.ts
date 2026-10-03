@@ -53,3 +53,44 @@ export function nodeHostFeatureDisabledMessage(
   const file = path ? `the daemon config (${path})` : "the daemon config file";
   return `${label} disabled in this node's daemon configuration. To enable it, set ${key}: true in ${file} on the node and restart the daemon.`;
 }
+
+/**
+ * Turning the console off alone is not a boundary: writing host files as the daemon user can still change the host
+ * (systemd units, cron jobs, SSH keys, the daemon config itself). Null unless console is off and files are on.
+ */
+export function nodeHostFileAccessWarning(
+  node: Node | NodeDetail | null | undefined
+): { title: string; message: string } | null {
+  if (!isNodeHostFeatureDisabled(node, "console") || isNodeHostFeatureDisabled(node, "files")) {
+    return null;
+  }
+  return {
+    title: "Host file access is still on",
+    message:
+      "File access as the daemon user can still change the host, for example systemd units, cron jobs, SSH keys, or the daemon config itself. To remove host access, set files.enabled: false as well.",
+  };
+}
+
+/** Installer options that turn host access off on the node being installed. */
+export interface HostAccessInstallOptions {
+  disableConsole: boolean;
+  disableFiles: boolean;
+}
+
+export const DEFAULT_HOST_ACCESS_INSTALL_OPTIONS: HostAccessInstallOptions = {
+  disableConsole: false,
+  disableFiles: false,
+};
+
+/** Appends the installer flags to a generated setup command, whose arguments end it one per continued line. */
+export function withHostAccessInstallFlags(
+  command: string,
+  options: HostAccessInstallOptions
+): string {
+  if (!command) return command;
+  const flags = [
+    ...(options.disableConsole ? ["--disable-console"] : []),
+    ...(options.disableFiles ? ["--disable-files"] : []),
+  ];
+  return flags.reduce((result, flag) => `${result} \\\n  ${flag}`, command);
+}

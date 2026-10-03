@@ -23,6 +23,7 @@ import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
+import { HostAccessInstallOptions } from "@/components/nodes/HostAccessInstallOptions";
 import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
 import { UnreleasedInstallerNote } from "@/components/nodes/UnreleasedInstallerNote";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +39,10 @@ import {
 import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
+import {
+  DEFAULT_HOST_ACCESS_INSTALL_OPTIONS,
+  withHostAccessInstallFlags,
+} from "@/lib/node-host-access";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -199,6 +204,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const [abandoningUpdate, setAbandoningUpdate] = useState(false);
   const [reenrollment, setReenrollment] = useState<RelayReenrollment | null>(null);
   const shownReenrollment = useRetainedDialogValue(reenrollment, reenrollment !== null);
+  const [hostAccess, setHostAccess] = useState(DEFAULT_HOST_ACCESS_INSTALL_OPTIONS);
   const canAbandonRelayUpdate = useAuthStore((state) => state.hasScope("admin:update"));
   const abandonRelayUpdate = useUpdateStore((state) => state.abandonRelayUpdate);
 
@@ -426,6 +432,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     setPoolAction(`reenroll:${instance.id}`);
     try {
       setReenrollment(await api.reenrollRelayInstance(instance.id));
+      setHostAccess(DEFAULT_HOST_ACCESS_INSTALL_OPTIONS);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to create a re-enrollment token"
@@ -1184,14 +1191,20 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         {shownReenrollment ? (
           <UnreleasedInstallerNote installerRelease={shownReenrollment.installerRelease} />
         ) : null}
-        {shownReenrollment?.installCommands.map((command) => (
-          <CopyCodeBlock
-            key={command.target}
-            label={command.label}
-            value={command.curl}
-            copyValue={command.curl.replace(/\s*\\\n\s*/g, " ")}
-          />
-        ))}
+        {shownReenrollment ? (
+          <HostAccessInstallOptions value={hostAccess} onChange={setHostAccess} />
+        ) : null}
+        {shownReenrollment?.installCommands.map((command) => {
+          const value = withHostAccessInstallFlags(command.curl, hostAccess);
+          return (
+            <CopyCodeBlock
+              key={command.target}
+              label={command.label}
+              value={value}
+              copyValue={value.replace(/\s*\\\n\s*/g, " ")}
+            />
+          );
+        })}
       </OneTimeSecretDialog>
 
       <NodeEnrollmentDialog

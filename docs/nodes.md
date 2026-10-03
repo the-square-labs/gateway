@@ -315,7 +315,9 @@ The switches live only in the config file on the node, so a Gateway administrato
 
 Docker container consoles and container files are not affected: they reach into containers, not the host.
 
-Host file write access as the daemon's user is host access in its own right (it can change system files and this config file). Turn both switches off to remove host access from Gateway entirely.
+**To remove host access, disable both.** Turning off only the console is not a boundary: the daemon usually runs as root, and writing files as that user can still change the host and run code — systemd units, cron jobs, `authorized_keys`, or this config file itself to turn the console back on at the next restart. The node page shows a warning while the console is off and file access is on.
+
+The node setup dialogs offer **Disable host console** and **Disable host files** checkboxes that add these flags to the generated command. Nodes ordered through a hosting provider are installed by Gateway itself with a pinned installer revision; turn the switches off on those nodes by editing the config file.
 
 ## Daemon Updates
 

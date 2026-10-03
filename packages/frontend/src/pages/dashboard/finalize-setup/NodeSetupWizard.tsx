@@ -5,6 +5,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { HostAccessInstallOptions } from "@/components/nodes/HostAccessInstallOptions";
 import { UnreleasedInstallerNote } from "@/components/nodes/UnreleasedInstallerNote";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DEFAULT_HOST_ACCESS_INSTALL_OPTIONS,
+  withHostAccessInstallFlags,
+} from "@/lib/node-host-access";
 import { api } from "@/services/api";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { CreateNodeResponse, NodeType } from "@/types";
@@ -67,6 +72,7 @@ export function NodeSetupWizard({
   const [online, setOnline] = useState(false);
   const [targetId, setTargetId] = useState("public");
   const [transport, setTransport] = useState<"curl" | "wget">("curl");
+  const [hostAccess, setHostAccess] = useState(DEFAULT_HOST_ACCESS_INSTALL_OPTIONS);
   const statusErrorShown = useRef(false);
 
   useEffect(() => {
@@ -78,6 +84,7 @@ export function NodeSetupWizard({
     setOnline(false);
     setTargetId("public");
     setTransport("curl");
+    setHostAccess(DEFAULT_HOST_ACCESS_INSTALL_OPTIONS);
     statusErrorShown.current = false;
   }, [open]);
 
@@ -141,7 +148,7 @@ export function NodeSetupWizard({
   };
 
   const selectedTarget = targets.find((target) => target.target === targetId) ?? targets[0];
-  const command = selectedTarget?.[transport] ?? "";
+  const command = withHostAccessInstallFlags(selectedTarget?.[transport] ?? "", hostAccess);
 
   const stepKey = online ? "complete" : enrollment ? "enrollment" : "details";
   return (
@@ -231,6 +238,7 @@ export function NodeSetupWizard({
               </TabsList>
             </Tabs>
           </div>
+          <HostAccessInstallOptions value={hostAccess} onChange={setHostAccess} />
           {selectedTarget && (
             <CopyCodeBlock
               label={`${transport} command`}
