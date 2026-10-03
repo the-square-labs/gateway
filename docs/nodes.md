@@ -75,6 +75,13 @@ curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/se
 
 A Build Worker uses the same Docker installer with `--mode builder`.
 
+**Build Worker priority.** Queued builds go to Build Workers in the order they appear in the Nodes list. The first online worker takes builds until all its parallel slots (Build Worker settings, parallelism) are busy, then the next one does, and so on. To make a worker preferred, drag it higher in the list; to keep one as overflow only, drag it to the bottom. The list order is:
+- top-level folders by their position;
+- inside a folder, its subfolders first, then its nodes;
+- nodes outside any folder last.
+
+A worker only takes builds for its platform (architecture).
+
 Storage node:
 
 ```bash
