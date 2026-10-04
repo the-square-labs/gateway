@@ -1825,6 +1825,7 @@
       ],
       "expect": [
         "Fresh: the supervisor enrolls, the relay is ready in Settings > Relay, gateway-relay listens on 9443, a Secure Link route keeps answering after Rebalance.",
+        "Re-run without a token: exit 0 without enrollment errors, the same relay id and identity; re-running the original command with its used token exits 1 and says the relay keeps running with its previous identity.",
         "To gwsvc: service user gwsvc, supervisor and worker run as gwsvc, no AmbientCapabilities for 9443; back to root: /usr/local/lib/gateway-relay/run-supervisor and all relay directories belong to root, find -user gwsvc is empty.",
         "After restart and reboot the relay is ready again."
       ]

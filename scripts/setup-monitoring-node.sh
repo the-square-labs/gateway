@@ -101,6 +101,8 @@ complete_incomplete() {
         echo -e "${YELLOW}■${NC} ${BOLD}Installation not completed.${NC}"
         echo ""
     fi
+    # An install that was declined or stopped after the summary did not complete: it never exits 0.
+    exit 1
 }
 
 show_logo() {
@@ -281,10 +283,14 @@ return_paths_to_root() {
     done
 }
 
-# A daemon that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
+# A daemon that moves to another user says so. One that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
 # directory were written by that user, and no other user may run them.
 prepare_run_user_switch() {
-    [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+    if [[ "$PREVIOUS_RUN_UID" == 0 ]]; then
+        [[ "$RUN_USER" == "root" || ! -d /etc/monitoring-daemon ]] || log "monitoring-daemon ran as root; switching it to ${RUN_USER}..."
+        return 0
+    fi
+    [[ "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
     log "monitoring-daemon ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}..."
     stop_daemon_service || die "Could not stop monitoring-daemon to switch its user."
     rm -rf /var/lib/monitoring-daemon/launcher
@@ -438,6 +444,8 @@ show_daemon_log() {
     elif has_openrc; then
         err "Daemon log: /var/log/monitoring-daemon.err and /var/log/monitoring-daemon.log"
         tail -n 20 /var/log/monitoring-daemon.err /var/log/monitoring-daemon.log >&2 2>/dev/null || true
+        # A service supervise-daemon cannot start leaves its reason in the system log, not in the service's own logs.
+        grep -h 'supervise-daemon.*monitoring-daemon' /var/log/messages 2>/dev/null | tail -n 5 >&2 || true
     fi
 }
 
@@ -480,6 +488,8 @@ await_gateway_connection() {
     local enrollment_error
     if enrollment_error=$(gateway_session_enrollment_error); then
         err "monitoring-daemon could not enroll with Gateway: ${enrollment_error}"
+    elif ! daemon_service_running; then
+        err "monitoring-daemon is not running; the service manager could not keep it up. The log below shows why."
     else
         err "monitoring-daemon has not connected to Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
     fi
@@ -496,10 +506,17 @@ launcher_pid_from_json() {
     printf '%s\n' "$pid"
 }
 
+# A launcher that exited but whose parent never reaps it (PID 1 of a container that does not) stays a zombie: kill -0
+# still succeeds for it, though it runs nothing. The state is the field after the command name in /proc/<pid>/stat,
+# which may itself contain ") ", so it is read after the last one (the same on busybox and Alpine).
 launcher_pid_is_live() {
-    local pid="${1:-}"
+    local pid="${1:-}" stat
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    kill -0 "$pid" 2>/dev/null
+    kill -0 "$pid" 2>/dev/null || return 1
+    [[ -r /proc/self/stat ]] || return 0
+    stat=$(cat "/proc/${pid}/stat" 2>/dev/null) || return 1
+    stat="${stat##*) }"
+    [[ "${stat:0:1}" != "Z" && "${stat:0:1}" != "X" ]]
 }
 
 launcher_child_is_ready() {
@@ -813,6 +830,14 @@ resolve_download_url() {
     DOWNLOAD_URL="${RELEASE_BASE}/${binary_name}"
 }
 
+# Without -y the installer asks on the terminal. When the terminal cannot be read (no controlling terminal, or the
+# read fails with EIO under sudo's pty while stdout is a pipe) nothing was answered, and a default must not stand in
+# for an answer: the run counts as non-interactive, which cannot approve what it asks about.
+refuse_unanswered_prompt() {
+    echo "" >&2
+    die "Cannot read an answer from the terminal for: $1. Run the installer from a terminal (not through a pipe such as '| tee'), or pass -y to install non-interactively."
+}
+
 prompt_input() {
     local prompt="$1"
     local default="${2:-}"
@@ -821,14 +846,10 @@ prompt_input() {
         echo "$default"
         return
     fi
-    if [ -e /dev/tty ]; then
-        if [ -n "$default" ]; then
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" result < /dev/tty
-        else
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
-        fi
+    if [ -n "$default" ]; then
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
     else
-        result=""
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
     fi
     echo "${result:-$default}"
 }
@@ -840,12 +861,8 @@ prompt_secret() {
         echo ""
         return
     fi
-    if [ -e /dev/tty ]; then
-        read -rs -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
-        echo "" >&2
-    else
-        result=""
-    fi
+    read -rs -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
+    echo "" >&2
     echo "$result"
 }
 
@@ -857,16 +874,12 @@ prompt_yes_no() {
         [[ "$default" =~ ^[yY]$ ]]
         return
     fi
-    if [ -e /dev/tty ]; then
-        if [[ "$default" == "Y" ]]; then
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [Y/n]: ${NC}")" reply < /dev/tty
-            reply="${reply:-Y}"
-        else
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [y/N]: ${NC}")" reply < /dev/tty
-            reply="${reply:-N}"
-        fi
+    if [[ "$default" == "Y" ]]; then
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [Y/n]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
+        reply="${reply:-Y}"
     else
-        reply="$default"
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [y/N]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
+        reply="${reply:-N}"
     fi
     [[ "$reply" =~ ^[yY]$ ]]
 }
@@ -928,11 +941,7 @@ prompt_choice() {
             render_menu
         done
     fi
-    if [ -e /dev/tty ]; then
-        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty 2>/dev/null || reply=""
-    else
-        reply=""
-    fi
+    read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
     echo "${reply:-$default}"
 }
 
@@ -1170,7 +1179,6 @@ summary_end
 
 if ! prompt_yes_no "Proceed with installation?" "Y"; then
     complete_incomplete
-    exit 0
 fi
 guide_blank
 
@@ -1458,6 +1466,13 @@ error_log="/var/log/monitoring-daemon.err"
 
 depend() {
     need net
+}
+
+# supervise-daemon opens the log files after it drops to the service user; a file left by another user (or by root
+# before the daemon switched users) would fail it with EACCES, so root hands them over first.
+start_pre() {
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/monitoring-daemon.log
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/monitoring-daemon.err
 }
 UNIT
         chmod +x /etc/init.d/monitoring-daemon || die "Could not make the monitoring-daemon OpenRC service executable."

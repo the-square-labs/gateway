@@ -5,6 +5,7 @@
 // stub commands for docker, nginx and curl, and no network; a dry run changes nothing on the host.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
@@ -365,5 +366,831 @@ test('every installer prints its help', { skip: !linux }, () => {
     const result = spawnSync('bash', [source, '--help'], { encoding: 'utf8', timeout: 30_000, input: '' });
     assert.equal(result.status, 0, `${name}\n${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /Usage/i, name);
+  }
+});
+
+// The OpenRC services of a daemon with its own user. supervise-daemon opens the output and error logs after it
+// drops to that user, so the service has to give it the files first (checkpath runs as root, before the drop); a
+// daemon that goes back to root takes them back the same way.
+function openrcUserServices(source) {
+  const lines = source.split('\n');
+  const services = [];
+  lines.forEach((line, index) => {
+    if (line !== '#!/sbin/openrc-run') return;
+    let end = index;
+    while (lines[end] !== 'UNIT') end++;
+    if (lines.slice(index, end).some((entry) => entry.startsWith('command_user='))) services.push({ index, end });
+  });
+  return { lines, services };
+}
+
+// Renders the service the installer would write for the account, with the text the installer builds before it.
+function renderOpenrcService(source, user, group) {
+  const { lines, services } = openrcUserServices(source);
+  assert.equal(services.length, 1);
+  const [{ index, end }] = services;
+  assert.match(lines[index - 1], /<<UNIT/, 'the service text follows its heredoc line');
+  const prefixStart = lines.findIndex((line, at) => at < index && /^\s+local unit_runtime=/.test(line));
+  const prefixEnd = lines.findIndex((line, at) => at > prefixStart && line === '    if has_systemd; then');
+  const prefix = prefixStart > 0 ? lines.slice(prefixStart, prefixEnd) : [];
+  const script = [
+    `RUN_USER=${user}; RUN_GROUP=${group}; openrc_need="net docker"; NGINX_DAEMON_RUNTIME_DIRS=(nginx-daemon gateway-secure-links)`,
+    'render() {',
+    ...prefix,
+    'cat <<UNIT',
+    ...lines.slice(index, end),
+    'UNIT',
+    '}',
+    'render',
+  ].join('\n');
+  const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout;
+}
+
+const OPENRC_OWNED_LOGS = {
+  'setup-monitoring-node.sh': 'monitoring-daemon',
+  'setup-docker-node.sh': 'docker-daemon',
+  'setup-node.sh': 'nginx-daemon',
+  'setup-relay-node.sh': 'gateway-relay-supervisor',
+};
+
+test('OpenRC services of a non-root daemon hand their log files over before the privilege drop', () => {
+  for (const [script, daemon] of Object.entries(OPENRC_OWNED_LOGS)) {
+    const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+    for (const [user, group] of [
+      ['svcuser', 'svcgroup'],
+      ['root', 'root'],
+    ]) {
+      const service = renderOpenrcService(source, user, group);
+      assert.match(service, new RegExp(`^command_user="${user}:${group}"$`, 'm'), `${script}\n${service}`);
+      assert.match(service, new RegExp(`^output_log="/var/log/${daemon}\\.log"$`, 'm'), script);
+      assert.match(service, new RegExp(`^error_log="/var/log/${daemon}\\.err"$`, 'm'), script);
+      const startPre = /^start_pre\(\) \{\n([\s\S]*?)^\}$/m.exec(service);
+      assert.ok(startPre, `${script} has a start_pre\n${service}`);
+      for (const log of [`${daemon}.log`, `${daemon}.err`]) {
+        assert.ok(
+          startPre[1].includes(`    checkpath --file --owner ${user}:${group} --mode 0640 /var/log/${log}\n`),
+          `${script} gives ${log} to ${user}:${group}\n${service}`
+        );
+      }
+    }
+  }
+  // A non-root nginx-daemon keeps the runtime directories it already got.
+  const nginx = renderOpenrcService(readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8'), 'svcuser', 'svcgroup');
+  assert.match(nginx, /checkpath --directory --mode 0755 --owner svcuser:svcgroup "\/run\/\${dir}"/);
+  assert.match(nginx, /^capabilities="\^cap_net_bind_service"$/m);
+  // No other generated OpenRC service drops privileges: the lease watchdog runs as root.
+  for (const name of installers) {
+    const { services } = openrcUserServices(readFileSync(path.join(scriptsDir, name), 'utf8'));
+    assert.equal(services.length, name in OPENRC_OWNED_LOGS ? 1 : 0, name);
+  }
+});
+
+test('an installer that cannot keep the OpenRC service up says so and shows the supervise-daemon reason', () => {
+  for (const [script, daemon] of Object.entries(OPENRC_OWNED_LOGS)) {
+    const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+    assert.match(source, /is not running; the service manager could not keep it up/, script);
+    // supervise-daemon logs why it could not start the service to the system log, not to the service's own logs.
+    const filter = daemon === 'gateway-relay-supervisor' ? 'gateway-relay' : daemon;
+    assert.ok(source.includes(`grep -h 'supervise-daemon.*${filter}' /var/log/messages`), script);
+  }
+});
+
+// A host that cannot run the Build Worker profile (it needs systemd) fails the install before the installer installs
+// packages, downloads or writes anything.
+test('the Build Worker host check runs before any host change', () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+  const { topLevel } = parseShell(source);
+  assert.match(source, /preflight_builder_host\(\) \{\n[^}]*has_systemd \|\|/);
+  assert.doesNotMatch(source, /preflight_builder_runtime\(\) \{\n[^}]*has_systemd/, 'the late preflight does not own the host check');
+  const firstRun = (name) => Math.min(...topLevel.filter((entry) => entry.calls.includes(name)).map((entry) => entry.line));
+  const check = firstRun('preflight_builder_host');
+  assert.ok(Number.isFinite(check), 'the host check runs at the top level');
+  for (const change of [
+    'check_dependencies',
+    'ensure_docker_installed',
+    'ensure_builder_system_packages',
+    'prepare_run_user_switch',
+    'create_directories',
+    'install_daemon',
+    'install_builder_runtime',
+  ]) {
+    assert.ok(check < firstRun(change), `the host check runs before ${change}`);
+  }
+});
+
+test('a Build Worker install on a host without systemd stops before it changes anything', { skip: !linux }, () => {
+  const host = path.join(work, 'host');
+  const result = spawnSync('bash', [path.join(work, 'scripts', 'setup-docker-node.sh'), '-y', ...common, '--mode', 'builder'], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    env: { ...process.env, PATH: `${path.join(work, 'bin')}:${process.env.PATH}` },
+    input: '',
+  });
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /Builder nodes require systemd/, output);
+  assert.doesNotMatch(output, /Installing|Downloading|Creating required directories/, output);
+  assert.equal(spawnSync('test', ['-e', path.join(host, 'usr/local/bin/docker-daemon')]).status, 1);
+  assert.equal(spawnSync('test', ['-e', path.join(host, 'etc/docker-daemon')]).status, 1);
+});
+
+// A top-level shell function of an installer, to run on its own.
+function shellFunction(source, name) {
+  const match = new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}$`, 'm').exec(source);
+  assert.ok(match, `${name} is defined`);
+  return match[0];
+}
+
+function runShell(script) {
+  const result = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 30_000 });
+  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
+// The managed nginx.conf names the pid file the host's nginx service watches. Alpine's service watches
+// /run/nginx/nginx.pid; a pid file elsewhere leaves OpenRC without a master process (the service reads "crashed" and
+// cannot restart while the old master keeps its ports). Debian and Ubuntu name /run/nginx.pid in the unit.
+test('managed nginx.conf names the pid file of the distribution service', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  assert.doesNotMatch(source, /^pid \/run\/nginx\.pid;$/m, 'the pid file is not hardcoded');
+  assert.match(source, /^pid __NGINX_PID_FILE__;$/m);
+  assert.match(source, /s\|__NGINX_PID_FILE__\|\$\(nginx_service_pid_file\)\|g/);
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-pid-'));
+  try {
+    const initScript = path.join(dir, 'nginx');
+    const body = shellFunction(source, 'nginx_service_pid_file').replaceAll('/etc/init.d/nginx', initScript);
+    const pidFile = (setup) => runShell(`${setup}\n${body}\nnginx_service_pid_file`).output.trim();
+    const stubs = (systemd, systemctlOut, built) =>
+      [
+        `has_systemd() { return ${systemd ? 0 : 1}; }`,
+        `has_openrc() { return ${systemd ? 1 : 0}; }`,
+        `systemctl() { echo '${systemctlOut}'; }`,
+        `nginx() { echo 'configure arguments: --prefix=/usr --pid-path=${built}' >&2; }`,
+      ].join('\n');
+    await writeFile(initScript, '#!/sbin/openrc-run\npidfile=/run/nginx/nginx.pid\ncommand=/usr/sbin/nginx\n');
+    assert.equal(pidFile(stubs(false, '', '/run/nginx.pid')), '/run/nginx/nginx.pid');
+    await writeFile(initScript, '#!/sbin/openrc-run\npidfile="/var/run/nginx.pid"\n');
+    assert.equal(pidFile(stubs(false, '', '/run/nginx.pid')), '/var/run/nginx.pid');
+    await writeFile(initScript, '#!/sbin/openrc-run\npidfile="${PIDFILE:-/x}"\n');
+    assert.equal(pidFile(stubs(false, '', '/run/built.pid')), '/run/built.pid');
+    assert.equal(pidFile(stubs(true, '/run/nginx.pid', '/run/built.pid')), '/run/nginx.pid');
+    assert.equal(pidFile(stubs(true, '', '/run/built.pid')), '/run/built.pid');
+    assert.equal(pidFile(stubs(true, '', '').replace(/nginx\(\) \{.*\}/, 'nginx() { :; }')), '/run/nginx.pid');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The installer secures the pid directory of Alpine's nginx service for a root nginx (the stock service gives it to the
+// unprivileged nginx user on every start and reload). The service must still give the directory to the user nginx runs
+// as when /etc/conf.d/nginx sets command_user, which is how docs/nodes.md prepares a non-root nginx.
+test('the secured nginx OpenRC service gives the pid directory to the user nginx runs as', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-openrc-'));
+  try {
+    const service = path.join(dir, 'nginx');
+    const stock = [
+      '#!/sbin/openrc-run',
+      'pidfile=/run/nginx/nginx.pid',
+      'start_pre() {',
+      '\tcheckpath --directory --owner nginx:nginx ${pidfile%/*}',
+      '}',
+      'reload_pre() {',
+      '\tcheckpath --directory --owner nginx:nginx ${pidfile%/*}',
+      '}',
+      '',
+    ].join('\n');
+    const earlier = stock.replaceAll('--owner nginx:nginx', '--mode 0755 --owner root:root');
+    const body = shellFunction(source, 'ensure_nginx_openrc_pid_directory').replaceAll('/etc/init.d', dir);
+    const migrate = async (content, runUser) => {
+      await writeFile(service, content, { mode: 0o755 });
+      const result = runShell(
+        [
+          source.split('\n').filter((line) => /^NGINX_OPENRC_(STOCK|EARLIER)_LINE=/.test(line)).join('\n'),
+          'has_openrc() { return 0; }',
+          'die() { echo "$*" >&2; exit 1; }',
+          'log() { :; }',
+          'backup_if_exists() { :; }',
+          // The service directories are root-owned and not writable by others on a host; the test files are not.
+          'stat() { case "$*" in "-c %u"*) echo 0 ;; *) echo 755 ;; esac; }',
+          `RUN_USER=${runUser}`,
+          body,
+          'ensure_nginx_openrc_pid_directory',
+        ].join('\n')
+      );
+      assert.equal(result.status, 0, result.output);
+      return readFileSync(service, 'utf8');
+    };
+    // The owner the start and reload steps hand /run/nginx to, with and without command_user.
+    const owners = (content, commandUser) => {
+      const lines = content.split('\n').filter((line) => line.includes('checkpath'));
+      assert.equal(lines.length, 2, content);
+      return lines.map((line) => {
+        const result = runShell(
+          [
+            'checkpath() { echo "$@"; }',
+            'pidfile=/run/nginx/nginx.pid',
+            commandUser ? `command_user=${commandUser}` : '',
+            line.trim(),
+          ].join('\n')
+        );
+        return result.output.trim();
+      });
+    };
+    for (const [content, runUser] of [
+      [stock, 'root'],
+      [earlier, 'root'],
+      [earlier, 'nginx'],
+    ]) {
+      const secured = await migrate(content, runUser);
+      assert.deepEqual(owners(secured, ''), Array(2).fill('--directory --mode 0755 --owner root:root /run/nginx'));
+      assert.deepEqual(owners(secured, 'nginx:nginx'), Array(2).fill('--directory --mode 0755 --owner nginx:nginx /run/nginx'));
+      assert.equal(await migrate(secured, runUser), secured, 'migrating twice changes nothing');
+    }
+    // A non-root daemon next to the stock service leaves the operator's pid directory alone.
+    assert.equal(await migrate(stock, 'nginx'), stock);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A daemon that moves to another user says so, in both directions.
+test('every installer announces the switch of the run user from root and to root', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-run-user-'));
+  try {
+    const configs = {
+      'setup-monitoring-node.sh': '/etc/monitoring-daemon',
+      'setup-docker-node.sh': '/etc/docker-daemon',
+      'setup-node.sh': '/etc/nginx-daemon',
+      'setup-relay-node.sh': '/etc/gateway-relay-supervisor',
+    };
+    for (const [script, config] of Object.entries(configs)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      const body = shellFunction(source, 'prepare_run_user_switch').replaceAll(config, path.join(dir, 'conf'));
+      const run = (runUser, previousUid) =>
+        runShell(
+          [
+            'log() { echo "$*"; }',
+            `PREVIOUS_RUN_UID=${previousUid}`,
+            `RUN_USER=${runUser}`,
+            body,
+            'prepare_run_user_switch',
+          ].join('\n')
+        );
+      // No installation yet: a fresh install does not switch anything.
+      assert.doesNotMatch(run('gwsvc', 0).output, /switching/, script);
+      await rm(path.join(dir, 'conf'), { recursive: true, force: true });
+      runShell(`mkdir -p '${path.join(dir, 'conf')}'`);
+      const toUser = run('gwsvc', 0);
+      assert.equal(toUser.status, 0, `${script}\n${toUser.output}`);
+      assert.match(toUser.output, /ran as root; switching it to gwsvc/, script);
+      assert.doesNotMatch(run('root', 0).output, /switching/, `${script} stays root`);
+      await rm(path.join(dir, 'conf'), { recursive: true, force: true });
+    }
+    // Leaving a non-root user is announced by the same function before the daemon is stopped.
+    for (const script of Object.keys(configs)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      assert.match(source, /ran as \$\(id -nu "\$PREVIOUS_RUN_UID"/, script);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A Docker node needs the memory, cpu and pids cgroup controllers for its containers (the Secure Link connector sets
+// all three limits). Where the root cgroup passes none down (an LXC guest with OpenRC) Docker starts, a container with
+// limits does not, and the node would enroll without its connectors. The installer refuses before it enrolls.
+test('the Docker installer refuses a host whose containers cannot get the cgroup controllers', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+  const { topLevel } = parseShell(source);
+  const firstRun = (name) => Math.min(...topLevel.filter((entry) => entry.calls.includes(name)).map((entry) => entry.line));
+  const check = firstRun('preflight_docker_cgroup_controllers');
+  assert.ok(Number.isFinite(check), 'the check runs at the top level');
+  assert.ok(firstRun('ensure_docker_installed') < check, 'after Docker is present');
+  for (const later of ['install_daemon', 'enroll_daemon', 'start_daemon']) {
+    assert.ok(check < firstRun(later), `before ${later}`);
+  }
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-cgroup-'));
+  try {
+    const body = shellFunction(source, 'preflight_docker_cgroup_controllers').replaceAll('/sys/fs/cgroup', dir);
+    const write = (name, content) => runShell(`mkdir -p '${path.dirname(path.join(dir, name))}' && printf '%s\\n' '${content}' > '${path.join(dir, name)}'`);
+    const check_ = (info, { DOCKER_MODE = 'docker' } = {}) =>
+      runShell(
+        [
+          // The installer runs with IFS=$'\n\t' (set at its top); the check must not depend on the default IFS.
+          "IFS=$'\\n\\t'",
+          `DOCKER_MODE=${DOCKER_MODE}; LOG_FILE=/dev/null`,
+          // The real docker CLI evaluates the template against moby's system.Info Go field names (CPUCfsQuota, not
+          // the JSON name CpuCfsQuota); a wrong name fails the command, and the check would be skipped.
+          'docker_run() { case "$*" in *"{{.CgroupVersion}} {{.CgroupDriver}} {{.MemoryLimit}} {{.PidsLimit}} {{.CPUCfsQuota}}"*) echo "' +
+            info +
+            '" ;; *) echo "template: cannot evaluate field" >&2; return 1 ;; esac; }',
+          'warn() { echo "WARN $*"; }',
+          'err() { echo "ERR $*" >&2; }',
+          'die() { err "$@"; exit 1; }',
+          body,
+          'preflight_docker_cgroup_controllers && echo PASSED',
+        ].join('\n')
+      );
+    const all = '2 cgroupfs true true true';
+    // The controllers pass down to Docker's cgroup.
+    write('docker/cgroup.controllers', 'cpu memory pids');
+    assert.match(check_(all).output, /PASSED/);
+    // An empty root cgroup: Docker's cgroup has none.
+    write('docker/cgroup.controllers', '');
+    const empty = check_(all);
+    assert.equal(empty.status, 1, empty.output);
+    assert.match(empty.output, /cannot give containers the cgroup controllers: cpu memory pids\./);
+    assert.match(empty.output, /Alpine with OpenRC in an LXC container/);
+    assert.match(empty.output, /nothing was enrolled/);
+    // Only the missing one is named; the root cgroup is read when Docker has no cgroup yet.
+    write('docker/cgroup.controllers', 'cpu memory');
+    assert.match(check_(all).output, /controllers: pids\./);
+    runShell(`rm '${path.join(dir, 'docker/cgroup.controllers')}'`);
+    write('cgroup.subtree_control', 'cpuset cpu io memory pids');
+    assert.match(check_(all).output, /PASSED/);
+    write('cgroup.subtree_control', '');
+    assert.match(check_(all).output, /controllers: cpu memory pids\./);
+    // docker info says the kernel lacks a controller (cgroup v1 too); the systemd driver reads no files.
+    assert.match(check_('1 cgroupfs true false true').output, /controllers: pids\./);
+    assert.match(check_('2 systemd true true true').output, /PASSED/);
+    // A Build Worker has no Docker.
+    assert.match(check_('2 cgroupfs false false false', { DOCKER_MODE: 'builder' }).output, /PASSED/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Without -y an installer asks on the terminal. A terminal that cannot be read (no controlling terminal, or sudo's pty
+// with a piped stdout, where the read fails with EIO) answers nothing, and a default must not stand in for the answer:
+// an unreadable terminal used to read as "yes" to "Proceed?" and to the nginx upgrade from nginx.org.
+test('a terminal that cannot be read is never answered with a default', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-tty-'));
+  try {
+    const answers = path.join(dir, 'answers');
+    const unreadable = { missing: path.join(dir, 'no-such-tty'), 'a read error': dir };
+    const helpers = {
+      'setup-node.sh': ['prompt_input', 'prompt_secret', 'prompt_yes_no', 'prompt_choice'],
+      'setup-docker-node.sh': ['prompt_input', 'prompt_secret', 'prompt_yes_no', 'prompt_choice'],
+      'setup-monitoring-node.sh': ['prompt_input', 'prompt_secret', 'prompt_yes_no', 'prompt_choice'],
+      'setup-database-node.sh': ['prompt_choice'],
+    };
+    for (const [script, names] of Object.entries(helpers)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      assert.doesNotMatch(source, /\[\[? -e \/dev\/tty \]\]?/, `${script} reads the terminal and checks the result`);
+      assert.doesNotMatch(source, /reply="\$default"|\|\| reply=""/, script);
+      const prelude = [
+        'set -euo pipefail',
+        'NON_INTERACTIVE=0; BRAND_MINT=""; NC=""; BOLD=""; GRAY=""; TERM=dumb',
+        'err() { echo "ERR $*" >&2; }',
+        'die() { err "$@"; exit 1; }',
+        shellFunction(source, 'refuse_unanswered_prompt'),
+        ...names.map((name) => shellFunction(source, name)),
+      ];
+      const calls = {
+        // The installers assign the answer in a plain assignment, where set -e stops them when the helper fails.
+        prompt_input: 'answer=$(prompt_input "Host" "default-host"); echo "got=${answer}"',
+        prompt_secret: 'answer=$(prompt_secret "Token"); echo "got=${answer}"',
+        prompt_yes_no: 'if prompt_yes_no "Upgrade nginx now?" "Y"; then echo "got=yes"; else echo "got=no"; fi',
+        prompt_choice: 'answer=$(prompt_choice "Choose" "1" "root" "user"); echo "got=${answer}"',
+      };
+      for (const name of names) {
+        for (const [what, tty] of Object.entries(unreadable)) {
+          const body = prelude.map((part) => part.replaceAll('/dev/tty', tty));
+          const result = runShell([...body, calls[name], 'echo AFTER'].join('\n'));
+          assert.equal(result.status, 1, `${script} ${name} with a terminal that is ${what}\n${result.output}`);
+          assert.match(result.output, /Cannot read an answer from the terminal/, `${script} ${name}`);
+          assert.match(result.output, /pass -y to install non-interactively/, `${script} ${name}`);
+          assert.doesNotMatch(result.output, /got=|AFTER/, `${script} ${name} did not default (${what})`);
+        }
+        // A readable terminal still answers, and an empty reply takes the default shown to the user.
+        const answered = (reply) => {
+          runShell(`printf '%s' '${reply}' > '${answers}'`);
+          const body = prelude.map((part) => part.replaceAll('/dev/tty', answers));
+          return runShell([...body, calls[name]].join('\n'));
+        };
+        assert.equal(answered('\n').status, 0, `${script} ${name}`);
+        if (name === 'prompt_yes_no') {
+          assert.match(answered('n\n').output, /got=no/, script);
+          assert.match(answered('y\n').output, /got=yes/, script);
+          assert.match(answered('\n').output, /got=yes/, script);
+        }
+        if (name === 'prompt_input') assert.match(answered('\n').output, /got=default-host/, script);
+      }
+    }
+    // The node type menu of setup-daemon.sh does not pick its default for an unreadable terminal either.
+    const daemon = readFileSync(path.join(scriptsDir, 'setup-daemon.sh'), 'utf8');
+    assert.match(daemon, /read -r reply < "\$tty" 2>\/dev\/null \|\| die "Cannot read an answer from the terminal/);
+    // -y stays the way to run without a terminal, and it still refuses an nginx upgrade it cannot ask about.
+    const node = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+    assert.match(node, /if \[\[ "\$NON_INTERACTIVE" -eq 1 \]\]; then\n\s+die "nginx \$\{NGINX_MIN_VERSION\}\+ is required\. Re-run interactively to approve the stable nginx upgrade\."/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// An Alpine host whose nginx service still has the PID-directory line an earlier installer wrote (owner root:root), and
+// whose operator ran nginx as the daemon's user (command_user in /etc/conf.d/nginx) before installing: that nginx
+// cannot start, so there is no nginx master to find. The preflight only detects this and the summary announces the
+// repair; the service line is migrated and nginx started after the user confirmed (or under -y). Nothing on the host
+// changes before the prompt, and a dry run only prints the plan.
+test('the nginx service repair of a non-root install is planned before the prompt and done after it', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  const { functions } = parseShell(source);
+  const preflight = functions.get('preflight_run_user_nginx');
+  assert.ok(preflight.calls.has('nginx_openrc_service_repair_needed'), 'the preflight detects the case');
+  for (const change of ['ensure_nginx_openrc_pid_directory', 'start_nginx_after_service_repair', 'backup_if_exists']) {
+    assert.ok(!preflight.calls.has(change), `the preflight does not call ${change}`);
+  }
+  const preflightCode = shellFunction(source, 'preflight_run_user_nginx')
+    .split('\n')
+    .filter((line) => !/^\s*err "/.test(line))
+    .join('\n');
+  assert.doesNotMatch(preflightCode, /rc-service/, 'the preflight runs no service command');
+  assert.doesNotMatch(shellFunction(source, 'nginx_openrc_service_repair_needed'), /rc-service nginx (zap|start|restart)/);
+  // The summary announces the plan before the prompt; the repair runs in the configuration step after it.
+  const prompt = source.indexOf('prompt_yes_no "Proceed with installation?"');
+  assert.ok(source.indexOf('summary_row "Nginx fix:   will update the nginx PID-directory line and start nginx"') < prompt);
+  assert.ok(source.indexOf('\npreflight_run_user_nginx\n') < prompt);
+  const configure = shellFunction(source, 'configure_nginx');
+  assert.ok(configure.indexOf('ensure_nginx_openrc_pid_directory') < configure.indexOf('start_nginx_after_service_repair'));
+  const runStart = source.indexOf('\n# ── Run ─');
+  assert.ok(runStart > prompt && source.indexOf('\nconfigure_nginx\n') > runStart, 'configure_nginx runs after the prompt');
+  assert.match(source, /dry_run_preview\(\) \{[\s\S]*Would update the nginx OpenRC service's PID-directory line and start nginx \(dry run\)/);
+  assert.deepEqual(definedBeforeUseErrors(source), []);
+
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-migrate-'));
+  try {
+    const service = path.join(dir, 'nginx');
+    const confd = path.join(dir, 'conf-nginx');
+    const calls = path.join(dir, 'calls');
+    const earlier = [
+      '#!/sbin/openrc-run',
+      'pidfile=/run/nginx/nginx.pid',
+      'start_pre() {',
+      '\tcheckpath --directory --mode 0755 --owner root:root ${pidfile%/*}',
+      '}',
+      '',
+    ].join('\n');
+    const text = ['ensure_nginx_openrc_pid_directory', 'nginx_openrc_service_repair_needed', 'start_nginx_after_service_repair', 'preflight_run_user_nginx']
+      .map((name) => shellFunction(source, name).replaceAll('/etc/init.d', dir).replaceAll('/etc/conf.d/nginx', confd))
+      .join('\n');
+    const constants = source
+      .split('\n')
+      .filter((line) => /^NGINX_OPENRC_(STOCK|EARLIER)_LINE=|^NGINX_SERVICE_REPAIR_PLANNED=/.test(line))
+      .join('\n');
+    const stubs = (dryRun) => [
+      'RUN_USER=nginx; RUN_GROUP=nginx; NGINX_MODE=integrate; LOG_FILE=/dev/null',
+      `DRY_RUN=${dryRun}`,
+      constants,
+      'has_openrc() { return 0; }',
+      'command_exists() { return 0; }',
+      'log() { echo "LOG $*"; }',
+      'err() { echo "ERR $*" >&2; }',
+      'die() { err "$@"; exit 1; }',
+      'backup_if_exists() { :; }',
+      'id() { case "$1" in -u) echo 1000 ;; *) echo nginx ;; esac; }',
+      'stat() { case "$*" in *"/proc/"*) echo 1000 ;; *"-c %u"*) echo 0 ;; *) echo 755 ;; esac; }',
+      // The service is down until something starts it; every call is recorded.
+      `rc-service() { echo "$*" >> '${calls}'; case "$2" in start) touch '${dir}/up' ;; esac; [[ "$2" != status ]] || [[ -e '${dir}/up' ]]; }`,
+      `nginx_master_pid() { [[ -e '${dir}/up' ]] && echo $$; }`,
+      text,
+    ];
+    const run = async ({ confdText, dryRun = 0, afterPrompt = false }) => {
+      await writeFile(service, earlier, { mode: 0o755 });
+      await writeFile(confd, confdText);
+      await writeFile(calls, '');
+      runShell(`rm -f '${dir}/up'`);
+      const steps = ['preflight_run_user_nginx', 'echo "PLANNED=${NGINX_SERVICE_REPAIR_PLANNED}"'];
+      if (afterPrompt) steps.push('ensure_nginx_openrc_pid_directory', 'start_nginx_after_service_repair');
+      const result = runShell([...stubs(dryRun), ...steps, 'echo DONE'].join('\n'));
+      return { ...result, script: readFileSync(service, 'utf8'), calls: readFileSync(calls, 'utf8') };
+    };
+    const prepared = 'command_user="nginx:nginx"\ncapabilities="^cap_net_bind_service"\n';
+    // Before the prompt: planned, nothing changed, nothing started.
+    const planned = await run({ confdText: prepared });
+    assert.equal(planned.status, 0, planned.output);
+    assert.match(planned.output, /PLANNED=1/);
+    assert.equal(planned.script, earlier, 'the service file is untouched before the prompt');
+    assert.doesNotMatch(planned.calls, /zap|start/, 'no service action before the prompt');
+    // After the prompt: the line is migrated, then nginx is started.
+    const done = await run({ confdText: prepared, afterPrompt: true });
+    assert.equal(done.status, 0, done.output);
+    assert.match(done.script, /--owner "\$\{command_user:-root:root\}" \$\{pidfile%\/\*\}/);
+    assert.match(done.calls, /nginx zap\nnginx start\n/);
+    // A dry run only prints the plan; the repair functions change nothing.
+    const dry = await run({ confdText: prepared, dryRun: 1, afterPrompt: true });
+    assert.equal(dry.script, earlier);
+    assert.doesNotMatch(dry.calls, /zap|start/);
+    // Without command_user for the run user nothing is planned and the refusal stays as before.
+    for (const confdText of ['', 'command_user="www-data"\n']) {
+      const refused = await run({ confdText });
+      assert.equal(refused.status, 1, refused.output);
+      assert.match(refused.output, /no running nginx master process was found/);
+      assert.match(refused.output, /rc-service nginx zap, then rc-service nginx start/);
+      assert.match(refused.output, /nothing was changed\./);
+      assert.equal(refused.script, earlier);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The relay installer re-runs like the monitoring, nginx and Docker installers: an enrolled relay re-run without a token
+// keeps its identity and takes what is not given from its configuration (the documented user switch is such a re-run);
+// with a token it re-enrolls, and when Gateway refuses the token the relay keeps running as it was but the install
+// fails; a new relay still needs every argument.
+test('an enrolled relay re-runs without a token and keeps its identity', { skip: !linux }, async () => {
+  const host = path.join(work, 'host');
+  const config = path.join(host, 'etc/gateway-relay-supervisor/config.yaml');
+  const identity = path.join(host, 'var/lib/gateway-relay-supervisor/supervisor-identity/node.pem');
+  const relayArgs = ['--version', VERSION];
+  const full = ['--gateway', 'gw.example.com:9443', '--gateway-cert-sha256', CERT, '--advertise-address', 'relay.example.com'];
+  try {
+    // A new relay: every argument is still required.
+    for (const args of [relayArgs, [...relayArgs, ...full], ['--token', 'gw_node_x', ...relayArgs, '--gateway', 'gw.example.com:9443']]) {
+      const fresh = dryRun('setup-relay-node.sh', args);
+      assert.equal(fresh.status, 2, `${args.join(' ')}\n${fresh.output}`);
+      assert.match(fresh.output, /Usage: setup-relay-node\.sh/);
+    }
+    await writeFile(
+      path.join(work, 'relay-config.yaml'),
+      [
+        'gateway:',
+        '  address: gw.example.com:9443',
+        '  token: gw_node_used',
+        `  cert_sha256: ${CERT}`,
+        'worker:',
+        '  service_port: 853',
+        '  advertised_addresses:',
+        '    - relay.example.com',
+        '',
+      ].join('\n')
+    );
+    runShell(`mkdir -p '${path.dirname(config)}' '${path.dirname(identity)}' && cp '${path.join(work, 'relay-config.yaml')}' '${config}' && echo pem > '${identity}'`);
+    // Enrolled, no token: gateway, pin, advertised address and port come from the configuration.
+    const kept = dryRun('setup-relay-node.sh', relayArgs);
+    assert.equal(kept.status, 0, kept.output);
+    assert.match(kept.output, /for Gateway gw\.example\.com:9443, advertised at relay\.example\.com:853\./);
+    assert.match(kept.output, /no token was given: it keeps its identity/);
+    // What is given wins.
+    const given = dryRun('setup-relay-node.sh', [...relayArgs, '--gateway', 'other.example.com:9443', '--service-port', '9444']);
+    assert.match(given.output, /for Gateway other\.example\.com:9443, advertised at relay\.example\.com:9444\./, given.output);
+    // With a token it re-enrolls.
+    const reenroll = dryRun('setup-relay-node.sh', ['--token', 'gw_node_new', ...relayArgs]);
+    assert.equal(reenroll.status, 2, 'a token alone is not a complete command for a new relay');
+    const reenrollFull = dryRun('setup-relay-node.sh', ['--token', 'gw_node_new', ...relayArgs, ...full]);
+    assert.equal(reenrollFull.status, 0, reenrollFull.output);
+    assert.match(reenrollFull.output, /a token was given: it re-enrolls, and keeps its previous identity if Gateway refuses the token/);
+    // A configuration that lacks the values cannot be re-run without them.
+    runShell(`printf 'gateway:\\n  token: x\\n' > '${config}'`);
+    const incomplete = dryRun('setup-relay-node.sh', relayArgs);
+    assert.equal(incomplete.status, 2, incomplete.output);
+    assert.match(incomplete.output, /does not name its Gateway, certificate pin and advertised address/);
+  } finally {
+    runShell(`rm -f '${config}' '${identity}' '${path.join(work, 'relay-config.yaml')}'`);
+  }
+
+  const source = readFileSync(path.join(scriptsDir, 'setup-relay-node.sh'), 'utf8');
+  // No token, no token line: a token in the configuration of an enrolled supervisor starts a re-enrollment.
+  const start = source.indexOf('GATEWAY_TOKEN_YAML=""');
+  const end = source.indexOf('\nCONFIG\n', start) + '\nCONFIG\n'.length;
+  const rendered = path.join(work, 'rendered-relay-config.yaml');
+  const render = (token) => {
+    const result = runShell(
+      [
+        `GATEWAY=gw.example.com:9443; TOKEN='${token}'; GATEWAY_CERT_SHA256=${CERT}; HOST_IDENTITY_PATH=/h; SERVICE_PORT=9443; ADVERTISE_ADDRESS=relay.example.com`,
+        source.slice(start, end).replace('/etc/gateway-relay-supervisor/config.yaml', rendered),
+      ].join('\n')
+    );
+    assert.equal(result.status, 0, result.output);
+    return readFileSync(rendered, 'utf8');
+  };
+  assert.doesNotMatch(render(''), /token:/);
+  assert.match(render(''), /^gateway:\n {2}address: gw\.example\.com:9443\n {2}cert_sha256: /);
+  assert.match(render('gw_node_new'), /^ {2}address: gw\.example\.com:9443\n {2}token: gw_node_new\n {2}cert_sha256:/m);
+  // Without a token there is no enrollment result to wait for, only the Gateway session.
+  assert.match(source, /Without a token there is no enrollment to wait for[^\n]*\n\s+\[\[ -n "\$TOKEN" \]\] \|\| enrolled=1/);
+  // A refused re-enrollment token is a failure that says the relay still runs.
+  assert.match(source, /enrollment_status" -eq 1 && "\$REENROLLMENT" -eq 1[\s\S]*keeps running with its previous identity, but it was not re-enrolled[\s\S]*without --token[\s\S]*exit 1/);
+});
+
+// Secure Runtime is optional: a host that does not support it gets a warning with the reason and no question; only an
+// explicit --secure-runtime fails the install, with that reason. An install that is declined or stopped after the
+// summary never exits 0 ("Installation not completed" with exit 0 left a pending node and a green script).
+test('Docker install without Secure Runtime support continues with the reason, and no installer exits 0 when incomplete', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-secure-runtime-'));
+  try {
+    const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+    assert.doesNotMatch(source, /Continue without Secure Runtimes\?/, 'the question is gone');
+    const body = shellFunction(source, 'setup_secure_runtime');
+    const run = async ({ secureRuntime, preflightExit, installExit = 0 }) => {
+      const daemon = path.join(dir, 'docker-daemon');
+      await writeFile(
+        daemon,
+        [
+          '#!/bin/sh',
+          'case "$*" in',
+          `  *--silent*) exit ${preflightExit} ;;`,
+          '  *--plain*) printf "unsupported\\tdocker_reload_unavailable\\tsystemd Docker service cannot be reloaded\\n"; exit 20 ;;',
+          `  *"runtime install"*) exit ${installExit} ;;`,
+          'esac',
+          '',
+        ].join('\n'),
+        { mode: 0o755 }
+      );
+      return runShell(
+        [
+          'set -euo pipefail',
+          `DOCKER_MODE=docker; EXISTING_INSTALL=0; SECURE_RUNTIME=${secureRuntime}; NON_INTERACTIVE=0; ROOT_DAEMON_BINARY='${daemon}'`,
+          'prepare_root_daemon_binary() { :; }',
+          'ok() { echo "OK $*"; }',
+          'log() { echo "LOG $*"; }',
+          'warn() { echo "WARN $*"; }',
+          'err() { echo "ERR $*" >&2; }',
+          'die() { err "$@"; exit 1; }',
+          'prompt_yes_no() { echo PROMPTED; return 1; }',
+          'complete_incomplete() { echo INCOMPLETE; exit 1; }',
+          body,
+          'setup_secure_runtime',
+          'echo CONTINUED',
+        ].join('\n')
+      );
+    };
+    // Unsupported, not requested: warns with the reason, no question, continues.
+    const unsupported = await run({ secureRuntime: 0, preflightExit: 20 });
+    assert.equal(unsupported.status, 0, unsupported.output);
+    assert.match(unsupported.output, /WARN Continuing without Secure Runtime \(systemd Docker service cannot be reloaded\)/);
+    assert.match(unsupported.output, /CONTINUED/);
+    assert.doesNotMatch(unsupported.output, /PROMPTED|INCOMPLETE/);
+    // A setup that fails behaves the same.
+    const failed = await run({ secureRuntime: 0, preflightExit: 10, installExit: 1 });
+    assert.equal(failed.status, 0, failed.output);
+    assert.doesNotMatch(failed.output, /PROMPTED/);
+    // Requested explicitly: the install fails with the reason.
+    const requested = await run({ secureRuntime: 1, preflightExit: 20 });
+    assert.equal(requested.status, 1, requested.output);
+    assert.match(requested.output, /Secure Runtime is not installed on this node: systemd Docker service cannot be reloaded\./);
+    assert.doesNotMatch(requested.output, /CONTINUED/);
+    // A ready Secure Runtime is not a warning.
+    const ready = await run({ secureRuntime: 0, preflightExit: 0 });
+    assert.match(ready.output, /OK Secure Runtime is ready/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  for (const script of ['setup-docker-node.sh', 'setup-monitoring-node.sh', 'setup-node.sh']) {
+    const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+    assert.match(shellFunction(source, 'complete_incomplete'), /\n\s+exit 1\n\}$/, `${script} declined install exits non-zero`);
+    assert.doesNotMatch(source, /complete_incomplete\n\s+exit 0/, script);
+  }
+  // Installers without that helper have no "not completed" path at all.
+  for (const script of installers) {
+    const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+    if (!source.includes('complete_incomplete()')) assert.doesNotMatch(source, /Installation not completed/, script);
+  }
+});
+
+// A launcher that stopped but whose parent never reaps it (PID 1 of a container) stays a zombie, which kill -0 counts as
+// running: a re-run in manual mode waited 30 s, gave up and left the host without a daemon.
+test('a zombie launcher counts as stopped in every installer that stops launchers', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-zombie-'));
+  const holder = spawn('bash', ['-c', 'trap "" TERM; sleep 120'], { stdio: 'ignore' });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const pid = holder.pid;
+    const proc = path.join(dir, 'proc');
+    const fake = (name, content) => runShell(`mkdir -p '${proc}/${pid}' '${proc}/self' && printf '%s' '${content}' > '${proc}/${name}'`);
+    fake('self/stat', '1 (bash) S 0');
+    const scripts = {
+      'setup-monitoring-node.sh': 'monitoring',
+      'setup-docker-node.sh': 'docker',
+      'setup-node.sh': 'nginx',
+      'setup-relay-node.sh': 'relay',
+    };
+    for (const [script, type] of Object.entries(scripts)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      const functionsText = ['launcher_pid_is_live', 'launcher_pid_from_json', 'stop_manual_launcher']
+        .map((name) => shellFunction(source, name).replaceAll('/proc/', `${proc}/`))
+        .join('\n');
+      const check = (stat, withStop = false) => {
+        fake(`${pid}/stat`, stat);
+        // The process is alive for the kernel (it ignores TERM) and has the launcher's command line.
+        runShell(`printf '%s\\0' x launcher --daemon-type ${type} y > '${proc}/${pid}/cmdline'`);
+        const launcherDir = path.join(dir, `launcher-${type}`);
+        runShell(`mkdir -p '${launcherDir}' && printf '{"pid":${pid}}' > '${launcherDir}/owner.json'`);
+        const started = Date.now();
+        const live = runShell(`${functionsText}\nlauncher_pid_is_live ${pid} && echo LIVE || echo STOPPED`);
+        // Stopping a launcher that is really alive waits 30 s, so only the zombie is stopped here.
+        const stopped = withStop
+          ? runShell(`${functionsText}\nstop_manual_launcher '${launcherDir}' ${type} && echo STOP-OK || echo STOP-FAILED`)
+          : { output: '' };
+        return { live: live.output.trim(), stopped: stopped.output.trim(), seconds: (Date.now() - started) / 1000 };
+      };
+      const zombie = check(`${pid} (relay-sup) Z 1 1 1`, true);
+      assert.equal(zombie.live, 'STOPPED', script);
+      assert.equal(zombie.stopped, 'STOP-OK', script);
+      assert.ok(zombie.seconds < 10, `${script} does not wait for a zombie (${zombie.seconds} s)`);
+      // A command name with ") " in it does not hide the state; a running launcher is alive.
+      assert.equal(check(`${pid} (a) b) Z 1`).live, 'STOPPED', script);
+      assert.equal(check(`${pid} (a) b) S 1`).live, 'LIVE', script);
+      assert.equal(check(`${pid} (launcher) R 1`).live, 'LIVE', script);
+    }
+  } finally {
+    holder.kill('SIGKILL');
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Switching a node away from a non-root user: the old daemon used to be stopped first, long before the new one started,
+// and systemd drops its file descriptor store at a stop, so the link sockets it had handed over were closed and the
+// traffic reset (about 1-2 s lost; root to user, a restart, lost nothing). The daemon now keeps serving with what its
+// user owns until just before the new process starts; the store is kept through the stop, the ownership change and the
+// start, so connections made meanwhile wait in the sockets' backlog.
+test('a switch away from a non-root user stops the daemon last and keeps its link sockets', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-switch-'));
+  try {
+    const nodes = {
+      'setup-docker-node.sh': { unit: 'docker-daemon', own: 'DOCKER_DAEMON_OWN_DIR=/o; DOCKER_REGISTRY_PROXY_TRUST_DIR=/t' },
+      'setup-node.sh': { unit: 'nginx-daemon', own: 'NGINX_DAEMON_OWN_DIR=/o; NGINX_DAEMON_RUNTIME_DIRS=(nginx-daemon)' },
+    };
+    for (const [script, { unit, own }] of Object.entries(nodes)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      // Static order: the stop comes right before the start, after everything else is prepared.
+      const { topLevel, functions } = parseShell(source);
+      const firstRun = (name) => Math.min(...topLevel.filter((entry) => entry.calls.includes(name)).map((entry) => entry.line));
+      const finish = firstRun('finish_run_user_switch');
+      assert.ok(Number.isFinite(finish), `${script} finishes the switch at the top level`);
+      for (const before of ['enroll_daemon', 'apply_host_access_config', 'install_daemon']) assert.ok(firstRun(before) < finish, `${script}: ${before} before the stop`);
+      assert.ok(finish < firstRun('start_daemon'), `${script}: the stop is right before the start`);
+      assert.ok(!functions.get('install_daemon').calls.has('stop_daemon_service'));
+      assert.match(source, /systemctl restart [a-z-]+ >> "\$LOG_FILE" 2>&1 \|\| \{ release_fd_store_hold; fail_daemon_start[^\n]*\n\s+release_fd_store_hold\n/);
+
+      const launcher = path.join(dir, `${unit}-launcher`);
+      const holdFile = path.join(dir, `${unit}-hold.conf`);
+      const unitFile = path.join(dir, `${unit}.service`);
+      await writeFile(unitFile, '[Service]\n');
+      const calls = path.join(dir, `${unit}-calls`);
+      const text = ['grant_daemon_paths_to_run_user', 'prepare_run_user_switch', 'hold_fd_store', 'release_fd_store_hold', 'finish_run_user_switch']
+        .map((name) =>
+          shellFunction(source, name)
+            .replaceAll(`/var/lib/${unit}/launcher`, launcher)
+            .replaceAll(`/etc/systemd/system/${unit}.service`, unitFile)
+        )
+        .join('\n');
+      const fdHold = `FD_STORE_HOLD='${holdFile}'`;
+      const run = async ({ enrolled, token = '', stopFails = false, steps }) => {
+        await writeFile(calls, '');
+        runShell(`mkdir -p '${launcher}'`);
+        const result = runShell(
+          [
+            'set -euo pipefail',
+            `RUN_USER=root; PREVIOUS_RUN_UID=1000; EXISTING_ENROLLED=${enrolled}; ENROLL_TOKEN='${token}'; LOG_FILE=/dev/null; RUN_GROUP=root; RUN_USER_SWITCH_PENDING=0`,
+            own,
+            fdHold,
+            'log() { echo "LOG $*"; }',
+            'err() { echo "ERR $*" >&2; }',
+            'die() { err "$@"; exit 1; }',
+            'id() { echo 0; }',
+            'has_systemd() { return 0; }',
+            `systemctl() { echo "systemctl $*" >> '${calls}'; }`,
+            'install() { mkdir -p "${@: -1}"; }',
+            `stop_daemon_service() { echo "stop launcher-present=$([[ -d '${launcher}' ]] && echo yes || echo no) preserve=$(grep -c '^FileDescriptorStorePreserve=yes$' '${holdFile}' 2>/dev/null || true)" >> '${calls}'; ${stopFails ? 'return 1' : 'return 0'}; }`,
+            `return_paths_to_root() { echo "return_paths_to_root launcher-present=$([[ -d '${launcher}' ]] && echo yes || echo no)" >> '${calls}'; }`,
+            text,
+            ...steps,
+          ].join('\n')
+        );
+        return { ...result, calls: readFileSync(calls, 'utf8'), hold: spawnSync('test', ['-e', holdFile]).status === 0 };
+      };
+      // Enrolled, no token: nothing stops at the start, ownership stays with the old user, and the stop comes last.
+      const early = await run({ enrolled: 1, steps: ['prepare_run_user_switch', 'grant_daemon_paths_to_run_user', 'echo AFTER-PREPARE'] });
+      assert.equal(early.status, 0, early.output);
+      assert.match(early.output, /switching it to root/);
+      assert.equal(early.calls, '', `${script}: no stop and no ownership change before the start is near`);
+      assert.equal(spawnSync('test', ['-d', launcher]).status, 0, 'the launcher copies stay until the stop');
+      const late = await run({
+        enrolled: 1,
+        steps: ['prepare_run_user_switch', 'grant_daemon_paths_to_run_user', 'finish_run_user_switch', `echo "HOLD-AFTER-FINISH=$([[ -f '${holdFile}' ]] && echo yes || echo no)"`, 'release_fd_store_hold'],
+      });
+      assert.equal(late.status, 0, late.output);
+      assert.match(late.calls, /systemctl daemon-reload\nstop launcher-present=yes preserve=1\nreturn_paths_to_root launcher-present=no\n/, `${script}\n${late.calls}`);
+      assert.match(late.output, /HOLD-AFTER-FINISH=yes/, 'the store is kept until the new process started');
+      assert.equal(late.hold, false, 'the hold is released afterwards');
+      // A node that enrolls again runs steps as the new user first, so its daemon stops at once, as before.
+      const withToken = await run({ enrolled: 1, token: 'gw_node_x', steps: ['prepare_run_user_switch', 'echo AFTER'] });
+      const notEnrolled = await run({ enrolled: 0, steps: ['prepare_run_user_switch', 'echo AFTER'] });
+      for (const immediate of script === 'setup-node.sh' ? [withToken, notEnrolled] : [notEnrolled]) {
+        assert.match(immediate.calls, /^stop launcher-present=yes/, `${script} stops at once\n${immediate.calls}`);
+        assert.equal(spawnSync('test', ['-d', launcher]).status, 1, 'and removes the launcher copies');
+      }
+      // A stop that fails does not leave the store held, and the install stops.
+      const failed = await run({ enrolled: 1, stopFails: true, steps: ['prepare_run_user_switch', 'finish_run_user_switch', 'echo AFTER'] });
+      assert.equal(failed.status, 1, failed.output);
+      assert.match(failed.output, new RegExp(`Could not stop ${unit} to switch its user`));
+      assert.equal(failed.hold, false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

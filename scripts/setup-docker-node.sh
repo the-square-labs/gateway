@@ -120,6 +120,8 @@ complete_incomplete() {
         echo -e "${YELLOW}■${NC} ${BOLD}Installation not completed.${NC}"
         echo ""
     fi
+    # An install that was declined or stopped after the summary did not complete: it never exits 0.
+    exit 1
 }
 
 show_logo() {
@@ -322,16 +324,58 @@ preflight_database_storage() {
 
 preflight_database_docker() {
     [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
-    [[ "$RUN_USER" == "root" ]] || die "Database docker-daemon profile must run as root."
     docker_run info >>"$LOG_FILE" 2>&1 || die "Docker Engine is not reachable; refusing database-node enrollment."
     [[ "$DOCKER_SOCKET" == unix://* ]] || die "Database nodes require a local Docker Engine socket; refusing remote Docker context '${DOCKER_SOCKET}'."
     [[ -S "${DOCKER_SOCKET#unix://}" ]] || die "Docker Engine socket is unavailable at ${DOCKER_SOCKET#unix://}."
     ok "Docker Engine preflight passed (${DOCKER_SOCKET})"
 }
 
-preflight_builder_runtime() {
+# The Secure Link connector and the managed workloads run with memory, CPU and pids limits (the connector sets all
+# three), so Docker has to be able to give its containers those cgroup controllers. On an LXC guest with OpenRC the
+# root cgroup can have none enabled (cgroup.subtree_control is empty and OpenRC's cgroups service cannot change that
+# while every process sits in the root cgroup): Docker and plain containers still start, but a container with limits
+# fails with "pids.max: no such file or directory", and the node enrolls without its connectors working.
+preflight_docker_cgroup_controllers() {
+    [[ "$DOCKER_MODE" != "builder" ]] || return 0
+    local info version driver memory_limit pids_limit cpu_quota controllers_file controller
+    local missing=()
+    if ! info=$(docker_run info --format '{{.CgroupVersion}} {{.CgroupDriver}} {{.MemoryLimit}} {{.PidsLimit}} {{.CPUCfsQuota}}' 2>>"$LOG_FILE"); then
+        warn "Could not read the cgroup setup from Docker; skipping the container limits check."
+        return 0
+    fi
+    IFS=' ' read -r version driver memory_limit pids_limit cpu_quota <<< "$info"
+    [[ "$memory_limit" == "true" ]] || missing+=(memory)
+    [[ "$pids_limit" == "true" ]] || missing+=(pids)
+    [[ "$cpu_quota" == "true" ]] || missing+=(cpu)
+    # Docker with the cgroupfs driver on cgroup v2 creates its containers below /sys/fs/cgroup/docker, which has the
+    # controllers the root cgroup passes down. docker info reports the controllers the kernel offers, not those.
+    if [[ "$version" == "2" && "$driver" == "cgroupfs" ]]; then
+        controllers_file=/sys/fs/cgroup/docker/cgroup.controllers
+        [[ -r "$controllers_file" ]] || controllers_file=/sys/fs/cgroup/cgroup.subtree_control
+        if [[ -r "$controllers_file" ]]; then
+            for controller in memory pids cpu; do
+                [[ " $(cat "$controllers_file") " == *" ${controller} "* ]] || missing+=("$controller")
+            done
+        fi
+    fi
+    [[ "${#missing[@]}" -gt 0 ]] || return 0
+    missing=($(printf '%s\n' "${missing[@]}" | sort -u))
+    local IFS=' '
+    err "Docker cannot give containers the cgroup controllers: ${missing[*]}."
+    err "The Secure Link connector and managed workloads run with memory, CPU and pids limits; with these controllers missing"
+    err "they fail to start, although the node would enroll. On Alpine with OpenRC in an LXC container, the host cgroup setup has"
+    err "to enable them. Check: cat /sys/fs/cgroup/cgroup.subtree_control /sys/fs/cgroup/docker/cgroup.controllers (see docs/nodes.md)."
+    die "Docker does not provide the cgroup controllers this node needs; nothing was enrolled."
+}
+
+# What the Build Worker profile needs from the host itself; checked before the installer changes or downloads anything.
+preflight_builder_host() {
     [[ "$DOCKER_MODE" == "builder" ]] || return 0
     has_systemd || die "Builder nodes require systemd to supervise the isolated containerd and BuildKit services."
+}
+
+preflight_builder_runtime() {
+    [[ "$DOCKER_MODE" == "builder" ]] || return 0
     local bundled=(containerd ctr buildkitd buildctl runc containerd-shim-runc-v2 syft grype)
     local system=(git iptables getent)
     local missing=() binary
@@ -402,6 +446,14 @@ summary_end() {
     guide_blank
 }
 
+# Without -y the installer asks on the terminal. When the terminal cannot be read (no controlling terminal, or the
+# read fails with EIO under sudo's pty while stdout is a pipe) nothing was answered, and a default must not stand in
+# for an answer: the run counts as non-interactive, which cannot approve what it asks about.
+refuse_unanswered_prompt() {
+    echo "" >&2
+    die "Cannot read an answer from the terminal for: $1. Run the installer from a terminal (not through a pipe such as '| tee'), or pass -y to install non-interactively."
+}
+
 prompt_input() {
     local prompt="$1"
     local default="${2:-}"
@@ -410,14 +462,10 @@ prompt_input() {
         echo "$default"
         return
     fi
-    if [ -e /dev/tty ]; then
-        if [ -n "$default" ]; then
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" result < /dev/tty
-        else
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
-        fi
+    if [ -n "$default" ]; then
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
     else
-        result=""
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
     fi
     echo "${result:-$default}"
 }
@@ -429,12 +477,8 @@ prompt_secret() {
         echo ""
         return
     fi
-    if [ -e /dev/tty ]; then
-        read -rs -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
-        echo "" >&2
-    else
-        result=""
-    fi
+    read -rs -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
+    echo "" >&2
     echo "$result"
 }
 
@@ -446,16 +490,12 @@ prompt_yes_no() {
         [[ "$default" =~ ^[yY]$ ]]
         return
     fi
-    if [ -e /dev/tty ]; then
-        if [[ "$default" == "Y" ]]; then
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [Y/n]: ${NC}")" reply < /dev/tty
-            reply="${reply:-Y}"
-        else
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [y/N]: ${NC}")" reply < /dev/tty
-            reply="${reply:-N}"
-        fi
+    if [[ "$default" == "Y" ]]; then
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [Y/n]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
+        reply="${reply:-Y}"
     else
-        reply="$default"
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [y/N]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
+        reply="${reply:-N}"
     fi
     [[ "$reply" =~ ^[yY]$ ]]
 }
@@ -517,11 +557,7 @@ prompt_choice() {
             render_menu
         done
     fi
-    if [ -e /dev/tty ]; then
-        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty 2>/dev/null || reply=""
-    else
-        reply=""
-    fi
+    read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
     echo "${reply:-$default}"
 }
 
@@ -663,6 +699,8 @@ preflight_run_user_docker_access() {
 # socket directories and workload data keep their owners, and the daemon brings the connectors over itself.
 grant_daemon_paths_to_run_user() {
     local path
+    # While a switch away from a non-root user waits for the daemon to stop, that user keeps what it owns.
+    [[ "$RUN_USER_SWITCH_PENDING" -eq 0 ]] || return 0
     if [[ "$RUN_USER" == "root" ]]; then
         return_paths_to_root /etc/docker-daemon /var/lib/docker-daemon "$DOCKER_DAEMON_OWN_DIR" "$DOCKER_REGISTRY_PROXY_TRUST_DIR"
         return
@@ -688,13 +726,57 @@ return_paths_to_root() {
     done
 }
 
-# A daemon that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
-# directory were written by that user, and no other user may run them.
+# A daemon that moves to another user says so. One that leaves a non-root user gets a new launcher: the launcher copies
+# in its state directory were written by that user, and no other user may run them. It is stopped for that, but as late
+# as possible (finish_run_user_switch, right before the new process starts), so the traffic it serves is not left without
+# a daemon while the installer downloads and prepares; the old process keeps running with what its user owns until then.
+# A node that enrolls again (a token) runs steps as the new user first, so its daemon is stopped at once.
+RUN_USER_SWITCH_PENDING=0
 prepare_run_user_switch() {
-    [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+    if [[ "$PREVIOUS_RUN_UID" == 0 ]]; then
+        [[ "$RUN_USER" == "root" || ! -d /etc/docker-daemon ]] || log "docker-daemon ran as root; switching it to ${RUN_USER}..."
+        return 0
+    fi
+    [[ "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
     log "docker-daemon ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}..."
+    if [[ "$EXISTING_ENROLLED" -eq 1 ]]; then
+        RUN_USER_SWITCH_PENDING=1
+        return 0
+    fi
     stop_daemon_service || die "Could not stop docker-daemon to switch its user."
     rm -rf /var/lib/docker-daemon/launcher
+}
+
+# systemd drops a unit's file descriptor store when the unit stops (not when it restarts), and the daemon that stops hands
+# its link sockets to that store for the next process. The store is kept for the switch, through the stop, the ownership
+# change and the start, so connections made meanwhile wait in the sockets' backlog instead of being reset.
+FD_STORE_HOLD=/run/systemd/system/docker-daemon.service.d/zz-run-user-switch.conf
+hold_fd_store() {
+    has_systemd || return 0
+    [[ -f /etc/systemd/system/docker-daemon.service ]] || return 0
+    install -d -m 0755 "$(dirname "$FD_STORE_HOLD")" || return 0
+    printf '[Service]\nFileDescriptorStorePreserve=yes\n' > "$FD_STORE_HOLD" || return 0
+    systemctl daemon-reload >>"$LOG_FILE" 2>&1 || true
+}
+
+release_fd_store_hold() {
+    [[ -f "$FD_STORE_HOLD" ]] || return 0
+    rm -f "$FD_STORE_HOLD"
+    rmdir "$(dirname "$FD_STORE_HOLD")" 2>/dev/null || true
+    systemctl daemon-reload >>"$LOG_FILE" 2>&1 || true
+}
+
+# The switch away from a non-root user: the old daemon is stopped only now (it hands its link sockets over while it still
+# owns its state), then the launcher copies it wrote are removed and everything it owned goes to the new user. The next
+# process starts right after, from start_daemon.
+finish_run_user_switch() {
+    [[ "$RUN_USER_SWITCH_PENDING" -eq 1 ]] || return 0
+    RUN_USER_SWITCH_PENDING=0
+    log "Stopping docker-daemon to switch its user..."
+    hold_fd_store
+    stop_daemon_service || { release_fd_store_hold; die "Could not stop docker-daemon to switch its user."; }
+    rm -rf /var/lib/docker-daemon/launcher
+    grant_daemon_paths_to_run_user
 }
 
 stop_daemon_service() {
@@ -859,6 +941,8 @@ show_daemon_log() {
     elif has_openrc; then
         err "Daemon log: /var/log/docker-daemon.err and /var/log/docker-daemon.log"
         tail -n 20 /var/log/docker-daemon.err /var/log/docker-daemon.log >&2 2>/dev/null || true
+        # A service supervise-daemon cannot start leaves its reason in the system log, not in the service's own logs.
+        grep -h 'supervise-daemon.*docker-daemon' /var/log/messages 2>/dev/null | tail -n 5 >&2 || true
     fi
 }
 
@@ -901,6 +985,8 @@ await_gateway_connection() {
     local enrollment_error
     if enrollment_error=$(gateway_session_enrollment_error); then
         err "docker-daemon could not enroll with Gateway: ${enrollment_error}"
+    elif ! daemon_service_running; then
+        err "docker-daemon is not running; the service manager could not keep it up. The log below shows why."
     else
         err "docker-daemon has not connected to Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
     fi
@@ -917,10 +1003,17 @@ launcher_pid_from_json() {
     printf '%s\n' "$pid"
 }
 
+# A launcher that exited but whose parent never reaps it (PID 1 of a container that does not) stays a zombie: kill -0
+# still succeeds for it, though it runs nothing. The state is the field after the command name in /proc/<pid>/stat,
+# which may itself contain ") ", so it is read after the last one (the same on busybox and Alpine).
 launcher_pid_is_live() {
-    local pid="${1:-}"
+    local pid="${1:-}" stat
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    kill -0 "$pid" 2>/dev/null
+    kill -0 "$pid" 2>/dev/null || return 1
+    [[ -r /proc/self/stat ]] || return 0
+    stat=$(cat "/proc/${pid}/stat" 2>/dev/null) || return 1
+    stat="${stat##*) }"
+    [[ "${stat:0:1}" != "Z" && "${stat:0:1}" != "X" ]]
 }
 
 launcher_child_is_ready() {
@@ -1651,6 +1744,7 @@ fi
 
 # ── Validate ─────────────────────────────────────────────────────────
 need_root
+[[ "$DRY_RUN" -eq 1 ]] || preflight_builder_host
 if [[ "$DRY_RUN" -eq 0 ]]; then
     LOG_FILE=$(mktemp /tmp/gateway_docker_setup.XXXXXX) || die "Could not create installer log file"
     chmod 600 "$LOG_FILE" || die "Could not secure installer log file"
@@ -1765,6 +1859,9 @@ fi
 if [[ "$DOCKER_MODE" == "builder" && "$RUN_USER" != "root" ]]; then
     die "Builder docker-daemon profile must run as root to manage its dedicated BuildKit/containerd runtime."
 fi
+if [[ ( "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ) && "$RUN_USER" != "root" ]]; then
+    die "Database docker-daemon profile must run as root."
+fi
 
 # ── Resolve run user/group ───────────────────────────────────────────
 RUN_GROUP=""
@@ -1813,7 +1910,6 @@ summary_end
 
 if ! prompt_yes_no "Proceed with installation?" "Y"; then
     complete_incomplete
-    exit 0
 fi
 guide_blank
 
@@ -1968,6 +2064,7 @@ fi
 
 ensure_docker_installed
 preflight_database_docker
+preflight_docker_cgroup_controllers
 ensure_builder_system_packages
 
 if [[ "$RUN_USER" != "root" ]]; then
@@ -2278,13 +2375,11 @@ setup_secure_runtime() {
             ;;
     esac
 
-    [[ "$SECURE_RUNTIME" != "1" ]] || die "Secure Runtime is not installed on this node."
-    local continue_default="N"
-    [[ "$NON_INTERACTIVE" -eq 1 ]] && continue_default="Y"
-    if ! prompt_yes_no "Continue without Secure Runtimes?" "$continue_default"; then
-        complete_incomplete
-        exit 0
-    fi
+    # Secure Runtime is optional. The reason it is missing is the node's own: its capabilities report the same one.
+    local reason
+    reason=$("$target" runtime preflight runsc --plain 2>/dev/null | sed -n 1p | awk -F'\t' '{ print ($3 != "" ? $3 : $2) }' || true)
+    [[ "$SECURE_RUNTIME" != "1" ]] || die "Secure Runtime is not installed on this node${reason:+: ${reason}}."
+    warn "Continuing without Secure Runtime${reason:+ (${reason})}. The node reports the same reason in its capabilities."
 }
 
 write_database_profile_config() {
@@ -2560,7 +2655,8 @@ UNIT
         systemctl daemon-reload >> "$LOG_FILE" 2>&1 || die "systemd daemon-reload failed."
         systemctl enable docker-daemon >> "$LOG_FILE" 2>&1 || die "Could not enable docker-daemon."
         forget_gateway_session
-        systemctl restart docker-daemon >> "$LOG_FILE" 2>&1 || fail_daemon_start "Could not start docker-daemon."
+        systemctl restart docker-daemon >> "$LOG_FILE" 2>&1 || { release_fd_store_hold; fail_daemon_start "Could not start docker-daemon."; }
+        release_fd_store_hold
     elif has_openrc; then
         local openrc_need="net docker"
         [[ "$DOCKER_MODE" != "builder" ]] || openrc_need="net"
@@ -2579,6 +2675,13 @@ error_log="/var/log/docker-daemon.err"
 
 depend() {
     need ${openrc_need}
+}
+
+# supervise-daemon opens the log files after it drops to the service user; a file left by another user (or by root
+# before the daemon switched users) would fail it with EACCES, so root hands them over first.
+start_pre() {
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/docker-daemon.log
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/docker-daemon.err
 }
 UNIT
         chmod +x /etc/init.d/docker-daemon || die "Could not make the docker-daemon OpenRC service executable."
@@ -2610,6 +2713,7 @@ write_database_profile_config
 write_builder_profile_config
 apply_host_access_config /etc/docker-daemon/config.yaml
 start_lease_watchdog
+finish_run_user_switch
 start_daemon
 # An install whose daemon does not run or did not connect to Gateway is not done.
 if ! await_gateway_connection; then
