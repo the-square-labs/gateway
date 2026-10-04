@@ -12,6 +12,13 @@ export interface ContainerLinkTargetBinding {
   targetContainer: string;
   targetPort: number;
   allowNetworkReselection: boolean;
+  /**
+   * A target placement of an Availability workload in lease mode: sent dormant and gated like a proxy Secure Link
+   * member, so its node binds it only while the placement holds the data-plane lease (a standby gets no traffic).
+   */
+  dormant?: boolean;
+  availabilityPolicyId?: string;
+  availabilityCandidateId?: string;
 }
 
 export interface ContainerLinkTargetStatus {

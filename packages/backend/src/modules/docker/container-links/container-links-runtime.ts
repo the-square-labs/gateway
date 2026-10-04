@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import {
   containerLinkPlacements,
   containerLinks,
+  dockerAvailabilityLeaseState,
   dockerAvailabilityPlacements,
   dockerAvailabilityPolicies,
   dockerDeploymentRoutes,
@@ -32,6 +33,7 @@ export const containerLinksRuntime = {
   sql,
   containerLinks,
   containerLinkPlacements,
+  dockerAvailabilityLeaseState,
   dockerAvailabilityPlacements,
   dockerAvailabilityPolicies,
   dockerDeploymentRoutes,

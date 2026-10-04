@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  containerLinkPlacements,
   dockerAvailabilityLeaseState,
   dockerAvailabilityPlacements,
   managedDatabaseBindingPlacements,
@@ -22,9 +23,10 @@ export interface RelayLeasePolicyIds {
 
 /**
  * Which relay endpoints and routes the relay must admit only through its lease gate (A2.4, A8, A11): the Secure
- * Link endpoints of every Availability member (serving or dormant) and the managed-database binding routes of every
- * placement, for policies in lease mode only. Bootstrapping keeps legacy admission so the legacy serving copy keeps
- * its registration until its first commit; closing and legacy clear the field.
+ * Link endpoints of every Availability member (serving or dormant), the container link endpoints of every target
+ * placement, and the managed-database binding routes of every placement, for policies in lease mode only.
+ * Bootstrapping keeps legacy admission so the legacy serving copy keeps its registration until its first commit;
+ * closing and legacy clear the field.
  */
 export async function relayLeasePolicyIds(
   db: DrizzleClient,
@@ -34,7 +36,8 @@ export async function relayLeasePolicyIds(
   const result: RelayLeasePolicyIds = { endpoints: new Map(), routes: new Map() };
   const linkIds = endpoints.filter((endpoint) => endpoint.ownerKind === 'proxy_host_secure_link').map((e) => e.ownerId);
   const projectionIds = routes.filter((route) => route.ownerKind === 'managed_database_binding').map((r) => r.ownerId);
-  if (linkIds.length === 0 && projectionIds.length === 0) return result;
+  const targetIds = endpoints.filter((endpoint) => endpoint.ownerKind === 'container_link').map((e) => e.ownerId);
+  if (linkIds.length === 0 && projectionIds.length === 0 && targetIds.length === 0) return result;
   const leasePolicies = new Set(
     (
       await db
@@ -45,7 +48,7 @@ export async function relayLeasePolicyIds(
   );
   if (leasePolicies.size === 0) return result;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const [members, projections] = await Promise.all([
+  const [members, projections, targets] = await Promise.all([
     linkIds.some((id) => uuid.test(id))
       ? db
           .select({ ownerId: proxyAdditionalSecureLinks.id, policyId: dockerAvailabilityPlacements.policyId })
@@ -82,11 +85,37 @@ export async function relayLeasePolicyIds(
             )
           )
       : [],
+    // A container link reaches an Availability target through one endpoint per target placement; the link's own
+    // endpoint (a single-node target) is not a placement and stays ungated.
+    targetIds.some((id) => uuid.test(id))
+      ? db
+          .select({ ownerId: containerLinkPlacements.id, policyId: dockerAvailabilityPlacements.policyId })
+          .from(containerLinkPlacements)
+          .innerJoin(
+            dockerAvailabilityPlacements,
+            eq(dockerAvailabilityPlacements.id, containerLinkPlacements.availabilityPlacementId)
+          )
+          .where(
+            and(
+              eq(containerLinkPlacements.role, 'target'),
+              inArray(
+                containerLinkPlacements.id,
+                targetIds.filter((id) => uuid.test(id))
+              )
+            )
+          )
+      : [],
   ]);
   const memberPolicy = new Map(members.map((row) => [row.ownerId, row.policyId]));
+  for (const row of targets) memberPolicy.set(`container_link:${row.ownerId}`, row.policyId);
   const projectionPolicy = new Map(projections.map((row) => [row.ownerId, row.policyId]));
   for (const endpoint of endpoints) {
-    const policyId = endpoint.ownerKind === 'proxy_host_secure_link' ? memberPolicy.get(endpoint.ownerId) : undefined;
+    const policyId =
+      endpoint.ownerKind === 'proxy_host_secure_link'
+        ? memberPolicy.get(endpoint.ownerId)
+        : endpoint.ownerKind === 'container_link'
+          ? memberPolicy.get(`container_link:${endpoint.ownerId}`)
+          : undefined;
     if (policyId && leasePolicies.has(policyId)) result.endpoints.set(endpoint.id, policyId);
   }
   for (const route of routes) {
