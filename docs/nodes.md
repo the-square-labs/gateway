@@ -149,6 +149,8 @@ Secure Runtime requires:
 - the Docker CLI and a Docker service that the installer can restart;
 - root privileges for installation.
 
+Installation registers `runsc` in `/etc/docker/daemon.json` and restarts Docker. In an existing file only `runtimes.runsc` is added or updated; every other key and value stays exactly as written, and the original file is saved once as `/etc/docker/daemon.json.gateway-backup` before the first change. A file that already registers this `runsc` is not rewritten.
+
 KVM is not required. A compatible LXC guest can use Secure Runtime when nested Docker, service management, and the required host capabilities are available; LXC compatibility is therefore host-configuration dependent rather than universal.
 
 Gateway advertises Secure as available only after `runsc` is installed, configured in Docker, and passes consecutive Docker smoke tests. Secure workload creation fails closed while that status is unknown, unhealthy, installing, or unsupported.
@@ -312,7 +314,7 @@ Gateway also renews its own gRPC, web, and local relay certificates while runnin
 
 If Gateway is behind Cloudflare for the UI/API, configure Gateway's public gRPC target as a direct `9443/tcp` endpoint. A Cloudflare-proxied web hostname must not be selected unless it explicitly routes the Gateway gRPC port. Generated commands use the configured target, so normal enrollment does not require replacing the address by hand.
 
-Daemons report local and detected public IP addresses in their health data. For Docker nodes, Gateway uses an explicitly configured service address first, then the first reported local address, then a reported public address when proxy Docker upstreams or cross-node workflows need to reach the host. Configure the service address on the node detail page when automatic selection is not routable from the other managed hosts.
+Daemons report local and detected public IP addresses in their health data. For Docker nodes, Gateway uses an explicitly configured service address first, then the first reported local address, then a reported public address for the endpoints other hosts and clients connect to directly: managed database links and published storage. Proxy routes to Docker containers, deployments, and Compose services do not use it: they always reach the workload through a Secure Link, without a host port. Configure the service address on the node detail page when automatic selection is not routable from the hosts or clients that use those endpoints.
 
 ## Daemon Configuration
 
@@ -343,7 +345,7 @@ nginx:
 
 console:
   enabled: true  # host console; false turns it off on this node
-  user: ""       # OS user for console sessions; empty = daemon's user
+  user: ""       # OS user for console sessions; empty = daemon's user; another user needs a root daemon
 
 files:
   enabled: true  # host file access; false turns it off on this node
@@ -371,6 +373,8 @@ Docker container consoles and container files are not affected: they reach into 
 **To remove host access, disable both.** Turning off only the console is not a boundary: the daemon usually runs as root, and writing files as that user can still change the host and run code — systemd units, cron jobs, `authorized_keys`, or this config file itself to turn the console back on at the next restart. The node page shows a warning while the console is off and file access is on.
 
 The node setup dialogs offer **Disable host console** and **Disable host files** checkboxes that add these flags to the generated command. Nodes ordered through a hosting provider are installed by Gateway itself with a pinned installer revision; turn the switches off on those nodes by editing the config file.
+
+`console.user` runs console sessions and one-shot commands as another OS user. Only a daemon running as root can start processes as another user. A daemon that runs as its own user (`--user`) and names another user in `console.user` logs an error at startup, reports it when it connects, and refuses every console session. Gateway refuses those requests with `409 NODE_CONSOLE_USER_UNAVAILABLE`, and the node page names the fix: remove `console.user` or run the daemon as root. Sessions start in the user's home directory, or in `/` when the user has none (for example a system user created with `--no-create-home`).
 
 ## Daemon Updates
 

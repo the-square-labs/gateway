@@ -3,6 +3,7 @@ import type { Node } from "@/types";
 import {
   DEFAULT_HOST_ACCESS_INSTALL_OPTIONS,
   isNodeHostFeatureDisabled,
+  nodeConsoleUnavailableMessage,
   nodeHostFeatureDisabledMessage,
   nodeHostFileAccessWarning,
   withHostAccessInstallFlags,
@@ -55,5 +56,19 @@ describe("node host access", () => {
     expect(nodeHostFeatureDisabledMessage(node("bastion", {}), "files")).toContain(
       "set files.enabled: true in the daemon config file on the node"
     );
+  });
+
+  it("explains a console the daemon refuses because console.user needs root", () => {
+    expect(nodeConsoleUnavailableMessage(node("nginx", {}))).toBeNull();
+    expect(nodeConsoleUnavailableMessage(node("nginx", { nodeConsoleDisabled: true }))).toContain(
+      "set console.enabled: true"
+    );
+    const userUnavailable = node("nginx", { nodeConsoleUserUnavailable: true });
+    expect(nodeConsoleUnavailableMessage(userUnavailable)).toBe(
+      "The daemon config sets console.user to another user, but the daemon does not run as root and cannot start console sessions as that user. Remove console.user from the daemon config (/etc/nginx-daemon/config.yaml) on the node, or run the daemon as root, and restart the daemon."
+    );
+    const marker = node("monitoring", { capabilities: ["node_console_user_unavailable_v1"] });
+    expect(nodeConsoleUnavailableMessage(marker)).toContain("/etc/monitoring-daemon/config.yaml");
+    expect(isNodeHostFeatureDisabled(userUnavailable, "console")).toBe(false);
   });
 });

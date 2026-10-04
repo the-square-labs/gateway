@@ -47,6 +47,9 @@ type DaemonBase struct {
 	// command, i.e. accepted the registration. Only the Run loop reads it.
 	sessionReceivedCommand bool
 	prepareShutdownOnce    sync.Once
+	// consoleUserRefusal is set at startup when console.user names a user
+	// this daemon cannot switch to; console sessions are refused with it.
+	consoleUserRefusal string
 }
 
 // NewDaemonBase creates a new DaemonBase with the given plugin.
@@ -73,6 +76,7 @@ func NewDaemonBase(cfg *BaseConfig, cfgPath string, plugin DaemonPlugin, logger 
 		baseHandler:           logger.Handler(), // original handler without startup buffer
 		tunnelIdentityChanged: make(chan struct{}, 1),
 		controlReconnect:      make(chan struct{}, 1),
+		consoleUserRefusal:    checkConsoleUser(cfg, startupLogger),
 	}, nil
 }
 

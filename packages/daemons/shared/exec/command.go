@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	osexec "os/exec"
-	"os/user"
-	"syscall"
 )
 
 type CommandResult struct {
@@ -61,16 +59,8 @@ func RunCommand(ctx context.Context, command []string, runAsUser string, maxOutp
 	cmd := osexec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.Env = os.Environ()
 
-	if runAsUser != "" {
-		cred, credErr := lookupUserCredential(runAsUser)
-		if credErr != nil {
-			return CommandResult{}, fmt.Errorf("cannot run as user %q: %w", runAsUser, credErr)
-		}
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred}
-		if u, lookupErr := user.Lookup(runAsUser); lookupErr == nil && u != nil {
-			cmd.Dir = u.HomeDir
-			cmd.Env = append(cmd.Env, "HOME="+u.HomeDir, "USER="+runAsUser)
-		}
+	if err := applyRunAsUser(cmd, runAsUser); err != nil {
+		return CommandResult{}, err
 	}
 
 	stdout := &limitedBuffer{limit: maxOutputBytes}

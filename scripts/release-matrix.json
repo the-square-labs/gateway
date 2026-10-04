@@ -85,7 +85,7 @@
       ]
     },
     "node.console-as-user": {
-      "description": "The node console runs as the daemon's user, or as console.user when it is set.",
+      "description": "The node console runs as the daemon's user, or, on a root daemon, as console.user when it is set (in / when that user has no home); a non-root daemon refuses another console.user with the reason.",
       "doc": "docs/nodes.md#daemon-configuration",
       "os": [
         "debian"
@@ -161,7 +161,7 @@
       "os": []
     },
     "node.service-address": {
-      "description": "An explicit Docker service address on the node page is used for proxy upstreams and cross-node traffic.",
+      "description": "An explicit Docker service address on the node page is the endpoint of managed database links and published storage; proxy routes to Docker workloads go through a Secure Link and do not use it.",
       "doc": "docs/nodes.md#relay-nodes",
       "os": [
         "debian"
@@ -241,7 +241,7 @@
       ]
     },
     "docker.existing-engine": {
-      "description": "An existing distribution Docker Engine (docker.io) and its daemon.json are kept.",
+      "description": "An existing distribution Docker Engine (docker.io) and its daemon.json are kept; Secure Runtime only adds runtimes.runsc to daemon.json, after a backup.",
       "doc": "docs/operations.md#container-log-limits",
       "os": [
         "ubuntu"
@@ -355,7 +355,7 @@
       ]
     },
     "builder.egress": {
-      "description": "Build Worker egress internet (public downloads, private and control-plane ranges blocked) and offline.",
+      "description": "Build Worker egress internet (public downloads, private and control-plane ranges and the worker host itself blocked) and offline.",
       "doc": "docs/installation.md#build-worker-requirements",
       "os": [
         "debian"
@@ -1910,7 +1910,7 @@
       ],
       "expect": [
         "Git and iptables are installed with apt; containerd, BuildKit, runc, CNI, Syft and Grype are downloaded and checksum-verified into /opt/gateway-builder/bin; gateway-builder-egress, gateway-builder-containerd and gateway-builder-buildkit units run; connected with every builder capability.",
-        "internet: both builds succeed; a build step reaching a private address or the Gateway gRPC endpoint fails.",
+        "internet: both builds succeed; a build step reaching a private address, the worker host (its own addresses and the build bridge gateway) or the Gateway gRPC endpoint fails.",
         "offline: the npm build fails at the download, the offline build succeeds.",
         "After re-run, restart and reboot the worker takes builds again."
       ]
@@ -2092,7 +2092,7 @@
         "Read the kernel log for AppArmor denials."
       ],
       "expect": [
-        "docker.io is kept (no docker-ce) and the existing daemon.json is untouched; connected.",
+        "docker.io is kept (no docker-ce); the existing daemon.json keeps every key and value of the operator, --secure-runtime only adds runtimes.runsc after saving the original as daemon.json.gateway-backup, and a re-run changes neither file; connected.",
         "--secure-runtime either installs runsc and Node Details shows Secure Runtime healthy, or exits 1 with the preflight reason and leaves the daemon running; it never reports success without runsc.",
         "Recreate keeps the container's configuration; names resolve inside containers through the resolved upstream; the registry pull succeeds.",
         "Non-root: connected as gwdock; connectors and workloads start with the docker-default profile; the route answers 200; no AppArmor denial for docker-daemon, its connectors or nginx."
@@ -2116,7 +2116,7 @@
         "Install a Build Worker with the default egress; force the build on it."
       ],
       "expect": [
-        "The build resolves and downloads its dependencies and succeeds; the egress policy still blocks private ranges."
+        "The build resolves and downloads its dependencies and succeeds; the egress policy still blocks private ranges and the worker host itself."
       ]
     },
     {
@@ -2161,12 +2161,12 @@
       "steps": [
         "Re-run each installer with --disable-console --disable-files; open the console and Files of each node and call execute_node_console_command over MCP.",
         "Re-run each installer without the flags.",
-        "Set files.enabled: true only and restart; then set both true, set console.user: gwsvc2 on the nginx node and restart."
+        "Set files.enabled: true only and restart; then set both true, set console.user: gwsvc2 on the nginx node (daemon as www-data) and on a root docker node, and restart both."
       ],
       "expect": [
         "Console: auth_error NODE_CONSOLE_DISABLED with the config hint; Files and the file API: 409 NODE_FILES_DISABLED; MCP returns NODE_CONSOLE_DISABLED; the node shows nodeConsoleDisabled/nodeFilesDisabled.",
         "The re-run keeps both false.",
-        "Console off and files on shows the warning notice; with both on the console works and nginx console sessions run as gwsvc2; config ownership and mode are unchanged."
+        "Console off and files on shows the warning notice; with both on the console works. console.user on the nginx node: one startup error in the daemon log, the node page says console.user needs a root daemon, and the console and MCP return NODE_CONSOLE_USER_UNAVAILABLE; on the root docker node console sessions run as gwsvc2 in / (it has no home). Config ownership and mode are unchanged."
       ]
     },
     {
@@ -2222,13 +2222,13 @@
         "feature node.service-address"
       ],
       "preconditions": [
-        "A docker node with two addresses; a route to a published container port on it."
+        "A docker node with two addresses that hosts a managed database with a link, or published managed storage; a route to a container on the same node."
       ],
       "steps": [
-        "Set the service address on the node page to the second address; recreate the container."
+        "Set the service address on the node page to the second address; read the database link (or published storage) endpoint and connect a client to it; read the route's rendered config; then clear the service address."
       ],
       "expect": [
-        "The route's upstream uses the configured address and answers 200."
+        "The database link (or published storage) endpoint uses the configured address and the client connects through it; after clearing, it moves back to the first reported local address. The route's upstream stays its Secure Link socket and answers 200 either way."
       ]
     },
     {

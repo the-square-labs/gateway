@@ -25,6 +25,7 @@ const (
 	DefaultTasksLimit          = int64(2048)
 	DefaultEgressProfile       = "internet"
 	BuilderNetworkSubnet       = "10.203.0.0/24"
+	BuilderBridgeName          = "gateway-builds0"
 	buildkitSocketDirectory    = "/run/gateway-builder/buildkit"
 	containerdSocketDirectory  = "/run/gateway-builder/containerd"
 )
