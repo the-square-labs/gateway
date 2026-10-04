@@ -1,6 +1,7 @@
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerBuilds, dockerRegistryNodeBindings } from '@/db/schema/index.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import type { EventBusService } from './event-bus.service.js';
@@ -14,22 +15,27 @@ const TOKEN_REFRESH_MS = 15_000;
  * their own command timeouts; this bound keeps a sync stuck anywhere else from holding the node's queue, and so every
  * later binding of that node, for good (stand rc.10, S6: a rollout waited on the target node's binding forever).
  */
-const NODE_SYNC_TIMEOUT_MS = 120_000;
+const NODE_SYNC_TIMEOUT_MS = 90_000;
 const REPOSITORY_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 
 type RegistryBindingRole = 'builder' | 'runtime' | 'mirror';
 type RegistryBindingContext = 'build' | 'container' | 'deployment' | 'compose_project' | 'availability';
 
+const logger = createChildLogger('RelayRegistryService');
+
 function withinNodeSyncBound(sync: Promise<void>, nodeId: string): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new Error(`Internal registry sync of node ${nodeId} did not finish within ${NODE_SYNC_TIMEOUT_MS / 1000} s`)
-        ),
-      NODE_SYNC_TIMEOUT_MS
-    );
+    timer = setTimeout(() => {
+      // The daemon answered none of the sync's commands in time (its command loop busy, or the commands lost).
+      logger.warn('Internal registry sync of a node is given up; the next sync starts', {
+        nodeId,
+        boundSeconds: NODE_SYNC_TIMEOUT_MS / 1000,
+      });
+      reject(
+        new Error(`Internal registry sync of node ${nodeId} did not finish within ${NODE_SYNC_TIMEOUT_MS / 1000} s`)
+      );
+    }, NODE_SYNC_TIMEOUT_MS);
     timer.unref?.();
   });
   // A sync given up on still ends on its own; its outcome is no longer awaited.
@@ -131,6 +137,50 @@ export class RelayRegistryService {
       .where(eq(dockerRegistryNodeBindings.id, binding.id));
     await this.relayPolicy.revokeOwner('registry_secure_link', binding.id, { allowDeferredSnapshot: true });
     await this.syncNode(binding.nodeId);
+  }
+
+  /**
+   * Revokes the context's active bindings for repositories it no longer uses (an Availability policy keeps the ones
+   * its pinned images live in): each rollout binds a new repository on every node, and the bindings of earlier ones
+   * stayed active, so every sync of the node carried all of them (stand: 19 and 35 per node). Returns the count.
+   */
+  async retainContextBindings(input: {
+    contextKind: RegistryBindingContext;
+    contextId: string;
+    repositories: readonly string[];
+  }): Promise<number> {
+    const keep = new Set(input.repositories);
+    const active = await this.db
+      .select()
+      .from(dockerRegistryNodeBindings)
+      .where(
+        and(
+          eq(dockerRegistryNodeBindings.contextKind, input.contextKind),
+          eq(dockerRegistryNodeBindings.contextId, input.contextId),
+          eq(dockerRegistryNodeBindings.status, 'active')
+        )
+      );
+    const stale = active.filter((binding) => !keep.has(binding.repository));
+    if (stale.length === 0) return 0;
+    await this.db
+      .update(dockerRegistryNodeBindings)
+      .set({ status: 'revoked', generation: sql`${dockerRegistryNodeBindings.generation} + 1`, updatedAt: new Date() })
+      .where(
+        and(
+          inArray(
+            dockerRegistryNodeBindings.id,
+            stale.map(({ id }) => id)
+          ),
+          eq(dockerRegistryNodeBindings.status, 'active')
+        )
+      );
+    for (const binding of stale) {
+      await this.relayPolicy.revokeOwner('registry_secure_link', binding.id, { allowDeferredSnapshot: true });
+    }
+    for (const nodeId of new Set(stale.map(({ nodeId }) => nodeId))) {
+      await this.syncNode(nodeId).catch(() => undefined);
+    }
+    return stale.length;
   }
 
   async revokeContextBinding(input: {

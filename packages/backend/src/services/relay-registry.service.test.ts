@@ -126,8 +126,8 @@ describe('registry binding sync across a Gateway restart (S6)', () => {
     try {
       const { relayRegistry, dispatch } = hanging();
       const stuck = relayRegistry.syncNode('node-2');
-      const settled = expect(stuck).rejects.toThrow(/did not finish within 120 s/);
-      await vi.advanceTimersByTimeAsync(120_000);
+      const settled = expect(stuck).rejects.toThrow(/did not finish within 90 s/);
+      await vi.advanceTimersByTimeAsync(90_000);
       await settled;
 
       await relayRegistry.syncNode('node-2');
@@ -135,5 +135,46 @@ describe('registry binding sync across a Gateway restart (S6)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('registry bindings of earlier Availability images', () => {
+  it('revokes the context bindings of repositories no pinned image uses and syncs each node once', async () => {
+    const rows = [
+      { ...binding('old-1', 'runtime', 'gateway/availability/policy-1/1/12', ['pull']), nodeId: 'node-1' },
+      { ...binding('old-2', 'runtime', 'gateway/availability/policy-1/1/12', ['pull']), nodeId: 'node-2' },
+      { ...binding('kept', 'runtime', 'gateway/availability/policy-1/1/14', ['pull']), nodeId: 'node-2' },
+    ];
+    const revokedIds: unknown[] = [];
+    const db = {
+      select: () => ({ from: () => ({ where: async () => rows }) }),
+      update: () => ({
+        set: () => ({
+          where: async () => {
+            revokedIds.push('update');
+          },
+        }),
+      }),
+    };
+    const relayPolicy = {
+      ensureInternalRegistryRoutes: vi.fn(async () => undefined),
+      revokeOwner: vi.fn(async (_kind: string, _id: string, _options?: unknown) => undefined),
+    };
+    const relayRegistry = new RelayRegistryService(db as never, relayPolicy as never, {} as never, {} as never);
+    const synced: string[] = [];
+    vi.spyOn(relayRegistry, 'syncNode').mockImplementation(async (nodeId: string) => {
+      synced.push(nodeId);
+    });
+
+    await expect(
+      relayRegistry.retainContextBindings({
+        contextKind: 'availability',
+        contextId: 'policy-1',
+        repositories: ['gateway/availability/policy-1/1/14'],
+      })
+    ).resolves.toBe(2);
+
+    expect(relayPolicy.revokeOwner.mock.calls.map(([, id]) => id)).toEqual(['old-1', 'old-2']);
+    expect(synced.sort()).toEqual(['node-1', 'node-2']);
   });
 });
