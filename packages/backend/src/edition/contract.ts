@@ -34,6 +34,8 @@ import type {
   DockerAvailabilitySetup,
   dockerAvailabilityCommercialRuntime,
 } from '@/modules/docker/availability/docker-availability-commercial-runtime.js';
+import type { ContainerLinksService } from '@/modules/docker/container-links/container-links.service.js';
+import type { containerLinksRuntime } from '@/modules/docker/container-links/container-links-runtime.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import type {
   DockerArchiveOperations,
@@ -242,6 +244,11 @@ export interface CommercialRegistration {
     args: ConstructorParameters<ManagedStorageConstructors[Key]>,
     runtime: typeof managedStorageRuntime
   ): InstanceType<ManagedStorageConstructors[Key]>;
+  /** Optional: cores older than container links omit it. */
+  createContainerLinks?(
+    args: ConstructorParameters<typeof ContainerLinksService>,
+    runtime: typeof containerLinksRuntime
+  ): ContainerLinksService;
   executeDatabaseTool?(
     context: DatabaseToolContext,
     user: User,

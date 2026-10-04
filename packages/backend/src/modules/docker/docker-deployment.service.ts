@@ -218,6 +218,28 @@ export class DockerDeploymentService {
   async managedBindingNetworkApplied(_nodeId: string, _deploymentId: string, _networkName: string): Promise<boolean> {
     return commercialModuleUnavailable();
   }
+  /** Rolls a serving deployment out so its new slot reaches its database links the way they are served now (D9). */
+  async rolloutForLinkTransport(_nodeId: string, _deploymentId: string, _userId: string | null): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  /**
+   * Saves (or drops) a container link network in the deployment. Without `rollout` its running slots join (leave) it
+   * live; with it (the link sets variables) the deployment rolls out like for a managed link.
+   */
+  async setContainerLinkNetwork(
+    _nodeId: string,
+    _deploymentId: string,
+    _networkName: string,
+    _enabled: boolean,
+    _userId: string | null,
+    _options?: { rollout?: boolean; forceRollout?: boolean }
+  ): Promise<
+    DockerDeploymentDetail & {
+      bindingRolloutPending: boolean;
+    }
+  > {
+    return commercialModuleUnavailable();
+  }
   async deploy(
     _nodeId: string,
     _deploymentId: string,

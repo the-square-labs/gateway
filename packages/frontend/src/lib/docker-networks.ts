@@ -2,12 +2,16 @@
 const GATEWAY_STORAGE_NETWORK =
   /^gateway-storage-(?:[0-9a-f]{16}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
 
-/** Mirrors the backend: Secure Links, managed database and managed storage networks. */
+/** A container link network (`gateway-link-<16 hex>`). */
+const GATEWAY_LINK_NETWORK = /^gateway-link-[0-9a-f]{16}$/;
+
+/** Mirrors the backend: Secure Links, managed database, managed storage and container link networks. */
 export function isGatewayManagedDockerNetwork(name: string) {
   return (
     name === "gateway-secure-links" ||
     name.startsWith("gateway-db-") ||
-    GATEWAY_STORAGE_NETWORK.test(name)
+    GATEWAY_STORAGE_NETWORK.test(name) ||
+    GATEWAY_LINK_NETWORK.test(name)
   );
 }
 

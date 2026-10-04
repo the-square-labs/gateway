@@ -621,6 +621,30 @@ export class DockerComposeService {
   } | null> {
     return commercialModuleUnavailable();
   }
+  /**
+   * A new revision with (or without) a container link on one service: its external link network and the variables the
+   * link sets (as project secrets). Null when the link is saved pending (no revision yet, or an operation holds it).
+   */
+  async applyContainerLink(
+    _nodeId: string,
+    _targetResourceId: string,
+    _linkId: string,
+    _networkName: string,
+    _environment: Record<string, string>,
+    _userId: string
+  ): Promise<{ id: string } | null> {
+    return commercialModuleUnavailable();
+  }
+  async removeContainerLink(
+    _nodeId: string,
+    _targetResourceId: string,
+    _linkId: string,
+    _networkName: string,
+    _environment: Record<string, string>,
+    _userId: string
+  ): Promise<{ id: string } | null> {
+    return commercialModuleUnavailable();
+  }
   async moveManagedDatabaseBindingNetwork(
     _nodeId: string,
     _targetResourceId: string,

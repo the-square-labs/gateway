@@ -26,6 +26,8 @@ import type {
   DockerAvailabilitySetup,
   dockerAvailabilityCommercialRuntime,
 } from '@/modules/docker/availability/docker-availability-commercial-runtime.js';
+import type { ContainerLinksService } from '@/modules/docker/container-links/container-links.service.js';
+import type { containerLinksRuntime } from '@/modules/docker/container-links/container-links-runtime.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import type {
   DockerArchiveOperations,
@@ -354,6 +356,13 @@ export class CommercialEditionRuntime {
       this.registration.createManagedStorage?.(key, args, runtime) ??
       (Reflect.construct(runtime.constructors[key], args) as InstanceType<ManagedStorageConstructors[Key]>)
     );
+  }
+
+  createContainerLinks(
+    args: ConstructorParameters<typeof ContainerLinksService>,
+    runtime: typeof containerLinksRuntime
+  ): ContainerLinksService {
+    return this.registration.createContainerLinks?.(args, runtime) ?? new runtime.ContainerLinksService(...args);
   }
 
   createDatabaseMonitoring(

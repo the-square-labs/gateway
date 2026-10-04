@@ -51,6 +51,8 @@ export class ManagedDatabaseBindingService {
           | 'syncNodeGrantBundle'
           | 'probeManagedDatabaseBindingRoute'
           | 'revokeOwner'
+          | 'awaitSecureLinkEgress'
+          | 'setLinkRouteTransport'
         > &
           Partial<Pick<RelayPolicyService, 'getManagedDatabaseBindingRouteRuntime'>>)
       | undefined,

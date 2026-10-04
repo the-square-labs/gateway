@@ -31,6 +31,10 @@ export class ManagedStorageBindingsService {
           | 'revokeOwner'
           | 'revokeStorageBindingRoute'
           | 'syncNodeGrants'
+          | 'setLinkRouteTransport'
+          | 'getLinkRouteTransport'
+          | 'awaitSecureLinkEgress'
+          | 'probeLinkRoute'
         >
       | undefined,
     _storageCA?: import('@/services/storage-ca.service.js').StorageCAService | undefined,

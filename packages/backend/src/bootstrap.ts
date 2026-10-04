@@ -69,6 +69,8 @@ import { DockerWorkloadResolverService } from '@/modules/docker/availability/doc
 import { AvailabilityLeaseService } from '@/modules/docker/availability/lease/availability-lease.service.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerComposeNodeDispatcher } from '@/modules/docker/compose/compose-node-dispatcher.js';
+import { ContainerLinksService } from '@/modules/docker/container-links/container-links.service.js';
+import { containerLinksRuntime } from '@/modules/docker/container-links/container-links-runtime.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
@@ -1280,9 +1282,11 @@ export async function initializeContainer(): Promise<void> {
   managedStorageBindingsService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(ManagedStorageBindingsService, managedStorageBindingsService);
   // A removed container, or a free name a new container takes, releases the links saved for that name.
+  let containerLinksService: ContainerLinksService | undefined;
   dockerManagementService.setManagedLinkReleaseHandler(async (nodeId, containerName, userId) => {
     await managedDatabaseBindingService.releaseContainerLinks(nodeId, containerName, userId);
     await managedStorageBindingsService.releaseContainerLinks(nodeId, containerName, userId);
+    await containerLinksService?.releaseContainerLinks(nodeId, containerName, userId);
   });
   // Bindings own containers, networks and relay routes that the cluster's own
   // delete path knows nothing about; the FK cascade would drop only their rows.
@@ -1319,6 +1323,25 @@ export async function initializeContainer(): Promise<void> {
   proxySecureLinkService?.setEventBus(eventBus);
   if (proxySecureLinkService) managedDatabaseBindingService.setTargetRuntimeReconciler(proxySecureLinkService);
   if (proxySecureLinkService) container.registerInstance(ProxySecureLinkService, proxySecureLinkService);
+  // Connector egress assignments carry the shared connector image for nodes without a proxy Secure Link binding.
+  relayPolicyService?.setSecureLinkConnectorImage(getEnv().SECURE_LINK_CONNECTOR_IMAGE);
+  containerLinksService = commercialEdition.createContainerLinks(
+    [
+      db,
+      auditService,
+      nodeDispatch,
+      dockerManagementService,
+      dockerDeploymentService,
+      dockerSecretService,
+      relayPolicyService,
+      dockerComposeService,
+      proxySecureLinkService,
+    ],
+    containerLinksRuntime
+  );
+  containerLinksService.setEventBus(eventBus);
+  containerLinksService.setLicensePolicyService(licensePolicyService);
+  container.registerInstance(ContainerLinksService, containerLinksService);
   const proxyMaintenanceAccessService = new ProxyMaintenanceAccessService(
     db,
     cacheService,
@@ -1947,8 +1970,10 @@ export async function initializeContainer(): Promise<void> {
         relayDockerRecovery.setExpectedImage(imageRef);
         relaySupervisor.setExpectedArtifact(imageRef, buildVersion, protocolMajor);
       },
-      updateSecureLinkConnectorImage: (imageRef) =>
-        proxySecureLinkService?.updateConnectorImage(imageRef) ?? Promise.resolve(),
+      updateSecureLinkConnectorImage: (imageRef) => {
+        relayPolicyService?.setSecureLinkConnectorImage(imageRef);
+        return proxySecureLinkService?.updateConnectorImage(imageRef) ?? Promise.resolve();
+      },
       probeNow: () => relaySupervisor.probeNow(),
     },
     generalSettingsService

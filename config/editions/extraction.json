@@ -343,6 +343,16 @@
       "typeOnlyProperties": true
     },
     {
+      "path": "modules/docker/container-links/container-links.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "releaseContainerLinks"
+      ],
+      "emptyConstructor": true
+    },
+    {
       "path": "modules/storage/storage-workload-provider.ts",
       "sharedMethods": [],
       "emptyMethods": [

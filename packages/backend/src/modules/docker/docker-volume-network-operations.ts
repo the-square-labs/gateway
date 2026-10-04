@@ -758,7 +758,7 @@ export async function createNetwork(
     throw new AppError(
       409,
       'RESERVED_NETWORK_NAME',
-      'Network names "gateway-secure-links", "gateway-db-*" and "gateway-storage-*" are reserved for Gateway'
+      'Network names "gateway-secure-links", "gateway-db-*", "gateway-storage-*" and "gateway-link-*" are reserved for Gateway'
     );
   }
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'create', {
