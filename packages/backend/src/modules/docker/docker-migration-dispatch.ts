@@ -48,6 +48,9 @@ export class DockerMigrationDispatchAdapter {
   async captureManifest(_nodeId: string, _resourceId: string): Promise<Record<string, unknown>> {
     return commercialModuleUnavailable();
   }
+  async validateManifest(_nodeId: string, _resourceId: string): Promise<{ blockers: string[] }> {
+    return commercialModuleUnavailable();
+  }
   async openArchiveExport(_args: {
     nodeId: string;
     archiveId: string;
