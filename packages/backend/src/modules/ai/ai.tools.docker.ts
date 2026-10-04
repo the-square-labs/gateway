@@ -1094,7 +1094,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'kill_docker_container',
     description:
-      'Send a signal (default SIGKILL) to a Docker container. SIGKILL answers once the container has exited (after 45 s with pending: true and its task); another signal answers once it was delivered. Prefer stop_docker_container unless an immediate kill is explicitly requested. Compose-owned containers must be changed through their Compose project.',
+      'Send a signal (default SIGKILL) to a Docker container. SIGKILL answers once the container has exited (after 45 s with pending: true and its task); another signal answers once it was delivered; a container that is not running answers at once with nothing signalled. Prefer stop_docker_container unless an immediate kill is explicitly requested. Compose-owned containers must be changed through their Compose project.',
     parameters: {
       type: 'object',
       properties: {

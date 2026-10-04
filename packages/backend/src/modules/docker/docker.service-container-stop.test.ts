@@ -19,8 +19,14 @@ function createService(initialState: string) {
   let state = initialState;
   const dispatch = {
     sendDockerContainerCommand: vi.fn(
-      async (_node: string, action: string): Promise<{ success: boolean; detail?: string; error?: string }> =>
-        action === 'inspect' ? inspectResult(state) : { success: true }
+      async (_node: string, action: string): Promise<{ success: boolean; detail?: string; error?: string }> => {
+        if (action === 'inspect') return inspectResult(state);
+        // Docker refuses to signal a container without a process.
+        if (action === 'kill' && state !== 'running') {
+          return { success: false, error: 'cannot kill container: api: container container-1 is not running' };
+        }
+        return { success: true };
+      }
     ),
   };
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
@@ -241,6 +247,26 @@ describe('DockerManagementService.killContainer', () => {
     expect(tasks.update).toHaveBeenCalledWith(
       'task-1',
       expect.objectContaining({ status: 'succeeded', progress: 'Sent SIGHUP' })
+    );
+    expect(service.getContainerTransition('node-1', 'api')).toBeUndefined();
+  });
+
+  it.each([
+    ['SIGKILL', 'exited'],
+    ['SIGHUP', 'created'],
+  ])('completes %s of a %s container at once, as a stop of it', async (signal, state) => {
+    const { service, dispatch, tasks } = createService(state);
+
+    await expect(service.killContainer('node-1', 'container-1', signal, 'user-1')).resolves.toMatchObject({
+      taskId: 'task-1',
+      name: 'api',
+      notRunning: true,
+    });
+
+    expect(dispatch.sendDockerContainerCommand.mock.calls.map(([, action]) => action)).not.toContain('kill');
+    expect(tasks.update).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ status: 'succeeded', progress: 'Container is not running' })
     );
     expect(service.getContainerTransition('node-1', 'api')).toBeUndefined();
   });

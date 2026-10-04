@@ -232,7 +232,7 @@ export const killContainerRoute = appRoute({
   tags: ['Docker Containers'],
   summary: 'Kill a container',
   description:
-    'SIGKILL (the default) answers 200 once the container has exited, or 202 with its task and `transition: killing` when it has not within 45 s. Another signal answers 200 once it was delivered; the container may keep running.',
+    'SIGKILL (the default) answers 200 once the container has exited, or 202 with its task and `transition: killing` when it has not within 45 s. Another signal answers 200 once it was delivered; the container may keep running. A container that is not running has no process to signal: the kill answers 200 at once, as a stop of it does.',
   request: { params: containerParams, ...optionalJsonBody(ContainerKillSchema) },
   responses: { ...successJson, ...operationPendingJson('The kill still runs; follow its task') },
 });

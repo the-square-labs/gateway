@@ -419,7 +419,7 @@ export async function executeDockerTool(
       const killed = await context.dockerService.killContainer(a.nodeId, a.containerId, signal, user.id);
       return lifecycleToolResult(
         killed,
-        `Sent ${signal} to the container`,
+        killed.notRunning ? 'The container is not running: nothing was signalled' : `Sent ${signal} to the container`,
         `Sent ${signal} to the container`,
         'State.Status is exited'
       );
