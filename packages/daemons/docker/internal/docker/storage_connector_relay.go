@@ -54,6 +54,10 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 			return fmt.Errorf("set storage connector relay directory permissions: %w", err)
 		}
 	}
+	// The storage connectors of the other mode keep their access through a switch of the daemon's user.
+	if err := grantConnectorAccess(directory, 7); err != nil && p.logger != nil {
+		p.logger.Warn("storage connector relay directory keeps its connectors' access only by its mode", "error", err)
+	}
 	path := filepath.Join(directory, storageConnectorSocketName)
 	// The socket the previous process handed over keeps the connections the connectors made meanwhile; one of the
 	// previous mode's is served as well until its connectors are recreated (link_socket_mode_handover.go).
@@ -95,6 +99,9 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 			return fmt.Errorf("set storage connector relay socket ownership: %w", err)
 		}
 	}
+	if err := grantConnectorAccess(path, 6); err != nil && p.logger != nil {
+		p.logger.Warn("storage connector relay socket keeps its connectors' access only by its mode", "error", err)
+	}
 	p.storageConnectorListener = listener
 	p.storageConnectorSocket = path
 	p.storageConnectorKept.set(listener, keepUnixListener(listener, path))
@@ -112,7 +119,8 @@ func storageConnectorSocketFits(info os.FileInfo) bool {
 	if runsWithoutRoot() {
 		return int(stat.Uid) == daemonEUID() && int(stat.Gid) == daemonEGID() && info.Mode().Perm() == 0o660
 	}
-	return stat.Uid == connectorUID && info.Mode().Perm() == 0o600
+	// The group bits show the mask of the connectors' ACL entry (grantConnectorAccess): 0600 or 0660.
+	return stat.Uid == connectorUID && info.Mode().Perm()&0o707 == 0o600
 }
 
 func (p *DockerPlugin) serveStorageConnectorRelay(listener net.Listener) {

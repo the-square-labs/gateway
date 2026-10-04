@@ -40,6 +40,10 @@ var secureLinkConnectorRetireLimit = 30 * time.Minute
 
 const secureLinkConnectorRetireTick = 100 * time.Millisecond
 
+// secureLinkDrainSignal tells a connector to stop accepting when its control socket is out of reach (the
+// connector's drain_signal.go).
+const secureLinkDrainSignal = "SIGUSR1"
+
 // secureLinkConnectorDrainPoll spaces the questions to a draining connector about its open sessions.
 var secureLinkConnectorDrainPoll = time.Second
 
@@ -237,6 +241,10 @@ func newDockerSecureLinkManager(plugin *DockerPlugin) (*dockerSecureLinkManager,
 		if err := os.Chmod(directory, 0o750); err != nil {
 			return nil, fmt.Errorf("secure-link control directory permissions: %w", err)
 		}
+	}
+	// The connectors of the other mode keep their access through a switch of the daemon's user (connector_access_acl.go).
+	if err := grantConnectorAccess(directory, 7); err != nil && plugin.logger != nil {
+		plugin.logger.Warn("secure-link control directory keeps its connectors' access only by its mode", "error", err)
 	}
 	manager := &dockerSecureLinkManager{
 		plugin: plugin, socketPath: filepath.Join(directory, "secure-link.sock"),
@@ -841,6 +849,16 @@ func (m *dockerSecureLinkManager) retireConnector(previous connectorRuntime) {
 		drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
 		_, drainErr := securelink.Drain(drainCtx, previous.socketPath)
 		cancelDrain()
+		if drainErr != nil {
+			// Its control socket is out of reach (a switch of the daemon's user): the drain signal stops it accepting
+			// all the same. A connector image without the drain signal stops at it, which retires it at once.
+			killCtx, cancelKill := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err := m.plugin.client.cli.ContainerKill(killCtx, previous.id, mobyclient.ContainerKillOptions{Signal: secureLinkDrainSignal})
+			cancelKill()
+			if m.plugin.logger != nil {
+				m.plugin.logger.Info("the replaced secure-link connector was signalled to drain", "drain_error", drainErr, "signal_error", err)
+			}
+		}
 		busy := m.plugin.proxyTunnels.drainWhere(func(connection *drainConn) bool {
 			return connectionConnector(connection) == previous.id
 		}, limit, secureLinkConnectorRetireTick, true)

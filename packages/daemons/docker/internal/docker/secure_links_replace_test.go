@@ -61,6 +61,10 @@ type fakeConnectorContainer struct {
 	anchor      bool
 	// pidsLimit overrides a connector's pids limit (a shape that drifted).
 	pidsLimit int64
+	// drainFails makes the connector's drain request fail, as when its control socket is out of the daemon's reach.
+	drainFails bool
+	// signals are the signals the connector received.
+	signals []string
 }
 
 // fakeAnchor is a running anchor, as a daemon finds it after its restart.
@@ -115,7 +119,11 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 				egressFails := current.egressFails
 				e.mu.Unlock()
 				if request.Drain {
-					_ = securelink.WriteJSON(connection, securelink.SyncResponse{Version: securelink.ProtocolVersion})
+					response := securelink.SyncResponse{Version: securelink.ProtocolVersion}
+					if current.drainFails {
+						response.Error = "control socket out of reach"
+					}
+					_ = securelink.WriteJSON(connection, response)
 					connection.Close()
 					continue
 				}
@@ -290,6 +298,9 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 				}
 				e.serveControl(current)
 			}
+			return respond(http.StatusNoContent, "")
+		case request.Method == http.MethodPost && len(parts) == 3 && parts[2] == "kill":
+			current.signals = append(current.signals, request.URL.Query().Get("signal"))
 			return respond(http.StatusNoContent, "")
 		case request.Method == http.MethodPost && len(parts) == 3 && parts[2] == "update":
 			return respond(http.StatusOK, map[string]any{})

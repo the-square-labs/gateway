@@ -229,3 +229,22 @@ func TestReplacedConnectorDrainsAsLongAsTheRelay(t *testing.T) {
 		t.Fatalf("retire limit %s, want 30m", secureLinkConnectorRetireLimit)
 	}
 }
+
+// A replaced connector whose control socket is out of the daemon's reach (a switch of the daemon's user) is told to
+// stop accepting by the drain signal instead, so new connections reach only its replacement (F3).
+func TestUnreachableConnectorIsSignalledToDrain(t *testing.T) {
+	manager, engine := replaceTestManager(t)
+	previous := engine.containers[secureLinkConnectorSlots[0].name]
+	engine.mu.Lock()
+	previous.drainFails = true
+	engine.mu.Unlock()
+	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
+		t.Fatalf("apply with the new image: %v", err)
+	}
+	waitRemoved(t, engine, previous.id)
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if !slices.Contains(previous.signals, secureLinkDrainSignal) {
+		t.Fatalf("signals %v, want the drain signal", previous.signals)
+	}
+}

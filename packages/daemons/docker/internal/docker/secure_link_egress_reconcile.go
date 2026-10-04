@@ -82,6 +82,14 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 		return false
 	}
 	statuses := m.reconcileEgressStatusesLocked(ctx)
+	// The previous connector stops accepting once the new one listens on every egress address the anchor holds (the
+	// ones sent to it, orphans included): an egress waiting for its network or rejected listens on neither.
+	ready := true
+	for _, config := range m.egress.configs {
+		if m.egress.configsFor != m.connectorID || statuses[config.ID].State != egressStateReady {
+			ready = false
+		}
+	}
 	// Orphans keep their listeners but are no longer Gateway's to hear about.
 	for id := range statuses {
 		_, desired := m.egress.desired[id]
@@ -91,8 +99,6 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 		}
 	}
 	m.egress.publish(statuses)
-	// A rejected egress never listens anywhere: it does not hold the previous connector back.
-	ready := allEgressReady(statuses, m.egress.desired)
 	if ready && m.pendingRetire != nil {
 		m.retireConnector(*m.pendingRetire)
 		m.pendingRetire = nil

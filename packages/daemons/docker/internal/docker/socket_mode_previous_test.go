@@ -105,3 +105,104 @@ func TestModeSwitchPreviousSockets(t *testing.T) {
 		}
 	}
 }
+
+// The other direction, non-root → root: the 0660 egress socket the non-root process handed over does not fit a root
+// daemon; a connection the previous mode's connector made during the switch is served instead of reset (F2).
+func TestModeSwitchToRootPreviousSocket(t *testing.T) {
+	previousUID := daemonEUID
+	t.Cleanup(func() { daemonEUID = previousUID })
+	store, err := listenerkeep.OpenStore(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	connectKeeper(t, store, nil)
+	path := filepath.Join(t.TempDir(), egressSocketName)
+	// Written by a daemon without root, then given to root by the installer.
+	daemonEUID = func() int { return 4242 }
+	keptName := keepSocketForNextProcess(t, store, path, 0o660, 0, 0)
+	waiting, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer waiting.Close()
+
+	daemonEUID = func() int { return 0 }
+	connectKeeper(t, store, inheritedFrom(t, store))
+	kept, _, others := adoptKeptUnixListeners(path, storageConnectorSocketFits)
+	if kept != nil || len(others) != 1 {
+		t.Fatalf("adopted %v as the root daemon's socket, %d of the previous mode", kept != nil, len(others))
+	}
+	var previous previousUnixListeners
+	previous.serve(others, func(connection net.Conn) {
+		defer connection.Close()
+		line, _ := bufio.NewReader(connection).ReadString('\n')
+		_, _ = fmt.Fprint(connection, strings.ToUpper(line))
+	})
+	_ = waiting.SetDeadline(time.Now().Add(2 * time.Second))
+	_, _ = fmt.Fprint(waiting, "hello\n")
+	if line, err := bufio.NewReader(waiting).ReadString('\n'); err != nil || line != "HELLO\n" {
+		t.Fatalf("the connection made during the switch was not served: %q, %v", line, err)
+	}
+	previous.retire()
+	store.Settle(time.Second)
+	if slices.Contains(store.Names(), keptName) {
+		t.Fatal("the listener keeper still holds the previous mode's socket")
+	}
+}
+
+// The connectors' ACL entry on the socket directories and sockets survives the installer giving them to another
+// user, so a connector of the previous mode keeps its access through the switch (root → non-root reset connections
+// for seconds before).
+func TestConnectorAccessSurvivesAnOwnerChange(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "c")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(directory, egressSocketName)
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Chmod(socket, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for path, perms := range map[string]uint16{directory: 7, socket: 6} {
+		if err := grantConnectorAccess(path, perms); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, set := connectorACLPermissions(directory); !set {
+		t.Skip("the file system here has no POSIX ACLs")
+	}
+	if os.Geteuid() == 0 {
+		// The installer gives the state directory to the daemon's new user.
+		for _, path := range []string{directory, socket} {
+			if err := os.Lchown(path, 4242, 4242); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for path, want := range map[string]uint16{directory: 7, socket: 6} {
+		if perms, set := connectorACLPermissions(path); !set || perms != want {
+			t.Fatalf("%s gives the connectors %o (set %v), want %o", path, perms, set, want)
+		}
+	}
+	// The mask lets the entry apply: the group bits of the mode show it.
+	if info, err := os.Stat(socket); err != nil || info.Mode().Perm()&0o060 != 0o060 {
+		t.Fatalf("socket mode %v, %v: the ACL mask does not let the connectors write", info.Mode(), err)
+	}
+	// A root daemon still takes its own socket with the entry as its own.
+	previousUID := daemonEUID
+	t.Cleanup(func() { daemonEUID = previousUID })
+	daemonEUID = func() int { return 0 }
+	if os.Geteuid() == 0 {
+		if err := os.Lchown(socket, connectorUID, connectorUID); err != nil {
+			t.Fatal(err)
+		}
+		if info, err := os.Lstat(socket); err != nil || !storageConnectorSocketFits(info) {
+			t.Fatalf("a root daemon refused its own socket with the connectors' ACL entry (%v)", err)
+		}
+	}
+}

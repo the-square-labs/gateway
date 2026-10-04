@@ -72,15 +72,22 @@ func (p *DockerPlugin) startSecureLinkEgressSocket() error {
 	return nil
 }
 
-// setConnectorSocketOwner gives a daemon socket the connectors connect to its owner and mode.
+// setConnectorSocketOwner gives a daemon socket the connectors connect to its owner and mode, and the connectors of
+// the other mode their access through a switch of the daemon's user (connector_access_acl.go).
 func setConnectorSocketOwner(path string) error {
 	if runsWithoutRoot() {
-		return os.Chmod(path, 0o660)
+		if err := os.Chmod(path, 0o660); err != nil {
+			return err
+		}
+	} else {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return err
+		}
+		if err := os.Chown(path, connectorUID, connectorUID); err != nil {
+			return err
+		}
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return err
-	}
-	return os.Chown(path, connectorUID, connectorUID)
+	return grantConnectorAccess(path, 6)
 }
 
 func (p *DockerPlugin) handleSecureLinkEgress(connection net.Conn) {
