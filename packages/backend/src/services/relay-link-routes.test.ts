@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { routeTransportRestartRequired } from './relay-link-routes.js';
 
-const listener = { networkName: 'gateway-db-a', listenAddress: '172.30.0.1', listenPort: 5432, allowedSources: [] };
+const listener = {
+  networkName: 'gateway-db-a',
+  listenAddress: '172.30.0.1',
+  listenPort: 5432,
+  allowedSources: [] as string[],
+};
 const egress = { networkName: 'gateway-db-a', alias: 'db-a', listenPort: 5432, maxSessions: 16 };
 const transport = (managedDatabaseListener: typeof listener | null, secureLinkEgress: typeof egress | null) => ({
   managedDatabaseListener,

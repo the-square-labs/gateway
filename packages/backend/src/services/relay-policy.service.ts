@@ -674,18 +674,24 @@ export class RelayPolicyService {
 
   /**
    * Delivers a node's grants until the daemon reports the connector egress of one link route listening for the route's
-   * current generation (egressStatuses in the ACK). Throws with the daemon's reason when it does not get there.
+   * current generation (egressStatuses in the ACK). The daemon answers `pending` while it brings the egress up, so the
+   * bundle is re-sent with backoff (1 s doubling to 8 s; an unchanged bundle is cheap) until `timeoutMs`, then this
+   * throws with the daemon's last reason, which the caller shows on the link.
    */
   async awaitSecureLinkEgress(
     nodeId: string,
     ownerKind: 'managed_storage_binding' | 'managed_database_binding' | 'container_link',
     ownerId: string,
-    options: { attempts?: number; delayMs?: number } = {}
+    options: { timeoutMs?: number; initialDelayMs?: number } = {}
   ): Promise<SecureLinkEgressStatus> {
-    const attempts = options.attempts ?? 10;
+    const deadline = Date.now() + (options.timeoutMs ?? 90_000);
+    let delayMs = options.initialDelayMs ?? 1_000;
     let reason = 'the daemon did not report it';
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, options.delayMs ?? 1_000));
+    for (let attempt = 0; attempt === 0 || Date.now() < deadline; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(delayMs, Math.max(0, deadline - Date.now()))));
+        delayMs = Math.min(delayMs * 2, 8_000);
+      }
       const [route] = await this.db
         .select({ generation: relayRoutes.generation, egress: relayRoutes.secureLinkEgress })
         .from(relayRoutes)
