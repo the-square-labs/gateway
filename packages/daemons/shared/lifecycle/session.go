@@ -251,6 +251,12 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	sendAsyncCommandResult := func(c *pb.GatewayCommand, handle func(*pb.GatewayCommand) *pb.CommandResult) {
 		dispatchAsync(genericPool, c, handle)
 	}
+	var grantSyncs *grantSyncWorker
+	if relayPlugin, ok := d.plugin.(RelayTunnelPlugin); ok {
+		grantSyncs = newGrantSyncWorker(sessionCtx, relayPlugin.SyncRelayGrants, func(result *pb.CommandResult) {
+			sendAsyncResult(result, "relay grant sync result")
+		})
+	}
 	controlReady := false
 
 	// Start health reporter in background
@@ -380,20 +386,16 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			dispatchAsync(backupPool, cmd, d.plugin.HandleCommand)
 			continue
 		case *pb.GatewayCommand_SyncRelayGrants:
-			result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
-			relayPlugin, ok := d.plugin.(RelayTunnelPlugin)
-			if !ok {
-				result.Success = false
-				result.Error = "daemon does not support relay grants"
-			} else if detail, err := relayPlugin.SyncRelayGrants(cmd.GetSyncRelayGrants()); err != nil {
-				result.Success = false
-				result.Error = err.Error()
-			} else {
-				result.Detail = detail
+			if grantSyncs == nil {
+				if err := writer.Send(&pb.DaemonMessage{Payload: &pb.DaemonMessage_CommandResult{CommandResult: &pb.CommandResult{
+					CommandId: cmd.CommandId, Success: false, Error: "daemon does not support relay grants",
+				}}}); err != nil {
+					return err
+				}
+				continue
 			}
-			if err := writer.Send(&pb.DaemonMessage{Payload: &pb.DaemonMessage_CommandResult{CommandResult: result}}); err != nil {
-				return err
-			}
+			// Applied in order on its own worker: the commands behind it are served meanwhile (S6).
+			grantSyncs.submit(cmd)
 			continue
 		case *pb.GatewayCommand_SyncProxySecureLinks:
 			sendAsyncCommandResult(cmd, func(c *pb.GatewayCommand) *pb.CommandResult {

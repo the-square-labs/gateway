@@ -37,6 +37,9 @@ func relayGrantStateFile(stateDir string) statecompat.File {
 // Gateway is unreachable the restored bundle is used once the hold runs out.
 const relayGrantRestoreHold = 10 * time.Second
 
+// relayGrantListenerReconcileTimeout bounds the database link listener reconcile of one grant sync.
+const relayGrantListenerReconcileTimeout = 20 * time.Second
+
 type relayGrantStore struct {
 	file    statecompat.File
 	mu      sync.RWMutex
@@ -158,7 +161,10 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 	p.reconcileRelayRegistrations()
 	listenerStatuses := map[string]managedDatabaseHostListenerStatus{}
 	if p.databaseListeners != nil {
-		listenerStatuses = p.databaseListeners.reconcile(context.Background(), p.relayGrants.get())
+		// Each network inspect has its own bound; this one bounds the whole set (a slow dockerd, many bindings).
+		ctx, cancel := context.WithTimeout(context.Background(), relayGrantListenerReconcileTimeout)
+		listenerStatuses = p.databaseListeners.reconcile(ctx, p.relayGrants.get())
+		cancel()
 	}
 	if p.registryProxy != nil {
 		p.registryProxy.reconcileGrants()

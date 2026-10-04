@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
 
@@ -56,7 +58,9 @@ func (p *DockerPlugin) handleNetworkCommand(cmd *pb.DockerNetworkCommand, result
 
 	case "create_link_network":
 		// A link network with a /28 of the secure-link pool and the connector's reserved address (C5).
-		created, err := p.createLinkNetwork(ctx, cmd.NetworkId)
+		linkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		created, err := p.createLinkNetwork(linkCtx, cmd.NetworkId)
+		cancel()
 		if err != nil {
 			result.Success = false
 			result.Error = err.Error()
