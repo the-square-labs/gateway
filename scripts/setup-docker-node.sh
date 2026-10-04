@@ -337,7 +337,7 @@ preflight_docker_cgroup_controllers() {
     [[ "$DOCKER_MODE" != "builder" ]] || return 0
     local info version driver memory_limit pids_limit cpu_quota controllers_file controller
     local missing=()
-    if ! info=$(docker_run info --format '{{.CgroupVersion}} {{.CgroupDriver}} {{.MemoryLimit}} {{.PidsLimit}} {{.CpuCfsQuota}}' 2>>"$LOG_FILE"); then
+    if ! info=$(docker_run info --format '{{.CgroupVersion}} {{.CgroupDriver}} {{.MemoryLimit}} {{.PidsLimit}} {{.CPUCfsQuota}}' 2>>"$LOG_FILE"); then
         warn "Could not read the cgroup setup from Docker; skipping the container limits check."
         return 0
     fi

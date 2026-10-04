@@ -678,7 +678,11 @@ test('the Docker installer refuses a host whose containers cannot get the cgroup
       runShell(
         [
           `DOCKER_MODE=${DOCKER_MODE}; LOG_FILE=/dev/null`,
-          'docker_run() { echo "' + info + '"; }',
+          // The real docker CLI evaluates the template against moby's system.Info Go field names (CPUCfsQuota, not
+          // the JSON name CpuCfsQuota); a wrong name fails the command, and the check would be skipped.
+          'docker_run() { case "$*" in *"{{.CgroupVersion}} {{.CgroupDriver}} {{.MemoryLimit}} {{.PidsLimit}} {{.CPUCfsQuota}}"*) echo "' +
+            info +
+            '" ;; *) echo "template: cannot evaluate field" >&2; return 1 ;; esac; }',
           'warn() { echo "WARN $*"; }',
           'err() { echo "ERR $*" >&2; }',
           'die() { err "$@"; exit 1; }',
