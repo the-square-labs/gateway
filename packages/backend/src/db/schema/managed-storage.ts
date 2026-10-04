@@ -355,6 +355,9 @@ export const managedStorageBindings = pgTable(
       .$type<ManagedStorageBindingObservedState>()
       .notNull()
       .default('active'),
+    // Per node: when the shared connector took over the link from its sidecar. The sidecar keeps answering clients
+    // that cached its address until it is idle and the DNS TTL has passed (D8, F6); durable across restarts.
+    sidecarCutovers: jsonb('sidecar_cutovers').$type<Record<string, string>>().notNull().default({}),
     lastError: text('last_error'),
     createdById: uuid('created_by_id')
       .notNull()

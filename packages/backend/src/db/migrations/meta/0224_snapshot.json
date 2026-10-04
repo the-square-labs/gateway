@@ -1,5 +1,5 @@
 {
-  "id": "6be97df7-6c7e-446a-b4ff-06aa86b7cfa6",
+  "id": "51f0ebd4-7107-4a59-8e54-01a216a5fb98",
   "prevId": "067ee0cb-e7e9-4947-8835-d998340d9fed",
   "version": "7",
   "dialect": "postgresql",
@@ -22906,6 +22906,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'active'"
+        },
+        "sidecar_cutovers": {
+          "name": "sidecar_cutovers",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
         },
         "last_error": {
           "name": "last_error",
