@@ -357,6 +357,16 @@ log_format: "json"
 
 In `integrate` mode, the `stub_status_url` may use a local alternate port such as `http://127.0.0.1:8081/nginx_status`.
 
+The Docker daemon reads `/etc/docker-daemon/config.yaml`. Its optional `docker.secure_links.subnet_pool` sets the address range of new secure-link networks (database, storage, and container links):
+
+```yaml
+docker:
+  secure_links:
+    subnet_pool: "10.213.0.0/16"  # default; IPv4, /26 or larger
+```
+
+Each new link network takes the first free /26 of the pool; subnets already used by Docker networks or by the host's routes are skipped. Change the pool when the default range overlaps a network the node reaches through its default route, such as a site network or a VPN behind a router, then restart the Docker daemon. Existing link networks keep their addresses until their link is recreated, and networks created before 2.11.1 keep theirs.
+
 ### Host Console And File Access
 
 Every daemon type (nginx, Docker, Storage, Build Worker, Monitoring, Relay) accepts two host access switches in its config file:
@@ -455,7 +465,7 @@ VM and bare-metal hosts normally expose the required loop and mount capabilities
 
 The Storage installer runs `docker-daemon` only as root and shows a local-disk selector in an interactive terminal. Choose an eligible mounted filesystem or a custom path; the selected location becomes the storage root. For automation, pass `--storage-root <path>` (or set `GATEWAY_DATABASE_STORAGE_ROOT`) together with the normal enrollment flags and `--yes`. The preflight runs before enrollment, and `--dry-run` performs no storage preparation or other host mutation.
 
-Managed application bindings use a TCP listener owned directly by the target Docker daemon. Gateway does not deploy a per-binding connector container or require a database connector image. During upgrades, successful listener reconciliation removes any connector containers left by older Gateway versions.
+Managed database links, managed storage links, and container links run through one shared secure-link connector per Docker node, each link on its own internal network. Gateway does not deploy a per-link connector container or open a host listener. After the 2.11.1 Docker daemon update, each workload with a database link, or with a storage link created before 2.11.1, is recreated once to move to the shared connector (Deployments blue/green, without downtime); rolling the daemon back to 2.11.0 moves the links back the same way. At most four workloads per node are recreated at once (the daemon's concurrent command limit). See [Updating To 2.11.1](operations.md#updating-to-2111).
 
 Published managed databases use native direct TLS by default. Gateway issues the server certificate from its independent Database CA and keeps the private key in daemon-owned storage outside the database image. PostgreSQL and Redis publish one TLS endpoint; ClickHouse publishes both HTTPS and its native TLS endpoint. The UI exposes the CA certificate/fingerprint with direct credentials and supports certificate rotation after node IP changes.
 

@@ -82,6 +82,18 @@ The update flow:
 
 Existing daemons from before signed-manifest support can perform one transition update. In that case Gateway verifies the signed manifest before dispatch, and the old daemon enforces the verified SHA256 checksum. After that transition, daemon-side signature verification is enforced for future updates.
 
+### Updating To 2.11.1
+
+2.11.1 moves managed database and storage links to one shared secure-link connector per Docker node (no per-link connector containers, no host listeners) and adds container links. Update Gateway first, then the Docker daemons. After a node's Docker daemon update:
+
+- Each workload with a database link is recreated once to join its new link network, at most four at a time per node. Deployments roll blue/green without downtime; standalone containers and Compose services restart once.
+- Each workload with a storage link created before 2.11.1 is recreated once right after its link switches. Links created on 2.11.1 need no recreate.
+- Variable names and credentials stay the same; nothing needs to be done by hand. Do not delete old link networks or connector containers yourself.
+- Rolling a Docker daemon back to 2.11.0 switches its links back automatically, with one recreate per workload. At most four workloads per node are recreated at once (the daemon's concurrent command limit), so on a node with many linked deployments the later ones reconnect a little later.
+- Later connector updates keep open link connections for up to 30 minutes, then close them once.
+
+New link networks take a /26 each from `docker.secure_links.subnet_pool` (default `10.213.0.0/16`); see [Daemon Configuration](nodes.md#daemon-configuration). Set it before the Docker daemon update when the default range overlaps a network the nodes reach through their default route; earlier daemons ignore the key.
+
 ## Container Log Limits
 
 Docker's default `json-file` log driver keeps container logs without a size limit, so one busy container can fill a node's disk. Gateway bounds them:
