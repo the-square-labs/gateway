@@ -121,6 +121,12 @@ export interface RelaySecureLinkEgressConfig {
   maxSessions: number;
   tlsCaPem?: string;
   tlsServerName?: string;
+  /**
+   * Database links: the daemon recreates the link's consumers without the host listener's ExtraHosts entry, so they
+   * reach the alias through the connector. Set only once the egress listens for the route's generation (and on the
+   * connector); absent while the egress is not ready and while reverting. Changing it keeps the route's generation.
+   */
+  consumersUseAlias?: boolean;
 }
 
 export interface RelayArtifactDescriptor {

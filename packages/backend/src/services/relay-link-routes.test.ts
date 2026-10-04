@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { routeTransportRestartRequired } from './relay-link-routes.js';
+import { routeTransportRestartRequired, secureLinkEgressEqual } from './relay-link-routes.js';
 
 const listener = {
   networkName: 'gateway-db-a',
@@ -7,7 +7,13 @@ const listener = {
   listenPort: 5432,
   allowedSources: [] as string[],
 };
-const egress = { networkName: 'gateway-db-a', alias: 'db-a', listenPort: 5432, maxSessions: 16 };
+const egress: {
+  networkName: string;
+  alias: string;
+  listenPort: number;
+  maxSessions: number;
+  consumersUseAlias?: boolean;
+} = { networkName: 'gateway-db-a', alias: 'db-a', listenPort: 5432, maxSessions: 16 };
 const transport = (managedDatabaseListener: typeof listener | null, secureLinkEgress: typeof egress | null) => ({
   managedDatabaseListener,
   secureLinkEgress,
@@ -24,6 +30,17 @@ describe('link route transport changes (D8, D9)', () => {
     // A storage route its sidecar serves gains or loses the connector egress.
     expect(routeTransportRestartRequired(transport(null, null), transport(null, egress))).toBe(false);
     expect(routeTransportRestartRequired(transport(null, egress), transport(null, null))).toBe(false);
+  });
+
+  it('writes consumersUseAlias without moving the generation, so live tunnels stay (S1)', () => {
+    const aliased = { ...egress, consumersUseAlias: true };
+    // The migration turns it on next to the listener once the egress listens; the revert turns it off.
+    expect(routeTransportRestartRequired(transport(listener, egress), transport(listener, aliased))).toBe(false);
+    expect(routeTransportRestartRequired(transport(listener, aliased), transport(listener, egress))).toBe(false);
+    expect(routeTransportRestartRequired(transport(null, aliased), transport(listener, egress))).toBe(false);
+    // The route is still written: the flag is part of the stored egress.
+    expect(secureLinkEgressEqual(egress, aliased)).toBe(false);
+    expect(secureLinkEgressEqual(egress, { ...egress, consumersUseAlias: false })).toBe(true);
   });
 
   it('restarts the route when a serving entry point changes or the only listener comes or goes', () => {

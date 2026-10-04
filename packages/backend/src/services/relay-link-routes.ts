@@ -13,11 +13,26 @@ export interface RelayRouteTransport {
   secureLinkEgress: RelaySecureLinkEgressConfig | null;
 }
 
+/** The stored egress equals the desired one, `consumersUseAlias` included (whether the route must be written). */
 export function secureLinkEgressEqual(
   current: RelaySecureLinkEgressConfig | null | undefined,
   desired: RelaySecureLinkEgressConfig | null | undefined
 ): boolean {
   if (!current || !desired) return current == null && desired == null;
+  return (
+    secureLinkEgressServesEqual(current, desired) &&
+    (current.consumersUseAlias ?? false) === (desired.consumersUseAlias ?? false)
+  );
+}
+
+/**
+ * The egress listens the same way (network, alias, port, sessions, TLS). `consumersUseAlias` only tells the daemon how
+ * to recreate consumers, so it never moves the route's generation (routeTransportRestartRequired).
+ */
+export function secureLinkEgressServesEqual(
+  current: RelaySecureLinkEgressConfig,
+  desired: RelaySecureLinkEgressConfig
+): boolean {
   return (
     current.networkName === desired.networkName &&
     current.alias === desired.alias &&
@@ -63,7 +78,7 @@ export function routeTransportRestartRequired(current: RelayRouteTransport, desi
   ) {
     return true;
   }
-  if (egressKept && !secureLinkEgressEqual(fromEgress, toEgress)) return true;
+  if (egressKept && !secureLinkEgressServesEqual(fromEgress!, toEgress!)) return true;
   // The listener added or removed while the connector keeps serving (the migration and its revert) moves nothing;
   // the only local entry point of a route added or removed restarts it, as before.
   if (Boolean(fromListener) !== Boolean(toListener) && !egressKept) return true;

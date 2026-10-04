@@ -85,6 +85,8 @@ export interface RelayGrantAssignment {
     routeGeneration: number;
     /** The connector image, for a node that has egress but no proxy Secure Link binding to take it from. */
     connectorImage?: string;
+    /** Database links: recreate the link's consumers without the listener's ExtraHosts entry. */
+    consumersUseAlias?: boolean;
   };
 }
 
