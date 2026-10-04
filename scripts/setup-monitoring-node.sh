@@ -280,8 +280,17 @@ grant_daemon_paths_to_run_user() {
     done
 }
 
-# The user a previous install ran the daemon as: the owner of its configuration directory (root without one).
-PREVIOUS_RUN_UID=$(stat -c '%u' /etc/monitoring-daemon 2>/dev/null || echo 0)
+# The user a previous install ran the daemon as: the first owner other than root of its configuration, state or own binary
+# directory (root without one), so a switch back to root is announced and handled even when one of them is root's.
+previous_run_uid() {
+    local path uid
+    for path in "$@"; do
+        uid=$(stat -c '%u' "$path" 2>/dev/null) || continue
+        [[ "$uid" == 0 ]] || { echo "$uid"; return 0; }
+    done
+    echo 0
+}
+PREVIOUS_RUN_UID=$(previous_run_uid /etc/monitoring-daemon /var/lib/monitoring-daemon "$MONITORING_OWN_DIR")
 
 # Gives root every entry in the paths that the previous non-root user owns; entries of other owners keep theirs.
 return_paths_to_root() {

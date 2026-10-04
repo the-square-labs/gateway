@@ -660,6 +660,21 @@ test('every installer announces the switch of the run user from root and to root
       assert.match(toUser.output, /STOPPED|PENDING=1/, `${script} stops the root daemon before the files change owner`);
       const stays = run('root', 0);
       assert.doesNotMatch(stays.output, /switching|STOPPED|PENDING=1/, `${script} stays root`);
+      // Back to root from a non-root user is announced the same way.
+      const toRoot = run('root', 4242);
+      assert.equal(toRoot.status, 0, `${script}\n${toRoot.output}`);
+      assert.match(toRoot.output, /ran as user4242; switching it to root/, script);
+      // The previous user is the first owner other than root of the configuration, state or own binary directory.
+      if (userInfo().uid === 0) {
+        const owned = ['conf-root', 'state-user', 'own-user'].map((name) => path.join(dir, name));
+        runShell(`mkdir -p ${owned.join(' ')} && chown 4242 '${owned[1]}' '${owned[2]}'`);
+        const previous = (...paths) =>
+          runShell(["IFS=$'\\n\\t'", shellFunction(source, 'previous_run_uid'), `previous_run_uid ${paths.join(' ')}`].join('\n'))
+            .output.trim();
+        assert.equal(previous(owned[0], owned[1], owned[2]), '4242', script);
+        assert.equal(previous(path.join(dir, 'missing'), owned[0]), '0', script);
+        await Promise.all(owned.map((entry) => rm(entry, { recursive: true, force: true })));
+      }
       await rm(path.join(dir, 'conf'), { recursive: true, force: true });
     }
     // Leaving a non-root user is announced by the same function before the daemon is stopped.
