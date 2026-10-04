@@ -1294,3 +1294,34 @@ test('a re-run never installs an older daemon than the installed one unless --ve
   assert.match(relayVersion('v2.11.0', 'v2.11.1-rc.20'), /^v2\.11\.0\n?$/);
   assert.match(relayVersion('latest', ''), /^v2\.11\.0\n?$/);
 });
+
+// rc.20: a run-user switch left the watchdog records to the previous daemon user. The watchdog is restarted (with the
+// new records owner) after the switch, and whenever it is installed, even when no release could be resolved.
+test('the Docker installer restarts an installed lease watchdog after the run-user switch', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+  const { topLevel } = parseShell(source);
+  const firstRun = (name) => Math.min(...topLevel.filter((entry) => entry.calls.includes(name)).map((entry) => entry.line));
+  assert.ok(firstRun('finish_run_user_switch') < firstRun('start_lease_watchdog'));
+  assert.ok(firstRun('start_lease_watchdog') < firstRun('start_daemon'));
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-watchdog-'));
+  try {
+    const binary = path.join(dir, 'gateway-lease-watchdog');
+    await writeFile(binary, '#!/bin/sh\n', { mode: 0o755 });
+    const run = (installed, bin) =>
+      runShell(
+        [
+          "IFS=$'\\n\\t'",
+          // Its heredocs hold a `}` line of their own (OpenRC depend()): the function ends at the `}` before a blank line.
+          /^start_lease_watchdog\(\) \{\n[\s\S]*?^\}$(?=\n\n)/m.exec(source)[0],
+          'has_systemd() { return 1; }; has_openrc() { return 1; }; warn() { echo "WARN $*"; }; ok() { echo "OK $*"; }',
+          `DOCKER_MODE=docker LEASE_WATCHDOG_INSTALLED=${installed} LEASE_WATCHDOG_BIN='${bin}' RUN_USER=gwdock`,
+          'start_lease_watchdog; echo done',
+        ].join('\n')
+      ).output;
+    // Installed but not (re)downloaded by this run: it is still restarted (here: no service manager to do it with).
+    assert.match(run(0, binary), /No service manager for the lease watchdog/);
+    assert.doesNotMatch(run(0, path.join(dir, 'missing')), /WARN/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -2573,7 +2573,10 @@ install_lease_watchdog() {
 }
 
 start_lease_watchdog() {
-    [[ "$DOCKER_MODE" == "docker" && "$LEASE_WATCHDOG_INSTALLED" -eq 1 ]] || return 0
+    # Also on a re-run that could not resolve or download a watchdog release: an installed watchdog is restarted with
+    # the current run user as its records owner (a run-user switch hands the records over).
+    [[ "$DOCKER_MODE" == "docker" ]] || return 0
+    [[ "$LEASE_WATCHDOG_INSTALLED" -eq 1 || -x "$LEASE_WATCHDOG_BIN" ]] || return 0
     # Runs as root: it must kill container processes of any user. The records
     # directory is owned by the docker-daemon user, which writes the deadlines.
     local args="run --records-owner ${RUN_USER} --auto-update --releases-url ${RELEASES_API_URL} --artifact-base-url ${ARTIFACT_BASE_URL}"
@@ -2764,8 +2767,10 @@ enroll_daemon
 write_database_profile_config
 write_builder_profile_config
 apply_host_access_config /etc/docker-daemon/config.yaml
-start_lease_watchdog
 finish_run_user_switch
+# After the switch: the watchdog starts with --records-owner of the new user and hands its records over at once, before
+# the daemon starts (a non-root daemon cannot read records left to the previous user).
+start_lease_watchdog
 start_daemon
 # An install whose daemon does not run or did not connect to Gateway is not done.
 if ! await_gateway_connection; then
