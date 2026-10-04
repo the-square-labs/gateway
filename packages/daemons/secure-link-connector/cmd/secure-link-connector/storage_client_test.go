@@ -31,7 +31,7 @@ func TestStorageConnectorLogsTheRelayRefusal(t *testing.T) {
 			}
 			var request securelink.RelayRequest
 			if securelink.ReadJSON(connection, &request) == nil {
-				_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: refusal})
+				_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion, Error: refusal})
 			}
 			_ = connection.Close()
 		}

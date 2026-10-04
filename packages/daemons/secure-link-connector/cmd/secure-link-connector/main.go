@@ -57,10 +57,14 @@ func main() {
 	// the connector never caps or times out sessions; nginx bounds the load
 	// and TCP keepalive clears dead peers.
 	manager := newBindingManager(0, 0)
+	// Egress listeners reach the daemon through its egress socket in the same directory: both connector slots
+	// mount it, whatever their control socket is named.
+	egress := newEgressManager(filepath.Join(filepath.Dir(socketPath), egressSocketName))
 	go func() {
 		<-ctx.Done()
 		listener.Close()
 		manager.close()
+		egress.close()
 	}()
 
 	for {
@@ -72,26 +76,49 @@ func main() {
 			log.Printf("accept control connection: %v", err)
 			continue
 		}
-		go handleControlConnection(connection, manager)
+		go handleControlConnection(connection, manager, egress)
 	}
 }
 
-func handleControlConnection(connection net.Conn, manager *bindingManager) {
+func handleControlConnection(connection net.Conn, manager *bindingManager, egress *egressManager) {
 	defer connection.Close()
 	var request securelink.SyncRequest
 	if err := securelink.ReadJSON(connection, &request); err != nil {
 		_ = securelink.WriteJSON(connection, securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: err.Error()})
 		return
 	}
-	if request.Version != securelink.ProtocolVersion {
-		_ = securelink.WriteJSON(connection, securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: "unsupported protocol version"})
-		return
+	_ = securelink.WriteJSON(connection, handleSyncRequest(request, manager, egress))
+}
+
+// handleSyncRequest applies one control request. A version 1 request comes from a daemon that knows no egress (one
+// rolled back to an older release): it sets the ingress bindings, no egress listener stays, and the answer is
+// version 1 as that daemon expects. A version 2 request sets both; its egress listeners stand on their own, so
+// ingress bindings the connector refuses (response Error) leave the egress statuses in the answer.
+func handleSyncRequest(request securelink.SyncRequest, manager *bindingManager, egress *egressManager) securelink.SyncResponse {
+	switch request.Version {
+	case securelink.ProtocolVersionIngressOnly:
+		if _, err := egress.sync(nil); err != nil {
+			return securelink.SyncResponse{Version: securelink.ProtocolVersionIngressOnly, Error: err.Error()}
+		}
+		statuses, err := manager.sync(request.Bindings)
+		if err != nil {
+			return securelink.SyncResponse{Version: securelink.ProtocolVersionIngressOnly, Error: err.Error()}
+		}
+		return securelink.SyncResponse{Version: securelink.ProtocolVersionIngressOnly, Bindings: statuses}
+	case securelink.ProtocolVersion:
+		egressStatuses, err := egress.sync(request.Egress)
+		if err != nil {
+			return securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: err.Error()}
+		}
+		response := securelink.SyncResponse{Version: securelink.ProtocolVersion, Egress: egressStatuses}
+		statuses, err := manager.sync(request.Bindings)
+		if err != nil {
+			response.Error = err.Error()
+		} else {
+			response.Bindings = statuses
+		}
+		return response
+	default:
+		return securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: securelink.UnsupportedVersionError}
 	}
-	statuses, err := manager.sync(request.Bindings)
-	response := securelink.SyncResponse{Version: securelink.ProtocolVersion, Bindings: statuses}
-	if err != nil {
-		response.Bindings = nil
-		response.Error = err.Error()
-	}
-	_ = securelink.WriteJSON(connection, response)
 }

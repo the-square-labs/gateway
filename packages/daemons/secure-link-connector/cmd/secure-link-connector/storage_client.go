@@ -64,14 +64,39 @@ func storageConnectorConfigFromEnv(getenv func(string) string) (storageConnector
 }
 
 func storageConnectorTLSConfig(config storageConnectorConfig) (*tls.Config, error) {
-	if config.CAPEM == "" {
+	tlsConfig, err := relayTLSConfig(config.CAPEM, config.ServerName)
+	if err != nil {
+		return nil, errors.New("GATEWAY_CONNECTOR_CA_PEM is not a valid certificate")
+	}
+	return tlsConfig, nil
+}
+
+// relayTLSConfig is the TLS client the connector speaks over a relayed stream to a server whose certificate caPEM
+// signed (nil without caPEM).
+func relayTLSConfig(caPEM, serverName string) (*tls.Config, error) {
+	if caPEM == "" {
 		return nil, nil
 	}
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM([]byte(config.CAPEM)) {
-		return nil, errors.New("GATEWAY_CONNECTOR_CA_PEM is not a valid certificate")
+	if !pool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, errors.New("the TLS CA is not a valid certificate")
 	}
-	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: config.ServerName}, nil
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: serverName}, nil
+}
+
+// clientTLS runs the TLS client handshake over remote and returns the TLS connection (remote itself without
+// tlsConfig).
+func clientTLS(ctx context.Context, remote net.Conn, tlsConfig *tls.Config) (net.Conn, error) {
+	if tlsConfig == nil {
+		return remote, nil
+	}
+	tlsRemote := tls.Client(remote, tlsConfig)
+	handshakeCtx, cancel := context.WithTimeout(ctx, targetDialTimeout)
+	defer cancel()
+	if err := tlsRemote.HandshakeContext(handshakeCtx); err != nil {
+		return nil, err
+	}
+	return tlsRemote, nil
 }
 
 func runStorageConnector(ctx context.Context, config storageConnectorConfig) error {
@@ -110,30 +135,30 @@ func proxyStorageConnectorConnection(ctx context.Context, local net.Conn, config
 		return
 	}
 	defer remote.Close()
-	if tlsConfig != nil {
-		tlsRemote := tls.Client(remote, tlsConfig)
-		handshakeCtx, cancel := context.WithTimeout(ctx, targetDialTimeout)
-		err = tlsRemote.HandshakeContext(handshakeCtx)
-		cancel()
-		if err != nil {
-			return
-		}
-		remote = tlsRemote
+	remote, err = clientTLS(ctx, remote, tlsConfig)
+	if err != nil {
+		return
 	}
 	bridge(local, remote)
 }
 
 func openStorageRelay(ctx context.Context, config storageConnectorConfig) (net.Conn, error) {
-	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", config.SocketPath)
+	return openRelayStream(ctx, config.SocketPath, storageBindingOwnerKind, config.BindingID)
+}
+
+// openRelayStream asks the daemon at socketPath for the relayed stream of one link (ownerKind and bindingID) and
+// returns it once the daemon answered that the stream is open.
+func openRelayStream(ctx context.Context, socketPath, ownerKind, bindingID string) (net.Conn, error) {
+	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("connect storage relay socket: %w", err)
+		return nil, fmt.Errorf("connect relay socket: %w", err)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = connection.SetDeadline(deadline)
 	} else {
 		_ = connection.SetDeadline(time.Now().Add(targetDialTimeout))
 	}
-	request := securelink.RelayRequest{Version: securelink.ProtocolVersion, OwnerKind: storageBindingOwnerKind, BindingID: config.BindingID}
+	request := securelink.RelayRequest{Version: securelink.RelayProtocolVersion, OwnerKind: ownerKind, BindingID: bindingID}
 	if err := securelink.WriteJSON(connection, request); err != nil {
 		_ = connection.Close()
 		return nil, err
@@ -143,9 +168,9 @@ func openStorageRelay(ctx context.Context, config storageConnectorConfig) (net.C
 		_ = connection.Close()
 		return nil, err
 	}
-	if response.Version != securelink.ProtocolVersion {
+	if response.Version != securelink.RelayProtocolVersion {
 		_ = connection.Close()
-		return nil, errors.New("unsupported storage relay protocol version")
+		return nil, errors.New("unsupported relay protocol version")
 	}
 	if response.Error != "" {
 		_ = connection.Close()
@@ -161,8 +186,10 @@ func storageConnectorEnvironment() func(string) string { return os.Getenv }
 // reached, the relay route unavailable): the first time a reason occurs, then at most once per
 // storageRelayFailureLogInterval with the number of connections it closed in between.
 type storageRelayFailureLog struct {
-	now     func() time.Time
-	logf    func(format string, args ...any)
+	now  func() time.Time
+	logf func(format string, args ...any)
+	// subject names the connections in the lines ("storage connection" when empty).
+	subject string
 	mu      sync.Mutex
 	entries map[string]*storageRelayFailureEntry
 }
@@ -199,9 +226,13 @@ func (l *storageRelayFailureLog) record(err error) {
 	suppressed := entry.suppressed
 	entry.logged, entry.suppressed = now, 0
 	l.mu.Unlock()
+	subject := l.subject
+	if subject == "" {
+		subject = "storage connection"
+	}
 	if suppressed > 0 {
-		l.logf("storage connection closed, relay not opened: %s (%d more since the last line)", reason, suppressed)
+		l.logf("%s closed, relay not opened: %s (%d more since the last line)", subject, reason, suppressed)
 		return
 	}
-	l.logf("storage connection closed, relay not opened: %s", reason)
+	l.logf("%s closed, relay not opened: %s", subject, reason)
 }
