@@ -12,6 +12,7 @@ import {
   isGatewayReleaseTag,
   isRelayReleaseTag,
   isRelayTooOldForGatewayUpdate,
+  isStaleRelayWorkerVersionError,
   relayRecreateStopTimeoutSeconds,
   selectLatestGatewayRelease,
   selectLatestRelayRelease,
@@ -34,6 +35,27 @@ describe('relayRecreateStopTimeoutSeconds', () => {
   it('keeps Docker default when the running relay version is unknown', () => {
     expect(relayRecreateStopTimeoutSeconds(undefined)).toBe(10);
     expect(relayRecreateStopTimeoutSeconds('dev')).toBe(10);
+  });
+});
+
+describe('isStaleRelayWorkerVersionError', () => {
+  const reported =
+    'relay worker did not become ready after update: worker did not become ready before deadline: worker reported version v2.11.0-rc.43, expected v2.11.1-rc.1';
+
+  it('recognises a worker update that left the previous worker running', () => {
+    expect(isStaleRelayWorkerVersionError(new Error(reported), 'v2.11.1-rc.1')).toBe(true);
+    expect(isStaleRelayWorkerVersionError(new Error(reported), '2.11.1-rc.1')).toBe(true);
+  });
+
+  it('ignores other failures and mismatches with another target', () => {
+    expect(isStaleRelayWorkerVersionError(new Error(reported), 'v2.11.1')).toBe(false);
+    expect(isStaleRelayWorkerVersionError(new Error('checksum mismatch'), 'v2.11.1-rc.1')).toBe(false);
+    expect(
+      isStaleRelayWorkerVersionError(
+        new Error('worker reported version v2.11.1-rc.1, expected v2.11.1-rc.1'),
+        'v2.11.1-rc.1'
+      )
+    ).toBe(false);
   });
 });
 
@@ -1419,9 +1441,10 @@ describe('UpdateService interrupted updates', () => {
     vi.spyOn(internals, 'updatePoolStep').mockResolvedValue(undefined);
     vi.spyOn(internals, 'waitForRelayInstanceDrain').mockResolvedValue(true);
     vi.spyOn(internals, 'relayInstanceArchitecture').mockReturnValue('amd64');
-    vi.spyOn(internals, 'waitForRelaySupervisorVersion').mockResolvedValue(undefined);
+    vi.spyOn(internals, 'isRelaySupervisorAt').mockResolvedValue(false);
+    const supervisorAt = vi.spyOn(internals, 'waitForRelaySupervisorVersion').mockResolvedValue(undefined);
     const verify = vi.spyOn(internals, 'waitForRelayInstanceVersion');
-    return { service, runtime, verify, updates };
+    return { service, runtime, verify, supervisorAt, updates };
   }
 
   it('waits for the relay lease peers before draining it and for its acceptor before resuming it', async () => {
@@ -1433,6 +1456,7 @@ describe('UpdateService interrupted updates', () => {
     runtime.drainInstance.mockImplementation(
       async (_id: string, _user: string, enabled: boolean) => void events.push(enabled ? 'drain' : 'resume')
     );
+    runtime.dispatchSupervisorUpdate.mockImplementation(async () => void events.push('supervisor update'));
     runtime.dispatchWorkerUpdate.mockImplementation(async () => void events.push('worker update'));
     verify.mockResolvedValue(undefined);
     const internals = service as unknown as Record<string, (...args: any[]) => any>;
@@ -1441,7 +1465,14 @@ describe('UpdateService interrupted updates', () => {
 
     await service.performRelayUpdate('v2.4.3', {} as never, 'admin-1');
 
-    expect(events).toEqual(['lease peers settled', 'drain', 'worker update', 'relay votes again', 'resume']);
+    expect(events).toEqual([
+      'lease peers settled',
+      'drain',
+      'supervisor update',
+      'worker update',
+      'relay votes again',
+      'resume',
+    ]);
     expect(awaitLeasePeers).toHaveBeenCalledWith('remote-1', expect.any(AbortSignal));
     expect(awaitLeaseSettled).toHaveBeenCalledWith('remote-1', expect.any(Number), expect.any(AbortSignal));
   });
@@ -1464,6 +1495,101 @@ describe('UpdateService interrupted updates', () => {
     );
     // Resumed after its update: the run completed rather than pausing with the relay drained.
     expect(runtime.drainInstance).toHaveBeenLastCalledWith('remote-1', 'admin-1', false);
+  });
+
+  // Regression (v2.11.1-rc.1): a supervisor before v2.11.1 restarted the previous worker binary while it downloaded
+  // the new one. The target supervisor carries out the worker update instead.
+  it('updates the supervisor and waits for it to run the target before it dispatches the worker update', async () => {
+    const { service, runtime, verify, supervisorAt } = rolloutHarness();
+    verify.mockResolvedValue(undefined);
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    vi.spyOn(internals, 'promoteRelayConnectorImages').mockResolvedValue(undefined);
+
+    await service.performRelayUpdate('v2.4.3', {} as never, 'admin-1');
+
+    expect(runtime.dispatchSupervisorUpdate).toHaveBeenCalledTimes(1);
+    expect(supervisorAt).toHaveBeenCalledWith('node-1', 'v2.4.3', expect.any(AbortSignal));
+    expect(runtime.dispatchSupervisorUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      supervisorAt.mock.invocationCallOrder[0]
+    );
+    expect(supervisorAt.mock.invocationCallOrder[0]).toBeLessThan(
+      runtime.prepareWorkerUpdate.mock.invocationCallOrder[0]
+    );
+    expect(runtime.dispatchWorkerUpdate).toHaveBeenCalledTimes(1);
+    expect(runtime.drainInstance).toHaveBeenLastCalledWith('remote-1', 'admin-1', false);
+  });
+
+  it('goes straight to the worker when a retried run finds the supervisor on the target', async () => {
+    const { service, runtime, verify } = rolloutHarness();
+    verify.mockResolvedValue(undefined);
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    vi.spyOn(internals, 'isRelaySupervisorAt').mockResolvedValue(true);
+    vi.spyOn(internals, 'promoteRelayConnectorImages').mockResolvedValue(undefined);
+
+    await service.performRelayUpdate('v2.4.3', {} as never, 'admin-1');
+
+    expect(runtime.dispatchSupervisorUpdate).not.toHaveBeenCalled();
+    expect(runtime.dispatchWorkerUpdate).toHaveBeenCalledTimes(1);
+    expect(internals.updatePoolStep).toHaveBeenCalledWith('step-1', 'ready', true);
+  });
+
+  it('does not update the worker of a run abandoned while the supervisor restarts', async () => {
+    const { service, runtime, supervisorAt } = rolloutHarness();
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    supervisorAt.mockImplementation(async () => {
+      (service as unknown as { relayPoolRun: AbortController }).relayPoolRun.abort();
+    });
+
+    await expect(service.performRelayUpdate('v2.4.3', {} as never, 'admin-1')).rejects.toThrow('abandoned');
+
+    expect(runtime.dispatchWorkerUpdate).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(runtime.drainInstance).toHaveBeenLastCalledWith('remote-1', 'admin-1', false));
+  });
+
+  it('dispatches the worker update again while the previous worker keeps running', async () => {
+    const { service, runtime, verify } = rolloutHarness();
+    verify.mockResolvedValue(undefined);
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    vi.spyOn(internals, 'promoteRelayConnectorImages').mockResolvedValue(undefined);
+    runtime.dispatchWorkerUpdate.mockRejectedValueOnce(
+      new Error('relay worker did not become ready after update: worker reported version v2.4.2, expected v2.4.3')
+    );
+
+    await service.performRelayUpdate('v2.4.3', {} as never, 'admin-1');
+
+    expect(runtime.dispatchWorkerUpdate).toHaveBeenCalledTimes(2);
+    expect(internals.updatePoolStep).toHaveBeenCalledWith('step-1', 'ready', true);
+  });
+
+  it('fails the step after a bounded number of worker updates that kept the previous worker', async () => {
+    const { service, runtime } = rolloutHarness();
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    runtime.dispatchWorkerUpdate.mockRejectedValue(
+      new Error('relay worker did not become ready after update: worker reported version v2.4.2, expected v2.4.3')
+    );
+
+    await expect(service.performRelayUpdate('v2.4.3', {} as never, 'admin-1')).rejects.toThrow(
+      'worker reported version v2.4.2'
+    );
+
+    expect(runtime.dispatchWorkerUpdate).toHaveBeenCalledTimes(3);
+    await vi.waitFor(() => expect(runtime.drainInstance).toHaveBeenLastCalledWith('remote-1', 'admin-1', false));
+  });
+
+  it('does not dispatch a worker update again after another failure', async () => {
+    const { service, runtime } = rolloutHarness();
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(false);
+    runtime.dispatchWorkerUpdate.mockRejectedValue(new Error('checksum mismatch'));
+
+    await expect(service.performRelayUpdate('v2.4.3', {} as never, 'admin-1')).rejects.toThrow('checksum mismatch');
+
+    expect(runtime.dispatchWorkerUpdate).toHaveBeenCalledTimes(1);
   });
 
   // Regression: a run that failed without a Gateway restart left the relay drained.

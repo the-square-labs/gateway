@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -32,11 +33,26 @@ type workerManager struct {
 	client             relayv1.RelayAdminClient
 	state              *enrollmentState
 	lastError          string
-	updateMu           sync.Mutex
+	// updateMu is held while an update or identity renewal stops and starts
+	// the worker itself.
+	updateMu sync.Mutex
+	// replaceBinary installs a verified worker binary at the destination.
+	replaceBinary func(downloadURL, targetVersion, checksum, signedManifest, daemonType, destination string, logger *slog.Logger) error
 }
 
 func newWorkerManager(cfg config.WorkerConfig, enrollmentStateDir string) *workerManager {
-	return &workerManager{cfg: cfg, enrollmentStateDir: enrollmentStateDir}
+	return &workerManager{cfg: cfg, enrollmentStateDir: enrollmentStateDir, replaceBinary: lifecycle.ReplaceBinaryAtPath}
+}
+
+// keepRunning starts a worker that is not running, except while an update or
+// identity renewal holds the worker: those stop and start it themselves, and a
+// start in between could run the previous binary of an update.
+func (m *workerManager) keepRunning() error {
+	if !m.updateMu.TryLock() {
+		return nil
+	}
+	defer m.updateMu.Unlock()
+	return m.ensureRunning()
 }
 
 func (m *workerManager) ensureRunning() error {
@@ -212,8 +228,12 @@ func (m *workerManager) update(
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
 
-	m.shutdown()
-	if err := lifecycle.ReplaceBinaryAtPath(
+	// The binary is replaced while the worker still runs: the rename leaves
+	// the running process on the previous file, and a download or check that
+	// fails leaves the worker as it was. Stopping the worker first left it
+	// down for the whole download, and a start in that window ran the
+	// previous binary, which then stayed.
+	if err := m.replaceBinary(
 		downloadURL,
 		targetVersion,
 		checksum,
@@ -226,12 +246,36 @@ func (m *workerManager) update(
 		return err
 	}
 
-	if err := m.waitReadyVersion(ctx, targetVersion, 30*time.Second); err != nil {
+	m.shutdown()
+	err := m.waitReadyVersion(ctx, targetVersion, workerRestartReadyTimeout)
+	var stale *staleWorkerVersionError
+	if errors.As(err, &stale) {
+		// The worker was started before its binary was replaced.
+		logger.Warn("relay worker runs the previous version after its update; restarting it",
+			"reported_version", stale.reported, "target_version", targetVersion)
+		m.shutdown()
+		err = m.waitReadyVersion(ctx, targetVersion, workerRestartReadyTimeout)
+	}
+	if err != nil {
 		return fmt.Errorf("relay worker did not become ready after update: %w", err)
 	}
 	return nil
 }
 
+// staleWorkerVersionError reports a ready worker that runs another build than
+// the update installed. Gateway dispatches the update again on this message.
+type staleWorkerVersionError struct {
+	reported string
+	expected string
+}
+
+func (e *staleWorkerVersionError) Error() string {
+	return fmt.Sprintf("worker reported version %s, expected %s", e.reported, e.expected)
+}
+
+// waitReadyVersion starts the worker and waits until it is ready on
+// targetVersion. A ready worker on another version is returned at once as a
+// staleWorkerVersionError: that process does not change its version.
 func (m *workerManager) waitReadyVersion(ctx context.Context, targetVersion string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -245,7 +289,7 @@ func (m *workerManager) waitReadyVersion(ctx context.Context, targetVersion stri
 		} else if !health.GetReadiness() {
 			lastErr = fmt.Errorf("worker is not ready: %s", health.GetReason())
 		} else if targetVersion != "" && health.GetBuildVersion() != targetVersion {
-			lastErr = fmt.Errorf("worker reported version %s, expected %s", health.GetBuildVersion(), targetVersion)
+			return &staleWorkerVersionError{reported: health.GetBuildVersion(), expected: targetVersion}
 		} else {
 			return nil
 		}
