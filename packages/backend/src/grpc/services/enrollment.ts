@@ -1,17 +1,16 @@
 import { createHash, randomUUID, X509Certificate } from 'node:crypto';
 import type { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
-import bcrypt from 'bcryptjs';
-import { and, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { validateEnrollmentDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
-import { isNodeEnrollmentTokenExpired, parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
 import { bumpRelayPolicyRevision } from '@/services/relay-policy-reconciler.js';
 import { requestedRelayServicePort } from '@/services/relay-service-endpoint.js';
 import type { EnrollRequest, EnrollResponse, RenewCertRequest, RenewCertResponse } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
+import { findPendingNodeByEnrollmentToken, findRelayNodeByReenrollmentToken } from './enrollment-token-lookup.js';
 
 const logger = createChildLogger('GrpcEnrollment');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -19,74 +18,6 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 function certificateFingerprint(certificatePem: string): string {
   const certificate = new X509Certificate(certificatePem);
   return `sha256:${createHash('sha256').update(certificate.raw).digest('hex')}`;
-}
-
-async function findPendingNodeByEnrollmentToken(deps: GrpcServerDeps, token: string) {
-  const parsedToken = parseNodeEnrollmentToken(token);
-
-  if (parsedToken.kind === 'v2') {
-    const [candidate] = await deps.db
-      .select()
-      .from(nodes)
-      .where(and(eq(nodes.status, 'pending'), eq(nodes.enrollmentTokenSelector, parsedToken.selector)))
-      .limit(1);
-
-    if (!candidate?.enrollmentTokenHash) {
-      return null;
-    }
-
-    if (!(await bcrypt.compare(token, candidate.enrollmentTokenHash))) return null;
-    return isNodeEnrollmentTokenExpired(candidate.enrollmentTokenExpiresAt) ? 'expired' : candidate;
-  }
-
-  if (parsedToken.kind !== 'legacy') {
-    return null;
-  }
-
-  // Compatibility for pending nodes created before selector-based tokens.
-  const legacyPendingNodes = await deps.db
-    .select()
-    .from(nodes)
-    .where(and(eq(nodes.status, 'pending'), isNull(nodes.enrollmentTokenSelector)));
-
-  let matchedNode = null;
-  for (const node of legacyPendingNodes) {
-    if (node.enrollmentTokenHash && (await bcrypt.compare(token, node.enrollmentTokenHash))) {
-      if (!matchedNode) {
-        matchedNode = node;
-      }
-    }
-    // Compare every legacy candidate to avoid turning old tokens into a position oracle.
-  }
-
-  if (matchedNode && isNodeEnrollmentTokenExpired(matchedNode.enrollmentTokenExpiresAt)) return 'expired';
-  return matchedNode;
-}
-
-/**
- * A re-enrollment token of an enrolled remote relay (RelayPoolService.issueRelayReenrollment).
- * The token is the authorization, exactly as for a first enrollment: single use, expiring, and
- * handed to the host by an administrator. It lets a relay whose pinned policy trust holds only
- * keys Gateway destroyed start over from the active key without leaving the pool.
- */
-async function findRelayNodeByReenrollmentToken(deps: GrpcServerDeps, token: string) {
-  const parsedToken = parseNodeEnrollmentToken(token);
-  if (parsedToken.kind !== 'v2') return null;
-  const [candidate] = await deps.db
-    .select()
-    .from(nodes)
-    .where(
-      and(
-        eq(nodes.type, 'relay'),
-        ne(nodes.status, 'pending'),
-        isNotNull(nodes.certificateSerial),
-        eq(nodes.enrollmentTokenSelector, parsedToken.selector)
-      )
-    )
-    .limit(1);
-  if (!candidate?.enrollmentTokenHash) return null;
-  if (!(await bcrypt.compare(token, candidate.enrollmentTokenHash))) return null;
-  return isNodeEnrollmentTokenExpired(candidate.enrollmentTokenExpiresAt) ? 'expired' : candidate;
 }
 
 class EnrollmentTokenConsumedError extends Error {
