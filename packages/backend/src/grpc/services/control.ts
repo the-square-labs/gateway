@@ -2,6 +2,7 @@ import type { ServerDuplexStream } from '@grpc/grpc-js';
 import { and, eq, sql } from 'drizzle-orm';
 import { getEnv } from '@/config/env.js';
 import { container } from '@/container.js';
+import type { DrizzleExecutor } from '@/db/client.js';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import type { NodeGpuDevice } from '@/db/schema/nodes.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
@@ -19,7 +20,9 @@ import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { backgroundWrites } from '@/services/background-writes.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { nodeHostAccessFlags } from '@/services/node-host-access.js';
+import { bumpRelayPolicyRevision } from '@/services/relay-policy-reconciler.js';
 import { reportedPolicySigningKeyIds } from '@/services/relay-policy-signing-key.service.js';
+import { reportedRelayServiceEndpoint } from '@/services/relay-service-endpoint.js';
 import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate, promotePendingNodeCertificate } from '../node-certificate.js';
@@ -901,6 +904,8 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                   appliedPolicyRevision: relayInstances.appliedPolicyRevision,
                   health: relayInstances.health,
                   lastSeenAt: relayInstances.lastSeenAt,
+                  servicePort: relayInstances.servicePort,
+                  advertisedAddresses: relayInstances.advertisedAddresses,
                 })
                 .from(relayInstances)
                 .where(eq(relayInstances.nodeId, activeNodeId))
@@ -918,55 +923,97 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               // A remote report; the policy service caps how far it may move revisions.
               const appliedPolicyRevision =
                 Number.isSafeInteger(reportedRevision) && reportedRevision > 0 ? reportedRevision : 0;
+              // The worker's port (and the addresses its installer advertised) are what daemons dial; a relay
+              // installed with another --service-port than it was created with, or installed again, moves them.
+              const serviceEndpoint = reportedRelayServiceEndpoint(instance, runtime);
               const runtimeStateChanged =
-                instance.state !== nextState || Number(instance.appliedPolicyRevision || 0) !== appliedPolicyRevision;
+                instance.state !== nextState ||
+                Number(instance.appliedPolicyRevision || 0) !== appliedPolicyRevision ||
+                serviceEndpoint !== null;
               // A report that raced the stream's replacement must not overwrite the state the
               // close hook (or the heartbeat fence) recorded.
               if (!isCurrentCommandStream()) return;
               const reportedAt = new Date();
-              await deps.db
-                .update(relayInstances)
-                .set({
-                  // Runtime restarts must not silently resume a manually drained member.
-                  state:
-                    nextState === 'ready'
-                      ? sql`case when ${relayInstances.manualDrainStartedAt} is not null then 'draining'::relay_instance_state else 'ready'::relay_instance_state end`
-                      : nextState,
-                  buildVersion: runtime.buildVersion || null,
-                  protocolMajor: runtime.protocolMajor || null,
-                  capabilities: {
-                    protocolMajor: runtime.protocolMajor || 0,
-                    features: runtime.capabilities ?? [],
-                  },
-                  appliedPolicyRevision,
-                  policyExpiresAt: Number(runtime.policyExpiresAtUnix || 0)
-                    ? new Date(Number(runtime.policyExpiresAtUnix) * 1000)
-                    : null,
-                  lastSeenAt: reportedAt,
-                  health: {
-                    activeTunnels: Number(runtime.activeTunnels || 0),
-                    registeredEndpoints: Number(runtime.registeredEndpoints || 0),
-                    pressurePercent: runtime.pressurePercent || 0,
-                    admissionState: runtime.draining ? 'draining' : nextState,
-                    policySigningKeyIds: reportedPolicySigningKeyIds(
-                      instance.health?.policySigningKeyIds,
-                      runtime.policySigningKeyIds,
-                      nextState
-                    ),
-                    assignmentTunnels: (runtime.assignmentTunnels ?? []).map((count) => ({
-                      endpointId: count.endpointId,
-                      assignmentGeneration: Number(count.assignmentGeneration),
-                      activeTunnels: Number(count.activeTunnels),
-                    })),
-                    // The supervisor's own diagnosis (readiness reason, trust bootstrap
-                    // failure) is what an operator needs when the relay is not ready.
-                    ...(runtime.error ? { lastError: runtime.error.slice(0, 1000) } : {}),
-                  },
-                  updatedAt: new Date(),
-                })
-                .where(eq(relayInstances.id, instance.id));
+              const writeRuntime = (executor: DrizzleExecutor) =>
+                executor
+                  .update(relayInstances)
+                  .set({
+                    // Runtime restarts must not silently resume a manually drained member.
+                    state:
+                      nextState === 'ready'
+                        ? sql`case when ${relayInstances.manualDrainStartedAt} is not null then 'draining'::relay_instance_state else 'ready'::relay_instance_state end`
+                        : nextState,
+                    buildVersion: runtime.buildVersion || null,
+                    protocolMajor: runtime.protocolMajor || null,
+                    capabilities: {
+                      protocolMajor: runtime.protocolMajor || 0,
+                      features: runtime.capabilities ?? [],
+                    },
+                    appliedPolicyRevision,
+                    policyExpiresAt: Number(runtime.policyExpiresAtUnix || 0)
+                      ? new Date(Number(runtime.policyExpiresAtUnix) * 1000)
+                      : null,
+                    lastSeenAt: reportedAt,
+                    health: {
+                      activeTunnels: Number(runtime.activeTunnels || 0),
+                      registeredEndpoints: Number(runtime.registeredEndpoints || 0),
+                      pressurePercent: runtime.pressurePercent || 0,
+                      admissionState: runtime.draining ? 'draining' : nextState,
+                      policySigningKeyIds: reportedPolicySigningKeyIds(
+                        instance.health?.policySigningKeyIds,
+                        runtime.policySigningKeyIds,
+                        nextState
+                      ),
+                      assignmentTunnels: (runtime.assignmentTunnels ?? []).map((count) => ({
+                        endpointId: count.endpointId,
+                        assignmentGeneration: Number(count.assignmentGeneration),
+                        activeTunnels: Number(count.activeTunnels),
+                      })),
+                      // The supervisor's own diagnosis (readiness reason, trust bootstrap
+                      // failure) is what an operator needs when the relay is not ready.
+                      ...(runtime.error ? { lastError: runtime.error.slice(0, 1000) } : {}),
+                    },
+                    updatedAt: new Date(),
+                    ...(serviceEndpoint ?? {}),
+                  })
+                  .where(eq(relayInstances.id, instance.id));
+              if (serviceEndpoint) {
+                // Daemons hold the old target in their grant bundles: a new policy revision and bundles move them.
+                await deps.db.transaction(async (tx) => {
+                  await writeRuntime(tx);
+                  await bumpRelayPolicyRevision(tx);
+                });
+              } else {
+                await writeRuntime(deps.db);
+              }
               if (runtimeStateChanged) {
                 deps.registry.publishRelayRuntimeChanged(activeNodeId, instance.id);
+              }
+              if (serviceEndpoint) {
+                logger.info('Relay service endpoint follows its runtime status', {
+                  nodeId: activeNodeId,
+                  relayInstanceId: instance.id,
+                  servicePort: serviceEndpoint.servicePort,
+                  advertisedAddresses: serviceEndpoint.advertisedAddresses,
+                });
+                await deps.auditService.log({
+                  userId: null,
+                  action: 'relay.instance.service_endpoint.change',
+                  resourceType: 'relay_instance',
+                  resourceId: instance.id,
+                  details: {
+                    previousServicePort: instance.servicePort,
+                    servicePort: serviceEndpoint.servicePort,
+                    previousAdvertisedAddresses: instance.advertisedAddresses,
+                    advertisedAddresses: serviceEndpoint.advertisedAddresses,
+                  },
+                });
+                void deps.relayPolicy?.refreshAllNodeGrantsIfDue(true).catch((error) => {
+                  logger.warn('Relay service endpoint changed; daemon grant bundles follow on the next refresh', {
+                    nodeId: activeNodeId,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                });
               }
               deps.relayPolicy?.noteRemoteAppliedRevision?.(
                 activeNodeId,

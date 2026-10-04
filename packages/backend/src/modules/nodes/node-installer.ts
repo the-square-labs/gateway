@@ -4,13 +4,12 @@ import { RELEASE_VERSION_PATTERN } from '@/lib/semver.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { DaemonUpdateService, daemonTypeForNodeType } from '@/services/daemon-update.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
+import { DEFAULT_RELAY_SERVICE_PORT, requestedRelayServicePort } from '@/services/relay-service-endpoint.js';
 
 const RELEASE_DOWNLOADS = 'https://github.com/the-square-labs/gateway/releases/download';
 // An unreleased build has no release assets of its own, so its commands run the installers from main.
 const MAIN_INSTALLERS = 'https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts';
 const INSTALLER_CHECKSUMS = 'gateway-daemon-installers.sha256';
-/** The relay installer's default service port; only another port is passed. */
-const RELAY_SERVICE_PORT = 9443;
 
 const NODE_INSTALLERS: Readonly<Record<string, string>> = {
   nginx: 'setup-node.sh',
@@ -161,7 +160,8 @@ export function nodeInstallCommands(input: {
     ];
     if (input.nodeType === 'builder') args.push(['--mode', 'builder']);
     if (input.advertiseAddress) args.push(['--advertise-address', input.advertiseAddress]);
-    if (input.servicePort && input.servicePort !== RELAY_SERVICE_PORT)
+    // The relay installer binds the default port unless told otherwise; only another port is passed.
+    if (input.servicePort && input.servicePort !== DEFAULT_RELAY_SERVICE_PORT)
       args.push(['--service-port', String(input.servicePort)]);
     if (input.daemonVersion) args.push(['--version', input.daemonVersion]);
     const command = (transport: InstallTransport) =>
@@ -193,7 +193,7 @@ export async function nodeInstallation(input: {
 /** nodeInstallation for a node enrollment: a created node or a new enrollment token of a pending one. */
 export function enrollmentInstallation(
   enrollment: {
-    node: { type: string; serviceAddresses?: string[] | null };
+    node: { type: string; serviceAddresses?: string[] | null; metadata?: unknown };
     enrollmentToken: string;
     gatewayCertSha256: string;
     gatewayEnrollmentTargets: EnrollmentTargets;
@@ -207,6 +207,7 @@ export function enrollmentInstallation(
     targets: enrollment.gatewayEnrollmentTargets,
     fallbackGateway,
     advertiseAddress: enrollment.node.type === 'relay' ? enrollment.node.serviceAddresses?.[0] : null,
+    servicePort: enrollment.node.type === 'relay' ? requestedRelayServicePort(enrollment.node.metadata) : null,
   });
 }
 

@@ -207,3 +207,24 @@ describe('RelayGrantIssuerService revocation fences', () => {
     expect(bundle.revocationFences).toBeUndefined();
   });
 });
+
+describe('RelayGrantIssuerService dial targets', () => {
+  it("names each relay's own service port in the candidates daemons dial", async () => {
+    const service = issuer([{ table: relayEndpoints, projected: false, filtered: true, rows: [endpoint] }]);
+    service.getPoolProjection = vi
+      .fn()
+      .mockResolvedValue(new Map([['endpoint-1', [{ ...relay('relay-custom'), port: 853 }, relay('relay-default')]]]));
+    const bundle = await service.getNodeGrantBundle('node-target');
+    const registration = bundle.grants.find((grant: { role: string }) => grant.role === 'endpoint');
+    expect(
+      registration.candidates.map(({ relayInstanceId, addresses, port }: Record<string, unknown>) => ({
+        relayInstanceId,
+        addresses,
+        port,
+      }))
+    ).toEqual([
+      { relayInstanceId: 'relay-custom', addresses: ['relay-custom.example'], port: 853 },
+      { relayInstanceId: 'relay-default', addresses: ['relay-default.example'], port: 9443 },
+    ]);
+  });
+});

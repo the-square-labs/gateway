@@ -3,7 +3,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '@/config/env.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
-import { installerRelease, nodeInstallCommands, secureRuntimeLocalCommand } from './node-installer.js';
+import {
+  enrollmentInstallation,
+  installerRelease,
+  nodeInstallCommands,
+  secureRuntimeLocalCommand,
+} from './node-installer.js';
+
+vi.mock('@/config/env.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/config/env.js')>()),
+  getEnv: () => ({ APP_VERSION: '2.11.0', GRPC_PORT: 9443 }),
+}));
 
 const RELEASE = 'https://github.com/the-square-labs/gateway/releases/download/v2.11.0';
 const CERT = `sha256:${'a'.repeat(64)}`;
@@ -116,6 +126,30 @@ describe('node setup commands', () => {
         targets: { public: { label: 'Public node', gateway: null } },
       })
     ).toEqual([]);
+  });
+});
+
+describe('relay enrollment command', () => {
+  function relayInstallation(metadata: Record<string, unknown>) {
+    return enrollmentInstallation({
+      node: { type: 'relay', serviceAddresses: ['relay.example.com'], metadata },
+      enrollmentToken: 'gw_node_v2_token',
+      gatewayCertSha256: CERT,
+      gatewayEnrollmentTargets: { public: { label: 'Public node', gateway: 'gw.example.com:9443' } },
+    });
+  }
+
+  it('carries the port the relay node was created with', async () => {
+    const installation = await relayInstallation({ createdById: 'user-1', relayServicePort: 853 });
+    expect(installation.installCommands[0]?.curl).toMatch(
+      /--advertise-address relay\.example\.com \\\n {2}--service-port 853$/
+    );
+  });
+
+  it('leaves the installer default port implicit', async () => {
+    const installation = await relayInstallation({ createdById: 'user-1' });
+    expect(installation.installCommands[0]?.curl).toMatch(/--advertise-address relay\.example\.com$/);
+    expect(installation.installCommands[0]?.curl).not.toContain('--service-port');
   });
 });
 

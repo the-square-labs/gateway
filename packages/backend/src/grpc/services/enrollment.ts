@@ -7,6 +7,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { validateEnrollmentDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
 import { isNodeEnrollmentTokenExpired, parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
 import { bumpRelayPolicyRevision } from '@/services/relay-policy-reconciler.js';
+import { requestedRelayServicePort } from '@/services/relay-service-endpoint.js';
 import type { EnrollRequest, EnrollResponse, RenewCertRequest, RenewCertResponse } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate } from '../node-certificate.js';
@@ -173,7 +174,9 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
                 faultDomainId: hostIdentityId,
                 displayName: matchedNode.displayName?.trim() ?? req.hostname,
                 advertisedAddresses,
-                servicePort: 9443,
+                // The port the operator created the relay with; the supervisor's runtime status then reports
+                // the port its worker actually listens on (control.ts), and that one wins.
+                servicePort: requestedRelayServicePort(matchedNode.metadata),
                 state: 'joining',
               })
               .returning();

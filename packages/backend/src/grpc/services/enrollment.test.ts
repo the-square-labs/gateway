@@ -395,6 +395,7 @@ describe('Enroll token lookup', () => {
       type: 'relay',
       displayName: 'EU Relay',
       serviceAddresses: ['relay.example.test'],
+      metadata: { createdById: 'user-1', relayServicePort: 853 },
     };
     const insertedValues = vi.fn();
     const db = {
@@ -458,6 +459,8 @@ describe('Enroll token lookup', () => {
         faultDomainId: hostIdentityId,
         displayName: 'EU Relay',
         advertisedAddresses: ['relay.example.test'],
+        // The port the relay node was created with, not the installer default.
+        servicePort: 853,
         state: 'joining',
       })
     );
