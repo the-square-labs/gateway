@@ -1,17 +1,16 @@
 import { createHash, randomUUID, X509Certificate } from 'node:crypto';
 import type { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
-import bcrypt from 'bcryptjs';
-import { and, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { validateEnrollmentDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
-import { isNodeEnrollmentTokenExpired, parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
 import { bumpRelayPolicyRevision } from '@/services/relay-policy-reconciler.js';
 import { requestedRelayServicePort } from '@/services/relay-service-endpoint.js';
 import type { EnrollRequest, EnrollResponse, RenewCertRequest, RenewCertResponse } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
+import { findPendingNodeByEnrollmentToken, findRelayNodeByReenrollmentToken } from './enrollment-token-lookup.js';
 
 const logger = createChildLogger('GrpcEnrollment');
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -21,78 +20,24 @@ function certificateFingerprint(certificatePem: string): string {
   return `sha256:${createHash('sha256').update(certificate.raw).digest('hex')}`;
 }
 
-async function findPendingNodeByEnrollmentToken(deps: GrpcServerDeps, token: string) {
-  const parsedToken = parseNodeEnrollmentToken(token);
-
-  if (parsedToken.kind === 'v2') {
-    const [candidate] = await deps.db
-      .select()
-      .from(nodes)
-      .where(and(eq(nodes.status, 'pending'), eq(nodes.enrollmentTokenSelector, parsedToken.selector)))
-      .limit(1);
-
-    if (!candidate?.enrollmentTokenHash) {
-      return null;
-    }
-
-    if (!(await bcrypt.compare(token, candidate.enrollmentTokenHash))) return null;
-    return isNodeEnrollmentTokenExpired(candidate.enrollmentTokenExpiresAt) ? 'expired' : candidate;
-  }
-
-  if (parsedToken.kind !== 'legacy') {
-    return null;
-  }
-
-  // Compatibility for pending nodes created before selector-based tokens.
-  const legacyPendingNodes = await deps.db
-    .select()
-    .from(nodes)
-    .where(and(eq(nodes.status, 'pending'), isNull(nodes.enrollmentTokenSelector)));
-
-  let matchedNode = null;
-  for (const node of legacyPendingNodes) {
-    if (node.enrollmentTokenHash && (await bcrypt.compare(token, node.enrollmentTokenHash))) {
-      if (!matchedNode) {
-        matchedNode = node;
-      }
-    }
-    // Compare every legacy candidate to avoid turning old tokens into a position oracle.
-  }
-
-  if (matchedNode && isNodeEnrollmentTokenExpired(matchedNode.enrollmentTokenExpiresAt)) return 'expired';
-  return matchedNode;
-}
-
-/**
- * A re-enrollment token of an enrolled remote relay (RelayPoolService.issueRelayReenrollment).
- * The token is the authorization, exactly as for a first enrollment: single use, expiring, and
- * handed to the host by an administrator. It lets a relay whose pinned policy trust holds only
- * keys Gateway destroyed start over from the active key without leaving the pool.
- */
-async function findRelayNodeByReenrollmentToken(deps: GrpcServerDeps, token: string) {
-  const parsedToken = parseNodeEnrollmentToken(token);
-  if (parsedToken.kind !== 'v2') return null;
-  const [candidate] = await deps.db
-    .select()
-    .from(nodes)
-    .where(
-      and(
-        eq(nodes.type, 'relay'),
-        ne(nodes.status, 'pending'),
-        isNotNull(nodes.certificateSerial),
-        eq(nodes.enrollmentTokenSelector, parsedToken.selector)
-      )
-    )
-    .limit(1);
-  if (!candidate?.enrollmentTokenHash) return null;
-  if (!(await bcrypt.compare(token, candidate.enrollmentTokenHash))) return null;
-  return isNodeEnrollmentTokenExpired(candidate.enrollmentTokenExpiresAt) ? 'expired' : candidate;
-}
-
 class EnrollmentTokenConsumedError extends Error {
   constructor() {
     super('Enrollment token was already used');
   }
+}
+
+class CertificateChangedDuringRenewalError extends Error {
+  constructor() {
+    super('Node certificate changed during renewal; retry');
+  }
+}
+
+/** What a failed RPC tells the daemon: database and PKI errors carry queries and identifiers, which stay in the log. */
+const ENROLLMENT_FAILED_MESSAGE = 'Enrollment failed; see the Gateway log for details';
+const RENEWAL_FAILED_MESSAGE = 'Certificate renewal failed; see the Gateway log for details';
+
+function relayHostTakenMessage(relayName: string | null): string {
+  return `This host already has ${relayName ? `relay "${relayName}"` : 'a relay'} in the Relay Pool. Re-enroll that relay (Settings > Relay > Re-enroll) or remove it first.`;
 }
 
 export function createEnrollmentHandlers(deps: GrpcServerDeps) {
@@ -161,10 +106,38 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             .from(relayInstances)
             .where(eq(relayInstances.nodeId, nodeId))
             .limit(1);
+          if (relayReenrollment) {
+            // A re-enrollment token re-enrolls the relay on its own host only. Presented by another
+            // host (another pool relay), it would move this relay's instance and identity there.
+            const enrolledHostIdentityId = instance?.faultDomainId ?? matchedNode.hostIdentityId;
+            if (!enrolledHostIdentityId || enrolledHostIdentityId.toLowerCase() !== hostIdentityId.toLowerCase()) {
+              logger.warn('Relay re-enrollment refused: the token was presented by another host', {
+                nodeId,
+                hostname: req.hostname,
+                hostIdentityId,
+              });
+              callback({ code: 16, message: 'Invalid enrollment token' });
+              return;
+            }
+          }
           if (!deps.relayPolicy) throw new Error('Relay instance enrollment is not initialized');
           const advertisedAddresses = instance?.advertisedAddresses ?? matchedNode.serviceAddresses ?? [];
-          if (!advertisedAddresses.length) throw new Error('Relay node has no advertised service address');
+          if (!advertisedAddresses.length) {
+            callback({ code: 9, message: 'Relay node has no advertised service address' });
+            return;
+          }
           if (!instance) {
+            // One relay per host in the pool. A relay that went offline on this host stays in the pool until its
+            // policy expires; the new node must not get certificates only to fail on the pool's host constraint.
+            const [sameHost] = await deps.db
+              .select({ displayName: relayInstances.displayName })
+              .from(relayInstances)
+              .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.faultDomainId, hostIdentityId)))
+              .limit(1);
+            if (sameHost) {
+              callback({ code: 6, message: relayHostTakenMessage(sameHost.displayName) });
+              return;
+            }
             [instance] = await deps.db
               .insert(relayInstances)
               .values({
@@ -320,12 +293,14 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           callback({ code: 16, message: 'Invalid enrollment token' });
           return;
         }
-        if ((err as { constraint?: string }).constraint === 'relay_instances_pool_fault_domain_unique') {
-          callback({ code: 6, message: 'This physical host already has a relay instance in the system pool' });
+        // Drizzle wraps the driver error: the constraint is on its cause. Reached when two enrollments race.
+        const failed = err as { constraint?: string; cause?: { constraint?: string } };
+        if ((failed.constraint ?? failed.cause?.constraint) === 'relay_instances_pool_fault_domain_unique') {
+          callback({ code: 6, message: relayHostTakenMessage(null) });
           return;
         }
-        logger.error('Enrollment failed', { error: (err as Error).message });
-        callback({ code: 13, message: `Enrollment failed: ${(err as Error).message}` });
+        logger.error('Enrollment failed', { hostname: call.request?.hostname, error: (err as Error).message });
+        callback({ code: 13, message: ENROLLMENT_FAILED_MESSAGE });
       }
     },
 
@@ -424,7 +399,7 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
               })
               .where(and(eq(nodes.id, req.nodeId), eq(nodes.certificateSerial, currentSerial)))
               .returning({ id: nodes.id });
-            if (staged.length === 0) throw new Error('Node certificate changed during renewal; retry');
+            if (staged.length === 0) throw new CertificateChangedDuringRenewalError();
           },
           { stage: 'pending' }
         );
@@ -469,8 +444,12 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           }
         }
       } catch (err) {
-        logger.error('Certificate renewal failed', { error: (err as Error).message });
-        callback({ code: 13, message: `Renewal failed: ${(err as Error).message}` });
+        if (err instanceof CertificateChangedDuringRenewalError) {
+          callback({ code: 13, message: err.message });
+          return;
+        }
+        logger.error('Certificate renewal failed', { nodeId: call.request?.nodeId, error: (err as Error).message });
+        callback({ code: 13, message: RENEWAL_FAILED_MESSAGE });
       }
     },
   };
