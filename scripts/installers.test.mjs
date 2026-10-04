@@ -975,3 +975,129 @@ test('an enrolled relay re-runs without a token and keeps its identity', { skip:
   // A refused re-enrollment token is a failure that says the relay still runs.
   assert.match(source, /enrollment_status" -eq 1 && "\$REENROLLMENT" -eq 1[\s\S]*keeps running with its previous identity, but it was not re-enrolled[\s\S]*without --token[\s\S]*exit 1/);
 });
+
+// Secure Runtime is optional: a host that does not support it gets a warning with the reason and no question; only an
+// explicit --secure-runtime fails the install, with that reason. An install that is declined or stopped after the
+// summary never exits 0 ("Installation not completed" with exit 0 left a pending node and a green script).
+test('Docker install without Secure Runtime support continues with the reason, and no installer exits 0 when incomplete', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-secure-runtime-'));
+  try {
+    const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+    assert.doesNotMatch(source, /Continue without Secure Runtimes\?/, 'the question is gone');
+    const body = shellFunction(source, 'setup_secure_runtime');
+    const run = async ({ secureRuntime, preflightExit, installExit = 0 }) => {
+      const daemon = path.join(dir, 'docker-daemon');
+      await writeFile(
+        daemon,
+        [
+          '#!/bin/sh',
+          'case "$*" in',
+          `  *--silent*) exit ${preflightExit} ;;`,
+          '  *--plain*) printf "unsupported\\tdocker_reload_unavailable\\tsystemd Docker service cannot be reloaded\\n"; exit 20 ;;',
+          `  *"runtime install"*) exit ${installExit} ;;`,
+          'esac',
+          '',
+        ].join('\n'),
+        { mode: 0o755 }
+      );
+      return runShell(
+        [
+          'set -euo pipefail',
+          `DOCKER_MODE=docker; EXISTING_INSTALL=0; SECURE_RUNTIME=${secureRuntime}; NON_INTERACTIVE=0; ROOT_DAEMON_BINARY='${daemon}'`,
+          'prepare_root_daemon_binary() { :; }',
+          'ok() { echo "OK $*"; }',
+          'log() { echo "LOG $*"; }',
+          'warn() { echo "WARN $*"; }',
+          'err() { echo "ERR $*" >&2; }',
+          'die() { err "$@"; exit 1; }',
+          'prompt_yes_no() { echo PROMPTED; return 1; }',
+          'complete_incomplete() { echo INCOMPLETE; exit 1; }',
+          body,
+          'setup_secure_runtime',
+          'echo CONTINUED',
+        ].join('\n')
+      );
+    };
+    // Unsupported, not requested: warns with the reason, no question, continues.
+    const unsupported = await run({ secureRuntime: 0, preflightExit: 20 });
+    assert.equal(unsupported.status, 0, unsupported.output);
+    assert.match(unsupported.output, /WARN Continuing without Secure Runtime \(systemd Docker service cannot be reloaded\)/);
+    assert.match(unsupported.output, /CONTINUED/);
+    assert.doesNotMatch(unsupported.output, /PROMPTED|INCOMPLETE/);
+    // A setup that fails behaves the same.
+    const failed = await run({ secureRuntime: 0, preflightExit: 10, installExit: 1 });
+    assert.equal(failed.status, 0, failed.output);
+    assert.doesNotMatch(failed.output, /PROMPTED/);
+    // Requested explicitly: the install fails with the reason.
+    const requested = await run({ secureRuntime: 1, preflightExit: 20 });
+    assert.equal(requested.status, 1, requested.output);
+    assert.match(requested.output, /Secure Runtime is not installed on this node: systemd Docker service cannot be reloaded\./);
+    assert.doesNotMatch(requested.output, /CONTINUED/);
+    // A ready Secure Runtime is not a warning.
+    const ready = await run({ secureRuntime: 0, preflightExit: 0 });
+    assert.match(ready.output, /OK Secure Runtime is ready/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  for (const script of ['setup-docker-node.sh', 'setup-monitoring-node.sh', 'setup-node.sh']) {
+    const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+    assert.match(shellFunction(source, 'complete_incomplete'), /\n\s+exit 1\n\}$/, `${script} declined install exits non-zero`);
+    assert.doesNotMatch(source, /complete_incomplete\n\s+exit 0/, script);
+  }
+  // Installers without that helper have no "not completed" path at all.
+  for (const script of installers) {
+    const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+    if (!source.includes('complete_incomplete()')) assert.doesNotMatch(source, /Installation not completed/, script);
+  }
+});
+
+// A launcher that stopped but whose parent never reaps it (PID 1 of a container) stays a zombie, which kill -0 counts as
+// running: a re-run in manual mode waited 30 s, gave up and left the host without a daemon.
+test('a zombie launcher counts as stopped in every installer that stops launchers', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-zombie-'));
+  const holder = spawn('bash', ['-c', 'trap "" TERM; sleep 120'], { stdio: 'ignore' });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const pid = holder.pid;
+    const proc = path.join(dir, 'proc');
+    const fake = (name, content) => runShell(`mkdir -p '${proc}/${pid}' '${proc}/self' && printf '%s' '${content}' > '${proc}/${name}'`);
+    fake('self/stat', '1 (bash) S 0');
+    const scripts = {
+      'setup-monitoring-node.sh': 'monitoring',
+      'setup-docker-node.sh': 'docker',
+      'setup-node.sh': 'nginx',
+      'setup-relay-node.sh': 'relay',
+    };
+    for (const [script, type] of Object.entries(scripts)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      const functionsText = ['launcher_pid_is_live', 'launcher_pid_from_json', 'stop_manual_launcher']
+        .map((name) => shellFunction(source, name).replaceAll('/proc/', `${proc}/`))
+        .join('\n');
+      const check = (stat, withStop = false) => {
+        fake(`${pid}/stat`, stat);
+        // The process is alive for the kernel (it ignores TERM) and has the launcher's command line.
+        runShell(`printf '%s\\0' x launcher --daemon-type ${type} y > '${proc}/${pid}/cmdline'`);
+        const launcherDir = path.join(dir, `launcher-${type}`);
+        runShell(`mkdir -p '${launcherDir}' && printf '{"pid":${pid}}' > '${launcherDir}/owner.json'`);
+        const started = Date.now();
+        const live = runShell(`${functionsText}\nlauncher_pid_is_live ${pid} && echo LIVE || echo STOPPED`);
+        // Stopping a launcher that is really alive waits 30 s, so only the zombie is stopped here.
+        const stopped = withStop
+          ? runShell(`${functionsText}\nstop_manual_launcher '${launcherDir}' ${type} && echo STOP-OK || echo STOP-FAILED`)
+          : { output: '' };
+        return { live: live.output.trim(), stopped: stopped.output.trim(), seconds: (Date.now() - started) / 1000 };
+      };
+      const zombie = check(`${pid} (relay-sup) Z 1 1 1`, true);
+      assert.equal(zombie.live, 'STOPPED', script);
+      assert.equal(zombie.stopped, 'STOP-OK', script);
+      assert.ok(zombie.seconds < 10, `${script} does not wait for a zombie (${zombie.seconds} s)`);
+      // A command name with ") " in it does not hide the state; a running launcher is alive.
+      assert.equal(check(`${pid} (a) b) Z 1`).live, 'STOPPED', script);
+      assert.equal(check(`${pid} (a) b) S 1`).live, 'LIVE', script);
+      assert.equal(check(`${pid} (launcher) R 1`).live, 'LIVE', script);
+    }
+  } finally {
+    holder.kill('SIGKILL');
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -120,6 +120,8 @@ complete_incomplete() {
         echo -e "${YELLOW}■${NC} ${BOLD}Installation not completed.${NC}"
         echo ""
     fi
+    # An install that was declined or stopped after the summary did not complete: it never exits 0.
+    exit 1
 }
 
 show_logo() {
@@ -959,10 +961,17 @@ launcher_pid_from_json() {
     printf '%s\n' "$pid"
 }
 
+# A launcher that exited but whose parent never reaps it (PID 1 of a container that does not) stays a zombie: kill -0
+# still succeeds for it, though it runs nothing. The state is the field after the command name in /proc/<pid>/stat,
+# which may itself contain ") ", so it is read after the last one (the same on busybox and Alpine).
 launcher_pid_is_live() {
-    local pid="${1:-}"
+    local pid="${1:-}" stat
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    kill -0 "$pid" 2>/dev/null
+    kill -0 "$pid" 2>/dev/null || return 1
+    [[ -r /proc/self/stat ]] || return 0
+    stat=$(cat "/proc/${pid}/stat" 2>/dev/null) || return 1
+    stat="${stat##*) }"
+    [[ "${stat:0:1}" != "Z" && "${stat:0:1}" != "X" ]]
 }
 
 launcher_child_is_ready() {
@@ -1859,7 +1868,6 @@ summary_end
 
 if ! prompt_yes_no "Proceed with installation?" "Y"; then
     complete_incomplete
-    exit 0
 fi
 guide_blank
 
@@ -2325,13 +2333,11 @@ setup_secure_runtime() {
             ;;
     esac
 
-    [[ "$SECURE_RUNTIME" != "1" ]] || die "Secure Runtime is not installed on this node."
-    local continue_default="N"
-    [[ "$NON_INTERACTIVE" -eq 1 ]] && continue_default="Y"
-    if ! prompt_yes_no "Continue without Secure Runtimes?" "$continue_default"; then
-        complete_incomplete
-        exit 0
-    fi
+    # Secure Runtime is optional. The reason it is missing is the node's own: its capabilities report the same one.
+    local reason
+    reason=$("$target" runtime preflight runsc --plain 2>/dev/null | sed -n 1p | awk -F'\t' '{ print ($3 != "" ? $3 : $2) }' || true)
+    [[ "$SECURE_RUNTIME" != "1" ]] || die "Secure Runtime is not installed on this node${reason:+: ${reason}}."
+    warn "Continuing without Secure Runtime${reason:+ (${reason})}. The node reports the same reason in its capabilities."
 }
 
 write_database_profile_config() {

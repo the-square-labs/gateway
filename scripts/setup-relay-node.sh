@@ -366,10 +366,17 @@ launcher_pid_from_json() {
   printf '%s\n' "$pid"
 }
 
+# A launcher that exited but whose parent never reaps it (PID 1 of a container that does not) stays a zombie: kill -0
+# still succeeds for it, though it runs nothing. The state is the field after the command name in /proc/<pid>/stat,
+# which may itself contain ") ", so it is read after the last one (the same on busybox and Alpine).
 launcher_pid_is_live() {
-  local pid="${1:-}"
+  local pid="${1:-}" stat
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-  kill -0 "$pid" 2>/dev/null
+  kill -0 "$pid" 2>/dev/null || return 1
+  [[ -r /proc/self/stat ]] || return 0
+  stat=$(cat "/proc/${pid}/stat" 2>/dev/null) || return 1
+  stat="${stat##*) }"
+  [[ "${stat:0:1}" != "Z" && "${stat:0:1}" != "X" ]]
 }
 
 launcher_child_is_ready() {
