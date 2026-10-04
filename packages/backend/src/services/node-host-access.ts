@@ -8,6 +8,17 @@ import { AppError } from '@/middleware/error-handler.js';
  */
 export const NODE_CONSOLE_DISABLED_CAPABILITY = 'node_console_disabled_v1';
 export const NODE_FILES_DISABLED_CAPABILITY = 'node_files_disabled_v1';
+/**
+ * The daemon config sets `console.user` to another user, but the daemon runs without root and cannot start sessions
+ * as that user, so it refuses every console session.
+ */
+export const NODE_CONSOLE_USER_UNAVAILABLE_CAPABILITY = 'node_console_user_unavailable_v1';
+
+const CONSOLE_USER_UNAVAILABLE = {
+  code: 'NODE_CONSOLE_USER_UNAVAILABLE',
+  message:
+    "This node's daemon config sets console.user to another user, but the daemon does not run as root and cannot start sessions as that user. Remove console.user from the daemon config file on the node, or run the daemon as root, and restart the daemon.",
+};
 
 export type NodeHostFeature = 'console' | 'files';
 
@@ -30,10 +41,14 @@ const FEATURES: Record<NodeHostFeature, { capability: string; code: string; mess
 export function nodeHostAccessFlags(advertised: readonly string[] | null | undefined): {
   nodeConsoleDisabled?: true;
   nodeFilesDisabled?: true;
+  nodeConsoleUserUnavailable?: true;
 } {
   return {
     ...(advertised?.includes(NODE_CONSOLE_DISABLED_CAPABILITY) ? { nodeConsoleDisabled: true as const } : {}),
     ...(advertised?.includes(NODE_FILES_DISABLED_CAPABILITY) ? { nodeFilesDisabled: true as const } : {}),
+    ...(advertised?.includes(NODE_CONSOLE_USER_UNAVAILABLE_CAPABILITY)
+      ? { nodeConsoleUserUnavailable: true as const }
+      : {}),
   };
 }
 
@@ -42,13 +57,32 @@ export function nodeHostFeatureDisabledError(feature: NodeHostFeature): AppError
   return new AppError(409, code, message);
 }
 
-/** Refuses a host console or file command for a connected node whose daemon advertises the feature as disabled. */
+type CapabilityRegistry = { hasCapability(nodeId: string, capability: string): boolean };
+
+/** Why the node's daemon refuses every host console session, or null when it accepts them. */
+export function nodeConsoleRefusal(registry: CapabilityRegistry, nodeId: string): AppError | null {
+  if (registry.hasCapability(nodeId, NODE_CONSOLE_DISABLED_CAPABILITY)) {
+    return nodeHostFeatureDisabledError('console');
+  }
+  if (registry.hasCapability(nodeId, NODE_CONSOLE_USER_UNAVAILABLE_CAPABILITY)) {
+    return new AppError(409, CONSOLE_USER_UNAVAILABLE.code, CONSOLE_USER_UNAVAILABLE.message);
+  }
+  return null;
+}
+
+/** Refuses a host console or file command for a connected node whose daemon advertises the feature as unavailable. */
 export function assertNodeHostFeatureEnabled(
-  registry: { hasCapability(nodeId: string, capability: string): boolean },
+  registry: CapabilityRegistry,
   nodeId: string,
   feature: NodeHostFeature
 ): void {
-  if (registry.hasCapability(nodeId, FEATURES[feature].capability)) {
-    throw nodeHostFeatureDisabledError(feature);
+  const refusal =
+    feature === 'console'
+      ? nodeConsoleRefusal(registry, nodeId)
+      : registry.hasCapability(nodeId, FEATURES[feature].capability)
+        ? nodeHostFeatureDisabledError(feature)
+        : null;
+  if (refusal) {
+    throw refusal;
   }
 }

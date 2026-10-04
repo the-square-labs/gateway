@@ -6,10 +6,7 @@ import (
 	"fmt"
 	"os"
 	osexec "os/exec"
-	"os/user"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -41,19 +38,8 @@ func (m *Manager) CreatePTYSession(ctx context.Context, key, shell string, rows,
 	cmd := osexec.CommandContext(ctx, shell)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
-	// Set user credentials if requested
-	if runAsUser != "" {
-		cred, credErr := lookupUserCredential(runAsUser)
-		if credErr != nil {
-			return "", false, fmt.Errorf("cannot run as user %q: %w", runAsUser, credErr)
-		}
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred}
-		// Set HOME for the target user
-		u, _ := user.Lookup(runAsUser)
-		if u != nil {
-			cmd.Dir = u.HomeDir
-			cmd.Env = append(cmd.Env, "HOME="+u.HomeDir, "USER="+runAsUser)
-		}
+	if err := applyRunAsUser(cmd, runAsUser); err != nil {
+		return "", false, err
 	}
 
 	// Start with PTY
@@ -133,18 +119,4 @@ func DetectShell() string {
 	}
 
 	return "/bin/sh"
-}
-
-// lookupUserCredential resolves a username to syscall credentials.
-func lookupUserCredential(username string) (*syscall.Credential, error) {
-	u, err := user.Lookup(username)
-	if err != nil {
-		return nil, err
-	}
-	uid, _ := strconv.ParseUint(u.Uid, 10, 32)
-	gid, _ := strconv.ParseUint(u.Gid, 10, 32)
-	return &syscall.Credential{
-		Uid: uint32(uid),
-		Gid: uint32(gid),
-	}, nil
 }

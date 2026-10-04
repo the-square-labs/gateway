@@ -329,7 +329,7 @@ nginx:
 
 console:
   enabled: true  # host console; false turns it off on this node
-  user: ""       # OS user for console sessions; empty = daemon's user
+  user: ""       # OS user for console sessions; empty = daemon's user; another user needs a root daemon
 
 files:
   enabled: true  # host file access; false turns it off on this node
@@ -357,6 +357,8 @@ Docker container consoles and container files are not affected: they reach into 
 **To remove host access, disable both.** Turning off only the console is not a boundary: the daemon usually runs as root, and writing files as that user can still change the host and run code — systemd units, cron jobs, `authorized_keys`, or this config file itself to turn the console back on at the next restart. The node page shows a warning while the console is off and file access is on.
 
 The node setup dialogs offer **Disable host console** and **Disable host files** checkboxes that add these flags to the generated command. Nodes ordered through a hosting provider are installed by Gateway itself with a pinned installer revision; turn the switches off on those nodes by editing the config file.
+
+`console.user` runs console sessions and one-shot commands as another OS user. Only a daemon running as root can start processes as another user. A daemon that runs as its own user (`--user`) and names another user in `console.user` logs an error at startup, reports it when it connects, and refuses every console session. Gateway refuses those requests with `409 NODE_CONSOLE_USER_UNAVAILABLE`, and the node page names the fix: remove `console.user` or run the daemon as root. Sessions start in the user's home directory, or in `/` when the user has none (for example a system user created with `--no-create-home`).
 
 ## Daemon Updates
 

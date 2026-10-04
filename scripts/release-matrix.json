@@ -85,7 +85,7 @@
       ]
     },
     "node.console-as-user": {
-      "description": "The node console runs as the daemon's user, or as console.user when it is set.",
+      "description": "The node console runs as the daemon's user, or, on a root daemon, as console.user when it is set (in / when that user has no home); a non-root daemon refuses another console.user with the reason.",
       "doc": "docs/nodes.md#daemon-configuration",
       "os": [
         "debian"
@@ -2160,12 +2160,12 @@
       "steps": [
         "Re-run each installer with --disable-console --disable-files; open the console and Files of each node and call execute_node_console_command over MCP.",
         "Re-run each installer without the flags.",
-        "Set files.enabled: true only and restart; then set both true, set console.user: gwsvc2 on the nginx node and restart."
+        "Set files.enabled: true only and restart; then set both true, set console.user: gwsvc2 on the nginx node (daemon as www-data) and on a root docker node, and restart both."
       ],
       "expect": [
         "Console: auth_error NODE_CONSOLE_DISABLED with the config hint; Files and the file API: 409 NODE_FILES_DISABLED; MCP returns NODE_CONSOLE_DISABLED; the node shows nodeConsoleDisabled/nodeFilesDisabled.",
         "The re-run keeps both false.",
-        "Console off and files on shows the warning notice; with both on the console works and nginx console sessions run as gwsvc2; config ownership and mode are unchanged."
+        "Console off and files on shows the warning notice; with both on the console works. console.user on the nginx node: one startup error in the daemon log, the node page says console.user needs a root daemon, and the console and MCP return NODE_CONSOLE_USER_UNAVAILABLE; on the root docker node console sessions run as gwsvc2 in / (it has no home). Config ownership and mode are unchanged."
       ]
     },
     {

@@ -1,6 +1,11 @@
 package lifecycle
 
 import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/exec"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
 
@@ -11,6 +16,9 @@ import (
 const (
 	NodeConsoleDisabledCapability = "node_console_disabled_v1"
 	NodeFilesDisabledCapability   = "node_files_disabled_v1"
+	// NodeConsoleUserUnavailableCapability marks a console.user this daemon
+	// cannot start sessions as; every console session is refused.
+	NodeConsoleUserUnavailableCapability = "node_console_user_unavailable_v1"
 
 	nodeConsoleDisabledError = "console is disabled in this node's daemon configuration (set console.enabled: true in the daemon config file and restart the daemon to enable it)"
 	nodeFilesDisabledError   = "file access is disabled in this node's daemon configuration (set files.enabled: true in the daemon config file and restart the daemon to enable it)"
@@ -58,4 +66,45 @@ func refuseDisabledNodeFile(cfg *BaseConfig, cmd *pb.GatewayCommand) *pb.Command
 		return nil
 	}
 	return &pb.CommandResult{CommandId: cmd.CommandId, Success: false, Error: nodeFilesDisabledError}
+}
+
+// consoleUserRefusal is the refusal for every console session when
+// console.user names a user this daemon cannot switch to, or "" when the
+// console may run as the configured user. Root daemons can switch to any
+// user; others only run sessions as themselves.
+func consoleUserRefusal(cfg *BaseConfig) string {
+	if !cfg.Console.IsEnabled() || cfg.Console.User == "" {
+		return ""
+	}
+	err := exec.CheckRunAsUser(cfg.Console.User)
+	if !errors.Is(err, exec.ErrCannotSwitchUser) {
+		return ""
+	}
+	return fmt.Sprintf("console.user %q needs a root daemon: %v. Remove console.user from the daemon config file, or run the daemon as root, and restart the daemon.", cfg.Console.User, err)
+}
+
+// checkConsoleUser runs once at startup: it logs why console.user cannot be
+// used and returns the refusal for console sessions. A user that does not
+// exist yet only gets a warning; its sessions fail until it is created.
+func checkConsoleUser(cfg *BaseConfig, logger *slog.Logger) string {
+	refusal := consoleUserRefusal(cfg)
+	if refusal != "" {
+		logger.Error("console.user cannot be used; console sessions are refused", "console_user", cfg.Console.User, "reason", refusal)
+		return refusal
+	}
+	if cfg.Console.IsEnabled() && cfg.Console.User != "" {
+		if err := exec.CheckRunAsUser(cfg.Console.User); err != nil {
+			logger.Warn("console.user is not a user on this host; console sessions fail until it exists", "console_user", cfg.Console.User, "error", err)
+		}
+	}
+	return ""
+}
+
+// refuseUnavailableConsoleUser returns the refusal for a node console command
+// when console.user cannot be used, or nil when the command may run.
+func refuseUnavailableConsoleUser(refusal string, cmd *pb.GatewayCommand) *pb.CommandResult {
+	if refusal == "" {
+		return nil
+	}
+	return &pb.CommandResult{CommandId: cmd.CommandId, Success: false, Error: refusal}
 }

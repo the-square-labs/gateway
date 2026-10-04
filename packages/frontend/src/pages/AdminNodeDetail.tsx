@@ -74,6 +74,7 @@ import {
 import { nodeChangesFor } from "@/lib/node-changed";
 import {
   isNodeHostFeatureDisabled,
+  nodeConsoleUnavailableMessage,
   nodeHostFeatureDisabledMessage,
   nodeHostFileAccessWarning,
 } from "@/lib/node-host-access";
@@ -536,7 +537,7 @@ export function AdminNodeDetail({
     (node.status === "online" || node.status === "offline") &&
     canUseNodeConsole;
   // The node operator turned these off in the daemon config file; Gateway cannot turn them back on.
-  const nodeConsoleDisabled = isNodeHostFeatureDisabled(node, "console");
+  const nodeConsoleUnavailable = nodeConsoleUnavailableMessage(node);
   const nodeFilesDisabled = isNodeHostFeatureDisabled(node, "files");
   const hostFileAccessWarning = nodeHostFileAccessWarning(node);
   const hostFileAccessNotice = hostFileAccessWarning && (
@@ -1398,10 +1399,10 @@ export function AdminNodeDetail({
             {canShowNodeConsole && !nodeOffline && (
               <TabsContent value="console" className="flex flex-col flex-1 min-h-0">
                 {activeTab === "console" &&
-                  (nodeConsoleDisabled ? (
+                  (nodeConsoleUnavailable ? (
                     <div>
                       {hostFileAccessNotice}
-                      <EmptyState message={nodeHostFeatureDisabledMessage(node, "console")} />
+                      <EmptyState message={nodeConsoleUnavailable} />
                     </div>
                   ) : (
                     <NodeConsoleTab nodeId={node.id} />

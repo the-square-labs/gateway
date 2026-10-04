@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { NodeDispatchService } from './node-dispatch.service.js';
 import {
   NODE_CONSOLE_DISABLED_CAPABILITY,
+  NODE_CONSOLE_USER_UNAVAILABLE_CAPABILITY,
   NODE_FILES_DISABLED_CAPABILITY,
   nodeHostAccessFlags,
 } from './node-host-access.js';
@@ -25,6 +26,24 @@ describe('node host access switches', () => {
     expect(nodeHostAccessFlags([NODE_CONSOLE_DISABLED_CAPABILITY, NODE_FILES_DISABLED_CAPABILITY])).toEqual({
       nodeConsoleDisabled: true,
       nodeFilesDisabled: true,
+    });
+    expect(nodeHostAccessFlags([NODE_CONSOLE_USER_UNAVAILABLE_CAPABILITY])).toEqual({
+      nodeConsoleUserUnavailable: true,
+    });
+  });
+
+  it('refuses console commands with a 409 naming console.user when the daemon cannot switch to it', async () => {
+    const { dispatch, sent } = dispatchFor([NODE_CONSOLE_USER_UNAVAILABLE_CAPABILITY]);
+    for (const action of ['create', 'resize', 'run']) {
+      await expect(dispatch.sendNodeExecCommand('node-1', action, { command: ['id'] })).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'NODE_CONSOLE_USER_UNAVAILABLE',
+        message: expect.stringContaining('Remove console.user from the daemon config file'),
+      });
+    }
+    expect(sent).toEqual([]);
+    await expect(dispatch.sendNodeFileCommand('node-1', 'list', { path: '/' })).resolves.toMatchObject({
+      success: true,
     });
   });
 

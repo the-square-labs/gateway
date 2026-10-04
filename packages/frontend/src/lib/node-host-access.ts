@@ -55,6 +55,27 @@ export function nodeHostFeatureDisabledMessage(
 }
 
 /**
+ * Why the node's daemon refuses every host console session, or null when it accepts them: the console is turned off,
+ * or console.user names another user and the daemon does not run as root.
+ */
+export function nodeConsoleUnavailableMessage(
+  node: Node | NodeDetail | null | undefined
+): string | null {
+  if (isNodeHostFeatureDisabled(node, "console")) {
+    return nodeHostFeatureDisabledMessage(node, "console");
+  }
+  const capabilities = (node?.capabilities ?? {}) as Record<string, unknown>;
+  const unavailable =
+    capabilities.nodeConsoleUserUnavailable === true ||
+    (Array.isArray(capabilities.capabilities) &&
+      capabilities.capabilities.includes("node_console_user_unavailable_v1"));
+  if (!unavailable) return null;
+  const path = node ? DAEMON_CONFIG_PATHS[node.type] : undefined;
+  const file = path ? `the daemon config (${path})` : "the daemon config file";
+  return `The daemon config sets console.user to another user, but the daemon does not run as root and cannot start console sessions as that user. Remove console.user from ${file} on the node, or run the daemon as root, and restart the daemon.`;
+}
+
+/**
  * Turning the console off alone is not a boundary: writing host files as the daemon user can still change the host
  * (systemd units, cron jobs, SSH keys, the daemon config itself). Null unless console is off and files are on.
  */

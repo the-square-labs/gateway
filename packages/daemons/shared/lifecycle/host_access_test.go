@@ -1,7 +1,9 @@
 package lifecycle
 
 import (
+	"log/slog"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -105,5 +107,47 @@ func TestBothHostAccessFeaturesDisabledAdvertiseBothMarkers(t *testing.T) {
 	want := []string{NodeConsoleDisabledCapability, NodeFilesDisabledCapability}
 	if got := cfg.hostAccessCapabilities(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("capabilities = %v, want %v", got, want)
+	}
+}
+
+func TestConsoleUserOfAnotherUserNeedsARootDaemon(t *testing.T) {
+	cfg := loadHostAccessTestConfig(t, "console:\n  user: \"root\"\n")
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	refusal := checkConsoleUser(cfg, logger)
+	if os.Geteuid() == 0 {
+		if refusal != "" || refuseUnavailableConsoleUser(refusal, nodeExecCommand("create")) != nil {
+			t.Fatalf("a root daemon must run console sessions as another user, got %q", refusal)
+		}
+		return
+	}
+	if !strings.Contains(refusal, `console.user "root" needs a root daemon`) || !strings.Contains(refusal, "Remove console.user") {
+		t.Fatalf("refusal = %q", refusal)
+	}
+	if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "console sessions are refused") {
+		t.Fatalf("startup log = %q, want one error naming the refusal", logs.String())
+	}
+	for _, action := range []string{"create", "resize", "run"} {
+		refused := refuseUnavailableConsoleUser(refusal, nodeExecCommand(action))
+		if refused == nil || refused.Success || refused.CommandId != "cmd-1" || refused.Error != refusal {
+			t.Fatalf("console user refusal for %s = %+v", action, refused)
+		}
+	}
+}
+
+func TestConsoleUserOfTheDaemonUserOrDisabledConsoleIsNotRefused(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Skip("current user is not resolvable")
+	}
+	for _, extra := range []string{
+		"console:\n  user: \"" + account.Username + "\"\n",
+		"console:\n  enabled: false\n  user: \"root\"\n",
+		"",
+	} {
+		cfg := loadHostAccessTestConfig(t, extra)
+		if refusal := consoleUserRefusal(cfg); refusal != "" {
+			t.Fatalf("config %q refused: %q", extra, refusal)
+		}
 	}
 }

@@ -34,6 +34,8 @@ export interface NodeCapabilities {
   nodeConsoleDisabled?: boolean;
   /** The daemon config on the node turned host file access off (`files.enabled: false`). */
   nodeFilesDisabled?: boolean;
+  /** The daemon config sets `console.user` to another user, which the daemon cannot switch to without root. */
+  nodeConsoleUserUnavailable?: boolean;
   dockerRuntimeStatus?: {
     state: 'healthy' | 'installable' | 'unsupported' | 'unknown' | 'installing' | 'failed';
     installedVersion?: string;
