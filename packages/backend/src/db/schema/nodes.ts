@@ -150,7 +150,7 @@ export interface NodeHealthReport {
  * storage connector socket for a storage link) is the link's single gate, whichever relay carries a connection.
  */
 export interface NodeManagedLinkReport {
-  /** managed_database_binding or managed_storage_binding. */
+  /** managed_database_binding, managed_storage_binding or container_link. */
   ownerKind: string;
   /** The binding id; an Availability placement id for a placement's link. */
   ownerId: string;

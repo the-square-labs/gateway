@@ -56,6 +56,24 @@ describe('managedLinkHealth', () => {
         },
       ],
     });
+    expect(
+      managedLinkHealth([
+        {
+          ownerKind: 'container_link',
+          ownerId: 'link-1',
+          activeConnections: 2,
+          openedTotal: '9',
+          sourceToTargetBytes: '10',
+          targetToSourceBytes: '20',
+        },
+      ]).managedLinks?.[0]
+    ).toMatchObject({
+      ownerKind: 'container_link',
+      activeConnections: 2,
+      openedTotal: 9,
+      sourceToTargetBytes: 10,
+      targetToSourceBytes: 20,
+    });
     expect(managedLinkHealth(undefined)).toEqual({});
     expect(managedLinkHealth([])).toEqual({});
   });

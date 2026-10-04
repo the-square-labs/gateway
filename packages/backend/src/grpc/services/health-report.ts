@@ -60,7 +60,8 @@ export function relayLatencyHealth(rawSamples: unknown): {
   return relayLatencies.length ? { relayLatencies } : {};
 }
 
-const MANAGED_LINK_OWNER_KINDS = new Set(['managed_database_binding', 'managed_storage_binding']);
+// Container links too: dropping them made their runtime show zero connections, sessions and bytes over the relay's.
+const MANAGED_LINK_OWNER_KINDS = new Set(['managed_database_binding', 'managed_storage_binding', 'container_link']);
 
 /**
  * The managed links of a docker daemon health report (managed_link_runtime_v1). Absent when the node reported none,
