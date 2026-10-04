@@ -55,7 +55,7 @@ curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/se
 > [!IMPORTANT]
 > Daemons must reach the public Gateway relay endpoint directly on `9443/tcp`; the app-side gRPC listener is internal. During Gateway browser setup, select the direct public gRPC host or IP that should appear in enrollment commands; an optional local gRPC IP can be selected for nodes on the same private network. If the address changes later, update it in **Settings > General > Access and limits** and generate a fresh node command instead of maintaining a manual edit workflow.
 
-The wrapper downloads the daemon-specific installer from the same release, checks it against the release's checksums, and forwards all arguments.
+The wrapper downloads the daemon-specific installer from the same release, checks it against the release's checksums, and forwards all other arguments. Its own `--version` selects the release the installers come from, not the daemon version; to pin the daemon version, set `GATEWAY_NODE_DAEMON_VERSION`, or use the daemon-specific installer with `--version`.
 
 ## Daemon-Specific Setup
 

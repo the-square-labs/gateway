@@ -1,7 +1,8 @@
 // Node installers: every one parses, defines each function before the code that runs it at the top level, and
-// completes a --dry-run for each profile, as root and with --user, with the host access switches. The dry runs use a
-// copy of the scripts whose root check passes for any user and whose host paths are under an empty directory, stub
-// commands for docker, nginx and curl, and no network; a dry run changes nothing on the host.
+// completes a --dry-run for each profile, as root and with --user, with the host access switches, with its settings
+// from the environment, and through setup-daemon.sh for each node type; every installer prints its help. The dry runs
+// use a copy of the scripts whose root check passes for any user and whose host paths are under an empty directory,
+// stub commands for docker, nginx and curl, and no network; a dry run changes nothing on the host.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -216,5 +217,153 @@ test('every installer completes a dry run for each profile, as root and with --u
     assert.equal(status, 0, `${script} ${args.join(' ')}\n${output}`);
     assert.doesNotMatch(output, /command not found/, `${script} ${args.join(' ')}\n${output}`);
     if (args.includes('--disable-console')) assert.match(output, /console\.enabled: false/, `${script}\n${output}`);
+  }
+});
+
+// Each environment variable an installer documents as the equivalent of an option reaches the run: a dry run gets
+// all its settings from the environment, and an invalid value is refused like the option's.
+test('the installers take their settings from the environment', { skip: !linux }, () => {
+  const settings = {
+    GATEWAY_NODE_TOKEN: 'gw_node_test',
+    GATEWAY_NODE_CERT_SHA256: CERT,
+    GATEWAY_NODE_DAEMON_VERSION: VERSION,
+    GATEWAY_NODE_DISABLE_CONSOLE: '1',
+    GATEWAY_NODE_DISABLE_FILES: '1',
+  };
+  const address = { ...settings, GATEWAY_NODE_ADDRESS: 'gw.example.com:9443' };
+  const hostPort = { ...settings, GATEWAY_NODE_HOST: 'gw.example.com', GATEWAY_NODE_PORT: '9443' };
+  const nginxUser = userInfo().uid === 0 ? [] : ['--user', nonRootUser];
+  const relayArgs = [
+    ...['--gateway', 'gw.example.com:9443', '--token', 'gw_node_test', '--gateway-cert-sha256', CERT],
+    ...['--advertise-address', 'relay.example.com', '--service-port', '853', '--version', VERSION],
+  ];
+  const runs = [
+    ['setup-monitoring-node.sh', ['-y'], address, /monitoring-daemon installed \(v2\.11\.1; dry run\)/],
+    ['setup-monitoring-node.sh', ['-y'], hostPort, /files\.enabled: false/],
+    [
+      'setup-node.sh',
+      ['-y', ...nginxUser],
+      { ...hostPort, GATEWAY_NODE_NGINX_MODE: 'integrate', GATEWAY_NODE_SKIP_NGINX: '1' },
+      /nginx configuration updated \(integrate mode; dry run\)/,
+    ],
+    [
+      'setup-docker-node.sh',
+      ['-y'],
+      { ...address, GATEWAY_DOCKER_MODE: 'builder', GATEWAY_BUILDER_EGRESS_PROFILE: 'offline' },
+      /Build Worker profile/,
+    ],
+    ['setup-docker-node.sh', ['-y'], { ...hostPort, GATEWAY_DOCKER_SECURE_RUNTIME: '1' }, /Secure Runtime/],
+    [
+      'setup-database-node.sh',
+      ['-y', ...common],
+      { GATEWAY_DATABASE_STORAGE_ROOT: '/srv/gateway-test' },
+      /storage: \/srv\/gateway-test/,
+    ],
+    ['setup-database-node.sh', ['-y', ...common, '--storage-root', '/srv/gw-flag'], {}, /storage: \/srv\/gw-flag/],
+    ['setup-storage-node.sh', ['-y', ...common], {}, /Database docker profile written/],
+    [
+      'setup-relay-node.sh',
+      relayArgs,
+      {
+        ...settings,
+        GATEWAY_RELAY_RUN_USER: nonRootUser,
+        GATEWAY_RELAY_RUN_GROUP: userInfo().uid === 0 ? 'nogroup' : '',
+      },
+      /files\.enabled: false/,
+    ],
+  ];
+  for (const [script, args, env, expected] of runs) {
+    const { status, output } = dryRun(script, args, env);
+    assert.equal(status, 0, `${script} ${JSON.stringify(env)}\n${output}`);
+    assert.match(output, expected, `${script} ${JSON.stringify(env)}\n${output}`);
+    if (env.GATEWAY_NODE_DISABLE_CONSOLE) assert.match(output, /console\.enabled: false/, `${script}\n${output}`);
+  }
+  const relay = dryRun('setup-relay-node.sh', relayArgs, { GATEWAY_RELAY_RUN_USER: nonRootUser });
+  assert.match(relay.output, /CAP_NET_BIND_SERVICE for port 853/, relay.output);
+  // The Gateway address in two parts, as options.
+  const parts = ['--host', 'gw.example.com', '--port', '9443', '--no-logo'];
+  const credentials = ['--token', 'gw_node_test', '--gateway-cert-sha256', CERT, '--version', VERSION];
+  for (const [script, extra] of [
+    ['setup-monitoring-node.sh', []],
+    ['setup-docker-node.sh', ['--mode', 'docker']],
+    ['setup-node.sh', ['--nginx-mode', 'integrate', ...nginxUser]],
+  ]) {
+    const { status, output } = dryRun(script, ['-y', ...parts, ...credentials, ...extra]);
+    assert.equal(status, 0, `${script}\n${output}`);
+  }
+
+  const refused = [
+    [
+      'setup-docker-node.sh',
+      ['-y'],
+      { ...address, GATEWAY_BUILDER_EGRESS_PROFILE: 'none' },
+      /Invalid --builder-egress 'none'/,
+    ],
+    ['setup-docker-node.sh', ['-y'], { ...address, GATEWAY_DOCKER_MODE: 'cluster' }, /Invalid --mode 'cluster'/],
+    [
+      'setup-docker-node.sh',
+      ['-y'],
+      { ...address, GATEWAY_DOCKER_MODE: 'storage', GATEWAY_DOCKER_SECURE_RUNTIME: '1' },
+      /--secure-runtime applies to the docker profile only/,
+    ],
+    ['setup-node.sh', ['-y', ...nginxUser], { ...address, GATEWAY_NODE_NGINX_MODE: 'x' }, /Unknown nginx mode: x/],
+    ['setup-database-node.sh', ['-y', ...common, '--user', nonRootUser], {}, /must run docker-daemon as root/],
+    [
+      'setup-relay-node.sh',
+      relayArgs,
+      { GATEWAY_RELAY_RUN_USER: nonRootUser, GATEWAY_RELAY_RUN_GROUP: 'gateway-no-such-group' },
+      /does not exist; Relay installation stopped/,
+    ],
+    [
+      'setup-relay-node.sh',
+      relayArgs,
+      { GATEWAY_RELAY_RUN_USER: 'gateway-no-such-user' },
+      /does not exist; Relay installation stopped/,
+    ],
+  ];
+  for (const [script, args, env, expected] of refused) {
+    const { status, output } = dryRun(script, args, env);
+    assert.notEqual(status, 0, `${script} ${JSON.stringify(env)}\n${output}`);
+    assert.match(output, expected, `${script} ${JSON.stringify(env)}\n${output}`);
+  }
+});
+
+// setup-daemon.sh runs the installer of each node type from a local directory and forwards the other arguments.
+test('setup-daemon.sh dispatches every node type to its installer', { skip: !linux }, () => {
+  const copies = path.join(work, 'scripts');
+  const nginxUser = userInfo().uid === 0 ? [] : ['--user', nonRootUser];
+  const types = {
+    monitoring: 'setup-monitoring-node.sh',
+    docker: 'setup-docker-node.sh',
+    storage: 'setup-storage-node.sh',
+    databases: 'setup-database-node.sh',
+    nginx: 'setup-node.sh',
+  };
+  // setup-daemon.sh keeps --version for itself (the release of the installers), so the daemon release comes from the
+  // environment.
+  const args = ['-y', '--gateway', 'gw.example.com:9443', '--token', 'gw_node_test', '--gateway-cert-sha256', CERT];
+  const env = { GATEWAY_NODE_DAEMON_VERSION: VERSION };
+  for (const [type, script] of Object.entries(types)) {
+    const extra = type === 'nginx' ? ['--nginx-mode', 'integrate', ...nginxUser] : [];
+    const viaFlag = dryRun('setup-daemon.sh', ['--type', type, '--script-dir', copies, ...args, ...extra], env);
+    assert.equal(viaFlag.status, 0, `${type}\n${viaFlag.output}`);
+    assert.match(viaFlag.output, new RegExp(`Running local ${script.replace('.', '\\.')}`), viaFlag.output);
+    const viaEnv = dryRun('setup-daemon.sh', ['--type', type, ...args, ...extra], {
+      ...env,
+      GATEWAY_SETUP_SCRIPT_DIR: copies,
+    });
+    assert.equal(viaEnv.status, 0, `${type}\n${viaEnv.output}`);
+  }
+  const unknown = dryRun('setup-daemon.sh', ['--type', 'gateway', '--script-dir', copies]);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.output, /Unknown daemon type: gateway/);
+});
+
+test('every installer prints its help', { skip: !linux }, () => {
+  for (const name of [...installers, 'install.sh']) {
+    const source = path.join(name === 'install.sh' ? scriptsDir : path.join(work, 'scripts'), name);
+    const result = spawnSync('bash', [source, '--help'], { encoding: 'utf8', timeout: 30_000, input: '' });
+    assert.equal(result.status, 0, `${name}\n${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /Usage/i, name);
   }
 });

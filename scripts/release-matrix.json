@@ -1,0 +1,2783 @@
+{
+  "description": "Release test matrix: every configuration Gateway supports, with the scenario that proves it before a stable tag. Built from what the installers parse and the docs promise, not from changelogs. scripts/release-matrix.test.mjs keeps it complete. Stand scenarios run on a stand before every stable tag; static scenarios run in CI. Steps are stand-agnostic; the stand runbook maps them to hosts.",
+  "conventions": {
+    "covers": "'<installer> <option>' or '<installer> <option>=<value>'; '<installer> $<VARIABLE>' or '<installer> $<VARIABLE>=<value>'; 'config <key>' (a daemon config key documented in docs/nodes.md); 'feature <id>' (declared under features); 'lifecycle <daemon> <operation>' (declared under lifecycle).",
+    "placeholders": {
+      "<setup command>": "The command Nodes > Add Node shows for the node type (the same as installCommands from POST /api/nodes), with the release, Gateway address, token and certificate fingerprint it generated.",
+      "<gateway>, <token>, <cert>": "The Gateway gRPC address, enrollment token and gRPC certificate fingerprint of a node created in Gateway.",
+      "<candidate>": "The release under test, for example v2.11.1.",
+      "<previous>": "The latest stable release before the candidate of the same major line.",
+      "<newer>": "A release of the same line newer than the candidate, published on the preview channel.",
+      "gwsvc, gwsvc2, gwdock, gwdock2": "System users created for the run: useradd --system --no-create-home --shell /usr/sbin/nologin <name> (Alpine: adduser -S -D -H -s /sbin/nologin <name>).",
+      "<unit>": "nginx-daemon, docker-daemon, monitoring-daemon or gateway-relay-supervisor.",
+      "connected": "The installer prints '<daemon> is connected to Gateway' (the relay: that the supervisor enrolled and connected) and exits 0; the node is online in GET /api/nodes with daemonVersion equal to the installed release.",
+      "service user": "systemd: systemctl show -p User,Group <unit>; OpenRC: rc-service <unit> status and ps -o user= -p <daemon pid>."
+    }
+  },
+  "os": {
+    "debian": "Debian 13 with systemd. The main target: every scenario runs here unless it is specific to another system.",
+    "alpine": "Alpine Linux 3.x with OpenRC. Installer and service-manager behaviour.",
+    "alpine-noinit": "An Alpine Linux 3.x container without an init system or service manager, where the installers use manual mode.",
+    "ubuntu": "Ubuntu 24.04 LTS with systemd, AppArmor and systemd-resolved. Only where it differs from Debian: packaged nginx 1.24, the distribution docker.io, AppArmor and the resolved stub DNS. In an LXC guest the host confines the guest, so AppArmor coverage there is partial; a VM gives the full picture."
+  },
+  "features": {
+    "installer.generated-command": {
+      "description": "The setup command of Nodes > Add Node downloads the installer from this Gateway's release, runs it only after the release checksum matches, pins --version to the newest daemon release of the same minor, and appends --disable-console/--disable-files when their checkboxes are set.",
+      "doc": "docs/nodes.md#quick-setup",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "installer.universal-command": {
+      "description": "setup-daemon.sh downloads the installer for --type from the same release, verifies it against the release checksums and forwards every other argument.",
+      "doc": "docs/nodes.md#quick-setup",
+      "os": [
+        "debian"
+      ]
+    },
+    "installer.release-mirror": {
+      "description": "Installers fetch release metadata, daemon artifacts and sibling installers from overridden locations and refuse a file whose checksum does not match.",
+      "doc": "scripts/setup-*.sh --help",
+      "os": [
+        "debian"
+      ]
+    },
+    "installer.interactive": {
+      "description": "Without -y the installers prompt only for missing values and the storage installer offers its disk selector.",
+      "doc": "docs/nodes.md#manual-setup",
+      "os": [
+        "debian"
+      ]
+    },
+    "installer.connection-check": {
+      "description": "An install or re-run succeeds only when the started daemon runs under the service manager and Gateway accepted its session; otherwise it exits 1 naming the daemon log and printing its last lines.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "installer.legacy-daemon-check": {
+      "description": "A daemon release older than the session signal is accepted after its service stayed active for 10 seconds, with a warning that it does not report its Gateway connection.",
+      "doc": "scripts/setup-*.sh (GATEWAY_SESSION_SINCE)",
+      "os": [
+        "debian"
+      ]
+    },
+    "installer.manual-mode": {
+      "description": "On a host without systemd or OpenRC the installers start a detached launcher that does not survive a reboot, and still wait for the Gateway session.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "alpine-noinit"
+      ]
+    },
+    "installer.dry-run": {
+      "description": "--dry-run validates the inputs and prints the real plan without changing the host.",
+      "doc": "docs/nodes.md#installer-options",
+      "os": []
+    },
+    "installer.apt-lock-retry": {
+      "description": "The nginx installer retries apt while another process holds the dpkg lock.",
+      "doc": "scripts/setup-node.sh",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.console-as-user": {
+      "description": "The node console runs as the daemon's user, or as console.user when it is set.",
+      "doc": "docs/nodes.md#daemon-configuration",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.files-as-user": {
+      "description": "Node file operations run with the daemon user's permissions and a refused path fails at once with permission denied.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.wrapper": {
+      "description": "A non-root daemon runs from /usr/local/lib/<daemon>/bin; /usr/local/bin/<daemon> is a root-owned wrapper that switches a root caller to the service user.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "node.host-identity": {
+      "description": "All daemons of a host report one host identity; a non-root daemon reads its copy through host_identity_path while the shared file stays root-only.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.host-access-switches": {
+      "description": "console.enabled/files.enabled false refuse the host console and host files with 409, survive installer re-runs and are turned back on only in the config file.",
+      "doc": "docs/nodes.md#host-console-and-file-access",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.manual-setup": {
+      "description": "A daemon installed by hand from the release files, enrolled with '<daemon> install' and run by a hand-written service.",
+      "doc": "docs/nodes.md#manual-setup",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.update-bulk": {
+      "description": "Update from the node page and Nodes > Update Nodes for several nodes at once.",
+      "doc": "docs/nodes.md#daemon-updates",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.update-refusals": {
+      "description": "Gateway refuses a daemon update for a disconnected node, a relay node and a node already on that release, and records the reason of a failed update.",
+      "doc": "docs/nodes.md#daemon-updates",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.update-lease-peers": {
+      "description": "Nodes that share a lease-mode Availability policy update one after another (waiting_for_lease_peers).",
+      "doc": "docs/nodes.md#daemon-updates",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.update-from-previous": {
+      "description": "Daemons of the previous stable release update to the candidate through Gateway.",
+      "doc": "docs/operations.md#daemon-updates",
+      "os": [
+        "debian"
+      ]
+    },
+    "node.launcher-rollback": {
+      "description": "The launcher keeps the previous binary and rolls a candidate back that does not stay ready through its stability window.",
+      "doc": "docs/nodes.md#daemon-updates",
+      "os": []
+    },
+    "node.service-address": {
+      "description": "An explicit Docker service address on the node page is used for proxy upstreams and cross-node traffic.",
+      "doc": "docs/nodes.md#relay-nodes",
+      "os": [
+        "debian"
+      ]
+    },
+    "nginx.managed": {
+      "description": "managed mode on a fresh host installs nginx (nginx.org stable on Debian and Ubuntu, the distribution package on Alpine) and writes the base config.",
+      "doc": "docs/nodes.md#nginx-node-modes",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "nginx.integrate-existing": {
+      "description": "integrate mode keeps the host's nginx config and its own 443 default server, injects the managed includes and a local stub_status.",
+      "doc": "docs/nodes.md#nginx-node-modes",
+      "os": [
+        "debian"
+      ]
+    },
+    "nginx.tls-catch-all": {
+      "description": "The managed 443 default server refuses TLS for names without a route.",
+      "doc": "docs/nodes.md#nginx-node-modes",
+      "os": [
+        "debian"
+      ]
+    },
+    "nginx.nonroot": {
+      "description": "nginx-daemon as the user that runs the nginx master: preflight refusals, CAP_NET_BIND_SERVICE for nginx -t, route apply and reload, and the switch back to root.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "nginx.nonroot-apparmor": {
+      "description": "A non-root nginx-daemon applies routes, runs nginx -t and reloads with AppArmor loaded (partial in an LXC guest).",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "ubuntu"
+      ]
+    },
+    "nginx.old-version": {
+      "description": "An existing nginx older than 1.25.1: refused non-interactively and with --skip-nginx, upgraded from nginx.org only after interactive approval.",
+      "doc": "docs/nodes.md#nginx-node-modes",
+      "os": [
+        "ubuntu"
+      ]
+    },
+    "nginx.maintenance": {
+      "description": "Route maintenance without an nginx reload, team access codes, maintenance across daemon restart and host reboot.",
+      "doc": "docs/capabilities.md#ingress",
+      "os": [
+        "debian"
+      ]
+    },
+    "nginx.acme-pages-logs": {
+      "description": "ACME HTTP-01 files, Pages deploys, live route logs and the ingress health endpoint on an nginx node.",
+      "doc": "docs/capabilities.md#ingress",
+      "os": [
+        "debian"
+      ]
+    },
+    "nginx.ingress-groups": {
+      "description": "Ingress groups: members render every route, an offline member catches up on reconnect, removal drains.",
+      "doc": "docs/capabilities.md#ingress-groups",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.engine-install": {
+      "description": "The Docker installer installs Docker Engine on a host without it (docker-ce from docker.com on Debian, the docker package on Alpine) and writes json-file log rotation defaults.",
+      "doc": "docs/operations.md#container-log-limits",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "docker.existing-engine": {
+      "description": "An existing distribution Docker Engine (docker.io) and its daemon.json are kept.",
+      "doc": "docs/operations.md#container-log-limits",
+      "os": [
+        "ubuntu"
+      ]
+    },
+    "docker.old-engine": {
+      "description": "Workloads on Docker Engine 20.10 to 25.x (Debian 12 docker.io is 20.10): recreate, migration preflight and migration to a current engine.",
+      "doc": "docs/capabilities.md#docker",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.nonroot": {
+      "description": "docker-daemon as a member of the docker group: socket preflight, connectors through the daemon's group, reported root-only features.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "docker.nonroot-apparmor": {
+      "description": "Root and non-root docker-daemon, its connector containers and workloads with AppArmor loaded (partial in an LXC guest).",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "ubuntu"
+      ]
+    },
+    "docker.connector-mode-switch": {
+      "description": "Secure Links and storage links keep working across root and non-root switches without a manual step.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.secure-runtime": {
+      "description": "Secure Runtime (gVisor): preflight and install on a fresh install, --secure-runtime on an existing root or non-root node, the runtime CLI exit codes, Secure workloads and their boundaries.",
+      "doc": "docs/nodes.md#docker-secure-runtime",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.secure-runtime-apparmor": {
+      "description": "--secure-runtime with AppArmor loaded, root and non-root: Secure Runtime installs where gVisor can run, otherwise the installer fails with the preflight reason (partial in an LXC guest).",
+      "doc": "docs/nodes.md#docker-secure-runtime",
+      "os": [
+        "ubuntu"
+      ]
+    },
+    "docker.lease-watchdog": {
+      "description": "The lease watchdog is installed as its own root service in docker mode, reports with 'gateway-lease-watchdog status', and GATEWAY_LEASE_WATCHDOG_VERSION pins its release.",
+      "doc": "docs/nodes.md#lease-watchdog",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "docker.watchdog-auto-install": {
+      "description": "A 2.11 docker-daemon running as root installs the lease watchdog by itself on a node installed before it existed.",
+      "doc": "docs/nodes.md#lease-watchdog",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.container-lifecycle": {
+      "description": "Stop, restart, kill and delete of containers, including ones that ignore SIGTERM, through REST, MCP and UI.",
+      "doc": "docs/capabilities.md#docker",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.migration": {
+      "description": "Cross-node migration of containers and deployments with a route: preflight, maintenance flag during cutover, completion.",
+      "doc": "docs/capabilities.md#docker",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.compose": {
+      "description": "Compose Projects: apply recreates only changed services, the first apply after the daemon update recreates once.",
+      "doc": "docs/capabilities.md#docker",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.archives": {
+      "description": ".gwca export and import in portable and registry-backed mode.",
+      "doc": "docs/docker-container-archives.md",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.log-limits": {
+      "description": "Containers Gateway creates get json-file rotation only while the host default allows it.",
+      "doc": "docs/operations.md#container-log-limits",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.gpu": {
+      "description": "Attaching a discovered physical GPU to a container and a deployment.",
+      "doc": "docs/nodes.md#docker-gpu-workloads",
+      "os": [
+        "debian"
+      ]
+    },
+    "docker.dns-resolved": {
+      "description": "Containers and connectors resolve names on a host whose resolv.conf is the systemd-resolved stub.",
+      "doc": "docs/nodes.md",
+      "os": [
+        "ubuntu"
+      ]
+    },
+    "builder.egress": {
+      "description": "Build Worker egress internet (public downloads, private and control-plane ranges blocked) and offline.",
+      "doc": "docs/installation.md#build-worker-requirements",
+      "os": [
+        "debian"
+      ]
+    },
+    "builder.egress-dns-resolved": {
+      "description": "A Build Worker with egress internet resolves dependency hosts on a systemd-resolved host.",
+      "doc": "docs/installation.md#build-worker-requirements",
+      "os": [
+        "ubuntu"
+      ]
+    },
+    "builder.order": {
+      "description": "Queued builds go to Build Workers in the order of the Nodes list, folders first.",
+      "doc": "docs/nodes.md#daemon-specific-setup",
+      "os": [
+        "debian"
+      ]
+    },
+    "builder.requires-systemd": {
+      "description": "The builder profile refuses a host without systemd before changing it.",
+      "doc": "scripts/setup-docker-node.sh",
+      "os": [
+        "alpine"
+      ]
+    },
+    "storage.loop-preflight": {
+      "description": "The Storage installer proves the loop and ext4 lifecycle before enrollment and refuses an ordinary LXC guest without changing it.",
+      "doc": "docs/nodes.md#manual-setup",
+      "os": [
+        "debian"
+      ]
+    },
+    "storage.root-selector": {
+      "description": "The interactive disk selector and --storage-root choose the storage root.",
+      "doc": "docs/nodes.md#manual-setup",
+      "os": [
+        "debian"
+      ]
+    },
+    "storage.legacy-databases": {
+      "description": "A node installed with the legacy databases alias keeps its identity and storage root and gets the Storage capabilities after a daemon update.",
+      "doc": "docs/nodes.md#daemon-types",
+      "os": [
+        "debian"
+      ]
+    },
+    "storage.managed-databases": {
+      "description": "Managed PostgreSQL, Redis and ClickHouse: TCP publication and ports, supervisor restarts, retry of failed provisioning, lost-record recovery.",
+      "doc": "docs/capabilities.md#databases",
+      "os": [
+        "debian"
+      ]
+    },
+    "storage.managed-object-storage": {
+      "description": "Managed SeaweedFS: engine supervision, retry and record recovery, storage links.",
+      "doc": "docs/storage-and-backups.md#managed-object-storage",
+      "os": [
+        "debian"
+      ]
+    },
+    "storage.backups-copy-jobs": {
+      "description": "Database backup policies, runs, restores, retention and storage copy jobs on Storage executors.",
+      "doc": "docs/storage-and-backups.md",
+      "os": [
+        "debian"
+      ]
+    },
+    "relay.pool-membership": {
+      "description": "A relay node enrolls, is ready in the Relay Pool and carries Secure Link traffic.",
+      "doc": "docs/nodes.md#relay-nodes",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
+    "relay.low-port": {
+      "description": "A non-root relay on a port below 1024 gets CAP_NET_BIND_SERVICE; 9443 and root get none.",
+      "doc": "docs/nodes.md#running-daemons-without-root",
+      "os": [
+        "debian"
+      ]
+    },
+    "relay.reenroll": {
+      "description": "Re-enroll from Settings > Relay with a single-use token; a refused token keeps the previous identity.",
+      "doc": "docs/nodes.md#relay-nodes",
+      "os": [
+        "debian"
+      ]
+    },
+    "relay.certificate-renewal": {
+      "description": "Remote relay certificates renew on their own and with Renew certificate.",
+      "doc": "docs/nodes.md#relay-nodes",
+      "os": [
+        "debian"
+      ]
+    },
+    "relay.pool-update": {
+      "description": "Relay Pool update: supervisor first, then worker, one relay at a time, resumable.",
+      "doc": "docs/operations.md#gateway-updates",
+      "os": [
+        "debian"
+      ]
+    },
+    "relay.rebalance-drain": {
+      "description": "Rebalance, drain with the 30 minute wait and Force disconnect.",
+      "doc": "docs/operations.md#gateway-updates",
+      "os": [
+        "debian"
+      ]
+    },
+    "availability.replicated": {
+      "description": "Availability in Replicated mode: enable, stop, start, rollout, disable with a route.",
+      "doc": "docs/capabilities.md#application-scaling",
+      "os": [
+        "debian"
+      ]
+    },
+    "availability.failover-lease": {
+      "description": "Failover policies in lease mode: entering lease mode, autonomous failover with and without Gateway, planned handoff, priority failback, excluded nodes.",
+      "doc": "docs/capabilities.md#data-plane-failover-lease-mode",
+      "os": [
+        "debian"
+      ]
+    },
+    "availability.nonroot-watchdog": {
+      "description": "A non-root Docker node takes part in lease mode through the root watchdog service the installer sets up.",
+      "doc": "docs/nodes.md#lease-watchdog",
+      "os": [
+        "debian"
+      ]
+    },
+    "gateway.install": {
+      "description": "install.sh fresh install with the default native HTTPS, setup code and wizard, and its re-run as an update.",
+      "doc": "docs/installation.md#install",
+      "os": [
+        "debian"
+      ]
+    },
+    "gateway.install-variants": {
+      "description": "install.sh with HTTP, the interactive transport prompt, another install directory, a resumed interrupted install and the host Docker logging defaults.",
+      "doc": "docs/installation.md#install",
+      "os": [
+        "debian"
+      ]
+    },
+    "gateway.install-from-source": {
+      "description": "install.sh --source-dir builds a fresh test installation from a checkout and refuses an existing one.",
+      "doc": "docs/installation.md#install",
+      "os": [
+        "debian"
+      ]
+    },
+    "gateway.update-in-app": {
+      "description": "In-app Gateway update: waiting for running operations, Update now, database snapshot, the update channel.",
+      "doc": "docs/operations.md#gateway-updates",
+      "os": [
+        "debian"
+      ]
+    },
+    "gateway.update-from-2.10": {
+      "description": "The upgrade path from the 2.10 line including the base updater's rollback.",
+      "doc": "docs/operations.md#updating-from-210",
+      "os": [
+        "debian"
+      ]
+    },
+    "gateway.web-transport": {
+      "description": "Switching internal HTTPS on and off in Settings.",
+      "doc": "docs/installation.md#native-https-and-reverse-proxies",
+      "os": [
+        "debian"
+      ]
+    },
+    "gateway.offline": {
+      "description": "With the Gateway app down, nginx keeps serving with the cached status page, containers run, daemons reconnect afterwards.",
+      "doc": "docs/nodes.md#offline-behavior",
+      "os": [
+        "debian"
+      ]
+    },
+    "hosting.adoption": {
+      "description": "Automatic adoption of a Proxmox guest whose node runs a non-root daemon, by host identity.",
+      "doc": "docs/hosting-integrations.md#automatic-adoption",
+      "os": [
+        "debian"
+      ]
+    },
+    "hosting.create-node": {
+      "description": "Creating a hosted node on Proxmox: provisioning, installation, enrollment, readiness and Retry installation.",
+      "doc": "docs/hosting-integrations.md#create-a-node",
+      "os": [
+        "debian"
+      ]
+    },
+    "dashboard.attention": {
+      "description": "The sidebar Dashboard dot and the Dashboard warnings show the same conditions.",
+      "doc": "docs/capabilities.md#nodes-and-monitoring",
+      "os": [
+        "debian"
+      ]
+    }
+  },
+  "lifecycle": {
+    "operations": {
+      "fresh-root": "First install on a host without this daemon, as root: connected, service user root.",
+      "fresh-user": "First install with a non-root service user: connected, service user is that user.",
+      "rerun": "Re-run on an enrolled, online node with the same user and no token: connected, no new enrollment, launcher kept.",
+      "root-to-user": "Re-run of a root install with --user: the daemon's directories go to the user, no new enrollment, same host identity.",
+      "user-to-root": "Re-run of a non-root install without --user: root gets back only what the previous user owned, the wrapper becomes a root binary.",
+      "user-to-user": "Re-run of a non-root install with another user.",
+      "refused-user": "A user that does not exist, or a non-root user for a root-only profile: exit 1 before any host change.",
+      "token-refused": "An already used or expired token: exit 1 at once with 'Gateway refused the enrollment token', without the reachability hint.",
+      "gateway-unreachable": "Gateway cannot be reached: exit 1 after the enrollment wait with the daemon log source and its last lines.",
+      "prerequisites": "A missing or unsupported prerequisite (packages, nginx version or user, Docker socket, loop devices, service manager) is installed or refused before any change, as documented.",
+      "service-fails": "The service of an enrolled node cannot start: the re-run exits 1 with the log tail and no manual-mode fallback.",
+      "restart": "A service-manager restart: online again, no restart loop.",
+      "reboot": "A host reboot: online again with the same service user.",
+      "self-update": "Gateway updates the daemon to a newer release: new version, previous binary kept, owner and service user unchanged.",
+      "dry-run": "--dry-run prints the plan and changes nothing."
+    },
+    "daemons": {
+      "nginx": {
+        "operations": {
+          "fresh-root": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "fresh-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "rerun": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "root-to-user": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "user-to-root": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "user-to-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "refused-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "token-refused": {
+            "os": [
+              "debian"
+            ]
+          },
+          "gateway-unreachable": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "prerequisites": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "service-fails": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "restart": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "reboot": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "self-update": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "dry-run": {
+            "os": []
+          }
+        }
+      },
+      "docker": {
+        "operations": {
+          "fresh-root": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "fresh-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "rerun": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "root-to-user": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "user-to-root": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "user-to-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "refused-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "token-refused": {
+            "os": [
+              "debian"
+            ]
+          },
+          "gateway-unreachable": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "prerequisites": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "service-fails": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "restart": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "reboot": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "self-update": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "dry-run": {
+            "os": []
+          }
+        }
+      },
+      "monitoring": {
+        "operations": {
+          "fresh-root": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "fresh-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "rerun": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "root-to-user": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "user-to-root": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "user-to-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "refused-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "token-refused": {
+            "os": [
+              "debian"
+            ]
+          },
+          "gateway-unreachable": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "prerequisites": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "service-fails": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "restart": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "reboot": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "self-update": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "dry-run": {
+            "os": []
+          }
+        }
+      },
+      "relay": {
+        "operations": {
+          "fresh-root": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "fresh-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "rerun": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "root-to-user": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "user-to-root": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "user-to-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "refused-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "token-refused": {
+            "os": [
+              "debian"
+            ]
+          },
+          "gateway-unreachable": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "prerequisites": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "service-fails": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "restart": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "reboot": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "self-update": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "dry-run": {
+            "os": []
+          }
+        }
+      },
+      "builder": {
+        "operations": {
+          "fresh-root": {
+            "os": [
+              "debian"
+            ]
+          },
+          "rerun": {
+            "os": [
+              "debian"
+            ]
+          },
+          "refused-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "prerequisites": {
+            "os": [
+              "debian",
+              "alpine"
+            ]
+          },
+          "restart": {
+            "os": [
+              "debian"
+            ]
+          },
+          "reboot": {
+            "os": [
+              "debian"
+            ]
+          },
+          "self-update": {
+            "os": [
+              "debian"
+            ]
+          },
+          "dry-run": {
+            "os": []
+          }
+        },
+        "notApplicable": {
+          "fresh-user": "The builder profile runs only as root; a non-root user is refused-user.",
+          "root-to-user": "Root only.",
+          "user-to-root": "Root only.",
+          "user-to-user": "Root only.",
+          "token-refused": "The same setup-docker-node.sh enrollment and session check as the docker profile.",
+          "gateway-unreachable": "The same setup-docker-node.sh session wait as the docker profile.",
+          "service-fails": "The same setup-docker-node.sh service start and check as the docker profile."
+        }
+      },
+      "storage": {
+        "operations": {
+          "fresh-root": {
+            "os": [
+              "debian"
+            ]
+          },
+          "rerun": {
+            "os": [
+              "debian"
+            ]
+          },
+          "refused-user": {
+            "os": [
+              "debian"
+            ]
+          },
+          "prerequisites": {
+            "os": [
+              "debian"
+            ]
+          },
+          "restart": {
+            "os": [
+              "debian"
+            ]
+          },
+          "reboot": {
+            "os": [
+              "debian"
+            ]
+          },
+          "self-update": {
+            "os": [
+              "debian"
+            ]
+          },
+          "dry-run": {
+            "os": []
+          }
+        },
+        "notApplicable": {
+          "fresh-user": "Storage nodes run only as root; a non-root user is refused-user.",
+          "root-to-user": "Root only.",
+          "user-to-root": "Root only.",
+          "user-to-user": "Root only.",
+          "token-refused": "setup-database-node.sh hands enrollment to setup-docker-node.sh, the same check as the docker profile.",
+          "gateway-unreachable": "The same setup-docker-node.sh session wait as the docker profile.",
+          "service-fails": "The same setup-docker-node.sh service start and check as the docker profile."
+        }
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "id": "STATIC-INSTALLERS",
+      "area": "installer",
+      "title": "Every installer parses, dry-runs each profile and takes its settings from options and the environment",
+      "where": "static",
+      "ci": "test:light:installers",
+      "covers": [
+        "setup-node.sh --gateway",
+        "setup-node.sh --host",
+        "setup-node.sh --port",
+        "setup-node.sh --token",
+        "setup-node.sh --gateway-cert-sha256",
+        "setup-node.sh --version",
+        "setup-node.sh --user",
+        "setup-node.sh --nginx-mode=integrate",
+        "setup-node.sh --disable-console",
+        "setup-node.sh --disable-files",
+        "setup-node.sh --no-logo",
+        "setup-node.sh --dry-run",
+        "setup-node.sh --yes",
+        "setup-node.sh --help",
+        "setup-node.sh $GATEWAY_NODE_HOST",
+        "setup-node.sh $GATEWAY_NODE_PORT",
+        "setup-node.sh $GATEWAY_NODE_ADDRESS",
+        "setup-node.sh $GATEWAY_NODE_TOKEN",
+        "setup-node.sh $GATEWAY_NODE_CERT_SHA256",
+        "setup-node.sh $GATEWAY_NODE_DAEMON_VERSION",
+        "setup-node.sh $GATEWAY_NODE_SKIP_NGINX",
+        "setup-node.sh $GATEWAY_NODE_NGINX_MODE",
+        "setup-node.sh $GATEWAY_NODE_DISABLE_CONSOLE",
+        "setup-node.sh $GATEWAY_NODE_DISABLE_FILES",
+        "setup-docker-node.sh --gateway",
+        "setup-docker-node.sh --host",
+        "setup-docker-node.sh --port",
+        "setup-docker-node.sh --token",
+        "setup-docker-node.sh --gateway-cert-sha256",
+        "setup-docker-node.sh --version",
+        "setup-docker-node.sh --user",
+        "setup-docker-node.sh --mode=docker",
+        "setup-docker-node.sh --mode=builder",
+        "setup-docker-node.sh --mode=databases",
+        "setup-docker-node.sh --mode=storage",
+        "setup-docker-node.sh --disable-console",
+        "setup-docker-node.sh --disable-files",
+        "setup-docker-node.sh --no-logo",
+        "setup-docker-node.sh --dry-run",
+        "setup-docker-node.sh --yes",
+        "setup-docker-node.sh --help",
+        "setup-docker-node.sh $GATEWAY_NODE_HOST",
+        "setup-docker-node.sh $GATEWAY_NODE_PORT",
+        "setup-docker-node.sh $GATEWAY_NODE_ADDRESS",
+        "setup-docker-node.sh $GATEWAY_NODE_TOKEN",
+        "setup-docker-node.sh $GATEWAY_NODE_CERT_SHA256",
+        "setup-docker-node.sh $GATEWAY_NODE_DAEMON_VERSION",
+        "setup-docker-node.sh $GATEWAY_NODE_DISABLE_CONSOLE",
+        "setup-docker-node.sh $GATEWAY_NODE_DISABLE_FILES",
+        "setup-docker-node.sh $GATEWAY_DOCKER_MODE",
+        "setup-docker-node.sh $GATEWAY_BUILDER_EGRESS_PROFILE",
+        "setup-docker-node.sh $GATEWAY_DOCKER_SECURE_RUNTIME",
+        "setup-docker-node.sh $GATEWAY_DATABASE_STORAGE_ROOT",
+        "setup-database-node.sh --storage-root",
+        "setup-database-node.sh --user",
+        "setup-database-node.sh --dry-run",
+        "setup-database-node.sh --yes",
+        "setup-database-node.sh --help",
+        "setup-database-node.sh $GATEWAY_DATABASE_STORAGE_ROOT",
+        "setup-database-node.sh $GATEWAY_DOCKER_MODE=databases",
+        "setup-database-node.sh $GATEWAY_DOCKER_MODE=storage",
+        "setup-monitoring-node.sh --gateway",
+        "setup-monitoring-node.sh --host",
+        "setup-monitoring-node.sh --port",
+        "setup-monitoring-node.sh --token",
+        "setup-monitoring-node.sh --gateway-cert-sha256",
+        "setup-monitoring-node.sh --version",
+        "setup-monitoring-node.sh --user",
+        "setup-monitoring-node.sh --disable-console",
+        "setup-monitoring-node.sh --disable-files",
+        "setup-monitoring-node.sh --no-logo",
+        "setup-monitoring-node.sh --dry-run",
+        "setup-monitoring-node.sh --yes",
+        "setup-monitoring-node.sh --help",
+        "setup-monitoring-node.sh $GATEWAY_NODE_HOST",
+        "setup-monitoring-node.sh $GATEWAY_NODE_PORT",
+        "setup-monitoring-node.sh $GATEWAY_NODE_ADDRESS",
+        "setup-monitoring-node.sh $GATEWAY_NODE_TOKEN",
+        "setup-monitoring-node.sh $GATEWAY_NODE_CERT_SHA256",
+        "setup-monitoring-node.sh $GATEWAY_NODE_DAEMON_VERSION",
+        "setup-monitoring-node.sh $GATEWAY_NODE_DISABLE_CONSOLE",
+        "setup-monitoring-node.sh $GATEWAY_NODE_DISABLE_FILES",
+        "setup-relay-node.sh --gateway",
+        "setup-relay-node.sh --token",
+        "setup-relay-node.sh --gateway-cert-sha256",
+        "setup-relay-node.sh --advertise-address",
+        "setup-relay-node.sh --service-port",
+        "setup-relay-node.sh --version",
+        "setup-relay-node.sh --disable-console",
+        "setup-relay-node.sh --disable-files",
+        "setup-relay-node.sh --dry-run",
+        "setup-relay-node.sh --help",
+        "setup-relay-node.sh $GATEWAY_RELAY_RUN_USER",
+        "setup-relay-node.sh $GATEWAY_RELAY_RUN_GROUP",
+        "setup-relay-node.sh $GATEWAY_NODE_DISABLE_CONSOLE",
+        "setup-relay-node.sh $GATEWAY_NODE_DISABLE_FILES",
+        "setup-daemon.sh --type=nginx",
+        "setup-daemon.sh --type=docker",
+        "setup-daemon.sh --type=storage",
+        "setup-daemon.sh --type=databases",
+        "setup-daemon.sh --type=monitoring",
+        "setup-daemon.sh --script-dir",
+        "setup-daemon.sh --help",
+        "setup-daemon.sh $GATEWAY_SETUP_SCRIPT_DIR",
+        "install.sh --help",
+        "lifecycle nginx dry-run",
+        "lifecycle docker dry-run",
+        "lifecycle monitoring dry-run",
+        "lifecycle relay dry-run",
+        "lifecycle builder dry-run",
+        "lifecycle storage dry-run",
+        "feature installer.dry-run"
+      ],
+      "preconditions": [
+        "Linux CI runner; the test copies the installers, points their host paths at an empty directory and stubs docker, nginx and curl."
+      ],
+      "steps": [
+        "bash -n and the define-before-use check on every setup-*.sh.",
+        "--dry-run of each installer and profile, as root and with --user, with and without --disable-console --disable-files.",
+        "The same dry runs with every setting from the GATEWAY_* environment instead of options, and with --host/--port/--no-logo.",
+        "Invalid values through the environment (--mode, --builder-egress, --nginx-mode, --secure-runtime outside docker, a non-root database node, a missing relay user or group).",
+        "setup-daemon.sh --type <each type> with --script-dir and with GATEWAY_SETUP_SCRIPT_DIR, and an unknown type.",
+        "--help of every installer and install.sh."
+      ],
+      "expect": [
+        "Every dry run exits 0, prints 'console.enabled: false'/'files.enabled: false' for the switches, the storage root given by --storage-root or GATEWAY_DATABASE_STORAGE_ROOT, 'integrate mode' for GATEWAY_NODE_NGINX_MODE, the Build Worker profile for GATEWAY_DOCKER_MODE=builder, CAP_NET_BIND_SERVICE for a non-root relay on port 853, and no 'command not found'.",
+        "Every invalid value exits non-zero with the installer's own message.",
+        "setup-daemon.sh runs the local installer of each type; an unknown type exits non-zero.",
+        "Every --help exits 0 with a Usage line."
+      ]
+    },
+    {
+      "id": "STATIC-DAEMON-LIFECYCLE",
+      "area": "daemon",
+      "title": "Launcher rollback, session file and host access refusals in the daemon test suite",
+      "where": "static",
+      "ci": "test:light:go",
+      "covers": [
+        "feature node.launcher-rollback"
+      ],
+      "preconditions": [
+        "CI runs the Go tests as a non-root user."
+      ],
+      "steps": [
+        "pnpm test:light:go runs shared/lifecycle (launcher, candidate directories, rollback, gateway-session.json), the lease watchdog and the host access refusal tests."
+      ],
+      "expect": [
+        "All packages pass; a candidate that does not stay ready is rolled back to the preserved binary."
+      ]
+    },
+    {
+      "id": "INS-GEN-01",
+      "area": "installer",
+      "title": "The generated setup command and the universal setup-daemon.sh command",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "feature installer.generated-command",
+        "feature installer.universal-command",
+        "feature installer.connection-check",
+        "setup-daemon.sh --version",
+        "setup-daemon.sh $GATEWAY_SETUP_VERSION"
+      ],
+      "preconditions": [
+        "A host prepared for node installs (bash, curl and sudo present).",
+        "Gateway runs <candidate>."
+      ],
+      "steps": [
+        "Create a monitoring node in Nodes > Add Node with both Disable host console/files checkboxes set; copy the command.",
+        "Check the command: it downloads from the <candidate> release, checks sha256sum against gateway-daemon-installers.sha256 and passes --version with the newest daemon release of the <candidate> minor, plus --disable-console --disable-files.",
+        "Run it as given.",
+        "On Debian also run the universal form: curl -sSL <release>/download/<candidate>/setup-daemon.sh | sudo bash -s -- --type monitoring --version <candidate> --gateway <gateway> --token <token> --gateway-cert-sha256 <cert> -y on a second token, and once with GATEWAY_SETUP_VERSION=<candidate> instead of --version."
+      ],
+      "expect": [
+        "connected; console.enabled: false and files.enabled: false in /etc/monitoring-daemon/config.yaml; GET /api/nodes shows nodeConsoleDisabled and nodeFilesDisabled true.",
+        "setup-daemon.sh logs 'Downloading verified setup-monitoring-node.sh' from download/<candidate> and the installer it ran is byte-identical to the release asset.",
+        "A tampered checksum file (served through GATEWAY_RELEASE_DOWNLOAD_BASE in INS-GEN-02) is refused; here the published one passes."
+      ]
+    },
+    {
+      "id": "INS-GEN-02",
+      "area": "installer",
+      "title": "Release locations overridden through the environment, and checksum refusal",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature installer.release-mirror",
+        "setup-daemon.sh $GATEWAY_RELEASE_DOWNLOAD_BASE",
+        "setup-storage-node.sh $GATEWAY_RELEASE_DOWNLOAD_BASE",
+        "setup-storage-node.sh $GATEWAY_SETUP_VERSION",
+        "setup-database-node.sh $GATEWAY_RELEASE_DOWNLOAD_BASE",
+        "setup-database-node.sh $GATEWAY_SETUP_VERSION",
+        "setup-node.sh $GATEWAY_RELEASES_API_URL",
+        "setup-node.sh $GATEWAY_ARTIFACT_BASE_URL",
+        "setup-docker-node.sh $GATEWAY_RELEASES_API_URL",
+        "setup-docker-node.sh $GATEWAY_ARTIFACT_BASE_URL",
+        "setup-monitoring-node.sh $GATEWAY_RELEASES_API_URL",
+        "setup-monitoring-node.sh $GATEWAY_ARTIFACT_BASE_URL",
+        "setup-relay-node.sh $GATEWAY_RELEASES_API_URL",
+        "setup-relay-node.sh $GATEWAY_ARTIFACT_BASE_URL"
+      ],
+      "preconditions": [
+        "A local HTTP server on the tool host mirrors the <candidate> GitHub release assets, the release feed answer for each component and the daemon artifact directories, with an access log.",
+        "A host where monitoring-daemon and the relay are not installed yet."
+      ],
+      "steps": [
+        "Without --version, run --dry-run of setup-node.sh, setup-docker-node.sh, setup-monitoring-node.sh and setup-relay-node.sh with GATEWAY_RELEASES_API_URL and GATEWAY_ARTIFACT_BASE_URL pointing at the mirror.",
+        "Replace the monitoring-daemon binary on the mirror with a modified copy and run the monitoring installer with the same variables; restore the binary.",
+        "Install the relay of INS-RLY-01 for real with the same variables and no --version.",
+        "Run setup-daemon.sh --type storage --dry-run and the piped setup-storage-node.sh (no sibling files) --dry-run with GATEWAY_RELEASE_DOWNLOAD_BASE=<mirror> and GATEWAY_SETUP_VERSION=<candidate>.",
+        "Replace setup-database-node.sh on the mirror with a modified copy and repeat the storage dry run."
+      ],
+      "expect": [
+        "The dry runs resolve <candidate> from the mirror (its access log shows the feed requests) and exit 0.",
+        "The modified daemon binary fails checksum verification with exit 1; /usr/local/bin/monitoring-daemon does not exist and no service was created.",
+        "The relay downloads only from the mirror and is ready.",
+        "The storage dry runs fetch setup-database-node.sh and setup-docker-node.sh from <mirror>/download/<candidate>/ and exit 0.",
+        "The modified installer stops with 'Checksum verification failed for setup-database-node.sh' and exit 1."
+      ]
+    },
+    {
+      "id": "INS-GEN-03",
+      "area": "installer",
+      "title": "Interactive installs prompt only for missing values",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature installer.interactive",
+        "setup-docker-node.sh $GATEWAY_SETUP_NO_CLEAR"
+      ],
+      "preconditions": [
+        "A terminal session (tmux) on a host without docker-daemon; a fresh docker token. INS-DKR-03 can use this install."
+      ],
+      "steps": [
+        "sudo bash setup-docker-node.sh --gateway <gateway> --user gwdock (no -y, no token, no fingerprint).",
+        "Answer the token and fingerprint prompts.",
+        "Re-run with only --user gwdock on the enrolled node with GATEWAY_SETUP_NO_CLEAR=1."
+      ],
+      "expect": [
+        "Only the token and fingerprint are asked; Docker version and the plan are shown; connected.",
+        "The re-run says 'Existing enrolled docker node detected — reusing current gateway configuration', asks nothing, does not clear the terminal and is connected."
+      ]
+    },
+    {
+      "id": "INS-GEN-04",
+      "area": "installer",
+      "title": "nginx install while apt is locked",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature installer.apt-lock-retry",
+        "setup-node.sh $GATEWAY_NODE_APT_LOCK_RETRY_ATTEMPTS",
+        "setup-node.sh $GATEWAY_NODE_APT_LOCK_RETRY_DELAY_SECONDS"
+      ],
+      "preconditions": [
+        "A host without nginx, before INS-NGX-01."
+      ],
+      "steps": [
+        "Hold the dpkg frontend lock the way apt does, for 20 s: python3 -c 'import fcntl,time; f=open(\"/var/lib/dpkg/lock-frontend\",\"w\"); fcntl.lockf(f,fcntl.LOCK_EX); time.sleep(20)' &",
+        "While it is held, run the nginx setup command with GATEWAY_NODE_APT_LOCK_RETRY_ATTEMPTS=2 GATEWAY_NODE_APT_LOCK_RETRY_DELAY_SECONDS=2.",
+        "Hold the lock again and run INS-NGX-01 with GATEWAY_NODE_APT_LOCK_RETRY_ATTEMPTS=12 GATEWAY_NODE_APT_LOCK_RETRY_DELAY_SECONDS=5."
+      ],
+      "expect": [
+        "With 2 attempts the installer prints 'Package manager is busy; retrying in 2s (1/2)' and then fails with the apt error, before changing nginx config or enrolling.",
+        "With 12 attempts it retries until the lock is released and the install completes."
+      ]
+    },
+    {
+      "id": "INS-MANUAL",
+      "area": "installer",
+      "title": "Manual mode on a host without a service manager",
+      "where": "stand",
+      "os": [
+        "alpine-noinit"
+      ],
+      "covers": [
+        "feature installer.manual-mode",
+        "setup-monitoring-node.sh $GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS",
+        "setup-relay-node.sh $GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS",
+        "setup-node.sh $GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS",
+        "setup-docker-node.sh $GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS"
+      ],
+      "preconditions": [
+        "Throwaway Alpine containers with bash, curl and sudo and no init: one with host networking for monitoring and relay, one with nginx installed from apk, one docker:dind container for the docker profile.",
+        "Fresh tokens for a monitoring, relay, nginx and docker node."
+      ],
+      "steps": [
+        "In each container run the setup command with GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS=60 (monitoring also once with --user gwsvc; relay with GATEWAY_RELAY_RUN_USER=gwsvc and a port above 1024; nginx with --nginx-mode integrate after starting nginx).",
+        "Re-run the monitoring installer on the enrolled container.",
+        "Stop the container and start it again."
+      ],
+      "expect": [
+        "Each installer prints '<daemon> is running in manual mode (launcher PID …)', 'Manual mode is not persistent across reboot', then connected; manual.log is owned by the service user.",
+        "The re-run stops the previous launcher (its cmdline matched) and starts one new launcher; exactly one launcher runs afterwards.",
+        "After the container restart the daemon does not run, as documented; re-running the installer brings it back."
+      ]
+    },
+    {
+      "id": "INS-PREREQ-01",
+      "area": "installer",
+      "title": "Missing prerequisites are installed or refused before any change",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle monitoring prerequisites",
+        "lifecycle relay prerequisites",
+        "lifecycle docker prerequisites",
+        "lifecycle nginx prerequisites",
+        "feature docker.nonroot",
+        "feature nginx.nonroot"
+      ],
+      "preconditions": [
+        "monitoring-daemon and the relay are not installed on the host; nginx from the distribution and Docker Engine run as root (a root nginx-daemon or docker-daemon may already be enrolled)."
+      ],
+      "steps": [
+        "Download setup-monitoring-node.sh and setup-relay-node.sh, then remove curl and jq with the package manager.",
+        "Run the monitoring installer from the file with --user gwsvc; run the relay installer from the file with GATEWAY_RELAY_RUN_USER=gwsvc.",
+        "Make the Docker socket unusable for its group (chgrp root on the socket; Docker recreates it on restart), run setup-docker-node.sh --user gwdock, then restart Docker.",
+        "Run setup-node.sh --user www-data --nginx-mode integrate (Alpine: --user nginx) while nginx still runs as root.",
+        "Run setup-node.sh --user www-data --nginx-mode managed after preparing nginx as in INS-NGX-02."
+      ],
+      "expect": [
+        "The monitoring installer installs curl and ca-certificates (apt or apk) and is connected; the relay installer installs jq and is connected.",
+        "The Docker installer adds gwdock to the docker group, then stops with \"User 'gwdock' cannot use the Docker socket\" and exit 1; an existing docker-daemon keeps its configuration, service user and connection.",
+        "The nginx installer stops with the list of what to prepare and 'nothing was changed'; an existing nginx-daemon, its configuration and /etc/nginx/gateway are unchanged.",
+        "managed mode with a non-root user is refused before any change."
+      ]
+    },
+    {
+      "id": "INS-FAIL-01",
+      "area": "installer",
+      "title": "A refused enrollment token",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle monitoring token-refused",
+        "lifecycle nginx token-refused",
+        "lifecycle docker token-refused",
+        "feature installer.connection-check"
+      ],
+      "preconditions": [
+        "A clean host at the end of its group (the host is reset afterwards); for each of monitoring, nginx and docker a token that already enrolled another node."
+      ],
+      "steps": [
+        "Run each setup command with the used token."
+      ],
+      "expect": [
+        "Each installer exits 1 within seconds with 'Gateway refused the enrollment token (already used, expired, or for another node): … Create a new setup command', names the daemon log and prints its last lines.",
+        "No 'check that Gateway … is reachable' hint is printed."
+      ]
+    },
+    {
+      "id": "INS-FAIL-02",
+      "area": "installer",
+      "title": "Gateway unreachable during a re-run",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle monitoring gateway-unreachable",
+        "lifecycle nginx gateway-unreachable",
+        "lifecycle docker gateway-unreachable",
+        "lifecycle relay gateway-unreachable",
+        "setup-node.sh $GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS",
+        "setup-docker-node.sh $GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS",
+        "setup-monitoring-node.sh $GATEWAY_MONITORING_ENROLLMENT_WAIT_SECONDS",
+        "setup-relay-node.sh $GATEWAY_RELAY_ENROLLMENT_WAIT_SECONDS",
+        "feature installer.connection-check"
+      ],
+      "preconditions": [
+        "Enrolled, online monitoring, nginx, docker and relay daemons on the host."
+      ],
+      "steps": [
+        "Add a firewall rule on the host that drops traffic to the Gateway gRPC port.",
+        "Re-run each installer with its wait variable set to 30 (GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS, GATEWAY_MONITORING_ENROLLMENT_WAIT_SECONDS, GATEWAY_RELAY_ENROLLMENT_WAIT_SECONDS).",
+        "Remove the rule and re-run once more."
+      ],
+      "expect": [
+        "Each re-run exits 1 after about 30 s with 'has not connected to Gateway within 30 s; check that Gateway at <gateway> is reachable', 'Daemon log: journalctl -u <unit>' (Alpine: the OpenRC log files) and the last 20 lines.",
+        "After the rule is removed each re-run is connected."
+      ]
+    },
+    {
+      "id": "INS-FAIL-03",
+      "area": "installer",
+      "title": "A service that cannot start fails the re-run",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle monitoring service-fails",
+        "lifecycle nginx service-fails",
+        "lifecycle docker service-fails",
+        "lifecycle relay service-fails"
+      ],
+      "preconditions": [
+        "Enrolled, online monitoring, nginx, docker and relay daemons on the host."
+      ],
+      "steps": [
+        "Make each service unable to start without touching the installed files: systemd drop-in with ExecStartPre=/bin/false; OpenRC rc_need=\"gateway-no-such-service\" in /etc/conf.d/<unit>.",
+        "Re-run each installer.",
+        "Remove the drop-in or conf.d line and re-run."
+      ],
+      "expect": [
+        "Each re-run exits 1, names the log source (journalctl -u <unit> or the OpenRC log) and prints its last lines; the output has no 'using manual mode'; no detached launcher runs.",
+        "After the cleanup each re-run is connected."
+      ]
+    },
+    {
+      "id": "INS-FAIL-04",
+      "area": "installer",
+      "title": "Users that cannot run a daemon",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle monitoring refused-user",
+        "lifecycle nginx refused-user",
+        "lifecycle docker refused-user",
+        "lifecycle relay refused-user",
+        "lifecycle builder refused-user",
+        "lifecycle storage refused-user"
+      ],
+      "preconditions": [
+        "Snapshots of the file lists of /etc, /usr/local and /var/lib on the host."
+      ],
+      "steps": [
+        "setup-monitoring-node.sh, setup-node.sh and setup-docker-node.sh with --user gateway-no-such-user and a fresh token.",
+        "setup-relay-node.sh with GATEWAY_RELAY_RUN_USER=gateway-no-such-user.",
+        "setup-docker-node.sh --mode builder --user gwsvc; setup-storage-node.sh --user gwsvc."
+      ],
+      "expect": [
+        "Every run exits 1 before any change; the relay prints the useradd hint; builder and storage say they run only as root.",
+        "The file lists are unchanged and the tokens are still unused."
+      ]
+    },
+    {
+      "id": "INS-MON-01",
+      "area": "installer",
+      "title": "Monitoring: fresh root install, re-run, root to user and back, restart, reboot",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle monitoring fresh-root",
+        "lifecycle monitoring rerun",
+        "lifecycle monitoring root-to-user",
+        "lifecycle monitoring user-to-root",
+        "lifecycle monitoring restart",
+        "lifecycle monitoring reboot",
+        "feature node.wrapper",
+        "feature installer.connection-check"
+      ],
+      "preconditions": [
+        "A host without monitoring-daemon."
+      ],
+      "steps": [
+        "Run the monitoring setup command without --user.",
+        "Re-run it without a token.",
+        "Re-run with --user gwsvc; call sudo /usr/local/bin/monitoring-daemon version.",
+        "Re-run without --user.",
+        "Restart the service; reboot the host."
+      ],
+      "expect": [
+        "Fresh: connected; service user root; /usr/local/bin/monitoring-daemon is a root binary; no host_identity_path in the config.",
+        "Re-run: connected, no new enrollment (certs unchanged), launcher directory kept.",
+        "To user: 'switching it to gwsvc'; connected; service user gwsvc; config, state and /usr/local/lib/monitoring-daemon owned by gwsvc; /usr/local/bin/monitoring-daemon is the root-owned wrapper and 'version' runs as gwsvc; host identity copy equals /var/lib/gateway/host-identity; same node id.",
+        "Back to root: 'ran as gwsvc; switching it to root'; connected; service user root; find over the three directories finds nothing owned by gwsvc; the wrapper is replaced by a root binary; host_identity_path removed.",
+        "Restart and reboot: online again within a minute, no restart loop in the service log."
+      ]
+    },
+    {
+      "id": "INS-MON-02",
+      "area": "installer",
+      "title": "Monitoring: fresh non-root install, console, files, user to user",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle monitoring fresh-user",
+        "lifecycle monitoring user-to-user",
+        "feature node.console-as-user",
+        "feature node.files-as-user",
+        "feature node.host-identity"
+      ],
+      "preconditions": [
+        "A host without monitoring-daemon; gwsvc and gwsvc2 exist; another root daemon runs on the host."
+      ],
+      "steps": [
+        "Run the monitoring setup command with --user gwsvc.",
+        "Open the node console and run id and touch /etc/gateway-test.",
+        "In Files: list, create, write and read in /var/lib/monitoring-daemon; create a file in /etc; read /var/lib/gateway/host-identity.",
+        "Re-run with --user gwsvc2."
+      ],
+      "expect": [
+        "connected; service user gwsvc; host_identity_path points into /var/lib/monitoring-daemon and the copy equals the shared identity; Gateway shows one host for both daemons of the host.",
+        "Console: uid of gwsvc; touch fails with Permission denied.",
+        "Files: the state directory operations return 200; /etc and the root-only identity fail at once with permission denied, no hang.",
+        "User to user: the daemon is stopped, launcher/ is removed, everything belongs to gwsvc2, connected, same node id."
+      ]
+    },
+    {
+      "id": "INS-NGX-01",
+      "area": "installer",
+      "title": "nginx: fresh managed install as root, re-run, restart, reboot",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "setup-node.sh --nginx-mode=managed",
+        "lifecycle nginx fresh-root",
+        "lifecycle nginx rerun",
+        "lifecycle nginx restart",
+        "lifecycle nginx reboot",
+        "feature nginx.managed",
+        "feature nginx.tls-catch-all"
+      ],
+      "preconditions": [
+        "A host without nginx and nginx-daemon, reachable on 80/443 from the tool host."
+      ],
+      "steps": [
+        "Run the nginx setup command with --nginx-mode managed.",
+        "Create a route on the node to a test upstream; request it over HTTPS with its name and with an unknown name.",
+        "Re-run without a token; restart nginx-daemon; reboot the host."
+      ],
+      "expect": [
+        "Debian: nginx from the nginx.org stable repository; Alpine: the apk nginx package; version 1.25.1 or newer; connected; no 'Fresh enrollment token provided' line and no enrollment-backup directory.",
+        "The route answers 200; the unknown name gets a refused TLS handshake (ssl_reject_handshake).",
+        "Re-run connected without a new enrollment; after restart and reboot the node is online, the /run socket directories exist and the route answers 200."
+      ]
+    },
+    {
+      "id": "INS-NGX-02",
+      "area": "installer",
+      "title": "nginx: root to non-root and back",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "setup-node.sh --nginx-mode=integrate",
+        "lifecycle nginx root-to-user",
+        "lifecycle nginx user-to-root",
+        "feature nginx.nonroot"
+      ],
+      "preconditions": [
+        "An enrolled root nginx node with one route answering 200."
+      ],
+      "steps": [
+        "Run nginx as its distribution user (www-data on Debian, nginx on Alpine) with CAP_NET_BIND_SERVICE as docs/nodes.md describes (systemd drop-in; OpenRC: command_user and capabilities in /etc/conf.d/nginx), give it /etc/nginx, /var/log/nginx and the temp directories.",
+        "Re-run the installer with --user <that user> --nginx-mode integrate.",
+        "Create a second route, then reload by changing it.",
+        "Re-run without --user while nginx still runs as the user.",
+        "Run nginx as root again, re-run without --user."
+      ],
+      "expect": [
+        "To user: connected; service user is the nginx user; the unit (systemd) or service (OpenRC) grants CAP_NET_BIND_SERVICE; /etc/nginx, /var/www/acme-challenge, /etc/nginx-daemon, /var/lib/nginx-daemon and /run/nginx-daemon, /run/gateway-secure-links, /run/gateway-registry-links, /run/gateway-ingress-health belong to the user.",
+        "Route create and change apply (nginx -t binds 443) and both routes answer 200.",
+        "Without --user while nginx runs as the user: exit 1 'nginx runs as <user>, not root; nothing was changed'.",
+        "Back to root: connected; what the installer handed over belongs to root again; distribution files keep their owners; routes answer 200."
+      ]
+    },
+    {
+      "id": "INS-NGX-03",
+      "area": "installer",
+      "title": "nginx: fresh non-root install and user to user",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle nginx fresh-user",
+        "lifecycle nginx user-to-user"
+      ],
+      "preconditions": [
+        "A host with Debian's nginx (1.25.1 or newer) prepared to run as www-data per docs/nodes.md, no nginx-daemon; a second user gwngx."
+      ],
+      "steps": [
+        "Run the nginx setup command with --user www-data --nginx-mode integrate.",
+        "Create a route; check the node health.",
+        "Switch nginx to run as gwngx (drop-in User/Group, ownership), re-run with --user gwngx --nginx-mode integrate."
+      ],
+      "expect": [
+        "connected; service user www-data; the route answers 200; node health configValid, ingressHealth.serving and configApplied are true.",
+        "User to user: connected as gwngx, everything the installer handed to www-data belongs to gwngx, the route answers 200."
+      ]
+    },
+    {
+      "id": "INS-NGX-04",
+      "area": "installer",
+      "title": "nginx: integrate with an existing configuration and --skip-nginx",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "setup-node.sh --skip-nginx",
+        "feature nginx.integrate-existing",
+        "config nginx.stub_status_url"
+      ],
+      "preconditions": [
+        "A host with Debian's nginx serving its own site with listen 443 ssl default_server and something on port 80."
+      ],
+      "steps": [
+        "Run the nginx setup command with --nginx-mode integrate --skip-nginx as root.",
+        "Create a route; request the host's own site and the route."
+      ],
+      "expect": [
+        "nginx is not reinstalled or upgraded; the host's site keeps answering; the daemon logs a warning that the node keeps its own 443 default server.",
+        "stub_status_url in /etc/nginx-daemon/config.yaml points at the local alternate port the installer chose, node stats report requests, the route answers 200."
+      ]
+    },
+    {
+      "id": "INS-DKR-01",
+      "area": "installer",
+      "title": "Docker: fresh root install with Docker Engine, watchdog and Secure Runtime preflight",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle docker fresh-root",
+        "lifecycle docker rerun",
+        "lifecycle docker restart",
+        "lifecycle docker reboot",
+        "setup-docker-node.sh $GATEWAY_LEASE_WATCHDOG_VERSION",
+        "feature docker.engine-install",
+        "feature docker.lease-watchdog"
+      ],
+      "preconditions": [
+        "A host without Docker Engine and docker-daemon (Alpine: LXC with nesting and keyctl)."
+      ],
+      "steps": [
+        "Run the docker setup command with GATEWAY_LEASE_WATCHDOG_VERSION=<the watchdog release of <previous>>.",
+        "Run gateway-lease-watchdog status; deploy a container from the Gateway registry.",
+        "Re-run without a token and without GATEWAY_LEASE_WATCHDOG_VERSION; restart docker-daemon; reboot the host."
+      ],
+      "expect": [
+        "Debian: docker-ce from download.docker.com; Alpine: the docker package; /etc/docker/daemon.json has json-file with max-size 50m and max-file 3; connected.",
+        "gateway-lease-watchdog runs as its own root service (systemd unit or OpenRC service) at the pinned release, its status shows a fresh heartbeat; the Secure Runtime preflight result is reported on the node (healthy, installable or unsupported) and does not fail the install.",
+        "The container runs; re-run connected without new enrollment and does not downgrade or replace the watchdog; after restart and reboot the node and the container are back."
+      ]
+    },
+    {
+      "id": "INS-DKR-02",
+      "area": "installer",
+      "title": "Docker: root to non-root and back with Secure Links and storage links",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle docker root-to-user",
+        "lifecycle docker user-to-root",
+        "feature docker.nonroot",
+        "feature docker.connector-mode-switch"
+      ],
+      "preconditions": [
+        "A root docker node with a container behind a route on an nginx node (Secure Link) answering 200.",
+        "Debian: also a workload with a managed storage link that writes and reads objects every second."
+      ],
+      "steps": [
+        "Re-run the installer with --user gwdock while probing the route and the storage link.",
+        "Deploy a blue/green deployment on the node; open the console.",
+        "Re-run without --user while probing."
+      ],
+      "expect": [
+        "To user: gwdock is added to the docker group; connected; service user gwdock; the connector containers are recreated with GroupAdd of the daemon's gid; storage-relay.sock is gwdock:gwdock 0660; no *.previous-owner-* directory remains.",
+        "The route answers 200 and the storage link keeps working during and after the switch without a manual step; the deployment succeeds; the console shows gwdock with the docker group.",
+        "Back to root: connected; storage-relay.sock is 65532:65532 0600 with a fresh mtime; links and route work; Gateway still lists and manages the recreated storage connector."
+      ]
+    },
+    {
+      "id": "INS-DKR-03",
+      "area": "installer",
+      "title": "Docker: fresh non-root install, root-only features, user to user",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle docker fresh-user",
+        "lifecycle docker user-to-user",
+        "feature docker.nonroot",
+        "feature availability.nonroot-watchdog"
+      ],
+      "preconditions": [
+        "A host with Docker Engine and without docker-daemon; gwdock and gwdock2 exist."
+      ],
+      "steps": [
+        "Run the docker setup command with --user gwdock.",
+        "Pull an image built by a Build Worker from the Gateway registry; deploy a container.",
+        "Open the volume create dialog (disk-image option), start a volume migration from and to the node, read container stats.",
+        "Re-run with --user gwdock2."
+      ],
+      "expect": [
+        "connected; service user gwdock; /etc/docker/certs.d/127.0.0.1:5443 is owned by gwdock; the lease watchdog runs as a root service; the node advertises docker_daemon_non_root_v1.",
+        "The pull verifies TLS against the registry proxy and the container runs.",
+        "The disk-image option and volume migration name the non-root reason; stats report no log sizes as documented.",
+        "User to user: connected as gwdock2; the node is not listed under Availability excluded nodes."
+      ]
+    },
+    {
+      "id": "INS-DKR-04",
+      "area": "installer",
+      "title": "Docker: Secure Runtime on fresh, existing root and non-root nodes",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "setup-docker-node.sh --secure-runtime",
+        "feature docker.secure-runtime"
+      ],
+      "preconditions": [
+        "A VM docker node installed fresh by INS-DKR-01 where gVisor can run, and an LXC docker node running as gwdock without runsc."
+      ],
+      "steps": [
+        "On the VM: docker-daemon runtime preflight runsc --json; create a Secure container.",
+        "Switch the VM node to --user gwdock; copy the one-line command from Node Details > Secure Runtime and run it; then sudo docker-daemon runtime install runsc.",
+        "On the LXC node: re-run the installer with --user gwdock --secure-runtime.",
+        "Try a Secure container with a bind mount, a GPU, a migration and a .gwca export."
+      ],
+      "expect": [
+        "Preflight exits 0 healthy; the Secure container runs with runtime runsc.",
+        "The one-line command downloads and checks this release's installer, installs runsc from its own verified binary, Node Details shows healthy, the service user stays gwdock; 'runtime install' as the service user exits non-zero.",
+        "Where gVisor cannot run, --secure-runtime exits 1 with the preflight reason and leaves the daemon running as gwdock.",
+        "Bind mounts, GPU, migration and export are refused for the Secure workload."
+      ]
+    },
+    {
+      "id": "INS-RLY-01",
+      "area": "installer",
+      "title": "Relay: fresh root install, re-run, root to user and back, restart, reboot",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle relay fresh-root",
+        "lifecycle relay rerun",
+        "lifecycle relay root-to-user",
+        "lifecycle relay user-to-root",
+        "lifecycle relay restart",
+        "lifecycle relay reboot",
+        "feature relay.pool-membership"
+      ],
+      "preconditions": [
+        "A host without a relay, its port 9443 reachable from the managed nodes."
+      ],
+      "steps": [
+        "Create a relay node and run its command (port 9443).",
+        "Re-run without a token; re-run with GATEWAY_RELAY_RUN_USER=gwsvc; re-run without it.",
+        "Restart gateway-relay-supervisor; reboot the host.",
+        "Delete the relay node at the end."
+      ],
+      "expect": [
+        "Fresh: the supervisor enrolls, the relay is ready in Settings > Relay, gateway-relay listens on 9443, a Secure Link route keeps answering after Rebalance.",
+        "To gwsvc: service user gwsvc, supervisor and worker run as gwsvc, no AmbientCapabilities for 9443; back to root: /usr/local/lib/gateway-relay/run-supervisor and all relay directories belong to root, find -user gwsvc is empty.",
+        "After restart and reboot the relay is ready again."
+      ]
+    },
+    {
+      "id": "INS-RLY-02",
+      "area": "installer",
+      "title": "Relay: fresh non-root install on a privileged port, group, setup log, user to user",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle relay fresh-user",
+        "lifecycle relay user-to-user",
+        "setup-relay-node.sh $GATEWAY_RELAY_RUN_GROUP",
+        "setup-relay-node.sh $GATEWAY_RELAY_SETUP_LOG",
+        "feature relay.low-port"
+      ],
+      "preconditions": [
+        "A host without a relay; gwsvc, gwsvc2 and a group gwrelay exist."
+      ],
+      "steps": [
+        "Run the relay command with --service-port 853, GATEWAY_RELAY_RUN_USER=gwsvc, GATEWAY_RELAY_RUN_GROUP=gwrelay and GATEWAY_RELAY_SETUP_LOG=/root/relay-setup.log.",
+        "Re-run with GATEWAY_RELAY_RUN_USER=gwsvc2 and no group."
+      ],
+      "expect": [
+        "Service user gwsvc, group gwrelay; the unit has AmbientCapabilities=CAP_NET_BIND_SERVICE; the worker listens on 853 as gwsvc and the relay is ready with its advertised port 853 (managed nodes connect to it); /root/relay-setup.log holds the setup output.",
+        "User to user: everything belongs to gwsvc2 and its primary group; ready again; same relay id."
+      ]
+    },
+    {
+      "id": "INS-RLY-03",
+      "area": "installer",
+      "title": "Relay re-enrollment and refused tokens",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle relay token-refused",
+        "feature relay.reenroll"
+      ],
+      "preconditions": [
+        "A remote relay of the pool."
+      ],
+      "steps": [
+        "Stop the relay's supervisor until Settings > Relay shows it offline; click Re-enroll and run the command.",
+        "Run the same command again; run a command whose token belongs to another relay."
+      ],
+      "expect": [
+        "Re-enrollment is ready with a new certificate; the pool keeps serving.",
+        "The used or foreign token exits 1 with the refused-token message; the relay keeps running with its current identity."
+      ]
+    },
+    {
+      "id": "INS-BLD-01",
+      "area": "installer",
+      "title": "Build Worker: fresh install, egress profiles, re-run, restart, reboot",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "setup-docker-node.sh --builder-egress=internet",
+        "setup-docker-node.sh --builder-egress=offline",
+        "lifecycle builder fresh-root",
+        "lifecycle builder rerun",
+        "lifecycle builder prerequisites",
+        "lifecycle builder restart",
+        "lifecycle builder reboot",
+        "feature builder.egress"
+      ],
+      "preconditions": [
+        "A systemd host without docker-daemon, Git or iptables; a Git source whose build downloads npm packages and one that needs no network."
+      ],
+      "steps": [
+        "Run the builder setup command (--mode builder, default egress).",
+        "Force a build of each source on this worker (move it to the top of the Nodes list).",
+        "Re-run with --builder-egress offline; build both again.",
+        "Re-run with --builder-egress internet; restart docker-daemon; reboot."
+      ],
+      "expect": [
+        "Git and iptables are installed with apt; containerd, BuildKit, runc, CNI, Syft and Grype are downloaded and checksum-verified into /opt/gateway-builder/bin; gateway-builder-egress, gateway-builder-containerd and gateway-builder-buildkit units run; connected with every builder capability.",
+        "internet: both builds succeed; a build step reaching a private address or the Gateway gRPC endpoint fails.",
+        "offline: the npm build fails at the download, the offline build succeeds.",
+        "After re-run, restart and reboot the worker takes builds again."
+      ]
+    },
+    {
+      "id": "INS-BLD-02",
+      "area": "installer",
+      "title": "Build Worker refused without systemd",
+      "where": "stand",
+      "os": [
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle builder prerequisites",
+        "feature builder.requires-systemd"
+      ],
+      "preconditions": [
+        "An OpenRC host; a fresh builder token."
+      ],
+      "steps": [
+        "Run the builder setup command."
+      ],
+      "expect": [
+        "Exit 1 with 'Builder nodes require systemd to supervise the isolated containerd and BuildKit services' before any download or enrollment; the token stays unused."
+      ]
+    },
+    {
+      "id": "INS-BLD-03",
+      "area": "feature",
+      "title": "Build Worker order",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature builder.order"
+      ],
+      "preconditions": [
+        "Two online Build Workers in a node folder, a Git source."
+      ],
+      "steps": [
+        "Force builds with each worker first in the folder.",
+        "Move one worker into a subfolder of that folder and force a build."
+      ],
+      "expect": [
+        "The first online worker of the list order takes the build each time; a worker in a subfolder comes before the folder's own nodes."
+      ]
+    },
+    {
+      "id": "INS-STO-01",
+      "area": "installer",
+      "title": "Storage: fresh install through the piped installer, disk selector, re-run, restart, reboot",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle storage fresh-root",
+        "lifecycle storage rerun",
+        "lifecycle storage restart",
+        "lifecycle storage reboot",
+        "feature storage.loop-preflight",
+        "feature storage.root-selector",
+        "feature installer.interactive"
+      ],
+      "preconditions": [
+        "A VM without docker-daemon with a second mounted filesystem."
+      ],
+      "steps": [
+        "Run curl … setup-storage-node.sh | sudo bash -s -- --gateway <gateway> --token <token> --gateway-cert-sha256 <cert> in a terminal without -y and pick the second filesystem in the disk selector.",
+        "Create a managed PostgreSQL and a SeaweedFS storage on the node; write data.",
+        "Re-run with -y --storage-root <the same path>; restart docker-daemon; reboot the VM."
+      ],
+      "expect": [
+        "The installer downloads setup-database-node.sh from the same release and checks it, runs the loop and ext4 preflight, cleans up its probe, installs Docker, then enrolls; connected; storage root is the selected path; config has docker.mode storage.",
+        "The database and storage become ready with their images under the storage root.",
+        "Re-run keeps the storage root and enrollment; after restart and reboot the database and storage are ready with their data."
+      ]
+    },
+    {
+      "id": "INS-STO-02",
+      "area": "installer",
+      "title": "Storage refused in an ordinary LXC guest",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "lifecycle storage prerequisites",
+        "feature storage.loop-preflight"
+      ],
+      "preconditions": [
+        "An unprivileged LXC guest without loop devices and without docker-daemon."
+      ],
+      "steps": [
+        "Run the storage setup command with -y."
+      ],
+      "expect": [
+        "Exit 1 before enrollment with the LXC loop-device remediation; no image, loop attachment or mount is left; /etc/docker-daemon does not exist; the token stays unused."
+      ]
+    },
+    {
+      "id": "INS-STO-03",
+      "area": "installer",
+      "title": "Legacy databases node updated to the candidate",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature storage.legacy-databases",
+        "feature node.update-from-previous",
+        "feature installer.legacy-daemon-check"
+      ],
+      "preconditions": [
+        "A VM without docker-daemon; Gateway runs <candidate>."
+      ],
+      "steps": [
+        "Install with the <previous> installers: setup-daemon.sh --type databases --version <previous> … -y --storage-root <path>.",
+        "Create a managed Redis with data.",
+        "Update the node to <candidate> from its node page."
+      ],
+      "expect": [
+        "The node shows as Storage; the Redis is ready.",
+        "After the update: same node id, enrollment and storage root; the node advertises the unified Storage capabilities (SeaweedFS can be created on it); the Redis data is intact."
+      ]
+    },
+    {
+      "id": "UBU-NGINX",
+      "area": "installer",
+      "title": "Ubuntu: packaged nginx 1.24 and a non-root nginx-daemon under AppArmor",
+      "where": "stand",
+      "os": [
+        "ubuntu"
+      ],
+      "covers": [
+        "feature nginx.old-version",
+        "feature nginx.nonroot-apparmor",
+        "lifecycle nginx prerequisites"
+      ],
+      "preconditions": [
+        "apt install nginx (1.24 from Ubuntu) running as root; fresh nginx tokens."
+      ],
+      "steps": [
+        "Run the setup command with -y.",
+        "Run it with -y --skip-nginx.",
+        "Run it interactively and decline the upgrade; run it interactively and approve.",
+        "Prepare nginx (now from nginx.org) to run as www-data per docs/nodes.md, re-run with --user www-data --nginx-mode integrate, create and change a route."
+      ],
+      "expect": [
+        "-y: exit 1 'nginx 1.25.1+ is required. Re-run interactively to approve the stable nginx upgrade.' before any config change or enrollment.",
+        "--skip-nginx: exit 1 '--skip-nginx requires nginx 1.25.1+; found 1.24…'.",
+        "Declined: stops before Gateway changes nginx config or enrolls; approved: nginx.org stable repository, nginx 1.25.1 or newer, connected.",
+        "Non-root under AppArmor: no AppArmor denial in the kernel log; nginx -t and reload succeed as www-data; routes answer 200."
+      ]
+    },
+    {
+      "id": "UBU-DOCKER",
+      "area": "installer",
+      "title": "Ubuntu: distribution docker.io, AppArmor, Secure Runtime and resolved DNS",
+      "where": "stand",
+      "os": [
+        "ubuntu"
+      ],
+      "covers": [
+        "lifecycle docker prerequisites",
+        "feature docker.existing-engine",
+        "feature docker.nonroot-apparmor",
+        "feature docker.secure-runtime-apparmor",
+        "feature docker.dns-resolved"
+      ],
+      "preconditions": [
+        "apt install docker.io with a daemon.json of the operator's own; /etc/resolv.conf is the systemd-resolved stub; a route on an nginx node for Secure Link checks."
+      ],
+      "steps": [
+        "Run the docker setup command as root with --secure-runtime.",
+        "Create a container; change its environment (recreate); run a container that resolves a public name and pulls from the Gateway registry.",
+        "Re-run with --user gwdock --secure-runtime; create a Default container behind a Secure Link route and, if Secure Runtime is healthy, a Secure container.",
+        "Read the kernel log for AppArmor denials."
+      ],
+      "expect": [
+        "docker.io is kept (no docker-ce) and the existing daemon.json is untouched; connected.",
+        "--secure-runtime either installs runsc and Node Details shows Secure Runtime healthy, or exits 1 with the preflight reason and leaves the daemon running; it never reports success without runsc.",
+        "Recreate keeps the container's configuration; names resolve inside containers through the resolved upstream; the registry pull succeeds.",
+        "Non-root: connected as gwdock; connectors and workloads start with the docker-default profile; the route answers 200; no AppArmor denial for docker-daemon, its connectors or nginx."
+      ]
+    },
+    {
+      "id": "UBU-BUILDER",
+      "area": "installer",
+      "title": "Ubuntu: Build Worker egress with systemd-resolved",
+      "where": "stand",
+      "os": [
+        "ubuntu"
+      ],
+      "covers": [
+        "feature builder.egress-dns-resolved"
+      ],
+      "preconditions": [
+        "An Ubuntu guest without docker-daemon (reset after UBU-DOCKER) with the resolved stub; a Git source whose build downloads npm packages."
+      ],
+      "steps": [
+        "Install a Build Worker with the default egress; force the build on it."
+      ],
+      "expect": [
+        "The build resolves and downloads its dependencies and succeeds; the egress policy still blocks private ranges."
+      ]
+    },
+    {
+      "id": "UBU-DAEMONS",
+      "area": "installer",
+      "title": "Ubuntu: non-root monitoring and relay under AppArmor",
+      "where": "stand",
+      "os": [
+        "ubuntu"
+      ],
+      "covers": [
+        "feature node.wrapper"
+      ],
+      "preconditions": [
+        "The Ubuntu guest of UBU-DOCKER."
+      ],
+      "steps": [
+        "Install monitoring with --user gwsvc and a relay with GATEWAY_RELAY_RUN_USER=gwsvc; open the console of the monitoring node; reboot."
+      ],
+      "expect": [
+        "Both connected and back after the reboot; no AppArmor denials; the monitoring wrapper runs as gwsvc."
+      ]
+    },
+    {
+      "id": "FEAT-NODE-01",
+      "area": "daemon",
+      "title": "Host console and file switches",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "config console.enabled",
+        "config files.enabled",
+        "config console.user",
+        "feature node.host-access-switches",
+        "feature node.console-as-user"
+      ],
+      "preconditions": [
+        "Enrolled nginx, docker, monitoring and relay nodes."
+      ],
+      "steps": [
+        "Re-run each installer with --disable-console --disable-files; open the console and Files of each node and call execute_node_console_command over MCP.",
+        "Re-run each installer without the flags.",
+        "Set files.enabled: true only and restart; then set both true, set console.user: gwsvc2 on the nginx node and restart."
+      ],
+      "expect": [
+        "Console: auth_error NODE_CONSOLE_DISABLED with the config hint; Files and the file API: 409 NODE_FILES_DISABLED; MCP returns NODE_CONSOLE_DISABLED; the node shows nodeConsoleDisabled/nodeFilesDisabled.",
+        "The re-run keeps both false.",
+        "Console off and files on shows the warning notice; with both on the console works and nginx console sessions run as gwsvc2; config ownership and mode are unchanged."
+      ]
+    },
+    {
+      "id": "FEAT-NODE-02",
+      "area": "daemon",
+      "title": "Manual setup of nginx-daemon from the release files",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature node.manual-setup",
+        "config gateway.address",
+        "config gateway.token",
+        "config gateway.cert_sha256",
+        "config tls.ca_cert",
+        "config tls.client_cert",
+        "config tls.client_key",
+        "config nginx.config_dir",
+        "config nginx.certs_dir",
+        "config nginx.logs_dir",
+        "config nginx.global_config",
+        "config nginx.binary",
+        "config nginx.htpasswd_dir",
+        "config nginx.acme_challenge_dir",
+        "config state_dir",
+        "config log_level",
+        "config log_format"
+      ],
+      "preconditions": [
+        "A host with Debian's nginx and no nginx-daemon; a fresh nginx token."
+      ],
+      "steps": [
+        "Download nginx-daemon, checksums.txt and the .update.json manifest of <candidate>; verify the checksum; install the binary.",
+        "Write /etc/nginx-daemon/config.yaml with every key of the docs example, log_level debug and log_format text; run nginx-daemon install --gateway <gateway> --token <token> --gateway-cert-sha256 <cert>.",
+        "Write and start a systemd service; create a route with an access list using basic auth."
+      ],
+      "expect": [
+        "Enrollment clears gateway.token in the file and writes the certificate paths under tls; the node is online.",
+        "The route config lands in nginx.config_dir, certificates in nginx.certs_dir, the htpasswd file in nginx.htpasswd_dir; ACME files go to nginx.acme_challenge_dir; logs in nginx.logs_dir stream in the UI; state lives in state_dir.",
+        "The daemon log is text at debug level."
+      ]
+    },
+    {
+      "id": "FEAT-NODE-03",
+      "area": "daemon",
+      "title": "Docker service address",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature node.service-address"
+      ],
+      "preconditions": [
+        "A docker node with two addresses; a route to a published container port on it."
+      ],
+      "steps": [
+        "Set the service address on the node page to the second address; recreate the container."
+      ],
+      "expect": [
+        "The route's upstream uses the configured address and answers 200."
+      ]
+    },
+    {
+      "id": "UPD-01",
+      "area": "daemon",
+      "title": "Daemons from the previous release update to the candidate",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature node.update-from-previous",
+        "feature node.update-bulk",
+        "feature node.update-refusals",
+        "feature node.update-lease-peers",
+        "feature installer.legacy-daemon-check"
+      ],
+      "preconditions": [
+        "Gateway runs <candidate>; nginx, docker, storage, builder and monitoring nodes run <previous>, among them a non-root monitoring node installed with --version <previous>.",
+        "A lease-mode Availability policy over two docker nodes."
+      ],
+      "steps": [
+        "Install one more monitoring node with --version <previous> using the candidate installer.",
+        "Try to update an offline node, a relay node and a node already on <candidate>.",
+        "Select every node in Nodes > Update Nodes and update.",
+        "Apply an unchanged Compose revision on an updated docker node."
+      ],
+      "expect": [
+        "The installer accepts the older daemon after 10 s of active service and warns that it does not report its Gateway connection.",
+        "The three updates are refused with their reasons.",
+        "Every node reports <candidate> and its capabilities; the two lease peers update one after another with waiting_for_lease_peers and the policy keeps its quorum; non-root daemons keep their user and /usr/local/lib/<daemon>/bin/<daemon>.previous exists.",
+        "The first apply recreates the Compose services once; the next one recreates nothing."
+      ]
+    },
+    {
+      "id": "UPD-02",
+      "area": "daemon",
+      "title": "Daemons on the candidate update themselves to a newer release",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "lifecycle nginx self-update",
+        "lifecycle docker self-update",
+        "lifecycle monitoring self-update",
+        "lifecycle relay self-update",
+        "lifecycle builder self-update",
+        "lifecycle storage self-update"
+      ],
+      "preconditions": [
+        "<newer> is published on the preview channel and the update channel is preview; root and non-root daemons of each type run <candidate>."
+      ],
+      "steps": [
+        "Update each node from Update Nodes; update the Relay Pool.",
+        "Restart each service afterwards."
+      ],
+      "expect": [
+        "Each daemon verifies the signed manifest, replaces its binary atomically, passes the 30 s stability window and reports <newer>; non-root daemons replace /usr/local/lib/<daemon>/bin/<daemon> and keep the previous one, owner and service user unchanged; the wrapper is untouched.",
+        "Relays update supervisor first, then worker; after the restarts every node is online on <newer>."
+      ]
+    },
+    {
+      "id": "UPD-03",
+      "area": "daemon",
+      "title": "Relay Pool update from the previous release",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature relay.pool-update"
+      ],
+      "preconditions": [
+        "Remote relays on <previous>; Gateway on <candidate>."
+      ],
+      "steps": [
+        "Start Update Relay Pool.",
+        "In a second run abandon a step after the supervisor update and start again.",
+        "Run it once more with every relay already on the target."
+      ],
+      "expect": [
+        "Each relay: supervisor self-update and reconnect first, then the worker update; the supervisor log has no listener with the old build version between 'starting self-update' and 'binary replaced successfully'; the run completes and relays leave drain.",
+        "The resumed run updates only the worker; the last run marks every step ready without draining."
+      ]
+    },
+    {
+      "id": "FEAT-RLY-01",
+      "area": "feature",
+      "title": "Relay Pool operations",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature relay.rebalance-drain",
+        "feature relay.certificate-renewal"
+      ],
+      "preconditions": [
+        "Two remote relays and Secure Link routes and database links under load."
+      ],
+      "steps": [
+        "Rebalance; drain a relay with an open database link pool, then Force disconnect; Renew certificate on a relay."
+      ],
+      "expect": [
+        "Assignments move after successful probes without failed requests; drain waits, Force disconnect is audited; the renewed certificate is served without dropping connections."
+      ]
+    },
+    {
+      "id": "FEAT-ING-01",
+      "area": "feature",
+      "title": "Route maintenance without reloads",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature nginx.maintenance"
+      ],
+      "preconditions": [
+        "An nginx node with several routes under 10 rps keep-alive probes; reload counter from the nginx error log."
+      ],
+      "steps": [
+        "Toggle maintenance 5 times through UI, API and MCP; redeem a team access code.",
+        "Restart nginx-daemon and reboot the node while one route is in maintenance.",
+        "Toggle on a route with secure_link in its advanced config."
+      ],
+      "expect": [
+        "0 reloads and 0 errors on the neighbours; 503 in maintenance and 200 with the access cookie; the upstream never sees the access cookie.",
+        "The route stays in maintenance after restart and reboot.",
+        "The secure_link route enters maintenance without a duplicate-directive error."
+      ]
+    },
+    {
+      "id": "FEAT-ING-02",
+      "area": "feature",
+      "title": "Ingress groups with two members",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature nginx.ingress-groups"
+      ],
+      "preconditions": [
+        "Two nginx nodes on the candidate."
+      ],
+      "steps": [
+        "Create a group with both nodes, move a domain and its routes onto it.",
+        "Stop one member's nginx-daemon, toggle maintenance and change a route, start it again.",
+        "Remove a member."
+      ],
+      "expect": [
+        "Both members serve every route and their health endpoints answer 200.",
+        "The offline member gets the flag and the change after reconnect within a minute.",
+        "The removed member drains and its configs are cleaned up."
+      ]
+    },
+    {
+      "id": "FEAT-ING-03",
+      "area": "feature",
+      "title": "ACME, Pages, logs and health on a non-root nginx node",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature nginx.acme-pages-logs"
+      ],
+      "preconditions": [
+        "A non-root nginx node."
+      ],
+      "steps": [
+        "Place an HTTP-01 challenge file; deploy a Pages project; open the route log stream; read node health."
+      ],
+      "expect": [
+        "nginx serves the challenge file written by the daemon user; Pages answers over HTTPS; log lines stream for each request; configValid, ingressHealth.serving and configApplied are true."
+      ]
+    },
+    {
+      "id": "FEAT-DKR-01",
+      "area": "feature",
+      "title": "Container stop, restart, kill and delete",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature docker.container-lifecycle"
+      ],
+      "preconditions": [
+        "A docker node; containers that exit on SIGTERM and that ignore it; docker events logged."
+      ],
+      "steps": [
+        "Stop, restart, kill (SIGKILL, SIGHUP) and delete through REST, MCP and UI, including delete right after stop with timeout 120.",
+        "Stop through an nginx route with a 60 s read timeout."
+      ],
+      "expect": [
+        "Fast containers answer 200 after die; slow ones 202 with a task after about 45 s and finish; no 409; no 504 through the proxy; the UI shows stopping and then exited without a reload and lets Remove queue the deletion."
+      ]
+    },
+    {
+      "id": "FEAT-DKR-02",
+      "area": "feature",
+      "title": "Migrations between docker nodes, including an old engine",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature docker.migration",
+        "feature docker.old-engine"
+      ],
+      "preconditions": [
+        "Two docker nodes on a current engine and one on Docker 20.10; deployments with routes."
+      ],
+      "steps": [
+        "Migrate a deployment between the current nodes in both directions; migrate a container from the 20.10 node; save an env variable without recreate and run the preflight."
+      ],
+      "expect": [
+        "0 reloads on the ingress, 503 from the first request after entering until cutover, no 502; the 20.10 migration completes; MIGRATION_ENV_PENDING names the key."
+      ]
+    },
+    {
+      "id": "FEAT-DKR-03",
+      "area": "feature",
+      "title": "Compose, archives and log limits",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature docker.compose",
+        "feature docker.archives",
+        "feature docker.log-limits"
+      ],
+      "preconditions": [
+        "A docker node whose Docker Engine the installer installed and one with its own daemon.json log-opts."
+      ],
+      "steps": [
+        "Apply a Compose revision changing one service; Pull & Apply.",
+        "Export a container as portable and as registry-backed .gwca and import both on another node.",
+        "Create a container on each node; inspect its LogConfig."
+      ],
+      "expect": [
+        "Only the changed service is recreated.",
+        "Both imports run with the same configuration and empty volumes.",
+        "json-file 50m × 3 on the installer node; the other node keeps the host's options."
+      ]
+    },
+    {
+      "id": "FEAT-DKR-04",
+      "area": "feature",
+      "title": "GPU workloads",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature docker.gpu"
+      ],
+      "preconditions": [
+        "A docker node with a GPU and its driver and runtime installed by the operator."
+      ],
+      "steps": [
+        "Attach the GPU to a container and to a deployment; try to migrate and export them."
+      ],
+      "expect": [
+        "The device is attachable, the workload sees it, GPU metrics report; migration and export are refused."
+      ]
+    },
+    {
+      "id": "FEAT-AV-01",
+      "area": "feature",
+      "title": "Availability, Replicated mode",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature availability.replicated"
+      ],
+      "preconditions": [
+        "Two docker nodes and an nginx node; a container with a route; reload counter."
+      ],
+      "steps": [
+        "Enable Replicated with two placements; Stop; Start; update the container env (rollout); Disable."
+      ],
+      "expect": [
+        "Reloads: enable 2, stop and drain 1 per member, disable 1; no 502 while another copy serves; the rollout completes even for an app that ignores SIGTERM; neighbours see no resets beyond those reloads."
+      ]
+    },
+    {
+      "id": "FEAT-AV-02",
+      "area": "feature",
+      "title": "Availability failover in lease mode",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature availability.failover-lease",
+        "feature availability.nonroot-watchdog"
+      ],
+      "preconditions": [
+        "Two docker nodes (one non-root) with lease watchdogs, two remote relays, all on the candidate for 2 minutes; a disposable node can be powered off."
+      ],
+      "steps": [
+        "Enable Failover with priority order; wait for lease mode.",
+        "Power off the holder; later power it on (failback after the delay).",
+        "Stop the Gateway app and power off the new holder; start Gateway again.",
+        "Stop the lease watchdog on one candidate."
+      ],
+      "expect": [
+        "The policy enters lease mode with participants settled.",
+        "The next candidate serves within 45 s; failback runs after failbackDelaySeconds.",
+        "Failover happens without Gateway; Gateway records docker.availability.lease_failover after it returns.",
+        "The candidate is listed under excluded nodes with watchdog_missing."
+      ]
+    },
+    {
+      "id": "FEAT-DB-01",
+      "area": "feature",
+      "title": "Managed databases and object storage",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature storage.managed-databases",
+        "feature storage.managed-object-storage"
+      ],
+      "preconditions": [
+        "A Storage node with free loop devices; docker events logged."
+      ],
+      "steps": [
+        "Create PostgreSQL and Redis with publishTcp true and no port; toggle publication; ClickHouse with both native ports.",
+        "docker stop, docker kill and kill -9 of the engine processes of SeaweedFS, Redis and PostgreSQL.",
+        "Exhaust loop devices to fail a create, free them and retry; move a record file aside on a live database and storage and retry."
+      ],
+      "expect": [
+        "One create and one start per engine; the port Gateway shows is the one the container listens on.",
+        "A requested stop stays ready; a real crash shows stopped 'keeps stopping' on the next pass.",
+        "Retry provisions ready with takesOverExistingData as documented; data and objects survive."
+      ]
+    },
+    {
+      "id": "FEAT-DB-02",
+      "area": "feature",
+      "title": "Backups, restores and copy jobs",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature storage.backups-copy-jobs"
+      ],
+      "preconditions": [
+        "Managed PostgreSQL, Redis and ClickHouse with data; an S3 destination."
+      ],
+      "steps": [
+        "Run a manual backup of each; restore each into a new database; run a copy job between two S3 storages with dryRun and then copy."
+      ],
+      "expect": [
+        "Backups succeed and restores contain the data; the copy job copies the buckets and reports the check result."
+      ]
+    },
+    {
+      "id": "GW-01",
+      "area": "installer",
+      "title": "Gateway fresh install, dry run and re-run as update",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "install.sh --dry-run",
+        "install.sh --https",
+        "install.sh $GATEWAY_INSTALL_LOG_FILE",
+        "feature gateway.install"
+      ],
+      "preconditions": [
+        "A clean host with Docker Engine and Compose v2, curl and openssl."
+      ],
+      "steps": [
+        "curl … install.sh | bash -s -- --dry-run.",
+        "curl … install.sh | GATEWAY_INSTALL_LOG_FILE=/root/gw-install.log bash -s -- --https.",
+        "Complete the wizard with the printed setup code.",
+        "Run install.sh again."
+      ],
+      "expect": [
+        "The dry run verifies the signed release, prints the plan and creates no file in /opt/gateway.",
+        "The install prints the URL, the System CA fingerprint and the setup code; https on :3000; /root/gw-install.log is 0600 and holds the run.",
+        "The wizard completes and the setup code stops working.",
+        "The re-run updates without prompts, keeps .env secrets and the relay container when its digest is unchanged."
+      ]
+    },
+    {
+      "id": "GW-02",
+      "area": "installer",
+      "title": "Gateway install variants",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "install.sh --install-dir",
+        "install.sh --http",
+        "install.sh $GATEWAY_INSTALL_DIR",
+        "install.sh $GATEWAY_WEB_TRANSPORT",
+        "install.sh $GATEWAY_DOCKER_DAEMON_CONFIG",
+        "feature gateway.install-variants",
+        "feature gateway.web-transport"
+      ],
+      "preconditions": [
+        "The host of GW-01 after removing that installation (docker compose down -v in /opt/gateway)."
+      ],
+      "steps": [
+        "Interactive install in a terminal: choose HTTP in the transport prompt.",
+        "Remove it; GATEWAY_INSTALL_DIR=/srv/gw-a GATEWAY_WEB_TRANSPORT=http install.sh; interrupt it after the images are pulled; run it again.",
+        "Remove it; write a daemon.json with log-opts to /root/daemon-test.json and run install.sh --install-dir /srv/gw-b --http with GATEWAY_DOCKER_DAEMON_CONFIG=/root/daemon-test.json.",
+        "Switch internal HTTPS on and off in Settings > General."
+      ],
+      "expect": [
+        "HTTP on :3000 after choosing HTTP.",
+        "The second run says 'fresh install (resumed)', keeps DB_PASSWORD and PKI_MASTER_KEY of the first and prints a setup code.",
+        "The install lives in /srv/gw-b and its docker-compose.yml has no logging sections; without the variable the sections are present.",
+        "Gateway restarts on the selected transport each time."
+      ]
+    },
+    {
+      "id": "GW-03",
+      "area": "installer",
+      "title": "Gateway built from a source checkout",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "install.sh --source-dir",
+        "install.sh --image",
+        "install.sh $GATEWAY_SOURCE_DIR",
+        "install.sh $GATEWAY_IMAGE",
+        "feature gateway.install-from-source"
+      ],
+      "preconditions": [
+        "A clean host with a checkout of the candidate."
+      ],
+      "steps": [
+        "install.sh --source-dir <checkout> --image gateway-local --https.",
+        "Run install.sh --source-dir <checkout> again on the installed host.",
+        "Remove it; GATEWAY_SOURCE_DIR=<checkout> GATEWAY_IMAGE=gateway-local2 install.sh."
+      ],
+      "expect": [
+        "Images gateway-local:local-<time> and gateway-local/relay:local-<time> are built; GATEWAY_RELAY_MANAGED=false in .env; setup completes.",
+        "The second run stops with '--source-dir is supported only for a fresh Gateway installation'.",
+        "The environment form builds gateway-local2 the same way."
+      ]
+    },
+    {
+      "id": "GW-04",
+      "area": "installer",
+      "title": "Release upgrade end-to-end from the 2.10 line",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature gateway.update-from-2.10",
+        "feature docker.watchdog-auto-install"
+      ],
+      "preconditions": [
+        "A clean disposable host with Internet access."
+      ],
+      "steps": [
+        "scripts/release-upgrade-e2e.sh --candidate <candidate> --logs-out <file>."
+      ],
+      "expect": [
+        "Every check prints PASS (install of the base, update with bounded API downtime, daemon and relay updates with the lease watchdog installed, the base updater's rollback, fresh candidate install); exit 0."
+      ]
+    },
+    {
+      "id": "GW-05",
+      "area": "feature",
+      "title": "In-app Gateway update and offline behaviour",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature gateway.update-in-app",
+        "feature gateway.offline"
+      ],
+      "preconditions": [
+        "The stand Gateway on <previous> with nodes, routes, a status page and database links."
+      ],
+      "steps": [
+        "Start a migration, then Check for updates and update to <candidate>; watch the wait list; press Update now on a second try.",
+        "Switch the update channel to preview and back to stable.",
+        "Stop the app container for 5 minutes, then start it."
+      ],
+      "expect": [
+        "The update waits for the migration, refuses new operations meanwhile, snapshots the database and deletes the dump after success; nodes reconnect; app-only update keeps database link streams.",
+        "Release-candidate offers appear only on preview.",
+        "While stopped, routes and the status page are served from nginx, containers run, links of ready bindings keep working; daemons reconnect after start."
+      ]
+    },
+    {
+      "id": "HOST-01",
+      "area": "feature",
+      "title": "Hosting: adoption and node creation on Proxmox",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature hosting.adoption",
+        "feature hosting.create-node"
+      ],
+      "preconditions": [
+        "A Proxmox hosting connector with an API token; a guest whose node runs a non-root daemon."
+      ],
+      "steps": [
+        "Sync the connector; create a hosted monitoring node; fail its installation once and use Retry installation."
+      ],
+      "expect": [
+        "The existing guest is adopted by host identity without a manual match; the hosted node becomes ready only after its daemon connects; retry keeps the VM and node id and rotates the token."
+      ]
+    },
+    {
+      "id": "DASH-01",
+      "area": "feature",
+      "title": "Dashboard attention dot",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "feature dashboard.attention"
+      ],
+      "preconditions": [
+        "An admin and a folder-limited user."
+      ],
+      "steps": [
+        "Produce an expired PKI certificate, a stopped pinned container, a flapping pinned node, and a failed TLS replica outside the limited user's scope."
+      ],
+      "expect": [
+        "The dot and a matching Dashboard warning appear and clear together; the limited user sees neither for the out-of-scope replica."
+      ]
+    }
+  ]
+}
