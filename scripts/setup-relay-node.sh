@@ -19,11 +19,13 @@ MANUAL_FALLBACK_USED=0
 ENROLLMENT_WAIT_SECONDS="${GATEWAY_RELAY_ENROLLMENT_WAIT_SECONDS:-90}"
 DISABLE_CONSOLE="${GATEWAY_NODE_DISABLE_CONSOLE:-0}"
 DISABLE_FILES="${GATEWAY_NODE_DISABLE_FILES:-0}"
+DRY_RUN=0
 
 usage() {
-  echo "Usage: setup-relay-node.sh --gateway host:port --token TOKEN --gateway-cert-sha256 sha256:HEX --advertise-address HOST [--service-port 9443] [--version vX.Y.Z] [--disable-console] [--disable-files]"
+  echo "Usage: setup-relay-node.sh --gateway host:port --token TOKEN --gateway-cert-sha256 sha256:HEX --advertise-address HOST [--service-port 9443] [--version vX.Y.Z] [--disable-console] [--disable-files] [--dry-run]"
   echo "  --disable-console  Turn the host console off (console.enabled: false; env GATEWAY_NODE_DISABLE_CONSOLE=1)"
   echo "  --disable-files    Turn host file access off (files.enabled: false; env GATEWAY_NODE_DISABLE_FILES=1)"
+  echo "  --dry-run          Validate inputs and show the plan without changing the host"
 }
 
 # Host access switches: the installer only turns them off, and keeps a switch a
@@ -231,19 +233,117 @@ install_supervisor_binary() {
 }
 
 # Hands every relay path to the run user: the supervisor reads its configuration, writes its state and identities and
-# replaces its own and the worker binary on update.
+# replaces its own and the worker binary on update. A relay switched back to root gets back what its previous user
+# owned, run-supervisor included, which root starts.
 grant_relay_paths_to_run_user() {
-  [[ "$RUN_USER" != "root" ]] || return 0
+  if [[ "$RUN_USER" == "root" ]]; then
+    return_paths_to_root "$@"
+    return
+  fi
   chown -hR "${RUN_USER}:${RUN_GROUP}" "$@"
 }
 
-supervisor_log_hint() {
-  if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
-    echo "Check the supervisor log: /var/lib/gateway-relay-supervisor/launcher/manual.log" >&2
-  elif has_systemd; then
-    echo "Check the supervisor log: journalctl -u gateway-relay-supervisor" >&2
+# The user a previous install ran the relay as: the owner of its configuration directory (root without one).
+PREVIOUS_RUN_UID=$(stat -c '%u' /etc/gateway-relay-supervisor 2>/dev/null || echo 0)
+
+# Gives root every entry in the paths that the previous non-root user owns; entries of other owners keep theirs.
+return_paths_to_root() {
+  local path
+  [[ "$PREVIOUS_RUN_UID" != 0 ]] || return 0
+  for path in "$@"; do
+    [[ ! -e "$path" ]] || find "$path" -xdev -user "$PREVIOUS_RUN_UID" -exec chown -h 0:0 {} +
+  done
+}
+
+# A relay that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
+# directory were written by that user, and no other user may run them.
+prepare_run_user_switch() {
+  [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+  echo "The relay supervisor ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}."
+  if ! stop_relay_supervisor; then
+    echo "Could not stop the relay supervisor to switch its user; Relay installation stopped." >&2
+    exit 1
+  fi
+  rm -rf /var/lib/gateway-relay-supervisor/launcher
+}
+
+stop_relay_supervisor() {
+  if has_systemd; then
+    [[ ! -f /etc/systemd/system/gateway-relay-supervisor.service ]] || systemctl stop gateway-relay-supervisor >>"$LOG_FILE" 2>&1
   elif has_openrc; then
-    echo "Check the supervisor log: /var/log/gateway-relay-supervisor.err and /var/log/gateway-relay-supervisor.log" >&2
+    [[ ! -f /etc/init.d/gateway-relay-supervisor ]] || rc-service --ifstarted gateway-relay-supervisor stop >>"$LOG_FILE" 2>&1
+  else
+    stop_manual_launcher /var/lib/gateway-relay-supervisor/launcher relay
+  fi
+}
+
+supervisor_log_hint() {
+  local manual_log=/var/lib/gateway-relay-supervisor/launcher/manual.log
+  if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+    echo "Supervisor log: ${manual_log}" >&2
+    tail -n 20 "$manual_log" >&2 2>/dev/null || true
+  elif has_systemd; then
+    echo "Supervisor log: journalctl -u gateway-relay-supervisor" >&2
+    journalctl -u gateway-relay-supervisor -n 20 --no-pager >&2 2>/dev/null || true
+  elif has_openrc; then
+    echo "Supervisor log: /var/log/gateway-relay-supervisor.err and /var/log/gateway-relay-supervisor.log" >&2
+    tail -n 20 /var/log/gateway-relay-supervisor.err /var/log/gateway-relay-supervisor.log >&2 2>/dev/null || true
+  fi
+}
+
+fail_supervisor_start() {
+  echo "$1" >&2
+  supervisor_log_hint
+  echo "Relay supervisor ${VERSION} is installed, but it is not running." >&2
+  exit 1
+}
+
+# The supervisor records each control session Gateway accepted in its state directory (from GATEWAY_SESSION_SINCE
+# on). The installer removes the record before it starts the supervisor, so only a session of the supervisor it
+# started counts.
+GATEWAY_SESSION_SINCE="v2.11.1-rc.2"
+GATEWAY_SESSION_FILE="/var/lib/gateway-relay-supervisor/gateway-session.json"
+GATEWAY_SESSION_STARTED=0
+
+forget_gateway_session() {
+  rm -f "$GATEWAY_SESSION_FILE"
+  GATEWAY_SESSION_STARTED=$(date +%s)
+}
+
+# Orders vX.Y.Z and vX.Y.Z-rc.N; a release orders after its release candidates.
+release_order() {
+  [[ "${1#v}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$ ]] || return 1
+  echo $(( ((BASH_REMATCH[1] * 1000 + BASH_REMATCH[2]) * 1000 + BASH_REMATCH[3]) * 100000 + ${BASH_REMATCH[5]:-99999} ))
+}
+
+# Supervisors older than GATEWAY_SESSION_SINCE write no session record; development builds do.
+daemon_records_gateway_session() {
+  local order
+  order=$(release_order "$1") || return 0
+  (( order >= $(release_order "$GATEWAY_SESSION_SINCE") ))
+}
+
+# Gateway accepted a session of the supervisor this run started, and that process still runs under its service manager.
+gateway_session_is_current() {
+  local pid connected_at
+  [[ -f "$GATEWAY_SESSION_FILE" && ! -L "$GATEWAY_SESSION_FILE" ]] || return 1
+  pid=$(sed -nE 's/.*"pid":([0-9]+).*/\1/p' "$GATEWAY_SESSION_FILE")
+  connected_at=$(sed -nE 's/.*"connected_at":([0-9]+).*/\1/p' "$GATEWAY_SESSION_FILE")
+  [[ -n "$pid" && -n "$connected_at" ]] || return 1
+  (( connected_at >= GATEWAY_SESSION_STARTED )) || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ "$MANUAL_FALLBACK_USED" -eq 0 ]] && has_systemd; then
+    grep -q '/gateway-relay-supervisor\.service$' "/proc/${pid}/cgroup" 2>/dev/null || return 1
+  fi
+}
+
+supervisor_service_running() {
+  if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+    launcher_pid_is_live "${MANUAL_OWNER_PID:-}"
+  elif has_systemd; then
+    systemctl is-active --quiet gateway-relay-supervisor
+  else
+    rc-service gateway-relay-supervisor status >/dev/null 2>&1
   fi
 }
 has_openrc() { command_exists rc-service && command_exists rc-update; }
@@ -369,15 +469,26 @@ prepare_manual_launcher_state() {
   [[ ! -L "$launcher_dir" ]] || return 1
   mkdir -p "$launcher_dir" || return 1
   chmod 0700 "$launcher_dir" || return 1
-  if [[ "$RUN_USER" != "root" ]] && ! chown "${RUN_USER}:${RUN_GROUP}" "$launcher_dir"; then
-    return 1
-  fi
+  chown "${RUN_USER}:${RUN_GROUP}" "$launcher_dir" || return 1
   [[ ! -L "$manual_log" ]] || return 1
   touch "$manual_log" || return 1
   chmod 0640 "$manual_log" || return 1
-  if [[ "$RUN_USER" != "root" ]] && ! chown "${RUN_USER}:${RUN_GROUP}" "$manual_log"; then
-    return 1
-  fi
+  chown "${RUN_USER}:${RUN_GROUP}" "$manual_log" || return 1
+}
+
+# Stops the launcher a previous manual start left running, as a service manager does on restart. Only a process whose
+# command line is this daemon's launcher is signalled.
+stop_manual_launcher() {
+  local launcher_dir="$1" daemon_type="$2" pid waited=0
+  pid="$(launcher_pid_from_json "${launcher_dir}/owner.json" || true)"
+  launcher_pid_is_live "$pid" || return 0
+  tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null | grep -Fq -- " launcher --daemon-type ${daemon_type} " || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  while launcher_pid_is_live "$pid" && (( waited < 30 )); do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  ! launcher_pid_is_live "$pid"
 }
 
 detach_manual_launcher() {
@@ -432,13 +543,15 @@ wait_for_manual_launcher_ready() {
   return 1
 }
 
+# Runs the supervisor under its own launcher on a host without a service manager. A launcher a previous run started
+# is stopped first, as a service restart would, so the supervisor installed now runs.
 manual_launcher_fallback() {
   local daemon_name="$1"
   local daemon_binary="$2"
   local state_dir="$3"
   local launcher_dir="${state_dir}/launcher"
   local manual_log="${launcher_dir}/manual.log"
-  local owner_pid daemon_type
+  local daemon_type
   MANUAL_FALLBACK_USED=1
 
   case "$daemon_binary" in
@@ -446,39 +559,27 @@ manual_launcher_fallback() {
     */nginx-daemon) daemon_type="nginx" ;;
     */monitoring-daemon) daemon_type="monitoring" ;;
     */relay-supervisor) daemon_type="relay" ;;
-    *) echo "Unknown launcher daemon binary ${daemon_binary}; preserving installed files." >&2; return 0 ;;
+    *) echo "Unknown launcher daemon binary ${daemon_binary}." >&2; return 1 ;;
   esac
 
-  owner_pid="$(launcher_pid_from_json "${launcher_dir}/owner.json" || true)"
-  if launcher_pid_is_live "$owner_pid"; then
-    if wait_for_manual_launcher_ready "$launcher_dir" "$daemon_type"; then
-      echo "${daemon_name} launcher is already ready (PID ${MANUAL_OWNER_PID}, child PID ${MANUAL_CHILD_PID})."
-      echo "Manual launcher log: ${manual_log}"
-      echo "Manual mode is not persistent across reboot."
-    else
-      echo "${daemon_name} has a live launcher owner but no verified ready child; refusing to start a competing launcher." >&2
-      echo "Launcher state: ${launcher_dir}"
-      echo "Launcher log: ${manual_log}"
-    fi
-    return 0
+  if ! stop_manual_launcher "$launcher_dir" "$daemon_type"; then
+    echo "The running ${daemon_name} launcher did not stop; installed files were preserved." >&2
+    return 1
   fi
-
   if ! prepare_manual_launcher_state "$state_dir"; then
     echo "Could not prepare manual launcher state for ${daemon_name}; installed files were preserved." >&2
     echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-    return 0
+    return 1
   fi
+  forget_gateway_session
   if ! detach_manual_launcher "$daemon_binary" "$manual_log"; then
     echo "Could not detach ${daemon_name}; installed files and launcher files were preserved." >&2
-    echo "Launcher log: ${manual_log}"
     echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-    return 0
+    return 1
   fi
 
   if wait_for_manual_launcher_ready "$launcher_dir" "$daemon_type"; then
     echo "${daemon_name} is running in manual mode (launcher PID ${MANUAL_OWNER_PID}, child PID ${MANUAL_CHILD_PID})."
-    echo "Launcher PID: ${MANUAL_OWNER_PID}"
-    echo "Child PID: ${MANUAL_CHILD_PID}"
     echo "Manual launcher log: ${manual_log}"
     echo "Manual mode is not persistent across reboot."
     return 0
@@ -486,10 +587,8 @@ manual_launcher_fallback() {
 
   echo "Could not verify the detached ${daemon_name} launcher; installed files and launcher files were preserved." >&2
   echo "Launcher state: ${launcher_dir}"
-  echo "Launcher log: ${manual_log}"
   echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-  echo "Manual mode is not persistent across reboot."
-  return 0
+  return 1
 }
 
 while [[ $# -gt 0 ]]; do
@@ -502,6 +601,7 @@ while [[ $# -gt 0 ]]; do
     --version) VERSION="$2"; shift 2 ;;
     --disable-console) DISABLE_CONSOLE=1; shift ;;
     --disable-files) DISABLE_FILES=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -511,13 +611,45 @@ done
 [[ -n "$GATEWAY" && -n "$TOKEN" && -n "$GATEWAY_CERT_SHA256" && -n "$ADVERTISE_ADDRESS" ]] || { usage >&2; exit 2; }
 [[ "$SERVICE_PORT" =~ ^[0-9]+$ && "$SERVICE_PORT" -ge 1 && "$SERVICE_PORT" -le 65535 ]] || { echo "Invalid service port" >&2; exit 2; }
 resolve_run_identity || exit 1
-ensure_dependencies
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH="amd64" ;;
   aarch64|arm64) ARCH="arm64" ;;
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
+
+# Shows what a real run does, without installing dependencies or changing the host.
+relay_dry_run() {
+  local version="$VERSION" manager="manual mode (not persistent across reboot)"
+  if [[ "$version" == "latest" ]]; then
+    if ! command_exists curl || ! command_exists jq; then
+      echo "curl and jq are required to resolve the latest Relay release during a dry run; pass --version." >&2
+      exit 1
+    fi
+    version=$(curl -fsSL "${RELEASES_API_URL}?component=relay" | jq -r '.target.tag_name // empty')
+    [[ -n "$version" ]] || { echo "No Relay release is available" >&2; exit 1; }
+    version="${version%-relay}"
+  else
+    version="v${version#v}"
+  fi
+  has_systemd && manager="systemd unit gateway-relay-supervisor"
+  ! has_openrc || has_systemd || manager="OpenRC service gateway-relay-supervisor"
+  echo "Dry run: Relay supervisor ${version} (${ARCH}) for Gateway ${GATEWAY}, advertised at ${ADVERTISE_ADDRESS}:${SERVICE_PORT}."
+  if [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]]; then
+    echo "Would stop the relay supervisor and switch it from $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}") to ${RUN_USER}."
+  fi
+  echo "Would install the signed relay-supervisor and relay worker binaries and run them as ${RUN_USER}:${RUN_GROUP} under the ${manager}."
+  needs_bind_capability && echo "Would grant ${RUN_USER} CAP_NET_BIND_SERVICE for port ${SERVICE_PORT}."
+  [[ "$DISABLE_CONSOLE" != "1" ]] || echo "Would write console.enabled: false to /etc/gateway-relay-supervisor/config.yaml."
+  [[ "$DISABLE_FILES" != "1" ]] || echo "Would write files.enabled: false to /etc/gateway-relay-supervisor/config.yaml."
+  echo "Would wait for the relay to enroll and connect to Gateway."
+  echo "Dry run completed; no host changes were made."
+}
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  relay_dry_run
+  exit 0
+fi
+ensure_dependencies
 
 if [[ "$VERSION" == "latest" ]]; then
   TAG=$(curl -fsSL "${RELEASES_API_URL}?component=relay" | jq -r '.target.tag_name // empty')
@@ -568,6 +700,7 @@ WORKER="relay-worker-linux-${ARCH}"
 fetch_verified "$SUPERVISOR" relay
 fetch_verified "$WORKER" relay-worker
 
+prepare_run_user_switch
 install -d -m 0700 /etc/gateway-relay-supervisor /var/lib/gateway-relay-supervisor /usr/local/lib/gateway-relay
 install_supervisor_binary "${TEMP_DIR}/${SUPERVISOR}" /usr/local/bin/relay-supervisor /usr/local/lib/gateway-relay/bin
 install -m 0755 "${TEMP_DIR}/${WORKER}" /usr/local/lib/gateway-relay/gateway-relay
@@ -629,11 +762,13 @@ if needs_bind_capability; then
   OPENRC_CAPABILITIES=$'\ncapabilities="^cap_net_bind_service"'
 fi
 
+# A host with systemd or OpenRC runs the supervisor as a service, and a service that does not start fails the install.
+# Manual mode is only for hosts without a service manager.
 start_relay_supervisor() {
   retire_legacy_update_guard "gateway-relay-supervisor" "/usr/local/bin/relay-supervisor"
 
   if has_systemd; then
-    if ! cat >/etc/systemd/system/gateway-relay-supervisor.service <<UNIT
+    cat >/etc/systemd/system/gateway-relay-supervisor.service <<UNIT || fail_supervisor_start "Could not write the relay supervisor systemd unit."
 [Unit]
 Description=Gateway Relay Supervisor
 After=network-online.target
@@ -652,26 +787,12 @@ LimitNOFILE=1048576${UNIT_CAPABILITIES}
 [Install]
 WantedBy=multi-user.target
 UNIT
-    then
-      echo "Could not write the relay supervisor systemd unit; using manual mode." >&2
-      manual_launcher_fallback "relay-supervisor" "/usr/local/bin/relay-supervisor" "/var/lib/gateway-relay-supervisor"
-      return 0
-    fi
-    if ! systemctl daemon-reload >>"$LOG_FILE" 2>&1 \
-      || ! systemctl enable gateway-relay-supervisor >>"$LOG_FILE" 2>&1 \
-      || ! systemctl restart gateway-relay-supervisor >>"$LOG_FILE" 2>&1; then
-      echo "Could not register or start the relay supervisor with systemd; using manual mode." >&2
-      manual_launcher_fallback "relay-supervisor" "/usr/local/bin/relay-supervisor" "/var/lib/gateway-relay-supervisor"
-      return 0
-    fi
-    sleep 2
-    if systemctl is-active --quiet gateway-relay-supervisor; then
-      echo "Relay supervisor is running."
-      return 0
-    fi
-    echo "Relay supervisor is not active; using manual mode." >&2
+    systemctl daemon-reload >>"$LOG_FILE" 2>&1 && systemctl enable gateway-relay-supervisor >>"$LOG_FILE" 2>&1 \
+      || fail_supervisor_start "Could not register the relay supervisor with systemd."
+    forget_gateway_session
+    systemctl restart gateway-relay-supervisor >>"$LOG_FILE" 2>&1 || fail_supervisor_start "Could not start the relay supervisor."
   elif has_openrc; then
-    if ! cat >/etc/init.d/gateway-relay-supervisor <<UNIT
+    cat >/etc/init.d/gateway-relay-supervisor <<UNIT || fail_supervisor_start "Could not write the relay supervisor OpenRC service."
 #!/sbin/openrc-run
 name="Gateway Relay Supervisor"
 description="Gateway Relay Supervisor"
@@ -687,41 +808,32 @@ depend() {
     need net
 }
 UNIT
-    then
-      echo "Could not write the relay supervisor OpenRC service; using manual mode." >&2
-      manual_launcher_fallback "relay-supervisor" "/usr/local/bin/relay-supervisor" "/var/lib/gateway-relay-supervisor"
-      return 0
+    chmod +x /etc/init.d/gateway-relay-supervisor && rc-update add gateway-relay-supervisor default >>"$LOG_FILE" 2>&1 \
+      || fail_supervisor_start "Could not register the relay supervisor with OpenRC."
+    forget_gateway_session
+    if ! rc-service gateway-relay-supervisor restart >>"$LOG_FILE" 2>&1 && ! rc-service gateway-relay-supervisor start >>"$LOG_FILE" 2>&1; then
+      fail_supervisor_start "Could not start the relay supervisor with OpenRC."
     fi
-    if ! chmod +x /etc/init.d/gateway-relay-supervisor \
-      || ! rc-update add gateway-relay-supervisor default >>"$LOG_FILE" 2>&1 \
-      || { ! rc-service gateway-relay-supervisor restart >>"$LOG_FILE" 2>&1 && ! rc-service gateway-relay-supervisor start >>"$LOG_FILE" 2>&1; }; then
-      echo "Could not register or start the relay supervisor with OpenRC; using manual mode." >&2
-      manual_launcher_fallback "relay-supervisor" "/usr/local/bin/relay-supervisor" "/var/lib/gateway-relay-supervisor"
-      return 0
-    fi
-    sleep 2
-    if rc-service gateway-relay-supervisor status >>"$LOG_FILE" 2>&1; then
-      echo "Relay supervisor is running."
-      return 0
-    fi
-    echo "Relay supervisor is not active in OpenRC; using manual mode." >&2
   else
     echo "No supported service manager found; using manual mode." >&2
+    manual_launcher_fallback "relay-supervisor" "/usr/local/bin/relay-supervisor" "/var/lib/gateway-relay-supervisor" \
+      || fail_supervisor_start "Could not start the relay supervisor in manual mode."
   fi
-  manual_launcher_fallback "relay-supervisor" "/usr/local/bin/relay-supervisor" "/var/lib/gateway-relay-supervisor"
+  echo "Relay supervisor started."
 }
 
+# The relay is installed once Gateway accepted the token written above and then a session of the supervisor this run
+# started. A supervisor too old to record its session must have enrolled and keep running for 10 s instead.
 await_enrollment() {
-  local waited=0 outcome error
+  local waited=0 outcome error enrolled=0 running=0
   while [[ "$waited" -lt "$ENROLLMENT_WAIT_SECONDS" ]]; do
-    if [[ -s "$ENROLLMENT_RESULT" ]]; then
+    if [[ "$enrolled" -eq 0 && -s "$ENROLLMENT_RESULT" ]]; then
       outcome=$(jq -r '.outcome // empty' "$ENROLLMENT_RESULT" 2>/dev/null || true)
       error=$(jq -r '.error // empty' "$ENROLLMENT_RESULT" 2>/dev/null || true)
       if [[ "$outcome" == "enrolled" ]]; then
         echo "Relay enrolled with Gateway."
-        return 0
-      fi
-      if [[ "$outcome" == "failed" ]]; then
+        enrolled=1
+      elif [[ "$outcome" == "failed" ]]; then
         if [[ "$REENROLLMENT" -eq 1 ]]; then
           echo "Relay re-enrollment failed: ${error}" >&2
           echo "The relay keeps running with its previous identity. Issue a new re-enroll token in Gateway (Settings > Relay) and run the installer again." >&2
@@ -732,10 +844,30 @@ await_enrollment() {
         return 1
       fi
     fi
+    if [[ "$enrolled" -eq 1 ]]; then
+      if daemon_records_gateway_session "$VERSION"; then
+        if gateway_session_is_current; then
+          echo "Relay supervisor is connected to Gateway."
+          return 0
+        fi
+      elif supervisor_service_running; then
+        running=$((running + 1))
+        if [[ "$running" -ge 10 ]]; then
+          echo "Relay supervisor ${VERSION} does not report its Gateway connection; check that the relay is online in Gateway." >&2
+          return 0
+        fi
+      else
+        running=0
+      fi
+    fi
     sleep 1
     waited=$((waited + 1))
   done
-  echo "The relay supervisor has not reported its enrollment within ${ENROLLMENT_WAIT_SECONDS} s; check that Gateway at ${GATEWAY} is reachable and the supervisor log." >&2
+  if [[ "$enrolled" -eq 1 ]]; then
+    echo "The relay supervisor has not connected to Gateway within ${ENROLLMENT_WAIT_SECONDS} s; check that Gateway at ${GATEWAY} is reachable and the supervisor log." >&2
+  else
+    echo "The relay supervisor has not reported its enrollment within ${ENROLLMENT_WAIT_SECONDS} s; check that Gateway at ${GATEWAY} is reachable and the supervisor log." >&2
+  fi
   return 2
 }
 
@@ -747,7 +879,7 @@ enrollment_status=0
 await_enrollment || enrollment_status=$?
 if [[ "$enrollment_status" -ne 0 ]]; then
   # A timeout is a failure too: a supervisor that cannot start never reports, and the relay is not usable.
-  echo "Relay supervisor ${VERSION} is installed, but the relay was not enrolled." >&2
+  echo "Relay supervisor ${VERSION} is installed, but the relay is not enrolled and connected to Gateway." >&2
   supervisor_log_hint
   exit 1
 fi
