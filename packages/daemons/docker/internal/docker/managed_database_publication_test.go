@@ -231,6 +231,48 @@ func TestPublishingOnAPickedPortCreatesTheContainerOnce(t *testing.T) {
 			if needsPinning {
 				t.Fatalf("binding %v needs pinning again", final)
 			}
+
+			// A controller that has not stored the picked ports yet sends 0 for
+			// them: the update keeps the ports the container publishes instead
+			// of replacing it on new ones.
+			unsettled := input
+			keepAssignedHostPorts(*record, &unsettled)
+			if unsettled.PublishedPort != record.PublishedPort || unsettled.PublishedNativePort != record.PublishedNativePort {
+				t.Fatalf("ports left to the node = %d/%d, want the published %d/%d",
+					unsettled.PublishedPort, unsettled.PublishedNativePort, record.PublishedPort, record.PublishedNativePort)
+			}
+			if managedDatabaseRequiresRecreate(*record, unsettled) {
+				t.Fatal("ports left to the node read as a publication change")
+			}
+			if needsPinning, err := m.publicationNeedsPinning(ctx, *record, unsettled); err != nil || needsPinning {
+				t.Fatalf("ports left to the node need pinning = %v, %v", needsPinning, err)
+			}
+		})
+	}
+}
+
+// A port left to the node is the one it publishes; a publication it has no
+// port for yet, or one that is turned off, keeps 0.
+func TestPortLeftToTheNodeKeepsTheAssignedPort(t *testing.T) {
+	published := managedDatabaseRecord{Type: "clickhouse", PublishedPort: 35481, PublishedNativePort: 35482}
+	for _, tc := range []struct {
+		name               string
+		record             managedDatabaseRecord
+		input              managedDatabaseCommand
+		wantPort, wantNatv uint16
+	}{
+		{name: "published", record: published, input: managedDatabaseCommand{PublishTCP: true, PublishNativeTCP: true}, wantPort: 35481, wantNatv: 35482},
+		{name: "native turned off", record: published, input: managedDatabaseCommand{PublishTCP: true}, wantPort: 35481},
+		{name: "publication turned off", record: published, input: managedDatabaseCommand{}},
+		{name: "chosen port", record: published, input: managedDatabaseCommand{PublishTCP: true, PublishedPort: 5432}, wantPort: 5432},
+		{name: "not published yet", record: managedDatabaseRecord{Type: "postgres"}, input: managedDatabaseCommand{PublishTCP: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := tc.input
+			keepAssignedHostPorts(tc.record, &input)
+			if input.PublishedPort != tc.wantPort || input.PublishedNativePort != tc.wantNatv {
+				t.Fatalf("ports = %d/%d, want %d/%d", input.PublishedPort, input.PublishedNativePort, tc.wantPort, tc.wantNatv)
+			}
 		})
 	}
 }

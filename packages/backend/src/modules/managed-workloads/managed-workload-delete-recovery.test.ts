@@ -36,4 +36,13 @@ describe('storage deletion recovery', () => {
     expect(remove).toHaveBeenCalledWith('storage');
     expect(dispatch.deleteCanonicalConnection).toHaveBeenCalledWith(row);
   });
+  it('removes what the node still has of a workload whose record it lost before committing the deletion', async () => {
+    const { lifecycle, dispatch, remove } = setup();
+    Object.assign(dispatch, { renderCommandPayload: vi.fn().mockResolvedValue('') });
+    dispatch.parseDaemonState.mockReturnValue({ status: 'missing', leftover: true });
+    await lifecycle.reconcilePendingRow(row as never);
+    expect(dispatch.sendCommand).toHaveBeenCalledWith('node', 'remove', 'storage', '');
+    expect(remove).toHaveBeenCalledWith('storage');
+    expect(dispatch.sendCommand.mock.invocationCallOrder[1]).toBeLessThan(remove.mock.invocationCallOrder[0]!);
+  });
 });

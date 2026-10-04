@@ -238,6 +238,12 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
       const state = this.dispatch.parseDaemonState(result);
       if (!state) return;
       if (state.status === 'missing' && operation.action === 'delete') {
+        // A node that lost the record but still has its container or storage
+        // removes them on a repeated delete.
+        if (state.leftover) {
+          await this.dispatchDelete(row, null);
+          return;
+        }
         return await this.completeDelete(row, null);
       }
       // Daemon commands are handled asynchronously. An inspect can acquire the

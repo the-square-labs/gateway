@@ -305,13 +305,6 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 		}
 		return m.marshalManagedStorageDetail(ctx, record, "stopped")
 	case "remove", "delete_data":
-		record, err := m.loadRecord(id)
-		if errors.Is(err, os.ErrNotExist) {
-			return `{"status":"missing"}`, nil
-		}
-		if err != nil {
-			return "", err
-		}
 		deleteData := action == "delete_data"
 		if !deleteData && configJSON != "" {
 			var lifecycle struct {
@@ -320,6 +313,19 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 			if json.Unmarshal([]byte(configJSON), &lifecycle) == nil {
 				deleteData = lifecycle.DeleteData
 			}
+		}
+		record, err := m.loadRecord(id)
+		if errors.Is(err, os.ErrNotExist) {
+			// A prior removal may have completed while its response was lost, or
+			// the node lost the record while a member's container and storage
+			// stayed: whatever is left of the id is removed.
+			if err := m.removeLostRecord(ctx, id, deleteData); err != nil {
+				return "", err
+			}
+			return `{"status":"missing"}`, nil
+		}
+		if err != nil {
+			return "", err
 		}
 		if err := m.remove(ctx, &record, deleteData); err != nil {
 			return "", err

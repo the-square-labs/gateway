@@ -515,8 +515,13 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 	case "remove":
 		record, err := m.loadRecord(id)
 		if errors.Is(err, os.ErrNotExist) {
-			// The prior remove may have completed while its response was lost.
-			// Reporting success makes control-plane deletion safe to retry.
+			// The prior remove may have completed while its response was lost,
+			// or the node lost the record while the container and storage
+			// stayed. Whatever is left of the id is removed, so control-plane
+			// deletion stays safe to retry and leaves nothing behind.
+			if err := m.removeLostRecord(ctx, id); err != nil {
+				return "", err
+			}
 			return `{"status":"deleted"}`, nil
 		}
 		if err != nil {

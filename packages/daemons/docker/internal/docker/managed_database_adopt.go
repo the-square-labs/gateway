@@ -82,6 +82,32 @@ func (m *managedDatabaseManager) labelledDatabaseIDs(ctx context.Context) (map[s
 	return ids, nil
 }
 
+// removeLostRecord deletes what is left of a managed database the node holds
+// no record of: every container with its owner label (the instance's, and one
+// a replacement left), its network, then mount, loop device, image and TLS
+// material by id. Only a delete runs it; the repair pass keeps the storage of
+// such a container, since a retried create takes it over.
+func (m *managedDatabaseManager) removeLostRecord(ctx context.Context, id string) error {
+	listed, err := m.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{
+		All:     true,
+		Filters: mobyclient.Filters{}.Add("label", managedDatabaseLabel+"="+id),
+	})
+	if err != nil {
+		return fmt.Errorf("list managed database containers: %w", err)
+	}
+	for _, item := range listed.Items {
+		if err := m.client.RemoveContainer(ctx, item.ID, true); err != nil && !isNotFoundErr(err) {
+			return fmt.Errorf("remove managed database container: %w", err)
+		}
+	}
+	if len(listed.Items) > 0 {
+		m.logger.Info("removing a managed database the node holds no record of", "id", id, "containers", len(listed.Items))
+	}
+	record := m.newRecord(id, managedDatabaseCommand{})
+	_, _ = m.client.cli.NetworkRemove(ctx, record.NetworkName, mobyclient.NetworkRemoveOptions{})
+	return m.cleanupStorage(ctx, &record, true)
+}
+
 // missingRecordDetail answers an inspect of an id the node holds no record
 // of with what the node still has of it. Gateway retries a deployment from
 // it: a create where nothing is left provisions anew, and one where the

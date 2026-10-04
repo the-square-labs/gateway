@@ -546,6 +546,13 @@ func (m *managedDatabaseManager) rotateClickHouseOwner(ctx context.Context, reco
 			return errors.New("managed ClickHouse owner rotation could not stage its credential override")
 		}
 	}
+	// ClickHouse rereads its users configuration on SYSTEM RELOAD CONFIG, so
+	// the running server takes the new password without a restart (one right
+	// after a create would stop the engine before the database is handed
+	// over). A server that does not take it is restarted as before.
+	if err := m.reloadClickHouseOwner(ctx, record.ContainerID, input); err == nil {
+		return nil
+	}
 	if err := m.client.RestartContainer(ctx, record.ContainerID, 30); err != nil {
 		rollback()
 		return errors.New("managed ClickHouse owner rotation could not restart the database")
@@ -555,6 +562,29 @@ func (m *managedDatabaseManager) rotateClickHouseOwner(ctx context.Context, reco
 		return err
 	}
 	return nil
+}
+
+// clickHouseOwnerReloadTimeout bounds the wait for a reloaded owner password
+// before the rotation falls back to a restart; the server applies a reload at
+// once. Tests shorten it.
+var clickHouseOwnerReloadTimeout = 15 * time.Second
+
+// reloadClickHouseOwner asks the running server, as the current owner, to
+// reread the staged owner override and waits briefly until the pending owner
+// signs in.
+func (m *managedDatabaseManager) reloadClickHouseOwner(ctx context.Context, containerID string, input managedDatabaseOwnerSeparationCommand) error {
+	if err := m.runManagedDatabaseExec(
+		ctx,
+		containerID,
+		[]string{"clickhouse-client", "--host", "127.0.0.1", "--user", input.CurrentOwnerUsername, "--query", "SYSTEM RELOAD CONFIG"},
+		"",
+		[]string{"CLICKHOUSE_PASSWORD=" + input.CurrentOwnerPassword},
+	); err != nil {
+		return err
+	}
+	reloadCtx, cancel := context.WithTimeout(ctx, clickHouseOwnerReloadTimeout)
+	defer cancel()
+	return m.waitForClickHouseOwner(reloadCtx, containerID, input.PendingOwnerUsername, input.PendingOwnerPassword, input.DatabaseName)
 }
 
 func (m *managedDatabaseManager) copyClickHouseOwnerOverride(ctx context.Context, containerID, config string) error {
