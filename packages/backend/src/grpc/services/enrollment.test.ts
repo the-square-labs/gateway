@@ -304,8 +304,15 @@ describe('Enroll token lookup', () => {
       type: 'relay',
       status: 'online',
       certificateSerial: 'old01',
+      hostIdentityId,
     };
-    const instance = { id: instanceId, nodeId, poolId: 'system', advertisedAddresses: ['relay.example.test'] };
+    const instance = {
+      id: instanceId,
+      nodeId,
+      poolId: 'system',
+      faultDomainId: hostIdentityId,
+      advertisedAddresses: ['relay.example.test'],
+    };
     const nodeLookups: unknown[] = [];
     const updates: Array<{ value: any; where: unknown }> = [];
     const db = {

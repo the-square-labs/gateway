@@ -92,6 +92,20 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             .from(relayInstances)
             .where(eq(relayInstances.nodeId, nodeId))
             .limit(1);
+          if (relayReenrollment) {
+            // A re-enrollment token re-enrolls the relay on its own host only. Presented by another
+            // host (another pool relay), it would move this relay's instance and identity there.
+            const enrolledHostIdentityId = instance?.faultDomainId ?? matchedNode.hostIdentityId;
+            if (!enrolledHostIdentityId || enrolledHostIdentityId.toLowerCase() !== hostIdentityId.toLowerCase()) {
+              logger.warn('Relay re-enrollment refused: the token was presented by another host', {
+                nodeId,
+                hostname: req.hostname,
+                hostIdentityId,
+              });
+              callback({ code: 16, message: 'Invalid enrollment token' });
+              return;
+            }
+          }
           if (!deps.relayPolicy) throw new Error('Relay instance enrollment is not initialized');
           const advertisedAddresses = instance?.advertisedAddresses ?? matchedNode.serviceAddresses ?? [];
           if (!advertisedAddresses.length) throw new Error('Relay node has no advertised service address');
