@@ -280,6 +280,9 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			controlReady = true
 			d.sessionReceivedCommand = true
 			notifyLauncherControlReady(d.logger)
+			if err := recordGatewaySession(d.cfg.StateDir, receivedAt); err != nil {
+				d.logger.Warn("could not record the gateway session for the installer", "error", err)
+			}
 			if d.tunnelIdentityPending.CompareAndSwap(true, false) {
 				d.notifyTunnelIdentityChanged()
 			}

@@ -226,8 +226,10 @@ func (listener *managedDatabaseHostListener) suspend() bool {
 }
 
 // adoptKeptUnixListener takes over the Unix listener the previous daemon process kept for path, if the path still
-// names that socket.
-func adoptKeptUnixListener(path string) (*net.UnixListener, string) {
+// names that socket and the socket file fits this daemon (fits). A socket left by a process of the other mode, a root
+// daemon's 0600 socket under a daemon without root or the reverse, keeps its file mode and owner when an installer
+// changes its owner; it is dropped, and the caller creates the socket anew.
+func adoptKeptUnixListener(path string, fits func(os.FileInfo) bool) (*net.UnixListener, string) {
 	name, err := listenerkeep.Name(path)
 	if err != nil {
 		return nil, ""
@@ -251,6 +253,11 @@ func adoptKeptUnixListener(path string) (*net.UnixListener, string) {
 		return nil, ""
 	}
 	unixListener.SetUnlinkOnClose(false)
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSocket == 0 || !fits(info) {
+		_ = unixListener.Close()
+		_ = listenerkeep.Drop(name)
+		return nil, ""
+	}
 	return unixListener, name
 }
 

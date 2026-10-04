@@ -203,8 +203,16 @@ func runRuntimeCommand(args []string) int {
 	if commandErr != nil && !*silent {
 		fmt.Fprintln(os.Stderr, commandErr)
 	}
-	switch status.State {
+	return runtimeCommandExitCode(status.State, commandErr)
+}
+
+// runtimeCommandExitCode reports the runtime state; an install that did not install never exits 0.
+func runtimeCommandExitCode(state runtimemanager.State, commandErr error) int {
+	switch state {
 	case runtimemanager.StateHealthy:
+		if commandErr != nil {
+			return 30
+		}
 		return 0
 	case runtimemanager.StateInstallable:
 		return 10

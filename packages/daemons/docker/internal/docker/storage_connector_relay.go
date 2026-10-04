@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
@@ -55,7 +56,7 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 	}
 	path := filepath.Join(directory, storageConnectorSocketName)
 	// The socket the previous process handed over keeps the connections the connectors made meanwhile.
-	if listener, keptName := adoptKeptUnixListener(path); listener != nil {
+	if listener, keptName := adoptKeptUnixListener(path, storageConnectorSocketFits); listener != nil {
 		p.storageConnectorListener = listener
 		p.storageConnectorSocket = path
 		p.storageConnectorKept.set(listener, keptName)
@@ -96,6 +97,19 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 	p.storageConnectorKept.set(listener, keepUnixListener(listener, path))
 	go p.serveStorageConnectorRelay(listener)
 	return nil
+}
+
+// storageConnectorSocketFits reports whether the relay socket file has the owner and mode this daemon gives it: its
+// own user and group with 0660 without root (the connectors reach it through that group), uid 65532 with 0600 as root.
+func storageConnectorSocketFits(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	if runsWithoutRoot() {
+		return int(stat.Uid) == daemonEUID() && int(stat.Gid) == daemonEGID() && info.Mode().Perm() == 0o660
+	}
+	return stat.Uid == connectorUID && info.Mode().Perm() == 0o600
 }
 
 func (p *DockerPlugin) serveStorageConnectorRelay(listener net.Listener) {

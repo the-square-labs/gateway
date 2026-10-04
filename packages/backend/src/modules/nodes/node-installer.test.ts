@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '@/config/env.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
-import { installerRelease, nodeInstallCommands } from './node-installer.js';
+import { installerRelease, nodeInstallCommands, secureRuntimeLocalCommand } from './node-installer.js';
 
 const RELEASE = 'https://github.com/the-square-labs/gateway/releases/download/v2.11.0';
 const CERT = `sha256:${'a'.repeat(64)}`;
@@ -21,6 +21,30 @@ function storageCommands(release: string | null) {
     daemonVersion: 'v2.11.0',
   });
 }
+
+describe('Secure Runtime local command', () => {
+  it('fetches and checks the release installer for a daemon that runs as its own user', () => {
+    expect(secureRuntimeLocalCommand('sudo bash setup-docker-node.sh --user gwdock --secure-runtime', 'v2.11.0')).toBe(
+      [
+        'cd "$(mktemp -d)"',
+        `curl -fsSL -o setup-docker-node.sh ${RELEASE}/setup-docker-node.sh`,
+        `curl -fsSL -o gateway-daemon-installers.sha256 ${RELEASE}/gateway-daemon-installers.sha256`,
+        "grep ' setup-docker-node.sh$' gateway-daemon-installers.sha256 | sha256sum -c -",
+        'sudo bash setup-docker-node.sh --user gwdock --secure-runtime',
+      ].join(' && ')
+    );
+  });
+
+  it('keeps every other command as the daemon reported it', () => {
+    for (const command of [
+      'sudo docker-daemon runtime install runsc',
+      'sudo bash setup-docker-node.sh --user gw;rm --secure-runtime',
+      'sudo bash setup-docker-node.sh --user gwdock --secure-runtime; reboot',
+    ]) {
+      expect(secureRuntimeLocalCommand(command, 'v2.11.0')).toBe(command);
+    }
+  });
+});
 
 describe('node setup commands', () => {
   it('run only the installer of the Gateway release that matches the release checksums', () => {

@@ -38,6 +38,7 @@ GATEWAY_CERT_SHA256="${GATEWAY_NODE_CERT_SHA256:-}"
 DAEMON_VERSION="${GATEWAY_NODE_DAEMON_VERSION:-latest}"
 DISABLE_CONSOLE="${GATEWAY_NODE_DISABLE_CONSOLE:-0}"
 DISABLE_FILES="${GATEWAY_NODE_DISABLE_FILES:-0}"
+SECURE_RUNTIME="${GATEWAY_DOCKER_SECURE_RUNTIME:-0}"
 RELEASES_API_URL="${GATEWAY_RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"
 ARTIFACT_BASE_URL="${GATEWAY_ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"
 RUN_USER=""
@@ -628,18 +629,22 @@ run_as_run_user() {
     fi
 }
 
-# Root-only installer steps (Secure Runtime) never run the binary the run user owns: they run a root-owned copy.
+# Root-only installer steps (Secure Runtime) never run the binary the run user owns, which that user can replace: they
+# run a copy downloaded and verified in this run, in a directory only root can reach.
 ROOT_DAEMON_COPY=""
-root_daemon_binary() {
+ROOT_DAEMON_BINARY=""
+prepare_root_daemon_binary() {
     if [[ "$RUN_USER" == "root" ]]; then
-        printf '%s\n' "$DOCKER_DAEMON_BIN_LINK"
+        ROOT_DAEMON_BINARY="$DOCKER_DAEMON_BIN_LINK"
         return
     fi
-    if [[ -z "$ROOT_DAEMON_COPY" ]]; then
-        ROOT_DAEMON_COPY=$(mktemp -d /tmp/gateway-docker-daemon-root.XXXXXX) || die "Could not stage the docker-daemon binary."
-        install -m 0700 "$DOCKER_DAEMON_OWN_BINARY" "${ROOT_DAEMON_COPY}/docker-daemon" || die "Could not stage the docker-daemon binary."
-    fi
-    printf '%s\n' "${ROOT_DAEMON_COPY}/docker-daemon"
+    [[ -z "$ROOT_DAEMON_BINARY" ]] || return 0
+    ROOT_DAEMON_COPY=$(mktemp -d /tmp/gateway-docker-daemon-root.XXXXXX) || die "Could not stage the docker-daemon binary."
+    curl -fsSL "$DOWNLOAD_URL" -o "${ROOT_DAEMON_COPY}/docker-daemon" >>"$LOG_FILE" 2>&1 \
+        || die "Could not download docker-daemon ${RESOLVED_DAEMON_VERSION} for the root-only setup steps."
+    verify_checksum "${ROOT_DAEMON_COPY}/docker-daemon" "docker-daemon-linux-${ARCH}"
+    chmod 0700 "${ROOT_DAEMON_COPY}/docker-daemon"
+    ROOT_DAEMON_BINARY="${ROOT_DAEMON_COPY}/docker-daemon"
 }
 
 # A non-root daemon reaches Docker only through the socket; check it before anything is started.
@@ -654,16 +659,51 @@ preflight_run_user_docker_access() {
 }
 
 # Hands the daemon everything it writes: its configuration, state and binary, and Docker's trust directory for the
-# daemon's registry proxy.
+# daemon's registry proxy. A daemon switched back to root gets back what its previous user owned there; connector
+# socket directories and workload data keep their owners, and the daemon brings the connectors over itself.
 grant_daemon_paths_to_run_user() {
-    [[ "$RUN_USER" != "root" ]] || return 0
     local path
+    if [[ "$RUN_USER" == "root" ]]; then
+        return_paths_to_root /etc/docker-daemon /var/lib/docker-daemon "$DOCKER_DAEMON_OWN_DIR" "$DOCKER_REGISTRY_PROXY_TRUST_DIR"
+        return
+    fi
     for path in /etc/docker-daemon /var/lib/docker-daemon "$DOCKER_DAEMON_OWN_DIR"; do
         [[ ! -e "$path" ]] || chown -hR "${RUN_USER}:${RUN_GROUP}" "$path"
     done
     if [[ "$DOCKER_MODE" == "docker" ]]; then
         install -d -m 0755 "$(dirname "$DOCKER_REGISTRY_PROXY_TRUST_DIR")"
         install -d -m 0755 -o "$RUN_USER" -g "$RUN_GROUP" "$DOCKER_REGISTRY_PROXY_TRUST_DIR"
+    fi
+}
+
+# The user a previous install ran the daemon as: the owner of its configuration directory (root without one).
+PREVIOUS_RUN_UID=$(stat -c '%u' /etc/docker-daemon 2>/dev/null || echo 0)
+
+# Gives root every entry in the paths that the previous non-root user owns; entries of other owners keep theirs.
+return_paths_to_root() {
+    local path
+    [[ "$PREVIOUS_RUN_UID" != 0 ]] || return 0
+    for path in "$@"; do
+        [[ ! -e "$path" ]] || find "$path" -xdev -user "$PREVIOUS_RUN_UID" -exec chown -h 0:0 {} +
+    done
+}
+
+# A daemon that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
+# directory were written by that user, and no other user may run them.
+prepare_run_user_switch() {
+    [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+    log "docker-daemon ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}..."
+    stop_daemon_service || die "Could not stop docker-daemon to switch its user."
+    rm -rf /var/lib/docker-daemon/launcher
+}
+
+stop_daemon_service() {
+    if has_systemd; then
+        [[ ! -f /etc/systemd/system/docker-daemon.service ]] || systemctl stop docker-daemon >>"$LOG_FILE" 2>&1
+    elif has_openrc; then
+        [[ ! -f /etc/init.d/docker-daemon ]] || rc-service --ifstarted docker-daemon stop >>"$LOG_FILE" 2>&1
+    else
+        stop_manual_launcher /var/lib/docker-daemon/launcher docker
     fi
 }
 
@@ -731,7 +771,11 @@ set_config_host_identity_path() {
 
 # A daemon running as its own user enrolls with its copy of the host identity and owns everything it writes.
 prepare_run_user_identity() {
-    [[ "$RUN_USER" != "root" ]] || return 0
+    if [[ "$RUN_USER" == "root" ]]; then
+        clear_config_host_identity_path /etc/docker-daemon/config.yaml \
+            || die "Could not point /etc/docker-daemon/config.yaml at the shared host identity."
+        return 0
+    fi
     seed_host_identity_copy "$SHARED_HOST_IDENTITY" "$DOCKER_DAEMON_OWN_HOST_IDENTITY" \
         || die "Could not prepare the host identity for ${RUN_USER}."
     set_config_host_identity_path /etc/docker-daemon/config.yaml "$DOCKER_DAEMON_OWN_HOST_IDENTITY" \
@@ -739,25 +783,128 @@ prepare_run_user_identity() {
     grant_daemon_paths_to_run_user
 }
 
-# The daemon enrolls when it starts; it has its certificate and state once Gateway accepted the token.
-await_enrollment() {
-    local waited=0 limit="${GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS:-90}"
+# A root daemon reads the shared host identity, as on a fresh root install.
+clear_config_host_identity_path() {
+    local config="$1" temporary
+    [[ ! -L "$config" ]] || return 1
+    [[ -f "$config" ]] && grep -q '^host_identity_path:' "$config" || return 0
+    temporary=$(mktemp) || return 1
+    grep -v '^host_identity_path:' "$config" >"$temporary" || true
+    cat "$temporary" >"$config" || { rm -f "$temporary"; return 1; }
+    rm -f "$temporary"
+}
+
+# The daemon records each control session Gateway accepted in its state directory (from GATEWAY_SESSION_SINCE on).
+# The installer removes the record before it starts the daemon, so only a session of the daemon it started counts.
+GATEWAY_SESSION_SINCE="v2.11.1-rc.2"
+GATEWAY_SESSION_FILE="/var/lib/docker-daemon/gateway-session.json"
+GATEWAY_SESSION_STARTED=0
+
+forget_gateway_session() {
+    rm -f "$GATEWAY_SESSION_FILE"
+    GATEWAY_SESSION_STARTED=$(date +%s)
+}
+
+# Orders vX.Y.Z and vX.Y.Z-rc.N; a release orders after its release candidates.
+release_order() {
+    [[ "${1#v}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$ ]] || return 1
+    echo $(( ((BASH_REMATCH[1] * 1000 + BASH_REMATCH[2]) * 1000 + BASH_REMATCH[3]) * 100000 + ${BASH_REMATCH[5]:-99999} ))
+}
+
+# Daemons older than GATEWAY_SESSION_SINCE write no session record; development builds do.
+daemon_records_gateway_session() {
+    local order
+    order=$(release_order "$1") || return 0
+    (( order >= $(release_order "$GATEWAY_SESSION_SINCE") ))
+}
+
+# Gateway accepted a session of the daemon this run started, and that process still runs under its service manager.
+gateway_session_is_current() {
+    local pid connected_at
+    [[ -f "$GATEWAY_SESSION_FILE" && ! -L "$GATEWAY_SESSION_FILE" ]] || return 1
+    pid=$(sed -nE 's/.*"pid":([0-9]+).*/\1/p' "$GATEWAY_SESSION_FILE")
+    connected_at=$(sed -nE 's/.*"connected_at":([0-9]+).*/\1/p' "$GATEWAY_SESSION_FILE")
+    [[ -n "$pid" && -n "$connected_at" ]] || return 1
+    (( connected_at >= GATEWAY_SESSION_STARTED )) || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    if [[ "$MANUAL_FALLBACK_USED" -eq 0 ]] && has_systemd; then
+        grep -q '/docker-daemon\.service$' "/proc/${pid}/cgroup" 2>/dev/null || return 1
+    fi
+}
+
+# The enrollment error the daemon started by this run recorded instead of a session, if any.
+gateway_session_enrollment_error() {
+    [[ -f "$GATEWAY_SESSION_FILE" && ! -L "$GATEWAY_SESSION_FILE" ]] || return 1
+    sed -nE 's/.*"enrollment_error":"(([^"\\]|\\.)*)".*/\1/p' "$GATEWAY_SESSION_FILE" | grep .
+}
+
+daemon_service_running() {
+    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+        launcher_pid_is_live "${MANUAL_OWNER_PID:-}"
+    elif has_systemd; then
+        systemctl is-active --quiet docker-daemon
+    else
+        rc-service docker-daemon status >/dev/null 2>&1
+    fi
+}
+
+show_daemon_log() {
+    local manual_log=/var/lib/docker-daemon/launcher/manual.log
+    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+        err "Daemon log: ${manual_log}"
+        tail -n 20 "$manual_log" >&2 2>/dev/null || true
+    elif has_systemd; then
+        err "Daemon log: journalctl -u docker-daemon"
+        journalctl -u docker-daemon -n 20 --no-pager >&2 2>/dev/null || true
+    elif has_openrc; then
+        err "Daemon log: /var/log/docker-daemon.err and /var/log/docker-daemon.log"
+        tail -n 20 /var/log/docker-daemon.err /var/log/docker-daemon.log >&2 2>/dev/null || true
+    fi
+}
+
+fail_daemon_start() {
+    err "$1"
+    show_daemon_log
+    die "docker-daemon is installed, but it is not running."
+}
+
+# An install is done once the daemon it started runs and Gateway accepted it. A daemon too old to record its session
+# must have enrolled and keep running for 10 s instead.
+await_gateway_connection() {
+    local waited=0 limit="${GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS:-90}" running=0
     while (( waited < limit )); do
-        if [[ -f /etc/docker-daemon/certs/node.pem && -f /var/lib/docker-daemon/state.json ]]; then
-            ok "docker-daemon enrolled with Gateway"
-            return 0
+        if daemon_records_gateway_session "$RESOLVED_DAEMON_VERSION"; then
+            if gateway_session_is_current; then
+                ok "docker-daemon is connected to Gateway"
+                return 0
+            fi
+            # Gateway answered and refused the token: waiting cannot change that.
+            if grep -q '"enrollment_refused":true' "$GATEWAY_SESSION_FILE" 2>/dev/null; then
+                err "Gateway refused the enrollment token (already used, expired, or for another node): $(gateway_session_enrollment_error)"
+                err "Create a new setup command in Gateway and run it on this host."
+                show_daemon_log
+                return 1
+            fi
+        elif [[ -f /etc/docker-daemon/certs/node.pem && -f /var/lib/docker-daemon/state.json ]] && daemon_service_running; then
+            running=$((running + 1))
+            if (( running >= 10 )); then
+                ok "docker-daemon enrolled with Gateway and is running"
+                warn "docker-daemon ${RESOLVED_DAEMON_VERSION} does not report its Gateway connection; check that the node is online in Gateway."
+                return 0
+            fi
+        else
+            running=0
         fi
         sleep 1
         waited=$((waited + 1))
     done
-    err "docker-daemon has not enrolled with Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
-    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
-        err "Check the daemon log: /var/lib/docker-daemon/launcher/manual.log"
-    elif has_systemd; then
-        err "Check the daemon log: journalctl -u docker-daemon"
-    elif has_openrc; then
-        err "Check the daemon log: /var/log/docker-daemon.err and /var/log/docker-daemon.log"
+    local enrollment_error
+    if enrollment_error=$(gateway_session_enrollment_error); then
+        err "docker-daemon could not enroll with Gateway: ${enrollment_error}"
+    else
+        err "docker-daemon has not connected to Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
     fi
+    show_daemon_log
     return 1
 }
 
@@ -883,16 +1030,28 @@ prepare_manual_launcher_state() {
     [[ ! -L "$launcher_dir" ]] || return 1
     mkdir -p "$launcher_dir" || return 1
     chmod 0700 "$launcher_dir" || return 1
-    if [[ "$RUN_USER" != "root" ]] && ! chown "${RUN_USER}:${RUN_GROUP}" "$launcher_dir"; then
-        return 1
-    fi
+    chown "${RUN_USER}:${RUN_GROUP}" "$launcher_dir" || return 1
     [[ ! -L "$manual_log" ]] || return 1
     touch "$manual_log" || return 1
     chmod 0640 "$manual_log" || return 1
-    if [[ "$RUN_USER" != "root" ]] && ! chown "${RUN_USER}:${RUN_GROUP}" "$manual_log"; then
-        return 1
-    fi
+    chown "${RUN_USER}:${RUN_GROUP}" "$manual_log" || return 1
 }
+
+# Stops the launcher a previous manual start left running, as a service manager does on restart. Only a process whose
+# command line is this daemon's launcher is signalled.
+stop_manual_launcher() {
+    local launcher_dir="$1" daemon_type="$2" pid waited=0
+    pid="$(launcher_pid_from_json "${launcher_dir}/owner.json" || true)"
+    launcher_pid_is_live "$pid" || return 0
+    tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null | grep -Fq -- " launcher --daemon-type ${daemon_type} " || return 0
+    kill -TERM "$pid" 2>/dev/null || true
+    while launcher_pid_is_live "$pid" && (( waited < 30 )); do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    ! launcher_pid_is_live "$pid"
+}
+
 
 detach_manual_launcher() {
     local daemon_binary="$1"
@@ -947,13 +1106,15 @@ wait_for_manual_launcher_ready() {
     return 1
 }
 
+# Runs the daemon under its own launcher on a host without a service manager. A launcher a previous run started is
+# stopped first, as a service restart would, so the daemon installed now runs.
 manual_launcher_fallback() {
     local daemon_name="$1"
     local daemon_binary="$2"
     local state_dir="$3"
     local launcher_dir="${state_dir}/launcher"
     local manual_log="${launcher_dir}/manual.log"
-    local owner_pid daemon_type
+    local daemon_type
     MANUAL_FALLBACK_USED=1
 
     case "$daemon_binary" in
@@ -961,50 +1122,36 @@ manual_launcher_fallback() {
         */nginx-daemon) daemon_type="nginx" ;;
         */monitoring-daemon) daemon_type="monitoring" ;;
         */relay-supervisor) daemon_type="relay" ;;
-        *) warn "Unknown launcher daemon binary ${daemon_binary}; preserving installed files."; return 0 ;;
+        *) err "Unknown launcher daemon binary ${daemon_binary}."; return 1 ;;
     esac
 
-    owner_pid="$(launcher_pid_from_json "${launcher_dir}/owner.json" || true)"
-    if launcher_pid_is_live "$owner_pid"; then
-        if wait_for_manual_launcher_ready "$launcher_dir" "$daemon_type"; then
-            ok "${daemon_name} launcher is already ready (PID ${MANUAL_OWNER_PID}, child PID ${MANUAL_CHILD_PID})."
-            echo "Manual launcher log: ${manual_log}"
-            echo "Manual mode is not persistent across reboot."
-        else
-            warn "${daemon_name} has a live launcher owner but no verified ready child; refusing to start a competing launcher."
-            echo "Launcher state: ${launcher_dir}"
-            echo "Launcher log: ${manual_log}"
-        fi
-        return 0
+    if ! stop_manual_launcher "$launcher_dir" "$daemon_type"; then
+        err "The running ${daemon_name} launcher did not stop; installed files were preserved."
+        return 1
     fi
-
     if ! prepare_manual_launcher_state "$state_dir"; then
-        warn "Could not prepare manual launcher state for ${daemon_name}; installed files were preserved."
+        err "Could not prepare manual launcher state for ${daemon_name}; installed files were preserved."
         echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-        return 0
+        return 1
     fi
+    forget_gateway_session
     if ! detach_manual_launcher "$daemon_binary" "$manual_log"; then
-        warn "Could not detach ${daemon_name}; installed files and launcher files were preserved."
-        echo "Launcher log: ${manual_log}"
+        err "Could not detach ${daemon_name}; installed files and launcher files were preserved."
         echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-        return 0
+        return 1
     fi
 
     if wait_for_manual_launcher_ready "$launcher_dir" "$daemon_type"; then
         ok "${daemon_name} is running in manual mode (launcher PID ${MANUAL_OWNER_PID}, child PID ${MANUAL_CHILD_PID})."
-        echo "Launcher PID: ${MANUAL_OWNER_PID}"
-        echo "Child PID: ${MANUAL_CHILD_PID}"
         echo "Manual launcher log: ${manual_log}"
         echo "Manual mode is not persistent across reboot."
         return 0
     fi
 
-    warn "Could not verify the detached ${daemon_name} launcher; installed files and launcher files were preserved."
+    err "Could not verify the detached ${daemon_name} launcher; installed files and launcher files were preserved."
     echo "Launcher state: ${launcher_dir}"
-    echo "Launcher log: ${manual_log}"
     echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-    echo "Manual mode is not persistent across reboot."
-    return 0
+    return 1
 }
 
 run_quiet() {
@@ -1417,6 +1564,8 @@ Options:
   --user <user>            Run daemon as this user (default: root)
   --disable-console        Turn the host console off (console.enabled: false in the daemon config)
   --disable-files          Turn host file access off (files.enabled: false in the daemon config)
+  --secure-runtime         Install Secure Runtime (gVisor) on an existing install too, and fail when it cannot
+                           (a fresh docker-profile install sets it up anyway)
   --no-logo                Suppress the logo banner
   --dry-run                Validate inputs and show the plan without changing the host
   -y, --yes                Non-interactive mode (no prompts, all values required via flags)
@@ -1434,6 +1583,7 @@ Environment variables:
   GATEWAY_BUILDER_EGRESS_PROFILE Same as --builder-egress (internet or offline; default: internet)
   GATEWAY_NODE_DISABLE_CONSOLE  Set to 1 to disable the host console
   GATEWAY_NODE_DISABLE_FILES    Set to 1 to disable host file access
+  GATEWAY_DOCKER_SECURE_RUNTIME Set to 1 for --secure-runtime
   GATEWAY_RELEASES_API_URL      Override the Gateway release feed
   GATEWAY_ARTIFACT_BASE_URL     Override the Gateway artifact base URL
 
@@ -1463,6 +1613,7 @@ while [[ $# -gt 0 ]]; do
         --user)           RUN_USER="$2"; shift 2 ;;
         --disable-console) DISABLE_CONSOLE=1; shift ;;
         --disable-files)  DISABLE_FILES=1; shift ;;
+        --secure-runtime) SECURE_RUNTIME=1; shift ;;
         --no-logo)        NO_LOGO=1; shift ;;
         --dry-run)        DRY_RUN=1; shift ;;
         -y|--yes)         NON_INTERACTIVE=1; NO_LOGO=1; shift ;;
@@ -1480,6 +1631,9 @@ case "$BUILDER_EGRESS_PROFILE" in
     internet|offline) ;;
     *) die "Invalid --builder-egress '${BUILDER_EGRESS_PROFILE}'. Expected internet or offline." ;;
 esac
+if [[ "$SECURE_RUNTIME" == "1" && "$DOCKER_MODE" != "docker" ]]; then
+    die "--secure-runtime applies to the docker profile only."
+fi
 
 # Resolve GATEWAY_ADDR from --host/--port if --gateway not given
 if [[ -n "$GATEWAY_HOST" && -z "$GATEWAY_ADDR" ]]; then
@@ -1663,19 +1817,123 @@ if ! prompt_yes_no "Proceed with installation?" "Y"; then
 fi
 guide_blank
 
+# ── Host access switches ─────────────────────────────────────────────
+# --disable-console / --disable-files write console.enabled: false and
+# files.enabled: false to the daemon config on this node. The installer only
+# turns them off and keeps them off when enrollment rewrites the config;
+# turning one back on is an edit of the config file on the node.
+host_feature_disabled() {
+    local config_file="$1"
+    local section="$2"
+    [[ -f "$config_file" ]] || return 1
+    awk -v section="$section" '
+        $0 ~ ("^" section ":[[:space:]]*(#.*)?$") { in_section = 1; next }
+        in_section && /^[^[:space:]#]/ { in_section = 0 }
+        in_section && /^[[:space:]]+enabled:[[:space:]]*(false|False|FALSE)[[:space:]]*(#.*)?$/ { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$config_file"
+}
+
+disable_host_feature() {
+    local config_file="$1"
+    local section="$2"
+    local tmp_file
+    tmp_file=$(mktemp "${config_file}.XXXXXX") || die "Could not update ${section}.enabled in ${config_file}"
+    if ! awk -v section="$section" '
+        function emit() { if (!done) { print indent "enabled: false"; done = 1 } }
+        BEGIN { indent = "  " }
+        !in_section && $0 ~ ("^" section ":") {
+            if ($0 !~ ("^" section ":[[:space:]]*(#.*)?$")) { failed = 1; exit 3 }
+            print; in_section = 1; seen = 1; next
+        }
+        in_section && /^[^[:space:]#]/ { emit(); in_section = 0 }
+        in_section && /^[[:space:]]+[^[:space:]#]/ {
+            if (!child) { match($0, /^[[:space:]]+/); indent = substr($0, 1, RLENGTH); child = 1 }
+            if ($0 ~ ("^" indent "enabled:")) { emit(); next }
+        }
+        { print }
+        END {
+            if (failed) exit 3
+            if (in_section) emit()
+            if (!seen) { print ""; print section ":"; print "  enabled: false" }
+        }
+    ' "$config_file" > "$tmp_file"; then
+        rm -f "$tmp_file"
+        die "Could not set ${section}.enabled: false in ${config_file}; edit the file by hand."
+    fi
+    # Write in place so the config keeps its owner and mode.
+    cat "$tmp_file" > "$config_file" || die "Could not write ${config_file}"
+    rm -f "$tmp_file"
+    ok "${section}.enabled: false written to ${config_file}"
+}
+
+remember_host_access_config() {
+    if host_feature_disabled "$1" console; then DISABLE_CONSOLE=1; fi
+    if host_feature_disabled "$1" files; then DISABLE_FILES=1; fi
+}
+
+apply_host_access_config() {
+    if [[ "$DISABLE_CONSOLE" == "1" ]]; then disable_host_feature "$1" console; fi
+    if [[ "$DISABLE_FILES" == "1" ]]; then disable_host_feature "$1" files; fi
+}
+
+preview_host_access_config() {
+    if [[ "$DISABLE_CONSOLE" == "1" ]]; then ok "console.enabled: false written to $1 (dry run)"; fi
+    if [[ "$DISABLE_FILES" == "1" ]]; then ok "files.enabled: false written to $1 (dry run)"; fi
+}
+
+# What a real run does with the daemon binary: docker-daemon at the path this run installs it to is kept when it already has
+# the version to install, else downloaded.
+preview_daemon_binary() {
+    local target="${DOCKER_DAEMON_OWN_BINARY}"
+    if [[ "$RUN_USER" == "root" ]]; then
+        target="${DOCKER_DAEMON_BIN_LINK}"
+        # A link or wrapper of a non-root install is replaced by a downloaded root binary.
+        if [[ -L "$target" ]] || is_daemon_wrapper "$target"; then target=""; fi
+    fi
+    if [[ -n "$target" && -f "$target" && "$(daemon_binary_version "$target" || true)" == "$RESOLVED_DAEMON_VERSION" ]]; then
+        ok "docker-daemon already installed (${RESOLVED_DAEMON_VERSION})"
+    else
+        log "Downloading docker-daemon..."
+        ok "docker-daemon installed (${RESOLVED_DAEMON_VERSION}; dry run)"
+    fi
+    if [[ "$RUN_USER" != "root" ]]; then
+        ok "${DOCKER_DAEMON_BIN_LINK} runs ${DOCKER_DAEMON_OWN_BINARY} as ${RUN_USER} (dry run)"
+    fi
+}
+
+preview_run_user_switch() {
+    [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+    log "docker-daemon runs as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); it is stopped and switched to ${RUN_USER} (dry run)"
+}
+
+preview_service_start() {
+    local manager="manual mode (no supported service manager; not persistent across reboot)"
+    if has_systemd; then
+        manager="systemd unit docker-daemon"
+    elif has_openrc; then
+        manager="OpenRC service docker-daemon"
+    fi
+    log "Enabling and starting docker-daemon as ${RUN_USER} (${manager})..."
+    ok "docker-daemon is connected to Gateway (dry run)"
+}
+
 dry_run_preview() {
-    if command_exists docker; then
+    if [[ "$DOCKER_MODE" == "builder" ]]; then
+        ok "Build Worker profile: Docker Engine is not installed; the worker runs its own BuildKit and containerd"
+    elif command_exists docker; then
         ok "Docker is available (${DOCKER_VER})"
     else
         log "Docker not found, installing it..."
         ok "Docker installed (dry run)"
     fi
+    if [[ "$RUN_USER" != "root" ]] && docker_group_exists && ! groups "$RUN_USER" 2>/dev/null | grep -qw docker; then
+        log "Adding ${RUN_USER} to the docker group (dry run)"
+    fi
+    preview_run_user_switch
     log "Creating required directories..."
     ok "Directories created (dry run)"
-    log "Downloading docker-daemon..."
-    log "Verifying checksum..."
-    ok "Checksum verified (dry run)"
-    ok "docker-daemon installed (${RESOLVED_DAEMON_VERSION}; dry run)"
+    preview_daemon_binary
     if [[ "$DOCKER_MODE" == "docker" ]]; then
         ok "Lease watchdog installed as its own service (dry run)"
     fi
@@ -1684,16 +1942,22 @@ dry_run_preview() {
         log "Verifying upstream runtime checksums..."
         ok "Builder runtime installed (dry run)"
     fi
-    log "Writing config and enrolling with Gateway..."
-    ok "Config written to /etc/docker-daemon/config.yaml (dry run)"
+    if [[ "$DOCKER_MODE" == "docker" && ( "$EXISTING_INSTALL" -eq 0 || "$SECURE_RUNTIME" == "1" ) ]]; then
+        log "Running the Secure Runtime preflight and installing Secure Runtime where the host supports it (dry run)"
+    fi
+    if [[ "$EXISTING_ENROLLED" -eq 1 ]]; then
+        ok "Node already enrolled — skipping enrollment (dry run)"
+    else
+        log "Writing config and enrolling with Gateway..."
+        ok "Config written to /etc/docker-daemon/config.yaml (dry run)"
+    fi
     if [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]]; then
         ok "Database docker profile written (root daemon, storage: ${DATABASE_STORAGE_ROOT}; dry run)"
     elif [[ "$DOCKER_MODE" == "builder" ]]; then
         ok "Builder docker profile written (no Docker socket; dry run)"
     fi
     preview_host_access_config /etc/docker-daemon/config.yaml
-    log "Enabling and starting docker-daemon..."
-    ok "docker-daemon is running (dry run)"
+    preview_service_start
     complete_success "Dry run completed successfully — no host changes were made."
 }
 
@@ -1728,10 +1992,7 @@ create_directories() {
         chmod 700 /etc/gateway-builder /usr/local/lib/gateway-builder /var/lib/docker-daemon/builder
     fi
 
-    if [[ "$RUN_USER" != "root" ]]; then
-        chown -R "${RUN_USER}:${RUN_GROUP}" /etc/docker-daemon
-        chown -R "${RUN_USER}:${RUN_GROUP}" /var/lib/docker-daemon
-    fi
+    grant_daemon_paths_to_run_user
 
     ok "Directories created"
 }
@@ -1983,11 +2244,13 @@ install_builder_runtime() {
     ok "Builder runtime installed for ${RESOLVED_DAEMON_VERSION}"
 }
 
+# A fresh install sets Secure Runtime up; an existing one only with --secure-runtime, which also fails the install
+# when Secure Runtime cannot be installed.
 setup_secure_runtime() {
     [[ "$DOCKER_MODE" == "docker" ]] || return 0
-    [[ "$EXISTING_INSTALL" -eq 0 ]] || return 0
-    local target
-    target=$(root_daemon_binary)
+    [[ "$EXISTING_INSTALL" -eq 0 || "$SECURE_RUNTIME" == "1" ]] || return 0
+    prepare_root_daemon_binary
+    local target="$ROOT_DAEMON_BINARY"
     local preflight_status=0
     set +e
     "$target" runtime preflight runsc --silent
@@ -2015,6 +2278,7 @@ setup_secure_runtime() {
             ;;
     esac
 
+    [[ "$SECURE_RUNTIME" != "1" ]] || die "Secure Runtime is not installed on this node."
     local continue_default="N"
     [[ "$NON_INTERACTIVE" -eq 1 ]] && continue_default="Y"
     if ! prompt_yes_no "Continue without Secure Runtimes?" "$continue_default"; then
@@ -2219,70 +2483,6 @@ UNIT
     fi
 }
 
-# ── Host access switches ─────────────────────────────────────────────
-# --disable-console / --disable-files write console.enabled: false and
-# files.enabled: false to the daemon config on this node. The installer only
-# turns them off and keeps them off when enrollment rewrites the config;
-# turning one back on is an edit of the config file on the node.
-host_feature_disabled() {
-    local config_file="$1"
-    local section="$2"
-    [[ -f "$config_file" ]] || return 1
-    awk -v section="$section" '
-        $0 ~ ("^" section ":[[:space:]]*(#.*)?$") { in_section = 1; next }
-        in_section && /^[^[:space:]#]/ { in_section = 0 }
-        in_section && /^[[:space:]]+enabled:[[:space:]]*(false|False|FALSE)[[:space:]]*(#.*)?$/ { found = 1 }
-        END { exit found ? 0 : 1 }
-    ' "$config_file"
-}
-
-disable_host_feature() {
-    local config_file="$1"
-    local section="$2"
-    local tmp_file
-    tmp_file=$(mktemp "${config_file}.XXXXXX") || die "Could not update ${section}.enabled in ${config_file}"
-    if ! awk -v section="$section" '
-        function emit() { if (!done) { print indent "enabled: false"; done = 1 } }
-        BEGIN { indent = "  " }
-        !in_section && $0 ~ ("^" section ":") {
-            if ($0 !~ ("^" section ":[[:space:]]*(#.*)?$")) { failed = 1; exit 3 }
-            print; in_section = 1; seen = 1; next
-        }
-        in_section && /^[^[:space:]#]/ { emit(); in_section = 0 }
-        in_section && /^[[:space:]]+[^[:space:]#]/ {
-            if (!child) { match($0, /^[[:space:]]+/); indent = substr($0, 1, RLENGTH); child = 1 }
-            if ($0 ~ ("^" indent "enabled:")) { emit(); next }
-        }
-        { print }
-        END {
-            if (failed) exit 3
-            if (in_section) emit()
-            if (!seen) { print ""; print section ":"; print "  enabled: false" }
-        }
-    ' "$config_file" > "$tmp_file"; then
-        rm -f "$tmp_file"
-        die "Could not set ${section}.enabled: false in ${config_file}; edit the file by hand."
-    fi
-    # Write in place so the config keeps its owner and mode.
-    cat "$tmp_file" > "$config_file" || die "Could not write ${config_file}"
-    rm -f "$tmp_file"
-    ok "${section}.enabled: false written to ${config_file}"
-}
-
-remember_host_access_config() {
-    if host_feature_disabled "$1" console; then DISABLE_CONSOLE=1; fi
-    if host_feature_disabled "$1" files; then DISABLE_FILES=1; fi
-}
-
-apply_host_access_config() {
-    if [[ "$DISABLE_CONSOLE" == "1" ]]; then disable_host_feature "$1" console; fi
-    if [[ "$DISABLE_FILES" == "1" ]]; then disable_host_feature "$1" files; fi
-}
-
-preview_host_access_config() {
-    if [[ "$DISABLE_CONSOLE" == "1" ]]; then ok "console.enabled: false written to $1 (dry run)"; fi
-    if [[ "$DISABLE_FILES" == "1" ]]; then ok "files.enabled: false written to $1 (dry run)"; fi
-}
 
 # ── Step 3: Install and enroll ───────────────────────────────────────
 enroll_daemon() {
@@ -2308,6 +2508,8 @@ enroll_daemon() {
 }
 
 # ── Step 4: Start the daemon ─────────────────────────────────────────
+# A host with systemd or OpenRC runs the daemon as a service, and a service that does not start fails the install.
+# Manual mode is only for hosts without a service manager.
 start_daemon() {
     retire_legacy_update_guard "docker-daemon" "/usr/local/bin/docker-daemon"
     log "Enabling and starting docker-daemon..."
@@ -2332,7 +2534,7 @@ start_daemon() {
             service_environment="Environment=\"PATH=${BUILDER_RUNTIME_PATH}\""
         fi
 
-        if ! cat > /etc/systemd/system/docker-daemon.service <<UNIT
+        cat > /etc/systemd/system/docker-daemon.service <<UNIT || die "Could not write the docker-daemon systemd unit."
 [Unit]
 Description=Gateway Docker Daemon
 After=${docker_after}
@@ -2355,39 +2557,14 @@ ${service_environment}
 [Install]
 WantedBy=multi-user.target
 UNIT
-        then
-            warn "Could not write the docker-daemon systemd unit; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-            return 0
-        fi
-
-        if ! systemctl daemon-reload >> "$LOG_FILE" 2>&1; then
-            warn "systemd daemon-reload failed; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-            return 0
-        fi
-        if ! systemctl enable docker-daemon >> "$LOG_FILE" 2>&1; then
-            warn "Could not enable docker-daemon; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-            return 0
-        fi
-        if ! systemctl restart docker-daemon >> "$LOG_FILE" 2>&1; then
-            warn "Could not start or restart docker-daemon; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-            return 0
-        fi
-        sleep 2
-
-        if systemctl is-active --quiet docker-daemon; then
-            ok "docker-daemon is running"
-        else
-            warn "docker-daemon is not active; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-        fi
+        systemctl daemon-reload >> "$LOG_FILE" 2>&1 || die "systemd daemon-reload failed."
+        systemctl enable docker-daemon >> "$LOG_FILE" 2>&1 || die "Could not enable docker-daemon."
+        forget_gateway_session
+        systemctl restart docker-daemon >> "$LOG_FILE" 2>&1 || fail_daemon_start "Could not start docker-daemon."
     elif has_openrc; then
         local openrc_need="net docker"
         [[ "$DOCKER_MODE" != "builder" ]] || openrc_need="net"
-        if ! cat > /etc/init.d/docker-daemon <<UNIT
+        cat > /etc/init.d/docker-daemon <<UNIT || die "Could not write the docker-daemon OpenRC service."
 #!/sbin/openrc-run
 name="Gateway Docker Daemon"
 description="Gateway Docker Daemon"
@@ -2404,43 +2581,22 @@ depend() {
     need ${openrc_need}
 }
 UNIT
-        then
-            warn "Could not write the docker-daemon OpenRC service; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-            return 0
-        fi
-        if ! chmod +x /etc/init.d/docker-daemon; then
-            warn "Could not make the docker-daemon OpenRC service executable; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-            return 0
-        fi
-        if ! rc-update add docker-daemon default >> "$LOG_FILE" 2>&1; then
-            warn "Could not enable docker-daemon in OpenRC; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-            return 0
-        fi
-        if ! rc-service docker-daemon restart >> "$LOG_FILE" 2>&1; then
-            if ! rc-service docker-daemon start >> "$LOG_FILE" 2>&1; then
-                warn "Could not start docker-daemon in OpenRC; using manual mode."
-                manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
-                return 0
-            fi
-        fi
-        sleep 2
-
-        if rc-service docker-daemon status >> "$LOG_FILE" 2>&1; then
-            ok "docker-daemon is running"
-        else
-            warn "docker-daemon is not active in OpenRC; using manual mode."
-            manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+        chmod +x /etc/init.d/docker-daemon || die "Could not make the docker-daemon OpenRC service executable."
+        rc-update add docker-daemon default >> "$LOG_FILE" 2>&1 || die "Could not enable docker-daemon in OpenRC."
+        forget_gateway_session
+        if ! rc-service docker-daemon restart >> "$LOG_FILE" 2>&1 && ! rc-service docker-daemon start >> "$LOG_FILE" 2>&1; then
+            fail_daemon_start "Could not start docker-daemon in OpenRC."
         fi
     else
         warn "No supported service manager found; using manual mode."
-        manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon"
+        manual_launcher_fallback "docker-daemon" "/usr/local/bin/docker-daemon" "/var/lib/docker-daemon" \
+            || fail_daemon_start "Could not start docker-daemon in manual mode."
     fi
+    ok "docker-daemon started"
 }
 
 # ── Run ──────────────────────────────────────────────────────────────
+prepare_run_user_switch
 create_directories
 install_daemon
 install_lease_watchdog
@@ -2455,9 +2611,9 @@ write_builder_profile_config
 apply_host_access_config /etc/docker-daemon/config.yaml
 start_lease_watchdog
 start_daemon
-# The daemon enrolls once it runs: an install whose daemon did not enroll is not done.
-if ! await_enrollment; then
-    die "docker-daemon is installed, but it did not enroll with Gateway."
+# An install whose daemon does not run or did not connect to Gateway is not done.
+if ! await_gateway_connection; then
+    die "docker-daemon is installed, but it did not connect to Gateway."
 fi
 
 echo ""
