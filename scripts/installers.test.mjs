@@ -896,3 +896,82 @@ test('the nginx service repair of a non-root install is planned before the promp
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// The relay installer re-runs like the monitoring, nginx and Docker installers: an enrolled relay re-run without a token
+// keeps its identity and takes what is not given from its configuration (the documented user switch is such a re-run);
+// with a token it re-enrolls, and when Gateway refuses the token the relay keeps running as it was but the install
+// fails; a new relay still needs every argument.
+test('an enrolled relay re-runs without a token and keeps its identity', { skip: !linux }, async () => {
+  const host = path.join(work, 'host');
+  const config = path.join(host, 'etc/gateway-relay-supervisor/config.yaml');
+  const identity = path.join(host, 'var/lib/gateway-relay-supervisor/supervisor-identity/node.pem');
+  const relayArgs = ['--version', VERSION];
+  const full = ['--gateway', 'gw.example.com:9443', '--gateway-cert-sha256', CERT, '--advertise-address', 'relay.example.com'];
+  try {
+    // A new relay: every argument is still required.
+    for (const args of [relayArgs, [...relayArgs, ...full], ['--token', 'gw_node_x', ...relayArgs, '--gateway', 'gw.example.com:9443']]) {
+      const fresh = dryRun('setup-relay-node.sh', args);
+      assert.equal(fresh.status, 2, `${args.join(' ')}\n${fresh.output}`);
+      assert.match(fresh.output, /Usage: setup-relay-node\.sh/);
+    }
+    await writeFile(
+      path.join(work, 'relay-config.yaml'),
+      [
+        'gateway:',
+        '  address: gw.example.com:9443',
+        '  token: gw_node_used',
+        `  cert_sha256: ${CERT}`,
+        'worker:',
+        '  service_port: 853',
+        '  advertised_addresses:',
+        '    - relay.example.com',
+        '',
+      ].join('\n')
+    );
+    runShell(`mkdir -p '${path.dirname(config)}' '${path.dirname(identity)}' && cp '${path.join(work, 'relay-config.yaml')}' '${config}' && echo pem > '${identity}'`);
+    // Enrolled, no token: gateway, pin, advertised address and port come from the configuration.
+    const kept = dryRun('setup-relay-node.sh', relayArgs);
+    assert.equal(kept.status, 0, kept.output);
+    assert.match(kept.output, /for Gateway gw\.example\.com:9443, advertised at relay\.example\.com:853\./);
+    assert.match(kept.output, /no token was given: it keeps its identity/);
+    // What is given wins.
+    const given = dryRun('setup-relay-node.sh', [...relayArgs, '--gateway', 'other.example.com:9443', '--service-port', '9444']);
+    assert.match(given.output, /for Gateway other\.example\.com:9443, advertised at relay\.example\.com:9444\./, given.output);
+    // With a token it re-enrolls.
+    const reenroll = dryRun('setup-relay-node.sh', ['--token', 'gw_node_new', ...relayArgs]);
+    assert.equal(reenroll.status, 2, 'a token alone is not a complete command for a new relay');
+    const reenrollFull = dryRun('setup-relay-node.sh', ['--token', 'gw_node_new', ...relayArgs, ...full]);
+    assert.equal(reenrollFull.status, 0, reenrollFull.output);
+    assert.match(reenrollFull.output, /a token was given: it re-enrolls, and keeps its previous identity if Gateway refuses the token/);
+    // A configuration that lacks the values cannot be re-run without them.
+    runShell(`printf 'gateway:\\n  token: x\\n' > '${config}'`);
+    const incomplete = dryRun('setup-relay-node.sh', relayArgs);
+    assert.equal(incomplete.status, 2, incomplete.output);
+    assert.match(incomplete.output, /does not name its Gateway, certificate pin and advertised address/);
+  } finally {
+    runShell(`rm -f '${config}' '${identity}' '${path.join(work, 'relay-config.yaml')}'`);
+  }
+
+  const source = readFileSync(path.join(scriptsDir, 'setup-relay-node.sh'), 'utf8');
+  // No token, no token line: a token in the configuration of an enrolled supervisor starts a re-enrollment.
+  const start = source.indexOf('GATEWAY_TOKEN_YAML=""');
+  const end = source.indexOf('\nCONFIG\n', start) + '\nCONFIG\n'.length;
+  const rendered = path.join(work, 'rendered-relay-config.yaml');
+  const render = (token) => {
+    const result = runShell(
+      [
+        `GATEWAY=gw.example.com:9443; TOKEN='${token}'; GATEWAY_CERT_SHA256=${CERT}; HOST_IDENTITY_PATH=/h; SERVICE_PORT=9443; ADVERTISE_ADDRESS=relay.example.com`,
+        source.slice(start, end).replace('/etc/gateway-relay-supervisor/config.yaml', rendered),
+      ].join('\n')
+    );
+    assert.equal(result.status, 0, result.output);
+    return readFileSync(rendered, 'utf8');
+  };
+  assert.doesNotMatch(render(''), /token:/);
+  assert.match(render(''), /^gateway:\n {2}address: gw\.example\.com:9443\n {2}cert_sha256: /);
+  assert.match(render('gw_node_new'), /^ {2}address: gw\.example\.com:9443\n {2}token: gw_node_new\n {2}cert_sha256:/m);
+  // Without a token there is no enrollment result to wait for, only the Gateway session.
+  assert.match(source, /Without a token there is no enrollment to wait for[^\n]*\n\s+\[\[ -n "\$TOKEN" \]\] \|\| enrolled=1/);
+  // A refused re-enrollment token is a failure that says the relay still runs.
+  assert.match(source, /enrollment_status" -eq 1 && "\$REENROLLMENT" -eq 1[\s\S]*keeps running with its previous identity, but it was not re-enrolled[\s\S]*without --token[\s\S]*exit 1/);
+});

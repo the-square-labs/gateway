@@ -7,6 +7,7 @@ TOKEN=""
 GATEWAY_CERT_SHA256=""
 ADVERTISE_ADDRESS=""
 SERVICE_PORT="9443"
+SERVICE_PORT_GIVEN=0
 VERSION="latest"
 RELEASES_API_URL="${GATEWAY_RELEASES_API_URL:-https://updates.thesqlabs.com/gateway/releases}"
 ARTIFACT_BASE_URL="${GATEWAY_ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"
@@ -23,6 +24,8 @@ DRY_RUN=0
 
 usage() {
   echo "Usage: setup-relay-node.sh --gateway host:port --token TOKEN --gateway-cert-sha256 sha256:HEX --advertise-address HOST [--service-port 9443] [--version vX.Y.Z] [--disable-console] [--disable-files] [--dry-run]"
+  echo "  An enrolled relay can be re-run without --token: it keeps its identity and takes the Gateway address, certificate"
+  echo "  pin, advertised address and port from its configuration unless they are given. With a token it re-enrolls."
   echo "  --disable-console  Turn the host console off (console.enabled: false; env GATEWAY_NODE_DISABLE_CONSOLE=1)"
   echo "  --disable-files    Turn host file access off (files.enabled: false; env GATEWAY_NODE_DISABLE_FILES=1)"
   echo "  --dry-run          Validate inputs and show the plan without changing the host"
@@ -597,13 +600,53 @@ manual_launcher_fallback() {
   return 1
 }
 
+RELAY_CONFIG=/etc/gateway-relay-supervisor/config.yaml
+RELAY_IDENTITY=/var/lib/gateway-relay-supervisor/supervisor-identity/node.pem
+
+# A value of the relay's configuration: key inside a section (gateway: address), or a list item under a key.
+relay_config_value() {
+  local section="$1" key="$2"
+  [[ -f "$RELAY_CONFIG" && ! -L "$RELAY_CONFIG" ]] || return 1
+  awk -v q="'" -v section="$section" -v key="$key" '
+    $0 ~ ("^" section ":[[:space:]]*(#.*)?$") { in_section = 1; next }
+    in_section && /^[^[:space:]#]/ { in_section = 0 }
+    in_section && $0 ~ ("^[[:space:]]+" key ":[[:space:]]*[^[:space:]]") {
+      value = $0
+      sub("^[[:space:]]+" key ":[[:space:]]*", "", value)
+      gsub("^[\"" q "]|[\"" q "]?[[:space:]]*$", "", value)
+      print value
+      exit
+    }
+  ' "$RELAY_CONFIG" | grep .
+}
+
+relay_config_advertised_address() {
+  [[ -f "$RELAY_CONFIG" && ! -L "$RELAY_CONFIG" ]] || return 1
+  awk -v q="'" '
+    /^[[:space:]]+advertised_addresses:[[:space:]]*(#.*)?$/ { in_list = 1; next }
+    in_list && /^[[:space:]]+-[[:space:]]*[^[:space:]]/ {
+      value = $0
+      sub(/^[[:space:]]+-[[:space:]]*/, "", value)
+      gsub("^[\"" q "]|[\"" q "]?[[:space:]]*$", "", value)
+      print value
+      exit
+    }
+    in_list && !/^[[:space:]]+-/ { in_list = 0 }
+  ' "$RELAY_CONFIG" | grep .
+}
+
+# A relay that enrolled before has its identity and configuration; re-running the installer without a token keeps both
+# and takes what was not given from that configuration, as the other node installers do.
+RELAY_ENROLLED=0
+RERUN_WITHOUT_TOKEN=0
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --gateway) GATEWAY="$2"; shift 2 ;;
     --token) TOKEN="$2"; shift 2 ;;
     --gateway-cert-sha256) GATEWAY_CERT_SHA256="$2"; shift 2 ;;
     --advertise-address) ADVERTISE_ADDRESS="$2"; shift 2 ;;
-    --service-port) SERVICE_PORT="$2"; shift 2 ;;
+    --service-port) SERVICE_PORT="$2"; SERVICE_PORT_GIVEN=1; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     --disable-console) DISABLE_CONSOLE=1; shift ;;
     --disable-files) DISABLE_FILES=1; shift ;;
@@ -614,7 +657,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ${EUID} -eq 0 ]] || { echo "Run this installer as root" >&2; exit 1; }
-[[ -n "$GATEWAY" && -n "$TOKEN" && -n "$GATEWAY_CERT_SHA256" && -n "$ADVERTISE_ADDRESS" ]] || { usage >&2; exit 2; }
+[[ -s "$RELAY_IDENTITY" && -f "$RELAY_CONFIG" ]] && RELAY_ENROLLED=1
+if [[ "$RELAY_ENROLLED" -eq 1 && -z "$TOKEN" ]]; then
+  RERUN_WITHOUT_TOKEN=1
+  [[ -n "$GATEWAY" ]] || GATEWAY=$(relay_config_value gateway address || true)
+  [[ -n "$GATEWAY_CERT_SHA256" ]] || GATEWAY_CERT_SHA256=$(relay_config_value gateway cert_sha256 || true)
+  [[ -n "$ADVERTISE_ADDRESS" ]] || ADVERTISE_ADDRESS=$(relay_config_advertised_address || true)
+  [[ "$SERVICE_PORT_GIVEN" -eq 1 ]] || SERVICE_PORT=$(relay_config_value worker service_port || echo "$SERVICE_PORT")
+  if [[ -z "$GATEWAY" || -z "$GATEWAY_CERT_SHA256" || -z "$ADVERTISE_ADDRESS" ]]; then
+    echo "This relay is enrolled, but ${RELAY_CONFIG} does not name its Gateway, certificate pin and advertised address; pass --gateway, --gateway-cert-sha256 and --advertise-address." >&2
+    usage >&2
+    exit 2
+  fi
+fi
+[[ -n "$GATEWAY" && ( -n "$TOKEN" || "$RERUN_WITHOUT_TOKEN" -eq 1 ) && -n "$GATEWAY_CERT_SHA256" && -n "$ADVERTISE_ADDRESS" ]] || { usage >&2; exit 2; }
 [[ "$SERVICE_PORT" =~ ^[0-9]+$ && "$SERVICE_PORT" -ge 1 && "$SERVICE_PORT" -le 65535 ]] || { echo "Invalid service port" >&2; exit 2; }
 resolve_run_identity || exit 1
 
@@ -641,6 +697,11 @@ relay_dry_run() {
   has_systemd && manager="systemd unit gateway-relay-supervisor"
   ! has_openrc || has_systemd || manager="OpenRC service gateway-relay-supervisor"
   echo "Dry run: Relay supervisor ${version} (${ARCH}) for Gateway ${GATEWAY}, advertised at ${ADVERTISE_ADDRESS}:${SERVICE_PORT}."
+  if [[ "$RERUN_WITHOUT_TOKEN" -eq 1 ]]; then
+    echo "The relay is enrolled and no token was given: it keeps its identity (Gateway, certificate pin and advertised address come from its configuration unless given)."
+  elif [[ "$RELAY_ENROLLED" -eq 1 ]]; then
+    echo "The relay is enrolled and a token was given: it re-enrolls, and keeps its previous identity if Gateway refuses the token."
+  fi
   if [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]]; then
     echo "Would stop the relay supervisor and switch it from $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}") to ${RUN_USER}."
   fi
@@ -724,10 +785,13 @@ if [[ "$RUN_USER" != "root" ]]; then
   seed_host_identity_copy /var/lib/gateway/host-identity "$HOST_IDENTITY_PATH" \
     || { echo "Could not prepare the relay host identity; Relay installation stopped." >&2; exit 1; }
 fi
+# Without a token the supervisor keeps its identity: a token in the configuration of an enrolled supervisor starts a
+# re-enrollment.
+GATEWAY_TOKEN_YAML=""
+[[ -z "$TOKEN" ]] || GATEWAY_TOKEN_YAML=$'\n'"  token: ${TOKEN}"
 cat >/etc/gateway-relay-supervisor/config.yaml <<CONFIG
 gateway:
-  address: ${GATEWAY}
-  token: ${TOKEN}
+  address: ${GATEWAY}${GATEWAY_TOKEN_YAML}
   cert_sha256: ${GATEWAY_CERT_SHA256}
 tls:
   ca_cert: /var/lib/gateway-relay-supervisor/supervisor-identity/ca.pem
@@ -839,6 +903,8 @@ UNIT
 # started. A supervisor too old to record its session must have enrolled and keep running for 10 s instead.
 await_enrollment() {
   local waited=0 outcome error enrolled=0 running=0
+  # Without a token there is no enrollment to wait for: the relay is enrolled and only has to connect.
+  [[ -n "$TOKEN" ]] || enrolled=1
   while [[ "$waited" -lt "$ENROLLMENT_WAIT_SECONDS" ]]; do
     if [[ "$enrolled" -eq 0 && -s "$ENROLLMENT_RESULT" ]]; then
       outcome=$(jq -r '.outcome // empty' "$ENROLLMENT_RESULT" 2>/dev/null || true)
@@ -892,6 +958,13 @@ if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]] && needs_bind_capability; then
 fi
 enrollment_status=0
 await_enrollment || enrollment_status=$?
+if [[ "$enrollment_status" -eq 1 && "$REENROLLMENT" -eq 1 ]]; then
+  # Gateway refused the token of a re-enrollment: the relay keeps running as it was, but that is not what was asked.
+  echo "Relay supervisor ${VERSION} is installed and the relay keeps running with its previous identity, but it was not re-enrolled." >&2
+  echo "To keep the relay as it is, run the installer again without --token." >&2
+  supervisor_log_hint
+  exit 1
+fi
 if [[ "$enrollment_status" -ne 0 ]]; then
   # A timeout is a failure too: a supervisor that cannot start never reports, and the relay is not usable.
   echo "Relay supervisor ${VERSION} is installed, but the relay is not enrolled and connected to Gateway." >&2
