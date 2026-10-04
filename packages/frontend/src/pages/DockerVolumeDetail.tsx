@@ -771,6 +771,7 @@ export function DockerVolumeDetail({
                   nodeId={nodeId!}
                   canBrowse={canReadVolumeFiles}
                   operations={fileOperations}
+                  description="Browse and manage files in this volume"
                   realtimeEvent="docker.volume.file.changed"
                   realtimeMatches={(payload) =>
                     payload.nodeId === nodeId && payload.volumeName === decodedVolumeName

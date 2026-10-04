@@ -1383,6 +1383,7 @@ export function AdminNodeDetail({
                     nodeId={node.id}
                     canBrowse={canReadNodeFiles}
                     operations={nodeFileOperations}
+                    description="Browse and manage files on this node's host"
                     realtimeEvent="node.file.changed"
                     realtimeMatches={(payload) =>
                       (payload as { nodeId?: string } | undefined)?.nodeId === node.id
