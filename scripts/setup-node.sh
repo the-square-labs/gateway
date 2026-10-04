@@ -590,6 +590,8 @@ preflight_root_nginx() {
 # user owned there, so that user can no longer change what a root nginx loads.
 grant_daemon_paths_to_run_user() {
     local path
+    # While a switch away from a non-root user waits for the daemon to stop, that user keeps what it owns.
+    [[ "$RUN_USER_SWITCH_PENDING" -eq 0 ]] || return 0
     if [[ "$RUN_USER" == "root" ]]; then
         return_paths_to_root /etc/nginx-daemon /var/lib/nginx-daemon "$NGINX_DAEMON_OWN_DIR" /etc/nginx /var/log/nginx \
             /var/www/acme-challenge "${NGINX_DAEMON_RUNTIME_DIRS[@]/#//run/}"
@@ -615,8 +617,12 @@ return_paths_to_root() {
     done
 }
 
-# A daemon that moves to another user says so. One that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
-# directory were written by that user, and no other user may run them.
+# A daemon that moves to another user says so. One that leaves a non-root user gets a new launcher: the launcher copies
+# in its state directory were written by that user, and no other user may run them. It is stopped for that, but as late
+# as possible (finish_run_user_switch, right before the new process starts), so the traffic it serves is not left without
+# a daemon while the installer downloads and prepares; the old process keeps running with what its user owns until then.
+# A node that enrolls again (a token) runs steps as the new user first, so its daemon is stopped at once.
+RUN_USER_SWITCH_PENDING=0
 prepare_run_user_switch() {
     if [[ "$PREVIOUS_RUN_UID" == 0 ]]; then
         [[ "$RUN_USER" == "root" || ! -d /etc/nginx-daemon ]] || log "nginx-daemon ran as root; switching it to ${RUN_USER}..."
@@ -624,8 +630,44 @@ prepare_run_user_switch() {
     fi
     [[ "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
     log "nginx-daemon ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}..."
+    if [[ -z "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 ]]; then
+        RUN_USER_SWITCH_PENDING=1
+        return 0
+    fi
     stop_daemon_service || die "Could not stop nginx-daemon to switch its user."
     rm -rf /var/lib/nginx-daemon/launcher
+}
+
+# systemd drops a unit's file descriptor store when the unit stops (not when it restarts), and the daemon that stops hands
+# its link sockets to that store for the next process. The store is kept for the switch, through the stop, the ownership
+# change and the start, so connections made meanwhile wait in the sockets' backlog instead of being reset.
+FD_STORE_HOLD=/run/systemd/system/nginx-daemon.service.d/zz-run-user-switch.conf
+hold_fd_store() {
+    has_systemd || return 0
+    [[ -f /etc/systemd/system/nginx-daemon.service ]] || return 0
+    install -d -m 0755 "$(dirname "$FD_STORE_HOLD")" || return 0
+    printf '[Service]\nFileDescriptorStorePreserve=yes\n' > "$FD_STORE_HOLD" || return 0
+    systemctl daemon-reload >>"$LOG_FILE" 2>&1 || true
+}
+
+release_fd_store_hold() {
+    [[ -f "$FD_STORE_HOLD" ]] || return 0
+    rm -f "$FD_STORE_HOLD"
+    rmdir "$(dirname "$FD_STORE_HOLD")" 2>/dev/null || true
+    systemctl daemon-reload >>"$LOG_FILE" 2>&1 || true
+}
+
+# The switch away from a non-root user: the old daemon is stopped only now (it hands its link sockets over while it still
+# owns its state), then the launcher copies it wrote are removed and everything it owned goes to the new user. The next
+# process starts right after, from start_daemon.
+finish_run_user_switch() {
+    [[ "$RUN_USER_SWITCH_PENDING" -eq 1 ]] || return 0
+    RUN_USER_SWITCH_PENDING=0
+    log "Stopping nginx-daemon to switch its user..."
+    hold_fd_store
+    stop_daemon_service || { release_fd_store_hold; die "Could not stop nginx-daemon to switch its user."; }
+    rm -rf /var/lib/nginx-daemon/launcher
+    grant_daemon_paths_to_run_user
 }
 
 stop_daemon_service() {
@@ -2489,7 +2531,8 @@ UNIT
         systemctl daemon-reload >> "$LOG_FILE" 2>&1 || die "systemd daemon-reload failed."
         systemctl enable nginx-daemon >> "$LOG_FILE" 2>&1 || die "Could not enable nginx-daemon."
         forget_gateway_session
-        systemctl restart nginx-daemon >> "$LOG_FILE" 2>&1 || fail_daemon_start "Could not start nginx-daemon."
+        systemctl restart nginx-daemon >> "$LOG_FILE" 2>&1 || { release_fd_store_hold; fail_daemon_start "Could not start nginx-daemon."; }
+        release_fd_store_hold
     elif has_openrc; then
         cat > /etc/init.d/nginx-daemon <<UNIT || die "Could not write the nginx-daemon OpenRC service."
 #!/sbin/openrc-run
@@ -2539,6 +2582,7 @@ install_daemon
 remember_host_access_config /etc/nginx-daemon/config.yaml
 enroll_daemon
 apply_host_access_config /etc/nginx-daemon/config.yaml
+finish_run_user_switch
 start_daemon
 # An install whose daemon does not run or did not connect to Gateway is not done.
 if ! await_gateway_connection; then

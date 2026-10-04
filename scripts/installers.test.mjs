@@ -1101,3 +1101,96 @@ test('a zombie launcher counts as stopped in every installer that stops launcher
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Switching a node away from a non-root user: the old daemon used to be stopped first, long before the new one started,
+// and systemd drops its file descriptor store at a stop, so the link sockets it had handed over were closed and the
+// traffic reset (about 1-2 s lost; root to user, a restart, lost nothing). The daemon now keeps serving with what its
+// user owns until just before the new process starts; the store is kept through the stop, the ownership change and the
+// start, so connections made meanwhile wait in the sockets' backlog.
+test('a switch away from a non-root user stops the daemon last and keeps its link sockets', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-switch-'));
+  try {
+    const nodes = {
+      'setup-docker-node.sh': { unit: 'docker-daemon', own: 'DOCKER_DAEMON_OWN_DIR=/o; DOCKER_REGISTRY_PROXY_TRUST_DIR=/t' },
+      'setup-node.sh': { unit: 'nginx-daemon', own: 'NGINX_DAEMON_OWN_DIR=/o; NGINX_DAEMON_RUNTIME_DIRS=(nginx-daemon)' },
+    };
+    for (const [script, { unit, own }] of Object.entries(nodes)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      // Static order: the stop comes right before the start, after everything else is prepared.
+      const { topLevel, functions } = parseShell(source);
+      const firstRun = (name) => Math.min(...topLevel.filter((entry) => entry.calls.includes(name)).map((entry) => entry.line));
+      const finish = firstRun('finish_run_user_switch');
+      assert.ok(Number.isFinite(finish), `${script} finishes the switch at the top level`);
+      for (const before of ['enroll_daemon', 'apply_host_access_config', 'install_daemon']) assert.ok(firstRun(before) < finish, `${script}: ${before} before the stop`);
+      assert.ok(finish < firstRun('start_daemon'), `${script}: the stop is right before the start`);
+      assert.ok(!functions.get('install_daemon').calls.has('stop_daemon_service'));
+      assert.match(source, /systemctl restart [a-z-]+ >> "\$LOG_FILE" 2>&1 \|\| \{ release_fd_store_hold; fail_daemon_start[^\n]*\n\s+release_fd_store_hold\n/);
+
+      const launcher = path.join(dir, `${unit}-launcher`);
+      const holdFile = path.join(dir, `${unit}-hold.conf`);
+      const unitFile = path.join(dir, `${unit}.service`);
+      await writeFile(unitFile, '[Service]\n');
+      const calls = path.join(dir, `${unit}-calls`);
+      const text = ['grant_daemon_paths_to_run_user', 'prepare_run_user_switch', 'hold_fd_store', 'release_fd_store_hold', 'finish_run_user_switch']
+        .map((name) =>
+          shellFunction(source, name)
+            .replaceAll(`/var/lib/${unit}/launcher`, launcher)
+            .replaceAll(`/etc/systemd/system/${unit}.service`, unitFile)
+        )
+        .join('\n');
+      const fdHold = `FD_STORE_HOLD='${holdFile}'`;
+      const run = async ({ enrolled, token = '', stopFails = false, steps }) => {
+        await writeFile(calls, '');
+        runShell(`mkdir -p '${launcher}'`);
+        const result = runShell(
+          [
+            'set -euo pipefail',
+            `RUN_USER=root; PREVIOUS_RUN_UID=1000; EXISTING_ENROLLED=${enrolled}; ENROLL_TOKEN='${token}'; LOG_FILE=/dev/null; RUN_GROUP=root; RUN_USER_SWITCH_PENDING=0`,
+            own,
+            fdHold,
+            'log() { echo "LOG $*"; }',
+            'err() { echo "ERR $*" >&2; }',
+            'die() { err "$@"; exit 1; }',
+            'id() { echo 0; }',
+            'has_systemd() { return 0; }',
+            `systemctl() { echo "systemctl $*" >> '${calls}'; }`,
+            'install() { mkdir -p "${@: -1}"; }',
+            `stop_daemon_service() { echo "stop launcher-present=$([[ -d '${launcher}' ]] && echo yes || echo no) preserve=$(grep -c '^FileDescriptorStorePreserve=yes$' '${holdFile}' 2>/dev/null || true)" >> '${calls}'; ${stopFails ? 'return 1' : 'return 0'}; }`,
+            `return_paths_to_root() { echo "return_paths_to_root launcher-present=$([[ -d '${launcher}' ]] && echo yes || echo no)" >> '${calls}'; }`,
+            text,
+            ...steps,
+          ].join('\n')
+        );
+        return { ...result, calls: readFileSync(calls, 'utf8'), hold: spawnSync('test', ['-e', holdFile]).status === 0 };
+      };
+      // Enrolled, no token: nothing stops at the start, ownership stays with the old user, and the stop comes last.
+      const early = await run({ enrolled: 1, steps: ['prepare_run_user_switch', 'grant_daemon_paths_to_run_user', 'echo AFTER-PREPARE'] });
+      assert.equal(early.status, 0, early.output);
+      assert.match(early.output, /switching it to root/);
+      assert.equal(early.calls, '', `${script}: no stop and no ownership change before the start is near`);
+      assert.equal(spawnSync('test', ['-d', launcher]).status, 0, 'the launcher copies stay until the stop');
+      const late = await run({
+        enrolled: 1,
+        steps: ['prepare_run_user_switch', 'grant_daemon_paths_to_run_user', 'finish_run_user_switch', `echo "HOLD-AFTER-FINISH=$([[ -f '${holdFile}' ]] && echo yes || echo no)"`, 'release_fd_store_hold'],
+      });
+      assert.equal(late.status, 0, late.output);
+      assert.match(late.calls, /systemctl daemon-reload\nstop launcher-present=yes preserve=1\nreturn_paths_to_root launcher-present=no\n/, `${script}\n${late.calls}`);
+      assert.match(late.output, /HOLD-AFTER-FINISH=yes/, 'the store is kept until the new process started');
+      assert.equal(late.hold, false, 'the hold is released afterwards');
+      // A node that enrolls again runs steps as the new user first, so its daemon stops at once, as before.
+      const withToken = await run({ enrolled: 1, token: 'gw_node_x', steps: ['prepare_run_user_switch', 'echo AFTER'] });
+      const notEnrolled = await run({ enrolled: 0, steps: ['prepare_run_user_switch', 'echo AFTER'] });
+      for (const immediate of script === 'setup-node.sh' ? [withToken, notEnrolled] : [notEnrolled]) {
+        assert.match(immediate.calls, /^stop launcher-present=yes/, `${script} stops at once\n${immediate.calls}`);
+        assert.equal(spawnSync('test', ['-d', launcher]).status, 1, 'and removes the launcher copies');
+      }
+      // A stop that fails does not leave the store held, and the install stops.
+      const failed = await run({ enrolled: 1, stopFails: true, steps: ['prepare_run_user_switch', 'finish_run_user_switch', 'echo AFTER'] });
+      assert.equal(failed.status, 1, failed.output);
+      assert.match(failed.output, new RegExp(`Could not stop ${unit} to switch its user`));
+      assert.equal(failed.hold, false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
