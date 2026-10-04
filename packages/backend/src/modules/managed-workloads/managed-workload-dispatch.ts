@@ -60,6 +60,8 @@ export interface DispatchWorkloadRow {
 export interface DaemonWorkloadState {
   status: 'ready' | 'paused' | 'stopped' | 'missing';
   operationId?: string;
+  /** A missing record whose container or storage the node still has; a repeated delete removes them. */
+  leftover?: boolean;
 }
 
 /**
