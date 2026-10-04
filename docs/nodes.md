@@ -298,7 +298,7 @@ Gateway also renews its own gRPC, web, and local relay certificates while runnin
 
 If Gateway is behind Cloudflare for the UI/API, configure Gateway's public gRPC target as a direct `9443/tcp` endpoint. A Cloudflare-proxied web hostname must not be selected unless it explicitly routes the Gateway gRPC port. Generated commands use the configured target, so normal enrollment does not require replacing the address by hand.
 
-Daemons report local and detected public IP addresses in their health data. For Docker nodes, Gateway uses an explicitly configured service address first, then the first reported local address, then a reported public address when proxy Docker upstreams or cross-node workflows need to reach the host. Configure the service address on the node detail page when automatic selection is not routable from the other managed hosts.
+Daemons report local and detected public IP addresses in their health data. For Docker nodes, Gateway uses an explicitly configured service address first, then the first reported local address, then a reported public address for the endpoints other hosts and clients connect to directly: managed database links and published storage. Proxy routes to Docker containers, deployments, and Compose services do not use it: they always reach the workload through a Secure Link, without a host port. Configure the service address on the node detail page when automatic selection is not routable from the hosts or clients that use those endpoints.
 
 ## Daemon Configuration
 

@@ -161,7 +161,7 @@
       "os": []
     },
     "node.service-address": {
-      "description": "An explicit Docker service address on the node page is used for proxy upstreams and cross-node traffic.",
+      "description": "An explicit Docker service address on the node page is the endpoint of managed database links and published storage; proxy routes to Docker workloads go through a Secure Link and do not use it.",
       "doc": "docs/nodes.md#relay-nodes",
       "os": [
         "debian"
@@ -2221,13 +2221,13 @@
         "feature node.service-address"
       ],
       "preconditions": [
-        "A docker node with two addresses; a route to a published container port on it."
+        "A docker node with two addresses that hosts a managed database with a link, or published managed storage; a route to a container on the same node."
       ],
       "steps": [
-        "Set the service address on the node page to the second address; recreate the container."
+        "Set the service address on the node page to the second address; read the database link (or published storage) endpoint and connect a client to it; read the route's rendered config; then clear the service address."
       ],
       "expect": [
-        "The route's upstream uses the configured address and answers 200."
+        "The database link (or published storage) endpoint uses the configured address and the client connects through it; after clearing, it moves back to the first reported local address. The route's upstream stays its Secure Link socket and answers 200 either way."
       ]
     },
     {
