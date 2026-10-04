@@ -194,6 +194,14 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 			m.pendingRetire = &previous
 		}
 	}
+	if replacement == nil && securelink.IsShuttingDown(err) && !m.abandoning {
+		// The connector was told to drain: it never serves again. The egress (and the ingress, restored in the
+		// background) goes to a new one at once.
+		m.abandonDrainingConnectorLocked()
+		m.abandoning = true
+		defer func() { m.abandoning = false }()
+		return m.reconcileEgressStatusesLocked(ctx)
+	}
 	if response == nil {
 		for _, config := range configs {
 			statuses[config.ID] = egressStatus{State: egressStateError, Error: fmt.Sprintf("secure-link connector sync: %v", err),

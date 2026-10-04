@@ -74,7 +74,7 @@ func (m *egressManager) sync(configs []securelink.EgressConfig) ([]securelink.Eg
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return nil, errors.New("secure-link connector is shutting down")
+		return nil, errors.New(securelink.ShuttingDownError)
 	}
 	var released []*egressListener
 	for id, current := range m.listeners {

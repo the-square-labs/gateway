@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 )
 
 const (
@@ -29,6 +30,15 @@ const (
 // UnsupportedVersionError is what a connector answers a request of a control
 // protocol version it does not speak (a v1 connector answers it to v2).
 const UnsupportedVersionError = "unsupported protocol version"
+
+// ShuttingDownError is how a connector told to drain refuses every sync: it accepts nothing new and only finishes
+// the sessions it carries. Connectors of every release answer it with these words.
+const ShuttingDownError = "secure-link connector is shutting down"
+
+// IsShuttingDown reports a sync refused by a draining connector: it never serves again.
+func IsShuttingDown(err error) bool {
+	return err != nil && strings.Contains(err.Error(), ShuttingDownError)
+}
 
 type BindingConfig struct {
 	ID         string `json:"id"`

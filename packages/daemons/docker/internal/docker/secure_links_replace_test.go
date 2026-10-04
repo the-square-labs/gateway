@@ -65,6 +65,8 @@ type fakeConnectorContainer struct {
 	drainFails bool
 	// signals are the signals the connector received.
 	signals []string
+	// draining: told to drain (a drain request or the drain signal), the connector refuses every sync.
+	draining bool
 }
 
 // fakeAnchor is a running anchor, as a daemon finds it after its restart.
@@ -116,14 +118,23 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 			if securelink.ReadJSON(connection, &request) == nil {
 				e.mu.Lock()
 				current.requests = append(current.requests, request)
-				egressFails := current.egressFails
+				egressFails, drainFails := current.egressFails, current.drainFails
+				if request.Drain && !drainFails {
+					current.draining = true
+				}
+				draining := current.draining
 				e.mu.Unlock()
 				if request.Drain {
 					response := securelink.SyncResponse{Version: securelink.ProtocolVersion}
-					if current.drainFails {
+					if drainFails {
 						response.Error = "control socket out of reach"
 					}
 					_ = securelink.WriteJSON(connection, response)
+					connection.Close()
+					continue
+				}
+				if draining {
+					_ = securelink.WriteJSON(connection, securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: securelink.ShuttingDownError})
 					connection.Close()
 					continue
 				}
@@ -301,6 +312,9 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 			return respond(http.StatusNoContent, "")
 		case request.Method == http.MethodPost && len(parts) == 3 && parts[2] == "kill":
 			current.signals = append(current.signals, request.URL.Query().Get("signal"))
+			if request.URL.Query().Get("signal") == secureLinkDrainSignal {
+				current.draining = true
+			}
 			return respond(http.StatusNoContent, "")
 		case request.Method == http.MethodPost && len(parts) == 3 && parts[2] == "update":
 			return respond(http.StatusOK, map[string]any{})

@@ -293,6 +293,20 @@ func (m *dockerSecureLinkManager) adoptedControlSocket(path string) string {
 	return path
 }
 
+// controlDirectory is where this daemon's connectors have their control sockets. socketPath may be the socket of a
+// connector adopted in a directory a switch of the daemon's user set aside (adoptedControlSocket).
+func (m *dockerSecureLinkManager) controlDirectory() string {
+	if m.controlDir != "" {
+		return m.controlDir
+	}
+	return filepath.Dir(m.socketPath)
+}
+
+// slotSocketPath is the control socket of the connector in a slot.
+func (m *dockerSecureLinkManager) slotSocketPath(slot int) string {
+	return filepath.Join(m.controlDirectory(), secureLinkConnectorSlots[slot].socket)
+}
+
 // anchorNetworks returns the network endpoints of the container holding them.
 func (m *dockerSecureLinkManager) anchorNetworks(ctx context.Context) (map[string]*network.EndpointSettings, error) {
 	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.networkHolder(), mobyclient.ContainerInspectOptions{})

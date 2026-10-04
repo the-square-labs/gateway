@@ -68,7 +68,7 @@ func (m *bindingManager) sync(configs []securelink.BindingConfig) ([]securelink.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return nil, errors.New("secure-link connector is shutting down")
+		return nil, errors.New(securelink.ShuttingDownError)
 	}
 	for id, config := range desired {
 		if current := m.bindings[id]; current != nil {
