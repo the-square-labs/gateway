@@ -1,11 +1,92 @@
 package docker
 
 import (
+	"maps"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/moby/moby/api/types/container"
 )
+
+// A replacement that does not listen on every egress address yet leaves the previous connector accepting: it is told
+// to drain only once a later reconcile finds every egress listening on the replacement.
+func TestReplacedConnectorDrainsOnlyOnceEgressListens(t *testing.T) {
+	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	plugin := &DockerPlugin{client: engine.client()}
+	manager := &dockerSecureLinkManager{plugin: plugin, socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{}}
+	manager.publishViewLocked()
+	plugin.secureLinks = manager
+	if _, err := manager.apply(replaceTestCommand(replaceTestOldImage), nil, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
+		t.Fatalf("egress on the first connector %+v", status)
+	}
+	previous := engine.containers[secureLinkConnectorSlots[0].name]
+	engine.mu.Lock()
+	engine.egressFails = true
+	engine.mu.Unlock()
+
+	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
+		t.Fatalf("apply with the new image: %v", err)
+	}
+	replacement := engine.containers[secureLinkConnectorSlots[1].name]
+	time.Sleep(300 * time.Millisecond)
+	if receivedDrain(engine.fakeConnectorEngine, previous) || slices.Contains(engine.removedIDs(), previous.id) {
+		t.Fatal("the previous connector was drained before the egress listened on its replacement")
+	}
+
+	engine.mu.Lock()
+	replacement.egressFails = false
+	engine.mu.Unlock()
+	manager.resyncEgress()
+	waitRemoved(t, engine, previous.id)
+	if !receivedDrain(engine.fakeConnectorEngine, previous) {
+		t.Fatal("the previous connector was removed without draining")
+	}
+}
+
+// The anchor sets tcp_migrate_req, so a draining listener hands its queued connections to the replacement, only on
+// a kernel that has it (Docker refuses an unknown sysctl); each variant is current on its kernel.
+func TestAnchorSysctlFollowsTheKernel(t *testing.T) {
+	previous := hostSupportsTCPMigrateReq
+	t.Cleanup(func() { hostSupportsTCPMigrateReq = previous })
+	anchor := func(sysctls map[string]string) container.InspectResponse {
+		pids := secureLinkAnchorPidsLimit
+		return container.InspectResponse{
+			Name: "/" + secureLinkAnchorName,
+			Config: &container.Config{Image: replaceTestNewImage, User: "65532:65532", Cmd: secureLinkAnchorCommand,
+				Labels: map[string]string{"wiolett.gateway.managed": "secure-link-connector", secureLinkRoleLabel: secureLinkAnchorRole}},
+			HostConfig: &container.HostConfig{ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
+				RestartPolicy: container.RestartPolicy{Name: "unless-stopped"}, Sysctls: sysctls,
+				Resources: container.Resources{Memory: secureLinkAnchorMemory, PidsLimit: &pids}},
+		}
+	}
+	migrate := map[string]string{tcpMigrateReqSysctl: "1"}
+	for _, test := range []struct {
+		kernel  bool
+		sysctls map[string]string
+		valid   bool
+	}{
+		{kernel: true, sysctls: migrate, valid: true},
+		{kernel: true, sysctls: nil, valid: false}, // replaced once after a kernel upgrade
+		{kernel: false, sysctls: nil, valid: true},
+		{kernel: false, sysctls: map[string]string{}, valid: true},
+		{kernel: false, sysctls: migrate, valid: false},
+	} {
+		hostSupportsTCPMigrateReq = func() bool { return test.kernel }
+		if got := validSecureLinkAnchor(anchor(test.sysctls)); got != test.valid {
+			t.Errorf("kernel with tcp_migrate_req %v, sysctls %v: valid %v, want %v", test.kernel, test.sysctls, got, test.valid)
+		}
+		if got := secureLinkAnchorSysctls(); test.valid && !maps.Equal(got, test.sysctls) {
+			t.Errorf("a new anchor on kernel %v gets %v, which the check then refuses", test.kernel, got)
+		}
+	}
+}
 
 func waitRemoved(t *testing.T, engine *egressFakeEngine, id string) {
 	t.Helper()
@@ -62,6 +143,12 @@ func TestConnectorAnchorFollowsTheImage(t *testing.T) {
 	}
 	waitRemoved(t, engine, "created-1")
 
+	// A Gateway rolled back to the earlier image sends no egress either.
+	previousWait := egressSuccessorTo
+	egressSuccessorTo = 50 * time.Millisecond
+	t.Cleanup(func() { egressSuccessorTo = previousWait })
+	manager.syncEgress(egressTestBundle())
+	time.Sleep(300 * time.Millisecond)
 	if _, err := manager.apply(replaceTestCommand(replaceTestOldImage), nil, nil, false); err != nil {
 		t.Fatalf("apply with the earlier image again: %v", err)
 	}

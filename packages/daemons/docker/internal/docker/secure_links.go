@@ -124,6 +124,9 @@ type dockerSecureLinkManager struct {
 	anchorID string
 	// anchorImages caches which connector images can run the anchor (anchorSupported); guarded by mu.
 	anchorImages map[string]bool
+	// pendingRetire is a replaced connector that keeps accepting until every egress listens on its replacement
+	// (reconcileEgressLocked); guarded by mu.
+	pendingRetire *connectorRuntime
 	// managementGateway is the management network's gateway, the daemon's address towards the connector: the only
 	// peer the ingress listeners accept (guarded by mu).
 	managementGateway string
@@ -430,16 +433,25 @@ func (m *dockerSecureLinkManager) apply(
 		}
 	}
 	m.egress.ingressNetworks = desiredNetworks
-	if m.egress.wanted() || len(m.egress.configs) > 0 {
-		// The connector may be new (a replacement, a restore): its egress listeners follow its ingress bindings, on
-		// the same addresses as the previous one's (SO_REUSEPORT), before the previous one stops accepting.
-		m.reconcileEgressLocked(ctx)
-	}
 	if replacement != nil {
 		if m.plugin.logger != nil {
 			m.plugin.logger.Info("secure-link connector replaced; the previous one is retired once its tunnels are idle", "image", image)
 		}
-		m.retireConnector(replacement.previous)
+		previous := replacement.previous
+		m.pendingRetire = &previous
+	}
+	if m.egress.wanted() || len(m.egress.configs) > 0 {
+		// The connector may be new (a replacement, a restore): its egress listeners follow its ingress bindings, on
+		// the same addresses as the previous one's (SO_REUSEPORT). The previous one stops accepting only once every
+		// egress listens here too; until then it keeps serving them, and a later reconcile retires it.
+		if !m.reconcileEgressLocked(ctx) && m.pendingRetire != nil && m.plugin.logger != nil {
+			m.plugin.logger.Warn("the replaced secure-link connector keeps serving until the egress listens on the new one")
+		}
+	}
+	if m.pendingRetire != nil && !m.egress.wanted() {
+		// No egress: only its tunnels hold the previous connector.
+		m.retireConnector(*m.pendingRetire)
+		m.pendingRetire = nil
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
 	return statuses, nil
@@ -757,6 +769,10 @@ func (m *dockerSecureLinkManager) startReplacement(ctx context.Context, image st
 	next := 1 - slot
 	if err := m.removeConnectorSlot(ctx, next); err != nil {
 		return unchanged(err)
+	}
+	if m.pendingRetire != nil && m.pendingRetire.slot == next {
+		// A connector still waiting for its retirement was in that slot: it is gone now.
+		m.pendingRetire = nil
 	}
 	inspect, err := m.createConnector(ctx, image, next)
 	if err == nil {
@@ -1306,6 +1322,7 @@ func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
 	m.egress.configs, m.egress.configsFor = nil, ""
 	m.egress.ingressConfigs, m.egress.ingressFor = nil, ""
 	m.egress.networks = nil
+	m.pendingRetire = nil
 	return nil
 }
 

@@ -39,6 +39,8 @@ type fakeConnectorEngine struct {
 	removed    []string
 	// syncFails makes the control socket of a connector created from now on refuse syncs.
 	syncFails bool
+	// egressFails makes a connector created from now on fail its egress listeners.
+	egressFails bool
 	// legacyImages are connector images of an earlier release: no anchor label.
 	legacyImages map[string]bool
 }
@@ -49,6 +51,7 @@ type fakeConnectorContainer struct {
 	slot                int
 	running             bool
 	syncFails           bool
+	egressFails         bool
 	listener            net.Listener
 	// requests are the control requests the connector received; networks are the link networks it was attached to.
 	requests []securelink.SyncRequest
@@ -107,6 +110,7 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 			if securelink.ReadJSON(connection, &request) == nil {
 				e.mu.Lock()
 				current.requests = append(current.requests, request)
+				egressFails := current.egressFails
 				e.mu.Unlock()
 				if request.Drain {
 					_ = securelink.WriteJSON(connection, securelink.SyncResponse{Version: securelink.ProtocolVersion})
@@ -115,7 +119,11 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 				}
 				response := securelink.SyncResponse{Version: securelink.ProtocolVersion}
 				for _, egress := range request.Egress {
-					response.Egress = append(response.Egress, securelink.EgressStatus{ID: egress.ID, Generation: egress.Generation, State: securelink.EgressListening})
+					status := securelink.EgressStatus{ID: egress.ID, Generation: egress.Generation, State: securelink.EgressListening}
+					if egressFails {
+						status.State, status.Error = securelink.EgressError, "address in use"
+					}
+					response.Egress = append(response.Egress, status)
 				}
 				if current.syncFails {
 					response.Error = "bind failed"
@@ -174,7 +182,7 @@ func (e *fakeConnectorEngine) connectorInspect(current *fakeConnectorContainer) 
 			"HostConfig": map[string]any{
 				"ReadonlyRootfs": true, "CapDrop": []string{"ALL"}, "SecurityOpt": []string{"no-new-privileges:true"},
 				"RestartPolicy": map[string]any{"Name": "unless-stopped"}, "NetworkMode": secureLinkManagementNetwork,
-				"Memory": secureLinkAnchorMemory, "PidsLimit": secureLinkAnchorPidsLimit,
+				"Memory": secureLinkAnchorMemory, "PidsLimit": secureLinkAnchorPidsLimit, "Sysctls": secureLinkAnchorSysctls(),
 			},
 			"State":           map[string]any{"Running": current.running},
 			"NetworkSettings": map[string]any{"Networks": networks},
@@ -248,7 +256,7 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 		}
 		created := &fakeConnectorContainer{
 			id: fmt.Sprintf("created-%d", e.created), name: name, image: body.Image, groups: body.HostConfig.GroupAdd, slot: slot,
-			ip: fmt.Sprintf("10.99.0.%d", 10+e.created), syncFails: e.syncFails, anchor: name == secureLinkAnchorName,
+			ip: fmt.Sprintf("10.99.0.%d", 10+e.created), syncFails: e.syncFails, egressFails: e.egressFails, anchor: name == secureLinkAnchorName,
 			networkMode: body.HostConfig.NetworkMode,
 		}
 		// A connector in the anchor's network namespace has the anchor's addresses.

@@ -74,9 +74,13 @@ func (m *dockerSecureLinkManager) releaseIngress(ctx context.Context) error {
 // reconcileEgressLocked brings the connector's egress to the desired set: the connector exists while it has ingress
 // or egress, joins each link network with the link's alias (its reserved address on a network of
 // create_link_network), and listens on its address there. Every failure is the status of its own egress.
-func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) {
+//
+// It reports whether every desired egress listens on the current connector. Only then does a connector it replaced
+// (pendingRetire) stop accepting and drain: until the replacement listens on every egress address, the previous one
+// keeps taking the workloads' connections.
+func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) bool {
 	if m.plugin == nil || m.plugin.client == nil {
-		return
+		return false
 	}
 	statuses := m.reconcileEgressStatusesLocked(ctx)
 	// Orphans keep their listeners but are no longer Gateway's to hear about.
@@ -88,6 +92,13 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) {
 		}
 	}
 	m.egress.publish(statuses)
+	// A rejected egress never listens anywhere: it does not hold the previous connector back.
+	ready := allEgressReady(statuses, m.egress.desired)
+	if ready && m.pendingRetire != nil {
+		m.retireConnector(*m.pendingRetire)
+		m.pendingRetire = nil
+	}
+	return ready
 }
 
 func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Context) map[string]egressStatus {
@@ -168,8 +179,9 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 			m.abortReplacement(replacement)
 			m.egress.configsFor = m.connectorID
 		} else {
-			// The egress listens on the new connector too (SO_REUSEPORT): the previous one stops accepting and drains.
-			m.retireConnector(replacement.previous)
+			// Retired once every egress listens on the new connector too (reconcileEgressLocked).
+			previous := replacement.previous
+			m.pendingRetire = &previous
 		}
 	}
 	if response == nil {

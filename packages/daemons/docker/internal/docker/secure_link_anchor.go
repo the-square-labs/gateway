@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -37,6 +39,25 @@ const (
 	secureLinkAnchorImageVersion = "v1"
 	connectorImageTooOld         = "the secure-link connector image is too old for links from this node; update Gateway"
 )
+
+// tcpMigrateReqSysctl moves the connections queued on a closing SO_REUSEPORT listener to another listener of the
+// same address instead of resetting them: a draining connector's backlog goes to its replacement.
+const tcpMigrateReqSysctl = "net.ipv4.tcp_migrate_req"
+
+// hostSupportsTCPMigrateReq reports a kernel with tcp_migrate_req (5.14+); Docker refuses a sysctl the kernel lacks.
+// A variable for tests.
+var hostSupportsTCPMigrateReq = func() bool {
+	_, err := os.Stat("/proc/sys/net/ipv4/tcp_migrate_req")
+	return err == nil
+}
+
+// secureLinkAnchorSysctls are the anchor's sysctls on this host's kernel (nil when it lacks tcp_migrate_req).
+func secureLinkAnchorSysctls() map[string]string {
+	if !hostSupportsTCPMigrateReq() {
+		return nil
+	}
+	return map[string]string{tcpMigrateReqSysctl: "1"}
+}
 
 // anchorSupported reports whether image can run the anchor, from the label of the (pulled) image.
 func (m *dockerSecureLinkManager) anchorSupported(ctx context.Context, image string) (bool, error) {
@@ -147,6 +168,8 @@ func (m *dockerSecureLinkManager) createAnchor(ctx context.Context, image string
 			ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
 			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
 			Resources:     container.Resources{Memory: secureLinkAnchorMemory, PidsLimit: &pids},
+			// The anchor owns the network namespace the connectors' listeners live in.
+			Sysctls: secureLinkAnchorSysctls(),
 		},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{secureLinkManagementNetwork: {}}},
 		Name:             secureLinkAnchorName,
@@ -174,7 +197,8 @@ func validSecureLinkAnchor(inspect container.InspectResponse) bool {
 		len(host.CapAdd) == 0 && containsFold(host.CapDrop, "ALL") && len(host.Binds) == 0 && len(host.Mounts) == 0 &&
 		len(host.PortBindings) == 0 && string(host.NetworkMode) != "host" && host.RestartPolicy.Name == "unless-stopped" &&
 		host.Resources.Memory == secureLinkAnchorMemory && host.Resources.PidsLimit != nil && *host.Resources.PidsLimit == secureLinkAnchorPidsLimit &&
-		(containsFold(host.SecurityOpt, "no-new-privileges") || containsFold(host.SecurityOpt, "no-new-privileges:true"))
+		(containsFold(host.SecurityOpt, "no-new-privileges") || containsFold(host.SecurityOpt, "no-new-privileges:true")) &&
+		maps.Equal(host.Sysctls, secureLinkAnchorSysctls())
 }
 
 // isSecureLinkAnchor reports the anchor among the containers named like the connector's.
