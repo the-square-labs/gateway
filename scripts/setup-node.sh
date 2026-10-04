@@ -463,15 +463,15 @@ backup_if_exists() {
 # every start and reload: the daemon signals the process the pid file names. The service gives the directory to root
 # unless /etc/conf.d/nginx runs nginx as another user (command_user), which then has to own it to write its pid. An
 # earlier installer wrote root:root there for good; that is replaced even for a non-root daemon, because it takes the
-# directory from the user nginx runs as, and before the daemon's preflight looks for that user's nginx master: an
-# operator who prepared nginx for the user (command_user) on such a host has an nginx that cannot start until then.
-NGINX_OPENRC_MIGRATED=0
+# directory from the user nginx runs as.
+NGINX_OPENRC_STOCK_LINE='checkpath --directory --owner nginx:nginx '
+NGINX_OPENRC_EARLIER_LINE='checkpath --directory --mode 0755 --owner root:root '
 ensure_nginx_openrc_pid_directory() {
     has_openrc || return 0
     [[ "$DRY_RUN" -eq 0 ]] || return 0
     local service=/etc/init.d/nginx
-    local stock='checkpath --directory --owner nginx:nginx '
-    local earlier='checkpath --directory --mode 0755 --owner root:root '
+    local stock="$NGINX_OPENRC_STOCK_LINE"
+    local earlier="$NGINX_OPENRC_EARLIER_LINE"
     local secured='checkpath --directory --mode 0755 --owner "${command_user:-root:root}" '
     local replaced
     local mode
@@ -505,20 +505,28 @@ ensure_nginx_openrc_pid_directory() {
     chmod "$mode" "$candidate"
     backup_if_exists "$service"
     mv -f "$candidate" "$service"
-    NGINX_OPENRC_MIGRATED=1
     log "Secured nginx OpenRC PID-directory ownership for start and reload"
 }
 
-# An nginx service that failed to start for the migrated line (status crashed) is started again, once the operator has
-# set nginx up to run as the daemon's user; its pid directory is now that user's.
-restart_nginx_service_after_migration() {
-    [[ "$NGINX_OPENRC_MIGRATED" -eq 1 ]] || return 0
+# An operator who prepared nginx for the daemon's user (command_user in /etc/conf.d/nginx) on a host whose nginx service
+# still has the line an earlier installer wrote has an nginx that cannot start: the service hands /run/nginx to root on
+# every start. The preflight only detects this (it changes nothing); the repair is part of the plan the user confirms.
+NGINX_SERVICE_REPAIR_PLANNED=0
+nginx_openrc_service_repair_needed() {
+    has_openrc || return 1
+    [[ "$RUN_USER" != "root" && -f /etc/init.d/nginx && ! -L /etc/init.d/nginx ]] || return 1
+    grep -Fq "${NGINX_OPENRC_EARLIER_LINE}"'${pidfile%/*}' /etc/init.d/nginx || return 1
+    grep -Eq "^[[:space:]]*command_user=[\"']?${RUN_USER}([:\"'[:space:]]|\$)" /etc/conf.d/nginx 2>/dev/null || return 1
+    ! rc-service nginx status >/dev/null 2>&1
+}
+
+# After the service line is migrated, the nginx that could not start for it is started (zap clears a crashed state).
+start_nginx_after_service_repair() {
+    [[ "$NGINX_SERVICE_REPAIR_PLANNED" -eq 1 && "$DRY_RUN" -eq 0 ]] || return 0
     ! rc-service nginx status >/dev/null 2>&1 || return 0
-    grep -Eq "^[[:space:]]*command_user=[\"']?${RUN_USER}([:\"'[:space:]]|\$)" /etc/conf.d/nginx 2>/dev/null || return 0
     rc-service nginx zap >> "$LOG_FILE" 2>&1 || true
-    if rc-service nginx start >> "$LOG_FILE" 2>&1; then
-        log "Started the nginx service, which could not start with the earlier PID-directory ownership"
-    fi
+    rc-service nginx start >> "$LOG_FILE" 2>&1 || die "Could not start nginx as ${RUN_USER} after updating its OpenRC service; see ${LOG_FILE}."
+    log "Started nginx, which could not start with the earlier PID-directory ownership"
 }
 
 # The daemon writes /etc/nginx and reloads nginx itself, so a non-root daemon needs an nginx master that runs as the
@@ -530,10 +538,11 @@ preflight_run_user_nginx() {
     fi
     local run_uid master_pid master_uid problem=""
     run_uid=$(id -u "$RUN_USER")
-    ensure_nginx_openrc_pid_directory
-    restart_nginx_service_after_migration
     if ! command_exists nginx; then
         problem="nginx is not installed"
+    elif nginx_openrc_service_repair_needed; then
+        # The master cannot be found until the service is repaired, which the confirmed install does.
+        NGINX_SERVICE_REPAIR_PLANNED=1
     elif ! master_pid=$(nginx_master_pid); then
         problem="no running nginx master process was found"
     else
@@ -555,9 +564,6 @@ preflight_run_user_nginx() {
     err "  - give ${RUN_USER} /etc/nginx, /var/log/nginx and the nginx temp directories, and make log rotation create files as ${RUN_USER};"
     err "  - start the prepared service (OpenRC: rc-service nginx zap, then rc-service nginx start; a service that crashed needs the zap);"
     err "  - or install nginx-daemon as root (--user root)."
-    if [[ "$NGINX_OPENRC_MIGRATED" -eq 1 ]]; then
-        die "nginx is not prepared for a non-root nginx-daemon; only the PID-directory line of the nginx OpenRC service was updated."
-    fi
     die "nginx is not prepared for a non-root nginx-daemon; nothing was changed."
 }
 
@@ -1425,6 +1431,7 @@ summary_row "Run as:      ${RUN_USER}:${RUN_GROUP}"
 summary_row "Skip nginx:  $([ "$SKIP_NGINX" -eq 1 ] && echo "yes" || echo "no")"
 summary_row "Nginx min:   ${NGINX_MIN_VERSION}"
 summary_row "Nginx mode:  ${NGINX_MODE}"
+[[ "$NGINX_SERVICE_REPAIR_PLANNED" -eq 0 ]] || summary_row "Nginx fix:   will update the nginx PID-directory line and start nginx"
 summary_row "Updates:     ${ARTIFACT_BASE_URL}"
 summary_end
 
@@ -1562,6 +1569,7 @@ preview_nginx_install() {
 dry_run_preview() {
     preview_run_user_switch
     preview_nginx_install
+    [[ "$NGINX_SERVICE_REPAIR_PLANNED" -eq 0 ]] || log "Would update the nginx OpenRC service's PID-directory line and start nginx (dry run)"
     log "Creating required directories..."
     ok "Directories created (dry run)"
     log "Configuring nginx (${NGINX_MODE} mode)..."
@@ -2205,6 +2213,7 @@ configure_nginx() {
 
     ensure_nginx_worker_limits
     ensure_nginx_openrc_pid_directory
+    start_nginx_after_service_repair
     ensure_nginx_service_limit
 
     if nginx -t >> "$LOG_FILE" 2>&1; then

@@ -791,25 +791,35 @@ test('a terminal that cannot be read is never answered with a default', { skip: 
 
 // An Alpine host whose nginx service still has the PID-directory line an earlier installer wrote (owner root:root), and
 // whose operator ran nginx as the daemon's user (command_user in /etc/conf.d/nginx) before installing: that nginx
-// cannot start, so the daemon's preflight finds no nginx master. The installer runs as root in this case too; it
-// migrates the line first, starts the service the operator prepared, and only then looks for the master.
-test('a non-root install migrates the earlier nginx service line before it looks for the nginx master', { skip: !linux }, async () => {
+// cannot start, so there is no nginx master to find. The preflight only detects this and the summary announces the
+// repair; the service line is migrated and nginx started after the user confirmed (or under -y). Nothing on the host
+// changes before the prompt, and a dry run only prints the plan.
+test('the nginx service repair of a non-root install is planned before the prompt and done after it', { skip: !linux }, async () => {
   const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
-  const { functions, topLevel } = parseShell(source);
+  const { functions } = parseShell(source);
   const preflight = functions.get('preflight_run_user_nginx');
-  assert.ok(preflight.calls.has('ensure_nginx_openrc_pid_directory'), 'the non-root preflight migrates the service line');
-  assert.ok(preflight.calls.has('restart_nginx_service_after_migration'));
-  const body = shellFunction(source, 'preflight_run_user_nginx');
-  assert.ok(
-    body.indexOf('ensure_nginx_openrc_pid_directory') < body.indexOf('nginx_master_pid'),
-    'the migration comes before the master lookup'
-  );
+  assert.ok(preflight.calls.has('nginx_openrc_service_repair_needed'), 'the preflight detects the case');
+  for (const change of ['ensure_nginx_openrc_pid_directory', 'start_nginx_after_service_repair', 'backup_if_exists']) {
+    assert.ok(!preflight.calls.has(change), `the preflight does not call ${change}`);
+  }
+  assert.doesNotMatch(shellFunction(source, 'preflight_run_user_nginx'), /rc-service/);
+  assert.doesNotMatch(shellFunction(source, 'nginx_openrc_service_repair_needed'), /rc-service nginx (zap|start|restart)/);
+  // The summary announces the plan before the prompt; the repair runs in the configuration step after it.
+  const prompt = source.indexOf('prompt_yes_no "Proceed with installation?"');
+  assert.ok(source.indexOf('summary_row "Nginx fix:   will update the nginx PID-directory line and start nginx"') < prompt);
+  assert.ok(source.indexOf('\npreflight_run_user_nginx\n') < prompt);
+  const configure = shellFunction(source, 'configure_nginx');
+  assert.ok(configure.indexOf('ensure_nginx_openrc_pid_directory') < configure.indexOf('start_nginx_after_service_repair'));
+  const runStart = source.indexOf('\n# ── Run ─');
+  assert.ok(runStart > prompt && source.indexOf('\nconfigure_nginx\n') > runStart, 'configure_nginx runs after the prompt');
+  assert.match(source, /dry_run_preview\(\) \{[\s\S]*Would update the nginx OpenRC service's PID-directory line and start nginx \(dry run\)/);
   assert.deepEqual(definedBeforeUseErrors(source), []);
-  assert.ok(topLevel.length > 0);
+
   const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-migrate-'));
   try {
     const service = path.join(dir, 'nginx');
     const confd = path.join(dir, 'conf-nginx');
+    const calls = path.join(dir, 'calls');
     const earlier = [
       '#!/sbin/openrc-run',
       'pidfile=/run/nginx/nginx.pid',
@@ -818,52 +828,65 @@ test('a non-root install migrates the earlier nginx service line before it looks
       '}',
       '',
     ].join('\n');
-    const functionsText = ['ensure_nginx_openrc_pid_directory', 'restart_nginx_service_after_migration', 'preflight_run_user_nginx']
+    const text = ['ensure_nginx_openrc_pid_directory', 'nginx_openrc_service_repair_needed', 'start_nginx_after_service_repair', 'preflight_run_user_nginx']
       .map((name) => shellFunction(source, name).replaceAll('/etc/init.d', dir).replaceAll('/etc/conf.d/nginx', confd))
       .join('\n');
-    const run = async ({ confdText, dryRun = 0, master = true }) => {
+    const constants = source
+      .split('\n')
+      .filter((line) => /^NGINX_OPENRC_(STOCK|EARLIER)_LINE=|^NGINX_SERVICE_REPAIR_PLANNED=/.test(line))
+      .join('\n');
+    const stubs = (dryRun) => [
+      'RUN_USER=nginx; RUN_GROUP=nginx; NGINX_MODE=integrate; LOG_FILE=/dev/null',
+      `DRY_RUN=${dryRun}`,
+      constants,
+      'has_openrc() { return 0; }',
+      'command_exists() { return 0; }',
+      'log() { echo "LOG $*"; }',
+      'err() { echo "ERR $*" >&2; }',
+      'die() { err "$@"; exit 1; }',
+      'backup_if_exists() { :; }',
+      'id() { case "$1" in -u) echo 1000 ;; *) echo nginx ;; esac; }',
+      'stat() { case "$*" in *"/proc/"*) echo 1000 ;; *"-c %u"*) echo 0 ;; *) echo 755 ;; esac; }',
+      // The service is down until something starts it; every call is recorded.
+      `rc-service() { echo "$*" >> '${calls}'; case "$2" in start) touch '${dir}/up' ;; esac; [[ "$2" != status ]] || [[ -e '${dir}/up' ]]; }`,
+      `nginx_master_pid() { [[ -e '${dir}/up' ]] && echo $$; }`,
+      text,
+    ];
+    const run = async ({ confdText, dryRun = 0, afterPrompt = false }) => {
       await writeFile(service, earlier, { mode: 0o755 });
       await writeFile(confd, confdText);
-      const calls = path.join(dir, 'calls');
       await writeFile(calls, '');
-      const result = runShell(
-        [
-          'RUN_USER=nginx; RUN_GROUP=nginx; NGINX_MODE=integrate; LOG_FILE=/dev/null',
-          `DRY_RUN=${dryRun}; NGINX_OPENRC_MIGRATED=0`,
-          'has_openrc() { return 0; }',
-          'command_exists() { return 0; }',
-          'log() { echo "LOG $*"; }',
-          'err() { echo "ERR $*" >&2; }',
-          'die() { err "$@"; exit 1; }',
-          'backup_if_exists() { :; }',
-          'id() { case "$1" in -u) echo 1000 ;; *) echo nginx ;; esac; }',
-          'stat() { case "$*" in *"/proc/"*) echo 1000 ;; *"-c %u"*) echo 0 ;; *) echo 755 ;; esac; }',
-          // The service is down until the installer starts it.
-          `rc-service() { echo "$*" >> '${calls}'; case "$2" in start) touch '${dir}/up' ;; esac; [[ "$2" != status ]] || [[ -e '${dir}/up' ]]; }`,
-          `rm -f '${dir}/up'`,
-          `nginx_master_pid() { ${master ? `[[ -e '${dir}/up' ]] && echo $$` : 'return 1'}; }`,
-          functionsText,
-          'preflight_run_user_nginx',
-          'echo PREFLIGHT-OK',
-        ].join('\n')
-      );
+      runShell(`rm -f '${dir}/up'`);
+      const steps = ['preflight_run_user_nginx', 'echo "PLANNED=${NGINX_SERVICE_REPAIR_PLANNED}"'];
+      if (afterPrompt) steps.push('ensure_nginx_openrc_pid_directory', 'start_nginx_after_service_repair');
+      const result = runShell([...stubs(dryRun), ...steps, 'echo DONE'].join('\n'));
       return { ...result, script: readFileSync(service, 'utf8'), calls: readFileSync(calls, 'utf8') };
     };
-    const migrated = await run({ confdText: 'command_user="nginx:nginx"\ncapabilities="^cap_net_bind_service"\n' });
-    assert.equal(migrated.status, 0, migrated.output);
-    assert.match(migrated.output, /PREFLIGHT-OK/);
-    assert.match(migrated.script, /--owner "\$\{command_user:-root:root\}" \$\{pidfile%\/\*\}/);
-    assert.match(migrated.calls, /nginx zap\nnginx start\n/, 'the prepared service is started again');
-    // Without command_user the service is not started, and the refusal says what was updated and how to start nginx.
-    const unprepared = await run({ confdText: '', master: false });
-    assert.equal(unprepared.status, 1, unprepared.output);
-    assert.match(unprepared.output, /only the PID-directory line of the nginx OpenRC service was updated/);
-    assert.match(unprepared.output, /rc-service nginx zap, then rc-service nginx start/);
-    assert.doesNotMatch(unprepared.calls, /start/);
-    // A dry run changes nothing.
-    const dry = await run({ confdText: 'command_user="nginx:nginx"\n', dryRun: 1, master: false });
+    const prepared = 'command_user="nginx:nginx"\ncapabilities="^cap_net_bind_service"\n';
+    // Before the prompt: planned, nothing changed, nothing started.
+    const planned = await run({ confdText: prepared });
+    assert.equal(planned.status, 0, planned.output);
+    assert.match(planned.output, /PLANNED=1/);
+    assert.equal(planned.script, earlier, 'the service file is untouched before the prompt');
+    assert.doesNotMatch(planned.calls, /zap|start/, 'no service action before the prompt');
+    // After the prompt: the line is migrated, then nginx is started.
+    const done = await run({ confdText: prepared, afterPrompt: true });
+    assert.equal(done.status, 0, done.output);
+    assert.match(done.script, /--owner "\$\{command_user:-root:root\}" \$\{pidfile%\/\*\}/);
+    assert.match(done.calls, /nginx zap\nnginx start\n/);
+    // A dry run only prints the plan; the repair functions change nothing.
+    const dry = await run({ confdText: prepared, dryRun: 1, afterPrompt: true });
     assert.equal(dry.script, earlier);
-    assert.equal(dry.calls, '');
+    assert.doesNotMatch(dry.calls, /zap|start/);
+    // Without command_user for the run user nothing is planned and the refusal stays as before.
+    for (const confdText of ['', 'command_user="www-data"\n']) {
+      const refused = await run({ confdText });
+      assert.equal(refused.status, 1, refused.output);
+      assert.match(refused.output, /no running nginx master process was found/);
+      assert.match(refused.output, /rc-service nginx zap, then rc-service nginx start/);
+      assert.match(refused.output, /nothing was changed\./);
+      assert.equal(refused.script, earlier);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
