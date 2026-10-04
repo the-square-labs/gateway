@@ -281,10 +281,14 @@ return_paths_to_root() {
     done
 }
 
-# A daemon that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
+# A daemon that moves to another user says so. One that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
 # directory were written by that user, and no other user may run them.
 prepare_run_user_switch() {
-    [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+    if [[ "$PREVIOUS_RUN_UID" == 0 ]]; then
+        [[ "$RUN_USER" == "root" || ! -d /etc/monitoring-daemon ]] || log "monitoring-daemon ran as root; switching it to ${RUN_USER}..."
+        return 0
+    fi
+    [[ "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
     log "monitoring-daemon ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}..."
     stop_daemon_service || die "Could not stop monitoring-daemon to switch its user."
     rm -rf /var/lib/monitoring-daemon/launcher

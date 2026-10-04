@@ -54,7 +54,6 @@ NGINX_HTPASSWD_DIR="/etc/nginx/gateway/htpasswd"
 NGINX_GLOBAL_CONF="/etc/nginx/nginx.conf"
 NGINX_SYSTEMD_DROPIN_DIR="/etc/systemd/system/nginx.service.d"
 NGINX_OPENRC_CONF_DIR="/etc/conf.d"
-NGINX_PID_FILE="/run/nginx.pid"
 NGINX_MIN_VERSION="1.25.1"
 NGINX_WORKER_NOFILE_MIN=65535
 NGINX_SERVICE_NOFILE_MIN=65536
@@ -442,6 +441,23 @@ nginx_master_pid() {
     printf '%s\n' "$pid"
 }
 
+# The pid file the host's nginx service watches: the one its unit (PIDFile=) or init script (pidfile=) names, else the
+# one nginx was built with. An nginx.conf that names another file leaves the service manager without a master process
+# (OpenRC reports the service crashed and cannot restart it while the old master keeps its ports).
+nginx_service_pid_file() {
+    local pid_file=""
+    if has_systemd; then
+        pid_file=$(systemctl show nginx.service -p PIDFile --value 2>/dev/null || true)
+    elif has_openrc && [[ -f /etc/init.d/nginx ]]; then
+        pid_file=$(sed -nE "s/^[[:space:]]*pidfile=[\"']?([^\"'[:space:]]*)[\"']?[[:space:]]*\$/\1/p" /etc/init.d/nginx | head -n 1)
+    fi
+    if [[ ! "$pid_file" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+        pid_file=$(nginx -V 2>&1 | grep -o -- '--pid-path=[^ ]*' | cut -d= -f2 || true)
+    fi
+    [[ "$pid_file" =~ ^/[A-Za-z0-9._/-]+$ ]] || pid_file=/run/nginx.pid
+    printf '%s\n' "$pid_file"
+}
+
 # The daemon writes /etc/nginx and reloads nginx itself, so a non-root daemon needs an nginx master that runs as the
 # same user. The installer does not convert the host's nginx service; it stops before changing anything instead.
 preflight_run_user_nginx() {
@@ -469,7 +485,8 @@ preflight_run_user_nginx() {
     err "The daemon writes /etc/nginx and reloads nginx itself. Prepare nginx, then run this installer again with --nginx-mode integrate:"
     err "  - run the nginx service as ${RUN_USER}:${RUN_GROUP} with CAP_NET_BIND_SERVICE and its pid file in a directory ${RUN_USER} owns"
     err "    (systemd drop-in for nginx.service: User=, Group=, AmbientCapabilities=CAP_NET_BIND_SERVICE, RuntimeDirectory=nginx,"
-    err "    PIDFile=/run/nginx/nginx.pid, and 'pid /run/nginx/nginx.pid;' in nginx.conf);"
+    err "    PIDFile=/run/nginx/nginx.pid, and 'pid /run/nginx/nginx.pid;' in nginx.conf; OpenRC: command_user=\"${RUN_USER}:${RUN_GROUP}\" and"
+    err "    capabilities=\"^cap_net_bind_service\" in /etc/conf.d/nginx, and 'pid /run/nginx/nginx.pid;' in nginx.conf);"
     err "  - give ${RUN_USER} /etc/nginx, /var/log/nginx and the nginx temp directories, and make log rotation create files as ${RUN_USER};"
     err "  - or install nginx-daemon as root (--user root)."
     die "nginx is not prepared for a non-root nginx-daemon; nothing was changed."
@@ -521,10 +538,14 @@ return_paths_to_root() {
     done
 }
 
-# A daemon that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
+# A daemon that moves to another user says so. One that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
 # directory were written by that user, and no other user may run them.
 prepare_run_user_switch() {
-    [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+    if [[ "$PREVIOUS_RUN_UID" == 0 ]]; then
+        [[ "$RUN_USER" == "root" || ! -d /etc/nginx-daemon ]] || log "nginx-daemon ran as root; switching it to ${RUN_USER}..."
+        return 0
+    fi
+    [[ "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
     log "nginx-daemon ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}..."
     stop_daemon_service || die "Could not stop nginx-daemon to switch its user."
     rm -rf /var/lib/nginx-daemon/launcher
@@ -1857,8 +1878,7 @@ current_nginx_worker_nofile_limit() {
     local child_pid
     local child_args
 
-    [[ -r "$NGINX_PID_FILE" ]] || return 0
-    master_pid=$(cat "$NGINX_PID_FILE")
+    master_pid=$(nginx_master_pid) || return 0
     [[ "$master_pid" =~ ^[0-9]+$ && -r "/proc/${master_pid}/task/${master_pid}/children" ]] || return 0
 
     for child_pid in $(cat "/proc/${master_pid}/task/${master_pid}/children"); do
@@ -1877,19 +1897,30 @@ nginx_worker_requires_restart() {
     [[ "$running_nofile" =~ ^[0-9]+$ ]] && (( running_nofile < NGINX_WORKER_NOFILE_MIN ))
 }
 
+# A root nginx must not leave its pid directory to the unprivileged nginx user that Alpine's service assigns it to on
+# every start and reload: the daemon signals the process the pid file names. The service gives the directory to root
+# unless /etc/conf.d/nginx runs nginx as another user (command_user), which then has to own it to write its pid. An
+# earlier installer wrote root:root there for good; that is replaced even for a non-root daemon, because it takes the
+# directory from the user nginx runs as.
 ensure_nginx_openrc_pid_directory() {
     has_openrc || return 0
-    # An nginx running as the daemon's user keeps the pid directory its operator gave it.
-    [[ "$RUN_USER" == "root" ]] || return 0
     local service=/etc/init.d/nginx
-    local original='checkpath --directory --owner nginx:nginx ${pidfile%/*}'
-    local secured='checkpath --directory --mode 0755 --owner root:root ${pidfile%/*}'
+    local stock='checkpath --directory --owner nginx:nginx '
+    local earlier='checkpath --directory --mode 0755 --owner root:root '
+    local secured='checkpath --directory --mode 0755 --owner "${command_user:-root:root}" '
+    local replaced
     local mode
     local parent
     local candidate
 
     [[ -f "$service" && ! -L "$service" ]] || return 0
-    grep -Fq "$original" "$service" || return 0
+    if [[ "$RUN_USER" == "root" ]] && grep -Fq "${stock}"'${pidfile%/*}' "$service"; then
+        replaced="$stock"
+    elif grep -Fq "${earlier}"'${pidfile%/*}' "$service"; then
+        replaced="$earlier"
+    else
+        return 0
+    fi
     [[ "$(head -n 1 "$service")" == '#!/sbin/openrc-run' ]] || return 0
     for parent in /etc /etc/init.d; do
         [[ -d "$parent" && ! -L "$parent" && "$(stat -c %u "$parent")" == 0 ]] || \
@@ -1901,8 +1932,8 @@ ensure_nginx_openrc_pid_directory() {
     mode=$(stat -c %a "$service")
     (( (8#$mode & 8#022) == 0 )) || die "Untrusted nginx OpenRC service permissions"
     candidate=$(mktemp /etc/init.d/.nginx-gateway-XXXXXX)
-    sed 's/checkpath --directory --owner nginx:nginx/checkpath --directory --mode 0755 --owner root:root/' "$service" > "$candidate"
-    if ! grep -Fq "$secured" "$candidate" || ! sh -n "$candidate"; then
+    sed "s/${replaced}/${secured}/" "$service" > "$candidate"
+    if ! grep -Fq "${secured}"'${pidfile%/*}' "$candidate" || ! sh -n "$candidate"; then
         rm -f "$candidate"
         die "Invalid nginx OpenRC service after PID-directory migration"
     fi
@@ -2031,7 +2062,7 @@ configure_nginx_managed() {
     cat > /etc/nginx/nginx.conf << 'EOF'
 worker_processes auto;
 worker_rlimit_nofile 65535;
-pid /run/nginx.pid;
+pid __NGINX_PID_FILE__;
 
 events {
     worker_connections 8192;
@@ -2061,7 +2092,7 @@ http {
     include __GATEWAY_SITES_DIR__/*.conf;
 }
 EOF
-    sed -i "s|__GATEWAY_SITES_DIR__|${NGINX_SITES_DIR}|g" /etc/nginx/nginx.conf
+    sed -i "s|__GATEWAY_SITES_DIR__|${NGINX_SITES_DIR}|g; s|__NGINX_PID_FILE__|$(nginx_service_pid_file)|g" /etc/nginx/nginx.conf
 
     cat > /etc/nginx/conf.d/default.conf << 'EOF'
 server {

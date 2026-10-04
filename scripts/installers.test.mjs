@@ -495,3 +495,164 @@ test('a Build Worker install on a host without systemd stops before it changes a
   assert.equal(spawnSync('test', ['-e', path.join(host, 'usr/local/bin/docker-daemon')]).status, 1);
   assert.equal(spawnSync('test', ['-e', path.join(host, 'etc/docker-daemon')]).status, 1);
 });
+
+// A top-level shell function of an installer, to run on its own.
+function shellFunction(source, name) {
+  const match = new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}$`, 'm').exec(source);
+  assert.ok(match, `${name} is defined`);
+  return match[0];
+}
+
+function runShell(script) {
+  const result = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 30_000 });
+  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
+// The managed nginx.conf names the pid file the host's nginx service watches. Alpine's service watches
+// /run/nginx/nginx.pid; a pid file elsewhere leaves OpenRC without a master process (the service reads "crashed" and
+// cannot restart while the old master keeps its ports). Debian and Ubuntu name /run/nginx.pid in the unit.
+test('managed nginx.conf names the pid file of the distribution service', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  assert.doesNotMatch(source, /^pid \/run\/nginx\.pid;$/m, 'the pid file is not hardcoded');
+  assert.match(source, /^pid __NGINX_PID_FILE__;$/m);
+  assert.match(source, /s\|__NGINX_PID_FILE__\|\$\(nginx_service_pid_file\)\|g/);
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-pid-'));
+  try {
+    const initScript = path.join(dir, 'nginx');
+    const body = shellFunction(source, 'nginx_service_pid_file').replaceAll('/etc/init.d/nginx', initScript);
+    const pidFile = (setup) => runShell(`${setup}\n${body}\nnginx_service_pid_file`).output.trim();
+    const stubs = (systemd, systemctlOut, built) =>
+      [
+        `has_systemd() { return ${systemd ? 0 : 1}; }`,
+        `has_openrc() { return ${systemd ? 1 : 0}; }`,
+        `systemctl() { echo '${systemctlOut}'; }`,
+        `nginx() { echo 'configure arguments: --prefix=/usr --pid-path=${built}' >&2; }`,
+      ].join('\n');
+    await writeFile(initScript, '#!/sbin/openrc-run\npidfile=/run/nginx/nginx.pid\ncommand=/usr/sbin/nginx\n');
+    assert.equal(pidFile(stubs(false, '', '/run/nginx.pid')), '/run/nginx/nginx.pid');
+    await writeFile(initScript, '#!/sbin/openrc-run\npidfile="/var/run/nginx.pid"\n');
+    assert.equal(pidFile(stubs(false, '', '/run/nginx.pid')), '/var/run/nginx.pid');
+    await writeFile(initScript, '#!/sbin/openrc-run\npidfile="${PIDFILE:-/x}"\n');
+    assert.equal(pidFile(stubs(false, '', '/run/built.pid')), '/run/built.pid');
+    assert.equal(pidFile(stubs(true, '/run/nginx.pid', '/run/built.pid')), '/run/nginx.pid');
+    assert.equal(pidFile(stubs(true, '', '/run/built.pid')), '/run/built.pid');
+    assert.equal(pidFile(stubs(true, '', '').replace(/nginx\(\) \{.*\}/, 'nginx() { :; }')), '/run/nginx.pid');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The installer secures the pid directory of Alpine's nginx service for a root nginx (the stock service gives it to the
+// unprivileged nginx user on every start and reload). The service must still give the directory to the user nginx runs
+// as when /etc/conf.d/nginx sets command_user, which is how docs/nodes.md prepares a non-root nginx.
+test('the secured nginx OpenRC service gives the pid directory to the user nginx runs as', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-openrc-'));
+  try {
+    const service = path.join(dir, 'nginx');
+    const stock = [
+      '#!/sbin/openrc-run',
+      'pidfile=/run/nginx/nginx.pid',
+      'start_pre() {',
+      '\tcheckpath --directory --owner nginx:nginx ${pidfile%/*}',
+      '}',
+      'reload_pre() {',
+      '\tcheckpath --directory --owner nginx:nginx ${pidfile%/*}',
+      '}',
+      '',
+    ].join('\n');
+    const earlier = stock.replaceAll('--owner nginx:nginx', '--mode 0755 --owner root:root');
+    const body = shellFunction(source, 'ensure_nginx_openrc_pid_directory').replaceAll('/etc/init.d', dir);
+    const migrate = async (content, runUser) => {
+      await writeFile(service, content, { mode: 0o755 });
+      const result = runShell(
+        [
+          'has_openrc() { return 0; }',
+          'die() { echo "$*" >&2; exit 1; }',
+          'log() { :; }',
+          'backup_if_exists() { :; }',
+          // The service directories are root-owned and not writable by others on a host; the test files are not.
+          'stat() { case "$*" in "-c %u"*) echo 0 ;; *) echo 755 ;; esac; }',
+          `RUN_USER=${runUser}`,
+          body,
+          'ensure_nginx_openrc_pid_directory',
+        ].join('\n')
+      );
+      assert.equal(result.status, 0, result.output);
+      return readFileSync(service, 'utf8');
+    };
+    // The owner the start and reload steps hand /run/nginx to, with and without command_user.
+    const owners = (content, commandUser) => {
+      const lines = content.split('\n').filter((line) => line.includes('checkpath'));
+      assert.equal(lines.length, 2, content);
+      return lines.map((line) => {
+        const result = runShell(
+          [
+            'checkpath() { echo "$@"; }',
+            'pidfile=/run/nginx/nginx.pid',
+            commandUser ? `command_user=${commandUser}` : '',
+            line.trim(),
+          ].join('\n')
+        );
+        return result.output.trim();
+      });
+    };
+    for (const [content, runUser] of [
+      [stock, 'root'],
+      [earlier, 'root'],
+      [earlier, 'nginx'],
+    ]) {
+      const secured = await migrate(content, runUser);
+      assert.deepEqual(owners(secured, ''), Array(2).fill('--directory --mode 0755 --owner root:root /run/nginx'));
+      assert.deepEqual(owners(secured, 'nginx:nginx'), Array(2).fill('--directory --mode 0755 --owner nginx:nginx /run/nginx'));
+      assert.equal(await migrate(secured, runUser), secured, 'migrating twice changes nothing');
+    }
+    // A non-root daemon next to the stock service leaves the operator's pid directory alone.
+    assert.equal(await migrate(stock, 'nginx'), stock);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A daemon that moves to another user says so, in both directions.
+test('every installer announces the switch of the run user from root and to root', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-run-user-'));
+  try {
+    const configs = {
+      'setup-monitoring-node.sh': '/etc/monitoring-daemon',
+      'setup-docker-node.sh': '/etc/docker-daemon',
+      'setup-node.sh': '/etc/nginx-daemon',
+      'setup-relay-node.sh': '/etc/gateway-relay-supervisor',
+    };
+    for (const [script, config] of Object.entries(configs)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      const body = shellFunction(source, 'prepare_run_user_switch').replaceAll(config, path.join(dir, 'conf'));
+      const run = (runUser, previousUid) =>
+        runShell(
+          [
+            'log() { echo "$*"; }',
+            `PREVIOUS_RUN_UID=${previousUid}`,
+            `RUN_USER=${runUser}`,
+            body,
+            'prepare_run_user_switch',
+          ].join('\n')
+        );
+      // No installation yet: a fresh install does not switch anything.
+      assert.doesNotMatch(run('gwsvc', 0).output, /switching/, script);
+      await rm(path.join(dir, 'conf'), { recursive: true, force: true });
+      runShell(`mkdir -p '${path.join(dir, 'conf')}'`);
+      const toUser = run('gwsvc', 0);
+      assert.equal(toUser.status, 0, `${script}\n${toUser.output}`);
+      assert.match(toUser.output, /ran as root; switching it to gwsvc/, script);
+      assert.doesNotMatch(run('root', 0).output, /switching/, `${script} stays root`);
+      await rm(path.join(dir, 'conf'), { recursive: true, force: true });
+    }
+    // Leaving a non-root user is announced by the same function before the daemon is stopped.
+    for (const script of Object.keys(configs)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      assert.match(source, /ran as \$\(id -nu "\$PREVIOUS_RUN_UID"/, script);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

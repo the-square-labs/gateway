@@ -255,10 +255,14 @@ return_paths_to_root() {
   done
 }
 
-# A relay that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
+# A relay that moves to another user says so. One that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
 # directory were written by that user, and no other user may run them.
 prepare_run_user_switch() {
-  [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+  if [[ "$PREVIOUS_RUN_UID" == 0 ]]; then
+    [[ "$RUN_USER" == "root" || ! -d /etc/gateway-relay-supervisor ]] || echo "The relay supervisor ran as root; switching it to ${RUN_USER}."
+    return 0
+  fi
+  [[ "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
   echo "The relay supervisor ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}."
   if ! stop_relay_supervisor; then
     echo "Could not stop the relay supervisor to switch its user; Relay installation stopped." >&2
