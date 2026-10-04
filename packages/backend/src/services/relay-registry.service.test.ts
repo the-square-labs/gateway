@@ -71,3 +71,69 @@ describe('registry binding sync while the registry takes no writes', () => {
     expect(desired[0]!.authorization).toBe('Bearer token:gateway/availability/policy-1/1/3:pull+push');
   });
 });
+
+describe('registry binding sync across a Gateway restart (S6)', () => {
+  function hanging() {
+    const db = {
+      select: () => ({
+        from: () => ({ where: async () => [binding('b1', 'runtime', 'gateway/availability/policy-1/1/14', ['pull'])] }),
+      }),
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
+    };
+    let calls = 0;
+    const relayPolicy = {
+      // The first sync (started for the connection before the restart's reconnect) never ends.
+      ensureInternalRegistryRoutes: vi.fn(() =>
+        calls++ === 0 ? new Promise<never>(() => undefined) : Promise.resolve()
+      ),
+      revokeOwner: vi.fn(),
+    };
+    const dispatch = { sendDockerRegistryBindings: vi.fn(async () => ({ success: true })) };
+    const registry = {
+      issueToken: vi.fn(async () => ({ token: 't', issuedAt: new Date().toISOString(), expiresIn: 120 })),
+    };
+    const events = { handlers: [] as Array<(payload: unknown) => void> };
+    const relayRegistry = new RelayRegistryService(
+      db as never,
+      relayPolicy as never,
+      dispatch as never,
+      registry as never
+    );
+    relayRegistry.setEventBus({
+      subscribe: (_topic: string, handler: (payload: unknown) => void) => events.handlers.push(handler),
+    } as never);
+    return {
+      relayRegistry,
+      dispatch,
+      connect: (id: string) => {
+        for (const handler of events.handlers) handler({ id, status: 'online' });
+      },
+    };
+  }
+
+  it('starts a new queue when the node connects again instead of waiting behind a stuck sync', async () => {
+    const { relayRegistry, dispatch, connect } = hanging();
+    void relayRegistry.syncNode('node-2');
+
+    connect('node-2');
+    await relayRegistry.syncNode('node-2');
+
+    expect(dispatch.sendDockerRegistryBindings).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the queue once a stuck sync passes its bound', async () => {
+    vi.useFakeTimers();
+    try {
+      const { relayRegistry, dispatch } = hanging();
+      const stuck = relayRegistry.syncNode('node-2');
+      const settled = expect(stuck).rejects.toThrow(/did not finish within 120 s/);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await settled;
+
+      await relayRegistry.syncNode('node-2');
+      expect(dispatch.sendDockerRegistryBindings).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -9,10 +9,33 @@ import type { RelayPolicyService } from './relay-policy.service.js';
 
 const REGISTRY_PROXY_PORT = 5443;
 const TOKEN_REFRESH_MS = 15_000;
+/**
+ * One node's registry sync (routes, grants, token issue, the bindings command) ends within this bound. Its steps carry
+ * their own command timeouts; this bound keeps a sync stuck anywhere else from holding the node's queue, and so every
+ * later binding of that node, for good (stand rc.10, S6: a rollout waited on the target node's binding forever).
+ */
+const NODE_SYNC_TIMEOUT_MS = 120_000;
 const REPOSITORY_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 
 type RegistryBindingRole = 'builder' | 'runtime' | 'mirror';
 type RegistryBindingContext = 'build' | 'container' | 'deployment' | 'compose_project' | 'availability';
+
+function withinNodeSyncBound(sync: Promise<void>, nodeId: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(`Internal registry sync of node ${nodeId} did not finish within ${NODE_SYNC_TIMEOUT_MS / 1000} s`)
+        ),
+      NODE_SYNC_TIMEOUT_MS
+    );
+    timer.unref?.();
+  });
+  // A sync given up on still ends on its own; its outcome is no longer awaited.
+  sync.catch(() => undefined);
+  return Promise.race([sync, bound]).finally(() => clearTimeout(timer));
+}
 
 export class RelayRegistryService {
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -31,6 +54,11 @@ export class RelayRegistryService {
       const event = payload as { id?: unknown; action?: unknown; status?: unknown } | null;
       if (typeof event?.id !== 'string' || event.action === 'deleted') return;
       if (event.status !== undefined && event.status !== 'online') return;
+      // A new connection starts a new queue: a sync queued for the connection before it must not hold this one.
+      if (event.status === 'online') {
+        this.nodeSyncs.delete(event.id);
+        this.queuedNodeSyncs.delete(event.id);
+      }
       void this.syncNode(event.id).catch(() => undefined);
     });
   }
@@ -247,7 +275,7 @@ export class RelayRegistryService {
       .catch(() => undefined)
       .then(() => {
         if (this.queuedNodeSyncs.get(nodeId) === current) this.queuedNodeSyncs.delete(nodeId);
-        return this.syncNodeLocked(nodeId);
+        return withinNodeSyncBound(this.syncNodeLocked(nodeId), nodeId);
       });
     this.queuedNodeSyncs.set(nodeId, current);
     this.nodeSyncs.set(nodeId, current);
