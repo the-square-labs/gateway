@@ -278,6 +278,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:containers:edit` | Yes |
 | `docker:containers:manage` | Yes |
 | `docker:containers:environment` | Yes |
+| `docker:containers:link` | Yes. Lets other workloads reach one port of this container or deployment through a container link; the consumer side needs `docker:containers:edit` (Compose: `docker:compose:manage`). |
 | `docker:containers:delete` | Yes |
 | `docker:containers:console` | Yes |
 | `docker:containers:files:read` | Yes |

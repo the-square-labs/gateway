@@ -139,6 +139,7 @@ const RESOURCE_SCOPED_DOCKER_NODE_SCOPES = [
   'docker:containers:delete',
   'docker:containers:edit',
   'docker:containers:environment',
+  'docker:containers:link',
   'docker:containers:secrets',
   'docker:containers:files:read',
   'docker:containers:files:write',

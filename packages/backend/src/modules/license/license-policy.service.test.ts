@@ -299,6 +299,7 @@ describe('LicensePolicyService', () => {
     'ai-plan-mode',
     'ai-scenarios',
     'ai-sandboxes',
+    'container-links',
   ] as const)('requires Personal for the new %s feature in v5', async (feature) => {
     const community = new LicensePolicyService({ getStatus: vi.fn(async () => baseStatus()) } as never);
     await expect(community.hasFeature(feature)).resolves.toBe(false);
@@ -386,6 +387,8 @@ describe('storage entitlement compatibility', () => {
         'ai-plan-mode',
         'ai-scenarios',
         'ai-sandboxes',
+        // Granted by managed-databases on every paid contract, without a new entitlements version (D12).
+        'container-links',
       ] as const) {
         await expect(policy.requireFeature(feature)).resolves.toBeUndefined();
       }

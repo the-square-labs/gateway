@@ -34,6 +34,7 @@ export const LICENSE_FEATURE_PLANS = {
   'git-push-to-deploy': 'business',
   'multi-node-availability': 'business',
   'compose-applications': 'personal',
+  'container-links': 'personal',
   'internal-pki': 'enterprise',
   'siem-export': 'enterprise',
 } as const satisfies Record<string, Exclude<LicensePlan, 'community'>>;
@@ -48,12 +49,15 @@ function entitlementFeature(feature: LicenseFeature): string {
   return feature === 'managed-storage' ? 'managed-databases' : feature;
 }
 
+// Container links came after v5 too: every paid v3-v5 contract grants them through managed-databases, so no
+// entitlement version or license server change is needed (D12).
 const PRE_V5_PERSONAL_CAPABILITIES = new Set<LicenseFeature>([
   'storage-connections',
   'external-database-connections',
   'ai-plan-mode',
   'ai-scenarios',
   'ai-sandboxes',
+  'container-links',
 ]);
 
 function includesFeature(entitlements: LicenseEntitlements, feature: LicenseFeature): boolean {

@@ -120,6 +120,12 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     group: "Docker: Containers",
   },
   {
+    value: "docker:containers:link",
+    label: "Container Link Target",
+    desc: "Let other workloads reach one port of a container or deployment through a container link",
+    group: "Docker: Containers",
+  },
+  {
     value: "docker:containers:delete",
     label: "Delete Containers",
     desc: "Remove containers",

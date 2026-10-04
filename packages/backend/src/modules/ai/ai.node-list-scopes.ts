@@ -35,6 +35,7 @@ const DOCKER_NODE_DISCOVERY_SCOPES = [
   'docker:containers:delete',
   'docker:containers:edit',
   'docker:containers:environment',
+  'docker:containers:link',
   'docker:containers:secrets',
   'docker:containers:files:read',
   'docker:containers:files:write',

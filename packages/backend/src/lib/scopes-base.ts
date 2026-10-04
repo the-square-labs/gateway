@@ -196,6 +196,8 @@ export const ALL_SCOPES = [
   'docker:containers:edit',
   'docker:containers:manage',
   'docker:containers:environment',
+  // Target of a container link: lets other workloads reach one port of this container or deployment privately.
+  'docker:containers:link',
   'docker:containers:delete',
   'docker:containers:console',
   'docker:containers:files:read',

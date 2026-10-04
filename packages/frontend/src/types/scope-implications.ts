@@ -31,6 +31,7 @@ export const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Readonly<Record<string, readonly 
     "docker:containers:export",
     "docker:containers:files:read",
     "docker:containers:files:write",
+    "docker:containers:link",
     "docker:containers:manage",
     "docker:containers:migrate",
     "docker:containers:mounts",
