@@ -1,12 +1,15 @@
 package docker
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
+	mobyclient "github.com/moby/moby/client"
 	"github.com/wiolett-industries/gateway/daemon-shared/statecompat"
 )
 
@@ -222,4 +225,29 @@ func (m *dockerSecureLinkManager) abandonDrainingConnectorLocked() {
 	m.bindings = map[string]dockerSecureLinkBinding{}
 	m.unbound = nil
 	m.publishViewLocked()
+}
+
+// removeConnectorContainer force-removes a connector container. A removal already running (a retirement removing the
+// same container while a replacement takes its slot) is waited for, as the slot is free only once the container is
+// gone: failing on it deferred the links' restore at a switch of the daemon's user.
+func (m *dockerSecureLinkManager) removeConnectorContainer(ctx context.Context, id string) error {
+	_, err := m.plugin.client.cli.ContainerRemove(ctx, id, mobyclient.ContainerRemoveOptions{Force: true})
+	if err == nil || isNotFoundErr(err) {
+		return nil
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "already in progress") {
+		return err
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for {
+		if _, inspectErr := m.plugin.client.cli.ContainerInspect(waitCtx, id, mobyclient.ContainerInspectOptions{}); isNotFoundErr(inspectErr) {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return err
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }

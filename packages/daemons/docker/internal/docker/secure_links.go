@@ -796,7 +796,7 @@ func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image strin
 			chosen = -2
 		}
 		m.retiring.stop(inspect.ID)
-		if _, err := m.plugin.client.cli.ContainerRemove(ctx, inspect.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+		if err := m.removeConnectorContainer(ctx, inspect.ID); err != nil {
 			return 0, nil, fmt.Errorf("remove leftover secure-link connector: %w", err)
 		}
 		found[slot] = nil
@@ -937,8 +937,8 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_, err := m.plugin.client.cli.ContainerRemove(ctx, previous.id, mobyclient.ContainerRemoveOptions{Force: true})
-		kept := err != nil && !isNotFoundErr(err)
+		err := m.removeConnectorContainer(ctx, previous.id)
+		kept := err != nil
 		if kept && m.plugin.logger != nil {
 			// The next daemon start removes it.
 			m.plugin.logger.Warn("could not remove the replaced secure-link connector", "error", err)
@@ -1014,7 +1014,7 @@ func (m *dockerSecureLinkManager) removeConnectorSlot(ctx context.Context, slot 
 	}
 	// A connector still retiring there: its retirement must not tell the slot's next connector to drain.
 	m.retiring.stop(inspect.Container.ID)
-	if _, err := m.plugin.client.cli.ContainerRemove(ctx, inspect.Container.ID, mobyclient.ContainerRemoveOptions{Force: true}); err != nil && !isNotFoundErr(err) {
+	if err := m.removeConnectorContainer(ctx, inspect.Container.ID); err != nil {
 		return fmt.Errorf("remove secure-link connector %s: %w", name, err)
 	}
 	return nil

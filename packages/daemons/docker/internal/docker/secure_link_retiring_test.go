@@ -266,3 +266,21 @@ func TestIngressRefusalDuringEgressSyncsIsLoggedOnce(t *testing.T) {
 		t.Fatalf("the refusal was logged %d times, want once", logged)
 	}
 }
+
+// A replacement whose slot is still being removed by a retirement waits for that removal instead of failing (the links'
+// restore was deferred at a switch of the daemon's user).
+func TestReplacementWaitsForARemovalInProgress(t *testing.T) {
+	manager, engine := replaceTestManager(t)
+	engine.mu.Lock()
+	anchor := engine.containers[secureLinkAnchorName]
+	leftover := &fakeConnectorContainer{id: "leftover-id", name: secureLinkConnectorSlots[1].name, image: replaceTestOldImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, slot: 1, networkMode: "container:" + anchor.id, removing: true}
+	engine.containers[leftover.name] = leftover
+	engine.mu.Unlock()
+	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
+		t.Fatalf("apply with the new image while the slot was being removed: %v", err)
+	}
+	if view := manager.currentView(); view.connectorID == leftover.id || manager.slot != 1 {
+		t.Fatalf("view %+v slot %d, want a new connector in the freed slot", view, manager.slot)
+	}
+}

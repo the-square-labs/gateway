@@ -67,6 +67,9 @@ type fakeConnectorContainer struct {
 	signals []string
 	// draining: told to drain (a drain request or the drain signal), the connector refuses every sync.
 	draining bool
+	// removing: another removal of the container runs; a remove request is refused with "already in progress" and
+	// the container goes shortly after.
+	removing bool
 }
 
 // fakeAnchor is a running anchor, as a daemon finds it after its restart.
@@ -318,6 +321,19 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 			return respond(http.StatusNoContent, "")
 		case request.Method == http.MethodPost && len(parts) == 3 && parts[2] == "update":
 			return respond(http.StatusOK, map[string]any{})
+		case request.Method == http.MethodDelete && len(parts) == 2 && current.removing:
+			current.removing = false
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				e.mu.Lock()
+				defer e.mu.Unlock()
+				if current.listener != nil {
+					current.listener.Close()
+				}
+				delete(e.containers, current.name)
+				e.removed = append(e.removed, current.id)
+			}()
+			return respond(http.StatusConflict, `{"message":"removal of container `+current.id+` is already in progress"}`)
 		case request.Method == http.MethodDelete && len(parts) == 2:
 			if current.listener != nil {
 				current.listener.Close()
