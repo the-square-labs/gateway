@@ -313,6 +313,9 @@ func (p *DockerPlugin) suspendLinkListeners() int {
 	if p.relayListenerKept.suspend() {
 		handed++
 	}
+	if p.secureLinkEgressKept.suspend() {
+		handed++
+	}
 	return handed
 }
 

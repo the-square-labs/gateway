@@ -27,9 +27,6 @@ const (
 	proxySecureLinkOwnerKind     = "proxy_host_secure_link"
 	secureLinkConnectorName      = "gateway-secure-link-connector"
 	secureLinkManagementNetwork  = "gateway-secure-links"
-	secureLinkConnectorMemory    = 128 * 1024 * 1024
-	secureLinkConnectorNanoCPUs  = 250_000_000
-	secureLinkConnectorPidsLimit = int64(128)
 	developmentSecureLinkImage   = "gateway-secure-link-connector:dev"
 	secureLinkConnectorPathEnv   = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	secureLinkRecoveryWindow     = time.Second
@@ -114,6 +111,10 @@ type dockerSecureLinkManager struct {
 
 	// probeRestoreAt is when a readiness probe last restored bindings (unix ns).
 	probeRestoreAt atomic.Int64
+
+	// egress is the connector's egress side (secure_link_egress.go): the links of this node's workloads to
+	// targets elsewhere, from the relay grant bundle. Guarded by mu, apart from its published view.
+	egress secureLinkEgress
 }
 
 type dockerSecureLinkView struct {
@@ -269,7 +270,8 @@ func (m *dockerSecureLinkManager) apply(
 				return nil, err
 			}
 		}
-		if err := m.removeConnector(context.Background()); err != nil {
+		// The connector stays while it serves egress (D5): only its ingress bindings go.
+		if err := m.releaseIngressLocked(context.Background()); err != nil {
 			m.failClosed(context.Background())
 			return nil, err
 		}
@@ -374,7 +376,7 @@ func (m *dockerSecureLinkManager) apply(
 			TargetHost: target.host, TargetPort: uint16(binding.TargetPort),
 		})
 	}
-	response, err := securelink.Sync(ctx, m.socketPath, configs)
+	response, err := m.syncConnectorLocked(ctx, configs)
 	if err != nil {
 		return nil, fail(err)
 	}
@@ -399,7 +401,7 @@ func (m *dockerSecureLinkManager) apply(
 	m.unbound = unbound
 	m.publishViewLocked()
 	for networkName := range m.attached {
-		if _, keep := desiredNetworks[networkName]; keep {
+		if _, keep := desiredNetworks[networkName]; keep || m.egress.networkDesired(networkName) {
 			continue
 		}
 		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, networkName, mobyclient.NetworkDisconnectOptions{Container: m.connectorID, Force: true}); err != nil && !isNotFoundErr(err) {
@@ -420,6 +422,11 @@ func (m *dockerSecureLinkManager) apply(
 			m.plugin.logger.Info("secure-link connector replaced; the previous one is retired once its tunnels are idle", "image", image)
 		}
 		m.retireConnector(replacement.previous)
+	}
+	m.egress.ingressNetworks = desiredNetworks
+	if m.egress.wanted() || len(m.egress.configs) > 0 {
+		// The connector may be new (a replacement, a restore): its egress listeners follow its ingress bindings.
+		m.reconcileEgressLocked(ctx)
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
 	return statuses, nil
@@ -497,13 +504,14 @@ func allowedSecureLinkConnectorImage(image string) bool {
 
 // failClosed prevents a partially applied connector state from accepting new
 // relay streams. The committed snapshot remains available for a clean retry.
+// Only the ingress bindings go: the egress listeners stand on their own (D5).
 func (m *dockerSecureLinkManager) failClosed(ctx context.Context) {
 	m.bindings = map[string]dockerSecureLinkBinding{}
 	m.unbound = nil
 	m.publishViewLocked()
 	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, _ = securelink.Sync(cleanupCtx, m.socketPath, nil)
+	_, _ = m.syncConnectorLocked(cleanupCtx, nil)
 }
 
 // ensureConnector makes the connector run the image. A connector that serves
@@ -535,7 +543,8 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 		return nil, secureLinkConnectorUnchangedError{err}
 	}
 	controlDirectory := filepath.Dir(m.socketPath)
-	if inspect != nil && inspect.Config != nil && inspect.Config.Image != image &&
+	// Another image, or the limits of an earlier release: the new connector starts next to the serving one.
+	if inspect != nil && inspect.Config != nil && (inspect.Config.Image != image || !currentSecureLinkConnectorShape(*inspect)) &&
 		managedSecureLinkConnector(*inspect, controlDirectory) && inspect.State != nil && inspect.State.Running &&
 		inspect.ID == m.connectorID && len(m.bindings) > 0 {
 		return m.startReplacement(ctx, image, slot)
@@ -592,6 +601,9 @@ type connectorReplacement struct {
 	previous         connectorRuntime
 	previousBindings map[string]dockerSecureLinkBinding
 	previousUnbound  map[string]struct{}
+	// The ingress configs the previous connector holds, which an egress sync sends it again.
+	previousIngress    []securelink.BindingConfig
+	previousIngressFor string
 }
 
 func (m *dockerSecureLinkManager) useConnector(runtime connectorRuntime) {
@@ -705,6 +717,7 @@ func (m *dockerSecureLinkManager) startReplacement(ctx context.Context, image st
 					id: m.connectorID, managementIP: m.managementIP, socketPath: m.socketPath, slot: m.slot, attached: m.attached,
 				},
 				previousBindings: m.bindings, previousUnbound: m.unbound,
+				previousIngress: m.egress.ingressConfigs, previousIngressFor: m.egress.ingressFor,
 			}
 			// Not published: dials go on to the previous connector until apply bound the links here.
 			m.useConnector(runtime)
@@ -724,6 +737,7 @@ func (m *dockerSecureLinkManager) abortReplacement(replacement *connectorReplace
 	m.useConnector(replacement.previous)
 	m.bindings = replacement.previousBindings
 	m.unbound = replacement.previousUnbound
+	m.egress.ingressConfigs, m.egress.ingressFor = replacement.previousIngress, replacement.previousIngressFor
 	m.publishViewLocked()
 	if err := m.removeConnectorSlot(context.Background(), failed); err != nil && m.plugin.logger != nil {
 		m.plugin.logger.Warn("could not remove the secure-link connector whose links failed to bind", "error", err)
@@ -760,11 +774,10 @@ func (m *dockerSecureLinkManager) createConnector(ctx context.Context, image str
 	}
 	controlDirectory := filepath.Dir(m.socketPath)
 	_ = os.Remove(filepath.Join(controlDirectory, secureLinkConnectorSlots[slot].socket))
-	pids := secureLinkConnectorPidsLimit
 	created, createErr := m.plugin.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
 		Config: &container.Config{
 			Image: image, User: "65532:65532",
-			Env:    []string{secureLinkConnectorSocketEnv(slot)},
+			Env:    secureLinkConnectorEnv(slot),
 			Labels: map[string]string{"wiolett.gateway.managed": "secure-link-connector"},
 		},
 		HostConfig: &container.HostConfig{
@@ -772,7 +785,7 @@ func (m *dockerSecureLinkManager) createConnector(ctx context.Context, image str
 			GroupAdd:       connectorGroupAdd(),
 			ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
 			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
-			Resources:     container.Resources{Memory: secureLinkConnectorMemory, NanoCPUs: secureLinkConnectorNanoCPUs, PidsLimit: &pids},
+			Resources:     secureLinkConnectorResources(),
 		},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{secureLinkManagementNetwork: {}}},
 		Name:             secureLinkConnectorSlots[slot].name,
@@ -833,7 +846,7 @@ func validSecureLinkManagementNetwork(inspect network.Inspect) bool {
 
 func validSecureLinkConnector(inspect container.InspectResponse, image, controlDirectory string) bool {
 	return inspect.Config != nil && inspect.Config.Image == image && managedSecureLinkConnector(inspect, controlDirectory) &&
-		inspect.HostConfig != nil && sameConnectorGroups(inspect.HostConfig.GroupAdd)
+		currentSecureLinkConnectorShape(inspect) && inspect.HostConfig != nil && sameConnectorGroups(inspect.HostConfig.GroupAdd)
 }
 
 func ownedSecureLinkConnector(inspect container.InspectResponse) bool {
@@ -854,22 +867,22 @@ func connectorSlot(inspect container.InspectResponse) (int, bool) {
 func managedSecureLinkConnector(inspect container.InspectResponse, controlDirectory string) bool {
 	config := inspect.Config
 	host := inspect.HostConfig
-	slot, named := connectorSlot(inspect)
+	_, named := connectorSlot(inspect)
+	// The limits and environment of this release or of the earlier one: a connector of the earlier shape is still
+	// this node's own, replaced next to the serving one (ensureConnector) and removed on teardown.
 	if !named || config == nil || host == nil ||
 		(config.Image != developmentSecureLinkImage &&
 			!immutableConnectorImagePattern.MatchString(config.Image) &&
 			!officialConnectorReleaseTagPattern.MatchString(config.Image)) ||
 		config.User != "65532:65532" ||
 		config.Labels["wiolett.gateway.managed"] != "secure-link-connector" ||
-		!validSecureLinkConnectorEnv(config.Env, secureLinkConnectorSocketEnv(slot)) ||
+		(!currentSecureLinkConnectorShape(inspect) && !legacySecureLinkConnectorShape(inspect)) ||
 		len(config.ExposedPorts) != 0 || host.Privileged || host.PublishAllPorts || !host.ReadonlyRootfs ||
 		len(host.CapAdd) != 0 || !containsFold(host.CapDrop, "ALL") || !allowedConnectorGroups(host.GroupAdd) ||
 		(!containsFold(host.SecurityOpt, "no-new-privileges") && !containsFold(host.SecurityOpt, "no-new-privileges:true")) ||
 		string(host.NetworkMode) == "host" || len(host.PortBindings) != 0 ||
 		len(host.Binds) != 1 || host.Binds[0] != controlDirectory+":/run/gateway" ||
-		host.RestartPolicy.Name != "unless-stopped" || host.Resources.Memory != secureLinkConnectorMemory ||
-		host.Resources.NanoCPUs != secureLinkConnectorNanoCPUs || host.Resources.PidsLimit == nil ||
-		*host.Resources.PidsLimit != secureLinkConnectorPidsLimit {
+		host.RestartPolicy.Name != "unless-stopped" {
 		return false
 	}
 	return inspect.NetworkSettings != nil && len(inspect.NetworkSettings.Ports) == 0
@@ -877,28 +890,6 @@ func managedSecureLinkConnector(inspect container.InspectResponse, controlDirect
 
 func secureLinkConnectorSocketEnv(slot int) string {
 	return "GATEWAY_SECURE_LINK_SOCKET=/run/gateway/" + secureLinkConnectorSlots[slot].socket
-}
-
-func validSecureLinkConnectorEnv(values []string, socket string) bool {
-	seenSocket := false
-	seenPath := false
-	for _, value := range values {
-		switch value {
-		case socket:
-			if seenSocket {
-				return false
-			}
-			seenSocket = true
-		case secureLinkConnectorPathEnv:
-			if seenPath {
-				return false
-			}
-			seenPath = true
-		default:
-			return false
-		}
-	}
-	return seenSocket
 }
 
 func containsFold(values []string, expected string) bool {
@@ -1223,6 +1214,9 @@ func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
 	m.unbound = nil
 	m.publishViewLocked()
 	m.attached = map[string]struct{}{}
+	m.egress.configs, m.egress.configsFor = nil, ""
+	m.egress.ingressConfigs, m.egress.ingressFor = nil, ""
+	m.egress.networks = nil
 	return nil
 }
 

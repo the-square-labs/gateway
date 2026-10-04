@@ -99,7 +99,10 @@ type DockerPlugin struct {
 	// (link_listener_handover.go); linkFlows are the link connections it lets finish.
 	storageConnectorKept keptUnixListener
 	relayListenerKept    keptUnixListener
+	secureLinkEgressKept keptUnixListener
 	linkFlows            linkFlowSet
+	// egressDatabaseSlots holds the database link sessions of the egress socket at their node limit.
+	egressDatabaseSlots chan struct{}
 	// startedAt is when Init began: link connections accepted before the relay lanes are up wait for them
 	// (relayLaneStartupWait).
 	startedAt time.Time
@@ -509,6 +512,10 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		// watchdog_ready carries later changes within the session.
 		values = append(values, p.leaseCapabilities()...)
 		values = append(values, "managed_database_binding_listener_v1", managedStorageLinkCapability, managedLinkRuntimeCapability)
+		if p.secureLinks != nil {
+			// The shared connector serves egress, container links and create_link_network (C7).
+			values = append(values, secureLinkEgressCapability)
+		}
 		if p.volumeImages != nil && p.volumeImages.supported {
 			values = append(values, "docker_volume_storage_images_v1")
 		}

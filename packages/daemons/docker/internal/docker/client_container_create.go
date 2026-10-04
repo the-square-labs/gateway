@@ -844,9 +844,10 @@ func (c *Client) DuplicateContainer(ctx context.Context, id string, newName stri
 	return result.ID, nil
 }
 
-// isLinkNetwork reports a managed database binding or storage link network.
+// isLinkNetwork reports a managed database binding, storage link or container link network.
 func isLinkNetwork(name string) bool {
-	return strings.HasPrefix(name, "gateway-db-") || storageBindingNetworkNamePattern.MatchString(name)
+	return strings.HasPrefix(name, "gateway-db-") || storageBindingNetworkNamePattern.MatchString(name) ||
+		containerLinkNetworkPattern.MatchString(name)
 }
 
 func withoutLinkNetworks(netNames []string) []string {

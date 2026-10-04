@@ -48,6 +48,9 @@ type fakeConnectorContainer struct {
 	running             bool
 	syncFails           bool
 	listener            net.Listener
+	// requests are the control requests the connector received; networks are the link networks it was attached to.
+	requests []securelink.SyncRequest
+	networks map[string]map[string]any
 }
 
 func newFakeConnectorEngine(t *testing.T) *fakeConnectorEngine {
@@ -92,7 +95,13 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 			}
 			var request securelink.SyncRequest
 			if securelink.ReadJSON(connection, &request) == nil {
+				e.mu.Lock()
+				current.requests = append(current.requests, request)
+				e.mu.Unlock()
 				response := securelink.SyncResponse{Version: securelink.ProtocolVersion}
+				for _, egress := range request.Egress {
+					response.Egress = append(response.Egress, securelink.EgressStatus{ID: egress.ID, Generation: egress.Generation, State: securelink.EgressListening})
+				}
 				if current.syncFails {
 					response.Error = "bind failed"
 				}
@@ -121,18 +130,20 @@ func (e *fakeConnectorEngine) byIDOrName(value string) *fakeConnectorContainer {
 }
 
 func (e *fakeConnectorEngine) connectorInspect(current *fakeConnectorContainer) map[string]any {
-	pids := secureLinkConnectorPidsLimit
 	networks := map[string]any{secureLinkManagementNetwork: map[string]any{"IPAddress": current.ip}}
+	for name, endpoint := range current.networks {
+		networks[name] = endpoint
+	}
 	return map[string]any{
 		"Id": current.id, "Name": "/" + current.name,
 		"Config": map[string]any{
-			"Image": current.image, "User": "65532:65532", "Env": []string{secureLinkConnectorSocketEnv(current.slot)},
+			"Image": current.image, "User": "65532:65532", "Env": secureLinkConnectorEnv(current.slot),
 			"Labels": map[string]string{"wiolett.gateway.managed": "secure-link-connector"},
 		},
 		"HostConfig": map[string]any{
 			"Binds": []string{e.controlDir + ":/run/gateway"}, "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
 			"SecurityOpt": []string{"no-new-privileges:true"}, "RestartPolicy": map[string]any{"Name": "unless-stopped"},
-			"Memory": secureLinkConnectorMemory, "NanoCpus": secureLinkConnectorNanoCPUs, "PidsLimit": pids,
+			"Memory": secureLinkConnectorMemory(), "NanoCpus": secureLinkConnectorNanoCPUs, "PidsLimit": secureLinkConnectorPidsLimit,
 			"GroupAdd": current.groups,
 		},
 		"State":           map[string]any{"Running": current.running},

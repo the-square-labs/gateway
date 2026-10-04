@@ -255,17 +255,19 @@ func (c *Client) removeStaleEndpoints(ctx context.Context, name string, networkN
 	}
 }
 
-// withLinkNetworks adds the managed database and storage link networks of the node to a list of network names.
+// withLinkNetworks adds the managed database, storage and container link networks of the node to a list of network
+// names.
 func (c *Client) withLinkNetworks(ctx context.Context, networkNames []string) []string {
 	listed, err := c.cli.NetworkList(ctx, client.NetworkListOptions{
-		Filters: make(client.Filters).Add("name", "gateway-db-").Add("name", "gateway-storage-"),
+		Filters: make(client.Filters).Add("name", "gateway-db-").Add("name", "gateway-storage-").Add("name", "gateway-link-"),
 	})
 	if err != nil {
 		return networkNames
 	}
 	names := slices.Clone(networkNames)
 	for _, item := range listed.Items {
-		linkNetwork := strings.HasPrefix(item.Name, "gateway-db-") || strings.HasPrefix(item.Name, "gateway-storage-")
+		linkNetwork := strings.HasPrefix(item.Name, "gateway-db-") || strings.HasPrefix(item.Name, "gateway-storage-") ||
+			strings.HasPrefix(item.Name, "gateway-link-")
 		if linkNetwork && !slices.Contains(names, item.Name) {
 			names = append(names, item.Name)
 		}

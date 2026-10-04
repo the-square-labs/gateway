@@ -40,11 +40,12 @@ func (p *DockerPlugin) createManagedStorageConnector(ctx context.Context, raw st
 		return "", "", errors.New("managed storage connector requires an internal bridge network")
 	}
 	containerConfig := &container.Config{Image: config.Image, Env: config.Env, User: "65532:65532", Labels: config.Labels}
-	pids := secureLinkConnectorPidsLimit
+	// A per-link storage connector carries one link: it keeps the limits connectors had before they were shared.
+	pids := legacySecureLinkConnectorPidsLimit
 	hostConfig := &container.HostConfig{
 		Binds: config.Binds, GroupAdd: connectorGroupAdd(), ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
-		Resources:     container.Resources{Memory: secureLinkConnectorMemory, NanoCPUs: secureLinkConnectorNanoCPUs, PidsLimit: &pids},
+		Resources:     container.Resources{Memory: legacySecureLinkConnectorMemory, NanoCPUs: legacySecureLinkConnectorNanoCPUs, PidsLimit: &pids},
 	}
 	created, err := p.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
 		Config: containerConfig, HostConfig: hostConfig,

@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"gopkg.in/yaml.v3"
@@ -19,6 +21,8 @@ type DockerConfig struct {
 	Database DatabaseConfig `yaml:"database"`
 	Compose  ComposeConfig  `yaml:"compose"`
 	Builder  BuilderConfig  `yaml:"builder"`
+	// SecureLinks configures the networks of secure links (container, storage and database links).
+	SecureLinks SecureLinksConfig `yaml:"secure_links"`
 	// LeaseWatchdogDir is the tmpfs directory shared with the independent
 	// lease watchdog; empty means /run/gateway-lease-watchdog.
 	LeaseWatchdogDir string `yaml:"lease_watchdog_dir"`
@@ -35,6 +39,12 @@ func (c DockerConfig) IsStorageProfile() bool {
 
 type BuilderConfig struct {
 	EgressProfile string `yaml:"egress_profile"`
+}
+
+// SecureLinksConfig: SubnetPool is the IPv4 network the /28 subnets of new link networks are taken from (default
+// 10.213.0.0/16); it must not overlap the networks the host routes elsewhere.
+type SecureLinksConfig struct {
+	SubnetPool string `yaml:"subnet_pool"`
 }
 
 // ComposeConfig configures the daemon-owned Compose sidecar. It is deliberately
@@ -92,6 +102,12 @@ func Load(path string) (*Config, error) {
 	}
 	if (cfg.Docker.Mode == "databases" || cfg.Docker.Mode == "storage") && cfg.Docker.Database.StorageRoot == "" {
 		return nil, fmt.Errorf("docker.database.storage_root is required in databases or storage mode")
+	}
+	if pool := strings.TrimSpace(cfg.Docker.SecureLinks.SubnetPool); pool != "" {
+		prefix, err := netip.ParsePrefix(pool)
+		if err != nil || !prefix.Addr().Is4() || prefix.Bits() > 28 {
+			return nil, fmt.Errorf("docker.secure_links.subnet_pool must be an IPv4 network of /28 or larger")
+		}
 	}
 	if cfg.Docker.Compose.CommandTimeoutSeconds <= 0 {
 		return nil, fmt.Errorf("docker.compose.command_timeout_seconds must be positive")

@@ -13,10 +13,16 @@ import (
 	"github.com/moby/moby/client"
 )
 
+// managedDatabaseHostEntries returns the ExtraHosts entry of each database link network: the link alias at the
+// network's gateway, where the daemon's host listener serves the link. A network where the shared connector serves
+// the link gets none (C6): its consumers resolve the alias through Docker's DNS to the connector.
 func (c *Client) managedDatabaseHostEntries(ctx context.Context, networkNames []string) ([]string, error) {
 	entries := make([]string, 0)
 	for _, networkName := range networkNames {
 		if !strings.HasPrefix(networkName, "gateway-db-") {
+			continue
+		}
+		if c.egressListening != nil && c.egressListening(networkName) {
 			continue
 		}
 		inspected, err := c.cli.NetworkInspect(ctx, networkName, client.NetworkInspectOptions{})

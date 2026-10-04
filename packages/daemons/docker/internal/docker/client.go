@@ -46,6 +46,9 @@ type Client struct {
 	// detected once at startup; nil means unknown (treated as json-file).
 	defaultLogDriver atomic.Pointer[string]
 	listeningPorts   listeningPortCache
+	// egressListening reports a link network where the shared connector serves the link (secure_link_egress.go);
+	// nil without secure links.
+	egressListening func(networkName string) bool
 }
 
 func (c *Client) SetRunscHealthy(healthy bool) {

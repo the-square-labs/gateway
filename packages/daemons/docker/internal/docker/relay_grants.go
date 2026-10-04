@@ -163,14 +163,22 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 	if p.registryProxy != nil {
 		p.registryProxy.reconcileGrants()
 	}
+	// The connector's egress listeners follow the connect assignments (D2); egress never enters the proxy
+	// secure-link state.
+	egressStatuses := map[string]egressStatus{}
+	if p.secureLinks != nil {
+		egressStatuses = p.secureLinks.syncEgress(p.relayGrants.get())
+	}
 	detail, err := json.Marshal(struct {
 		SocketPath        string                                       `json:"socketPath"`
 		StorageSocketPath string                                       `json:"storageSocketPath"`
 		ListenerStatuses  map[string]managedDatabaseHostListenerStatus `json:"listenerStatuses"`
+		EgressStatuses    map[string]egressStatus                      `json:"egressStatuses"`
 	}{
 		SocketPath:        databaseTunnelSocketPath(p.cfg.StateDir),
 		StorageSocketPath: storageConnectorRelaySocketPath(p.cfg.StateDir),
 		ListenerStatuses:  listenerStatuses,
+		EgressStatuses:    egressStatuses,
 	})
 	return string(detail), err
 }

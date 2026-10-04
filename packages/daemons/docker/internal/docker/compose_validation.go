@@ -348,6 +348,10 @@ func validateTopLevelResources(node *yaml.Node, resource string, reservedPolicy 
 // networkKey): it names the link's gateway-db-* network as external.
 var composeManagedDatabaseNetworkKey = regexp.MustCompile(`^gateway_db_[0-9a-f]{16}$`)
 
+// composeContainerLinkNetworkKey is the logical network the backend adds to a project for a container link whose
+// source is one of its services: it names the link's gateway-link-* network as external.
+var composeContainerLinkNetworkKey = regexp.MustCompile(`^gateway_link_[0-9a-f]{16}$`)
+
 // validateComposeNetworkNames keeps Compose networks off the host's network
 // namespaces and off the networks Gateway owns on the node, which a user
 // container may not join either (validateUserWorkloadNetworkMode, the
@@ -378,6 +382,9 @@ func validateComposeNetworkNames(networks *yaml.Node) error {
 		if external && composeManagedDatabaseNetworkKey.MatchString(key) && strings.HasPrefix(name, "gateway-db-") {
 			continue
 		}
+		if external && composeContainerLinkNetworkKey.MatchString(key) && containerLinkNetworkPattern.MatchString(name) {
+			continue
+		}
 		return fmt.Errorf("compose network %q uses reserved network name %q", key, name)
 	}
 	return nil
@@ -387,7 +394,8 @@ func validateComposeNetworkNames(networks *yaml.Node) error {
 // every name Gateway owns or will own on a node, the Secure Links management
 // network and managed database and storage link networks.
 func isReservedGatewayNetworkName(name string) bool {
-	return name == secureLinkManagementNetwork || strings.HasPrefix(name, "gateway-db-") || strings.HasPrefix(name, "gateway-storage-")
+	return name == secureLinkManagementNetwork || strings.HasPrefix(name, "gateway-db-") || strings.HasPrefix(name, "gateway-storage-") ||
+		strings.HasPrefix(name, "gateway-link-")
 }
 
 // validateServiceVolumes mirrors the backend Compose policy: only declared named

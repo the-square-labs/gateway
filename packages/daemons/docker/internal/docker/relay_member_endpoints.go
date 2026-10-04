@@ -516,7 +516,7 @@ func (p *DockerPlugin) memberEndpointIDs(policyID string) map[string]bool {
 		return result
 	}
 	for _, assignment := range p.relayGrants.get().GetGrants() {
-		if assignment.GetRole() == "endpoint" && assignment.GetOwnerKind() == proxySecureLinkOwnerKind && links[assignment.GetOwnerId()] && assignment.GetEndpointId() != "" {
+		if assignment.GetRole() == "endpoint" && isConnectorIngressOwnerKind(assignment.GetOwnerKind()) && links[assignment.GetOwnerId()] && assignment.GetEndpointId() != "" {
 			result[assignment.GetEndpointId()] = true
 		}
 	}

@@ -180,7 +180,8 @@ func (r *relayTunnelRouter) reconcileRegistrations() []chan struct{} {
 		}
 	} else {
 		for _, assignment := range bundle.Grants {
-			if assignment.Role == "endpoint" && assignment.OwnerKind == proxySecureLinkOwnerKind && assignment.EndpointId != "" {
+			// A container link's target is an ingress binding of the shared connector, like a proxy secure link's.
+			if assignment.Role == "endpoint" && isConnectorIngressOwnerKind(assignment.OwnerKind) && assignment.EndpointId != "" {
 				// Availability members register on every assigned relay, dormant
 				// until they serve and their workload is ready (D6, D7).
 				state := r.plugin.memberEndpointState(assignment.OwnerId)
@@ -515,7 +516,7 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		// ownerId is the signed backup-run UUID. routeId is the server-selected
 		// managed database UUID, never a client-provided address or port.
 		connection, err = r.plugin.databaseManager.dial(ctx, assignment.GetRouteId())
-	case proxySecureLinkOwnerKind:
+	case proxySecureLinkOwnerKind, containerLinkOwnerKind:
 		if r.plugin.secureLinks == nil {
 			return
 		}
@@ -557,7 +558,7 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 	}
 	defer connection.Close()
 	r.plugin.relayTunnelOutcomes.Succeeded(r.plugin.logger, relayTunnelOutcome(assignment))
-	if assignment.OwnerKind == proxySecureLinkOwnerKind {
+	if isConnectorIngressOwnerKind(assignment.OwnerKind) {
 		readChunk := int(r.plugin.relayGrants.readChunkBytes())
 		if readChunk == 0 {
 			readChunk = relaybridge.DefaultChunkBytes
@@ -580,6 +581,12 @@ func (r *relayTunnelRouter) tunnelFailed(assignment *pb.RelayGrantAssignment, st
 		"relay_instance_id", r.targetID, "stage", stage, "error", err)
 	r.plugin.relayTunnelOutcomes.Failed(r.plugin.logger, relayTunnelOutcome(assignment), "owner_kind", assignment.OwnerKind,
 		"relay_instance_id", r.targetID, "stage", stage, "error", err.Error())
+}
+
+// isConnectorIngressOwnerKind reports the endpoints this node serves through an ingress binding of its shared
+// connector: proxy secure links and container links.
+func isConnectorIngressOwnerKind(ownerKind string) bool {
+	return ownerKind == proxySecureLinkOwnerKind || ownerKind == containerLinkOwnerKind
 }
 
 func isManagedStorageRelayOwnerKind(ownerKind string) bool {

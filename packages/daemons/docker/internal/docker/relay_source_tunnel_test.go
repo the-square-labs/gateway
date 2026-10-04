@@ -132,7 +132,7 @@ func TestStorageConnectorRelayAnswersOnceTheTunnelIsOpen(t *testing.T) {
 		defer close(done)
 		plugin.handleStorageConnectorRelay(daemonSide)
 	}()
-	if err := securelink.WriteJSON(connector, securelink.RelayRequest{Version: securelink.ProtocolVersion, OwnerKind: storageBindingOwnerKind, BindingID: testStorageBindingID}); err != nil {
+	if err := securelink.WriteJSON(connector, securelink.RelayRequest{Version: securelink.RelayProtocolVersion, OwnerKind: storageBindingOwnerKind, BindingID: testStorageBindingID}); err != nil {
 		t.Fatal(err)
 	}
 	answered := make(chan securelink.RelayResponse, 1)
@@ -169,7 +169,7 @@ func TestStorageConnectorRelayReportsTheCapacityRefusal(t *testing.T) {
 	connector, daemonSide := net.Pipe()
 	defer connector.Close()
 	go plugin.handleStorageConnectorRelay(daemonSide)
-	if err := securelink.WriteJSON(connector, securelink.RelayRequest{Version: securelink.ProtocolVersion, OwnerKind: storageBindingOwnerKind, BindingID: testStorageBindingID}); err != nil {
+	if err := securelink.WriteJSON(connector, securelink.RelayRequest{Version: securelink.RelayProtocolVersion, OwnerKind: storageBindingOwnerKind, BindingID: testStorageBindingID}); err != nil {
 		t.Fatal(err)
 	}
 	var response securelink.RelayResponse
@@ -202,7 +202,7 @@ func TestStorageConnectorRelayHoldsTheLinkAtItsGrantLimit(t *testing.T) {
 		connector, daemonSide := net.Pipe()
 		t.Cleanup(func() { connector.Close() })
 		go plugin.handleStorageConnectorRelay(daemonSide)
-		if err := securelink.WriteJSON(connector, securelink.RelayRequest{Version: securelink.ProtocolVersion, OwnerKind: storageBindingOwnerKind, BindingID: testStorageBindingID}); err != nil {
+		if err := securelink.WriteJSON(connector, securelink.RelayRequest{Version: securelink.RelayProtocolVersion, OwnerKind: storageBindingOwnerKind, BindingID: testStorageBindingID}); err != nil {
 			t.Fatal(err)
 		}
 		var response securelink.RelayResponse

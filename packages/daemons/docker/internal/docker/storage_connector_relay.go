@@ -120,17 +120,17 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 	defer connection.Close()
 	var request securelink.RelayRequest
 	if err := securelink.ReadJSON(connection, &request); err != nil {
-		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: err.Error()})
+		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion, Error: err.Error()})
 		return
 	}
-	if request.Version != securelink.ProtocolVersion || request.OwnerKind != storageBindingOwnerKind || !proxySecureLinkIDPattern.MatchString(request.BindingID) {
-		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: "invalid storage connector relay request"})
+	if request.Version != securelink.RelayProtocolVersion || request.OwnerKind != storageBindingOwnerKind || !proxySecureLinkIDPattern.MatchString(request.BindingID) {
+		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion, Error: "invalid storage connector relay request"})
 		return
 	}
 	assignment := p.relayGrants.lookup("connect", storageBindingOwnerKind, request.BindingID)
 	if assignment == nil || (assignment.GetGrant() == nil && len(relaybridge.PoolCandidates(assignment, false)) == 0) {
 		p.linkRejections.rejected(p.logger, linkKindManagedStorageBinding, request.BindingID, linkRejectedGrantUnavailable)
-		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: "storage binding relay route is unavailable"})
+		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion, Error: "storage binding relay route is unavailable"})
 		return
 	}
 	// Every connection of the link passes this socket, whichever connector of the node and relay of the pool carries
@@ -139,7 +139,7 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 	limit := relayGrantSessionLimit(assignment, managedLinkDefaultSessions)
 	if !p.linkConnections.acquire(link, int(limit)) {
 		p.linkRejections.rejected(p.logger, link.kind, link.id, linkRejectedLinkLimit, "limit", limit)
-		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion,
+		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion,
 			Error: fmt.Sprintf("storage link session capacity reached: the link carries its %d concurrent connections", limit)})
 		return
 	}
@@ -150,10 +150,10 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 	if err != nil {
 		reason := relayRefusalReason(err)
 		p.linkRejections.rejected(p.logger, linkKindManagedStorageBinding, request.BindingID, reason, "error", relayRefusalMessage(err))
-		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion, Error: storageConnectorRelayRefusal(reason, err)})
+		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion, Error: storageConnectorRelayRefusal(reason, err)})
 		return
 	}
-	if err := securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.ProtocolVersion}); err != nil {
+	if err := securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion}); err != nil {
 		tunnel.close()
 		return
 	}
