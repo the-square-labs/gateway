@@ -355,9 +355,9 @@ export const managedStorageBindings = pgTable(
       .$type<ManagedStorageBindingObservedState>()
       .notNull()
       .default('active'),
-    // Per node: the IPv4 the legacy sidecar had on the link network, recorded when the cutover to the shared connector
-    // starts, so the connector takes the same address even after a restart in the middle of it (D8, F6). Entries of
-    // earlier releases hold a timestamp instead and are ignored.
+    // Per node: the link's consumers still need their one recreate after its sidecar went, so they resolve the alias
+    // through the shared connector anew (D8, R2); durable across restarts. Any entry counts (earlier releases left a
+    // cutover time or an address here).
     sidecarCutovers: jsonb('sidecar_cutovers').$type<Record<string, string>>().notNull().default({}),
     lastError: text('last_error'),
     createdById: uuid('created_by_id')
