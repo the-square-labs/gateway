@@ -12,6 +12,10 @@ import (
 // links (HealthReport.managed_links): a link the report leaves out has none.
 const managedLinkRuntimeCapability = "managed_link_runtime_v1"
 
+// managedLinkCompletedCapability tells Gateway that the link reports carry completed_total (the sessions that
+// ended); an older daemon's reports read 0 there.
+const managedLinkCompletedCapability = "managed_link_completed_v1"
+
 // managedLinkDefaultSessions is a link's concurrent connections when its grant names no session limit (an older
 // Gateway); Gateway signs its link capacity (MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS) into the grant.
 const managedLinkDefaultSessions = 64
