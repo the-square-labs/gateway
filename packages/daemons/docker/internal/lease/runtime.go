@@ -98,6 +98,9 @@ type Runtime struct {
 	revision    uint64
 	beaconAt    time.Duration
 
+	// recordsUnreadable: the last read of the watchdog records failed (logged once per stretch).
+	recordsUnreadable bool
+
 	// heldSince is when each key held now was acquired (lease clock), kept
 	// from the transitions even when their report events are dropped.
 	heldSince map[availabilitylease.Key]time.Duration
@@ -274,12 +277,18 @@ func (r *Runtime) Step() {
 	}
 	r.observeWatchdogLocked(now, hbAge, hbPresent)
 	r.collectEventsLocked()
-	r.loadRecordsLocked()
+	readable := r.loadRecordsLocked()
 	r.maybeObserveLocked(now, manifests, holders)
 	if r.snapshot == nil {
 		return
 	}
 	if !r.started {
+		if !readable && r.watchdog.alive {
+			// The records tell which running copy is fenced (A2.3): without them every copy would look unfenced and
+			// be killed. The watchdog goes on enforcing them meanwhile; the start waits until they can be read.
+			// Without a watchdog nothing fences a copy, and the start kills them whatever the records say.
+			return
+		}
 		// Recovered keys show up in the next step's holder view.
 		r.started = true
 		r.startupFenceLocked(now, manifests)
@@ -329,13 +338,24 @@ func (r *Runtime) rotateIdentity() {
 	}
 }
 
-func (r *Runtime) loadRecordsLocked() {
+// loadRecordsLocked reads the watchdog records and reports whether it could. Unreadable records (a switch of the
+// daemon's user the watchdog has not followed yet) keep the ones read before.
+func (r *Runtime) loadRecordsLocked() bool {
 	records, err := r.opts.Fence.Records()
 	if err != nil {
-		r.logger.Warn("lease watchdog records unreadable", "error", err)
-		return
+		if !r.recordsUnreadable {
+			r.recordsUnreadable = true
+			r.logger.Warn("lease watchdog records unreadable; lease-mode containers found running at daemon start wait until they can be read",
+				"error", err)
+		}
+		return false
+	}
+	if r.recordsUnreadable {
+		r.recordsUnreadable = false
+		r.logger.Info("lease watchdog records readable again")
 	}
 	r.records = records
+	return true
 }
 
 func (r *Runtime) snapshotFreshLocked(now time.Duration) bool {

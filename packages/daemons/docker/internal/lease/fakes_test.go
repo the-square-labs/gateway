@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"time"
 
@@ -134,6 +135,8 @@ type fakeFence struct {
 	heartbeat bool
 	lag       time.Duration
 	lastBeat  time.Duration
+	// unreadable models records the daemon may not read (another user's, before the watchdog hands them over).
+	unreadable bool
 }
 
 func (f *fakeFence) HeartbeatAge(now time.Duration) (time.Duration, bool) {
@@ -150,6 +153,9 @@ func (f *fakeFence) HeartbeatAge(now time.Duration) (time.Duration, bool) {
 func (f *fakeFence) removeWatchdog() { f.heartbeat, f.lastBeat = false, 0 }
 
 func (f *fakeFence) Records() (map[string]leasefence.Record, error) {
+	if f.unreadable {
+		return nil, os.ErrPermission
+	}
 	out := make(map[string]leasefence.Record, len(f.records))
 	for id, record := range f.records {
 		out[id] = record

@@ -23,7 +23,7 @@ func (f DirFence) HeartbeatAge(now time.Duration) (time.Duration, bool) {
 }
 
 func (f DirFence) Records() (map[string]leasefence.Record, error) {
-	records, _, err := f.Dir.ReadRecords()
+	records, err := f.Dir.ReadableRecords()
 	if err != nil {
 		return nil, err
 	}

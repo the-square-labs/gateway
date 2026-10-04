@@ -39,6 +39,34 @@ func TestStartupRecoversContainerWithLiveRecordWhenRenewalSucceeds(t *testing.T)
 	}
 }
 
+// A daemon that may not read the watchdog records at its start (a switch of its user the watchdog has not followed
+// yet) must not take its running copies for unfenced and kill them: it waits, and recovers them once it reads them.
+func TestStartupWaitsForUnreadableRecords(t *testing.T) {
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	w.run(3 * time.Second)
+	d1 := w.daemon("d1")
+	d1.fence.unreadable = true
+	w.restartDaemon("d1")
+	restart := w.lastIndexOf("d1 daemon restarted")
+	w.run(time.Second)
+	if !d1.engine.running() || w.lastIndexOf("d1 docker stop") > restart || w.lastIndexOf("d1 docker kill") > restart {
+		t.Fatalf("a copy was killed while the records could not be read\n%s", w.dump())
+	}
+	d1.fence.unreadable = false
+	w.run(500 * time.Millisecond)
+	role := d1.runtime.Node().HolderStatus(availabilitylease.Key{PolicyID: testPolicy}).Role
+	if role != availabilitylease.RoleRecovering && role != availabilitylease.RoleHolding {
+		t.Fatalf("restarted holder role %s once the records are readable, want recovering or holding\n%s", role, w.dump())
+	}
+	w.waitServing("d1", 10*time.Second)
+	w.run(30 * time.Second)
+	w.requireClean()
+	if w.lastIndexOf("d1 docker stop") > restart || w.lastIndexOf("d1 docker kill") > restart || w.holderOf() != "d1" {
+		t.Fatalf("the recovered copy must keep serving\n%s", w.dump())
+	}
+}
+
 func TestStartupKillsContainerWithoutRecord(t *testing.T) {
 	w := twoCandidateWorld(t)
 	w.waitServing("d1", 45*time.Second)

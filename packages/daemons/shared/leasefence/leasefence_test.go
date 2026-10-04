@@ -1,6 +1,7 @@
 package leasefence
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,30 @@ func TestRecordsRoundTripAndMalformedFilesAreReported(t *testing.T) {
 	}
 	if err := dir.DeleteRecord(testID); err != nil {
 		t.Fatal("deleting a missing record is not an error")
+	}
+}
+
+// A record the daemon may not read (another user's, after a switch of the daemon's user) is an error for the daemon,
+// never a missing record: a missing record makes its running copy look unfenced.
+func TestRecordTheDaemonMayNotReadIsAnError(t *testing.T) {
+	dir := Dir{Root: t.TempDir()}
+	if err := os.MkdirAll(dir.RecordsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.WriteRecord(Record{ContainerID: testID, PolicyID: "p1", DeadlineNs: 42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir.RecordsDir(), testID+".json"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(filepath.Join(dir.RecordsDir(), testID+".json")); err == nil {
+		t.Skip("this process reads every file (root or CAP_DAC_READ_SEARCH)")
+	}
+	if records, err := dir.ReadableRecords(); !errors.Is(err, os.ErrPermission) || records != nil {
+		t.Fatalf("records %+v err %v, want a permission error", records, err)
+	}
+	if records, problems, err := dir.ReadRecords(); err != nil || len(records) != 0 || len(problems) != 1 {
+		t.Fatalf("the watchdog's read: records %+v problems %v err %v", records, problems, err)
 	}
 }
 

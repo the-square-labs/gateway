@@ -178,6 +178,19 @@ func (d Dir) DeleteRecord(containerID string) error {
 // the names of malformed files, which never hide valid records. err is set
 // only when the directory itself cannot be read.
 func (d Dir) ReadRecords() (records []Record, problems []string, err error) {
+	return d.readRecords(false)
+}
+
+// ReadableRecords is ReadRecords for the docker daemon: a record it is not
+// allowed to read (written by the daemon of another user before a switch of
+// its user, until the watchdog hands it over) is an error like an unreadable
+// directory, never a missing record. A malformed record is still ignored.
+func (d Dir) ReadableRecords() ([]Record, error) {
+	records, _, err := d.readRecords(true)
+	return records, err
+}
+
+func (d Dir) readRecords(strict bool) (records []Record, problems []string, err error) {
 	entries, err := os.ReadDir(d.RecordsDir())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -193,6 +206,9 @@ func (d Dir) ReadRecords() (records []Record, problems []string, err error) {
 		id := strings.TrimSuffix(name, ".json")
 		data, readErr := os.ReadFile(filepath.Join(d.RecordsDir(), name))
 		if readErr != nil {
+			if strict && errors.Is(readErr, os.ErrPermission) {
+				return nil, nil, readErr
+			}
 			problems = append(problems, fmt.Sprintf("%s: %v", name, readErr))
 			continue
 		}
