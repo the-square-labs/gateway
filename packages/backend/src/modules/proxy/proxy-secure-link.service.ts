@@ -23,6 +23,7 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPolicyService } from '@/services/relay-policy.service.js';
+import type { ContainerLinkTargetProvider } from './container-link-targets.js';
 import type { ProxyDockerUpstreamService } from './proxy-docker-upstream.service.js';
 import {
   availabilityMemberBindingFields,
@@ -155,6 +156,7 @@ export class ProxySecureLinkService {
   private readonly targetNodeSyncs = new Map<string, Promise<void>>();
   private readonly sourceNodeSyncs = new Map<string, Promise<void>>();
   private readonly linkOperations = new Map<string, Promise<unknown>>();
+  private containerLinkTargets?: ContainerLinkTargetProvider;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -196,6 +198,7 @@ export class ProxySecureLinkService {
       for (const binding of additional as Array<{ dockerNodeId: string; upstreamKind: string }>) {
         if (isDockerUpstream(binding.upstreamKind)) targetNodeIds.add(binding.dockerNodeId);
       }
+      for (const nodeId of (await this.containerLinkTargets?.targetNodeIds()) ?? []) targetNodeIds.add(nodeId);
 
       const nodesToSync = [...targetNodeIds];
       const results = await Promise.allSettled(nodesToSync.map((nodeId) => this.syncTargetNode(nodeId)));
@@ -1977,6 +1980,11 @@ export class ProxySecureLinkService {
     await this.syncTargetNode(nodeId);
   }
 
+  /** The container links each Docker node serves as a target, sent with its proxy Secure Link bindings. */
+  setContainerLinkTargets(provider: ContainerLinkTargetProvider): void {
+    this.containerLinkTargets = provider;
+  }
+
   async releaseTargetNetwork(nodeId: string, networkName: string): Promise<void> {
     await this.syncTargetNode(nodeId, networkName);
   }
@@ -2446,6 +2454,8 @@ export class ProxySecureLinkService {
           })
         : [];
       const members = await availabilityMemberSyncContext(this.db, nodeId, additional);
+      const containerLinkBindings = (await this.containerLinkTargets?.targetBindings(nodeId)) ?? [];
+      const containerLinkIds = new Set(containerLinkBindings.map((binding) => binding.linkId));
       const targetBindings = [
         ...hosts.map((host) => ({
           linkId: host.id,
@@ -2472,6 +2482,12 @@ export class ProxySecureLinkService {
             allowNetworkReselection: binding.upstreamKind === 'docker_container',
             ...availabilityMemberBindingFields(binding, members),
           })),
+        ...containerLinkBindings.map((binding) => ({
+          ...binding,
+          role: 'target' as const,
+          targetHost: '',
+          connectorImage: this.connectorImage,
+        })),
       ].flatMap((binding) => releasedNetworkBinding(binding, excludedNetwork));
       const additionalIds = new Set(additional.map((binding: ProxyAdditionalSecureLinkRow) => binding.id));
       let appliedBindings = targetBindings;
@@ -2506,7 +2522,10 @@ export class ProxySecureLinkService {
         appliedBindings = nextBindings;
         result = await this.dispatch.sendProxySecureLinks(nodeId, appliedBindings);
       }
-      await this.recordUnavailableTargets(unavailable, additionalIds);
+      await this.recordUnavailableTargets(
+        new Map([...unavailable].filter(([linkId]) => !containerLinkIds.has(linkId))),
+        additionalIds
+      );
       let statuses = this.parseBindings(result.detail);
       const statusByLink = new Map(statuses.map((binding) => [binding.linkId, binding]));
       let networkChanged = false;
@@ -2525,6 +2544,19 @@ export class ProxySecureLinkService {
         for (const binding of reconciledBindings) {
           const original = appliedBindings.find((candidate) => candidate.linkId === binding.linkId);
           if (!original || original.targetNetwork === binding.targetNetwork) continue;
+          if (containerLinkIds.has(binding.linkId)) {
+            const recorded = await this.containerLinkTargets!.recordTargetNetwork(
+              binding.linkId,
+              original.generation,
+              binding.generation,
+              binding.targetNetwork
+            );
+            if (!recorded) {
+              desiredStateChanged = true;
+              break;
+            }
+            continue;
+          }
           const applied = additionalIds.has(binding.linkId)
             ? await this.db
                 .update(proxyAdditionalSecureLinks)
@@ -2558,7 +2590,15 @@ export class ProxySecureLinkService {
         if (!result.success) throw new Error(result.error || 'Docker daemon rejected reconciled secure-link bindings');
         statuses = this.parseBindings(result.detail);
       }
+      if (this.containerLinkTargets && (containerLinkIds.size > 0 || unavailable.size > 0)) {
+        await this.containerLinkTargets.recordTargetStatuses(
+          nodeId,
+          statuses.filter((binding) => containerLinkIds.has(binding.linkId)),
+          new Map([...unavailable].filter(([linkId]) => containerLinkIds.has(linkId)))
+        );
+      }
       for (const binding of statuses) {
+        if (containerLinkIds.has(binding.linkId)) continue;
         if (additionalIds.has(binding.linkId)) {
           await this.db
             .update(proxyAdditionalSecureLinks)
