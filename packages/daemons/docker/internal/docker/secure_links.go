@@ -33,9 +33,10 @@ const (
 )
 
 // secureLinkConnectorRetireLimit bounds how long a replaced connector keeps
-// the tunnels that are busy (a request in flight, a WebSocket); a variable for
-// tests.
-var secureLinkConnectorRetireLimit = 10 * time.Minute
+// the tunnels that are busy (a request in flight, a WebSocket, a held
+// container link session) and the workload sessions of its egress listeners,
+// like the relay's drain; a variable for tests.
+var secureLinkConnectorRetireLimit = 30 * time.Minute
 
 const secureLinkConnectorRetireTick = 100 * time.Millisecond
 
