@@ -322,16 +322,20 @@ preflight_database_storage() {
 
 preflight_database_docker() {
     [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
-    [[ "$RUN_USER" == "root" ]] || die "Database docker-daemon profile must run as root."
     docker_run info >>"$LOG_FILE" 2>&1 || die "Docker Engine is not reachable; refusing database-node enrollment."
     [[ "$DOCKER_SOCKET" == unix://* ]] || die "Database nodes require a local Docker Engine socket; refusing remote Docker context '${DOCKER_SOCKET}'."
     [[ -S "${DOCKER_SOCKET#unix://}" ]] || die "Docker Engine socket is unavailable at ${DOCKER_SOCKET#unix://}."
     ok "Docker Engine preflight passed (${DOCKER_SOCKET})"
 }
 
-preflight_builder_runtime() {
+# What the Build Worker profile needs from the host itself; checked before the installer changes or downloads anything.
+preflight_builder_host() {
     [[ "$DOCKER_MODE" == "builder" ]] || return 0
     has_systemd || die "Builder nodes require systemd to supervise the isolated containerd and BuildKit services."
+}
+
+preflight_builder_runtime() {
+    [[ "$DOCKER_MODE" == "builder" ]] || return 0
     local bundled=(containerd ctr buildkitd buildctl runc containerd-shim-runc-v2 syft grype)
     local system=(git iptables getent)
     local missing=() binary
@@ -859,6 +863,8 @@ show_daemon_log() {
     elif has_openrc; then
         err "Daemon log: /var/log/docker-daemon.err and /var/log/docker-daemon.log"
         tail -n 20 /var/log/docker-daemon.err /var/log/docker-daemon.log >&2 2>/dev/null || true
+        # A service supervise-daemon cannot start leaves its reason in the system log, not in the service's own logs.
+        grep -h 'supervise-daemon.*docker-daemon' /var/log/messages 2>/dev/null | tail -n 5 >&2 || true
     fi
 }
 
@@ -901,6 +907,8 @@ await_gateway_connection() {
     local enrollment_error
     if enrollment_error=$(gateway_session_enrollment_error); then
         err "docker-daemon could not enroll with Gateway: ${enrollment_error}"
+    elif ! daemon_service_running; then
+        err "docker-daemon is not running; the service manager could not keep it up. The log below shows why."
     else
         err "docker-daemon has not connected to Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
     fi
@@ -1651,6 +1659,7 @@ fi
 
 # ── Validate ─────────────────────────────────────────────────────────
 need_root
+[[ "$DRY_RUN" -eq 1 ]] || preflight_builder_host
 if [[ "$DRY_RUN" -eq 0 ]]; then
     LOG_FILE=$(mktemp /tmp/gateway_docker_setup.XXXXXX) || die "Could not create installer log file"
     chmod 600 "$LOG_FILE" || die "Could not secure installer log file"
@@ -1764,6 +1773,9 @@ fi
 
 if [[ "$DOCKER_MODE" == "builder" && "$RUN_USER" != "root" ]]; then
     die "Builder docker-daemon profile must run as root to manage its dedicated BuildKit/containerd runtime."
+fi
+if [[ ( "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ) && "$RUN_USER" != "root" ]]; then
+    die "Database docker-daemon profile must run as root."
 fi
 
 # ── Resolve run user/group ───────────────────────────────────────────
@@ -2579,6 +2591,13 @@ error_log="/var/log/docker-daemon.err"
 
 depend() {
     need ${openrc_need}
+}
+
+# supervise-daemon opens the log files after it drops to the service user; a file left by another user (or by root
+# before the daemon switched users) would fail it with EACCES, so root hands them over first.
+start_pre() {
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/docker-daemon.log
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/docker-daemon.err
 }
 UNIT
         chmod +x /etc/init.d/docker-daemon || die "Could not make the docker-daemon OpenRC service executable."

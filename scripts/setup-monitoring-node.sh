@@ -438,6 +438,8 @@ show_daemon_log() {
     elif has_openrc; then
         err "Daemon log: /var/log/monitoring-daemon.err and /var/log/monitoring-daemon.log"
         tail -n 20 /var/log/monitoring-daemon.err /var/log/monitoring-daemon.log >&2 2>/dev/null || true
+        # A service supervise-daemon cannot start leaves its reason in the system log, not in the service's own logs.
+        grep -h 'supervise-daemon.*monitoring-daemon' /var/log/messages 2>/dev/null | tail -n 5 >&2 || true
     fi
 }
 
@@ -480,6 +482,8 @@ await_gateway_connection() {
     local enrollment_error
     if enrollment_error=$(gateway_session_enrollment_error); then
         err "monitoring-daemon could not enroll with Gateway: ${enrollment_error}"
+    elif ! daemon_service_running; then
+        err "monitoring-daemon is not running; the service manager could not keep it up. The log below shows why."
     else
         err "monitoring-daemon has not connected to Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
     fi
@@ -1458,6 +1462,13 @@ error_log="/var/log/monitoring-daemon.err"
 
 depend() {
     need net
+}
+
+# supervise-daemon opens the log files after it drops to the service user; a file left by another user (or by root
+# before the daemon switched users) would fail it with EACCES, so root hands them over first.
+start_pre() {
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/monitoring-daemon.log
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/monitoring-daemon.err
 }
 UNIT
         chmod +x /etc/init.d/monitoring-daemon || die "Could not make the monitoring-daemon OpenRC service executable."

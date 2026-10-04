@@ -288,6 +288,8 @@ supervisor_log_hint() {
   elif has_openrc; then
     echo "Supervisor log: /var/log/gateway-relay-supervisor.err and /var/log/gateway-relay-supervisor.log" >&2
     tail -n 20 /var/log/gateway-relay-supervisor.err /var/log/gateway-relay-supervisor.log >&2 2>/dev/null || true
+    # A service supervise-daemon cannot start leaves its reason in the system log, not in the service's own logs.
+    grep -h 'supervise-daemon.*gateway-relay' /var/log/messages 2>/dev/null | tail -n 5 >&2 || true
   fi
 }
 
@@ -807,6 +809,13 @@ error_log="/var/log/gateway-relay-supervisor.err"
 depend() {
     need net
 }
+
+# supervise-daemon opens the log files after it drops to the service user; a file left by another user (or by root
+# before the daemon switched users) would fail it with EACCES, so root hands them over first.
+start_pre() {
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/gateway-relay-supervisor.log
+    checkpath --file --owner ${RUN_USER}:${RUN_GROUP} --mode 0640 /var/log/gateway-relay-supervisor.err
+}
 UNIT
     chmod +x /etc/init.d/gateway-relay-supervisor && rc-update add gateway-relay-supervisor default >>"$LOG_FILE" 2>&1 \
       || fail_supervisor_start "Could not register the relay supervisor with OpenRC."
@@ -863,7 +872,9 @@ await_enrollment() {
     sleep 1
     waited=$((waited + 1))
   done
-  if [[ "$enrolled" -eq 1 ]]; then
+  if ! supervisor_service_running; then
+    echo "The relay supervisor is not running; the service manager could not keep it up. The log below shows why." >&2
+  elif [[ "$enrolled" -eq 1 ]]; then
     echo "The relay supervisor has not connected to Gateway within ${ENROLLMENT_WAIT_SECONDS} s; check that Gateway at ${GATEWAY} is reachable and the supervisor log." >&2
   else
     echo "The relay supervisor has not reported its enrollment within ${ENROLLMENT_WAIT_SECONDS} s; check that Gateway at ${GATEWAY} is reachable and the supervisor log." >&2

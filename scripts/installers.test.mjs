@@ -5,6 +5,7 @@
 // stub commands for docker, nginx and curl, and no network; a dry run changes nothing on the host.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
@@ -366,4 +367,131 @@ test('every installer prints its help', { skip: !linux }, () => {
     assert.equal(result.status, 0, `${name}\n${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /Usage/i, name);
   }
+});
+
+// The OpenRC services of a daemon with its own user. supervise-daemon opens the output and error logs after it
+// drops to that user, so the service has to give it the files first (checkpath runs as root, before the drop); a
+// daemon that goes back to root takes them back the same way.
+function openrcUserServices(source) {
+  const lines = source.split('\n');
+  const services = [];
+  lines.forEach((line, index) => {
+    if (line !== '#!/sbin/openrc-run') return;
+    let end = index;
+    while (lines[end] !== 'UNIT') end++;
+    if (lines.slice(index, end).some((entry) => entry.startsWith('command_user='))) services.push({ index, end });
+  });
+  return { lines, services };
+}
+
+// Renders the service the installer would write for the account, with the text the installer builds before it.
+function renderOpenrcService(source, user, group) {
+  const { lines, services } = openrcUserServices(source);
+  assert.equal(services.length, 1);
+  const [{ index, end }] = services;
+  assert.match(lines[index - 1], /<<UNIT/, 'the service text follows its heredoc line');
+  const prefixStart = lines.findIndex((line, at) => at < index && /^\s+local unit_runtime=/.test(line));
+  const prefixEnd = lines.findIndex((line, at) => at > prefixStart && line === '    if has_systemd; then');
+  const prefix = prefixStart > 0 ? lines.slice(prefixStart, prefixEnd) : [];
+  const script = [
+    `RUN_USER=${user}; RUN_GROUP=${group}; openrc_need="net docker"; NGINX_DAEMON_RUNTIME_DIRS=(nginx-daemon gateway-secure-links)`,
+    'render() {',
+    ...prefix,
+    'cat <<UNIT',
+    ...lines.slice(index, end),
+    'UNIT',
+    '}',
+    'render',
+  ].join('\n');
+  const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout;
+}
+
+const OPENRC_OWNED_LOGS = {
+  'setup-monitoring-node.sh': 'monitoring-daemon',
+  'setup-docker-node.sh': 'docker-daemon',
+  'setup-node.sh': 'nginx-daemon',
+  'setup-relay-node.sh': 'gateway-relay-supervisor',
+};
+
+test('OpenRC services of a non-root daemon hand their log files over before the privilege drop', () => {
+  for (const [script, daemon] of Object.entries(OPENRC_OWNED_LOGS)) {
+    const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+    for (const [user, group] of [
+      ['svcuser', 'svcgroup'],
+      ['root', 'root'],
+    ]) {
+      const service = renderOpenrcService(source, user, group);
+      assert.match(service, new RegExp(`^command_user="${user}:${group}"$`, 'm'), `${script}\n${service}`);
+      assert.match(service, new RegExp(`^output_log="/var/log/${daemon}\\.log"$`, 'm'), script);
+      assert.match(service, new RegExp(`^error_log="/var/log/${daemon}\\.err"$`, 'm'), script);
+      const startPre = /^start_pre\(\) \{\n([\s\S]*?)^\}$/m.exec(service);
+      assert.ok(startPre, `${script} has a start_pre\n${service}`);
+      for (const log of [`${daemon}.log`, `${daemon}.err`]) {
+        assert.ok(
+          startPre[1].includes(`    checkpath --file --owner ${user}:${group} --mode 0640 /var/log/${log}\n`),
+          `${script} gives ${log} to ${user}:${group}\n${service}`
+        );
+      }
+    }
+  }
+  // A non-root nginx-daemon keeps the runtime directories it already got.
+  const nginx = renderOpenrcService(readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8'), 'svcuser', 'svcgroup');
+  assert.match(nginx, /checkpath --directory --mode 0755 --owner svcuser:svcgroup "\/run\/\${dir}"/);
+  assert.match(nginx, /^capabilities="\^cap_net_bind_service"$/m);
+  // No other generated OpenRC service drops privileges: the lease watchdog runs as root.
+  for (const name of installers) {
+    const { services } = openrcUserServices(readFileSync(path.join(scriptsDir, name), 'utf8'));
+    assert.equal(services.length, name in OPENRC_OWNED_LOGS ? 1 : 0, name);
+  }
+});
+
+test('an installer that cannot keep the OpenRC service up says so and shows the supervise-daemon reason', () => {
+  for (const [script, daemon] of Object.entries(OPENRC_OWNED_LOGS)) {
+    const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+    assert.match(source, /is not running; the service manager could not keep it up/, script);
+    // supervise-daemon logs why it could not start the service to the system log, not to the service's own logs.
+    const filter = daemon === 'gateway-relay-supervisor' ? 'gateway-relay' : daemon;
+    assert.ok(source.includes(`grep -h 'supervise-daemon.*${filter}' /var/log/messages`), script);
+  }
+});
+
+// A host that cannot run the Build Worker profile (it needs systemd) fails the install before the installer installs
+// packages, downloads or writes anything.
+test('the Build Worker host check runs before any host change', () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+  const { topLevel } = parseShell(source);
+  assert.match(source, /preflight_builder_host\(\) \{\n[^}]*has_systemd \|\|/);
+  assert.doesNotMatch(source, /preflight_builder_runtime\(\) \{\n[^}]*has_systemd/, 'the late preflight does not own the host check');
+  const firstRun = (name) => Math.min(...topLevel.filter((entry) => entry.calls.includes(name)).map((entry) => entry.line));
+  const check = firstRun('preflight_builder_host');
+  assert.ok(Number.isFinite(check), 'the host check runs at the top level');
+  for (const change of [
+    'check_dependencies',
+    'ensure_docker_installed',
+    'ensure_builder_system_packages',
+    'prepare_run_user_switch',
+    'create_directories',
+    'install_daemon',
+    'install_builder_runtime',
+  ]) {
+    assert.ok(check < firstRun(change), `the host check runs before ${change}`);
+  }
+});
+
+test('a Build Worker install on a host without systemd stops before it changes anything', { skip: !linux }, () => {
+  const host = path.join(work, 'host');
+  const result = spawnSync('bash', [path.join(work, 'scripts', 'setup-docker-node.sh'), '-y', ...common, '--mode', 'builder'], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    env: { ...process.env, PATH: `${path.join(work, 'bin')}:${process.env.PATH}` },
+    input: '',
+  });
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /Builder nodes require systemd/, output);
+  assert.doesNotMatch(output, /Installing|Downloading|Creating required directories/, output);
+  assert.equal(spawnSync('test', ['-e', path.join(host, 'usr/local/bin/docker-daemon')]).status, 1);
+  assert.equal(spawnSync('test', ['-e', path.join(host, 'etc/docker-daemon')]).status, 1);
 });

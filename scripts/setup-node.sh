@@ -692,6 +692,8 @@ show_daemon_log() {
     elif has_openrc; then
         err "Daemon log: /var/log/nginx-daemon.err and /var/log/nginx-daemon.log"
         tail -n 20 /var/log/nginx-daemon.err /var/log/nginx-daemon.log >&2 2>/dev/null || true
+        # A service supervise-daemon cannot start leaves its reason in the system log, not in the service's own logs.
+        grep -h 'supervise-daemon.*nginx-daemon' /var/log/messages 2>/dev/null | tail -n 5 >&2 || true
     fi
 }
 
@@ -734,6 +736,8 @@ await_gateway_connection() {
     local enrollment_error
     if enrollment_error=$(gateway_session_enrollment_error); then
         err "nginx-daemon could not enroll with Gateway: ${enrollment_error}"
+    elif ! daemon_service_running; then
+        err "nginx-daemon is not running; the service manager could not keep it up. The log below shows why."
     else
         err "nginx-daemon has not connected to Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
     fi
@@ -2384,14 +2388,18 @@ start_daemon() {
     log "Enabling and starting nginx-daemon..."
     # A daemon running as its own user cannot create its socket directories in /run; the service manager does. Its
     # nginx -t binds the configured listen ports, below 1024 too, so it gets the capability its nginx has.
-    local unit_runtime="" openrc_capabilities="" openrc_runtime="" runtime_dirs
+    # supervise-daemon opens the log files after it drops to the service user, so root hands them over first; a daemon
+    # switched back to root gets them back the same way.
+    local unit_runtime="" openrc_capabilities="" runtime_dirs
+    local openrc_runtime=$'\n\nstart_pre() {\n    checkpath --file --owner '"${RUN_USER}:${RUN_GROUP}"$' --mode 0640 /var/log/nginx-daemon.log\n    checkpath --file --owner '"${RUN_USER}:${RUN_GROUP}"$' --mode 0640 /var/log/nginx-daemon.err'
     if [[ "$RUN_USER" != "root" ]]; then
         runtime_dirs=$(printf '%s ' "${NGINX_DAEMON_RUNTIME_DIRS[@]}")
         runtime_dirs="${runtime_dirs% }"
         unit_runtime=$'\nRuntimeDirectory='"${runtime_dirs}"$'\nRuntimeDirectoryMode=0755\nRuntimeDirectoryPreserve=yes\nAmbientCapabilities=CAP_NET_BIND_SERVICE'
         openrc_capabilities=$'\ncapabilities="^cap_net_bind_service"'
-        openrc_runtime=$'\n\nstart_pre() {\n    for dir in '"${runtime_dirs}"$'; do\n        checkpath --directory --mode 0755 --owner '"${RUN_USER}:${RUN_GROUP}"$' "/run/${dir}"\n    done\n}'
+        openrc_runtime+=$'\n    for dir in '"${runtime_dirs}"$'; do\n        checkpath --directory --mode 0755 --owner '"${RUN_USER}:${RUN_GROUP}"$' "/run/${dir}"\n    done'
     fi
+    openrc_runtime+=$'\n}'
 
     if has_systemd; then
         # Write systemd unit with user/group support
