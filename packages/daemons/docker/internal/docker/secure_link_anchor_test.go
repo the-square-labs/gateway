@@ -190,3 +190,35 @@ func TestDriftedConnectorIsReplacedSideBySide(t *testing.T) {
 		t.Fatal("the drifted connector was removed without draining")
 	}
 }
+
+// A held container link session through the serving connector (same node: consumer, egress, local dial, ingress)
+// survives a connector replacement (R3): idle or not, it is not cut as an idle request tunnel would be, and the
+// previous connector stays until the session ends.
+func TestHeldLinkSessionSurvivesReplacement(t *testing.T) {
+	manager, engine := replaceTestManager(t)
+	previous := manager.currentView()
+	limit := secureLinkConnectorRetireLimit
+	secureLinkConnectorRetireLimit = 5 * time.Second
+	t.Cleanup(func() { secureLinkConnectorRetireLimit = limit })
+	// Idle for longer than any request tunnel may be: a database pool's connection between queries.
+	session := newDrainConn(&connectorConn{Conn: nopConn{}, connectorID: previous.connectorID})
+	session.lastRead.Store(time.Now().Add(-time.Minute).UnixNano())
+	session.lastWrite.Store(time.Now().Add(-time.Minute).UnixNano())
+	cut := make(chan struct{})
+	release := manager.plugin.proxyTunnels.addHeld(session, func() { close(cut) })
+
+	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
+		t.Fatalf("apply with the new image: %v", err)
+	}
+	select {
+	case <-cut:
+		t.Fatal("the held container link session was cut by the connector replacement")
+	case <-time.After(500 * time.Millisecond):
+	}
+	if slices.Contains(engine.removedIDs(), previous.connectorID) {
+		t.Fatal("the previous connector was removed while it carried the session")
+	}
+	// The session ends: the previous connector goes.
+	release()
+	waitRemoved(t, engine, previous.connectorID)
+}

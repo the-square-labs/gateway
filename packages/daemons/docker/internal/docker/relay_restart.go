@@ -122,15 +122,32 @@ func relaySupportsRestart(assignment *pb.RelayGrantAssignment) bool {
 // proxyTunnelSet tracks the Secure Link tunnels this daemon serves.
 type proxyTunnelSet struct {
 	mu      sync.Mutex
-	tunnels map[*drainConn]func()
+	tunnels map[*drainConn]proxyTunnel
+}
+
+// proxyTunnel is a tracked tunnel: cancel ends it. A held tunnel carries a container link, a TCP session whose
+// protocol the daemon does not know: idle between bytes is no point to end it at, and a connector replacement lets
+// it run until it ends or the retire limit (addHeld).
+type proxyTunnel struct {
+	cancel func()
+	held   bool
 }
 
 func (s *proxyTunnelSet) add(connection *drainConn, cancel func()) func() {
+	return s.track(connection, proxyTunnel{cancel: cancel})
+}
+
+// addHeld tracks a container link tunnel (see proxyTunnel).
+func (s *proxyTunnelSet) addHeld(connection *drainConn, cancel func()) func() {
+	return s.track(connection, proxyTunnel{cancel: cancel, held: true})
+}
+
+func (s *proxyTunnelSet) track(connection *drainConn, tunnel proxyTunnel) func() {
 	s.mu.Lock()
 	if s.tunnels == nil {
-		s.tunnels = map[*drainConn]func(){}
+		s.tunnels = map[*drainConn]proxyTunnel{}
 	}
-	s.tunnels[connection] = cancel
+	s.tunnels[connection] = tunnel
 	s.mu.Unlock()
 	return func() {
 		s.mu.Lock()
@@ -140,25 +157,27 @@ func (s *proxyTunnelSet) add(connection *drainConn, cancel func()) func() {
 }
 
 // drain waits up to limit for the tunnels serving a request, closing every
-// tunnel as soon as it is idle between requests.
+// tunnel as soon as it is idle between requests (held ones too: they pass
+// through this process, which is stopping).
 func (s *proxyTunnelSet) drain(limit time.Duration) {
-	s.drainWhere(func(*drainConn) bool { return true }, limit, restartDrainTick)
+	s.drainWhere(func(*drainConn) bool { return true }, limit, restartDrainTick, false)
 }
 
 // drainWhere drains the tunnels match selects like drain, and reports how
-// many were still busy when limit ran out.
-func (s *proxyTunnelSet) drainWhere(match func(*drainConn) bool, limit, tick time.Duration) int {
+// many were still busy when limit ran out. With keepHeld a held tunnel is not
+// closed when idle: it counts as busy until it ends.
+func (s *proxyTunnelSet) drainWhere(match func(*drainConn) bool, limit, tick time.Duration, keepHeld bool) int {
 	deadline := time.Now().Add(limit)
 	for {
 		now := time.Now()
 		busy := 0
 		s.mu.Lock()
-		for connection, cancel := range s.tunnels {
+		for connection, tunnel := range s.tunnels {
 			if !match(connection) {
 				continue
 			}
-			if connection.idle(now, restartIdleQuiet) {
-				cancel()
+			if !(keepHeld && tunnel.held) && connection.idle(now, restartIdleQuiet) {
+				tunnel.cancel()
 				delete(s.tunnels, connection)
 				continue
 			}

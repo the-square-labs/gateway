@@ -842,7 +842,7 @@ func (m *dockerSecureLinkManager) retireConnector(previous connectorRuntime) {
 		cancelDrain()
 		busy := m.plugin.proxyTunnels.drainWhere(func(connection *drainConn) bool {
 			return connectionConnector(connection) == previous.id
-		}, limit, secureLinkConnectorRetireTick)
+		}, limit, secureLinkConnectorRetireTick, true)
 		if busy > 0 && m.plugin.logger != nil {
 			m.plugin.logger.Info("tunnels still busy on the replaced secure-link connector are cut", "tunnels", busy)
 		}

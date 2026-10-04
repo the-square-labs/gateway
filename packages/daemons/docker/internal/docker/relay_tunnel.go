@@ -545,7 +545,12 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 			// the tunnel once it is idle (B-13).
 			tracked := newDrainConn(connection)
 			connection = tracked
-			defer r.plugin.proxyTunnels.add(tracked, cancel)()
+			if assignment.OwnerKind == containerLinkOwnerKind {
+				// A container link session survives a connector replacement until it ends.
+				defer r.plugin.proxyTunnels.addHeld(tracked, cancel)()
+			} else {
+				defer r.plugin.proxyTunnels.add(tracked, cancel)()
+			}
 		}
 	case "managed_storage", "managed_storage_binding", "managed_storage_gateway":
 		if r.plugin.storageManager == nil {
