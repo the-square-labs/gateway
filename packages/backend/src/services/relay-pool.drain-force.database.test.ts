@@ -57,7 +57,7 @@ describe.skipIf(!url)('relay manual drain force', () => {
     const setRemoteInstanceDrain = vi.fn(async () => undefined);
     const service = new RelayPoolService(
       db,
-      { setRemoteInstanceDrain } as never,
+      { setRemoteInstanceDrain, isRemoteInstanceConnected: () => true } as never,
       {} as never,
       {} as never,
       {} as never

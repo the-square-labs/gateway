@@ -325,7 +325,7 @@ export function remoteRelayReenrollmentMessage(): string {
 export class RelayPolicyService {
   private dispatch?: Pick<
     NodeDispatchService,
-    'sendRelayGrantBundle' | 'sendRelayPolicy' | 'setRelayDrain' | 'probeRelayCandidate'
+    'sendRelayGrantBundle' | 'sendRelayPolicy' | 'setRelayDrain' | 'probeRelayCandidate' | 'isNodeConnected'
   >;
   private lastGrantRefreshAt = 0;
   private lastGrantRefreshRevision = 0;
@@ -391,7 +391,7 @@ export class RelayPolicyService {
   setNodeDispatch(
     dispatch: Pick<
       NodeDispatchService,
-      'sendRelayGrantBundle' | 'sendRelayPolicy' | 'setRelayDrain' | 'probeRelayCandidate'
+      'sendRelayGrantBundle' | 'sendRelayPolicy' | 'setRelayDrain' | 'probeRelayCandidate' | 'isNodeConnected'
     >
   ): void {
     this.dispatch = dispatch;
@@ -603,6 +603,11 @@ export class RelayPolicyService {
     // The relay answers again: pushes of later changes must not wait out an earlier failure's cooldown.
     this.remotePolicyPushFailedAt.delete(nodeId);
     return snapshot.revision;
+  }
+
+  /** Whether the relay's supervisor holds its control stream; drain commands reach only such a relay. */
+  isRemoteInstanceConnected(nodeId: string): boolean {
+    return this.dispatch?.isNodeConnected(nodeId) ?? false;
   }
 
   async setRemoteInstanceDrain(nodeId: string, enabled: boolean, forceDisconnect = false): Promise<void> {

@@ -489,6 +489,8 @@ export class RelayPoolService {
           .limit(1);
         if (!instance) return;
         if (!instance.nodeId || instance.kind !== 'remote' || !instance.manualDrainStartedAt) return;
+        // A relay that is not connected gets the drain once it reconnects and reports admitting again.
+        if (!this.policy.isRemoteInstanceConnected(instance.nodeId)) return;
         const expired = Date.now() - instance.manualDrainStartedAt.getTime() >= MANUAL_DRAIN_TIMEOUT_MS;
         // Reassert admission after a worker restart; an acknowledged forced drain
         // need not repeat unless the worker resumed admission or reports live streams.
@@ -1724,13 +1726,19 @@ export class RelayPoolService {
         'A Relay Pool update drained this relay; retry or abandon that update instead of resuming the relay'
       );
     }
+    // An operator drain is Gateway state: a relay that is not connected receives it when it reconnects
+    // (reconcileManualDrains), and keeps its offline state meanwhile. A resume or an update's drain needs the relay.
+    const connected = this.policy.isRemoteInstanceConnected(instance.nodeId);
+    if (!connected && !(enabled && manual)) {
+      throw new AppError(409, 'RELAY_NOT_CONNECTED', 'The relay is not connected. Try again once it reconnects.');
+    }
     // Persist user intent before remote I/O so a crash or failed delivery cannot
     // lose the deadline. Update-owned drains retain their separate rollout policy.
     const persist = () =>
       this.db
         .update(relayInstances)
         .set({
-          state: enabled ? 'draining' : 'ready',
+          state: enabled ? (connected ? 'draining' : instance.state) : 'ready',
           manualDrainStartedAt: enabled
             ? manual
               ? sql`coalesce(${relayInstances.manualDrainStartedAt}, now())`
@@ -1741,7 +1749,7 @@ export class RelayPoolService {
         })
         .where(eq(relayInstances.id, instance.id));
     if (enabled && manual) await persist();
-    await this.policy.setRemoteInstanceDrain(instance.nodeId, enabled);
+    if (connected) await this.policy.setRemoteInstanceDrain(instance.nodeId, enabled);
     // Resume is command-first: failure must not erase the durable drain intent.
     if (!enabled || !manual) await persist();
     await this.policy.reconcileAndSync();
@@ -1794,6 +1802,9 @@ export class RelayPoolService {
     if (!instance.nodeId) throw new AppError(409, 'RELAY_INSTANCE_UNENROLLED', 'Relay instance is not enrolled');
     if (instance.state !== 'draining') {
       throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINING', 'Relay instance must be draining first');
+    }
+    if (!this.policy.isRemoteInstanceConnected(instance.nodeId)) {
+      throw new AppError(409, 'RELAY_NOT_CONNECTED', 'The relay is not connected. Try again once it reconnects.');
     }
     await this.policy.setRemoteInstanceDrain(instance.nodeId, true, true);
     await this.db
