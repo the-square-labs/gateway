@@ -1424,7 +1424,15 @@ install_daemon_binary() {
             ok "monitoring-daemon already installed (${existing_ver})"
             return 0
         fi
-        log "Upgrading monitoring-daemon from ${existing_ver} to ${RESOLVED_DAEMON_VERSION}..."
+        # The version the node runs is the installed command's (EXISTING_VERSION): the binary here can be a copy a
+        # run as another user left behind (a run-user switch), which says nothing about what is installed.
+        local installed_ver="$existing_ver"
+        [[ "$EXISTING_VERSION" =~ ^v[0-9] ]] && installed_ver="$EXISTING_VERSION"
+        if [[ "$installed_ver" == "$RESOLVED_DAEMON_VERSION" ]]; then
+            log "Installing monitoring-daemon ${RESOLVED_DAEMON_VERSION} at ${target}..."
+        else
+            log "Upgrading monitoring-daemon from ${installed_ver} to ${RESOLVED_DAEMON_VERSION}..."
+        fi
         # Backup existing binary
         local backup="${target}.backup.$(date +%Y%m%d_%H%M%S)"
         cp "$target" "$backup"
