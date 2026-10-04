@@ -86,7 +86,7 @@ Existing daemons from before signed-manifest support can perform one transition 
 
 2.11.1 moves managed database and storage links to one shared secure-link connector per Docker node (no per-link connector containers, no host listeners) and adds container links. Update Gateway first, then the Docker daemons. After a node's Docker daemon update:
 
-- Each workload with a database link is recreated once to join its new link network, at most four at a time per node. Deployments roll blue/green without downtime; standalone containers and Compose services restart once.
+- Each workload with a database link is recreated once to join its new link network, one at a time per node (the next once the previous runs healthy). Deployments roll blue/green without downtime; standalone containers and Compose services restart once.
 - Each workload with a storage link created before 2.11.1 is recreated once right after its link switches. Links created on 2.11.1 need no recreate.
 - Variable names and credentials stay the same; nothing needs to be done by hand. Do not delete old link networks or connector containers yourself.
 - Rolling a Docker daemon back to 2.11.0 switches its links back automatically, with one recreate per workload. At most four workloads per node are recreated at once (the daemon's concurrent command limit), so on a node with many linked deployments the later ones reconnect a little later.
