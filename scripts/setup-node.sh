@@ -1187,6 +1187,48 @@ detect_existing_install() {
     fi
 }
 
+# Whether release $1 is older than release $2 (vX.Y.Z[-pre]; a pre-release is older than its release, rc.9 than rc.20).
+daemon_version_older() {
+    local a="${1#v}" b="${2#v}" a_pre="" b_pre="" i x y
+    [[ "$a" == *-* ]] && a_pre="${a#*-}"
+    [[ "$b" == *-* ]] && b_pre="${b#*-}"
+    local IFS=.
+    local -a ac=(${a%%-*}) bc=(${b%%-*}) ap=($a_pre) bp=($b_pre)
+    for i in 0 1 2; do
+        x="${ac[i]:-0}" y="${bc[i]:-0}"
+        [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]] || return 1
+        ((10#$x < 10#$y)) && return 0
+        ((10#$x > 10#$y)) && return 1
+    done
+    [[ -n "$a_pre" ]] || return 1
+    [[ -n "$b_pre" ]] || return 0
+    for ((i = 0; i < ${#ap[@]} || i < ${#bp[@]}; i++)); do
+        x="${ap[i]-}" y="${bp[i]-}"
+        [[ -n "$x" ]] || return 0
+        [[ -n "$y" ]] || return 1
+        if [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then
+            ((10#$x < 10#$y)) && return 0
+            ((10#$x > 10#$y)) && return 1
+        elif [[ "$x" != "$y" ]]; then
+            [[ "$x" < "$y" ]]
+            return
+        fi
+    done
+    return 1
+}
+
+# A re-run without --version never moves a node to an older daemon than it runs: "latest" is the newest stable
+# release, so a node on a newer release or pre-release keeps its version. Only --version (or
+# GATEWAY_NODE_DAEMON_VERSION) naming the older release installs it.
+keep_installed_newer_daemon() {
+    local daemon="$1"
+    [[ "$DAEMON_VERSION" == "latest" && "$EXISTING_INSTALL" -eq 1 ]] || return 0
+    [[ "$EXISTING_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || return 0
+    daemon_version_older "$RESOLVED_DAEMON_VERSION" "$EXISTING_VERSION" || return 0
+    warn "${daemon} ${EXISTING_VERSION} is installed; latest resolves to the older ${RESOLVED_DAEMON_VERSION}. Keeping ${EXISTING_VERSION}; pass --version ${RESOLVED_DAEMON_VERSION} to install the older release."
+    resolve_download_url "$EXISTING_VERSION"
+}
+
 resolve_download_url() {
     local version="$1"
     local binary_name="nginx-daemon-linux-${ARCH}"
@@ -1230,7 +1272,7 @@ Options:
   --token <token>          Enrollment token from Gateway UI (Nodes > Add Node)
   --gateway-cert-sha256 <fp>
                            Gateway gRPC TLS leaf fingerprint from the generated setup command
-  --version <ver>          Daemon version to install (default: latest)
+  --version <ver>          Daemon version to install (default: latest; never older than an installed one)
   --user <user>            Run daemon as this user (default: root)
   --skip-nginx             Reuse installed nginx (must be 1.25.1 or newer)
   --nginx-mode <mode>      Nginx config mode: managed or integrate
@@ -1461,6 +1503,7 @@ preflight_run_user_nginx
 
 resolve_download_url "$DAEMON_VERSION"
 detect_existing_install
+keep_installed_newer_daemon nginx-daemon
 
 # ── Confirmation ─────────────────────────────────────────────────────
 if [[ "$EXISTING_INSTALL" -eq 1 ]]; then

@@ -219,6 +219,60 @@ is_daemon_wrapper() {
 
 # A root relay keeps its binary in /usr/local/bin. A relay running as its own user must be able to replace its binary
 # when it updates itself, so the binary lives in the relay's own directory and /usr/local/bin holds a root-owned wrapper.
+# Whether release $1 is older than release $2 (vX.Y.Z[-pre]; a pre-release is older than its release, rc.9 than rc.20).
+daemon_version_older() {
+  local a="${1#v}" b="${2#v}" a_pre="" b_pre="" i x y
+  [[ "$a" == *-* ]] && a_pre="${a#*-}"
+  [[ "$b" == *-* ]] && b_pre="${b#*-}"
+  local IFS=.
+  local -a ac=(${a%%-*}) bc=(${b%%-*}) ap=($a_pre) bp=($b_pre)
+  for i in 0 1 2; do
+    x="${ac[i]:-0}" y="${bc[i]:-0}"
+    [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]] || return 1
+    ((10#$x < 10#$y)) && return 0
+    ((10#$x > 10#$y)) && return 1
+  done
+  [[ -n "$a_pre" ]] || return 1
+  [[ -n "$b_pre" ]] || return 0
+  for ((i = 0; i < ${#ap[@]} || i < ${#bp[@]}; i++)); do
+    x="${ap[i]-}" y="${bp[i]-}"
+    [[ -n "$x" ]] || return 0
+    [[ -n "$y" ]] || return 1
+    if [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then
+      ((10#$x < 10#$y)) && return 0
+      ((10#$x > 10#$y)) && return 1
+    elif [[ "$x" != "$y" ]]; then
+      [[ "$x" < "$y" ]]
+      return
+    fi
+  done
+  return 1
+}
+
+# The installed supervisor's version ('' when none answers); a non-root supervisor runs as its user, never as root.
+installed_supervisor_version() {
+  local binary=/usr/local/bin/relay-supervisor owner
+  [[ -x "$binary" ]] || return 0
+  owner=$(stat -Lc '%U' "$binary" 2>/dev/null || echo root)
+  if [[ "$owner" == root ]] || is_daemon_wrapper "$binary"; then
+    "$binary" version 2>/dev/null | awk '{print $2}'
+  elif command -v runuser >/dev/null 2>&1; then
+    runuser -u "$owner" -- "$binary" version 2>/dev/null | awk '{print $2}'
+  fi
+}
+
+# The version to install: a re-run without --version never moves a relay to an older supervisor than it runs ("latest"
+# is the newest stable release); only --version naming the older release installs it.
+relay_version_to_install() {
+  local requested="$1" resolved="$2" installed
+  installed=$(installed_supervisor_version || true)
+  if [[ "$requested" == latest && "$installed" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] && daemon_version_older "$resolved" "$installed"; then
+    echo "Relay supervisor ${installed} is installed; latest resolves to the older ${resolved}. Keeping ${installed}; pass --version ${resolved} to install the older release." >&2
+    resolved="$installed"
+  fi
+  echo "$resolved"
+}
+
 install_supervisor_binary() {
   local source="$1" link="$2" own_dir="$3"
   if [[ "$RUN_USER" == "root" ]]; then
@@ -696,7 +750,8 @@ relay_dry_run() {
     fi
     version=$(curl -fsSL "${RELEASES_API_URL}?component=relay" | jq -r '.target.tag_name // empty')
     [[ -n "$version" ]] || { echo "No Relay release is available" >&2; exit 1; }
-    version="${version%-relay}"
+    version=$(relay_version_to_install latest "${version%-relay}")
+    version="v${version#v}"
   else
     version="v${version#v}"
   fi
@@ -727,11 +782,10 @@ ensure_dependencies
 if [[ "$VERSION" == "latest" ]]; then
   TAG=$(curl -fsSL "${RELEASES_API_URL}?component=relay" | jq -r '.target.tag_name // empty')
   [[ -n "$TAG" ]] || { echo "No Relay release is available" >&2; exit 1; }
-  VERSION="${TAG%-relay}"
-else
-  VERSION="v${VERSION#v}"
-  TAG="${VERSION}-relay"
+  VERSION=$(relay_version_to_install latest "${TAG%-relay}")
 fi
+VERSION="v${VERSION#v}"
+TAG="${VERSION}-relay"
 
 PACKAGE_BASE="${ARTIFACT_BASE_URL}/relay-supervisor/${TAG}"
 TEMP_DIR=$(mktemp -d)

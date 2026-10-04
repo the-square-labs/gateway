@@ -1235,3 +1235,62 @@ test('an installer keeps only the newest backup of a file it replaces', { skip: 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// A re-run without --version on a node running a newer pre-release resolved "latest" to the older stable release and
+// downgraded the node (stand rc.20). No installer moves a node to an older daemon unless --version names it.
+test('a re-run never installs an older daemon than the installed one unless --version names it', { skip: !linux }, () => {
+  const order = [
+    ['v2.11.0', 'v2.11.1-rc.20', true],
+    ['v2.11.1-rc.20', 'v2.11.1', true],
+    ['v2.11.1-rc.9', 'v2.11.1-rc.20', true],
+    ['v2.10.9', 'v2.11.0', true],
+    ['v2.11.1', 'v2.11.1-rc.20', false],
+    ['v2.11.1', 'v2.11.1', false],
+    ['v2.12.0', 'v2.11.9', false],
+  ];
+  for (const name of ['setup-docker-node.sh', 'setup-node.sh', 'setup-monitoring-node.sh', 'setup-relay-node.sh']) {
+    const source = readFileSync(path.join(scriptsDir, name), 'utf8');
+    for (const [older, newer, expected] of order) {
+      const run = runShell(
+        ["IFS=$'\\n\\t'", shellFunction(source, 'daemon_version_older'), `daemon_version_older '${older}' '${newer}'`].join('\n')
+      );
+      assert.equal(run.status === 0, expected, `${name}: ${older} < ${newer}`);
+    }
+  }
+  for (const name of ['setup-docker-node.sh', 'setup-node.sh', 'setup-monitoring-node.sh']) {
+    const source = readFileSync(path.join(scriptsDir, name), 'utf8');
+    const keep = (requested, installed) =>
+      runShell(
+        [
+          "IFS=$'\\n\\t'",
+          shellFunction(source, 'daemon_version_older'),
+          shellFunction(source, 'keep_installed_newer_daemon'),
+          'warn() { echo "WARN $*"; }',
+          'resolve_download_url() { RESOLVED_DAEMON_VERSION="$1"; }',
+          `DAEMON_VERSION='${requested}' EXISTING_INSTALL=1 EXISTING_VERSION='${installed}' RESOLVED_DAEMON_VERSION=v2.11.0`,
+          'keep_installed_newer_daemon test-daemon',
+          'echo "install=$RESOLVED_DAEMON_VERSION"',
+        ].join('\n')
+      ).output;
+    const kept = keep('latest', 'v2.11.1-rc.20');
+    assert.match(kept, /test-daemon v2\.11\.1-rc\.20 is installed; latest resolves to the older v2\.11\.0/, name);
+    assert.match(kept, /install=v2\.11\.1-rc\.20/, name);
+    assert.match(keep('v2.11.0', 'v2.11.1-rc.20'), /install=v2\.11\.0/, name);
+    assert.doesNotMatch(keep('latest', 'v2.10.4'), /WARN/, name);
+    assert.match(keep('latest', 'unknown'), /install=v2\.11\.0/, name);
+  }
+  const relay = readFileSync(path.join(scriptsDir, 'setup-relay-node.sh'), 'utf8');
+  const relayVersion = (requested, installed) =>
+    runShell(
+      [
+        "IFS=$'\\n\\t'",
+        shellFunction(relay, 'daemon_version_older'),
+        shellFunction(relay, 'relay_version_to_install'),
+        `installed_supervisor_version() { echo '${installed}'; }`,
+        `relay_version_to_install '${requested}' v2.11.0`,
+      ].join('\n')
+    ).output;
+  assert.match(relayVersion('latest', 'v2.11.1-rc.20'), /^v2\.11\.1-rc\.20\n[\s\S]*Keeping v2\.11\.1-rc\.20; pass --version v2\.11\.0/);
+  assert.match(relayVersion('v2.11.0', 'v2.11.1-rc.20'), /^v2\.11\.0\n?$/);
+  assert.match(relayVersion('latest', ''), /^v2\.11\.0\n?$/);
+});
