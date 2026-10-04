@@ -78,14 +78,19 @@ func run(args []string, logger *slog.Logger) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	root := fs.String("dir", leasefence.DefaultRoot, "tmpfs directory shared with docker-daemon")
 	cgroupRoot := fs.String("cgroup-root", leasefence.DefaultCgroupRoot, "cgroupfs mount")
-	owner := fs.String("records-owner", "", "user that runs docker-daemon and writes deadline records")
+	owner := fs.String("records-owner", "", "user that runs docker-daemon and writes deadline records, when its configuration directory is missing")
+	daemonConfigDir := fs.String("daemon-config-dir", defaultDaemonConfigDir, "docker-daemon configuration directory: its owner is the user that runs docker-daemon")
 	autoUpdate := fs.Bool("auto-update", false, "install new watchdog releases automatically")
 	interval := fs.Duration("update-interval", 6*time.Hour, "average interval between update checks")
 	updates := addUpdateFlags(fs)
 	_ = fs.Parse(args)
 
 	dir := leasefence.Dir{Root: *root}
-	if err := prepareDirectories(dir, *owner); err != nil {
+	fallback, err := lookupOwner(*owner)
+	if err != nil {
+		return err
+	}
+	if err := prepareDirectories(dir); err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -95,7 +100,8 @@ func run(args []string, logger *slog.Logger) error {
 	if *autoUpdate {
 		go updateLoop(ctx, updates, *interval, logger, restart)
 	}
-	enforcer := watchdog.New(watchdog.Config{Dir: dir, CgroupRoot: *cgroupRoot, Logger: logger, Build: Version})
+	enforcer := watchdog.New(watchdog.Config{Dir: dir, CgroupRoot: *cgroupRoot, Logger: logger, Build: Version,
+		Owner: watchdog.ConfigDirOwner(*daemonConfigDir, fallback)})
 	done := make(chan struct{})
 	runCtx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -113,26 +119,32 @@ func run(args []string, logger *slog.Logger) error {
 	return nil
 }
 
-func prepareDirectories(dir leasefence.Dir, owner string) error {
+// defaultDaemonConfigDir is the docker-daemon configuration directory the node installer creates.
+const defaultDaemonConfigDir = "/etc/docker-daemon"
+
+// prepareDirectories creates the records directory; the enforcer gives it its owner from the first pass.
+func prepareDirectories(dir leasefence.Dir) error {
 	if err := os.MkdirAll(dir.RecordsDir(), 0o700); err != nil {
 		return fmt.Errorf("create lease record directory: %w", err)
 	}
-	if err := os.Chmod(filepath.Dir(dir.RecordsDir()), 0o755); err != nil {
-		return err
-	}
+	return os.Chmod(filepath.Dir(dir.RecordsDir()), 0o755)
+}
+
+// lookupOwner resolves --records-owner (no owner when it is empty).
+func lookupOwner(owner string) (watchdog.Owner, error) {
 	if owner == "" {
-		return nil
+		return func() (int, int, bool) { return 0, 0, false }, nil
 	}
 	account, err := user.Lookup(owner)
 	if err != nil {
-		return fmt.Errorf("records owner %q: %w", owner, err)
+		return nil, fmt.Errorf("records owner %q: %w", owner, err)
 	}
 	uid, uidErr := strconv.Atoi(account.Uid)
 	gid, gidErr := strconv.Atoi(account.Gid)
 	if uidErr != nil || gidErr != nil {
-		return fmt.Errorf("records owner %q has a non-numeric id", owner)
+		return nil, fmt.Errorf("records owner %q has a non-numeric id", owner)
 	}
-	return os.Chown(dir.RecordsDir(), uid, gid)
+	return func() (int, int, bool) { return uid, gid, true }, nil
 }
 
 func updateLoop(ctx context.Context, flags updateFlags, interval time.Duration, logger *slog.Logger, restart chan<- string) {

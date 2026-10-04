@@ -31,6 +31,8 @@ type Config struct {
 	Logger *slog.Logger
 	// Build is reported in the heartbeat for diagnostics.
 	Build string
+	// Owner is the docker daemon's user, given the records on every pass (owner.go); nil leaves them as they are.
+	Owner Owner
 }
 
 type Watchdog struct {
@@ -82,6 +84,7 @@ type PassResult struct {
 // writes their records again.
 func (w *Watchdog) Pass() PassResult {
 	result := PassResult{Healthy: true}
+	w.alignOwner()
 	records, problems, err := w.cfg.Dir.ReadRecords()
 	if err != nil {
 		w.cfg.Logger.Error("lease watchdog cannot read deadline records", "error", err)
