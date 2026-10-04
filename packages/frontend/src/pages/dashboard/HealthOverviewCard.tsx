@@ -9,7 +9,6 @@ import type { ProxyHost } from "@/types";
 
 interface HealthOverviewCardProps {
   healthHosts: ProxyHost[];
-  hasScope: (scope: string) => boolean;
 }
 
 function healthOverviewPriority(host: ProxyHost): number {
@@ -33,9 +32,10 @@ export function sortHealthOverviewHosts(hosts: ProxyHost[]): ProxyHost[] {
   });
 }
 
-export function HealthOverviewCard({ healthHosts, hasScope }: HealthOverviewCardProps) {
-  // Omit the panel entirely when there is nothing useful to show on the dashboard.
-  if (!hasScope("proxy:view") || healthHosts.length === 0) return null;
+export function HealthOverviewCard({ healthHosts }: HealthOverviewCardProps) {
+  // The server sends only what the viewer may see, and this panel explains the Dashboard dot: no
+  // second scope check on the cached scopes. Omit the panel when there is nothing to show.
+  if (healthHosts.length === 0) return null;
 
   return (
     <PanelShell

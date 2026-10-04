@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useLoadDashboardBootstrap } from "@/hooks/use-dashboard-bootstrap";
+import { dockerResourceKey } from "@/lib/dashboard-attention";
 import { refreshDynamicScopes } from "@/lib/live-scopes";
 import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -27,10 +28,10 @@ import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { useSystemConfigStore } from "@/stores/system-config";
-import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   AuditLogEntry,
+  DashboardAttentionNotice,
   DashboardRelaySnapshot,
   DashboardStats,
   FinalizeSetupState,
@@ -51,7 +52,7 @@ import { NodeSetupWizard } from "./dashboard/finalize-setup/NodeSetupWizard";
 import { HealthOverviewCard } from "./dashboard/HealthOverviewCard";
 import { ManagedCertificatesNotice } from "./dashboard/ManagedCertificatesNotice";
 import { NodesCard } from "./dashboard/NodesCard";
-import { nodeHasCapacityWarning, PinnedNodeCard } from "./dashboard/PinnedNodeCard";
+import { PinnedNodeCard } from "./dashboard/PinnedNodeCard";
 import { PinnedProxyCard } from "./dashboard/PinnedProxyCard";
 import { PinnedDatabaseCard, PinnedDockerResourceCard } from "./dashboard/PinnedResourceCard";
 import { QuickStatsCard } from "./dashboard/QuickStatsCard";
@@ -77,10 +78,6 @@ function makeDevExpiringItems(): ExpiringItem[] {
     makeItem("dev-expiring-preview", "backend.preview.pearldivergame.com", 15),
     makeItem("dev-expiring-staging", "backend.staging.pearldivergame.com", 15),
   ];
-}
-
-function isFinalizeSetupComplete(state: FinalizeSetupState): boolean {
-  return Object.values(state.steps).every((status) => status !== "pending");
 }
 
 function relayReasonLabel(reason: string | null | undefined): string {
@@ -294,6 +291,7 @@ export function LicenseGraceNotice({
   canManage: boolean;
 }) {
   const invalidateLicense = useUIBootstrapStore((state) => state.invalidate);
+  const invalidateDashboardBootstrap = useDashboardBootstrapStore((state) => state.invalidate);
   const deadline = graceUntil ? new Date(graceUntil).getTime() : Number.NaN;
   const [now, setNow] = useState(Date.now());
 
@@ -304,6 +302,8 @@ export function LicenseGraceNotice({
       () => {
         setNow(Date.now());
         invalidateLicense();
+        // The sidebar dot carries a `license-grace` notice until the dashboard snapshot is reloaded.
+        invalidateDashboardBootstrap();
       },
       Math.min(deadline - Date.now() + 50, 2_147_483_647)
     );
@@ -311,7 +311,7 @@ export function LicenseGraceNotice({
       window.clearInterval(interval);
       window.clearTimeout(timeout);
     };
-  }, [deadline, invalidateLicense]);
+  }, [deadline, invalidateDashboardBootstrap, invalidateLicense]);
 
   if (!Number.isFinite(deadline) || deadline <= now) return null;
   const absolute = formatDateTime(deadline);
@@ -367,7 +367,6 @@ export function Dashboard() {
   const invalidateDashboardBootstrap = useDashboardBootstrapStore((s) => s.invalidate);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
   const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
-  const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
   useLoadDashboardBootstrap();
   const [activity, setActivity] = useState<AuditLogEntry[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -506,18 +505,26 @@ export function Dashboard() {
   const mfaOnboardingReminder = Boolean(
     user?.authMethod !== "oidc" && showMfaOnboardingReminder && !mfaHasFactor && !mfaRequired
   );
+  // Every warning below is drawn from the notices behind the sidebar Dashboard dot, so the page and
+  // the dot cannot disagree.
+  const attentionNotices = dashboardBootstrap?.attention.notices ?? [];
+  const attentionNotice = (id: string): DashboardAttentionNotice | undefined =>
+    attentionNotices.find((notice) => notice.id === id);
+  const attentionIds = (id: string) => new Set(attentionNotice(id)?.ids ?? []);
   const relay = dashboardBootstrap?.relay ?? null;
   const license = useUIBootstrapStore((state) => state.snapshot?.license ?? null);
-  const relayNotice =
-    relay &&
-    ["migration_pending", "maintenance", "recovering", "degraded", "critical"].includes(relay.state)
-      ? relay
-      : null;
+  const relayNotice = attentionNotice("gateway-relay") ? relay : null;
   const tlsCertificateDistributionNeedsAttention = Boolean(
-    dashboardBootstrap?.attention.notices.some(
-      (notice) => notice.id === "tls-certificate-distribution"
-    )
+    attentionNotice("tls-certificate-distribution")
   );
+  const expiredPkiCertificates = attentionNotice("pki-certificates-expired")?.count ?? 0;
+  const updateNeedsAttention = Boolean(attentionNotice("gateway-update"));
+  const loggingNeedsAttention = Boolean(attentionNotice("logging-health"));
+  const mfaNeedsAttention = Boolean(attentionNotice("mfa"));
+  const finalizeSetupNeedsAttention = Boolean(attentionNotice("finalize-setup"));
+  const capacityNodeIds = attentionIds("node-capacity");
+  const unhealthyDatabaseIds = attentionIds("pinned-database-health");
+  const unhealthyDockerKeys = attentionIds("pinned-docker-health");
   const canRetryRelay = hasScope("admin:system") && relayNotice?.state === "critical";
 
   useEffect(() => {
@@ -580,10 +587,6 @@ export function Dashboard() {
     cas: { total: totalCAs, active: activeCAs },
   };
   const expiringItemsForCard = forcedExpiringItems ?? expiringItems;
-  const hasExpiringItemScope = useCallback(
-    (scope: string) => (forcedExpiringItems ? true : hasScopedAccess(scope)),
-    [forcedExpiringItems, hasScopedAccess]
-  );
 
   if (!dashboardBootstrap && dashboardBootstrapError) {
     return (
@@ -651,35 +654,53 @@ export function Dashboard() {
             </Notice>
           )}
 
+          {expiredPkiCertificates > 0 && (
+            <Notice
+              tone="warning"
+              title={
+                expiredPkiCertificates === 1
+                  ? "1 PKI certificate has expired"
+                  : `${expiredPkiCertificates} PKI certificates have expired`
+              }
+              actions={
+                pkiEnabled && hasScopedAccess("pki:cert:view") ? (
+                  <NoticeAction tone="warning" to="/certificates?status=expired">
+                    View expired certificates
+                  </NoticeAction>
+                ) : null
+              }
+            >
+              <p>Reissue the ones still in use, then revoke the expired ones.</p>
+            </Notice>
+          )}
+
           <ManagedCertificatesNotice certificates={dashboardBootstrap?.managedCertificates ?? []} />
 
           {/* Update available */}
-          {(dashboardBootstrap?.update?.updateAvailable ||
-            dashboardBootstrap?.update?.relay?.updateAvailable) &&
-            showUpdateNotifications && (
-              <Notice
-                tone="warning"
-                icon={ArrowUpCircle}
-                title="Update Available"
-                actions={
-                  <NoticeAction
-                    tone="warning"
-                    to="/settings/general"
-                    state={{ scrollTarget: "system-updates" }}
-                  >
-                    Go to Settings
-                  </NoticeAction>
-                }
-              >
-                <p>
-                  {dashboardBootstrap.update.updateAvailable
-                    ? `Gateway ${dashboardBootstrap.update.latestVersion} is ready to install`
-                    : `Relay ${dashboardBootstrap.update.relay?.latestVersion} is ready to install`}
-                </p>
-              </Notice>
-            )}
+          {updateNeedsAttention && dashboardBootstrap?.update && (
+            <Notice
+              tone="warning"
+              icon={ArrowUpCircle}
+              title="Update Available"
+              actions={
+                <NoticeAction
+                  tone="warning"
+                  to="/settings/general"
+                  state={{ scrollTarget: "system-updates" }}
+                >
+                  Go to Settings
+                </NoticeAction>
+              }
+            >
+              <p>
+                {dashboardBootstrap.update.updateAvailable
+                  ? `Gateway ${dashboardBootstrap.update.latestVersion} is ready to install`
+                  : `Relay ${dashboardBootstrap.update.relay?.latestVersion} is ready to install`}
+              </p>
+            </Notice>
+          )}
 
-          {loggingHealth && !["disabled", "healthy"].includes(loggingHealth.status) && (
+          {loggingNeedsAttention && loggingHealth && (
             <Notice
               tone="warning"
               title={
@@ -710,7 +731,7 @@ export function Dashboard() {
             </Notice>
           )}
 
-          {(mfaRequired || mfaGraceReauthenticationRequired) && (
+          {mfaNeedsAttention && (mfaRequired || mfaGraceReauthenticationRequired) && (
             <Notice
               tone="warning"
               title={
@@ -739,7 +760,7 @@ export function Dashboard() {
             </Notice>
           )}
 
-          {mfaOnboardingReminder && (
+          {mfaNeedsAttention && mfaOnboardingReminder && (
             <Notice
               tone="warning"
               title="Configure MFA"
@@ -764,7 +785,7 @@ export function Dashboard() {
             </Notice>
           )}
 
-          {finalizeSetup && !isFinalizeSetupComplete(finalizeSetup) && !mfaOnboardingReminder && (
+          {finalizeSetupNeedsAttention && finalizeSetup && (
             <Notice
               tone="info"
               icon={Info}
@@ -806,7 +827,11 @@ export function Dashboard() {
           {dashboardBootstrap?.pinned.dashboard.databases
             .filter((database) => dashboardPinnedDatabaseIds.includes(database.id))
             .map((database) => (
-              <PinnedDatabaseCard key={database.id} database={database} />
+              <PinnedDatabaseCard
+                key={database.id}
+                database={database}
+                attention={unhealthyDatabaseIds.has(database.id)}
+              />
             ))}
 
           {dashboardBootstrap?.pinned.dashboard.dockerResources
@@ -815,24 +840,22 @@ export function Dashboard() {
               <PinnedDockerResourceCard
                 key={`${resource.kind}:${resource.id}`}
                 resource={resource}
+                attention={unhealthyDockerKeys.has(dockerResourceKey(resource))}
               />
             ))}
 
           {/* Pinned + Warning Node Overview Cards */}
           {visibleNodesForCards
-            .filter((n) => dashboardPinnedIds.includes(n.id) || nodeHasCapacityWarning(n))
+            .filter((n) => dashboardPinnedIds.includes(n.id) || capacityNodeIds.has(n.id))
             .map((node) => (
               <PinnedNodeCard key={node.id} node={node} />
             ))}
 
-          <CertificateExpiryCard
-            expiringItems={expiringItemsForCard}
-            hasScopedAccess={hasExpiringItemScope}
-          />
+          <CertificateExpiryCard expiringItems={expiringItemsForCard} />
 
-          <HealthOverviewCard healthHosts={visibleHealthHosts} hasScope={hasScopedAccess} />
+          <HealthOverviewCard healthHosts={visibleHealthHosts} />
 
-          <NodesCard nodesList={visibleNodesForCards} hasScope={hasScopedAccess} />
+          <NodesCard nodesList={visibleNodesForCards} />
 
           {pkiEnabled && <CertificateAuthoritiesCard cas={cas} hasScope={hasScope} />}
 

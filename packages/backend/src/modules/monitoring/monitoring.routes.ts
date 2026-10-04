@@ -18,6 +18,7 @@ import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.
 import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import { hasLoggingHealthAccess } from '@/modules/logging/logging-permissions.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
@@ -37,11 +38,20 @@ import { SystemCertificateRenewalService } from '@/services/system-certificate-r
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
 import {
+  type DashboardAttentionNotice,
+  dashboardPinnedDatabaseWarningIds,
+  dashboardPinnedDockerWarningKeys,
   getDashboardAttentionSeverity,
-  hasDashboardPinnedDatabaseWarning,
-  hasDashboardPinnedDockerWarning,
+  hasNodeCapacityWarning,
+  lowInferenceUsageWindows,
+  nodeHealthAttentionIds,
+  proxyHealthAttentionIds,
 } from './dashboard-attention.js';
-import { DashboardReadModelService, dashboardStatsFromSourceSnapshots } from './dashboard-read-model.service.js';
+import {
+  DashboardReadModelService,
+  dashboardStatsFromSourceSnapshots,
+  listAllPages,
+} from './dashboard-read-model.service.js';
 import { getNginxLogHistory, logRelay, type RelayedLogEntry } from './log-relay.service.js';
 import { visibleManagedCertificateAttention } from './managed-certificate-attention.js';
 import {
@@ -234,14 +244,6 @@ type DashboardDockerResource = {
   scopeResourceId?: string;
 };
 
-function hasNodeCapacityWarning(node: any): boolean {
-  const health = node.lastHealthReport;
-  const disk = health?.diskMounts?.find((mount: any) => mount.mountPoint === '/');
-  const memory =
-    health?.systemMemoryTotalBytes > 0 ? (health.systemMemoryUsedBytes / health.systemMemoryTotalBytes) * 100 : 0;
-  return Boolean(health && (health.cpuPercent >= 80 || memory >= 80 || disk?.usagePercent >= 80));
-}
-
 /**
  * Keep the scope calculation shared with the legacy stats endpoint while the
  * bootstrap response is introduced incrementally.  This route is deliberately
@@ -321,45 +323,47 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     : Promise.resolve({ data: [] as any[] });
   const sslPromise = canViewSsl
     ? dashboardReadModels.get<any[]>('ssl').then(async (snapshot) => {
+        // Only the expiry list reads these rows: keep all of them, so it names every certificate the
+        // expiry notices count.
         if (!snapshot || snapshot.revision === 0) {
-          return container
-            .resolve(SSLService)
-            .listCerts(
-              { page: 1, limit: 100, status: 'active', showSystem } as any,
-              hasScope(scopes, 'ssl:cert:view')
-                ? undefined
-                : { allowedIds: getResourceScopedIds(scopes, 'ssl:cert:view') }
-            );
+          const ssl = container.resolve(SSLService);
+          const options = hasScope(scopes, 'ssl:cert:view')
+            ? undefined
+            : { allowedIds: getResourceScopedIds(scopes, 'ssl:cert:view') };
+          return {
+            data: await listAllPages((page) =>
+              ssl.listCerts({ page, limit: 100, status: 'active', showSystem } as any, options)
+            ),
+          };
         }
         const allowed = new Set(getResourceScopedIds(scopes, 'ssl:cert:view'));
         return {
           data: snapshot.data
             .filter((certificate) => certificate.status === 'active')
             .filter((certificate) => showSystem || !certificate.isSystem)
-            .filter((certificate) => hasScope(scopes, 'ssl:cert:view') || allowed.has(certificate.id))
-            .slice(0, 100),
+            .filter((certificate) => hasScope(scopes, 'ssl:cert:view') || allowed.has(certificate.id)),
         };
       })
     : Promise.resolve({ data: [] as any[] });
   const pkiPromise = canViewPki
     ? dashboardReadModels.get<any[]>('pki').then(async (snapshot) => {
         if (!snapshot || snapshot.revision === 0) {
-          return container
-            .resolve(CertService)
-            .listCertificates(
-              { page: 1, limit: 100, status: 'active', showSystem } as any,
-              hasScope(scopes, 'pki:cert:view')
-                ? undefined
-                : { allowedIds: getResourceScopedIds(scopes, 'pki:cert:view') }
-            );
+          const certificates = container.resolve(CertService);
+          const options = hasScope(scopes, 'pki:cert:view')
+            ? undefined
+            : { allowedIds: getResourceScopedIds(scopes, 'pki:cert:view') };
+          return {
+            data: await listAllPages((page) =>
+              certificates.listCertificates({ page, limit: 100, status: 'active', showSystem } as any, options)
+            ),
+          };
         }
         const allowed = new Set(getResourceScopedIds(scopes, 'pki:cert:view'));
         return {
           data: snapshot.data
             .filter((certificate) => certificate.status === 'active')
             .filter((certificate) => showSystem || !certificate.isSystem)
-            .filter((certificate) => hasScope(scopes, 'pki:cert:view') || allowed.has(certificate.id))
-            .slice(0, 100),
+            .filter((certificate) => hasScope(scopes, 'pki:cert:view') || allowed.has(certificate.id)),
         };
       })
     : Promise.resolve({ data: [] as any[] });
@@ -483,9 +487,27 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
           // Optional card: a failing summary must not take the dashboard down.
           .catch(() => [])
       : Promise.resolve([]);
+  // Only failures of certificates the viewer can open: the notice sends them to the certificate list.
   const tlsRepairFailuresPromise = canViewSsl
-    ? container.resolve(NginxCertificateDistributionService).getActiveRepairFailureCount()
+    ? container
+        .resolve(NginxCertificateDistributionService)
+        .listActiveRepairFailures()
+        .then(
+          (failures) =>
+            failures.filter((failure) =>
+              failure.referenceType === 'ssl'
+                ? hasScope(scopes, `ssl:cert:view:${failure.referenceId}`)
+                : hasScope(scopes, 'ssl:cert:view') || hasScope(scopes, `pki:cert:view:${failure.referenceId}`)
+            ).length
+        )
     : Promise.resolve(0);
+  // The Dashboard shows every viewer the license grace period; a failing read must not hide the page.
+  const licensePromise = container.isRegistered(LicensePolicyService)
+    ? container
+        .resolve(LicensePolicyService)
+        .getSummary()
+        .catch(() => null)
+    : Promise.resolve(null);
   const dashboardPinNodeIds = [...new Set(request.pins.dashboard.nodeIds)];
   const sidebarPinNodeIds = [...new Set(request.pins.sidebar.nodeIds)];
   const dashboardPinProxyIds = [...new Set(request.pins.dashboard.proxyHostIds)];
@@ -628,6 +650,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     daemonUpdates,
     dockerNavigationHealth,
     managedCertificates,
+    license,
   ] = await Promise.all([
     statsPromise,
     healthPromise,
@@ -650,6 +673,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     daemonUpdatesPromise,
     dockerNavigationHealthPromise,
     managedCertificatesPromise,
+    licensePromise,
   ]);
   const now = Date.now();
   const nodeCardIds = nodeResponse.data
@@ -711,23 +735,23 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       Number.isFinite(mfa.graceExpiresAt) &&
       mfa.graceExpiresAt > now
   );
-  const lowInference = inferenceUsage
-    ? [
-        inferenceUsage.api,
-        inferenceUsage.subscription['5h'],
-        inferenceUsage.subscription['7d'],
-        inferenceUsage.subscription['30d'],
-      ].some((window) => window.configured && 100 - window.percentage < 20)
-    : false;
-  const nodeCapacityWarning = dashboardNodes.some(hasNodeCapacityWarning);
-  const nodeHealthWarning = nodeResponse.data.some((node: any) =>
-    ['offline', 'error', 'degraded'].includes(node.status)
+  const nodeCapacityIds = dashboardNodes.filter(hasNodeCapacityWarning).map((node: any) => node.id);
+  const nodeHealthIds = nodeHealthAttentionIds(dashboardNodes, now);
+  const proxyHealthIds = canViewProxy
+    ? proxyHealthAttentionIds(
+        health,
+        pinnedProxyResponse.data.filter((proxy: any) => dashboardPinProxyIds.includes(proxy.id))
+      )
+    : [];
+  const pinnedDatabaseWarningIds = dashboardPinnedDatabaseWarningIds(
+    pinnedDatabaseResponse.data,
+    dashboardPinDatabaseIds
   );
-  const pinnedDatabaseWarning = hasDashboardPinnedDatabaseWarning(pinnedDatabaseResponse.data, dashboardPinDatabaseIds);
-  const pinnedDockerWarning = hasDashboardPinnedDockerWarning(
+  const pinnedDockerWarningKeys = dashboardPinnedDockerWarningKeys(
     pinnedDockerResources,
     request.pins.dashboard.dockerResources
   );
+  const lowInferenceWindows = lowInferenceUsageWindows(inferenceUsage);
   const relay = container.isRegistered(RelaySupervisorService)
     ? container.resolve(RelaySupervisorService).getSnapshot(hasScope(scopes, 'admin:system'))
     : null;
@@ -737,32 +761,50 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       : relay && ['migration_pending', 'maintenance', 'recovering', 'degraded'].includes(relay.state)
         ? { id: 'gateway-relay', severity: 'warning' as const }
         : null;
-  const notices = [
+  const licenseGraceUntil =
+    license?.status === 'expired_grace' && license.graceUntil ? Date.parse(license.graceUntil) : 0;
+  const notices: DashboardAttentionNotice[] = [
+    ...(licenseGraceUntil > now ? [{ id: 'license-grace', severity: 'critical' as const }] : []),
     ...(relayNotice ? [relayNotice] : []),
-    ...(tlsRepairFailures > 0 ? [{ id: 'tls-certificate-distribution', severity: 'critical' as const }] : []),
+    ...(tlsRepairFailures > 0
+      ? [{ id: 'tls-certificate-distribution', severity: 'critical' as const, count: tlsRepairFailures }]
+      : []),
     ...(canViewSsl && stats.sslCertificates.expiringSoon > 0
-      ? [{ id: 'ssl-certificates-expiring', severity: 'warning' as const }]
+      ? [{ id: 'ssl-certificates-expiring', severity: 'warning' as const, count: stats.sslCertificates.expiringSoon }]
       : []),
     ...(canViewPki && stats.pkiCertificates.expired > 0
-      ? [{ id: 'pki-certificates-expired', severity: 'warning' as const }]
+      ? [{ id: 'pki-certificates-expired', severity: 'warning' as const, count: stats.pkiCertificates.expired }]
       : []),
-    ...(canViewProxy && health.some((host) => ['offline', 'degraded', 'recovering'].includes(host.healthStatus ?? ''))
-      ? [{ id: 'proxy-health', severity: 'warning' as const }]
+    ...(proxyHealthIds.length > 0 ? [{ id: 'proxy-health', severity: 'warning' as const, ids: proxyHealthIds }] : []),
+    ...(expiring.length > 0
+      ? [{ id: 'certificate-expiry', severity: 'warning' as const, count: expiring.length }]
       : []),
-    ...(expiring.length > 0 ? [{ id: 'certificate-expiry', severity: 'warning' as const }] : []),
-    ...(managedCertificates.length > 0 ? [{ id: 'managed-certificates', severity: 'warning' as const }] : []),
-    ...(nodeCapacityWarning ? [{ id: 'node-capacity', severity: 'warning' as const }] : []),
-    ...(nodeHealthWarning ? [{ id: 'node-health', severity: 'warning' as const }] : []),
-    ...(pinnedDatabaseWarning ? [{ id: 'pinned-database-health', severity: 'warning' as const }] : []),
-    ...(pinnedDockerWarning ? [{ id: 'pinned-docker-health', severity: 'warning' as const }] : []),
+    ...(managedCertificates.length > 0
+      ? [{ id: 'managed-certificates', severity: 'warning' as const, count: managedCertificates.length }]
+      : []),
+    ...(nodeCapacityIds.length > 0
+      ? [{ id: 'node-capacity', severity: 'warning' as const, ids: nodeCapacityIds }]
+      : []),
+    ...(nodeHealthIds.length > 0 ? [{ id: 'node-health', severity: 'warning' as const, ids: nodeHealthIds }] : []),
+    ...(pinnedDatabaseWarningIds.length > 0
+      ? [{ id: 'pinned-database-health', severity: 'warning' as const, ids: pinnedDatabaseWarningIds }]
+      : []),
+    ...(pinnedDockerWarningKeys.length > 0
+      ? [{ id: 'pinned-docker-health', severity: 'warning' as const, ids: pinnedDockerWarningKeys }]
+      : []),
     ...(mfa && ((!mfaHasFactor && (mfa.required || mfa.showReminder)) || mfaGraceActive)
       ? [{ id: 'mfa', severity: 'warning' as const }]
       : []),
-    ...(update?.updateAvailable ? [{ id: 'gateway-update', severity: 'warning' as const }] : []),
+    // The Dashboard shows one Update Available notice for a Gateway or a relay release.
+    ...(update?.updateAvailable || update?.relay?.updateAvailable
+      ? [{ id: 'gateway-update', severity: 'warning' as const }]
+      : []),
     ...(loggingHealth && !['disabled', 'healthy'].includes(loggingHealth.status)
       ? [{ id: 'logging-health', severity: 'warning' as const }]
       : []),
-    ...(lowInference ? [{ id: 'inference-usage', severity: 'warning' as const }] : []),
+    ...(lowInferenceWindows.length > 0
+      ? [{ id: 'inference-usage', severity: 'warning' as const, ids: lowInferenceWindows }]
+      : []),
     ...(finalizeSetup && !isFinalizeSetupComplete(finalizeSetup) && !(mfa && !mfaHasFactor && mfa.showReminder)
       ? [{ id: 'finalize-setup', severity: 'info' as const }]
       : []),

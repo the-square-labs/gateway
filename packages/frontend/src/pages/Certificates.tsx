@@ -1,6 +1,6 @@
 import { FolderPlus, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
 import { IssuingCABadge } from "@/components/certificates/IssuingCABadge";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -80,6 +80,18 @@ export function Certificates() {
     fetchCertificates();
     if (canListCAs) fetchCAs();
   }, [canListCAs, fetchCAs, fetchCertificates, showSystemCertificates]);
+
+  // `?status=expired` opens the list on that status, e.g. from the Dashboard expired-certificates notice.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedStatus = searchParams.get("status");
+  useEffect(() => {
+    if (!requestedStatus) return;
+    const status = statusOptions.find((option) => option.value === requestedStatus)?.value;
+    if (status) setFilters({ status });
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("status");
+    setSearchParams(nextParams, { replace: true });
+  }, [requestedStatus, searchParams, setFilters, setSearchParams]);
 
   useRealtime("cert.changed", () => {
     fetchCertificates();

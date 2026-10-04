@@ -9,7 +9,6 @@ import { effectiveNodeStatus } from "@/types";
 
 interface NodesCardProps {
   nodesList: Node[];
-  hasScope: (scope: string) => boolean;
 }
 
 function dashboardNodePriority(node: Node): number {
@@ -32,9 +31,10 @@ export function sortDashboardNodes(nodes: Node[]): Node[] {
   });
 }
 
-export function NodesCard({ nodesList, hasScope }: NodesCardProps) {
-  // Omit the panel entirely when there is nothing useful to show on the dashboard.
-  if (!hasScope("nodes:details") || nodesList.length === 0) return null;
+export function NodesCard({ nodesList }: NodesCardProps) {
+  // The server sends only what the viewer may see, and this panel explains the Dashboard dot: no
+  // second scope check on the cached scopes. Omit the panel when there is nothing to show.
+  if (nodesList.length === 0) return null;
 
   return (
     <PanelShell

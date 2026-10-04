@@ -73,10 +73,10 @@ export class DashboardReadModelService {
     this.register('health', () => this.monitoring.getHealthOverview(), [MATERIAL_PROXY_CHANGE]);
     this.register(
       'proxies',
-      () => this.listAll((page) => this.proxies.listProxyHosts({ page, limit: 1_000 } as never)),
+      () => listAllPages((page) => this.proxies.listProxyHosts({ page, limit: 1_000 } as never)),
       [MATERIAL_PROXY_CHANGE]
     );
-    this.register('databases', () => this.listAll((page) => this.databases.list({ page, limit: 1_000 } as never)), [
+    this.register('databases', () => listAllPages((page) => this.databases.list({ page, limit: 1_000 } as never)), [
       {
         channel: 'database.changed',
         matches: (payload) => (payload as { action?: string } | null)?.action !== 'health.sampled',
@@ -84,13 +84,13 @@ export class DashboardReadModelService {
     ]);
     this.register(
       'ssl',
-      () => this.listAll((page) => this.ssl.listCerts({ page, limit: 1_000, showSystem: true } as never)),
+      () => listAllPages((page) => this.ssl.listCerts({ page, limit: 1_000, showSystem: true } as never)),
       ['ssl.cert.changed']
     );
     this.register(
       'pki',
       () =>
-        this.listAll((page) => this.certificates.listCertificates({ page, limit: 1_000, showSystem: true } as never)),
+        listAllPages((page) => this.certificates.listCertificates({ page, limit: 1_000, showSystem: true } as never)),
       ['cert.changed', 'ca.changed']
     );
     this.register('cas', () => this.cas.getCATree(true), ['ca.changed', 'cert.changed']);
@@ -141,17 +141,18 @@ export class DashboardReadModelService {
     });
     if (!leased.acquired) return;
   }
+}
 
-  private async listAll<T>(
-    fetchPage: (page: number) => Promise<{ data: T[]; pagination?: { page?: number; totalPages?: number } }>
-  ): Promise<T[]> {
-    const rows: T[] = [];
-    for (let page = 1; ; page += 1) {
-      const result = await fetchPage(page);
-      rows.push(...(result.data ?? []));
-      const totalPages = result.pagination?.totalPages;
-      if (!totalPages || page >= totalPages) return rows;
-    }
+/** Every row of a paginated list, page by page. */
+export async function listAllPages<T>(
+  fetchPage: (page: number) => Promise<{ data: T[]; pagination?: { page?: number; totalPages?: number } }>
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let page = 1; ; page += 1) {
+    const result = await fetchPage(page);
+    rows.push(...(result.data ?? []));
+    const totalPages = result.pagination?.totalPages;
+    if (!totalPages || page >= totalPages) return rows;
   }
 }
 
