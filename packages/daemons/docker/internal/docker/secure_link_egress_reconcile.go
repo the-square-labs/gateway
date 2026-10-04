@@ -126,16 +126,20 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 	}
 	sort.Strings(ids)
 	attached := map[string]egressNetwork{}
+	warnings := map[string]string{}
 	changed := false
 	for _, id := range ids {
 		desired := serving[id]
-		info, reattached, state, err := m.attachEgressLocked(ctx, desired, connectorNetworks[desired.networkName])
-		if err != nil {
-			statuses[id] = egressStatus{State: state, Error: err.Error(), RouteGeneration: desired.generation, network: desired.networkName}
+		result := m.attachEgressLocked(ctx, desired, connectorNetworks[desired.networkName])
+		if result.err != nil {
+			statuses[id] = egressStatus{State: result.state, Error: result.err.Error(), RouteGeneration: desired.generation, network: desired.networkName}
 			continue
 		}
-		changed = changed || reattached
-		attached[id] = info
+		changed = changed || result.changed
+		attached[id] = result.info
+		if result.warning != "" {
+			warnings[id] = result.warning
+		}
 	}
 	if changed {
 		reinspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.networkHolder(), mobyclient.ContainerInspectOptions{})
@@ -196,6 +200,14 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 		m.plugin.logger.Warn("secure-link connector refused its ingress bindings during an egress sync", "error", err)
 	}
 	m.recordEgressResponseLocked(response, configs, serving, statuses)
+	// Served, but not as Gateway asked (a refused address, a rejoin that kept the previous endpoint): the egress
+	// listens, and its status says what was not done.
+	for id, warning := range warnings {
+		if status, ok := statuses[id]; ok && status.Error == "" {
+			status.Error = warning
+			statuses[id] = status
+		}
+	}
 	m.detachStaleEgressNetworksLocked(ctx, connectorNetworks)
 	return statuses
 }
@@ -319,7 +331,12 @@ func egressNetworkOf(inspected network.Inspect) (egressNetwork, error) {
 		return egressNetwork{}, errors.New("the link network has no IPv4 subnet")
 	}
 	if reserved, ok := linkNetworkReservedAddress(inspected); ok {
-		info.reserved = reserved
+		info.reserved, info.userSubnet = reserved, true
+	}
+	for _, config := range inspected.IPAM.Config {
+		if config.IPRange.IsValid() || len(config.AuxAddress) > 0 {
+			info.userSubnet = true
+		}
 	}
 	return info, nil
 }

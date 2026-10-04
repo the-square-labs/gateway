@@ -80,8 +80,12 @@ func (m *dockerSecureLinkManager) recordEgressAddressLocked(networkName string, 
 }
 
 // wantedEgressAddress is the address the connector must have on the link network (invalid: any), and whether it is
-// only the recorded one, which yields to another holder.
+// only the recorded one, which yields to another holder. Docker attaches at a chosen address only on a network with
+// its own IPAM configuration: on one of the default pools the connector takes any address.
 func (m *dockerSecureLinkManager) wantedEgressAddress(desired egressDesired, info egressNetwork) (netip.Addr, bool) {
+	if !info.userSubnet {
+		return netip.Addr{}, false
+	}
 	switch {
 	case desired.connectorAddress.IsValid():
 		return desired.connectorAddress, false
@@ -95,20 +99,32 @@ func (m *dockerSecureLinkManager) wantedEgressAddress(desired egressDesired, inf
 	return netip.Addr{}, false
 }
 
+// egressAttach is the outcome of attaching the connector to one link network. With err the egress is not served
+// there; a warning is an error the egress reports while it is served (a refused address, a failed rejoin that put
+// the previous endpoint back).
+type egressAttach struct {
+	info    egressNetwork
+	changed bool
+	state   string
+	err     error
+	warning string
+}
+
 // attachEgressLocked joins the connector to the link network at its wanted address, with the link's alias unless
-// Gateway holds it back. It reports whether it attached now, and the egress state of an error.
-func (m *dockerSecureLinkManager) attachEgressLocked(ctx context.Context, desired egressDesired, endpoint *network.EndpointSettings) (egressNetwork, bool, string, error) {
+// Gateway holds it back. A desired network the connector is not on is joined again (self-heal). A rejoin never leaves
+// the connector off the network: when the new endpoint is refused, the previous one is put back.
+func (m *dockerSecureLinkManager) attachEgressLocked(ctx context.Context, desired egressDesired, endpoint *network.EndpointSettings) egressAttach {
 	info, known := m.egress.networks[desired.networkName]
 	if !known || endpoint == nil || endpoint.NetworkID != info.id {
 		inspected, err := m.plugin.client.cli.NetworkInspect(ctx, desired.networkName, mobyclient.NetworkInspectOptions{})
 		if isNotFoundErr(err) {
-			return egressNetwork{}, false, egressStatePending, errors.New("the link network does not exist yet")
+			return egressAttach{state: egressStatePending, err: errors.New("the link network does not exist yet")}
 		}
 		if err != nil {
-			return egressNetwork{}, false, egressStatePending, fmt.Errorf("inspect the link network: %w", err)
+			return egressAttach{state: egressStatePending, err: fmt.Errorf("inspect the link network: %w", err)}
 		}
 		if info, err = egressNetworkOf(inspected.Network); err != nil {
-			return egressNetwork{}, false, egressStateError, err
+			return egressAttach{state: egressStateError, err: err}
 		}
 		if m.egress.networks == nil {
 			m.egress.networks = map[string]egressNetwork{}
@@ -119,35 +135,35 @@ func (m *dockerSecureLinkManager) attachEgressLocked(ctx context.Context, desire
 			endpoint = nil
 		}
 	}
+	result := egressAttach{info: info}
+	if desired.connectorAddress.IsValid() && !info.userSubnet {
+		result.warning = fmt.Sprintf("connector address %s refused: the link network has no subnet of its own (one of Docker's default pools), "+
+			"where Docker attaches at no chosen address", desired.connectorAddress)
+	}
 	want, onlyRecorded := m.wantedEgressAddress(desired, info)
 	if want.IsValid() && !info.prefix.Contains(want) {
-		return egressNetwork{}, false, egressStateError, fmt.Errorf("the connector address %s is outside the link network", want)
+		return egressAttach{state: egressStateError, err: fmt.Errorf("the connector address %s is outside the link network", want)}
 	}
 	attachedRight := endpoint != nil && endpoint.NetworkID == info.id && endpointHasAlias(endpoint, desired.alias) != desired.aliasDisabled
 	if attachedRight && (!want.IsValid() || endpoint.IPAddress == want) {
-		return info, false, "", nil
+		return result
 	}
 	if want.IsValid() {
 		taken, err := m.takeEgressAddressLocked(ctx, desired.networkName, want)
 		switch {
 		case err != nil:
-			return egressNetwork{}, false, egressStateError, err
+			return egressAttach{state: egressStateError, err: err}
 		case taken && onlyRecorded:
 			// Another container got the recorded address meanwhile: the connector keeps or takes a new one.
 			m.recordEgressAddressLocked(desired.networkName, netip.Addr{})
 			if attachedRight {
-				return info, false, "", nil
+				return result
 			}
 			want = netip.Addr{}
 		case taken:
 			// The current endpoint stays until the address is free: no gap while it is not.
 			m.scheduleEgressRetryLocked()
-			return egressNetwork{}, false, egressStatePending, fmt.Errorf("%w (%s); retrying", errEgressAddressInUse, want)
-		}
-	}
-	if endpoint != nil {
-		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, desired.networkName, mobyclient.NetworkDisconnectOptions{Container: m.networkHolder(), Force: true}); err != nil && !isNotFoundErr(err) {
-			return egressNetwork{}, false, egressStateError, fmt.Errorf("detach the connector to rejoin the link network: %w", err)
+			return egressAttach{state: egressStatePending, err: fmt.Errorf("%w (%s); retrying", errEgressAddressInUse, want)}
 		}
 	}
 	settings := &network.EndpointSettings{}
@@ -157,20 +173,56 @@ func (m *dockerSecureLinkManager) attachEgressLocked(ctx context.Context, desire
 	if want.IsValid() {
 		settings.IPAMConfig = &network.EndpointIPAMConfig{IPv4Address: want}
 	}
-	if _, err := m.plugin.client.cli.NetworkConnect(ctx, desired.networkName, mobyclient.NetworkConnectOptions{Container: m.networkHolder(), EndpointConfig: settings}); err != nil {
-		if want.IsValid() && strings.Contains(strings.ToLower(err.Error()), "in use") {
-			// Taken between the check and the connect: back on any address until it is free.
-			settings.IPAMConfig = nil
-			_, _ = m.plugin.client.cli.NetworkConnect(ctx, desired.networkName, mobyclient.NetworkConnectOptions{Container: m.networkHolder(), EndpointConfig: settings})
-			m.scheduleEgressRetryLocked()
-			return egressNetwork{}, true, egressStatePending, fmt.Errorf("%w (%s); retrying", errEgressAddressInUse, want)
+	// What puts the connector back on the network when the new endpoint is refused: its previous aliases (the link's
+	// alias when it must have one) at its previous address where the network allows one, else any address.
+	restore := &network.EndpointSettings{Aliases: settings.Aliases}
+	if endpoint != nil {
+		if desired.aliasDisabled {
+			restore.Aliases = endpoint.Aliases
 		}
-		return egressNetwork{}, false, egressStateError, fmt.Errorf("attach the secure-link connector to the link network: %w", err)
+		if info.userSubnet && endpoint.IPAddress.IsValid() {
+			restore.IPAMConfig = &network.EndpointIPAMConfig{IPv4Address: endpoint.IPAddress}
+		}
+		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, desired.networkName, mobyclient.NetworkDisconnectOptions{Container: m.networkHolder(), Force: true}); err != nil && !isNotFoundErr(err) {
+			return egressAttach{state: egressStateError, err: fmt.Errorf("detach the connector to rejoin the link network: %w", err)}
+		}
+	}
+	if _, err := m.plugin.client.cli.NetworkConnect(ctx, desired.networkName, mobyclient.NetworkConnectOptions{Container: m.networkHolder(), EndpointConfig: settings}); err != nil {
+		m.scheduleEgressRetryLocked()
+		if !m.rejoinEgressNetworkLocked(ctx, desired.networkName, restore) {
+			return egressAttach{state: egressStateError, err: fmt.Errorf("attach the secure-link connector to the link network: %w", err)}
+		}
+		result.changed = true
+		result.warning = fmt.Sprintf("the connector kept its previous endpoint on the link network: %v", err)
+		if want.IsValid() && strings.Contains(strings.ToLower(err.Error()), "in use") {
+			result.warning = fmt.Sprintf("%v (%s); retrying", errEgressAddressInUse, want)
+		}
+		return result
 	}
 	if m.attached != nil {
 		m.attached[desired.networkName] = struct{}{}
 	}
-	return info, true, "", nil
+	result.changed = true
+	return result
+}
+
+// rejoinEgressNetworkLocked puts the connector back on a link network it was taken off: with restore, else at any
+// address. It reports whether the connector is on the network again.
+func (m *dockerSecureLinkManager) rejoinEgressNetworkLocked(ctx context.Context, networkName string, restore *network.EndpointSettings) bool {
+	attempts := []*network.EndpointSettings{restore}
+	if restore.IPAMConfig != nil {
+		attempts = append(attempts, &network.EndpointSettings{Aliases: restore.Aliases})
+	}
+	for _, settings := range attempts {
+		if _, err := m.plugin.client.cli.NetworkConnect(ctx, networkName, mobyclient.NetworkConnectOptions{Container: m.networkHolder(), EndpointConfig: settings}); err == nil ||
+			strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			if m.attached != nil {
+				m.attached[networkName] = struct{}{}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // takeEgressAddressLocked makes the connector's address free on a link network: a connector it replaces (the other

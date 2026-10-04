@@ -31,6 +31,10 @@ type egressFakeEngine struct {
 	gateways map[string]string
 	// sidecars hold addresses on the storage network (container id to IPv4), like a storage link's sidecar.
 	sidecars map[string]string
+	// storageUserSubnet gives the storage network its own IPAM configuration (else one of Docker's default pools);
+	// failAddressedConnect makes every connect at a chosen address fail.
+	storageUserSubnet    bool
+	failAddressedConnect bool
 }
 
 func (e *egressFakeEngine) serveNetwork(name, gateway string) {
@@ -96,9 +100,13 @@ func (e *egressFakeEngine) serveLinks(request *http.Request) (*http.Response, er
 		for id, address := range e.sidecars {
 			containers[id] = map[string]any{"Name": "gateway-storage-connector-" + id, "IPv4Address": address + "/24"}
 		}
+		ipam := map[string]string{"Subnet": "172.31.0.0/24", "Gateway": "172.31.0.1"}
+		if e.storageUserSubnet {
+			ipam["IPRange"] = "172.31.0.0/24"
+		}
 		return respond(http.StatusOK, map[string]any{
 			"Name": egressTestStorageNet, "Id": egressTestStorageNet + "-id", "Driver": "bridge", "Internal": true,
-			"IPAM":       map[string]any{"Config": []map[string]string{{"Subnet": "172.31.0.0/24", "Gateway": "172.31.0.1"}}},
+			"IPAM":       map[string]any{"Config": []map[string]string{ipam}},
 			"Containers": containers,
 		})
 	case e.gateways[name] != "" && request.Method == http.MethodGet:
@@ -120,6 +128,14 @@ func (e *egressFakeEngine) serveLinks(request *http.Request) (*http.Response, er
 		current := e.byIDOrName(body.Container)
 		if current == nil {
 			return respond(http.StatusNotFound, map[string]string{"message": "no such container"})
+		}
+		addressed := body.EndpointConfig.IPAMConfig != nil && body.EndpointConfig.IPAMConfig.IPv4Address != ""
+		if addressed && name == egressTestStorageNet && !e.storageUserSubnet {
+			return respond(http.StatusBadRequest, map[string]string{
+				"message": "user specified IP address is supported only when connecting to networks with user configured subnets"})
+		}
+		if addressed && e.failAddressedConnect {
+			return respond(http.StatusInternalServerError, map[string]string{"message": "connect failed"})
 		}
 		address := "10.213.0.33"
 		if name == egressTestStorageNet {

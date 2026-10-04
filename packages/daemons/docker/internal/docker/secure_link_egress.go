@@ -91,6 +91,10 @@ type egressNetwork struct {
 	id       string
 	prefix   netip.Prefix
 	reserved netip.Addr
+	// userSubnet: the network was created with its own IPAM configuration, the only kind Docker attaches a container
+	// to at a chosen address. A network of Docker's default pools shows its subnet in the inspect as well, so only
+	// the pool's networks (create_link_network) and an IP range tell them apart.
+	userSubnet bool
 }
 
 type secureLinkEgress struct {
