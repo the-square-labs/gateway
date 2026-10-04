@@ -375,7 +375,11 @@ export class NodesService {
               status: 'pending',
               serviceAddresses: input.type === 'relay' ? input.serviceAddresses : [],
               // Lets the creator, and only the creator, re-issue the enrollment token with nodes:create alone.
-              metadata: { createdById: userId },
+              // A relay keeps the port it was created with until enrollment records it on its relay instance.
+              metadata: {
+                createdById: userId,
+                ...(input.type === 'relay' && input.servicePort ? { relayServicePort: input.servicePort } : {}),
+              },
             })
             .returning();
           return created;

@@ -76,6 +76,11 @@ function percent(value: number, total: number) {
   return Math.max(0, Math.min(100, (value / total) * 100));
 }
 
+/** Where daemons dial a relay: an address with the relay's service port, IPv6 in brackets. */
+function relayEndpointLabel(address: string, port: number): string {
+  return `${address.includes(":") && !address.startsWith("[") ? `[${address}]` : address}:${port}`;
+}
+
 function metric(value: unknown): number {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
@@ -520,7 +525,9 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           <div className="text-xs text-muted-foreground">
             {row.kind === "local"
               ? "Gateway host"
-              : `${row.advertisedAddresses.join(", ")}:${row.servicePort}`}
+              : row.advertisedAddresses
+                  .map((address) => relayEndpointLabel(address, row.servicePort))
+                  .join(", ")}
           </div>
         </div>
       ),
