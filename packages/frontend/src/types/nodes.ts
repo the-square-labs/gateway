@@ -280,14 +280,5 @@ export function getNodeUpdateTargetVersion(node: Node | NodeDetail): string | nu
   return typeof target === "string" && target.length > 0 ? target : null;
 }
 
-/** Compute effective node status from recent health history (mirrors proxy effectiveHealthStatus) */
-export function effectiveNodeStatus(node: {
-  status: NodeStatus;
-  healthHistory?: Array<{ ts: string; status: string }>;
-}): string {
-  if (node.status !== "online" || !node.healthHistory?.length) return node.status;
-  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-  const recent = node.healthHistory.filter((h) => h.ts && new Date(h.ts).getTime() >= fiveMinAgo);
-  if (recent.some((h) => h.status === "offline" || h.status === "degraded")) return "degraded";
-  return "online";
-}
+/** Effective node status from recent health history; the Dashboard dot uses the same rule. */
+export { effectiveNodeStatus } from "@/lib/dashboard-attention";

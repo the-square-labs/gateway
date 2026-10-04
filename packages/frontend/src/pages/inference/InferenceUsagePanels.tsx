@@ -21,7 +21,11 @@ import {
   useInferenceSelfUsage,
   useInferenceSelfUsageOverview,
 } from "@/hooks/use-inference-self-usage";
-import { DASHBOARD_INFERENCE_USAGE_THRESHOLD } from "@/lib/inference-self-usage";
+import {
+  INFERENCE_USAGE_WARNING_REMAINING_PERCENT,
+  type InferenceUsageWindowId,
+  lowInferenceUsageWindows,
+} from "@/lib/dashboard-attention";
 import { cn, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
@@ -123,7 +127,7 @@ function UsageStatCard({
   icon: typeof Gauge;
 }) {
   const remaining = remainingPercentage(value.percentage);
-  const isLow = 100 - value.percentage < DASHBOARD_INFERENCE_USAGE_THRESHOLD;
+  const isLow = 100 - value.percentage < INFERENCE_USAGE_WARNING_REMAINING_PERCENT;
   return (
     <StatCard
       className="border-0"
@@ -196,20 +200,13 @@ export function DashboardInferenceUsage({
 
   if (loading || error || !usage?.enabled) return null;
 
-  const lowWindows: Array<{
-    label: string;
-    value: InferenceUsageWindow;
-  }> = [
-    { label: "API usage", value: usage.api },
-    { label: "5 hours", value: usage.subscription["5h"] },
-    { label: "Weekly", value: usage.subscription["7d"] },
-    { label: "Monthly", value: usage.subscription["30d"] },
-  ].filter(
-    ({ value }) =>
-      value.configured &&
-      value.active !== false &&
-      100 - value.percentage < DASHBOARD_INFERENCE_USAGE_THRESHOLD
-  );
+  const windows: Record<InferenceUsageWindowId, { label: string; value: InferenceUsageWindow }> = {
+    api: { label: "API usage", value: usage.api },
+    "5h": { label: "5 hours", value: usage.subscription["5h"] },
+    "7d": { label: "Weekly", value: usage.subscription["7d"] },
+    "30d": { label: "Monthly", value: usage.subscription["30d"] },
+  };
+  const lowWindows = lowInferenceUsageWindows(usage).map((id) => windows[id]);
 
   if (lowWindows.length === 0) return null;
 

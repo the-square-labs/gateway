@@ -32,6 +32,18 @@ export interface DashboardStats {
 export type DashboardAttentionSeverity = "info" | "warning" | "critical";
 export type NavigationAttentionSeverity = "warning" | "critical";
 
+export interface DashboardAttentionNotice {
+  id: string;
+  severity: DashboardAttentionSeverity;
+  /**
+   * What the notice is about: node ids (`node-capacity`, `node-health`), route ids (`proxy-health`),
+   * pinned database ids, pinned Docker keys `kind:nodeId:id`, or inference windows (`inference-usage`).
+   */
+  ids?: string[];
+  /** How many certificates or replicas the notice counts. */
+  count?: number;
+}
+
 export type RelayLifecycleState =
   | "migration_pending"
   | "maintenance"
@@ -277,9 +289,10 @@ export interface DashboardBootstrap {
     dashboard: DashboardBootstrapPinnedResources;
     sidebar: DashboardBootstrapPinnedResources;
   };
+  /** Why the sidebar Dashboard dot is on. The Dashboard explains every notice from this list. */
   attention: {
     severity: DashboardAttentionSeverity | null;
-    notices: Array<{ id: string; severity: DashboardAttentionSeverity }>;
+    notices: DashboardAttentionNotice[];
   };
   navigationAttention: {
     nodes: NavigationAttentionSeverity | null;

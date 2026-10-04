@@ -4,40 +4,22 @@ import { nodeStatusTone } from "@/components/common/resource-status";
 import { Badge } from "@/components/ui/badge";
 import { HealthBars } from "@/components/ui/health-bars";
 import { StatCard as MetricCard } from "@/components/ui/stat-card";
+import { nodeCapacityWarnings } from "@/lib/dashboard-attention";
 import { nodeTypeLabel } from "@/lib/node-appearance";
 import { nodeRoute } from "@/lib/resource-routes";
 import { formatBytes } from "@/lib/utils";
 import type { Node, NodeHealthReport } from "@/types";
 import { effectiveNodeStatus } from "@/types";
 
-export const WARN_THRESHOLD = 80;
-
-/**
- * The same rule as the server's dashboard attention (`node-capacity`): CPU, memory, or root disk at the
- * threshold. A node that raises the sidebar dot must also get its card here, pinned or not.
- */
-export function nodeHasCapacityWarning(node: Pick<Node, "lastHealthReport">): boolean {
-  const h = node.lastHealthReport;
-  if (!h) return false;
-  const memory =
-    h.systemMemoryTotalBytes > 0 ? (h.systemMemoryUsedBytes / h.systemMemoryTotalBytes) * 100 : 0;
-  const disk = h.diskMounts?.find((mount) => mount.mountPoint === "/");
-  return (
-    h.cpuPercent >= WARN_THRESHOLD ||
-    memory >= WARN_THRESHOLD ||
-    (disk?.usagePercent ?? 0) >= WARN_THRESHOLD
-  );
-}
-
 function warnStyle(
-  pct: number,
+  warning: boolean,
   boundaries: { left: boolean; right: boolean }
 ): {
   style?: React.CSSProperties;
   valueColor?: string;
   progressColor?: string;
 } {
-  if (pct < WARN_THRESHOLD) return {};
+  if (!warning) return {};
   const warningBorder = "1px solid color-mix(in srgb, var(--color-warning) 60%, transparent)";
   return {
     style: {
@@ -75,12 +57,11 @@ export function PinnedNodeCard({ node, liveHealth, healthHistory }: PinnedNodeCa
   const diskPercent = rootDisk ? Math.round(rootDisk.usagePercent) : 0;
   const cpuPercent = h ? Math.min(Math.round(h.cpuPercent), 100) : 0;
 
-  const cpuWarning = cpuPercent >= WARN_THRESHOLD;
-  const memoryWarning = memPercent >= WARN_THRESHOLD;
-  const diskWarning = diskPercent >= WARN_THRESHOLD;
-  const cpuWarn = warnStyle(cpuPercent, { left: true, right: !memoryWarning });
-  const memWarn = warnStyle(memPercent, { left: !cpuWarning, right: !diskWarning });
-  const diskWarn = warnStyle(diskPercent, { left: !memoryWarning, right: true });
+  // On the unrounded values: the rule of the server's `node-capacity` notice behind the sidebar dot.
+  const { cpu: cpuWarning, memory: memoryWarning, disk: diskWarning } = nodeCapacityWarnings(h);
+  const cpuWarn = warnStyle(cpuWarning, { left: true, right: !memoryWarning });
+  const memWarn = warnStyle(memoryWarning, { left: !cpuWarning, right: !diskWarning });
+  const diskWarn = warnStyle(diskWarning, { left: !memoryWarning, right: true });
 
   return (
     <div className="grid grid-cols-4 border border-border bg-card overflow-visible">

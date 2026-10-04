@@ -1007,12 +1007,23 @@ export class NginxCertificateDistributionService {
     }
   }
 
-  async getActiveRepairFailureCount(): Promise<number> {
+  /**
+   * One entry per failed replica that an active route still needs, naming the certificate it carries
+   * (`ssl` = SSL certificate id, `internal` = PKI certificate id), so callers can limit it to what a viewer
+   * may see.
+   */
+  async listActiveRepairFailures(): Promise<Array<{ referenceType: 'ssl' | 'internal'; referenceId: string }>> {
     const failed = await this.db
-      .select({ assetId: nginxCertificateReplicas.assetId, nodeId: nginxCertificateReplicas.nodeId })
+      .select({
+        assetId: nginxCertificateReplicas.assetId,
+        nodeId: nginxCertificateReplicas.nodeId,
+        referenceType: nginxCertificateAssets.referenceType,
+        referenceId: nginxCertificateAssets.referenceId,
+      })
       .from(nginxCertificateReplicas)
+      .innerJoin(nginxCertificateAssets, eq(nginxCertificateAssets.id, nginxCertificateReplicas.assetId))
       .where(eq(nginxCertificateReplicas.status, 'failed'));
-    let count = 0;
+    const result: Array<{ referenceType: 'ssl' | 'internal'; referenceId: string }> = [];
     for (const replica of failed) {
       const [active] = await this.db
         .select({ id: nginxProxyHostDeployments.id })
@@ -1025,9 +1036,9 @@ export class NginxCertificateDistributionService {
           )
         )
         .limit(1);
-      if (active) count += 1;
+      if (active) result.push({ referenceType: replica.referenceType, referenceId: replica.referenceId });
     }
-    return count;
+    return result;
   }
 
   private async repairReplica(asset: AssetRow, nodeId: string): Promise<void> {
