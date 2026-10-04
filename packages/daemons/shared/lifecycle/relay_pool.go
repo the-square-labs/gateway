@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync/atomic"
 
@@ -25,8 +26,10 @@ func runProcessRelayPool(
 	// on those lanes (database, storage and backup streams) would drop with them.
 	type targetRun struct {
 		target *atomic.Pointer[RelayTunnelTarget]
-		cancel context.CancelFunc
-		done   chan struct{}
+		// changed wakes the run when the target's address or certificate changed.
+		changed chan struct{}
+		cancel  context.CancelFunc
+		done    chan struct{}
 	}
 	running := map[string]*targetRun{}
 	laneCount := 0
@@ -70,10 +73,14 @@ func runProcessRelayPool(
 		plan := planRelayTargets(runningIDs, targets)
 		stop(plan.stop...)
 		for _, target := range plan.update {
-			// A changed address or certificate (a renewal) applies to the next
-			// connection; lanes that are up stay up.
+			// A changed address or certificate (a re-enrollment or a renewal)
+			// replaces the target's lanes once one of them is not connected;
+			// lanes that are up stay up (runRelayPoolTarget).
 			next := target
-			running[target.ID].target.Store(&next)
+			run := running[target.ID]
+			if previous := run.target.Swap(&next); !sameRelayConnection(*previous, next) {
+				notifyRelayLanes(run.changed)
+			}
 		}
 		for _, target := range plan.start {
 			id := target.ID
@@ -81,11 +88,11 @@ func runProcessRelayPool(
 			initial := target
 			current.Store(&initial)
 			targetCtx, cancel := context.WithCancel(ctx)
-			run := &targetRun{target: current, cancel: cancel, done: make(chan struct{})}
+			run := &targetRun{target: current, changed: make(chan struct{}, 1), cancel: cancel, done: make(chan struct{})}
 			running[id] = run
 			go func() {
 				defer close(run.done)
-				runRelayPoolTarget(targetCtx, connector, plugin, nodeID, current.Load, lanes, logger)
+				runRelayPoolTarget(targetCtx, connector, plugin, nodeID, current.Load, run.changed, lanes, logger)
 			}()
 		}
 		select {
@@ -108,8 +115,8 @@ type relayTargetPlan struct {
 }
 
 // planRelayTargets compares running relay targets with the desired ones: only
-// new targets start and only removed ones stop. A target whose address or
-// certificate changed keeps its lanes and uses the new data to reconnect.
+// new targets start and only removed ones stop. A running target is updated in
+// place; its run replaces its lanes when its address or certificate changed.
 func planRelayTargets(running map[string]bool, desired []RelayTunnelTarget) relayTargetPlan {
 	plan := relayTargetPlan{}
 	wanted := make(map[string]bool, len(desired))
@@ -133,12 +140,21 @@ func planRelayTargets(running map[string]bool, desired []RelayTunnelTarget) rela
 	return plan
 }
 
+// runRelayPoolTarget keeps the lanes to one relay target. A lane's connection
+// pins the address and certificate it was built for, and gRPC reconnects it
+// with them. When the target's address or certificate changes (a re-enrolled
+// relay serves a new certificate), lanes that are up stay up: a renewed relay
+// keeps serving the previous certificate, so their tunnels carry on. Once one
+// of them drops (or is down when the change arrives), every lane of the target
+// is replaced with lanes built for the new data: reconnecting with the old
+// ones fails for as long as the relay no longer serves that certificate.
 func runRelayPoolTarget(
 	ctx context.Context,
 	connector *connector.Connector,
 	plugin RelayPoolTunnelPlugin,
 	nodeID string,
 	currentTarget func() *RelayTunnelTarget,
+	targetChanged <-chan struct{},
 	laneCount int,
 	logger *slog.Logger,
 ) {
@@ -147,6 +163,7 @@ func runRelayPoolTarget(
 		targetCtx, cancelTarget := context.WithCancel(ctx)
 		connections := make([]*grpc.ClientConn, 0, laneCount)
 		laneEnded := make(chan struct{}, laneCount)
+		laneDropped := make(chan struct{}, 1)
 		// Each lane carries tunnels as soon as it is up: right after a start (a restart or update of the daemon) the
 		// connections the previous process handed over wait for the first lane, not for every lane of the relay.
 		for len(connections) < laneCount && ctx.Err() == nil {
@@ -165,7 +182,7 @@ func runRelayPoolTarget(
 				liveRelayTransports.set(target.ID, conn)
 			}
 			connections = append(connections, conn)
-			go keepRelayLaneConnected(targetCtx, conn)
+			go keepRelayLaneConnected(targetCtx, conn, laneDropped)
 			go func() {
 				plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
 				laneEnded <- struct{}{}
@@ -178,9 +195,25 @@ func runRelayPoolTarget(
 			}
 			continue
 		}
-		select {
-		case <-ctx.Done():
-		case <-laneEnded:
+	lanesUp:
+		for {
+			dropped := false
+			select {
+			case <-ctx.Done():
+				break lanesUp
+			case <-laneEnded:
+				break lanesUp
+			case <-targetChanged:
+			case <-laneDropped:
+				dropped = true
+			}
+			current := *currentTarget()
+			if sameRelayConnection(target, current) || (!dropped && relayLanesReady(connections)) {
+				continue
+			}
+			logger.Info("relay target address or certificate changed, replacing its lanes",
+				"relay_instance_id", target.ID, "certificate_fingerprint", current.CertificateFingerprint)
+			break lanesUp
 		}
 		cancelTarget()
 		liveRelayTransports.clear(target.ID, connections[0])
@@ -196,8 +229,10 @@ func runRelayPoolTarget(
 // keepRelayLaneConnected reconnects a lane whose transport dropped. gRPC
 // leaves such a connection idle until the next call on it, but tunnels are
 // only opened on lanes that are connected: a relay that was unreachable for a
-// while would stay out of use after it came back.
-func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn) {
+// while would stay out of use after it came back. Each time the lane leaves
+// the connected state it is signalled on dropped (nil for none), even when it
+// is connected again by the time the signal is read.
+func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn, dropped chan<- struct{}) {
 	for {
 		state := conn.GetState()
 		if state == connectivity.Idle {
@@ -206,5 +241,32 @@ func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn) {
 		if !conn.WaitForStateChange(ctx, state) {
 			return
 		}
+		if state == connectivity.Ready {
+			notifyRelayLanes(dropped)
+		}
 	}
+}
+
+func notifyRelayLanes(changed chan<- struct{}) {
+	select {
+	case changed <- struct{}{}:
+	default:
+	}
+}
+
+// sameRelayConnection reports whether lanes built for one target fit the other:
+// a lane's connection is bound to its addresses, server name and certificate.
+func sameRelayConnection(built, current RelayTunnelTarget) bool {
+	return slices.Equal(built.Addresses, current.Addresses) &&
+		built.CertificateIdentity == current.CertificateIdentity &&
+		built.CertificateFingerprint == current.CertificateFingerprint
+}
+
+func relayLanesReady(connections []*grpc.ClientConn) bool {
+	for _, conn := range connections {
+		if conn.GetState() != connectivity.Ready {
+			return false
+		}
+	}
+	return true
 }
