@@ -133,6 +133,8 @@ Secure Runtime requires:
 - the Docker CLI and a Docker service that the installer can restart;
 - root privileges for installation.
 
+Installation registers `runsc` in `/etc/docker/daemon.json` and restarts Docker. In an existing file only `runtimes.runsc` is added or updated; every other key and value stays exactly as written, and the original file is saved once as `/etc/docker/daemon.json.gateway-backup` before the first change. A file that already registers this `runsc` is not rewritten.
+
 KVM is not required. A compatible LXC guest can use Secure Runtime when nested Docker, service management, and the required host capabilities are available; LXC compatibility is therefore host-configuration dependent rather than universal.
 
 Gateway advertises Secure as available only after `runsc` is installed, configured in Docker, and passes consecutive Docker smoke tests. Secure workload creation fails closed while that status is unknown, unhealthy, installing, or unsupported.

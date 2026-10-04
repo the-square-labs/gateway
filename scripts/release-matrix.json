@@ -241,7 +241,7 @@
       ]
     },
     "docker.existing-engine": {
-      "description": "An existing distribution Docker Engine (docker.io) and its daemon.json are kept.",
+      "description": "An existing distribution Docker Engine (docker.io) and its daemon.json are kept; Secure Runtime only adds runtimes.runsc to daemon.json, after a backup.",
       "doc": "docs/operations.md#container-log-limits",
       "os": [
         "ubuntu"
@@ -2091,7 +2091,7 @@
         "Read the kernel log for AppArmor denials."
       ],
       "expect": [
-        "docker.io is kept (no docker-ce) and the existing daemon.json is untouched; connected.",
+        "docker.io is kept (no docker-ce); the existing daemon.json keeps every key and value of the operator, --secure-runtime only adds runtimes.runsc after saving the original as daemon.json.gateway-backup, and a re-run changes neither file; connected.",
         "--secure-runtime either installs runsc and Node Details shows Secure Runtime healthy, or exits 1 with the preflight reason and leaves the daemon running; it never reports success without runsc.",
         "Recreate keeps the container's configuration; names resolve inside containers through the resolved upstream; the registry pull succeeds.",
         "Non-root: connected as gwdock; connectors and workloads start with the docker-default profile; the route answers 200; no AppArmor denial for docker-daemon, its connectors or nginx."

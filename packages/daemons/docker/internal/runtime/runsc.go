@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha512"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -663,123 +662,6 @@ func copyExecutable(source, target string) error {
 		return copyErr
 	}
 	return closeErr
-}
-
-func writeRunscDockerConfig(path, runscPath string) (func() error, error) {
-	original, readErr := os.ReadFile(path)
-	existed := readErr == nil
-	originalMode := os.FileMode(0o644)
-	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		return nil, readErr
-	}
-	if existed {
-		if info, err := os.Stat(path); err == nil {
-			originalMode = info.Mode().Perm()
-		} else {
-			return nil, err
-		}
-	}
-	config := map[string]any{}
-	if existed && len(strings.TrimSpace(string(original))) > 0 {
-		if err := json.Unmarshal(original, &config); err != nil {
-			return nil, fmt.Errorf("parse Docker daemon config: %w", err)
-		}
-	}
-	runtimes, _ := config["runtimes"].(map[string]any)
-	if runtimes == nil {
-		runtimes = map[string]any{}
-		config["runtimes"] = runtimes
-	}
-	runtimeArgs := make([]any, 0, 1)
-	if existing, ok := runtimes["runsc"].(map[string]any); ok {
-		if existingArgs, ok := existing["runtimeArgs"].([]any); ok {
-			runtimeArgs = append(runtimeArgs, existingArgs...)
-		}
-	}
-	hasHostNetwork := false
-	for _, arg := range runtimeArgs {
-		if arg == "--network=host" {
-			hasHostNetwork = true
-			break
-		}
-	}
-	if !hasHostNetwork {
-		runtimeArgs = append(runtimeArgs, "--network=host")
-	}
-	runtimes["runsc"] = map[string]any{
-		"path":        runscPath,
-		"runtimeArgs": runtimeArgs,
-	}
-	content, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	content = append(content, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".gateway-daemon-json-*")
-	if err != nil {
-		return nil, err
-	}
-	tempName := temp.Name()
-	defer os.Remove(tempName)
-	if err := temp.Chmod(originalMode); err != nil {
-		temp.Close()
-		return nil, err
-	}
-	if _, err := temp.Write(content); err != nil {
-		temp.Close()
-		return nil, err
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return nil, err
-	}
-	if err := temp.Close(); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tempName, path); err != nil {
-		return nil, err
-	}
-	return func() error {
-		if !existed {
-			return os.Remove(path)
-		}
-		return os.WriteFile(path, original, originalMode)
-	}, nil
-}
-
-func runscDockerConfigStatus(path, runscPath string) (registered bool, current bool, err error) {
-	content, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, false, nil
-	}
-	if err != nil {
-		return false, false, err
-	}
-	if len(strings.TrimSpace(string(content))) == 0 {
-		return false, false, nil
-	}
-	config := map[string]any{}
-	if err := json.Unmarshal(content, &config); err != nil {
-		return false, false, fmt.Errorf("parse Docker daemon config: %w", err)
-	}
-	runtimes, _ := config["runtimes"].(map[string]any)
-	runsc, registered := runtimes["runsc"].(map[string]any)
-	if !registered {
-		return false, false, nil
-	}
-	if runsc["path"] != runscPath {
-		return true, false, nil
-	}
-	runtimeArgs, _ := runsc["runtimeArgs"].([]any)
-	for _, arg := range runtimeArgs {
-		if arg == "--network=host" {
-			return true, true, nil
-		}
-	}
-	return true, false, nil
 }
 
 // localInstallCommand is the command that installs Secure Runtime on this node. Root never runs the binary of a
