@@ -29,6 +29,70 @@ const (
 
 var secureLinkAnchorCommand = []string{"pause"}
 
+// secureLinkAnchorImageLabel marks a connector image that has the pause subcommand (its Dockerfile). The daemon is
+// updated before Gateway, which then still sends the connector image of its own release: without the label the
+// connector runs in its own network namespace as before, serving ingress, and the egress waits for Gateway's update.
+const (
+	secureLinkAnchorImageLabel   = "wiolett.gateway.secure-link-connector.anchor"
+	secureLinkAnchorImageVersion = "v1"
+	connectorImageTooOld         = "the secure-link connector image is too old for links from this node; update Gateway"
+)
+
+// anchorSupported reports whether image can run the anchor, from the label of the (pulled) image.
+func (m *dockerSecureLinkManager) anchorSupported(ctx context.Context, image string) (bool, error) {
+	if supported, known := m.anchorImages[image]; known {
+		return supported, nil
+	}
+	if image != developmentSecureLinkImage {
+		if err := m.plugin.client.EnsureImage(ctx, image, ""); err != nil {
+			return false, fmt.Errorf("ensure secure-link connector image: %w", err)
+		}
+	}
+	inspected, err := m.plugin.client.cli.ImageInspect(ctx, image)
+	if err != nil {
+		return false, fmt.Errorf("inspect secure-link connector image: %w", err)
+	}
+	supported := inspected.Config != nil && inspected.Config.Labels[secureLinkAnchorImageLabel] == secureLinkAnchorImageVersion
+	if image != developmentSecureLinkImage {
+		// A digest or release tag names one image for good; the development tag is rebuilt.
+		if m.anchorImages == nil {
+			m.anchorImages = map[string]bool{}
+		}
+		m.anchorImages[image] = supported
+	}
+	return supported, nil
+}
+
+// networkHolder is the container that holds the connector's network endpoints: the anchor, or the connector itself
+// when its image cannot run one.
+func (m *dockerSecureLinkManager) networkHolder() string {
+	if m.anchorID != "" {
+		return m.anchorID
+	}
+	return m.connectorID
+}
+
+// removeUnusedAnchor removes an anchor no connector runs in any more: the connector image went back to one without
+// the anchor (a Gateway rollback), and the anchor's link aliases would answer for nothing.
+func (m *dockerSecureLinkManager) removeUnusedAnchor(ctx context.Context) {
+	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, secureLinkAnchorName, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		return
+	}
+	for _, slot := range secureLinkConnectorSlots {
+		connector, err := m.plugin.client.cli.ContainerInspect(ctx, slot.name, mobyclient.ContainerInspectOptions{})
+		if err == nil && inSecureLinkAnchor(connector.Container, inspected.Container.ID) {
+			return
+		}
+		if err != nil && !isNotFoundErr(err) {
+			return
+		}
+	}
+	if err := m.removeAnchor(ctx); err != nil && m.plugin.logger != nil {
+		m.plugin.logger.Warn("could not remove the unused secure-link anchor", "error", err)
+	}
+}
+
 // ensureAnchor returns the running anchor, created (with image) or started when needed.
 func (m *dockerSecureLinkManager) ensureAnchor(ctx context.Context, image string) (*container.InspectResponse, error) {
 	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, secureLinkAnchorName, mobyclient.ContainerInspectOptions{})
@@ -123,6 +187,15 @@ func inSecureLinkAnchor(inspect container.InspectResponse, anchorID string) bool
 	return anchorID != "" && inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "container:"+anchorID
 }
 
+// inConnectorNamespace reports a connector in the namespace it must run in: the anchor's, or without an anchor
+// (anchorID "") its own.
+func inConnectorNamespace(inspect container.InspectResponse, anchorID string) bool {
+	if anchorID != "" {
+		return inSecureLinkAnchor(inspect, anchorID)
+	}
+	return inspect.HostConfig != nil && !strings.HasPrefix(string(inspect.HostConfig.NetworkMode), "container:")
+}
+
 // joinedBeforeAnchorStart reports a connector that started before the anchor's last start: it holds the network
 // namespace of the anchor's previous run and must be restarted to join the current one.
 func joinedBeforeAnchorStart(connector, anchor container.InspectResponse) bool {
@@ -154,9 +227,9 @@ func (m *dockerSecureLinkManager) removeAnchor(ctx context.Context) error {
 	return nil
 }
 
-// anchorNetworks returns the anchor's network endpoints.
+// anchorNetworks returns the network endpoints of the container holding them.
 func (m *dockerSecureLinkManager) anchorNetworks(ctx context.Context) (map[string]*network.EndpointSettings, error) {
-	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.anchorID, mobyclient.ContainerInspectOptions{})
+	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.networkHolder(), mobyclient.ContainerInspectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("inspect secure-link anchor: %w", err)
 	}

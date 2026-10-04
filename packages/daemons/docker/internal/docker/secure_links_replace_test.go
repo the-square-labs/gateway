@@ -39,6 +39,8 @@ type fakeConnectorEngine struct {
 	removed    []string
 	// syncFails makes the control socket of a connector created from now on refuse syncs.
 	syncFails bool
+	// legacyImages are connector images of an earlier release: no anchor label.
+	legacyImages map[string]bool
 }
 
 type fakeConnectorContainer struct {
@@ -142,6 +144,20 @@ func (e *fakeConnectorEngine) byIDOrName(value string) *fakeConnectorContainer {
 	return nil
 }
 
+// connectorNetworks are a connector's endpoints: none in the anchor's namespace, its own (the management network and
+// what was attached) when its image has no anchor.
+func (e *fakeConnectorEngine) connectorNetworks(current *fakeConnectorContainer) map[string]any {
+	networks := map[string]any{}
+	if strings.HasPrefix(current.networkMode, "container:") {
+		return networks
+	}
+	networks[secureLinkManagementNetwork] = map[string]any{"IPAddress": current.ip, "NetworkID": "management"}
+	for name, endpoint := range current.networks {
+		networks[name] = endpoint
+	}
+	return networks
+}
+
 func (e *fakeConnectorEngine) connectorInspect(current *fakeConnectorContainer) map[string]any {
 	if current.anchor {
 		// The anchor holds the endpoints: the management network and what was attached.
@@ -177,7 +193,7 @@ func (e *fakeConnectorEngine) connectorInspect(current *fakeConnectorContainer) 
 			"GroupAdd": current.groups, "NetworkMode": current.networkMode,
 		},
 		"State":           map[string]any{"Running": current.running},
-		"NetworkSettings": map[string]any{"Networks": map[string]any{}},
+		"NetworkSettings": map[string]any{"Networks": e.connectorNetworks(current)},
 	}
 }
 
@@ -199,7 +215,11 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 	case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
 		image := strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json")
 		e.pulled = append(e.pulled, image)
-		return respond(http.StatusOK, map[string]any{"Id": "sha256:image"})
+		labels := map[string]string{secureLinkAnchorImageLabel: secureLinkAnchorImageVersion}
+		if e.legacyImages[image] {
+			labels = nil
+		}
+		return respond(http.StatusOK, map[string]any{"Id": "sha256:image", "Config": map[string]any{"Labels": labels}})
 	case request.Method == http.MethodGet && path == "/networks/"+secureLinkManagementNetwork:
 		return respond(http.StatusOK, map[string]any{
 			"Name": secureLinkManagementNetwork, "Id": "management", "Driver": "bridge", "Internal": true,

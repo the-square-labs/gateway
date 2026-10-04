@@ -122,6 +122,8 @@ type dockerSecureLinkManager struct {
 	egressRun egressRunner
 	// anchorID is the container holding the connector's network namespace (secure_link_anchor.go); guarded by mu.
 	anchorID string
+	// anchorImages caches which connector images can run the anchor (anchorSupported); guarded by mu.
+	anchorImages map[string]bool
 	// managementGateway is the management network's gateway, the daemon's address towards the connector: the only
 	// peer the ingress listeners accept (guarded by mu).
 	managementGateway string
@@ -370,7 +372,7 @@ func (m *dockerSecureLinkManager) apply(
 		if _, attached := m.attached[networkName]; attached {
 			continue
 		}
-		if _, err := m.plugin.client.cli.NetworkConnect(ctx, networkName, mobyclient.NetworkConnectOptions{Container: m.anchorID}); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+		if _, err := m.plugin.client.cli.NetworkConnect(ctx, networkName, mobyclient.NetworkConnectOptions{Container: m.networkHolder()}); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
 			return nil, fail(fmt.Errorf("attach secure-link connector to %s: %w", networkName, err))
 		}
 		m.attached[networkName] = struct{}{}
@@ -414,7 +416,7 @@ func (m *dockerSecureLinkManager) apply(
 		if _, keep := desiredNetworks[networkName]; keep || m.egress.networkDesired(networkName) {
 			continue
 		}
-		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, networkName, mobyclient.NetworkDisconnectOptions{Container: m.anchorID, Force: true}); err != nil && !isNotFoundErr(err) {
+		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, networkName, mobyclient.NetworkDisconnectOptions{Container: m.networkHolder(), Force: true}); err != nil && !isNotFoundErr(err) {
 			return nil, fail(fmt.Errorf("detach secure-link connector from %s: %w", networkName, err))
 		}
 		delete(m.attached, networkName)
@@ -557,9 +559,18 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 		return nil, fmt.Errorf("secure-link management network: %w", err)
 	}
 	m.managementGateway = gateway.String()
-	anchor, err := m.ensureAnchor(ctx, image)
+	supported, err := m.anchorSupported(ctx, image)
 	if err != nil {
-		return nil, err
+		return nil, secureLinkConnectorUnchangedError{err}
+	}
+	var anchor *container.InspectResponse
+	if supported {
+		if anchor, err = m.ensureAnchor(ctx, image); err != nil {
+			return nil, err
+		}
+	} else {
+		// An image of an earlier release: the connector runs in its own namespace, as that release ran it.
+		m.anchorID = ""
 	}
 
 	slot, inspect, err := m.findConnector(ctx, image)
@@ -570,7 +581,7 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 	// Another image, the limits of an earlier release, or a connector outside the anchor (an earlier release's): the
 	// new connector starts next to the serving one, in the anchor.
 	if inspect != nil && inspect.Config != nil &&
-		(inspect.Config.Image != image || !currentSecureLinkConnectorShape(*inspect) || !inSecureLinkAnchor(*inspect, m.anchorID)) &&
+		(inspect.Config.Image != image || !currentSecureLinkConnectorShape(*inspect) || !inConnectorNamespace(*inspect, m.anchorID)) &&
 		managedSecureLinkConnector(*inspect, controlDirectory) && inspect.State != nil && inspect.State.Running &&
 		inspect.ID == m.connectorID && m.servingLocked() {
 		return m.startReplacement(ctx, image, slot)
@@ -588,7 +599,7 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 		if inspect, err = m.createConnector(ctx, image, slot); err != nil {
 			return nil, err
 		}
-	} else if inspect.State == nil || !inspect.State.Running || joinedBeforeAnchorStart(*inspect, *anchor) {
+	} else if inspect.State == nil || !inspect.State.Running || (anchor != nil && joinedBeforeAnchorStart(*inspect, *anchor)) {
 		// Stopped, or running in the namespace of the anchor's previous run (the anchor restarted): start it again.
 		if inspect.State != nil && inspect.State.Running {
 			_, err = m.plugin.client.cli.ContainerRestart(ctx, inspect.ID, mobyclient.ContainerRestartOptions{})
@@ -606,7 +617,11 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 	} else if err := m.updateConnectorMemory(ctx, *inspect); err != nil && m.plugin.logger != nil {
 		m.plugin.logger.Warn("secure-link connector keeps its memory limit", "error", err)
 	}
-	runtime, err := connectorRuntimeOf(*inspect, anchor.NetworkSettings, slot, controlDirectory)
+	holder := inspect
+	if anchor != nil {
+		holder = anchor
+	}
+	runtime, err := connectorRuntimeOf(*inspect, holder.NetworkSettings, slot, controlDirectory)
 	if err != nil {
 		return nil, err
 	}
@@ -614,6 +629,9 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 	m.publishViewLocked()
 	if err := waitForConnectorSocket(ctx, m.socketPath); err != nil {
 		return nil, err
+	}
+	if anchor == nil {
+		m.removeUnusedAnchor(ctx)
 	}
 	// The connector of this mode serves: the control directory a mode switch set aside can go.
 	if m.plugin.cfg != nil && len(setAsideDirectories(m.plugin.cfg.StateDir, "secure-link-connector")) > 0 {
@@ -743,9 +761,12 @@ func (m *dockerSecureLinkManager) startReplacement(ctx context.Context, image st
 	inspect, err := m.createConnector(ctx, image, next)
 	if err == nil {
 		var runtime connectorRuntime
-		var anchor mobyclient.ContainerInspectResult
-		if anchor, err = m.plugin.client.cli.ContainerInspect(ctx, m.anchorID, mobyclient.ContainerInspectOptions{}); err == nil {
-			runtime, err = connectorRuntimeOf(*inspect, anchor.Container.NetworkSettings, next, filepath.Dir(m.socketPath))
+		holder := mobyclient.ContainerInspectResult{Container: *inspect}
+		if m.anchorID != "" {
+			holder, err = m.plugin.client.cli.ContainerInspect(ctx, m.anchorID, mobyclient.ContainerInspectOptions{})
+		}
+		if err == nil {
+			runtime, err = connectorRuntimeOf(*inspect, holder.Container.NetworkSettings, next, filepath.Dir(m.socketPath))
 		}
 		if err == nil {
 			err = waitForConnectorSocket(ctx, runtime.socketPath)
@@ -828,22 +849,30 @@ func (m *dockerSecureLinkManager) createConnector(ctx context.Context, image str
 	}
 	controlDirectory := filepath.Dir(m.socketPath)
 	_ = os.Remove(filepath.Join(controlDirectory, secureLinkConnectorSlots[slot].socket))
+	hostConfig := &container.HostConfig{
+		Binds:          []string{controlDirectory + ":/run/gateway"},
+		GroupAdd:       connectorGroupAdd(),
+		ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
+		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+		Resources:     secureLinkConnectorResources(),
+	}
+	var networking *network.NetworkingConfig
+	if m.anchorID != "" {
+		// The anchor holds the addresses and aliases (secure_link_anchor.go).
+		hostConfig.NetworkMode = container.NetworkMode("container:" + m.anchorID)
+	} else {
+		// An image without the anchor: the connector's own namespace on the management network.
+		networking = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{secureLinkManagementNetwork: {}}}
+	}
 	created, createErr := m.plugin.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
 		Config: &container.Config{
 			Image: image, User: "65532:65532",
 			Env:    secureLinkConnectorEnv(slot),
 			Labels: map[string]string{"wiolett.gateway.managed": "secure-link-connector"},
 		},
-		HostConfig: &container.HostConfig{
-			Binds:          []string{controlDirectory + ":/run/gateway"},
-			GroupAdd:       connectorGroupAdd(),
-			ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
-			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
-			Resources:     secureLinkConnectorResources(),
-			// The anchor holds the addresses and aliases (secure_link_anchor.go).
-			NetworkMode: container.NetworkMode("container:" + m.anchorID),
-		},
-		Name: secureLinkConnectorSlots[slot].name,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networking,
+		Name:             secureLinkConnectorSlots[slot].name,
 	})
 	if createErr != nil {
 		return nil, fmt.Errorf("create secure-link connector: %w", createErr)
@@ -901,7 +930,7 @@ func validSecureLinkManagementNetwork(inspect network.Inspect) bool {
 
 func validSecureLinkConnector(inspect container.InspectResponse, image, controlDirectory, anchorID string) bool {
 	return inspect.Config != nil && inspect.Config.Image == image && managedSecureLinkConnector(inspect, controlDirectory) &&
-		currentSecureLinkConnectorShape(inspect) && inSecureLinkAnchor(inspect, anchorID) &&
+		currentSecureLinkConnectorShape(inspect) && inConnectorNamespace(inspect, anchorID) &&
 		inspect.HostConfig != nil && sameConnectorGroups(inspect.HostConfig.GroupAdd)
 }
 

@@ -6,6 +6,8 @@ WORKDIR /src/secure-link-connector
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /secure-link-connector ./cmd/secure-link-connector
 
 FROM scratch
+# The image runs the connector's anchor (the pause subcommand): docker-daemon looks for this label before it starts one.
+LABEL wiolett.gateway.secure-link-connector.anchor="v1"
 COPY --from=build /secure-link-connector /secure-link-connector
 USER 65532:65532
 ENTRYPOINT ["/secure-link-connector"]
