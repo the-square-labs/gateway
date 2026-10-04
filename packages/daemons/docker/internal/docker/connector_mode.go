@@ -85,7 +85,8 @@ func (p *DockerPlugin) removeSetAsideConnectorDirectories(ctx context.Context, k
 	defer setAsideCleanup.Unlock()
 	for _, path := range setAsideDirectories(p.cfg.StateDir, kind) {
 		var err error
-		if !runsWithoutRoot() {
+		// A directory an installer already gave this daemon's user is removed directly as well.
+		if !runsWithoutRoot() || ownedByDaemon(path) {
 			err = os.RemoveAll(path)
 		} else {
 			err = p.emptyWithConnector(ctx, image, path)
@@ -99,6 +100,15 @@ func (p *DockerPlugin) removeSetAsideConnectorDirectories(ctx context.Context, k
 		}
 		p.logger.Info("removed a socket directory set aside by a mode switch", "path", path)
 	}
+}
+
+func ownedByDaemon(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(stat.Uid) == daemonEUID()
 }
 
 func (p *DockerPlugin) emptyWithConnector(ctx context.Context, image, path string) error {

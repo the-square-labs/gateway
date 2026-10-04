@@ -606,7 +606,7 @@ func (p *DockerPlugin) startRelayListener() error {
 	}
 	path := databaseTunnelSocketPath(p.cfg.StateDir)
 	// The socket the previous process handed over keeps the connections the sidecars made meanwhile.
-	if listener, keptName := adoptKeptUnixListener(path); listener != nil {
+	if listener, keptName := adoptKeptUnixListener(path, databaseTunnelSocketFits); listener != nil {
 		p.relayListener = listener
 		p.relayListenerKept.set(listener, keptName)
 		go p.acceptRelayLoop(listener)
@@ -627,6 +627,11 @@ func (p *DockerPlugin) startRelayListener() error {
 	p.relayListenerKept.set(listener, keepUnixListener(listener, path))
 	go p.acceptRelayLoop(listener)
 	return nil
+}
+
+// databaseTunnelSocketFits reports whether the sidecar socket file is open to every sidecar (0666), as created.
+func databaseTunnelSocketFits(info os.FileInfo) bool {
+	return info.Mode().Perm() == 0o666
 }
 
 func (p *DockerPlugin) acceptRelayLoop(listener net.Listener) {
