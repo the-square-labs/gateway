@@ -22,6 +22,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { AVAILABILITY_LEASE_CAPABILITY } from '@/modules/docker/availability/lease/lease-constants.js';
 import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from '@/modules/nodes/node-enrollment-token.js';
+import { relayRemovableAfter } from '@/modules/nodes/relay-removal.js';
 import type { GeneralSettingsService, RelayAssignmentSpread } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
@@ -1095,6 +1096,8 @@ export class RelayPoolService {
             0
           ),
           updateStep: updateStepByInstance.get(instance.id) ?? null,
+          /** An offline remote relay: when its removal becomes possible (expired policy, 90 s silent). */
+          removableAfter: instance.kind === 'remote' ? relayRemovableAfter(instance) : null,
           policyTrust: policyTrust.get(instance.id) ?? null,
           certificate: certificates.get(instance.id) ?? null,
           /** Revoked routes this relay has not applied; `stale` once past the deadline. */

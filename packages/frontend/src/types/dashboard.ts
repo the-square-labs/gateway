@@ -154,6 +154,8 @@ export interface DashboardRelayInstance {
   activeAssignments: number;
   retainedAssignments?: number;
   updateStep?: { state: string; error: string | null } | null;
+  /** An offline remote relay: when Gateway allows its removal (policy expired, 90 s silent). */
+  removableAfter?: string | null;
   health?: {
     activeTunnels?: number;
     registeredEndpoints?: number;

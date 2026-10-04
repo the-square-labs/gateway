@@ -12,6 +12,20 @@ type Instance = typeof relayInstances.$inferSelect;
 type Assignment = typeof relayEndpointAssignments.$inferSelect;
 type Generation = typeof relayEndpointAssignmentGenerations.$inferSelect;
 
+/** Supervisors report every 5 s; a relay silent this long is offline for removal. */
+const OFFLINE_REMOVAL_SILENCE_MS = 90_000;
+
+/**
+ * When an offline relay can be removed: once its signed policy has expired, so no daemon or relay still admits a
+ * grant for it, and it has been silent for 90 s. Null while it is not offline, or for one that never held a policy,
+ * which removal refuses.
+ */
+export function relayRemovableAfter(instance: Pick<Instance, 'state' | 'policyExpiresAt' | 'lastSeenAt'>): Date | null {
+  if (instance.state !== 'offline' || !instance.policyExpiresAt) return null;
+  const silentSince = instance.lastSeenAt ? instance.lastSeenAt.getTime() + OFFLINE_REMOVAL_SILENCE_MS : 0;
+  return new Date(Math.max(instance.policyExpiresAt.getTime(), silentSince));
+}
+
 export function assertOfflineRelayCoverage(
   removed: Instance,
   instances: Instance[],
@@ -19,16 +33,19 @@ export function assertOfflineRelayCoverage(
   generations: Generation[],
   now = Date.now()
 ) {
-  if (
-    removed.state !== 'offline' ||
-    !removed.policyExpiresAt ||
-    removed.policyExpiresAt.getTime() > now ||
-    (removed.lastSeenAt && removed.lastSeenAt.getTime() > now - 90_000)
-  ) {
+  const removableAfter = relayRemovableAfter(removed);
+  if (!removableAfter || removableAfter.getTime() > now) {
     throw new AppError(
       409,
       'RELAY_OFFLINE_REMOVAL_UNSAFE',
-      'Relay must be offline with an expired policy before removal'
+      removableAfter
+        ? `Relay must be offline with an expired policy before removal; it can be removed after ${removableAfter.toISOString()}`
+        : 'Relay must be offline with an expired policy before removal',
+      {
+        removableAfter: removableAfter?.toISOString() ?? null,
+        policyExpiresAt: removed.policyExpiresAt?.toISOString() ?? null,
+        lastSeenAt: removed.lastSeenAt?.toISOString() ?? null,
+      }
     );
   }
   const live = generations.filter((g) => ['active', 'staging', 'draining'].includes(g.state));

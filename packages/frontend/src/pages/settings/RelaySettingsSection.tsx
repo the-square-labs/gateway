@@ -43,6 +43,7 @@ import {
   DEFAULT_HOST_ACCESS_INSTALL_OPTIONS,
   withHostAccessInstallFlags,
 } from "@/lib/node-host-access";
+import { relayRemovalWaitNote } from "@/lib/relay-removal";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -541,6 +542,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             row.policyExpiresAt &&
             Date.parse(row.policyExpiresAt) <= Date.now()
         );
+        const removalWait = relayRemovalWaitNote(row);
         return (
           <div className="space-y-1">
             <Badge
@@ -595,6 +597,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 <RelativeTime value={row.revocation.since} />. {row.revocation.message}
               </p>
             )}
+            {removalWait && <p className="max-w-md text-xs text-muted-foreground">{removalWait}</p>}
             {!row.policyTrust && row.state !== "ready" && row.health?.lastError && (
               <p className="max-w-md break-words text-xs text-muted-foreground">
                 {row.health.lastError}
@@ -691,7 +694,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 <Button
                   variant="destructive"
                   pending={poolAction === `remove:${row.id}`}
-                  disabled={!canEdit || poolAction !== null}
+                  disabled={!canEdit || poolAction !== null || relayRemovalWaitNote(row) !== null}
                   onClick={() => void removeRelay(row)}
                 >
                   Remove

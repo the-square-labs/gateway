@@ -2336,10 +2336,12 @@
         "Two remote relays and Secure Link routes and database links under load."
       ],
       "steps": [
-        "Rebalance; drain a relay with an open database link pool, then Force disconnect; Renew certificate on a relay."
+        "Rebalance; drain a relay with an open database link pool, then Force disconnect; Renew certificate on a relay.",
+        "Stop the supervisor of a remote relay whose policy has not expired and try to remove it."
       ],
       "expect": [
-        "Assignments move after successful probes without failed requests; drain waits, Force disconnect is audited; the renewed certificate is served without dropping connections."
+        "Assignments move after successful probes without failed requests; drain waits, Force disconnect is audited; the renewed certificate is served without dropping connections.",
+        "Removal is refused with 409 RELAY_OFFLINE_REMOVAL_UNSAFE whose details.removableAfter is the later of the relay's policy expiry and 90 s after it was last seen; Settings > Relay shows 'Can be removed after <local date and time>' for it with Remove disabled, and GET /api/system/relay reports the same removableAfter."
       ]
     },
     {
