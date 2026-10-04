@@ -567,6 +567,7 @@ test('the secured nginx OpenRC service gives the pid directory to the user nginx
       await writeFile(service, content, { mode: 0o755 });
       const result = runShell(
         [
+          source.split('\n').filter((line) => /^NGINX_OPENRC_(STOCK|EARLIER)_LINE=/.test(line)).join('\n'),
           'has_openrc() { return 0; }',
           'die() { echo "$*" >&2; exit 1; }',
           'log() { :; }',
@@ -802,7 +803,11 @@ test('the nginx service repair of a non-root install is planned before the promp
   for (const change of ['ensure_nginx_openrc_pid_directory', 'start_nginx_after_service_repair', 'backup_if_exists']) {
     assert.ok(!preflight.calls.has(change), `the preflight does not call ${change}`);
   }
-  assert.doesNotMatch(shellFunction(source, 'preflight_run_user_nginx'), /rc-service/);
+  const preflightCode = shellFunction(source, 'preflight_run_user_nginx')
+    .split('\n')
+    .filter((line) => !/^\s*err "/.test(line))
+    .join('\n');
+  assert.doesNotMatch(preflightCode, /rc-service/, 'the preflight runs no service command');
   assert.doesNotMatch(shellFunction(source, 'nginx_openrc_service_repair_needed'), /rc-service nginx (zap|start|restart)/);
   // The summary announces the plan before the prompt; the repair runs in the configuration step after it.
   const prompt = source.indexOf('prompt_yes_no "Proceed with installation?"');
