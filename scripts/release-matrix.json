@@ -2309,11 +2309,12 @@
       "steps": [
         "Start Update Relay Pool.",
         "In a second run abandon a step after the supervisor update and start again.",
-        "Run it once more with every relay already on the target."
+        "Start it once more with every relay already on the target."
       ],
       "expect": [
         "Each relay: supervisor self-update and reconnect first, then the worker update; the supervisor log has no listener with the old build version between 'starting self-update' and 'binary replaced successfully'; the run completes and relays leave drain.",
-        "The resumed run updates only the worker; the last run marks every step ready without draining."
+        "The resumed run updates only the worker of the relay left after its supervisor update; a relay it finds already on the target is marked ready without draining.",
+        "Starting a run with every relay already on the target is refused with NO_UPDATE; no relay is drained or restarted."
       ]
     },
     {
