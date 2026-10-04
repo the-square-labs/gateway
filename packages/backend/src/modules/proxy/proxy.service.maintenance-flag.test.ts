@@ -53,7 +53,12 @@ function route(maintenanceEnabled: boolean, advancedConfig: string | null = null
 }
 
 /** A maintenance toggle over fakes: the stored row before and after, and a node reporting `capabilities`. */
-function toggleHarness(before: any, after: any, capabilities: string[]) {
+function toggleHarness(
+  before: any,
+  after: any,
+  capabilities: string[],
+  apply: () => Promise<{ success: boolean; error?: string }> = async () => ({ success: true })
+) {
   const db = {
     query: {
       proxyHosts: { findFirst: vi.fn().mockResolvedValue(before) },
@@ -66,7 +71,7 @@ function toggleHarness(before: any, after: any, capabilities: string[]) {
       set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([after]) })) })),
     })),
   } as any;
-  const applyConfig = vi.fn().mockResolvedValue({ success: true });
+  const applyConfig = vi.fn((..._args: unknown[]) => apply());
   const maintenanceAccess = {
     secretForHost: () => 'route-secret',
     isNodeSupported: vi.fn().mockResolvedValue(true),
@@ -164,5 +169,19 @@ describe('Maintenance mode of a route whose config collides with the guard', () 
     // The access-code bypass fits this config, so the page keeps it.
     expect(config).toContain('maintenance-access.sock');
     expect(config).toContain('Team access');
+  });
+
+  it('answers a config the node rejected with one prefix and its own status', async () => {
+    const rejected = 'nginx config test failed: nginx: [emerg] unknown directive "bogus" in /etc/nginx/x.conf:3';
+    const enter = toggleHarness(route(false), route(true), ACCESS_AND_FLAGS, async () => ({
+      success: false,
+      error: rejected,
+    }));
+
+    await expect(enter.service.toggleMaintenance(HOST_ID, true, 'user-id')).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'NGINX_CONFIG_FAILED',
+      message: `Failed to apply Nginx config: ${rejected}`,
+    });
   });
 });
