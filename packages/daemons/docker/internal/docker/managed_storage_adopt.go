@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
 	mobyclient "github.com/moby/moby/client"
 )
@@ -119,6 +120,77 @@ func (m *managedStorageManager) adoptLostRecord(ctx context.Context, record mana
 	}
 	m.logger.Warn("took over a managed storage member whose record was lost; its storage image was kept", "id", record.ID, "member", record.MemberIndex, "container", record.ContainerID)
 	return record, nil
+}
+
+// removeLostRecord removes what is left of a managed storage id the node holds
+// no record of: every container with its owner label, its network, and for
+// each member found (by container label or by its image or mount point) the
+// mount and loop device. With deleteData the image and staged files go too;
+// without it the image is kept under a removed record, like any removed
+// member, so the repair pass does not take it for an orphan. Only a removal
+// runs it; the repair pass keeps the storage of such a container, since a
+// retried create takes it over.
+func (m *managedStorageManager) removeLostRecord(ctx context.Context, id string, deleteData bool) error {
+	listed, err := m.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{
+		All:     true,
+		Filters: mobyclient.Filters{}.Add("label", managedStorageLabel+"="+id),
+	})
+	if err != nil {
+		return fmt.Errorf("list managed storage containers: %w", err)
+	}
+	members := map[int]bool{}
+	for _, item := range listed.Items {
+		if member, err := strconv.Atoi(item.Labels[managedStorageMemberLabel]); err == nil {
+			members[member] = true
+		}
+		if err := m.client.RemoveContainer(ctx, item.ID, true); err != nil && !isNotFoundErr(err) {
+			return fmt.Errorf("remove managed storage container: %w", err)
+		}
+	}
+	if len(listed.Items) > 0 {
+		m.logger.Info("removed the containers of a managed storage the node holds no record of", "id", id, "containers", len(listed.Items))
+	}
+	_, _ = m.client.cli.NetworkRemove(ctx, "gateway-storage-"+id, mobyclient.NetworkRemoveOptions{})
+	for _, dir := range []string{"images", "mounts"} {
+		names, err := filepath.Glob(filepath.Join(m.root, "storage", dir, id+"-*"))
+		if err != nil {
+			return err
+		}
+		for _, name := range names {
+			if found, member, ok := cutStorageMemberName(strings.TrimSuffix(filepath.Base(name), ".img")); ok && found == id {
+				members[int(member)] = true
+			}
+		}
+	}
+	for member := range members {
+		record := m.newRecord(id, managedStorageCommand{MemberIndex: member}, "")
+		record.DesiredRunning = false
+		if err := m.removeSeaweedFSStaging(record); err != nil {
+			return err
+		}
+		if deleteData {
+			for _, directory := range []string{"tls", "sftp"} {
+				_ = os.RemoveAll(filepath.Join(m.root, "storage", directory, fmt.Sprintf("%s-%d", id, member)))
+			}
+			if err := m.cleanupStorage(ctx, &record, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := m.cleanupStorage(ctx, &record, false); err != nil {
+			return err
+		}
+		if err := m.loopHost().removeMountPoint(record.MountPath); err != nil {
+			return err
+		}
+		if _, err := os.Stat(record.ImagePath); err == nil {
+			record.Removed = true
+			if err := m.saveRecord(record); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // labelledStorageIDs are the managed storage ids the node has containers of,
