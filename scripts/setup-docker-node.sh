@@ -341,7 +341,7 @@ preflight_docker_cgroup_controllers() {
         warn "Could not read the cgroup setup from Docker; skipping the container limits check."
         return 0
     fi
-    read -r version driver memory_limit pids_limit cpu_quota <<< "$info"
+    IFS=' ' read -r version driver memory_limit pids_limit cpu_quota <<< "$info"
     [[ "$memory_limit" == "true" ]] || missing+=(memory)
     [[ "$pids_limit" == "true" ]] || missing+=(pids)
     [[ "$cpu_quota" == "true" ]] || missing+=(cpu)
@@ -358,6 +358,7 @@ preflight_docker_cgroup_controllers() {
     fi
     [[ "${#missing[@]}" -gt 0 ]] || return 0
     missing=($(printf '%s\n' "${missing[@]}" | sort -u))
+    local IFS=' '
     err "Docker cannot give containers the cgroup controllers: ${missing[*]}."
     err "The Secure Link connector and managed workloads run with memory, CPU and pids limits; with these controllers missing"
     err "they fail to start, although the node would enroll. On Alpine with OpenRC in an LXC container, the host cgroup setup has"

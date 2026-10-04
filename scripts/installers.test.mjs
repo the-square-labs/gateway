@@ -677,6 +677,8 @@ test('the Docker installer refuses a host whose containers cannot get the cgroup
     const check_ = (info, { DOCKER_MODE = 'docker' } = {}) =>
       runShell(
         [
+          // The installer runs with IFS=$'\n\t' (set at its top); the check must not depend on the default IFS.
+          "IFS=$'\\n\\t'",
           `DOCKER_MODE=${DOCKER_MODE}; LOG_FILE=/dev/null`,
           // The real docker CLI evaluates the template against moby's system.Info Go field names (CPUCfsQuota, not
           // the JSON name CpuCfsQuota); a wrong name fails the command, and the check would be skipped.
