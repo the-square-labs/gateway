@@ -5227,8 +5227,12 @@ type SecureLinkEgress struct {
 	// The secure-link connector image, for a node that has egress but no proxy
 	// secure-link target binding to take the image from.
 	ConnectorImage string `protobuf:"bytes,8,opt,name=connector_image,json=connectorImage,proto3" json:"connector_image,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Database links: the binding's consumers are moved to the connector alias
+	// (recreated without the ExtraHosts entry) while the host listener still
+	// serves the ones not moved yet.
+	ConsumersUseAlias bool `protobuf:"varint,9,opt,name=consumers_use_alias,json=consumersUseAlias,proto3" json:"consumers_use_alias,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SecureLinkEgress) Reset() {
@@ -5315,6 +5319,13 @@ func (x *SecureLinkEgress) GetConnectorImage() string {
 		return x.ConnectorImage
 	}
 	return ""
+}
+
+func (x *SecureLinkEgress) GetConsumersUseAlias() bool {
+	if x != nil {
+		return x.ConsumersUseAlias
+	}
+	return false
 }
 
 // Desired daemon-side listener for a managed-database binding. It is carried
@@ -12944,7 +12955,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x0eschema_version\x18\t \x01(\rR\rschemaVersion\x12_\n" +
 	"\x19managed_database_listener\x18\n" +
 	" \x01(\v2#.gateway.v1.ManagedDatabaseListenerR\x17managedDatabaseListener\x12J\n" +
-	"\x12secure_link_egress\x18\v \x01(\v2\x1c.gateway.v1.SecureLinkEgressR\x10secureLinkEgress\"\xa9\x02\n" +
+	"\x12secure_link_egress\x18\v \x01(\v2\x1c.gateway.v1.SecureLinkEgressR\x10secureLinkEgress\"\xd9\x02\n" +
 	"\x10SecureLinkEgress\x12!\n" +
 	"\fnetwork_name\x18\x01 \x01(\tR\vnetworkName\x12\x14\n" +
 	"\x05alias\x18\x02 \x01(\tR\x05alias\x12\x1f\n" +
@@ -12955,7 +12966,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"tls_ca_pem\x18\x05 \x01(\tR\btlsCaPem\x12&\n" +
 	"\x0ftls_server_name\x18\x06 \x01(\tR\rtlsServerName\x12)\n" +
 	"\x10route_generation\x18\a \x01(\x04R\x0frouteGeneration\x12'\n" +
-	"\x0fconnector_image\x18\b \x01(\tR\x0econnectorImage\"\xd8\x01\n" +
+	"\x0fconnector_image\x18\b \x01(\tR\x0econnectorImage\x12.\n" +
+	"\x13consumers_use_alias\x18\t \x01(\bR\x11consumersUseAlias\"\xd8\x01\n" +
 	"\x17ManagedDatabaseListener\x12!\n" +
 	"\fnetwork_name\x18\x01 \x01(\tR\vnetworkName\x12%\n" +
 	"\x0elisten_address\x18\x02 \x01(\tR\rlistenAddress\x12\x1f\n" +

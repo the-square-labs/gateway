@@ -293,4 +293,9 @@ func TestDatabaseExtraHostsLeaveOutLinksServedByTheConnector(t *testing.T) {
 	if entries, err := cli.managedDatabaseHostEntries(t.Context(), []string{migrating}); err != nil || len(entries) != 1 {
 		t.Fatalf("a link whose grant still names the host listener lost its entry: %v %v", entries, err)
 	}
+	// Migrating: the host listener serves the consumers not moved yet, and the ones recreated now use the alias.
+	bundle.Grants[1].SecureLinkEgress.ConsumersUseAlias = true
+	if entries, err := cli.managedDatabaseHostEntries(t.Context(), []string{migrating}); err != nil || len(entries) != 0 {
+		t.Fatalf("a consumer recreated during the migration kept the host listener entry: %v %v", entries, err)
+	}
 }

@@ -231,8 +231,9 @@ func egressFromAssignment(assignment *pb.RelayGrantAssignment) (egressDesired, e
 }
 
 // databaseLinkOnConnector reports a database link network whose binding Gateway moved to the connector: its connect
-// grant carries an egress on that network and no host listener (desired state, F4). Its consumers resolve the link
-// alias through Docker's DNS and get no ExtraHosts entry; a binding still on the host listener keeps the entry.
+// grant carries an egress on that network and either no host listener, or a host listener only for the consumers
+// not moved yet with consumers_use_alias set (desired state, F4, S1). Its consumers resolve the link alias through
+// Docker's DNS and get no ExtraHosts entry; a binding still only on the host listener keeps the entry.
 func (p *DockerPlugin) databaseLinkOnConnector(networkName string) bool {
 	if p.relayGrants == nil {
 		return false
@@ -247,8 +248,10 @@ func (p *DockerPlugin) databaseLinkOnConnector(networkName string) bool {
 func databaseLinkOnConnectorIn(bundle *pb.SyncRelayGrantsCommand, networkName string) bool {
 	for _, assignment := range bundle.GetGrants() {
 		egress := assignment.GetSecureLinkEgress()
+		// During a migration the grant keeps the host listener for the consumers not moved yet, and marks the ones
+		// recreated from now on as moved (consumers_use_alias).
 		if assignment.GetRole() == "connect" && assignment.GetOwnerKind() == linkKindManagedDatabaseBinding && egress != nil &&
-			egress.GetNetworkName() == networkName && assignment.GetManagedDatabaseListener() == nil {
+			egress.GetNetworkName() == networkName && (assignment.GetManagedDatabaseListener() == nil || egress.GetConsumersUseAlias()) {
 			return true
 		}
 	}

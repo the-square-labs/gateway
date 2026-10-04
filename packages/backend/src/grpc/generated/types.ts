@@ -1068,6 +1068,11 @@ export interface SecureLinkEgress {
   routeGeneration: number | string;
   /** The secure-link connector image, for a node without a proxy secure-link target binding to take it from. */
   connectorImage?: string;
+  /**
+   * Database links: consumers recreated from now on use the connector alias (no `db-<id>` ExtraHosts entry), while
+   * the host listener still serves the consumers not moved yet.
+   */
+  consumersUseAlias?: boolean;
 }
 
 export interface RelayDataCandidate {

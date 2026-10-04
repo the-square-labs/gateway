@@ -675,6 +675,10 @@ message SecureLinkEgress {
   // The secure-link connector image, for a node that has egress but no proxy
   // secure-link target binding to take the image from.
   string connector_image = 8;
+  // Database links: the binding's consumers are moved to the connector alias
+  // (recreated without the ExtraHosts entry) while the host listener still
+  // serves the ones not moved yet.
+  bool consumers_use_alias = 9;
 }
 
 // Desired daemon-side listener for a managed-database binding. It is carried
