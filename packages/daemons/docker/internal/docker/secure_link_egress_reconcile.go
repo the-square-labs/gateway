@@ -100,16 +100,21 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 	}
 	m.egress.publish(statuses)
 	if m.pendingRetire != nil {
-		waited := time.Since(m.pendingRetireSince) >= secureLinkReplacementListenWait
+		// Availability first: while an egress does not listen on the replacement, the previous connector keeps
+		// serving it, up to the retire limit.
 		switch {
-		case ready || waited:
+		case ready || time.Since(m.pendingRetireSince) >= secureLinkConnectorRetireLimit:
 			if !ready && m.plugin.logger != nil {
-				m.plugin.logger.Warn("the replaced secure-link connector stops accepting although an egress does not listen on the new one yet",
-					"waited", secureLinkReplacementListenWait)
+				m.plugin.logger.Warn("the replaced secure-link connector stops accepting at the retire limit although an egress does not listen on the new one",
+					"limit", secureLinkConnectorRetireLimit)
 			}
 			m.retireConnector(*m.pendingRetire)
 			m.pendingRetire = nil
 		default:
+			if !m.pendingRetireLogged && m.plugin.logger != nil {
+				m.pendingRetireLogged = true
+				m.plugin.logger.Warn("the replaced secure-link connector keeps serving until every egress listens on the new one")
+			}
 			// Checked again shortly: it stops accepting as soon as the new one listens.
 			m.scheduleEgressRetryLocked()
 		}
@@ -117,14 +122,10 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 	return ready
 }
 
-// secureLinkReplacementListenWait bounds how long a replaced connector keeps accepting while an egress does not
-// listen on its replacement yet (a variable for tests).
-var secureLinkReplacementListenWait = time.Minute
-
 // setPendingRetireLocked keeps a replaced connector accepting until every egress listens on its replacement.
 func (m *dockerSecureLinkManager) setPendingRetireLocked(previous connectorRuntime) {
 	m.pendingRetire = &previous
-	m.pendingRetireSince = time.Now()
+	m.pendingRetireSince, m.pendingRetireLogged = time.Now(), false
 }
 
 func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Context) map[string]egressStatus {

@@ -52,12 +52,12 @@ func TestReplacedConnectorDrainsOnlyOnceEgressListens(t *testing.T) {
 	}
 }
 
-// A replacement whose egress does not listen within secureLinkReplacementListenWait does not leave the previous
-// connector accepting for longer (the stand saw one accept for 25 minutes): it drains all the same.
-func TestReplacedConnectorStopsAcceptingAfterTheListenWait(t *testing.T) {
-	retry, wait := egressAddressRetry, secureLinkReplacementListenWait
-	egressAddressRetry, secureLinkReplacementListenWait = 100*time.Millisecond, 300*time.Millisecond
-	t.Cleanup(func() { egressAddressRetry, secureLinkReplacementListenWait = retry, wait })
+// A replacement whose egress does not listen leaves the previous connector serving that egress (availability first)
+// and re-checks by itself; at the retire limit the previous one drains all the same.
+func TestReplacedConnectorServesUntilTheRetireLimit(t *testing.T) {
+	retry, limit := egressAddressRetry, secureLinkConnectorRetireLimit
+	egressAddressRetry, secureLinkConnectorRetireLimit = 100*time.Millisecond, time.Second
+	t.Cleanup(func() { egressAddressRetry, secureLinkConnectorRetireLimit = retry, limit })
 	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
 	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
 	plugin := &DockerPlugin{client: engine.client()}
@@ -77,6 +77,10 @@ func TestReplacedConnectorStopsAcceptingAfterTheListenWait(t *testing.T) {
 	engine.mu.Unlock()
 	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
 		t.Fatalf("apply with the new image: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if receivedDrain(engine.fakeConnectorEngine, previous) {
+		t.Fatal("the previous connector stopped accepting while an egress did not listen on its replacement")
 	}
 	waitRemoved(t, engine, previous.id)
 	if !receivedDrain(engine.fakeConnectorEngine, previous) {
