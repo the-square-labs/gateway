@@ -81,6 +81,17 @@ export const NODE_ENROLLMENT_TYPES: Array<{
   },
 ];
 
+/** The port the relay installer binds unless it is given another one. */
+const DEFAULT_RELAY_PORT = 9443;
+
+/** A relay port typed into the form, or null while it is not a TCP port. */
+function parseRelayPort(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d{1,5}$/.test(trimmed)) return null;
+  const port = Number(trimmed);
+  return port >= 1 && port <= 65535 ? port : null;
+}
+
 function canonicalEnrollmentType(type: NodeType): NodeType {
   return type === "databases" ? "storage" : type;
 }
@@ -132,6 +143,7 @@ export function NodeEnrollmentDialog({
   const [displayName, setDisplayName] = useState("");
   const [folderId, setFolderId] = useState("");
   const [relayAddress, setRelayAddress] = useState("");
+  const [relayPort, setRelayPort] = useState(String(DEFAULT_RELAY_PORT));
   const [creating, setCreating] = useState(false);
   const {
     open: resultOpen,
@@ -160,6 +172,7 @@ export function NodeEnrollmentDialog({
     setDisplayName("");
     setFolderId("");
     setRelayAddress("");
+    setRelayPort(String(DEFAULT_RELAY_PORT));
     void fetchFolders("node");
   }, [fetchFolders, initialMode, initialType, open]);
 
@@ -224,10 +237,11 @@ export function NodeEnrollmentDialog({
   const selectedType =
     NODE_ENROLLMENT_TYPES.find((candidate) => candidate.value === type) ??
     NODE_ENROLLMENT_TYPES[0]!;
+  const relayServicePort = parseRelayPort(relayPort);
   const canCreate =
     canCreateInFolder(user?.scopes ?? [], "nodes:create", folderId || null) &&
     displayName.trim().length > 0 &&
-    (type !== "relay" || relayAddress.trim().length > 0);
+    (type !== "relay" || (relayAddress.trim().length > 0 && relayServicePort !== null));
   const modeLocked = creating || hostingModeLocked;
 
   const createNode = async () => {
@@ -241,7 +255,10 @@ export function NodeEnrollmentDialog({
         displayName: displayName.trim(),
         folderId: folderId || null,
         ...(type === "relay"
-          ? { serviceAddresses: [normalizedRelayAddress], servicePort: 9443 }
+          ? {
+              serviceAddresses: [normalizedRelayAddress],
+              servicePort: relayServicePort ?? DEFAULT_RELAY_PORT,
+            }
           : {}),
       });
       setResult({
@@ -440,8 +457,22 @@ export function NodeEnrollmentDialog({
                               placeholder="relay.example.com"
                             />
                             <p className="text-xs text-muted-foreground">
-                              Reachable IP or hostname advertised to participating nodes. TCP 9443
-                              must be accessible.
+                              Reachable IP or hostname advertised to participating nodes.
+                            </p>
+                          </div>
+                        )}
+                        {type === "relay" && (
+                          <div className="space-y-1.5">
+                            <label className="text-sm font-medium">Relay Port</label>
+                            <Input
+                              value={relayPort}
+                              onChange={(event) => setRelayPort(event.target.value)}
+                              inputMode="numeric"
+                              placeholder={String(DEFAULT_RELAY_PORT)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              TCP port the relay listens on. It must be reachable from participating
+                              nodes.
                             </p>
                           </div>
                         )}
