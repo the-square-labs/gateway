@@ -788,3 +788,83 @@ test('a terminal that cannot be read is never answered with a default', { skip: 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// An Alpine host whose nginx service still has the PID-directory line an earlier installer wrote (owner root:root), and
+// whose operator ran nginx as the daemon's user (command_user in /etc/conf.d/nginx) before installing: that nginx
+// cannot start, so the daemon's preflight finds no nginx master. The installer runs as root in this case too; it
+// migrates the line first, starts the service the operator prepared, and only then looks for the master.
+test('a non-root install migrates the earlier nginx service line before it looks for the nginx master', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  const { functions, topLevel } = parseShell(source);
+  const preflight = functions.get('preflight_run_user_nginx');
+  assert.ok(preflight.calls.has('ensure_nginx_openrc_pid_directory'), 'the non-root preflight migrates the service line');
+  assert.ok(preflight.calls.has('restart_nginx_service_after_migration'));
+  const body = shellFunction(source, 'preflight_run_user_nginx');
+  assert.ok(
+    body.indexOf('ensure_nginx_openrc_pid_directory') < body.indexOf('nginx_master_pid'),
+    'the migration comes before the master lookup'
+  );
+  assert.deepEqual(definedBeforeUseErrors(source), []);
+  assert.ok(topLevel.length > 0);
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-migrate-'));
+  try {
+    const service = path.join(dir, 'nginx');
+    const confd = path.join(dir, 'conf-nginx');
+    const earlier = [
+      '#!/sbin/openrc-run',
+      'pidfile=/run/nginx/nginx.pid',
+      'start_pre() {',
+      '\tcheckpath --directory --mode 0755 --owner root:root ${pidfile%/*}',
+      '}',
+      '',
+    ].join('\n');
+    const functionsText = ['ensure_nginx_openrc_pid_directory', 'restart_nginx_service_after_migration', 'preflight_run_user_nginx']
+      .map((name) => shellFunction(source, name).replaceAll('/etc/init.d', dir).replaceAll('/etc/conf.d/nginx', confd))
+      .join('\n');
+    const run = async ({ confdText, dryRun = 0, master = true }) => {
+      await writeFile(service, earlier, { mode: 0o755 });
+      await writeFile(confd, confdText);
+      const calls = path.join(dir, 'calls');
+      await writeFile(calls, '');
+      const result = runShell(
+        [
+          'RUN_USER=nginx; RUN_GROUP=nginx; NGINX_MODE=integrate; LOG_FILE=/dev/null',
+          `DRY_RUN=${dryRun}; NGINX_OPENRC_MIGRATED=0`,
+          'has_openrc() { return 0; }',
+          'command_exists() { return 0; }',
+          'log() { echo "LOG $*"; }',
+          'err() { echo "ERR $*" >&2; }',
+          'die() { err "$@"; exit 1; }',
+          'backup_if_exists() { :; }',
+          'id() { case "$1" in -u) echo 1000 ;; *) echo nginx ;; esac; }',
+          'stat() { case "$*" in *"/proc/"*) echo 1000 ;; *"-c %u"*) echo 0 ;; *) echo 755 ;; esac; }',
+          // The service is down until the installer starts it.
+          `rc-service() { echo "$*" >> '${calls}'; case "$2" in start) touch '${dir}/up' ;; esac; [[ "$2" != status ]] || [[ -e '${dir}/up' ]]; }`,
+          `rm -f '${dir}/up'`,
+          `nginx_master_pid() { ${master ? `[[ -e '${dir}/up' ]] && echo $$` : 'return 1'}; }`,
+          functionsText,
+          'preflight_run_user_nginx',
+          'echo PREFLIGHT-OK',
+        ].join('\n')
+      );
+      return { ...result, script: readFileSync(service, 'utf8'), calls: readFileSync(calls, 'utf8') };
+    };
+    const migrated = await run({ confdText: 'command_user="nginx:nginx"\ncapabilities="^cap_net_bind_service"\n' });
+    assert.equal(migrated.status, 0, migrated.output);
+    assert.match(migrated.output, /PREFLIGHT-OK/);
+    assert.match(migrated.script, /--owner "\$\{command_user:-root:root\}" \$\{pidfile%\/\*\}/);
+    assert.match(migrated.calls, /nginx zap\nnginx start\n/, 'the prepared service is started again');
+    // Without command_user the service is not started, and the refusal says what was updated and how to start nginx.
+    const unprepared = await run({ confdText: '', master: false });
+    assert.equal(unprepared.status, 1, unprepared.output);
+    assert.match(unprepared.output, /only the PID-directory line of the nginx OpenRC service was updated/);
+    assert.match(unprepared.output, /rc-service nginx zap, then rc-service nginx start/);
+    assert.doesNotMatch(unprepared.calls, /start/);
+    // A dry run changes nothing.
+    const dry = await run({ confdText: 'command_user="nginx:nginx"\n', dryRun: 1, master: false });
+    assert.equal(dry.script, earlier);
+    assert.equal(dry.calls, '');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

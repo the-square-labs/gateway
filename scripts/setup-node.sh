@@ -450,6 +450,77 @@ nginx_service_pid_file() {
     printf '%s\n' "$pid_file"
 }
 
+backup_if_exists() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        local backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
+        cp "$file" "$backup"
+        log "Backed up ${file} to ${backup}"
+    fi
+}
+
+# A root nginx must not leave its pid directory to the unprivileged nginx user that Alpine's service assigns it to on
+# every start and reload: the daemon signals the process the pid file names. The service gives the directory to root
+# unless /etc/conf.d/nginx runs nginx as another user (command_user), which then has to own it to write its pid. An
+# earlier installer wrote root:root there for good; that is replaced even for a non-root daemon, because it takes the
+# directory from the user nginx runs as, and before the daemon's preflight looks for that user's nginx master: an
+# operator who prepared nginx for the user (command_user) on such a host has an nginx that cannot start until then.
+NGINX_OPENRC_MIGRATED=0
+ensure_nginx_openrc_pid_directory() {
+    has_openrc || return 0
+    [[ "$DRY_RUN" -eq 0 ]] || return 0
+    local service=/etc/init.d/nginx
+    local stock='checkpath --directory --owner nginx:nginx '
+    local earlier='checkpath --directory --mode 0755 --owner root:root '
+    local secured='checkpath --directory --mode 0755 --owner "${command_user:-root:root}" '
+    local replaced
+    local mode
+    local parent
+    local candidate
+
+    [[ -f "$service" && ! -L "$service" ]] || return 0
+    if [[ "$RUN_USER" == "root" ]] && grep -Fq "${stock}"'${pidfile%/*}' "$service"; then
+        replaced="$stock"
+    elif grep -Fq "${earlier}"'${pidfile%/*}' "$service"; then
+        replaced="$earlier"
+    else
+        return 0
+    fi
+    [[ "$(head -n 1 "$service")" == '#!/sbin/openrc-run' ]] || return 0
+    for parent in /etc /etc/init.d; do
+        [[ -d "$parent" && ! -L "$parent" && "$(stat -c %u "$parent")" == 0 ]] || \
+            die "Untrusted nginx OpenRC service directory"
+        mode=$(stat -c %a "$parent")
+        (( (8#$mode & 8#022) == 0 )) || die "Untrusted nginx OpenRC service directory permissions"
+    done
+    [[ "$(stat -c %u "$service")" == 0 ]] || die "Untrusted nginx OpenRC service owner"
+    mode=$(stat -c %a "$service")
+    (( (8#$mode & 8#022) == 0 )) || die "Untrusted nginx OpenRC service permissions"
+    candidate=$(mktemp /etc/init.d/.nginx-gateway-XXXXXX)
+    sed "s/${replaced}/${secured}/" "$service" > "$candidate"
+    if ! grep -Fq "${secured}"'${pidfile%/*}' "$candidate" || ! sh -n "$candidate"; then
+        rm -f "$candidate"
+        die "Invalid nginx OpenRC service after PID-directory migration"
+    fi
+    chmod "$mode" "$candidate"
+    backup_if_exists "$service"
+    mv -f "$candidate" "$service"
+    NGINX_OPENRC_MIGRATED=1
+    log "Secured nginx OpenRC PID-directory ownership for start and reload"
+}
+
+# An nginx service that failed to start for the migrated line (status crashed) is started again, once the operator has
+# set nginx up to run as the daemon's user; its pid directory is now that user's.
+restart_nginx_service_after_migration() {
+    [[ "$NGINX_OPENRC_MIGRATED" -eq 1 ]] || return 0
+    ! rc-service nginx status >/dev/null 2>&1 || return 0
+    grep -Eq "^[[:space:]]*command_user=[\"']?${RUN_USER}([:\"'[:space:]]|\$)" /etc/conf.d/nginx 2>/dev/null || return 0
+    rc-service nginx zap >> "$LOG_FILE" 2>&1 || true
+    if rc-service nginx start >> "$LOG_FILE" 2>&1; then
+        log "Started the nginx service, which could not start with the earlier PID-directory ownership"
+    fi
+}
+
 # The daemon writes /etc/nginx and reloads nginx itself, so a non-root daemon needs an nginx master that runs as the
 # same user. The installer does not convert the host's nginx service; it stops before changing anything instead.
 preflight_run_user_nginx() {
@@ -459,6 +530,8 @@ preflight_run_user_nginx() {
     fi
     local run_uid master_pid master_uid problem=""
     run_uid=$(id -u "$RUN_USER")
+    ensure_nginx_openrc_pid_directory
+    restart_nginx_service_after_migration
     if ! command_exists nginx; then
         problem="nginx is not installed"
     elif ! master_pid=$(nginx_master_pid); then
@@ -480,7 +553,11 @@ preflight_run_user_nginx() {
     err "    PIDFile=/run/nginx/nginx.pid, and 'pid /run/nginx/nginx.pid;' in nginx.conf; OpenRC: command_user=\"${RUN_USER}:${RUN_GROUP}\" and"
     err "    capabilities=\"^cap_net_bind_service\" in /etc/conf.d/nginx, and 'pid /run/nginx/nginx.pid;' in nginx.conf);"
     err "  - give ${RUN_USER} /etc/nginx, /var/log/nginx and the nginx temp directories, and make log rotation create files as ${RUN_USER};"
+    err "  - start the prepared service (OpenRC: rc-service nginx zap, then rc-service nginx start; a service that crashed needs the zap);"
     err "  - or install nginx-daemon as root (--user root)."
+    if [[ "$NGINX_OPENRC_MIGRATED" -eq 1 ]]; then
+        die "nginx is not prepared for a non-root nginx-daemon; only the PID-directory line of the nginx OpenRC service was updated."
+    fi
     die "nginx is not prepared for a non-root nginx-daemon; nothing was changed."
 }
 
@@ -1690,15 +1767,6 @@ install_nginx() {
 }
 
 # ── Step 2: Configure nginx ───────────────────────────────────────────
-backup_if_exists() {
-    local file="$1"
-    if [[ -f "$file" ]]; then
-        local backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
-        cp "$file" "$backup"
-        log "Backed up ${file} to ${backup}"
-    fi
-}
-
 ensure_http_include() {
     local include_line="$1"
     local global_conf="/etc/nginx/nginx.conf"
@@ -1887,52 +1955,6 @@ nginx_worker_requires_restart() {
 
     running_nofile=$(current_nginx_worker_nofile_limit)
     [[ "$running_nofile" =~ ^[0-9]+$ ]] && (( running_nofile < NGINX_WORKER_NOFILE_MIN ))
-}
-
-# A root nginx must not leave its pid directory to the unprivileged nginx user that Alpine's service assigns it to on
-# every start and reload: the daemon signals the process the pid file names. The service gives the directory to root
-# unless /etc/conf.d/nginx runs nginx as another user (command_user), which then has to own it to write its pid. An
-# earlier installer wrote root:root there for good; that is replaced even for a non-root daemon, because it takes the
-# directory from the user nginx runs as.
-ensure_nginx_openrc_pid_directory() {
-    has_openrc || return 0
-    local service=/etc/init.d/nginx
-    local stock='checkpath --directory --owner nginx:nginx '
-    local earlier='checkpath --directory --mode 0755 --owner root:root '
-    local secured='checkpath --directory --mode 0755 --owner "${command_user:-root:root}" '
-    local replaced
-    local mode
-    local parent
-    local candidate
-
-    [[ -f "$service" && ! -L "$service" ]] || return 0
-    if [[ "$RUN_USER" == "root" ]] && grep -Fq "${stock}"'${pidfile%/*}' "$service"; then
-        replaced="$stock"
-    elif grep -Fq "${earlier}"'${pidfile%/*}' "$service"; then
-        replaced="$earlier"
-    else
-        return 0
-    fi
-    [[ "$(head -n 1 "$service")" == '#!/sbin/openrc-run' ]] || return 0
-    for parent in /etc /etc/init.d; do
-        [[ -d "$parent" && ! -L "$parent" && "$(stat -c %u "$parent")" == 0 ]] || \
-            die "Untrusted nginx OpenRC service directory"
-        mode=$(stat -c %a "$parent")
-        (( (8#$mode & 8#022) == 0 )) || die "Untrusted nginx OpenRC service directory permissions"
-    done
-    [[ "$(stat -c %u "$service")" == 0 ]] || die "Untrusted nginx OpenRC service owner"
-    mode=$(stat -c %a "$service")
-    (( (8#$mode & 8#022) == 0 )) || die "Untrusted nginx OpenRC service permissions"
-    candidate=$(mktemp /etc/init.d/.nginx-gateway-XXXXXX)
-    sed "s/${replaced}/${secured}/" "$service" > "$candidate"
-    if ! grep -Fq "${secured}"'${pidfile%/*}' "$candidate" || ! sh -n "$candidate"; then
-        rm -f "$candidate"
-        die "Invalid nginx OpenRC service after PID-directory migration"
-    fi
-    chmod "$mode" "$candidate"
-    backup_if_exists "$service"
-    mv -f "$candidate" "$service"
-    log "Secured nginx OpenRC PID-directory ownership for start and reload"
 }
 
 ensure_nginx_service_limit() {
