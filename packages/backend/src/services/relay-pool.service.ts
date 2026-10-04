@@ -1800,11 +1800,13 @@ export class RelayPoolService {
     if (instance.kind === 'local')
       throw new AppError(409, 'LOCAL_RELAY_DRAIN_UNSUPPORTED', 'Use pool maintenance for local relay');
     if (!instance.nodeId) throw new AppError(409, 'RELAY_INSTANCE_UNENROLLED', 'Relay instance is not enrolled');
-    if (instance.state !== 'draining') {
-      throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINING', 'Relay instance must be draining first');
-    }
+    // A relay that is not connected has nothing to disconnect; its operator drain stays recorded while its state stays
+    // offline, so "not draining" would be the wrong reason.
     if (!this.policy.isRemoteInstanceConnected(instance.nodeId)) {
       throw new AppError(409, 'RELAY_NOT_CONNECTED', 'The relay is not connected. Try again once it reconnects.');
+    }
+    if (instance.state !== 'draining') {
+      throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINING', 'Relay instance must be draining first');
     }
     await this.policy.setRemoteInstanceDrain(instance.nodeId, true, true);
     await this.db

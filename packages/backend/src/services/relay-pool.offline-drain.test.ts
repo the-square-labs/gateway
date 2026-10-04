@@ -4,14 +4,14 @@ import { RelayPoolService } from './relay-pool.service.js';
 const nodeId = '11111111-1111-4111-8111-111111111111';
 
 /** A remote relay whose supervisor lost its control stream. */
-function offlineRelay(state: 'offline' | 'draining' = 'offline') {
+function offlineRelay(state: 'offline' | 'draining' = 'offline', drained = state === 'draining') {
   const instance = {
     id: 'relay-1',
     poolId: 'system',
     kind: 'remote',
     nodeId,
     state,
-    manualDrainStartedAt: state === 'draining' ? new Date() : null,
+    manualDrainStartedAt: drained ? new Date() : null,
     drainForcedAt: null,
     health: {},
   };
@@ -72,6 +72,17 @@ describe('Relay drain while the relay is not connected', () => {
       statusCode: 409,
       code: 'RELAY_NOT_CONNECTED',
     });
+    expect(persisted).toEqual([]);
+  });
+
+  it('says it is not connected when it was just drained and keeps its offline state', async () => {
+    const { service, persisted, policy } = offlineRelay('offline', true);
+
+    await expect(service.forceDisconnectInstance('relay-1', 'admin-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'RELAY_NOT_CONNECTED',
+    });
+    expect(policy.setRemoteInstanceDrain).not.toHaveBeenCalled();
     expect(persisted).toEqual([]);
   });
 });
