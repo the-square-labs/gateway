@@ -115,3 +115,55 @@ describe('Enroll relay re-enrollment host binding', () => {
     expect(deps.systemCA.issueRelayServerCert).toHaveBeenCalledWith(instanceId, ['relay.example.test']);
   });
 });
+
+describe('Enrollment errors returned to the daemon', () => {
+  it('returns a generic enrollment error and keeps the database error in the log', async () => {
+    const token = createNodeEnrollmentToken();
+    const deps = makeDeps(await makeRelayDb(token));
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).Enroll(relayEnrollCall(token.token, relayHostIdentityId), callback);
+
+    expect(callback).toHaveBeenCalledWith({
+      code: 13,
+      message: 'Enrollment failed; see the Gateway log for details',
+    });
+  });
+
+  it('returns a generic renewal error and keeps the database error in the log', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ id: nodeId, certificateSerial: 'aa01', hostname: 'node-1', status: 'online' }],
+          }),
+        }),
+      })),
+    } as any;
+    const deps = makeDeps(db);
+    const callback = vi.fn();
+    const call = {
+      request: { nodeId },
+      getPeer: () => '127.0.0.1:50000',
+      handler: {
+        http2Stream: {
+          session: {
+            socket: {
+              authorized: true,
+              authorizationError: null,
+              getPeerCertificate: () => ({ subject: { CN: nodeId }, serialNumber: 'aa01' }),
+            },
+          },
+        },
+      },
+    } as any;
+
+    await createEnrollmentHandlers(deps).RenewCertificate(call, callback);
+
+    expect(deps.systemCA.issueNodeCert).toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledWith({
+      code: 13,
+      message: 'Certificate renewal failed; see the Gateway log for details',
+    });
+  });
+});

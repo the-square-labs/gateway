@@ -26,6 +26,16 @@ class EnrollmentTokenConsumedError extends Error {
   }
 }
 
+class CertificateChangedDuringRenewalError extends Error {
+  constructor() {
+    super('Node certificate changed during renewal; retry');
+  }
+}
+
+/** What a failed RPC tells the daemon: database and PKI errors carry queries and identifiers, which stay in the log. */
+const ENROLLMENT_FAILED_MESSAGE = 'Enrollment failed; see the Gateway log for details';
+const RENEWAL_FAILED_MESSAGE = 'Certificate renewal failed; see the Gateway log for details';
+
 export function createEnrollmentHandlers(deps: GrpcServerDeps) {
   return {
     async Enroll(call: ServerUnaryCall<EnrollRequest, EnrollResponse>, callback: sendUnaryData<EnrollResponse>) {
@@ -108,7 +118,10 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           }
           if (!deps.relayPolicy) throw new Error('Relay instance enrollment is not initialized');
           const advertisedAddresses = instance?.advertisedAddresses ?? matchedNode.serviceAddresses ?? [];
-          if (!advertisedAddresses.length) throw new Error('Relay node has no advertised service address');
+          if (!advertisedAddresses.length) {
+            callback({ code: 9, message: 'Relay node has no advertised service address' });
+            return;
+          }
           if (!instance) {
             [instance] = await deps.db
               .insert(relayInstances)
@@ -269,8 +282,8 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           callback({ code: 6, message: 'This physical host already has a relay instance in the system pool' });
           return;
         }
-        logger.error('Enrollment failed', { error: (err as Error).message });
-        callback({ code: 13, message: `Enrollment failed: ${(err as Error).message}` });
+        logger.error('Enrollment failed', { hostname: call.request?.hostname, error: (err as Error).message });
+        callback({ code: 13, message: ENROLLMENT_FAILED_MESSAGE });
       }
     },
 
@@ -369,7 +382,7 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
               })
               .where(and(eq(nodes.id, req.nodeId), eq(nodes.certificateSerial, currentSerial)))
               .returning({ id: nodes.id });
-            if (staged.length === 0) throw new Error('Node certificate changed during renewal; retry');
+            if (staged.length === 0) throw new CertificateChangedDuringRenewalError();
           },
           { stage: 'pending' }
         );
@@ -414,8 +427,12 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           }
         }
       } catch (err) {
-        logger.error('Certificate renewal failed', { error: (err as Error).message });
-        callback({ code: 13, message: `Renewal failed: ${(err as Error).message}` });
+        if (err instanceof CertificateChangedDuringRenewalError) {
+          callback({ code: 13, message: err.message });
+          return;
+        }
+        logger.error('Certificate renewal failed', { nodeId: call.request?.nodeId, error: (err as Error).message });
+        callback({ code: 13, message: RENEWAL_FAILED_MESSAGE });
       }
     },
   };
