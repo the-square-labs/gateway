@@ -21,6 +21,7 @@ import {
   dockerWebhooks,
   managedDatabaseBindings,
   nodes,
+  relayRoutes,
 } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -76,6 +77,7 @@ export const dockerDeploymentCommercialRuntime = {
   normalizeMountDefinitionsFromConfig,
   managedDatabaseBindings,
   containerLinks,
+  relayRoutes,
   assertDeploymentNotUsedByProxy,
   assertComposeProjectNotUsedByProxy,
   inArray,
