@@ -87,6 +87,10 @@ export interface RelayGrantAssignment {
     connectorImage?: string;
     /** Database links: recreate the link's consumers without the listener's ExtraHosts entry. */
     consumersUseAlias?: boolean;
+    /** Storage links: listening on the network without answering the alias yet (a legacy cutover). */
+    aliasDisabled?: boolean;
+    /** The fixed IPv4 the connector takes on the link network (a legacy sidecar's address). */
+    connectorAddress?: string;
   };
 }
 

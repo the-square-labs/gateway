@@ -13,7 +13,10 @@ export interface RelayRouteTransport {
   secureLinkEgress: RelaySecureLinkEgressConfig | null;
 }
 
-/** The stored egress equals the desired one, `consumersUseAlias` included (whether the route must be written). */
+/**
+ * The stored egress equals the desired one, `consumersUseAlias`, `aliasDisabled` and `connectorAddress` included (whether
+ * the route must be written).
+ */
 export function secureLinkEgressEqual(
   current: RelaySecureLinkEgressConfig | null | undefined,
   desired: RelaySecureLinkEgressConfig | null | undefined
@@ -21,13 +24,16 @@ export function secureLinkEgressEqual(
   if (!current || !desired) return current == null && desired == null;
   return (
     secureLinkEgressServesEqual(current, desired) &&
-    (current.consumersUseAlias ?? false) === (desired.consumersUseAlias ?? false)
+    (current.consumersUseAlias ?? false) === (desired.consumersUseAlias ?? false) &&
+    (current.aliasDisabled ?? false) === (desired.aliasDisabled ?? false) &&
+    (current.connectorAddress ?? '') === (desired.connectorAddress ?? '')
   );
 }
 
 /**
- * The egress listens the same way (network, alias, port, sessions, TLS). `consumersUseAlias` only tells the daemon how
- * to recreate consumers, so it never moves the route's generation (routeTransportRestartRequired).
+ * The egress listens the same way (network, alias, port, sessions, TLS). `consumersUseAlias` (how the daemon recreates
+ * consumers), `aliasDisabled` and `connectorAddress` (how the connector sits on the network) never move the route's
+ * generation (routeTransportRestartRequired).
  */
 export function secureLinkEgressServesEqual(
   current: RelaySecureLinkEgressConfig,

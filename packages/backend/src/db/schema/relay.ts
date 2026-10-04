@@ -127,6 +127,16 @@ export interface RelaySecureLinkEgressConfig {
    * connector); absent while the egress is not ready and while reverting. Changing it keeps the route's generation.
    */
   consumersUseAlias?: boolean;
+  /**
+   * Storage links leaving their legacy sidecar: the connector is on the network and listens, but does not answer the
+   * alias yet (the sidecar still does). Changing it keeps the route's generation.
+   */
+  aliasDisabled?: boolean;
+  /**
+   * The fixed IPv4 the connector takes on the link network: a legacy sidecar's address, so clients that resolved the
+   * alias once (an nginx static proxy_pass) keep reaching it after the cutover. Changing it keeps the generation.
+   */
+  connectorAddress?: string;
 }
 
 export interface RelayArtifactDescriptor {
