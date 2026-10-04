@@ -99,11 +99,32 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 		}
 	}
 	m.egress.publish(statuses)
-	if ready && m.pendingRetire != nil {
-		m.retireConnector(*m.pendingRetire)
-		m.pendingRetire = nil
+	if m.pendingRetire != nil {
+		waited := time.Since(m.pendingRetireSince) >= secureLinkReplacementListenWait
+		switch {
+		case ready || waited:
+			if !ready && m.plugin.logger != nil {
+				m.plugin.logger.Warn("the replaced secure-link connector stops accepting although an egress does not listen on the new one yet",
+					"waited", secureLinkReplacementListenWait)
+			}
+			m.retireConnector(*m.pendingRetire)
+			m.pendingRetire = nil
+		default:
+			// Checked again shortly: it stops accepting as soon as the new one listens.
+			m.scheduleEgressRetryLocked()
+		}
 	}
 	return ready
+}
+
+// secureLinkReplacementListenWait bounds how long a replaced connector keeps accepting while an egress does not
+// listen on its replacement yet (a variable for tests).
+var secureLinkReplacementListenWait = time.Minute
+
+// setPendingRetireLocked keeps a replaced connector accepting until every egress listens on its replacement.
+func (m *dockerSecureLinkManager) setPendingRetireLocked(previous connectorRuntime) {
+	m.pendingRetire = &previous
+	m.pendingRetireSince = time.Now()
 }
 
 func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Context) map[string]egressStatus {
@@ -190,8 +211,7 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 			m.egress.configsFor = m.connectorID
 		} else {
 			// Retired once every egress listens on the new connector too (reconcileEgressLocked).
-			previous := replacement.previous
-			m.pendingRetire = &previous
+			m.setPendingRetireLocked(replacement.previous)
 		}
 	}
 	if replacement == nil && securelink.IsShuttingDown(err) && !m.abandoning {
@@ -209,9 +229,12 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 		}
 		return statuses
 	}
-	if err != nil && m.plugin.logger != nil {
+	if err != nil && m.egress.refusalLogged != m.connectorID {
 		// The ingress bindings the connector holds were refused again; the next proxy secure-link sync deals with them.
-		m.plugin.logger.Warn("secure-link connector refused its ingress bindings during an egress sync", "error", err)
+		m.egress.refusalLogged = m.connectorID
+		if m.plugin.logger != nil {
+			m.plugin.logger.Warn("secure-link connector refused its ingress bindings during an egress sync", "error", err)
+		}
 	}
 	m.recordEgressResponseLocked(response, configs, serving, statuses)
 	// Served, but not as Gateway asked (a refused address, a rejoin that kept the previous endpoint): the egress

@@ -11,8 +11,11 @@ import (
 )
 
 // A replacement that does not listen on every egress address yet leaves the previous connector accepting: it is told
-// to drain only once a later reconcile finds every egress listening on the replacement.
+// to drain as soon as a reconcile, which runs again shortly by itself, finds every egress listening on the replacement.
 func TestReplacedConnectorDrainsOnlyOnceEgressListens(t *testing.T) {
+	retry := egressAddressRetry
+	egressAddressRetry = 100 * time.Millisecond
+	t.Cleanup(func() { egressAddressRetry = retry })
 	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
 	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
 	plugin := &DockerPlugin{client: engine.client()}
@@ -43,7 +46,38 @@ func TestReplacedConnectorDrainsOnlyOnceEgressListens(t *testing.T) {
 	engine.mu.Lock()
 	replacement.egressFails = false
 	engine.mu.Unlock()
-	manager.resyncEgress()
+	waitRemoved(t, engine, previous.id)
+	if !receivedDrain(engine.fakeConnectorEngine, previous) {
+		t.Fatal("the previous connector was removed without draining")
+	}
+}
+
+// A replacement whose egress does not listen within secureLinkReplacementListenWait does not leave the previous
+// connector accepting for longer (the stand saw one accept for 25 minutes): it drains all the same.
+func TestReplacedConnectorStopsAcceptingAfterTheListenWait(t *testing.T) {
+	retry, wait := egressAddressRetry, secureLinkReplacementListenWait
+	egressAddressRetry, secureLinkReplacementListenWait = 100*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { egressAddressRetry, secureLinkReplacementListenWait = retry, wait })
+	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	plugin := &DockerPlugin{client: engine.client()}
+	manager := &dockerSecureLinkManager{plugin: plugin, socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{}}
+	manager.publishViewLocked()
+	plugin.secureLinks = manager
+	if _, err := manager.apply(replaceTestCommand(replaceTestOldImage), nil, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
+		t.Fatalf("egress on the first connector %+v", status)
+	}
+	previous := engine.containers[secureLinkConnectorSlots[0].name]
+	engine.mu.Lock()
+	engine.egressFails = true
+	engine.mu.Unlock()
+	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
+		t.Fatalf("apply with the new image: %v", err)
+	}
 	waitRemoved(t, engine, previous.id)
 	if !receivedDrain(engine.fakeConnectorEngine, previous) {
 		t.Fatal("the previous connector was removed without draining")

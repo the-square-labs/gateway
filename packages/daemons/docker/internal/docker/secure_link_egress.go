@@ -108,6 +108,9 @@ type secureLinkEgress struct {
 	configsFor     string
 	ingressConfigs []securelink.BindingConfig
 	ingressFor     string
+	// refusalLogged is the connector whose refusal of its ingress bindings during an egress sync was logged: once
+	// per connector, not on every sync.
+	refusalLogged string
 	// ingressNetworks are the target networks the last apply attached the connector to.
 	ingressNetworks map[string]struct{}
 	networks        map[string]egressNetwork

@@ -1,8 +1,12 @@
 package docker
 
 import (
+	"bytes"
+	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,5 +222,47 @@ func TestEgressLeavesADrainingConnector(t *testing.T) {
 	}
 	if request := engine.lastRequest(next.name); len(request.Egress) != 1 || request.Egress[0].Generation != 4 {
 		t.Fatalf("egress sent to the new connector %+v", request.Egress)
+	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *lockedBuffer) count(text string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Count(b.String(), text)
+}
+
+// A connector that keeps refusing its ingress bindings is logged once, not on every egress sync (89 lines in six
+// seconds on the stand).
+func TestIngressRefusalDuringEgressSyncsIsLoggedOnce(t *testing.T) {
+	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
+	logs := &lockedBuffer{}
+	plugin := &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewTextHandler(logs, nil))}
+	manager := &dockerSecureLinkManager{plugin: plugin, socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{}}
+	manager.publishViewLocked()
+	plugin.secureLinks = manager
+	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
+		t.Fatalf("egress status %+v", status)
+	}
+	connector := engine.containers[secureLinkConnectorSlots[0].name]
+	engine.mu.Lock()
+	connector.syncFails = true
+	engine.mu.Unlock()
+	for range 5 {
+		manager.resyncEgress()
+	}
+	if logged := logs.count("refused its ingress bindings during an egress sync"); logged != 1 {
+		t.Fatalf("the refusal was logged %d times, want once", logged)
 	}
 }

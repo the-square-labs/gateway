@@ -139,6 +139,8 @@ type dockerSecureLinkManager struct {
 	// pendingRetire is a replaced connector that keeps accepting until every egress listens on its replacement
 	// (reconcileEgressLocked); guarded by mu.
 	pendingRetire *connectorRuntime
+	// pendingRetireSince is when pendingRetire was replaced (secureLinkReplacementListenWait); guarded by mu.
+	pendingRetireSince time.Time
 	// managementGateway is the management network's gateway, the daemon's address towards the connector: the only
 	// peer the ingress listeners accept (guarded by mu).
 	managementGateway string
@@ -466,8 +468,7 @@ func (m *dockerSecureLinkManager) apply(
 		if m.plugin.logger != nil {
 			m.plugin.logger.Info("secure-link connector replaced; the previous one is retired once its tunnels are idle", "image", image)
 		}
-		previous := replacement.previous
-		m.pendingRetire = &previous
+		m.setPendingRetireLocked(replacement.previous)
 	}
 	if m.egress.wanted() || len(m.egress.configs) > 0 {
 		// The connector may be new (a replacement, a restore): its egress listeners follow its ingress bindings, on
