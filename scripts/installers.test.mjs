@@ -627,15 +627,25 @@ test('every installer announces the switch of the run user from root and to root
     };
     for (const [script, config] of Object.entries(configs)) {
       const source = readFileSync(path.join(scriptsDir, script), 'utf8');
-      const body = shellFunction(source, 'prepare_run_user_switch').replaceAll(config, path.join(dir, 'conf'));
-      const run = (runUser, previousUid) =>
+      const body = shellFunction(source, 'prepare_run_user_switch')
+        .replaceAll(config, path.join(dir, 'conf'))
+        .replaceAll('/var/lib/', `${path.join(dir, 'lib')}/`);
+      const run = (runUser, previousUid, enrolled = 1) =>
         runShell(
           [
             'log() { echo "$*"; }',
+            'die() { echo "DIE $*"; exit 1; }',
+            'id() { case "$1" in -u) [[ "$2" == root ]] && echo 0 || echo 4242 ;; -nu) [[ "$2" == 0 ]] && echo root || echo "user$2" ;; esac; }',
+            'stop_daemon_service() { echo STOPPED; }',
+            'stop_relay_supervisor() { echo STOPPED; }',
             `PREVIOUS_RUN_UID=${previousUid}`,
             `RUN_USER=${runUser}`,
+            `EXISTING_ENROLLED=${enrolled}`,
+            "ENROLL_TOKEN=''",
+            'RUN_USER_SWITCH_PENDING=0',
             body,
             'prepare_run_user_switch',
+            'echo "PENDING=$RUN_USER_SWITCH_PENDING"',
           ].join('\n')
         );
       // No installation yet: a fresh install does not switch anything.
@@ -645,7 +655,11 @@ test('every installer announces the switch of the run user from root and to root
       const toUser = run('gwsvc', 0);
       assert.equal(toUser.status, 0, `${script}\n${toUser.output}`);
       assert.match(toUser.output, /ran as root; switching it to gwsvc/, script);
-      assert.doesNotMatch(run('root', 0).output, /switching/, `${script} stays root`);
+      // A root daemon keeps rewriting its files as root while it runs, so it is stopped before they change owner:
+      // at once, or (docker, nginx) right before the new process starts, which defers the ownership change too.
+      assert.match(toUser.output, /STOPPED|PENDING=1/, `${script} stops the root daemon before the files change owner`);
+      const stays = run('root', 0);
+      assert.doesNotMatch(stays.output, /switching|STOPPED|PENDING=1/, `${script} stays root`);
       await rm(path.join(dir, 'conf'), { recursive: true, force: true });
     }
     // Leaving a non-root user is announced by the same function before the daemon is stopped.

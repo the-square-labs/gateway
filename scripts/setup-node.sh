@@ -627,17 +627,16 @@ return_paths_to_root() {
     done
 }
 
-# A daemon that moves to another user says so. One that leaves a non-root user gets a new launcher: the launcher copies
+# A daemon that moves to another user says so and gets a new launcher: the launcher copies
 # in its state directory were written by that user, and no other user may run them. It is stopped for that, but as late
 # as possible (finish_run_user_switch, right before the new process starts), so the traffic it serves is not left without
 # a daemon while the installer downloads and prepares; the old process keeps running with what its user owns until then.
 # A node that enrolls again (a token) runs steps as the new user first, so its daemon is stopped at once.
 RUN_USER_SWITCH_PENDING=0
 prepare_run_user_switch() {
-    if [[ "$PREVIOUS_RUN_UID" == 0 ]]; then
-        [[ "$RUN_USER" == "root" || ! -d /etc/nginx-daemon ]] || log "nginx-daemon ran as root; switching it to ${RUN_USER}..."
-        return 0
-    fi
+    # A fresh install has nothing to switch. A daemon that ran as root is stopped before its files change owner too:
+    # it keeps rewriting them (atomically, as root) while it runs, and the new user could not read them.
+    [[ "$PREVIOUS_RUN_UID" != 0 || -d /etc/nginx-daemon ]] || return 0
     [[ "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
     log "nginx-daemon ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}..."
     if [[ -z "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 ]]; then
