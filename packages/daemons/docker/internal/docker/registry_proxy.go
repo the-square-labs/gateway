@@ -305,7 +305,7 @@ func (m *dockerRegistryProxyManager) serveHTTP(response http.ResponseWriter, req
 		},
 	}
 	defer transport.CloseIdleConnections()
-	upstream, err := transport.RoundTrip(request)
+	upstream, err := roundTripRegistryRead(request, transport.RoundTrip)
 	if err != nil {
 		http.Error(response, "internal registry is unavailable", http.StatusBadGateway)
 		return
