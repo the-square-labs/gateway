@@ -31,13 +31,15 @@ func main() {
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "version":
+		case "version", "--version", "-version":
+			exitOnExtraArgs()
 			fmt.Printf("nginx-daemon %s\n", daemon.Version)
 			return
 		case "install":
 			runInstall()
 			return
 		case "run":
+			exitOnExtraArgs()
 			// explicit run, continue below
 		default:
 			fmt.Fprintf(os.Stderr, "Usage: nginx-daemon [run|install|version]\n")
@@ -217,5 +219,13 @@ WantedBy=multi-user.target
 	} else {
 		fmt.Printf("Systemd service written to %s\n", servicePath)
 		fmt.Println("Enable and start: systemctl enable --now nginx-daemon")
+	}
+}
+
+// exitOnExtraArgs ends with the usage when run or version got arguments (lifecycle.ExtraArgs).
+func exitOnExtraArgs() {
+	if err := lifecycle.ExtraArgs(os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\nUsage: nginx-daemon [run|install|version]\n", err)
+		os.Exit(1)
 	}
 }

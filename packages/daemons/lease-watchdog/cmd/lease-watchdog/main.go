@@ -18,6 +18,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -46,7 +47,11 @@ func main() {
 		err = status(os.Args[2:])
 	case "self-test":
 		err = selfTest(os.Args[2:])
-	case "version":
+	case "version", "--version", "-version":
+		if len(os.Args) > 2 {
+			usage()
+			os.Exit(2)
+		}
 		fmt.Printf("lease-watchdog %s\n", Version)
 	default:
 		usage()
@@ -84,6 +89,10 @@ func run(args []string, logger *slog.Logger) error {
 	interval := fs.Duration("update-interval", 6*time.Hour, "average interval between update checks")
 	updates := addUpdateFlags(fs)
 	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		// "run version" used as a version check would start a second watchdog.
+		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
 
 	dir := leasefence.Dir{Root: *root}
 	fallback, err := lookupOwner(*owner)

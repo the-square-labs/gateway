@@ -29,10 +29,12 @@ func main() {
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "version":
+		case "version", "--version", "-version":
+			exitOnExtraArgs()
 			fmt.Printf("relay-supervisor %s\n", Version)
 			return
 		case "run":
+			exitOnExtraArgs()
 		default:
 			fmt.Fprintln(os.Stderr, "Usage: relay-supervisor [run|version]")
 			os.Exit(1)
@@ -166,5 +168,13 @@ func logLevel(value string) slog.Level {
 		return slog.LevelError
 	default:
 		return slog.LevelInfo
+	}
+}
+
+// exitOnExtraArgs ends with the usage when run or version got arguments (lifecycle.ExtraArgs).
+func exitOnExtraArgs() {
+	if err := lifecycle.ExtraArgs(os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\nUsage: relay-supervisor [run|version]\n", err)
+		os.Exit(1)
 	}
 }

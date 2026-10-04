@@ -39,7 +39,8 @@ func main() {
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "version":
+		case "version", "--version", "-version":
+			exitOnExtraArgs()
 			fmt.Printf("docker-daemon %s\n", Version)
 			return
 		case "install":
@@ -52,6 +53,7 @@ func main() {
 		case "hold-link-listeners":
 			os.Exit(runHoldLinkListeners(os.Args[2:]))
 		case "run":
+			exitOnExtraArgs()
 			// explicit run, continue below
 		default:
 			fmt.Fprintf(os.Stderr, "Usage: docker-daemon [run|install|runtime|mount-volume-images|hold-link-listeners|version]\n")
@@ -411,4 +413,12 @@ func systemdUnitExists(unit string) bool {
 		}
 	}
 	return false
+}
+
+// exitOnExtraArgs ends with the usage when run or version got arguments (lifecycle.ExtraArgs).
+func exitOnExtraArgs() {
+	if err := lifecycle.ExtraArgs(os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\nUsage: docker-daemon [run|install|runtime|mount-volume-images|hold-link-listeners|version]\n", err)
+		os.Exit(1)
+	}
 }
