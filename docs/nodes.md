@@ -73,6 +73,8 @@ curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/se
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
+**Alpine, OpenRC and LXC requirements.** Docker nodes need Docker to be able to give its containers the `memory`, `pids` and `cpu` cgroup controllers, because the Secure Link connector and managed workloads run with memory, CPU and pids limits. The installer checks this after Docker is present and refuses to enroll the node when a controller is missing. On an LXC guest running Alpine with OpenRC the root cgroup can have no controllers enabled: `cat /sys/fs/cgroup/cgroup.subtree_control` is empty, and OpenRC's `cgroups` service reports `Resource busy` because every process sits in the root cgroup. Docker and plain containers still start there, but a container with limits fails with `pids.max: no such file or directory`. The host cgroup setup has to enable the controllers before the node is installed; verify with `cat /sys/fs/cgroup/cgroup.subtree_control /sys/fs/cgroup/docker/cgroup.controllers`, which must list `memory`, `pids` and `cpu`. The installer does not change the host's cgroup setup, and no particular OpenRC or Proxmox setting is documented here as the fix.
+
 A Build Worker uses the same Docker installer with `--mode builder`.
 
 **Build Worker priority.** Queued builds go to Build Workers in the order they appear in the Nodes list. The first online worker takes builds until all its parallel slots (Build Worker settings, parallelism) are busy, then the next one does, and so on. To make a worker preferred, drag it higher in the list; to keep one as overflow only, drag it to the bottom. The list order is:

@@ -328,6 +328,43 @@ preflight_database_docker() {
     ok "Docker Engine preflight passed (${DOCKER_SOCKET})"
 }
 
+# The Secure Link connector and the managed workloads run with memory, CPU and pids limits (the connector sets all
+# three), so Docker has to be able to give its containers those cgroup controllers. On an LXC guest with OpenRC the
+# root cgroup can have none enabled (cgroup.subtree_control is empty and OpenRC's cgroups service cannot change that
+# while every process sits in the root cgroup): Docker and plain containers still start, but a container with limits
+# fails with "pids.max: no such file or directory", and the node enrolls without its connectors working.
+preflight_docker_cgroup_controllers() {
+    [[ "$DOCKER_MODE" != "builder" ]] || return 0
+    local info version driver memory_limit pids_limit cpu_quota controllers_file controller
+    local missing=()
+    if ! info=$(docker_run info --format '{{.CgroupVersion}} {{.CgroupDriver}} {{.MemoryLimit}} {{.PidsLimit}} {{.CpuCfsQuota}}' 2>>"$LOG_FILE"); then
+        warn "Could not read the cgroup setup from Docker; skipping the container limits check."
+        return 0
+    fi
+    read -r version driver memory_limit pids_limit cpu_quota <<< "$info"
+    [[ "$memory_limit" == "true" ]] || missing+=(memory)
+    [[ "$pids_limit" == "true" ]] || missing+=(pids)
+    [[ "$cpu_quota" == "true" ]] || missing+=(cpu)
+    # Docker with the cgroupfs driver on cgroup v2 creates its containers below /sys/fs/cgroup/docker, which has the
+    # controllers the root cgroup passes down. docker info reports the controllers the kernel offers, not those.
+    if [[ "$version" == "2" && "$driver" == "cgroupfs" ]]; then
+        controllers_file=/sys/fs/cgroup/docker/cgroup.controllers
+        [[ -r "$controllers_file" ]] || controllers_file=/sys/fs/cgroup/cgroup.subtree_control
+        if [[ -r "$controllers_file" ]]; then
+            for controller in memory pids cpu; do
+                [[ " $(cat "$controllers_file") " == *" ${controller} "* ]] || missing+=("$controller")
+            done
+        fi
+    fi
+    [[ "${#missing[@]}" -gt 0 ]] || return 0
+    missing=($(printf '%s\n' "${missing[@]}" | sort -u))
+    err "Docker cannot give containers the cgroup controllers: ${missing[*]}."
+    err "The Secure Link connector and managed workloads run with memory, CPU and pids limits; with these controllers missing"
+    err "they fail to start, although the node would enroll. On Alpine with OpenRC in an LXC container, the host cgroup setup has"
+    err "to enable them. Check: cat /sys/fs/cgroup/cgroup.subtree_control /sys/fs/cgroup/docker/cgroup.controllers (see docs/nodes.md)."
+    die "Docker does not provide the cgroup controllers this node needs; nothing was enrolled."
+}
+
 # What the Build Worker profile needs from the host itself; checked before the installer changes or downloads anything.
 preflight_builder_host() {
     [[ "$DOCKER_MODE" == "builder" ]] || return 0
@@ -1984,6 +2021,7 @@ fi
 
 ensure_docker_installed
 preflight_database_docker
+preflight_docker_cgroup_controllers
 ensure_builder_system_packages
 
 if [[ "$RUN_USER" != "root" ]]; then

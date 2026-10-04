@@ -656,3 +656,61 @@ test('every installer announces the switch of the run user from root and to root
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// A Docker node needs the memory, cpu and pids cgroup controllers for its containers (the Secure Link connector sets
+// all three limits). Where the root cgroup passes none down (an LXC guest with OpenRC) Docker starts, a container with
+// limits does not, and the node would enroll without its connectors. The installer refuses before it enrolls.
+test('the Docker installer refuses a host whose containers cannot get the cgroup controllers', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+  const { topLevel } = parseShell(source);
+  const firstRun = (name) => Math.min(...topLevel.filter((entry) => entry.calls.includes(name)).map((entry) => entry.line));
+  const check = firstRun('preflight_docker_cgroup_controllers');
+  assert.ok(Number.isFinite(check), 'the check runs at the top level');
+  assert.ok(firstRun('ensure_docker_installed') < check, 'after Docker is present');
+  for (const later of ['install_daemon', 'enroll_daemon', 'start_daemon']) {
+    assert.ok(check < firstRun(later), `before ${later}`);
+  }
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-cgroup-'));
+  try {
+    const body = shellFunction(source, 'preflight_docker_cgroup_controllers').replaceAll('/sys/fs/cgroup', dir);
+    const write = (name, content) => runShell(`mkdir -p '${path.dirname(path.join(dir, name))}' && printf '%s\\n' '${content}' > '${path.join(dir, name)}'`);
+    const check_ = (info, { DOCKER_MODE = 'docker' } = {}) =>
+      runShell(
+        [
+          `DOCKER_MODE=${DOCKER_MODE}; LOG_FILE=/dev/null`,
+          'docker_run() { echo "' + info + '"; }',
+          'warn() { echo "WARN $*"; }',
+          'err() { echo "ERR $*" >&2; }',
+          'die() { err "$@"; exit 1; }',
+          body,
+          'preflight_docker_cgroup_controllers && echo PASSED',
+        ].join('\n')
+      );
+    const all = '2 cgroupfs true true true';
+    // The controllers pass down to Docker's cgroup.
+    write('docker/cgroup.controllers', 'cpu memory pids');
+    assert.match(check_(all).output, /PASSED/);
+    // An empty root cgroup: Docker's cgroup has none.
+    write('docker/cgroup.controllers', '');
+    const empty = check_(all);
+    assert.equal(empty.status, 1, empty.output);
+    assert.match(empty.output, /cannot give containers the cgroup controllers: cpu memory pids\./);
+    assert.match(empty.output, /Alpine with OpenRC in an LXC container/);
+    assert.match(empty.output, /nothing was enrolled/);
+    // Only the missing one is named; the root cgroup is read when Docker has no cgroup yet.
+    write('docker/cgroup.controllers', 'cpu memory');
+    assert.match(check_(all).output, /controllers: pids\./);
+    runShell(`rm '${path.join(dir, 'docker/cgroup.controllers')}'`);
+    write('cgroup.subtree_control', 'cpuset cpu io memory pids');
+    assert.match(check_(all).output, /PASSED/);
+    write('cgroup.subtree_control', '');
+    assert.match(check_(all).output, /controllers: cpu memory pids\./);
+    // docker info says the kernel lacks a controller (cgroup v1 too); the systemd driver reads no files.
+    assert.match(check_('1 cgroupfs true false true').output, /controllers: pids\./);
+    assert.match(check_('2 systemd true true true').output, /PASSED/);
+    // A Build Worker has no Docker.
+    assert.match(check_('2 cgroupfs false false false', { DOCKER_MODE: 'builder' }).output, /PASSED/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
