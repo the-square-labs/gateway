@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   managedDatabaseInstances,
@@ -25,6 +25,7 @@ import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from '@/modul
 import type { GeneralSettingsService, RelayAssignmentSpread } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
+import { localRelayTakeoverBlocker, setLocalRelayUpdateDrain } from './relay-local-takeover.js';
 import type { RelayPolicyService, RelayPolicyTrustStatus } from './relay-policy.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
 import {
@@ -581,7 +582,7 @@ export class RelayPoolService {
   }
 
   /**
-   * Resumes remote relays an update run drained and no longer owns. The run's own release is an
+   * Resumes relays an update run drained and no longer owns. The run's own release is an
    * in-process retry that ends after a while or with the process; a relay left draining by a
    * failed or abandoned run would then stay out of service. Only update runs drain without an
    * operator's drain mark, and a relay held by an unfinished run, paused ones included, stays.
@@ -595,10 +596,9 @@ export class RelayPoolService {
       .where(
         and(
           eq(relayInstances.poolId, 'system'),
-          eq(relayInstances.kind, 'remote'),
           eq(relayInstances.state, 'draining'),
           isNull(relayInstances.manualDrainStartedAt),
-          isNotNull(relayInstances.nodeId)
+          or(eq(relayInstances.kind, 'local'), isNotNull(relayInstances.nodeId))
         )
       );
     let released = 0;
@@ -640,7 +640,8 @@ export class RelayPoolService {
   ): Promise<void> {
     const now = Date.now();
     for (const instance of instances) {
-      if (instance.kind !== 'remote' || instance.state !== 'draining' || instance.activeAssignments === 0) continue;
+      // The local relay drains only for an update, and only while another relay can carry its workloads.
+      if (instance.state !== 'draining' || instance.activeAssignments === 0) continue;
       if (now < (this.nextEvacuationAt.get(instance.id) ?? 0)) continue;
       this.nextEvacuationAt.set(instance.id, now + EVACUATION_RETRY_MS);
       try {
@@ -1712,8 +1713,17 @@ export class RelayPoolService {
   private async setInstanceDrain(instanceId: string, userId: string | null, enabled: boolean, manual: boolean) {
     const [instance] = await this.db.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1);
     if (!instance) throw new AppError(404, 'RELAY_INSTANCE_NOT_FOUND', 'Relay instance not found');
-    if (instance.kind === 'local')
-      throw new AppError(409, 'LOCAL_RELAY_DRAIN_UNSUPPORTED', 'Use pool maintenance for local relay');
+    if (instance.kind === 'local') {
+      if (manual) throw new AppError(409, 'LOCAL_RELAY_DRAIN_UNSUPPORTED', 'Use pool maintenance for local relay');
+      await setLocalRelayUpdateDrain(
+        { db: this.db, policy: this.policy, audit: this.audit, events: this.events },
+        instance,
+        userId,
+        enabled
+      );
+      if (enabled) await this.evacuateUpdateDrainedInstance(instance.id);
+      return;
+    }
     if (!instance.nodeId) throw new AppError(409, 'RELAY_INSTANCE_UNENROLLED', 'Relay instance is not enrolled');
     // Completing an update cannot cancel a separate operator-owned drain.
     if (!manual && !enabled && instance.manualDrainStartedAt) enabled = true;
@@ -1761,18 +1771,37 @@ export class RelayPoolService {
       details: {},
     });
     this.events.publish('system.relay.health.changed', { poolId: instance.poolId, instanceId: instance.id });
-    if (enabled) {
-      try {
-        await this.evacuateInstance(instance.id);
-      } catch (error) {
-        // An update's drain stands on its own; moving workloads is retried by later placement.
-        if (manual) throw error;
-        logger.warn('Relay drained for an update; moving its workloads failed', {
-          instanceId: instance.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    if (!enabled) return;
+    if (manual) await this.evacuateInstance(instance.id);
+    else await this.evacuateUpdateDrainedInstance(instance.id);
+  }
+
+  /** An update's drain stands on its own; moving workloads is retried by later placement. */
+  private async evacuateUpdateDrainedInstance(instanceId: string): Promise<void> {
+    try {
+      await this.evacuateInstance(instanceId);
+    } catch (error) {
+      logger.warn('Relay drained for an update; moving its workloads failed', {
+        instanceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
+  }
+
+  /** Why no other relay can carry the local relay's workloads while an update recreates it; null when one can. */
+  async localRelayTakeoverBlocker(localInstanceId: string): Promise<string | null> {
+    const snapshot = await this.getSnapshot();
+    return localRelayTakeoverBlocker(
+      this.db,
+      this.policy,
+      {
+        instances: snapshot.instances,
+        gatewayHostOnlyEndpointIds: new Set(
+          snapshot.warnings.filter(({ code }) => code === 'gateway_host_only').map(({ endpointId }) => endpointId)
+        ),
+      },
+      localInstanceId
+    );
   }
 
   /** Endpoints whose path includes a daemon without Relay Pool support; advisory on failure. */
@@ -1797,18 +1826,21 @@ export class RelayPoolService {
   private async forceDisconnectDrainingInstance(instanceId: string, userId: string | null, update: boolean) {
     const [instance] = await this.db.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1);
     if (!instance) throw new AppError(404, 'RELAY_INSTANCE_NOT_FOUND', 'Relay instance not found');
-    if (instance.kind === 'local')
-      throw new AppError(409, 'LOCAL_RELAY_DRAIN_UNSUPPORTED', 'Use pool maintenance for local relay');
-    if (!instance.nodeId) throw new AppError(409, 'RELAY_INSTANCE_UNENROLLED', 'Relay instance is not enrolled');
+    // The local relay drains only during a Relay Pool update; its streams can be ended early like a remote relay's.
+    const nodeId = instance.kind === 'local' ? null : instance.nodeId;
+    if (instance.kind !== 'local' && !nodeId) {
+      throw new AppError(409, 'RELAY_INSTANCE_UNENROLLED', 'Relay instance is not enrolled');
+    }
     // A relay that is not connected has nothing to disconnect; its operator drain stays recorded while its state stays
     // offline, so "not draining" would be the wrong reason.
-    if (!this.policy.isRemoteInstanceConnected(instance.nodeId)) {
+    if (nodeId && !this.policy.isRemoteInstanceConnected(nodeId)) {
       throw new AppError(409, 'RELAY_NOT_CONNECTED', 'The relay is not connected. Try again once it reconnects.');
     }
     if (instance.state !== 'draining') {
       throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINING', 'Relay instance must be draining first');
     }
-    await this.policy.setRemoteInstanceDrain(instance.nodeId, true, true);
+    if (nodeId) await this.policy.setRemoteInstanceDrain(nodeId, true, true);
+    else await this.policy.setLocalInstanceDrain(true, true);
     await this.db
       .update(relayInstances)
       .set({ drainForcedAt: new Date() })

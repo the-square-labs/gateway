@@ -2304,17 +2304,20 @@
         "feature relay.pool-update"
       ],
       "preconditions": [
-        "Remote relays on <previous>; Gateway on <candidate>."
+        "Remote relays on <previous>; Gateway on <candidate>.",
+        "Database link pools and storage links held open through the local relay, with probes that count dropped connections."
       ],
       "steps": [
         "Start Update Relay Pool.",
         "In a second run abandon a step after the supervisor update and start again.",
-        "Start it once more with every relay already on the target."
+        "Start it once more with every relay already on the target.",
+        "Note what Settings > Relay shows for the local relay during its step."
       ],
       "expect": [
         "Each relay: supervisor self-update and reconnect first, then the worker update; the supervisor log has no listener with the old build version between 'starting self-update' and 'binary replaced successfully'; the run completes and relays leave drain.",
         "The resumed run updates only the worker of the relay left after its supervisor update; a relay it finds already on the target is marked ready without draining.",
-        "Starting a run with every relay already on the target is refused with NO_UPDATE; no relay is drained or restarted."
+        "Starting a run with every relay already on the target is refused with NO_UPDATE; no relay is drained or restarted.",
+        "With another ready relay that can serve the local relay's workloads, the local relay's step drains it first (audit relay.instance.drain on the local instance, its workloads move, the drain waits as for a remote relay and Force disconnect works on it), then recreates, verifies and resumes it (relay.instance.resume); held connections move instead of dropping, and abandon is refused with 409 RELAY_UPDATE_COMMITTED only once the recreate began. Without such a relay the local relay is recreated at once, connections drop once and reconnect, and relay_pool_update_steps.error of the local step names why."
       ]
     },
     {

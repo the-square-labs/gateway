@@ -699,7 +699,20 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
               )}
           </div>
         ) : (
-          <Badge variant="secondary">Local</Badge>
+          <div className="flex justify-end gap-2">
+            {/* A Relay Pool update drains the local relay while another relay carries its workloads. */}
+            {row.state === "draining" && metric(row.health?.activeTunnels) > 0 && (
+              <Button
+                variant="destructive"
+                pending={poolAction === `disconnect:${row.id}`}
+                disabled={!canEdit || poolAction !== null}
+                onClick={() => void forceDisconnect(row)}
+              >
+                Force disconnect
+              </Button>
+            )}
+            <Badge variant="secondary">Local</Badge>
+          </div>
         ),
     },
   ];

@@ -637,6 +637,11 @@ export class RelayPolicyService {
     if (!result.success) throw new Error(result.error || 'Remote relay drain command failed');
   }
 
+  /** The local relay's drain, which only a Relay Pool update takes while another relay carries its workloads. */
+  async setLocalInstanceDrain(enabled: boolean, forceDisconnect = false): Promise<void> {
+    await this.relay.setDrain(enabled, forceDisconnect);
+  }
+
   async probeRelayCandidate(
     nodeId: string,
     input: Parameters<NodeDispatchService['probeRelayCandidate']>[1]

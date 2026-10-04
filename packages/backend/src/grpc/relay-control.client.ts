@@ -403,6 +403,11 @@ export class RelayControlClient {
     return { replacedKeyIds: response.replacedKeyIds ?? [] };
   }
 
+  /** Stops (or resumes) admitting new tunnels; `forceDisconnect` also closes the open ones of a draining relay. */
+  async setDrain(draining: boolean, forceDisconnect = false, timeoutMs = 5_000): Promise<void> {
+    await this.unary('SetDrain', { draining, operationId: randomUUID(), forceDisconnect }, timeoutMs);
+  }
+
   /**
    * Asks the relay to load the identity files installed now and moves to the client on disk.
    * A reload already in flight may have been answered before those files were written, so it is

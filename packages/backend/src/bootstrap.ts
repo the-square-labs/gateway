@@ -2135,6 +2135,7 @@ export async function initializeContainer(): Promise<void> {
         relayPoolService.drainInstance(instanceId, userId, enabled, { manual: false }),
       forceDisconnectInstance: (instanceId, userId) =>
         relayPoolService.forceDisconnectInstance(instanceId, userId, { update: true }),
+      localRelayTakeoverBlocker: (instanceId) => relayPoolService.localRelayTakeoverBlocker(instanceId),
       prepareWorkerUpdate: (version, arch) =>
         daemonUpdateService.prepareTrustedDaemonUpdate('relay-worker', `${version}-relay`, version, arch),
       dispatchWorkerUpdate: async (nodeId, artifact) => {

@@ -33,6 +33,7 @@ import {
   waitForOrchestrationIdle,
 } from './orchestration-activity.js';
 import { saveInstalledRelayArtifact } from './relay-installed-artifact.js';
+import { waitForLocalRelayEvacuation } from './relay-local-takeover.js';
 
 const logger = createChildLogger('UpdateService');
 export const DOCKER_COMPOSE_CLI_IMAGE_REF =
@@ -125,6 +126,8 @@ const RELAY_DRAIN_RELEASE_RETRY_MS = 30_000;
 const RELAY_UPDATE_DRAIN_GRACE_MS = 30 * 60_000;
 /** After the forced disconnect: time for the relay to report its streams closed. The update goes on either way. */
 const RELAY_UPDATE_FORCED_DRAIN_SETTLE_MS = 30_000;
+/** How long a drained local relay's workloads get to move to other relays before the update resumes it instead. */
+const LOCAL_RELAY_EVACUATION_TIMEOUT_MS = 5 * 60_000;
 const RELAY_DRAIN_RELEASE_ATTEMPTS = 20;
 /** How often a worker update that left the previous worker running is dispatched again. */
 const RELAY_WORKER_STALE_VERSION_RETRIES = 2;
@@ -177,6 +180,8 @@ export interface RelayPoolUpdateRuntime {
   drainInstance(instanceId: string, userId: string | null, enabled: boolean): Promise<void>;
   /** Closes the streams a drained relay still carries (audited as a forced disconnect). */
   forceDisconnectInstance(instanceId: string, userId: string | null): Promise<void>;
+  /** Why no other relay can carry the local relay's workloads while it is recreated; null when one can. */
+  localRelayTakeoverBlocker?(localInstanceId: string): Promise<string | null>;
   /**
    * Resolves once no other voter or candidate of the relay's availability lease policies is updating or still
    * settling after a restart (daemon updates included), so two members of one policy never restart together.
@@ -1392,17 +1397,44 @@ chmod 700 "$backup"
         if (!instance) throw new Error(`Relay instance ${step.relayInstanceId} is unavailable`);
         if (instance.kind === 'local') {
           // A retried run finds the local relay already on the target image.
+          let interruption: string | null = null;
           if (!artifact.imageRef || this.env.GATEWAY_RELAY_IMAGE_REF !== artifact.imageRef) {
             await runtime.awaitLeasePeers?.(instance.id, signal);
             throwIfAbandoned();
+            // While another relay can carry its workloads, the local relay is drained like a remote one, so its
+            // sessions move instead of dropping when its container is recreated. Otherwise they drop once.
+            interruption = await this.localRelayTakeoverBlocker(runtime, instance.id);
+            if (!interruption) {
+              await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + RELAY_UPDATE_DRAIN_GRACE_MS));
+              drainedInstanceId = instance.id;
+              interruption = await this.drainLocalRelay(runtime, instance.id, userId, signal);
+              if (interruption) drainedInstanceId = null;
+              else await this.waitForUpdateDrain(runtime, instance, userId, signal);
+              throwIfAbandoned();
+            }
             await this.updatePoolStep(step.id, 'updating');
             const restartedAt = Date.now();
             // From the point the local relay update commits, abandoning is refused: the pool ends on the target (or the
             // relay rolls back), and the run records that outcome rather than a failure (abandonRelayUpdate).
             await this.performLocalRelayUpdate(targetVersion, artifact, false, signal);
+            if (drainedInstanceId) {
+              await this.updatePoolStep(step.id, 'verifying');
+              await this.waitForRelayInstanceVersion(instance.id, artifact.buildVersion, signal);
+            }
             await runtime.awaitLeaseSettled?.(instance.id, restartedAt, signal);
+            if (drainedInstanceId) {
+              await runtime.drainInstance(instance.id, userId, false);
+              drainedInstanceId = null;
+            }
+            if (interruption) {
+              logger.warn('Sessions through the local relay were interrupted by its update', { interruption });
+            }
           }
-          await this.updatePoolStep(step.id, 'ready', true);
+          // Recorded on the step: no other relay could carry the local relay's sessions, so they dropped once.
+          const note = interruption
+            ? `Sessions through the local relay were interrupted once while it was recreated: ${interruption}.`
+            : null;
+          await this.updatePoolStep(step.id, 'ready', true, undefined, note);
           currentStepId = null;
           continue;
         }
@@ -1420,21 +1452,7 @@ chmod 700 "$backup"
         await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + RELAY_UPDATE_DRAIN_GRACE_MS));
         drainedInstanceId = instance.id;
         await runtime.drainInstance(instance.id, userId, true);
-        // Long-lived streams (a database pool, a WebSocket) may never end on their own. After the grace they are
-        // disconnected, as a manual drain does after its own, and the update goes on: the worker restart would end
-        // them anyway, and a run that waited for an operator kept the relay out of the pool meanwhile.
-        if (!(await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_DRAIN_GRACE_MS, signal))) {
-          logger.warn('Relay drain grace ended with active streams; disconnecting them to continue the update', {
-            relayInstanceId: instance.id,
-            relay: instance.displayName,
-          });
-          await runtime.forceDisconnectInstance(instance.id, userId);
-          if (!(await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_FORCED_DRAIN_SETTLE_MS, signal))) {
-            logger.warn('Relay still reports streams after the forced disconnect; its update ends them', {
-              relayInstanceId: instance.id,
-            });
-          }
-        }
+        await this.waitForUpdateDrain(runtime, instance, userId, signal);
         throwIfAbandoned();
         await this.updatePoolStep(step.id, 'updating');
         const architecture = this.relayInstanceArchitecture(instance);
@@ -1503,6 +1521,65 @@ chmod 700 "$backup"
       }
       throw error;
     }
+  }
+
+  /**
+   * Long-lived streams (a database pool, a WebSocket) may never end on their own. After the grace they are
+   * disconnected, as a manual drain does after its own, and the update goes on: the restart would end them anyway,
+   * and a run that waited for an operator kept the relay out of the pool meanwhile.
+   */
+  private async waitForUpdateDrain(
+    runtime: RelayPoolUpdateRuntime,
+    instance: typeof relayInstances.$inferSelect,
+    userId: string | null,
+    signal: AbortSignal
+  ): Promise<void> {
+    if (await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_DRAIN_GRACE_MS, signal)) return;
+    logger.warn('Relay drain grace ended with active streams; disconnecting them to continue the update', {
+      relayInstanceId: instance.id,
+      relay: instance.displayName,
+    });
+    await runtime.forceDisconnectInstance(instance.id, userId);
+    if (!(await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_FORCED_DRAIN_SETTLE_MS, signal))) {
+      logger.warn('Relay still reports streams after the forced disconnect; its update ends them', {
+        relayInstanceId: instance.id,
+      });
+    }
+  }
+
+  private async localRelayTakeoverBlocker(runtime: RelayPoolUpdateRuntime, instanceId: string): Promise<string | null> {
+    if (!runtime.localRelayTakeoverBlocker) return 'no other relay was available to take its workloads over';
+    try {
+      return await runtime.localRelayTakeoverBlocker(instanceId);
+    } catch (error) {
+      return `whether another relay could take its workloads over was not known (${formatError(error)})`;
+    }
+  }
+
+  /**
+   * Drains the local relay and waits until its workloads moved to other relays. Returns why its sessions are
+   * interrupted instead: it refused the drain, or a workload could not move (it is resumed then, so that workload's
+   * new sessions are not refused through the whole drain).
+   */
+  private async drainLocalRelay(
+    runtime: RelayPoolUpdateRuntime,
+    instanceId: string,
+    userId: string | null,
+    signal: AbortSignal
+  ): Promise<string | null> {
+    try {
+      await runtime.drainInstance(instanceId, userId, true);
+    } catch (error) {
+      return `the local relay did not accept the drain (${formatError(error)})`;
+    }
+    const abandoned = () => {
+      if (signal.aborted) throw new RelayPoolUpdateAbandonedError();
+    };
+    if (await waitForLocalRelayEvacuation(this.db, instanceId, LOCAL_RELAY_EVACUATION_TIMEOUT_MS, abandoned)) {
+      return null;
+    }
+    await runtime.drainInstance(instanceId, userId, false);
+    return 'its workloads could not be moved to another relay in time';
   }
 
   private async performLocalRelayUpdate(
@@ -1734,11 +1811,13 @@ exit 1`,
     return run;
   }
 
+  /** `note`: what the step could not avoid, such as interrupted sessions, kept on a step that completed. */
   private async updatePoolStep(
     stepId: string,
     state: 'draining' | 'updating' | 'verifying' | 'ready',
     completed = false,
-    drainDeadlineAt?: Date
+    drainDeadlineAt?: Date,
+    note?: string | null
   ): Promise<void> {
     await this.db
       .update(relayPoolUpdateSteps)
@@ -1747,7 +1826,7 @@ exit 1`,
         startedAt: new Date(),
         ...(drainDeadlineAt ? { drainDeadlineAt } : {}),
         ...(completed ? { completedAt: new Date() } : {}),
-        error: null,
+        error: note ?? null,
         updatedAt: new Date(),
       })
       .where(eq(relayPoolUpdateSteps.id, stepId));
@@ -1968,7 +2047,7 @@ exit 1`,
           relayInstanceId: relayPoolUpdateSteps.relayInstanceId,
           drainDeadlineAt: relayPoolUpdateSteps.drainDeadlineAt,
         });
-      // Only remote steps drain; they record a drain deadline when they do.
+      // Steps record a drain deadline when they drain their relay.
       return steps.filter(({ drainDeadlineAt }) => drainDeadlineAt).map(({ relayInstanceId }) => relayInstanceId);
     });
   }
@@ -2003,7 +2082,7 @@ exit 1`,
           .where(eq(relayInstances.id, instanceId))
           .limit(1);
         // Operator drains are not the update's to release.
-        if (!instance || instance.kind !== 'remote' || !instance.nodeId || instance.manualDrainStartedAt) continue;
+        if (!instance || (instance.kind === 'remote' && !instance.nodeId) || instance.manualDrainStartedAt) continue;
         if (instance.state === 'ready' && instance.health?.admissionState !== 'draining') continue;
         if (await this.isRelayInstanceHeldByUnfinishedRun(instanceId)) continue;
         await runtime.drainInstance(instanceId, userId, false);
