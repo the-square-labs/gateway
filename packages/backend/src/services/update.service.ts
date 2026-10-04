@@ -126,6 +126,8 @@ const RELAY_UPDATE_DRAIN_GRACE_MS = 30 * 60_000;
 /** After the forced disconnect: time for the relay to report its streams closed. The update goes on either way. */
 const RELAY_UPDATE_FORCED_DRAIN_SETTLE_MS = 30_000;
 const RELAY_DRAIN_RELEASE_ATTEMPTS = 20;
+/** How often a worker update that left the previous worker running is dispatched again. */
+const RELAY_WORKER_STALE_VERSION_RETRIES = 2;
 const RELAY_UPDATE_BLOCKS_GATEWAY_MESSAGE =
   'A Relay Pool update is in progress. Update Gateway after it finishes, or abandon the Relay Pool update first.';
 
@@ -240,6 +242,21 @@ export function isRelayTooOldForGatewayUpdate(relayVersion: string, targetVersio
   if (current.major < target.major) return true;
   if (current.major > target.major) return false;
   return target.minor - current.minor >= 2;
+}
+
+/**
+ * True for a relay worker update that installed the target but found the previous worker still running: the
+ * supervisor reports "worker reported version X, expected Y". A supervisor before v2.11.1 could restart the
+ * previous binary while the new one downloaded; dispatching the update again replaces that worker.
+ */
+export function isStaleRelayWorkerVersionError(error: unknown, targetVersion: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = /worker reported version (\S+), expected (\S+)/.exec(message);
+  return (
+    match !== null &&
+    normalizeVersionTag(match[2]) === normalizeVersionTag(targetVersion) &&
+    normalizeVersionTag(match[1]) !== normalizeVersionTag(targetVersion)
+  );
 }
 
 export function isGatewayCompatibleWithRelayUpdate(currentVersion: string, minGatewayVersion: string): boolean {
@@ -1410,11 +1427,18 @@ chmod 700 "$backup"
         await this.updatePoolStep(step.id, 'updating');
         const architecture = this.relayInstanceArchitecture(instance);
         const normalizedVersion = normalizeVersionTag(targetVersion);
-        const workerArtifact = await runtime.prepareWorkerUpdate(normalizedVersion, architecture);
         const restartedAt = Date.now();
-        await runtime.dispatchWorkerUpdate(instance.nodeId, workerArtifact);
-        const supervisorArtifact = await runtime.prepareSupervisorUpdate(normalizedVersion, architecture);
-        await runtime.dispatchSupervisorUpdate(instance.nodeId, supervisorArtifact);
+        // The supervisor goes first, so the worker update runs on the target supervisor: one before v2.11.1 could
+        // restart the previous worker binary while it downloaded the new one. A retried run whose supervisor
+        // already runs the target goes straight on to the worker.
+        if (!(await this.isRelaySupervisorAt(instance.nodeId, normalizedVersion))) {
+          const supervisorArtifact = await runtime.prepareSupervisorUpdate(normalizedVersion, architecture);
+          await runtime.dispatchSupervisorUpdate(instance.nodeId, supervisorArtifact);
+          await this.waitForRelaySupervisorVersion(instance.nodeId, normalizedVersion, signal);
+          throwIfAbandoned();
+        }
+        const workerArtifact = await runtime.prepareWorkerUpdate(normalizedVersion, architecture);
+        await this.dispatchRelayWorkerUpdate(runtime, instance.nodeId, workerArtifact, normalizedVersion, signal);
         await this.updatePoolStep(step.id, 'verifying');
         await Promise.all([
           this.waitForRelayInstanceVersion(instance.id, normalizedVersion, signal),
@@ -1714,12 +1738,43 @@ exit 1`,
 
   private async isRemoteRelayAt(instance: typeof relayInstances.$inferSelect, version: string): Promise<boolean> {
     if (!instance.nodeId || instance.buildVersion !== version) return false;
+    return this.isRelaySupervisorAt(instance.nodeId, version);
+  }
+
+  private async isRelaySupervisorAt(nodeId: string, version: string): Promise<boolean> {
     const [node] = await this.db
       .select({ status: nodes.status, daemonVersion: nodes.daemonVersion })
       .from(nodes)
-      .where(eq(nodes.id, instance.nodeId))
+      .where(eq(nodes.id, nodeId))
       .limit(1);
     return node?.status === 'online' && node.daemonVersion === version;
+  }
+
+  /** Dispatches a relay worker update, again (bounded) while it reports the previous worker still running. */
+  private async dispatchRelayWorkerUpdate(
+    runtime: RelayPoolUpdateRuntime,
+    nodeId: string,
+    artifact: TrustedDaemonUpdateArtifact,
+    version: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await runtime.dispatchWorkerUpdate(nodeId, artifact);
+        return;
+      } catch (error) {
+        if (attempt >= RELAY_WORKER_STALE_VERSION_RETRIES || !isStaleRelayWorkerVersionError(error, version)) {
+          throw error;
+        }
+        if (signal.aborted) throw new RelayPoolUpdateAbandonedError();
+        logger.warn('Relay worker still runs the previous version after its update; dispatching it again', {
+          nodeId,
+          targetVersion: version,
+          attempt: attempt + 1,
+          error: formatError(error),
+        });
+      }
+    }
   }
 
   private relayInstanceArchitecture(instance: typeof relayInstances.$inferSelect): string {
