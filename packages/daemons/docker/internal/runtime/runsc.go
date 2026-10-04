@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -103,7 +105,7 @@ func (m *Manager) PreflightWithoutSmokeTest(ctx context.Context) (status Status,
 		State:               StateUnknown,
 		TargetVersion:       RunscVersion,
 		CheckedAt:           time.Now().UTC(),
-		LocalInstallCommand: "sudo docker-daemon runtime install runsc",
+		LocalInstallCommand: localInstallCommand(),
 	}
 	arch, ok := supportedArchitecture(runtime.GOARCH)
 	if runtime.GOOS != "linux" || !ok {
@@ -357,7 +359,7 @@ func (m *Manager) reportProgress(step InstallStep, message string, percent *uint
 		Message:             message,
 		CheckedAt:           time.Now().UTC(),
 		RemoteInstallable:   os.Geteuid() == 0,
-		LocalInstallCommand: "sudo docker-daemon runtime install runsc",
+		LocalInstallCommand: localInstallCommand(),
 		Step:                step,
 		ProgressPercent:     percent,
 	})
@@ -780,6 +782,20 @@ func runscDockerConfigStatus(path, runscPath string) (registered bool, current b
 	return true, false, nil
 }
 
+// localInstallCommand is the command that installs Secure Runtime on this node. Root never runs the binary of a
+// daemon that runs as its own user, since that user can replace it: there the node installer installs Secure Runtime
+// from a copy it downloads and verifies, and keeps the daemon's user.
+func localInstallCommand() string {
+	if os.Geteuid() == 0 {
+		return "sudo docker-daemon runtime install runsc"
+	}
+	name := strconv.Itoa(os.Geteuid())
+	if account, err := user.LookupId(name); err == nil {
+		name = account.Username
+	}
+	return "sudo bash setup-docker-node.sh --user " + name + " --secure-runtime"
+}
+
 func failedStatus(reason string, err error) Status {
 	return Status{
 		State:               StateFailed,
@@ -788,7 +804,7 @@ func failedStatus(reason string, err error) Status {
 		Message:             err.Error(),
 		CheckedAt:           time.Now().UTC(),
 		RemoteInstallable:   os.Geteuid() == 0,
-		LocalInstallCommand: "sudo docker-daemon runtime install runsc",
+		LocalInstallCommand: localInstallCommand(),
 	}
 }
 
