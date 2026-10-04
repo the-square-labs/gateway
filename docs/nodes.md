@@ -201,7 +201,7 @@ Common daemon setup options:
 | `--nginx-mode <mode>` / `--skip-nginx` | Nginx installer only: `managed` or `integrate` (see [Nginx Node Modes](#nginx-node-modes)); `--skip-nginx` reuses an installed nginx 1.25.1 or newer. |
 | `--disable-console` / `--disable-files` | Turn the host console or host file access off on this node (writes `console.enabled: false` / `files.enabled: false`, see [Host Console And File Access](#host-console-and-file-access)). Environment: `GATEWAY_NODE_DISABLE_CONSOLE=1`, `GATEWAY_NODE_DISABLE_FILES=1`. |
 | `--dry-run` | Validate inputs and show the plan without changing the host. |
-| `-y`, `--yes` | Non-interactive mode. |
+| `-y`, `--yes` | Non-interactive mode. Without it the installer asks on the terminal and stops when it cannot read an answer (no terminal, or `sudo` with its output piped through `tee`), instead of using the defaults. |
 | `--help` | Show all supported options. |
 
 Every option also has an environment variable (`GATEWAY_NODE_ADDRESS`, `GATEWAY_NODE_TOKEN`, `GATEWAY_DOCKER_MODE`, and so on; `--help` lists them). `GATEWAY_LEASE_WATCHDOG_VERSION` pins the [lease watchdog](#lease-watchdog) release that the Docker installer installs in `docker` mode (default: the latest release).

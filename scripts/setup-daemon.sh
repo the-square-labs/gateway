@@ -133,10 +133,8 @@ prompt_menu() {
     fi
     while true; do
         printf "${BRAND_MINT}◆${NC} ${BRAND_MINT}Choose [${default}]: ${NC}" > "$tty"
-        if ! IFS= read -r reply < "$tty" 2>/dev/null; then
-            echo "$default"
-            return
-        fi
+        # An unreadable terminal answered nothing; the default must not choose the node type.
+        IFS= read -r reply < "$tty" 2>/dev/null || die "Cannot read an answer from the terminal — run the installer from a terminal, or use the --type flag"
         reply="${reply:-$default}"
         if [[ "$reply" =~ ^[0-9]+$ && "$reply" -ge 1 && "$reply" -le "${#options[@]}" ]]; then
             echo "$reply"

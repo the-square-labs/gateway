@@ -51,6 +51,14 @@ guide() { echo -e "${BRAND_MINT}│${NC} $*"; }
 guide_blank() { echo -e "${BRAND_MINT}│${NC}"; }
 guide_start() { echo -e "${BRAND_MINT}╭${NC} $*"; }
 
+# Without -y the installer asks on the terminal. When the terminal cannot be read (no controlling terminal, or the
+# read fails with EIO under sudo's pty while stdout is a pipe) nothing was answered, and a default must not stand in
+# for an answer: the run counts as non-interactive, which cannot approve what it asks about.
+refuse_unanswered_prompt() {
+    echo "" >&2
+    die "Cannot read an answer from the terminal for: $1. Run the installer from a terminal (not through a pipe such as '| tee'), or pass -y to install non-interactively."
+}
+
 prompt_choice() {
     local prompt="$1"
     local default="$2"
@@ -59,11 +67,7 @@ prompt_choice() {
         echo "$default"
         return
     fi
-    if [[ -e /dev/tty ]]; then
-        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty
-    else
-        reply=""
-    fi
+    read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
     echo "${reply:-$default}"
 }
 

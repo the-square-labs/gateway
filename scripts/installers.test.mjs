@@ -714,3 +714,71 @@ test('the Docker installer refuses a host whose containers cannot get the cgroup
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Without -y an installer asks on the terminal. A terminal that cannot be read (no controlling terminal, or sudo's pty
+// with a piped stdout, where the read fails with EIO) answers nothing, and a default must not stand in for the answer:
+// an unreadable terminal used to read as "yes" to "Proceed?" and to the nginx upgrade from nginx.org.
+test('a terminal that cannot be read is never answered with a default', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-tty-'));
+  try {
+    const answers = path.join(dir, 'answers');
+    const unreadable = { missing: path.join(dir, 'no-such-tty'), 'a read error': dir };
+    const helpers = {
+      'setup-node.sh': ['prompt_input', 'prompt_secret', 'prompt_yes_no', 'prompt_choice'],
+      'setup-docker-node.sh': ['prompt_input', 'prompt_secret', 'prompt_yes_no', 'prompt_choice'],
+      'setup-monitoring-node.sh': ['prompt_input', 'prompt_secret', 'prompt_yes_no', 'prompt_choice'],
+      'setup-database-node.sh': ['prompt_choice'],
+    };
+    for (const [script, names] of Object.entries(helpers)) {
+      const source = readFileSync(path.join(scriptsDir, script), 'utf8');
+      assert.doesNotMatch(source, /\[\[? -e \/dev\/tty \]\]?/, `${script} reads the terminal and checks the result`);
+      assert.doesNotMatch(source, /reply="\$default"|\|\| reply=""/, script);
+      const prelude = [
+        'set -euo pipefail',
+        'NON_INTERACTIVE=0; BRAND_MINT=""; NC=""; BOLD=""; GRAY=""; TERM=dumb',
+        'err() { echo "ERR $*" >&2; }',
+        'die() { err "$@"; exit 1; }',
+        shellFunction(source, 'refuse_unanswered_prompt'),
+        ...names.map((name) => shellFunction(source, name)),
+      ];
+      const calls = {
+        // The installers assign the answer in a plain assignment, where set -e stops them when the helper fails.
+        prompt_input: 'answer=$(prompt_input "Host" "default-host"); echo "got=${answer}"',
+        prompt_secret: 'answer=$(prompt_secret "Token"); echo "got=${answer}"',
+        prompt_yes_no: 'if prompt_yes_no "Upgrade nginx now?" "Y"; then echo "got=yes"; else echo "got=no"; fi',
+        prompt_choice: 'answer=$(prompt_choice "Choose" "1" "root" "user"); echo "got=${answer}"',
+      };
+      for (const name of names) {
+        for (const [what, tty] of Object.entries(unreadable)) {
+          const body = prelude.map((part) => part.replaceAll('/dev/tty', tty));
+          const result = runShell([...body, calls[name], 'echo AFTER'].join('\n'));
+          assert.equal(result.status, 1, `${script} ${name} with a terminal that is ${what}\n${result.output}`);
+          assert.match(result.output, /Cannot read an answer from the terminal/, `${script} ${name}`);
+          assert.match(result.output, /pass -y to install non-interactively/, `${script} ${name}`);
+          assert.doesNotMatch(result.output, /got=|AFTER/, `${script} ${name} did not default (${what})`);
+        }
+        // A readable terminal still answers, and an empty reply takes the default shown to the user.
+        const answered = (reply) => {
+          runShell(`printf '%s' '${reply}' > '${answers}'`);
+          const body = prelude.map((part) => part.replaceAll('/dev/tty', answers));
+          return runShell([...body, calls[name]].join('\n'));
+        };
+        assert.equal(answered('\n').status, 0, `${script} ${name}`);
+        if (name === 'prompt_yes_no') {
+          assert.match(answered('n\n').output, /got=no/, script);
+          assert.match(answered('y\n').output, /got=yes/, script);
+          assert.match(answered('\n').output, /got=yes/, script);
+        }
+        if (name === 'prompt_input') assert.match(answered('\n').output, /got=default-host/, script);
+      }
+    }
+    // The node type menu of setup-daemon.sh does not pick its default for an unreadable terminal either.
+    const daemon = readFileSync(path.join(scriptsDir, 'setup-daemon.sh'), 'utf8');
+    assert.match(daemon, /read -r reply < "\$tty" 2>\/dev\/null \|\| die "Cannot read an answer from the terminal/);
+    // -y stays the way to run without a terminal, and it still refuses an nginx upgrade it cannot ask about.
+    const node = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+    assert.match(node, /if \[\[ "\$NON_INTERACTIVE" -eq 1 \]\]; then\n\s+die "nginx \$\{NGINX_MIN_VERSION\}\+ is required\. Re-run interactively to approve the stable nginx upgrade\."/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -443,6 +443,14 @@ summary_end() {
     guide_blank
 }
 
+# Without -y the installer asks on the terminal. When the terminal cannot be read (no controlling terminal, or the
+# read fails with EIO under sudo's pty while stdout is a pipe) nothing was answered, and a default must not stand in
+# for an answer: the run counts as non-interactive, which cannot approve what it asks about.
+refuse_unanswered_prompt() {
+    echo "" >&2
+    die "Cannot read an answer from the terminal for: $1. Run the installer from a terminal (not through a pipe such as '| tee'), or pass -y to install non-interactively."
+}
+
 prompt_input() {
     local prompt="$1"
     local default="${2:-}"
@@ -451,14 +459,10 @@ prompt_input() {
         echo "$default"
         return
     fi
-    if [ -e /dev/tty ]; then
-        if [ -n "$default" ]; then
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" result < /dev/tty
-        else
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
-        fi
+    if [ -n "$default" ]; then
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
     else
-        result=""
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
     fi
     echo "${result:-$default}"
 }
@@ -470,12 +474,8 @@ prompt_secret() {
         echo ""
         return
     fi
-    if [ -e /dev/tty ]; then
-        read -rs -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty
-        echo "" >&2
-    else
-        result=""
-    fi
+    read -rs -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt}: ${NC}")" result < /dev/tty || refuse_unanswered_prompt "$prompt"
+    echo "" >&2
     echo "$result"
 }
 
@@ -487,16 +487,12 @@ prompt_yes_no() {
         [[ "$default" =~ ^[yY]$ ]]
         return
     fi
-    if [ -e /dev/tty ]; then
-        if [[ "$default" == "Y" ]]; then
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [Y/n]: ${NC}")" reply < /dev/tty
-            reply="${reply:-Y}"
-        else
-            read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [y/N]: ${NC}")" reply < /dev/tty
-            reply="${reply:-N}"
-        fi
+    if [[ "$default" == "Y" ]]; then
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [Y/n]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
+        reply="${reply:-Y}"
     else
-        reply="$default"
+        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [y/N]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
+        reply="${reply:-N}"
     fi
     [[ "$reply" =~ ^[yY]$ ]]
 }
@@ -558,11 +554,7 @@ prompt_choice() {
             render_menu
         done
     fi
-    if [ -e /dev/tty ]; then
-        read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty 2>/dev/null || reply=""
-    else
-        reply=""
-    fi
+    read -r -p "$(echo -e "${BRAND_MINT}◆${NC} ${BRAND_MINT}${prompt} [${default}]: ${NC}")" reply < /dev/tty || refuse_unanswered_prompt "$prompt"
     echo "${reply:-$default}"
 }
 
