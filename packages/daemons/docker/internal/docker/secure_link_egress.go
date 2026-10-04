@@ -93,6 +93,9 @@ type egressNetwork struct {
 type secureLinkEgress struct {
 	desired  map[string]egressDesired
 	rejected map[string]egressStatus
+	// orphans left the bundle without a successor on their socket yet (secure_link_egress_runner.go): the connector
+	// keeps their listeners, and the connections they carry, for egressSuccessorWait.
+	orphans map[string]egressOrphan
 	// configs were last sent to the connector configsFor; ingress likewise.
 	configs        []securelink.EgressConfig
 	configsFor     string
@@ -108,10 +111,24 @@ type secureLinkEgress struct {
 	listening map[string]bool
 }
 
-func (e *secureLinkEgress) wanted() bool { return len(e.desired) > 0 }
+func (e *secureLinkEgress) wanted() bool { return len(e.serving(time.Now())) > 0 }
+
+// serving is what the connector listens for: the desired egress and the orphans still waiting for a successor.
+func (e *secureLinkEgress) serving(now time.Time) map[string]egressDesired {
+	serving := make(map[string]egressDesired, len(e.desired)+len(e.orphans))
+	for id, orphan := range e.orphans {
+		if now.Before(orphan.until) {
+			serving[id] = orphan.desired
+		}
+	}
+	for id, desired := range e.desired {
+		serving[id] = desired
+	}
+	return serving
+}
 
 func (e *secureLinkEgress) networkDesired(name string) bool {
-	for _, desired := range e.desired {
+	for _, desired := range e.serving(time.Now()) {
 		if desired.networkName == name {
 			return true
 		}
@@ -218,17 +235,6 @@ func (m *dockerSecureLinkManager) setDesiredEgress(bundle *pb.SyncRelayGrantsCom
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.egress.desired, m.egress.rejected = desiredEgressFromBundle(bundle)
-}
-
-// syncEgress applies the egress of a grant bundle and returns every egress status.
-func (m *dockerSecureLinkManager) syncEgress(bundle *pb.SyncRelayGrantsCommand) map[string]egressStatus {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.egress.desired, m.egress.rejected = desiredEgressFromBundle(bundle)
-	ctx, cancel := context.WithTimeout(context.Background(), secureLinkEgressTimeout)
-	defer cancel()
-	m.reconcileEgressLocked(ctx)
-	return m.egress.currentStatuses()
 }
 
 // resyncEgress applies the recorded egress again (a connector that restarted lost its listeners).

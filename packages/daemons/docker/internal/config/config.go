@@ -41,7 +41,7 @@ type BuilderConfig struct {
 	EgressProfile string `yaml:"egress_profile"`
 }
 
-// SecureLinksConfig: SubnetPool is the IPv4 network the /28 subnets of new link networks are taken from (default
+// SecureLinksConfig: SubnetPool is the IPv4 network the /26 subnets of new link networks are taken from (default
 // 10.213.0.0/16); it must not overlap the networks the host routes elsewhere.
 type SecureLinksConfig struct {
 	SubnetPool string `yaml:"subnet_pool"`
@@ -105,8 +105,8 @@ func Load(path string) (*Config, error) {
 	}
 	if pool := strings.TrimSpace(cfg.Docker.SecureLinks.SubnetPool); pool != "" {
 		prefix, err := netip.ParsePrefix(pool)
-		if err != nil || !prefix.Addr().Is4() || prefix.Bits() > 28 {
-			return nil, fmt.Errorf("docker.secure_links.subnet_pool must be an IPv4 network of /28 or larger")
+		if err != nil || !prefix.Addr().Is4() || prefix.Bits() > 26 {
+			return nil, fmt.Errorf("docker.secure_links.subnet_pool must be an IPv4 network of /26 or larger")
 		}
 	}
 	if cfg.Docker.Compose.CommandTimeoutSeconds <= 0 {

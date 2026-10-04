@@ -115,6 +115,11 @@ type dockerSecureLinkManager struct {
 	// egress is the connector's egress side (secure_link_egress.go): the links of this node's workloads to
 	// targets elsewhere, from the relay grant bundle. Guarded by mu, apart from its published view.
 	egress secureLinkEgress
+	// egressRun applies the grant bundles' egress in the background of their ACKs (secure_link_egress_runner.go).
+	egressRun egressRunner
+	// managementGateway is the management network's gateway, the daemon's address towards the connector: the only
+	// peer the ingress listeners accept (guarded by mu).
+	managementGateway string
 }
 
 type dockerSecureLinkView struct {
@@ -536,7 +541,16 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 		}); err != nil {
 			return nil, fmt.Errorf("create secure-link management network: %w", err)
 		}
+		if managementNetwork, err = m.plugin.client.cli.NetworkInspect(ctx, secureLinkManagementNetwork, mobyclient.NetworkInspectOptions{}); err != nil {
+			return nil, fmt.Errorf("inspect secure-link management network: %w", err)
+		}
 	}
+	// The daemon dials the ingress listeners from the management network's gateway: the only peer they accept.
+	gateway, err := managedDatabaseNetworkGatewayAddress(managementNetwork.Network)
+	if err != nil {
+		return nil, fmt.Errorf("secure-link management network: %w", err)
+	}
+	m.managementGateway = gateway.String()
 
 	slot, inspect, err := m.findConnector(ctx, image)
 	if err != nil {

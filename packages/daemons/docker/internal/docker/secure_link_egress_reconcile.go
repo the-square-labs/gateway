@@ -7,12 +7,19 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	mobyclient "github.com/moby/moby/client"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
+
+// connectorRequest is a connector sync: every one names the daemon's address towards the connector as the only peer
+// of its ingress listeners.
+func (m *dockerSecureLinkManager) connectorRequest(ingress []securelink.BindingConfig, egress []securelink.EgressConfig) securelink.SyncRequest {
+	return securelink.SyncRequest{Bindings: ingress, Egress: egress, IngressPeer: m.managementGateway}
+}
 
 // syncConnectorLocked sends ingress to the connector together with the egress listeners it already holds, which a
 // sync of the ingress side therefore leaves as they are.
@@ -21,7 +28,7 @@ func (m *dockerSecureLinkManager) syncConnectorLocked(ctx context.Context, ingre
 	if m.egress.configsFor == m.connectorID {
 		egress = m.egress.configs
 	}
-	response, err := securelink.Sync(ctx, m.socketPath, ingress, egress)
+	response, err := securelink.Sync(ctx, m.socketPath, m.connectorRequest(ingress, egress))
 	if err == nil {
 		m.egress.ingressConfigs, m.egress.ingressFor = ingress, m.connectorID
 	}
@@ -71,7 +78,16 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) {
 	if m.plugin == nil || m.plugin.client == nil {
 		return
 	}
-	m.egress.publish(m.reconcileEgressStatusesLocked(ctx, true))
+	statuses := m.reconcileEgressStatusesLocked(ctx, true)
+	// Orphans keep their listeners but are no longer Gateway's to hear about.
+	for id := range statuses {
+		_, desired := m.egress.desired[id]
+		_, rejected := m.egress.rejected[id]
+		if !desired && !rejected {
+			delete(statuses, id)
+		}
+	}
+	m.egress.publish(statuses)
 }
 
 func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Context, mayReplace bool) map[string]egressStatus {
@@ -79,12 +95,13 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 	for id, status := range m.egress.rejected {
 		statuses[id] = status
 	}
-	if !m.egress.wanted() {
+	serving := m.egress.serving(time.Now())
+	if len(serving) == 0 {
 		m.dropEgressLocked(ctx)
 		return statuses
 	}
 	pending := func(reason string) map[string]egressStatus {
-		for id, desired := range m.egress.desired {
+		for id, desired := range serving {
 			statuses[id] = egressStatus{State: egressStatePending, Error: reason, RouteGeneration: desired.generation, network: desired.networkName}
 		}
 		return statuses
@@ -93,15 +110,15 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 	if err != nil {
 		return pending(err.Error())
 	}
-	ids := make([]string, 0, len(m.egress.desired))
-	for id := range m.egress.desired {
+	ids := make([]string, 0, len(serving))
+	for id := range serving {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	attached := map[string]egressNetwork{}
 	changed := false
 	for _, id := range ids {
-		desired := m.egress.desired[id]
+		desired := serving[id]
 		info, reattached, state, err := m.attachEgressLocked(ctx, desired, connectorNetworks[desired.networkName])
 		if err != nil {
 			statuses[id] = egressStatus{State: state, Error: err.Error(), RouteGeneration: desired.generation, network: desired.networkName}
@@ -123,7 +140,7 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 		if !ok {
 			continue
 		}
-		desired := m.egress.desired[id]
+		desired := serving[id]
 		endpoint := connectorNetworks[desired.networkName]
 		if endpoint == nil || !endpoint.IPAddress.IsValid() || !endpoint.IPAddress.Is4() || !info.prefix.Contains(endpoint.IPAddress) {
 			statuses[id] = egressStatus{State: egressStatePending, Error: "the connector has no address on the link network yet",
@@ -141,11 +158,11 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 	if m.egress.ingressFor != m.connectorID {
 		ingress = nil
 	}
-	response, err := securelink.Sync(ctx, m.socketPath, ingress, configs)
+	response, err := securelink.Sync(ctx, m.socketPath, m.connectorRequest(ingress, configs))
 	if response == nil {
 		for _, config := range configs {
 			statuses[config.ID] = egressStatus{State: egressStateError, Error: fmt.Sprintf("secure-link connector sync: %v", err),
-				RouteGeneration: config.Generation, network: m.egress.desired[config.ID].networkName}
+				RouteGeneration: config.Generation, network: serving[config.ID].networkName}
 		}
 		return statuses
 	}
@@ -164,19 +181,19 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 		// The ingress bindings the connector holds were refused again; the next proxy secure-link sync deals with them.
 		m.plugin.logger.Warn("secure-link connector refused its ingress bindings during an egress sync", "error", err)
 	}
-	m.recordEgressResponseLocked(response, configs, statuses)
+	m.recordEgressResponseLocked(response, configs, serving, statuses)
 	m.detachStaleEgressNetworksLocked(ctx, connectorNetworks)
 	return statuses
 }
 
 // recordEgressResponseLocked turns the connector's answer into statuses.
-func (m *dockerSecureLinkManager) recordEgressResponseLocked(response *securelink.SyncResponse, configs []securelink.EgressConfig, statuses map[string]egressStatus) {
+func (m *dockerSecureLinkManager) recordEgressResponseLocked(response *securelink.SyncResponse, configs []securelink.EgressConfig, serving map[string]egressDesired, statuses map[string]egressStatus) {
 	answered := make(map[string]securelink.EgressStatus, len(response.Egress))
 	for _, status := range response.Egress {
 		answered[status.ID] = status
 	}
 	for _, config := range configs {
-		networkName := m.egress.desired[config.ID].networkName
+		networkName := serving[config.ID].networkName
 		status := egressStatus{RouteGeneration: config.Generation, network: networkName}
 		answer, ok := answered[config.ID]
 		switch {
@@ -367,7 +384,7 @@ func (m *dockerSecureLinkManager) dropEgressLocked(ctx context.Context) {
 		if m.egress.ingressFor != m.connectorID {
 			ingress = nil
 		}
-		if _, err := securelink.Sync(ctx, m.socketPath, ingress, nil); err != nil && m.plugin.logger != nil {
+		if _, err := securelink.Sync(ctx, m.socketPath, m.connectorRequest(ingress, nil)); err != nil && m.plugin.logger != nil {
 			m.plugin.logger.Warn("secure-link connector did not take the removal of its egress listeners", "error", err)
 		}
 	}

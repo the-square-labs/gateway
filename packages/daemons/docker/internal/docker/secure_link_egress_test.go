@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
@@ -70,13 +71,13 @@ func (e *egressFakeEngine) serveLinks(request *http.Request) (*http.Response, er
 		containers := map[string]any{}
 		for _, current := range e.containers {
 			if endpoint := current.networks[egressTestNetwork]; endpoint != nil {
-				containers[current.id] = map[string]any{"Name": current.name, "IPv4Address": endpoint["IPAddress"].(string) + "/28"}
+				containers[current.id] = map[string]any{"Name": current.name, "IPv4Address": endpoint["IPAddress"].(string) + "/26"}
 			}
 		}
 		return respond(http.StatusOK, map[string]any{
 			"Name": egressTestNetwork, "Id": "link-net-id", "Driver": "bridge", "Internal": true,
 			"Labels":     map[string]string{"wiolett.gateway.managed": linkNetworkLabel},
-			"IPAM":       map[string]any{"Config": []map[string]string{{"Subnet": "10.213.0.0/28", "Gateway": "10.213.0.1", "IPRange": "10.213.0.8/29"}}},
+			"IPAM":       map[string]any{"Config": []map[string]string{{"Subnet": "10.213.0.0/26", "Gateway": "10.213.0.1", "IPRange": "10.213.0.32/27"}}},
 			"Containers": containers,
 		})
 	case e.gateways[name] != "" && request.Method == http.MethodGet:
@@ -99,7 +100,7 @@ func (e *egressFakeEngine) serveLinks(request *http.Request) (*http.Response, er
 		if current == nil {
 			return respond(http.StatusNotFound, map[string]string{"message": "no such container"})
 		}
-		address := "10.213.0.9"
+		address := "10.213.0.33"
 		if body.EndpointConfig.IPAMConfig != nil && body.EndpointConfig.IPAMConfig.IPv4Address != "" {
 			address = body.EndpointConfig.IPAMConfig.IPv4Address
 		}
@@ -137,6 +138,15 @@ func egressTestAssignment(id, networkName string) *pb.RelayGrantAssignment {
 	}
 }
 
+func (e *egressFakeEngine) requestCount(name string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if current := e.containers[name]; current != nil {
+		return len(current.requests)
+	}
+	return 0
+}
+
 func (e *egressFakeEngine) lastRequest(name string) securelink.SyncRequest {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -159,6 +169,9 @@ func TestEgressFollowsTheGrantBundle(t *testing.T) {
 	manager.publishViewLocked()
 	plugin.secureLinks = manager
 	connector := secureLinkConnectorSlots[0].name
+	previousWait := egressSuccessorTo
+	egressSuccessorTo = 100 * time.Millisecond
+	t.Cleanup(func() { egressSuccessorTo = previousWait })
 
 	invalidID := "7b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e"
 	statuses := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork),
@@ -175,12 +188,18 @@ func TestEgressFollowsTheGrantBundle(t *testing.T) {
 		t.Fatalf("connector endpoint on the link network %+v", endpoint)
 	}
 	request := engine.lastRequest(connector)
-	if len(request.Egress) != 1 || request.Egress[0].ListenHost != "10.213.0.2" || request.Egress[0].AllowedPrefix != "10.213.0.0/28" ||
+	if len(request.Egress) != 1 || request.Egress[0].ListenHost != "10.213.0.2" || request.Egress[0].AllowedPrefix != "10.213.0.0/26" ||
 		request.Egress[0].OwnerKind != containerLinkOwnerKind || request.Egress[0].ListenPort != 8080 {
 		t.Fatalf("egress sent to the connector %+v", request.Egress)
 	}
 	if !manager.egress.listeningOn(egressTestNetwork) {
 		t.Fatal("the link network is not reported as served by the connector")
+	}
+	// Gateway polls by sending the same bundle again: answered from the published state, without a connector sync.
+	syncs := engine.requestCount(connector)
+	if again := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork),
+		egressTestAssignment(invalidID, "user-network"))); again[egressTestLinkID].State != egressStateReady || engine.requestCount(connector) != syncs {
+		t.Fatalf("a repeated bundle synced the connector again (%d syncs, status %+v)", engine.requestCount(connector)-syncs, again[egressTestLinkID])
 	}
 
 	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
@@ -188,6 +207,10 @@ func TestEgressFollowsTheGrantBundle(t *testing.T) {
 	}
 	if request := engine.lastRequest(connector); len(request.Bindings) != 1 || len(request.Egress) != 1 {
 		t.Fatalf("an ingress sync did not keep the egress listener: %+v", request)
+	}
+	// The daemon dials from the management network's gateway: the ingress listeners take no other peer.
+	if peer := engine.lastRequest(connector).IngressPeer; peer != "10.99.0.1" {
+		t.Fatalf("ingress peer %q, want the management network gateway", peer)
 	}
 	manager.mu.Lock()
 	manager.failClosed(t.Context())
@@ -206,7 +229,27 @@ func TestEgressFollowsTheGrantBundle(t *testing.T) {
 		t.Fatalf("connector state without ingress %+v", request)
 	}
 
+	// An Availability re-key split over two bundles: the listener of the binding that left stays until the binding
+	// that takes its socket over arrives, and both are in one connector sync then, which moves the listener.
+	successorID := "8c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f"
+	if statuses := manager.syncEgress(egressTestBundle()); len(statuses) != 0 {
+		t.Fatalf("statuses of an empty bundle %+v", statuses)
+	}
+	if request := engine.lastRequest(connector); len(request.Egress) != 1 || request.Egress[0].ID != egressTestLinkID || len(engine.removedIDs()) != 0 {
+		t.Fatalf("the listener of a binding that left was not kept for its successor: %+v", request.Egress)
+	}
+	if statuses := manager.syncEgress(egressTestBundle(egressTestAssignment(successorID, egressTestNetwork))); statuses[successorID].State != egressStateReady {
+		t.Fatalf("successor status %+v", statuses[successorID])
+	}
+	if request := engine.lastRequest(connector); len(request.Egress) != 1 || request.Egress[0].ID != successorID {
+		t.Fatalf("the successor did not take the socket over in one sync: %+v", request.Egress)
+	}
+
 	manager.syncEgress(egressTestBundle())
+	deadline := time.Now().Add(3 * time.Second)
+	for len(engine.removedIDs()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if removed := engine.removedIDs(); len(removed) != 1 {
 		t.Fatalf("the connector without links was not removed: %v", removed)
 	}

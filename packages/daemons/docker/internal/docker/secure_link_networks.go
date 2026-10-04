@@ -18,13 +18,13 @@ import (
 	mobyclient "github.com/moby/moby/client"
 )
 
-// Link networks (C5): every new link network (container links, new storage and database links) gets an explicit /28
+// Link networks (C5): every new link network (container links, new storage and database links) gets an explicit /26
 // from Gateway's own pool instead of Docker's default address pools, so links never use up the subnets users'
 // networks are given. The connector holds base+2 on it (its static address, outside the network's dynamic range);
-// workloads get the addresses Docker assigns from the other half.
+// workloads get the addresses Docker assigns from the upper /27 (managedConnectorIPAM): about 30 per link.
 const (
 	defaultLinkSubnetPool  = "10.213.0.0/16"
-	linkNetworkPrefixBits  = 28
+	linkNetworkPrefixBits  = 26
 	linkNetworkLabel       = "secure-link"
 	linkNetworkCreateTries = 8
 )
@@ -57,7 +57,7 @@ func (p *DockerPlugin) linkSubnetPool() (netip.Prefix, error) {
 	return pool.Masked(), nil
 }
 
-// createLinkNetwork creates the internal bridge network of a link with the first free /28 of the pool. A network of
+// createLinkNetwork creates the internal bridge network of a link with the first free /26 of the pool. A network of
 // that name that already is a link network is returned as it is, so a retried command succeeds.
 func (p *DockerPlugin) createLinkNetwork(ctx context.Context, name string) (linkNetworkResult, error) {
 	if !linkNetworkNamePattern.MatchString(name) {
@@ -176,11 +176,11 @@ func (p *DockerPlugin) usedIPv4Prefixes(ctx context.Context) ([]netip.Prefix, er
 	return used, nil
 }
 
-// allocateLinkSubnet returns the first /28 of pool that overlaps none of used.
+// allocateLinkSubnet returns the first /26 of pool that overlaps none of used.
 func allocateLinkSubnet(pool netip.Prefix, used []netip.Prefix) (netip.Prefix, error) {
 	pool = pool.Masked()
 	if !pool.Addr().Is4() || pool.Bits() > linkNetworkPrefixBits {
-		return netip.Prefix{}, errors.New("secure-link subnet pool is not an IPv4 network of /28 or larger")
+		return netip.Prefix{}, errors.New("secure-link subnet pool is not an IPv4 network of /26 or larger")
 	}
 	start := pool.Addr().As4()
 	base := binary.BigEndian.Uint32(start[:])

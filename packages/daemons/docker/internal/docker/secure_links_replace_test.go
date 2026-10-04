@@ -174,6 +174,7 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 		return respond(http.StatusOK, map[string]any{
 			"Name": secureLinkManagementNetwork, "Id": "management", "Driver": "bridge", "Internal": true,
 			"Labels": map[string]string{"wiolett.gateway.managed": "secure-link"},
+			"IPAM":   map[string]any{"Config": []map[string]string{{"Subnet": "10.99.0.0/24", "Gateway": "10.99.0.1"}}},
 		})
 	case parts[0] == "networks" && len(parts) == 3 && (parts[2] == "connect" || parts[2] == "disconnect"):
 		return respond(http.StatusOK, map[string]any{})
