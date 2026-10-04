@@ -128,8 +128,7 @@ export class RelayLinkRoutes {
             : change.managedDatabaseListener,
         secureLinkEgress: change.secureLinkEgress === undefined ? current.secureLinkEgress : change.secureLinkEgress,
       };
-      const listenerSame =
-        listenerConfigsEqual(current.managedDatabaseListener, desired.managedDatabaseListener);
+      const listenerSame = listenerConfigsEqual(current.managedDatabaseListener, desired.managedDatabaseListener);
       if (listenerSame && secureLinkEgressEqual(current.secureLinkEgress, desired.secureLinkEgress)) {
         return { routeId: route.id, generation: route.generation, changed: false };
       }

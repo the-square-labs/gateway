@@ -7,6 +7,7 @@ export type DockerDeploymentConstructors = typeof constructors;
 import { and, desc, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import {
+  containerLinks,
   dockerComposeOperations,
   dockerComposeProjects,
   dockerComposeRevisions,
@@ -19,7 +20,6 @@ import {
   dockerSourceBindings,
   dockerWebhooks,
   managedDatabaseBindings,
-  containerLinks,
   nodes,
 } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
