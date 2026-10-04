@@ -1,5 +1,6 @@
 import type { ServerDuplexStream } from '@grpc/grpc-js';
 import { and, eq, sql } from 'drizzle-orm';
+import { getEnv } from '@/config/env.js';
 import { container } from '@/container.js';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import type { NodeGpuDevice } from '@/db/schema/nodes.js';
@@ -12,6 +13,7 @@ import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import { ingressHealthFromProto } from '@/modules/ingress-groups/ingress-health.js';
 import { daemonLogRelay } from '@/modules/monitoring/log-relay.service.js';
 import { validateRegisteredDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
+import { installerRelease, secureRuntimeLocalCommand } from '@/modules/nodes/node-installer.js';
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { backgroundWrites } from '@/services/background-writes.js';
@@ -68,7 +70,9 @@ export function mapDockerRuntimeStatus(raw: DaemonMessage['dockerRuntimeStatus']
     message: raw.message || undefined,
     checkedAt: Number.isFinite(checkedAtMs) ? new Date(checkedAtMs).toISOString() : undefined,
     remoteInstallable: Boolean(raw.remoteInstallable),
-    localInstallCommand: raw.localInstallCommand || undefined,
+    localInstallCommand: raw.localInstallCommand
+      ? secureRuntimeLocalCommand(raw.localInstallCommand, installerRelease(getEnv().APP_VERSION))
+      : undefined,
     step: raw.step || undefined,
     progressPercent: raw.step === 'downloading' ? Number(raw.progressPercent) : undefined,
   });

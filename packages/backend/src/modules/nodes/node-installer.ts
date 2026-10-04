@@ -86,9 +86,14 @@ export function nodeInstallCommand(input: {
   installer: string;
   release: string | null;
   transport: InstallTransport;
-  args: ReadonlyArray<readonly [flag: string, value: string]>;
+  args: ReadonlyArray<readonly [flag: string, value?: string]>;
+  /** One line, for a command shown inline instead of in a copy block. */
+  oneLine?: boolean;
 }): string {
-  const args = input.args.map(([flag, value]) => ` \\\n  ${flag} ${shellWord(value)}`).join('');
+  const argBreak = input.oneLine ? ' ' : ' \\\n  ';
+  const args = input.args
+    .map(([flag, value]) => `${argBreak}${flag}${value === undefined ? '' : ` ${shellWord(value)}`}`)
+    .join('');
   if (!input.release) {
     const url = `${MAIN_INSTALLERS}/${input.installer}`;
     return `${input.transport === 'curl' ? `curl -sSL ${url}` : `wget -qO- ${url}`} | sudo bash -s --${args}`;
@@ -102,7 +107,25 @@ export function nodeInstallCommand(input: {
     download(INSTALLER_CHECKSUMS),
     `grep ' ${input.installer}$' ${INSTALLER_CHECKSUMS} | sha256sum -c -`,
     `sudo bash ${input.installer}${args}`,
-  ].join(' && \\\n');
+  ].join(input.oneLine ? ' && ' : ' && \\\n');
+}
+
+/**
+ * A docker-daemon running as its own user reports `sudo bash setup-docker-node.sh --user <user> --secure-runtime` as
+ * its Secure Runtime command: root never runs that daemon's binary, which its user can replace, so the node installer
+ * installs Secure Runtime from a copy it downloads and verifies. Gateway shows it as one line that fetches and checks
+ * this release's installer first, like the setup commands. Any other command is shown as the daemon reported it.
+ */
+export function secureRuntimeLocalCommand(command: string, release: string | null): string {
+  const match = /^sudo bash setup-docker-node\.sh --user ([A-Za-z0-9_][A-Za-z0-9_.-]*) --secure-runtime$/.exec(command);
+  if (!match) return command;
+  return nodeInstallCommand({
+    installer: 'setup-docker-node.sh',
+    release,
+    transport: 'curl',
+    args: [['--user', match[1] as string], ['--secure-runtime']],
+    oneLine: true,
+  });
 }
 
 /** Setup commands for one enrollment token, one per enrollment target that has an address. */
