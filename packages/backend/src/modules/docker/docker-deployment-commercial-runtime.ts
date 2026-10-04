@@ -19,6 +19,7 @@ import {
   dockerSourceBindings,
   dockerWebhooks,
   managedDatabaseBindings,
+  containerLinks,
   nodes,
 } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
@@ -74,6 +75,7 @@ export const dockerDeploymentCommercialRuntime = {
   assertDockerMountChangeAllowed,
   normalizeMountDefinitionsFromConfig,
   managedDatabaseBindings,
+  containerLinks,
   assertDeploymentNotUsedByProxy,
   assertComposeProjectNotUsedByProxy,
   inArray,
