@@ -51,6 +51,14 @@ type fakeConnectorContainer struct {
 	// requests are the control requests the connector received; networks are the link networks it was attached to.
 	requests []securelink.SyncRequest
 	networks map[string]map[string]any
+	// networkMode is a connector's "container:<anchor id>"; anchor marks the anchor container.
+	networkMode string
+	anchor      bool
+}
+
+// fakeAnchor is a running anchor, as a daemon finds it after its restart.
+func fakeAnchor(image, ip string) *fakeConnectorContainer {
+	return &fakeConnectorContainer{id: "anchor-id", name: secureLinkAnchorName, image: image, ip: ip, running: true, anchor: true}
 }
 
 func newFakeConnectorEngine(t *testing.T) *fakeConnectorEngine {
@@ -98,6 +106,11 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 				e.mu.Lock()
 				current.requests = append(current.requests, request)
 				e.mu.Unlock()
+				if request.Drain {
+					_ = securelink.WriteJSON(connection, securelink.SyncResponse{Version: securelink.ProtocolVersion})
+					connection.Close()
+					continue
+				}
 				response := securelink.SyncResponse{Version: securelink.ProtocolVersion}
 				for _, egress := range request.Egress {
 					response.Egress = append(response.Egress, securelink.EgressStatus{ID: egress.ID, Generation: egress.Generation, State: securelink.EgressListening})
@@ -130,9 +143,26 @@ func (e *fakeConnectorEngine) byIDOrName(value string) *fakeConnectorContainer {
 }
 
 func (e *fakeConnectorEngine) connectorInspect(current *fakeConnectorContainer) map[string]any {
-	networks := map[string]any{secureLinkManagementNetwork: map[string]any{"IPAddress": current.ip}}
-	for name, endpoint := range current.networks {
-		networks[name] = endpoint
+	if current.anchor {
+		// The anchor holds the endpoints: the management network and what was attached.
+		networks := map[string]any{secureLinkManagementNetwork: map[string]any{"IPAddress": current.ip, "NetworkID": "management"}}
+		for name, endpoint := range current.networks {
+			networks[name] = endpoint
+		}
+		return map[string]any{
+			"Id": current.id, "Name": "/" + current.name,
+			"Config": map[string]any{
+				"Image": current.image, "User": "65532:65532", "Cmd": secureLinkAnchorCommand,
+				"Labels": map[string]string{"wiolett.gateway.managed": "secure-link-connector", secureLinkRoleLabel: secureLinkAnchorRole},
+			},
+			"HostConfig": map[string]any{
+				"ReadonlyRootfs": true, "CapDrop": []string{"ALL"}, "SecurityOpt": []string{"no-new-privileges:true"},
+				"RestartPolicy": map[string]any{"Name": "unless-stopped"}, "NetworkMode": secureLinkManagementNetwork,
+				"Memory": secureLinkAnchorMemory, "PidsLimit": secureLinkAnchorPidsLimit,
+			},
+			"State":           map[string]any{"Running": current.running},
+			"NetworkSettings": map[string]any{"Networks": networks},
+		}
 	}
 	return map[string]any{
 		"Id": current.id, "Name": "/" + current.name,
@@ -144,10 +174,10 @@ func (e *fakeConnectorEngine) connectorInspect(current *fakeConnectorContainer) 
 			"Binds": []string{e.controlDir + ":/run/gateway"}, "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
 			"SecurityOpt": []string{"no-new-privileges:true"}, "RestartPolicy": map[string]any{"Name": "unless-stopped"},
 			"Memory": secureLinkConnectorMemory(), "NanoCpus": secureLinkConnectorNanoCPUs, "PidsLimit": secureLinkConnectorPidsLimit,
-			"GroupAdd": current.groups,
+			"GroupAdd": current.groups, "NetworkMode": current.networkMode,
 		},
 		"State":           map[string]any{"Running": current.running},
-		"NetworkSettings": map[string]any{"Networks": networks},
+		"NetworkSettings": map[string]any{"Networks": map[string]any{}},
 	}
 }
 
@@ -185,7 +215,10 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 		}
 		var body struct {
 			Image      string
-			HostConfig struct{ GroupAdd []string }
+			HostConfig struct {
+				GroupAdd    []string
+				NetworkMode string
+			}
 		}
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		e.created++
@@ -193,11 +226,17 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 		if name == secureLinkConnectorSlots[1].name {
 			slot = 1
 		}
-		e.containers[name] = &fakeConnectorContainer{
+		created := &fakeConnectorContainer{
 			id: fmt.Sprintf("created-%d", e.created), name: name, image: body.Image, groups: body.HostConfig.GroupAdd, slot: slot,
-			ip: fmt.Sprintf("10.99.0.%d", 10+e.created), syncFails: e.syncFails,
+			ip: fmt.Sprintf("10.99.0.%d", 10+e.created), syncFails: e.syncFails, anchor: name == secureLinkAnchorName,
+			networkMode: body.HostConfig.NetworkMode,
 		}
-		return respond(http.StatusCreated, map[string]any{"Id": e.containers[name].id})
+		// A connector in the anchor's network namespace has the anchor's addresses.
+		if anchor := e.byIDOrName(strings.TrimPrefix(body.HostConfig.NetworkMode, "container:")); anchor != nil {
+			created.ip = anchor.ip
+		}
+		e.containers[name] = created
+		return respond(http.StatusCreated, map[string]any{"Id": created.id})
 	case parts[0] == "containers" && len(parts) >= 2:
 		current := e.byIDOrName(parts[1])
 		if current == nil {
@@ -213,10 +252,17 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 				})
 			}
 			return respond(http.StatusOK, e.connectorInspect(current))
-		case request.Method == http.MethodPost && len(parts) == 3 && parts[2] == "start":
+		case request.Method == http.MethodPost && len(parts) == 3 && (parts[2] == "start" || parts[2] == "restart"):
 			current.running = true
-			e.serveControl(current)
+			if !current.anchor {
+				if current.listener != nil {
+					current.listener.Close()
+				}
+				e.serveControl(current)
+			}
 			return respond(http.StatusNoContent, "")
+		case request.Method == http.MethodPost && len(parts) == 3 && parts[2] == "update":
+			return respond(http.StatusOK, map[string]any{})
 		case request.Method == http.MethodDelete && len(parts) == 2:
 			if current.listener != nil {
 				current.listener.Close()
@@ -269,7 +315,8 @@ func replaceTestCommand(image string) *pb.SyncProxySecureLinksCommand {
 func TestNewConnectorImageReplacesTheConnectorWithoutAGap(t *testing.T) {
 	manager, engine := replaceTestManager(t)
 	previous := manager.currentView()
-	if previous.connectorID != "created-1" || previous.bindings[replaceTestLinkID].port == 0 {
+	previousContainer := engine.containers[secureLinkConnectorSlots[0].name]
+	if previous.connectorID != "created-2" || previous.bindings[replaceTestLinkID].port == 0 {
 		t.Fatalf("serving view = %+v", previous)
 	}
 	// A request in flight through the serving connector when the update arrives.
@@ -287,8 +334,8 @@ func TestNewConnectorImageReplacesTheConnectorWithoutAGap(t *testing.T) {
 	}
 
 	current := manager.currentView()
-	if current.connectorID != "created-2" || current.managementIP != "10.99.0.12" {
-		t.Fatalf("dials use %+v, want the new connector", current)
+	if current.connectorID != "created-3" || current.managementIP != previous.managementIP || manager.anchorID != "created-1" {
+		t.Fatalf("dials use %+v (anchor %s), want the new connector on the same addresses", current, manager.anchorID)
 	}
 	if port := current.bindings[replaceTestLinkID].port; port != 20100 {
 		t.Fatalf("link bound on port %d, want the new connector's port", port)
@@ -307,15 +354,15 @@ func TestNewConnectorImageReplacesTheConnectorWithoutAGap(t *testing.T) {
 	for len(engine.removedIDs()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if removed := engine.removedIDs(); len(removed) != 1 || removed[0] != "created-1" {
-		t.Fatalf("removed %v, want only the replaced connector", removed)
+	if removed := engine.removedIDs(); len(removed) != 1 || removed[0] != "created-2" || !receivedDrain(engine, previousContainer) {
+		t.Fatalf("removed %v, want only the replaced connector, after it was told to drain", removed)
 	}
 
 	// The next image change takes the first slot again.
 	if _, err := manager.apply(replaceTestCommand(replaceTestOldImage), nil, nil, false); err != nil {
 		t.Fatalf("apply back to the first image: %v", err)
 	}
-	if view := manager.currentView(); view.connectorID != "created-3" || manager.slot != 0 {
+	if view := manager.currentView(); view.connectorID != "created-4" || manager.slot != 0 {
 		t.Fatalf("second replacement view %+v slot %d", view, manager.slot)
 	}
 }
@@ -336,7 +383,7 @@ func TestFailedConnectorReplacementKeepsTheServingConnector(t *testing.T) {
 	if current.connectorID != previous.connectorID || current.bindings[replaceTestLinkID] != previous.bindings[replaceTestLinkID] {
 		t.Fatalf("view after the failed replacement = %+v, want %+v", current, previous)
 	}
-	if removed := engine.removedIDs(); len(removed) != 1 || removed[0] != "created-2" {
+	if removed := engine.removedIDs(); len(removed) != 1 || removed[0] != "created-3" {
 		t.Fatalf("removed %v, want only the failed replacement", removed)
 	}
 }
@@ -346,10 +393,14 @@ func TestFailedConnectorReplacementKeepsTheServingConnector(t *testing.T) {
 func TestDaemonStartKeepsTheConnectorRunningTheImage(t *testing.T) {
 	engine := newFakeConnectorEngine(t)
 	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
-	// Both were created by this daemon before its restart, so they carry the groups it gives connectors.
-	old := &fakeConnectorContainer{id: "old-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage, groups: connectorGroupAdd(), ip: "10.99.0.2", running: true}
-	current := &fakeConnectorContainer{id: "next-id", name: secureLinkConnectorSlots[1].name, image: replaceTestNewImage, groups: connectorGroupAdd(), ip: "10.99.0.3", running: true, slot: 1}
-	engine.containers[old.name], engine.containers[current.name] = old, current
+	// Both were created by this daemon before its restart, so they carry the groups it gives connectors, and run in
+	// the anchor's network namespace.
+	anchor := fakeAnchor(replaceTestOldImage, "10.99.0.2")
+	old := &fakeConnectorContainer{id: "old-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage, groups: connectorGroupAdd(),
+		ip: anchor.ip, running: true, networkMode: "container:" + anchor.id}
+	current := &fakeConnectorContainer{id: "next-id", name: secureLinkConnectorSlots[1].name, image: replaceTestNewImage, groups: connectorGroupAdd(),
+		ip: anchor.ip, running: true, slot: 1, networkMode: "container:" + anchor.id}
+	engine.containers[old.name], engine.containers[current.name], engine.containers[anchor.name] = old, current, anchor
 	engine.serveControl(old)
 	engine.serveControl(current)
 	plugin := &DockerPlugin{client: engine.client()}
@@ -368,6 +419,18 @@ func TestDaemonStartKeepsTheConnectorRunningTheImage(t *testing.T) {
 	if removed := engine.removedIDs(); len(removed) != 1 || removed[0] != "old-id" {
 		t.Fatalf("removed %v, want the leftover connector", removed)
 	}
+}
+
+// receivedDrain reports a connector told to stop accepting (its replacement took its addresses over).
+func receivedDrain(engine *fakeConnectorEngine, connector *fakeConnectorContainer) bool {
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	for _, request := range connector.requests {
+		if request.Drain {
+			return true
+		}
+	}
+	return false
 }
 
 type nopConn struct{ net.Conn }

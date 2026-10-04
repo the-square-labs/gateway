@@ -54,7 +54,7 @@ func (m *dockerSecureLinkManager) releaseIngressLocked(ctx context.Context) erro
 			if m.egress.networkDesired(name) {
 				continue
 			}
-			if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, name, mobyclient.NetworkDisconnectOptions{Container: m.connectorID, Force: true}); err != nil && !isNotFoundErr(err) {
+			if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, name, mobyclient.NetworkDisconnectOptions{Container: m.anchorID, Force: true}); err != nil && !isNotFoundErr(err) {
 				return fmt.Errorf("detach secure-link connector from %s: %w", name, err)
 			}
 			delete(m.attached, name)
@@ -78,7 +78,7 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) {
 	if m.plugin == nil || m.plugin.client == nil {
 		return
 	}
-	statuses := m.reconcileEgressStatusesLocked(ctx, true)
+	statuses := m.reconcileEgressStatusesLocked(ctx)
 	// Orphans keep their listeners but are no longer Gateway's to hear about.
 	for id := range statuses {
 		_, desired := m.egress.desired[id]
@@ -90,7 +90,7 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) {
 	m.egress.publish(statuses)
 }
 
-func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Context, mayReplace bool) map[string]egressStatus {
+func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Context) map[string]egressStatus {
 	statuses := map[string]egressStatus{}
 	for id, status := range m.egress.rejected {
 		statuses[id] = status
@@ -106,7 +106,7 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 		}
 		return statuses
 	}
-	connectorNetworks, runningImage, err := m.egressConnectorLocked(ctx)
+	connectorNetworks, _, replacement, err := m.egressConnectorLocked(ctx)
 	if err != nil {
 		return pending(err.Error())
 	}
@@ -128,9 +128,12 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 		attached[id] = info
 	}
 	if changed {
-		reinspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.connectorID, mobyclient.ContainerInspectOptions{})
+		reinspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.anchorID, mobyclient.ContainerInspectOptions{})
 		if err != nil {
-			return pending(fmt.Sprintf("inspect secure-link connector: %v", err))
+			if replacement != nil {
+				m.abortReplacement(replacement)
+			}
+			return pending(fmt.Sprintf("inspect secure-link anchor: %v", err))
 		}
 		connectorNetworks = connectorNetworksOf(reinspected.Container.NetworkSettings)
 	}
@@ -159,23 +162,22 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 		ingress = nil
 	}
 	response, err := securelink.Sync(ctx, m.socketPath, m.connectorRequest(ingress, configs))
+	if replacement != nil {
+		if response == nil || response.Version < securelink.ProtocolVersion {
+			// The new connector took nothing: the previous one serves on as before.
+			m.abortReplacement(replacement)
+			m.egress.configsFor = m.connectorID
+		} else {
+			// The egress listens on the new connector too (SO_REUSEPORT): the previous one stops accepting and drains.
+			m.retireConnector(replacement.previous)
+		}
+	}
 	if response == nil {
 		for _, config := range configs {
 			statuses[config.ID] = egressStatus{State: egressStateError, Error: fmt.Sprintf("secure-link connector sync: %v", err),
 				RouteGeneration: config.Generation, network: serving[config.ID].networkName}
 		}
 		return statuses
-	}
-	if response.Version < securelink.ProtocolVersion && mayReplace && !m.ingressWantedLocked() {
-		// A connector of an earlier image serves no egress (D4). With ingress, the proxy secure-link sync owns the
-		// image; without, the connector is started again with the image the egress names, once per sync.
-		if image := m.egressImageLocked(); image != "" && image != runningImage {
-			if err := m.removeConnector(ctx); err == nil {
-				return m.reconcileEgressStatusesLocked(ctx, false)
-			} else if m.plugin.logger != nil {
-				m.plugin.logger.Warn("could not replace the secure-link connector of an earlier image", "error", err)
-			}
-		}
 	}
 	if err != nil && m.plugin.logger != nil {
 		// The ingress bindings the connector holds were refused again; the next proxy secure-link sync deals with them.
@@ -213,43 +215,56 @@ func (m *dockerSecureLinkManager) recordEgressResponseLocked(response *securelin
 	}
 }
 
-// egressConnectorLocked returns the networks and image of the running connector, started for egress when there is
-// none.
-func (m *dockerSecureLinkManager) egressConnectorLocked(ctx context.Context) (map[string]*network.EndpointSettings, string, error) {
+// egressConnectorLocked brings the connector and its anchor up for the egress and returns the anchor's networks, the
+// connector's image, and the replacement it started for another egress image (a node without ingress), which the
+// caller retires once the egress listens on the new connector. With ingress, the proxy secure-link sync owns the
+// image: the running connector keeps its own.
+func (m *dockerSecureLinkManager) egressConnectorLocked(ctx context.Context) (map[string]*network.EndpointSettings, string, *connectorReplacement, error) {
+	ingress := m.ingressWantedLocked()
+	var running *container.InspectResponse
 	if m.connectorID != "" {
 		inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.connectorID, mobyclient.ContainerInspectOptions{})
-		if err == nil && inspected.Container.State != nil && inspected.Container.State.Running {
-			return connectorNetworksOf(inspected.Container.NetworkSettings), connectorImageOf(inspected.Container), nil
-		}
 		if err != nil && !isNotFoundErr(err) {
-			return nil, "", fmt.Errorf("inspect secure-link connector: %w", err)
+			return nil, "", nil, fmt.Errorf("inspect secure-link connector: %w", err)
+		}
+		if err == nil && inspected.Container.State != nil && inspected.Container.State.Running {
+			running = &inspected.Container
 		}
 	}
 	image := m.egressImageLocked()
-	if image == "" && m.connectorID == "" {
-		return nil, "", errors.New("no secure-link connector image is known on this node yet")
+	if running != nil && (ingress || image == "") {
+		image = connectorImageOf(*running)
 	}
 	if image == "" {
-		return nil, "", errors.New("the secure-link connector is not running")
+		return nil, "", nil, errors.New("no secure-link connector image is known on this node yet")
 	}
 	replacement, err := m.ensureConnector(ctx, image)
 	if err != nil {
-		return nil, "", fmt.Errorf("start the secure-link connector: %w", err)
+		return nil, "", nil, fmt.Errorf("start the secure-link connector: %w", err)
 	}
-	if replacement != nil {
-		// Only a serving connector is replaced, and it serves ingress: the next proxy secure-link sync switches.
+	if replacement != nil && ingress {
+		// Its ingress bindings must move with it: the next proxy secure-link sync replaces it.
 		m.abortReplacement(replacement)
-		return nil, "", errors.New("the secure-link connector is being replaced")
+		replacement = nil
 	}
-	if m.ingressWantedLocked() {
-		// A connector started here lost the ingress bindings of the one before: bind them again once this sync is done.
+	if ingress && (running == nil || running.ID != m.connectorID) {
+		// A connector started here holds none of the ingress bindings: bind them again once this sync is done.
 		go func() { _ = m.restoreBindingsCoalesced(true) }()
 	}
-	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.connectorID, mobyclient.ContainerInspectOptions{})
+	networks, err := m.anchorNetworks(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("inspect secure-link connector: %w", err)
+		if replacement != nil {
+			m.abortReplacement(replacement)
+		}
+		return nil, "", nil, err
 	}
-	return connectorNetworksOf(inspected.Container.NetworkSettings), connectorImageOf(inspected.Container), nil
+	return networks, image, replacement, nil
+}
+
+// servingLocked reports a connector carrying links: ingress bindings or egress listeners. Another image starts next
+// to it instead of replacing it in place.
+func (m *dockerSecureLinkManager) servingLocked() bool {
+	return len(m.bindings) > 0 || (m.egress.configsFor == m.connectorID && len(m.egress.configs) > 0)
 }
 
 func connectorImageOf(inspect container.InspectResponse) string {
@@ -295,7 +310,7 @@ func (m *dockerSecureLinkManager) attachEgressLocked(ctx context.Context, desire
 		return info, false, "", nil
 	}
 	if endpoint != nil {
-		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, desired.networkName, mobyclient.NetworkDisconnectOptions{Container: m.connectorID, Force: true}); err != nil && !isNotFoundErr(err) {
+		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, desired.networkName, mobyclient.NetworkDisconnectOptions{Container: m.anchorID, Force: true}); err != nil && !isNotFoundErr(err) {
 			return egressNetwork{}, false, egressStateError, fmt.Errorf("detach the connector to rejoin the link network: %w", err)
 		}
 	}
@@ -306,7 +321,7 @@ func (m *dockerSecureLinkManager) attachEgressLocked(ctx context.Context, desire
 		}
 		settings.IPAMConfig = &network.EndpointIPAMConfig{IPv4Address: info.reserved}
 	}
-	if _, err := m.plugin.client.cli.NetworkConnect(ctx, desired.networkName, mobyclient.NetworkConnectOptions{Container: m.connectorID, EndpointConfig: settings}); err != nil {
+	if _, err := m.plugin.client.cli.NetworkConnect(ctx, desired.networkName, mobyclient.NetworkConnectOptions{Container: m.anchorID, EndpointConfig: settings}); err != nil {
 		return egressNetwork{}, false, egressStateError, fmt.Errorf("attach the secure-link connector to the link network: %w", err)
 	}
 	if m.attached != nil {
@@ -323,7 +338,7 @@ func (m *dockerSecureLinkManager) freeReservedAddressLocked(ctx context.Context,
 		return fmt.Errorf("inspect the link network: %w", err)
 	}
 	for id, endpoint := range inspected.Network.Containers {
-		if !endpoint.IPv4Address.IsValid() || endpoint.IPv4Address.Addr() != reserved || id == m.connectorID {
+		if !endpoint.IPv4Address.IsValid() || endpoint.IPv4Address.Addr() != reserved || id == m.anchorID {
 			continue
 		}
 		if !isSecureLinkConnectorName(strings.TrimPrefix(endpoint.Name, "/")) {
@@ -388,7 +403,7 @@ func (m *dockerSecureLinkManager) dropEgressLocked(ctx context.Context) {
 			m.plugin.logger.Warn("secure-link connector did not take the removal of its egress listeners", "error", err)
 		}
 	}
-	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.connectorID, mobyclient.ContainerInspectOptions{})
+	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.anchorID, mobyclient.ContainerInspectOptions{})
 	if err == nil && inspected.Container.NetworkSettings != nil {
 		m.detachStaleEgressNetworksLocked(ctx, inspected.Container.NetworkSettings.Networks)
 	}
@@ -404,7 +419,7 @@ func (m *dockerSecureLinkManager) detachStaleEgressNetworksLocked(ctx context.Co
 		if _, ingress := m.egress.ingressNetworks[name]; ingress {
 			continue
 		}
-		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, name, mobyclient.NetworkDisconnectOptions{Container: m.connectorID, Force: true}); err != nil && !isNotFoundErr(err) {
+		if _, err := m.plugin.client.cli.NetworkDisconnect(ctx, name, mobyclient.NetworkDisconnectOptions{Container: m.anchorID, Force: true}); err != nil && !isNotFoundErr(err) {
 			if m.plugin.logger != nil {
 				m.plugin.logger.Warn("could not detach the secure-link connector from a link network it no longer serves", "network", name, "error", err)
 			}

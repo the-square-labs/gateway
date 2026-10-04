@@ -363,7 +363,11 @@ func (c *Client) releaseSecureLinkConnector(ctx context.Context, network string,
 	}
 }
 
+// isSecureLinkConnectorName reports the connector's containers: its slots and the anchor holding its endpoints.
 func isSecureLinkConnectorName(name string) bool {
+	if name == secureLinkAnchorName {
+		return true
+	}
 	for _, slot := range secureLinkConnectorSlots {
 		if slot.name == name {
 			return true

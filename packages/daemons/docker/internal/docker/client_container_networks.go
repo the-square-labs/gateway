@@ -22,7 +22,7 @@ func (c *Client) managedDatabaseHostEntries(ctx context.Context, networkNames []
 		if !strings.HasPrefix(networkName, "gateway-db-") {
 			continue
 		}
-		if c.egressListening != nil && c.egressListening(networkName) {
+		if c.databaseLinkOnConnector != nil && c.databaseLinkOnConnector(networkName) {
 			continue
 		}
 		inspected, err := c.cli.NetworkInspect(ctx, networkName, client.NetworkInspectOptions{})

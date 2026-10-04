@@ -230,6 +230,31 @@ func egressFromAssignment(assignment *pb.RelayGrantAssignment) (egressDesired, e
 	}, nil
 }
 
+// databaseLinkOnConnector reports a database link network whose binding Gateway moved to the connector: its connect
+// grant carries an egress on that network and no host listener (desired state, F4). Its consumers resolve the link
+// alias through Docker's DNS and get no ExtraHosts entry; a binding still on the host listener keeps the entry.
+func (p *DockerPlugin) databaseLinkOnConnector(networkName string) bool {
+	if p.relayGrants == nil {
+		return false
+	}
+	onConnector := false
+	p.relayGrants.withCurrent(func(bundle *pb.SyncRelayGrantsCommand) {
+		onConnector = databaseLinkOnConnectorIn(bundle, networkName)
+	})
+	return onConnector
+}
+
+func databaseLinkOnConnectorIn(bundle *pb.SyncRelayGrantsCommand, networkName string) bool {
+	for _, assignment := range bundle.GetGrants() {
+		egress := assignment.GetSecureLinkEgress()
+		if assignment.GetRole() == "connect" && assignment.GetOwnerKind() == linkKindManagedDatabaseBinding && egress != nil &&
+			egress.GetNetworkName() == networkName && assignment.GetManagedDatabaseListener() == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // setDesiredEgress records the egress of bundle without touching the connector (the startup restore applies it).
 func (m *dockerSecureLinkManager) setDesiredEgress(bundle *pb.SyncRelayGrantsCommand) {
 	m.mu.Lock()
@@ -274,4 +299,3 @@ func (m *dockerSecureLinkManager) egressImageLocked() string {
 	}
 	return ""
 }
-

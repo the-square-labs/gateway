@@ -183,7 +183,7 @@ func TestEgressFollowsTheGrantBundle(t *testing.T) {
 	if statuses[invalidID].State != egressStateError {
 		t.Fatalf("an egress on a user network was not refused: %+v", statuses[invalidID])
 	}
-	endpoint := engine.containers[connector].networks[egressTestNetwork]
+	endpoint := engine.containers[secureLinkAnchorName].networks[egressTestNetwork]
 	if endpoint["IPAddress"] != "10.213.0.2" || len(endpoint["Aliases"].([]string)) != 1 || endpoint["Aliases"].([]string)[0] != "app" {
 		t.Fatalf("connector endpoint on the link network %+v", endpoint)
 	}
@@ -247,26 +247,37 @@ func TestEgressFollowsTheGrantBundle(t *testing.T) {
 
 	manager.syncEgress(egressTestBundle())
 	deadline := time.Now().Add(3 * time.Second)
-	for len(engine.removedIDs()) == 0 && time.Now().Before(deadline) {
+	for len(engine.removedIDs()) < 2 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if removed := engine.removedIDs(); len(removed) != 1 {
-		t.Fatalf("the connector without links was not removed: %v", removed)
+	if removed := engine.removedIDs(); len(removed) != 2 {
+		t.Fatalf("the connector and its anchor were not removed without links: %v", removed)
 	}
 	if manager.egress.listeningOn(egressTestNetwork) {
 		t.Fatal("the link network is still reported as served")
 	}
 }
 
-// A database consumer recreated while the connector serves its link gets no ExtraHosts entry for the link alias: it
-// resolves the alias through Docker's DNS to the connector (C6). Other database links keep the host listener entry.
+// A database consumer recreated after Gateway moved its link to the connector (the grant carries an egress and no
+// host listener) gets no ExtraHosts entry for the link alias: it resolves the alias through Docker's DNS to the
+// connector (C6, F4). A link still on, or moving off, the host listener keeps the entry.
 func TestDatabaseExtraHostsLeaveOutLinksServedByTheConnector(t *testing.T) {
 	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
 	cli := engine.client()
-	served := map[string]bool{egressTestDBNet: true}
-	cli.egressListening = func(name string) bool { return served[name] }
 	other := "gateway-db-fedcba9876543210"
+	migrating := "gateway-db-00112233445566ff"
+	connect := func(id, networkName string, listener bool) *pb.RelayGrantAssignment {
+		assignment := &pb.RelayGrantAssignment{Role: "connect", OwnerKind: linkKindManagedDatabaseBinding, OwnerId: id,
+			SecureLinkEgress: &pb.SecureLinkEgress{NetworkName: networkName, Alias: "db", ListenPort: 5432, RouteGeneration: 2}}
+		if listener {
+			assignment.ManagedDatabaseListener = &pb.ManagedDatabaseListener{NetworkName: networkName}
+		}
+		return assignment
+	}
+	bundle := egressTestBundle(connect(egressTestLinkID, egressTestDBNet, false), connect("9d4e5f6a-7b8c-4d9e-8f0a-1b2c3d4e5f6a", migrating, true))
+	cli.databaseLinkOnConnector = func(name string) bool { return databaseLinkOnConnectorIn(bundle, name) }
 	engine.serveNetwork(other, "172.30.5.1")
+	engine.serveNetwork(migrating, "172.30.6.1")
 
 	entries, err := cli.managedDatabaseHostEntries(t.Context(), []string{egressTestDBNet, other, "app-net"})
 	if err != nil {
@@ -278,5 +289,8 @@ func TestDatabaseExtraHostsLeaveOutLinksServedByTheConnector(t *testing.T) {
 	merged := mergeManagedDatabaseExtraHosts([]string{"db-0123456789abcdef:172.30.4.1", "cache:10.0.0.3"}, entries)
 	if strings.Join(merged, ",") != "cache:10.0.0.3,db-fedcba9876543210:172.30.5.1" {
 		t.Fatalf("a recreate kept the host listener entry of a link the connector serves: %v", merged)
+	}
+	if entries, err := cli.managedDatabaseHostEntries(t.Context(), []string{migrating}); err != nil || len(entries) != 1 {
+		t.Fatalf("a link whose grant still names the host listener lost its entry: %v %v", entries, err)
 	}
 }

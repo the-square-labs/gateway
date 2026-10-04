@@ -30,7 +30,7 @@ func (p *DockerPlugin) initProxySecureLinks() error {
 	}
 	if p.client != nil {
 		// Consumers of a database link served by the connector resolve its alias through Docker's DNS (C6).
-		p.client.egressListening = p.secureLinks.egress.listeningOn
+		p.client.databaseLinkOnConnector = p.databaseLinkOnConnector
 	}
 	pending, hasPending, pendingErr := p.secureLinkState.Pending()
 	if pendingErr != nil {
