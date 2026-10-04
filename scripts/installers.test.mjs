@@ -1194,3 +1194,30 @@ test('a switch away from a non-root user stops the daemon last and keeps its lin
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Every upgrade by an installer backs the previous binary (and nginx configs) up; only the newest backup is kept, so
+// re-running an installer does not pile up copies of the daemon binary on the host.
+test('an installer keeps only the newest backup of a file it replaces', { skip: !linux }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-backups-'));
+  try {
+    for (const name of ['setup-docker-node.sh', 'setup-monitoring-node.sh', 'setup-node.sh']) {
+      const source = readFileSync(path.join(scriptsDir, name), 'utf8');
+      const target = path.join(dir, `${name}.bin`);
+      const older = [`${target}.backup.20260101_000000`, `${target}.backup.20260102_000000`];
+      const keep = `${target}.backup.20260103_000000`;
+      const unrelated = [`${target}.backup.mine`, `${target}.previous`, `${target}-other.backup.20260101_000000`];
+      for (const file of [...older, keep, ...unrelated]) await writeFile(file, 'x');
+      const run = runShell(["IFS=$'\\n\\t'", shellFunction(source, 'prune_older_backups'), `prune_older_backups '${target}' '${keep}'`].join('\n'));
+      assert.equal(run.status, 0, run.output);
+      const left = (await readdir(dir)).filter((file) => file.startsWith(`${name}.bin`)).sort();
+      assert.deepEqual(
+        left,
+        [keep, ...unrelated].map((file) => path.basename(file)).filter((file) => file.startsWith(`${name}.bin`)).sort(),
+        name
+      );
+      for (const file of await readdir(dir)) await rm(path.join(dir, file));
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

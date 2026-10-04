@@ -321,6 +321,15 @@ detect_arch() {
 }
 
 command_exists() { command -v "$1" &>/dev/null; }
+
+# Keeps the backup just taken and removes the older ones of the same file, so repeated upgrades do not pile up copies.
+prune_older_backups() {
+    local target="$1" keep="$2" old
+    for old in "${target}".backup.*; do
+        [[ -f "$old" && "$old" != "$keep" && "$old" =~ \.backup\.[0-9]{8}_[0-9]{6}$ ]] || continue
+        rm -f -- "$old"
+    done
+}
 has_existing_nginx_config() {
     [[ -s /etc/nginx/nginx.conf || -s /usr/local/etc/nginx/nginx.conf || -s /usr/local/nginx/conf/nginx.conf ]]
 }
@@ -458,6 +467,7 @@ backup_if_exists() {
         local backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
         cp "$file" "$backup"
         log "Backed up ${file} to ${backup}"
+        prune_older_backups "$file" "$backup"
     fi
 }
 
@@ -2389,6 +2399,7 @@ install_daemon_binary() {
         local backup="${target}.backup.$(date +%Y%m%d_%H%M%S)"
         cp "$target" "$backup"
         ok "Backed up existing binary to ${backup}"
+        prune_older_backups "$target" "$backup"
     else
         log "Downloading nginx-daemon..."
     fi
