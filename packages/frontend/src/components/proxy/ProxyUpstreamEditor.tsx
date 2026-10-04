@@ -244,6 +244,9 @@ export function ProxyUpstreamFields({
   disabled = false,
   allowManual = true,
   showTargetSelect = true,
+  showScheme = true,
+  resourceDescription = "Container or deployment reached through Secure Link",
+  portDescription = "TCP port the container listens on or declares, or one entered manually",
   layout = "rows",
 }: {
   value: ProxyUpstreamSelection;
@@ -252,6 +255,10 @@ export function ProxyUpstreamFields({
   disabled?: boolean;
   allowManual?: boolean;
   showTargetSelect?: boolean;
+  /** The HTTP scheme only matters to routes; other callers (container links) hide it. */
+  showScheme?: boolean;
+  resourceDescription?: string;
+  portDescription?: string;
   /** Settings rows (default) or stacked form fields for form dialogs. */
   layout?: UpstreamFieldLayout;
 }) {
@@ -557,7 +564,7 @@ export function ProxyUpstreamFields({
             layout={layout}
             id={`${fieldId}-resource`}
             title="Docker Resource"
-            description="Container or deployment reached through Secure Link"
+            description={resourceDescription}
             controlsClassName="sm:w-full"
           >
             <Combobox
@@ -637,12 +644,12 @@ export function ProxyUpstreamFields({
               }}
             />
           </UpstreamField>
-          <UpstreamFieldPair layout={layout}>
+          <UpstreamFieldPair layout={showScheme ? layout : "rows"}>
             <UpstreamField
               layout={layout}
               id={`${fieldId}-container-port`}
               title="Application Port"
-              description="TCP port the container listens on or declares, or one entered manually"
+              description={portDescription}
               controlsClassName="sm:w-full"
             >
               <Input
@@ -662,20 +669,22 @@ export function ProxyUpstreamFields({
                 disabled={disabled || (!effectiveSelectedContainer && !selectedCompose)}
               />
             </UpstreamField>
-            <UpstreamField
-              layout={layout}
-              id={`${fieldId}-scheme`}
-              title="Scheme"
-              description="Protocol used to reach the upstream"
-              controlsClassName="sm:w-full"
-            >
-              <SchemeSelect
+            {showScheme ? (
+              <UpstreamField
+                layout={layout}
                 id={`${fieldId}-scheme`}
-                value={value}
-                onChange={onChange}
-                disabled={disabled}
-              />
-            </UpstreamField>
+                title="Scheme"
+                description="Protocol used to reach the upstream"
+                controlsClassName="sm:w-full"
+              >
+                <SchemeSelect
+                  id={`${fieldId}-scheme`}
+                  value={value}
+                  onChange={onChange}
+                  disabled={disabled}
+                />
+              </UpstreamField>
+            ) : null}
           </UpstreamFieldPair>
         </>
       )}

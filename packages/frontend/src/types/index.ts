@@ -11,6 +11,7 @@ export type {
 } from "./ai";
 export type * from "./auth";
 export type * from "./common";
+export type * from "./container-links";
 export type * from "./dashboard";
 export type * from "./databases";
 export { DEFAULT_MANAGED_REDIS_CONFIG } from "./databases";

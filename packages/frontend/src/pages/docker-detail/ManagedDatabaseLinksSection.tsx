@@ -799,11 +799,11 @@ export const ManagedDatabaseLinksSection = forwardRef<
         description={
           targetType === "compose_service"
             ? composeBeforeFirstRevision
-              ? "Private sidecar connections. Saved now and added to the selected services by the project's first revision."
-              : "Private sidecar connections stored in each selected service's Compose revision."
+              ? "Private connections. Saved now and added to the selected services by the project's first revision."
+              : "Private connections stored in each selected service's Compose revision."
             : recreatesRunningWorkload
-              ? "Private sidecar connections. Changes apply with Save & Recreate."
-              : "Private sidecar connections. Changes apply on next start."
+              ? "Private connections. Changes apply with Save & Recreate."
+              : "Private connections. Changes apply on next start."
         }
         dirty={hasChanges}
         bodyClassName={displayBindings.length > 0 ? "divide-y divide-border" : undefined}

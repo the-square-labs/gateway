@@ -4,6 +4,7 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { createClientUuid } from "@/lib/client-id";
 import { api } from "@/services/api";
 import type { DockerComposeProject } from "@/types";
+import { ContainerLinksSection } from "../docker-detail/ContainerLinksSection";
 import { EnvironmentTab } from "../docker-detail/EnvironmentTab";
 import { ManagedDatabaseLinksSection } from "../docker-detail/ManagedDatabaseLinksSection";
 
@@ -95,6 +96,19 @@ export function ComposeVariablesTab({
           ),
         }))}
       />
+
+      {activeRevision && serviceNames.length > 0 && (
+        <ContainerLinksSection
+          nodeId={project.nodeId}
+          type="compose_service"
+          resourceId={project.id}
+          workloadName={project.name}
+          services={serviceNames}
+          canManage={canManage}
+          canSetEnvironment={canManage}
+          onApplied={onApplied}
+        />
+      )}
 
       {activeRevision ? (
         <EnvironmentTab

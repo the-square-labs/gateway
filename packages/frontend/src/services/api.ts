@@ -27,6 +27,7 @@ import { withAIStatusApi } from "./api-ai-status";
 import { withAuthApi } from "./api-auth";
 import { withBackupApi } from "./api-backups";
 import { API_BASE, ApiClientBase } from "./api-base";
+import { withContainerLinksApi } from "./api-container-links";
 import { withDatabaseApi } from "./api-databases";
 import { withDockerApi } from "./api-docker";
 import { withHostingApi } from "./api-hosting";
@@ -56,7 +57,9 @@ class ApiClient extends withIngressGroupsApi(
                     withDockerApi(
                       withBackupApi(
                         withObjectStorageApi(
-                          withDatabaseApi(withPkiApi(withProxyApi(withHostingApi(ApiClientBase))))
+                          withContainerLinksApi(
+                            withDatabaseApi(withPkiApi(withProxyApi(withHostingApi(ApiClientBase))))
+                          )
                         )
                       )
                     )

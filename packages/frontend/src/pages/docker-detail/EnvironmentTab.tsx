@@ -15,6 +15,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import type { DockerSecret, ManagedDatabaseBindingTargetType } from "@/types";
+import { ContainerLinksSection } from "./ContainerLinksSection";
 import {
   type ManagedDatabaseLinkDraft,
   ManagedDatabaseLinksSection,
@@ -157,6 +158,14 @@ export function EnvironmentTab({
     canViewManagedStorage &&
     Boolean(storageTargetType) &&
     Boolean(resolvedStorageTargetResourceId);
+  // Container links work on containers and deployments; a Compose service links from the project's Variables tab.
+  const containerLinksEnabled =
+    managedDatabaseLinksEnabled &&
+    Boolean(storageTargetType) &&
+    Boolean(resolvedStorageTargetResourceId) &&
+    Boolean(containerName) &&
+    hasScope(`docker:containers:view:${scopeSuffix}`);
+  const canManageContainerLinks = hasScope(`docker:containers:edit:${scopeSuffix}`);
   const serviceEnvSignature = useMemo(() => JSON.stringify(serviceEnv ?? {}), [serviceEnv]);
   const managedDatabaseVariableNames = useMemo(
     () => new Set(databaseLinkDraft.managedVariableNames),
@@ -891,6 +900,21 @@ export function EnvironmentTab({
           onDraftChange={handleStorageLinkDraftChange}
           onSaveRequested={() => void handleSave()}
           recreatesRunningWorkload={recreatesRunningContainer}
+        />
+      )}
+
+      {containerLinksEnabled && (
+        <ContainerLinksSection
+          nodeId={nodeId}
+          type={storageTargetType!}
+          resourceId={resolvedStorageTargetResourceId}
+          workloadName={containerName!}
+          canManage={canManageContainerLinks}
+          canSetEnvironment={canEdit}
+          disabled={linksDisabled || isSaving}
+          onMutationStart={onMutationStart}
+          onMutationEnd={onMutationEnd}
+          onRecreating={onRecreating}
         />
       )}
 

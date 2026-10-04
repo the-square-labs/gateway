@@ -15,6 +15,7 @@ export const LICENSE_FEATURE_PLANS = {
   "cross-node-migration": "personal",
   "managed-storage": "personal",
   "managed-databases": "personal",
+  "container-links": "personal",
   "status-pages": "personal",
   "registry-discovery": "personal",
   pages: "personal",
@@ -81,7 +82,7 @@ export function hasLicenseFeature(feature: LicenseFeature): boolean | null {
   if (!license) return null;
   if (
     license.entitlements.features.includes(
-      feature === "managed-storage" ? "managed-databases" : feature
+      feature === "managed-storage" || feature === "container-links" ? "managed-databases" : feature
     )
   )
     return true;
