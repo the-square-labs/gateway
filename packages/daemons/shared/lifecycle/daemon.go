@@ -86,6 +86,9 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 	// Step 1: Enroll if not yet enrolled
 	if !d.cfg.IsEnrolled() {
 		if err := d.enroll(); err != nil {
+			if recordErr := recordEnrollmentFailure(d.cfg.StateDir, err); recordErr != nil {
+				d.logger.Warn("could not record the enrollment failure for the installer", "error", recordErr)
+			}
 			return fmt.Errorf("enrollment: %w", err)
 		}
 	}

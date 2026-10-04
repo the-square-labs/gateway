@@ -2,10 +2,15 @@ package lifecycle
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // The installers read this record to tell a daemon Gateway accepted in their
@@ -37,5 +42,33 @@ func TestRecordGatewaySessionWritesTheInstallerRecord(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+// A refused token is named for the installer; an unreachable Gateway is only an error.
+func TestRecordEnrollmentFailureNamesARefusedToken(t *testing.T) {
+	for _, test := range []struct {
+		err     error
+		refused bool
+	}{
+		{fmt.Errorf("enrollment failed: %w", status.Error(codes.Unauthenticated, "Invalid enrollment token")), true},
+		{fmt.Errorf("enrollment failed: %w", status.Error(codes.Unavailable, "connection refused")), false},
+		{errors.New("gateway certificate fingerprint mismatch"), false},
+	} {
+		stateDir := t.TempDir()
+		if err := recordEnrollmentFailure(stateDir, test.err); err != nil {
+			t.Fatal(err)
+		}
+		contents, err := os.ReadFile(filepath.Join(stateDir, GatewaySessionFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record gatewaySessionRecord
+		if err := json.Unmarshal(contents, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.EnrollmentRefused != test.refused || record.EnrollmentError != test.err.Error() || record.ConnectedAt != 0 || record.PID != os.Getpid() {
+			t.Errorf("%v: record = %+v", test.err, record)
+		}
 	}
 }
