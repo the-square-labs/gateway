@@ -22,6 +22,12 @@ const (
 	// EndpointRestartCapability tells daemons that this relay keeps a
 	// restarting endpoint's registration (ENDPOINT_SERVING_STATE_RESTARTING).
 	EndpointRestartCapability = "endpoint_restart_v1"
+	// DrainKeepsLocalServicesCapability tells Gateway that a draining relay
+	// refuses new tunnels only to workload endpoints and keeps serving its
+	// built-in local services (the internal registry), which no other relay
+	// serves. Gateway drains the local relay for an update only then.
+	DrainKeepsLocalServicesCapability = "drain_keeps_local_services_v1"
+	localServiceSubjectKind           = "local_service"
 )
 
 // EndpointRestartGrace is how long a registration whose daemon announced a

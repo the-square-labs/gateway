@@ -26,9 +26,6 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	if open == nil {
 		return status.Error(codes.InvalidArgument, "first tunnel frame must open")
 	}
-	if b.draining.Load() {
-		return status.Error(codes.Unavailable, "relay is draining")
-	}
 	claims, err := b.verifier.Verify(open.Grant, "connect", client)
 	if err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -42,12 +39,6 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		return status.Error(codes.Internal, "could not create accept token")
 	}
 	b.mu.Lock()
-	// Checked again under the lock: a forced drain disconnects the sessions it
-	// finds under this lock, so a tunnel admitted after it must not slip in.
-	if b.draining.Load() {
-		b.mu.Unlock()
-		return status.Error(codes.Unavailable, "relay is draining")
-	}
 	snapshot := b.store.Current()
 	if err := grant.ValidatePolicy(claims, "connect", snapshot); err != nil {
 		b.mu.Unlock()
@@ -63,6 +54,12 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		b.mu.Unlock()
 		return status.Error(codes.PermissionDenied, "connect grant endpoint was revoked")
 	}
+	// Decided under the lock: a forced drain disconnects the sessions it finds
+	// under this lock, so a tunnel admitted after it must not slip in.
+	if b.draining.Load() && drainRefuses(endpoint) {
+		b.mu.Unlock()
+		return status.Error(codes.Unavailable, "relay is draining")
+	}
 	frameLimit := minNonZero(DefaultMaxFrameBytes, int(route.MaxFrameBytes), int(claims.MaxFrameBytes))
 	trafficClass := routeTrafficClass(route)
 	metrics := b.routeMetricsLocked(route.RouteId)
@@ -74,7 +71,7 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		metrics.recordFailedOpen(time.Since(startedAt))
 		return err
 	}
-	if endpoint.SubjectKind == "local_service" {
+	if endpoint.SubjectKind == localServiceSubjectKind {
 		target, targetErr := config.BuiltinLocalServiceTarget(endpoint.SubjectId)
 		if targetErr != nil {
 			metrics.opened.Add(1)
@@ -407,4 +404,12 @@ func (b *Broker) closeEndpointSessionsLocked(endpointID string, assignmentGenera
 		}
 		tunnel.close()
 	}
+}
+
+// drainRefuses tells whether a draining relay refuses new tunnels to the
+// endpoint. A drain moves workload endpoints to other relays; a built-in local
+// service (the Gateway internal registry) is served only by the local relay,
+// so it keeps admitting tunnels to it. See DrainKeepsLocalServicesCapability.
+func drainRefuses(endpoint *relayv1.EndpointPolicy) bool {
+	return endpoint.GetSubjectKind() != localServiceSubjectKind
 }

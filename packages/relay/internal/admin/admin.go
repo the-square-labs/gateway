@@ -111,7 +111,7 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 func healthCapabilities(mode relayv1.RelayMode, availabilityLease bool) []string {
 	capabilities := []string{
 		policy.PoolCapability, "signed_policy_envelope_v1", identity.ServerCertificateRolloverCapability,
-		policy.LongLeaseCapability, broker.EndpointRestartCapability,
+		policy.LongLeaseCapability, broker.EndpointRestartCapability, broker.DrainKeepsLocalServicesCapability,
 	}
 	if mode == relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
 		capabilities = append(capabilities, policy.TrustResetCapability)

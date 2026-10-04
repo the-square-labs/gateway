@@ -279,13 +279,7 @@ func TestDrainRejectsNewTunnelWithoutClosingActiveSession(t *testing.T) {
 		t.Fatal("drain closed an established session")
 	default:
 	}
-	stream := &openStream{
-		ctx:   authenticatedContext("node-source", []byte("source")),
-		first: &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{}}},
-	}
-	if code := status.Code(b.OpenTunnel(stream)); code != codes.Unavailable {
-		t.Fatalf("draining open status = %v", code)
-	}
+	// New tunnels: see TestDrainRefusesWorkloadTunnelsAndKeepsLocalServices.
 }
 
 func TestForceDisconnectRequiresDrainAndClosesActiveSessions(t *testing.T) {
