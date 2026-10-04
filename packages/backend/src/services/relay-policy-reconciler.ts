@@ -4,6 +4,8 @@ import type { DrizzleClient } from '@/db/client.js';
 import {
   backupRuns,
   certificates,
+  containerLinkPlacements,
+  containerLinks,
   dockerAvailabilityPolicies,
   dockerRegistryNodeBindings,
   managedDatabaseBindingPlacements,
@@ -309,6 +311,7 @@ const PROXY_SECURE_LINK_OWNERS: OwnerTable[] = [
 ];
 const MANAGED_STORAGE_OWNERS: OwnerTable[] = [{ table: managedStorageClusters, id: managedStorageClusters.id }];
 const BACKUP_RUN_OWNERS: OwnerTable[] = [{ table: backupRuns, id: backupRuns.id }];
+const CONTAINER_LINK_OWNERS: OwnerTable[] = [{ table: containerLinks, id: containerLinks.id }];
 
 /**
  * The rows that own relay state, per owner kind. Managed database endpoints and database and storage link routes
@@ -317,8 +320,11 @@ const BACKUP_RUN_OWNERS: OwnerTable[] = [{ table: backupRuns, id: backupRuns.id 
 const ENDPOINT_OWNERS: Record<string, OwnerTable[]> = {
   proxy_host_secure_link: PROXY_SECURE_LINK_OWNERS,
   managed_storage: MANAGED_STORAGE_OWNERS,
+  // A container link's own endpoint, or the endpoint of one target placement of it.
+  container_link: [...CONTAINER_LINK_OWNERS, { table: containerLinkPlacements, id: containerLinkPlacements.id }],
 };
 const ROUTE_OWNERS: Record<string, OwnerTable[]> = {
+  container_link: CONTAINER_LINK_OWNERS,
   proxy_host_secure_link: PROXY_SECURE_LINK_OWNERS,
   managed_storage_gateway: MANAGED_STORAGE_OWNERS,
   managed_database_gateway: [{ table: managedDatabaseInstances, id: managedDatabaseInstances.id }],

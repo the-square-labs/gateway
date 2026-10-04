@@ -74,6 +74,18 @@ export interface RelayGrantAssignment {
     allowedSources: string[];
     routeGeneration: number;
   };
+  /** The connector egress listener of a link on its source node (C2); only on connect assignments. */
+  secureLinkEgress?: {
+    networkName: string;
+    alias: string;
+    listenPort: number;
+    maxSessions: number;
+    tlsCaPem?: string;
+    tlsServerName?: string;
+    routeGeneration: number;
+    /** The connector image, for a node that has egress but no proxy Secure Link binding to take it from. */
+    connectorImage?: string;
+  };
 }
 
 export interface RelayDataCandidate {
@@ -115,6 +127,8 @@ export class RelayGrantIssuerService {
   private fenceBypassRevision = 0;
   private lastBundleGeneratedAtMs = 0;
   private readonly topology: RelayTopologyService;
+  /** The shared secure-link connector image egress assignments name (SECURE_LINK_CONNECTOR_IMAGE). */
+  private connectorImage = '';
 
   constructor(
     private readonly db: DrizzleClient,
@@ -122,6 +136,10 @@ export class RelayGrantIssuerService {
     private readonly settings: GeneralSettingsService
   ) {
     this.topology = new RelayTopologyService(db);
+  }
+
+  setConnectorImage(image: string): void {
+    this.connectorImage = image;
   }
 
   acknowledgeRevision(revision: number): void {
@@ -255,6 +273,13 @@ export class RelayGrantIssuerService {
         candidates,
         managedDatabaseListener: route.managedDatabaseListener
           ? { ...route.managedDatabaseListener, routeGeneration: route.generation }
+          : undefined,
+        secureLinkEgress: route.secureLinkEgress
+          ? {
+              ...route.secureLinkEgress,
+              routeGeneration: route.generation,
+              ...(this.connectorImage ? { connectorImage: this.connectorImage } : {}),
+            }
           : undefined,
       });
     }

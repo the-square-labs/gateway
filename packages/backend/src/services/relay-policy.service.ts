@@ -14,7 +14,7 @@ import {
   relayPools,
   relayRoutes,
 } from '@/db/schema/index.js';
-import type { RelayManagedDatabaseListenerConfig } from '@/db/schema/relay.js';
+import type { RelayManagedDatabaseListenerConfig, RelaySecureLinkEgressConfig } from '@/db/schema/relay.js';
 import {
   RELAY_MAX_FRAME_BYTES,
   type RelayControlClient,
@@ -47,6 +47,7 @@ import {
   RelayPolicyNotAcknowledgedError,
 } from './relay-grant-issuer.service.js';
 import { RelayGrantKeyService } from './relay-grant-key.service.js';
+import { CONTAINER_LINK_OWNER_KIND, RelayLinkRoutes, routeTransportRestartRequired } from './relay-link-routes.js';
 import {
   backfillRelayNodeFingerprints,
   bumpRelayPolicyRevision,
@@ -65,6 +66,7 @@ import {
 } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 import type { RelayAssignmentRole } from './relay-topology.js';
+import { parseRelayGrantEgressStatuses, type SecureLinkEgressStatus } from './secure-link-egress-status.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
 
@@ -330,6 +332,7 @@ export class RelayPolicyService {
   private lastGrantRefreshAt = 0;
   private lastGrantRefreshRevision = 0;
   private readonly grantIssuer: RelayGrantIssuerService;
+  private readonly linkRoutes: RelayLinkRoutes;
   private readonly grantKeys: RelayGrantKeyService;
   private readonly policyKeys: RelayPolicySigningKeyService;
   private relaySettingsSync: Promise<void> = Promise.resolve();
@@ -380,12 +383,25 @@ export class RelayPolicyService {
     private readonly relay: RelayControlClient
   ) {
     this.grantIssuer = new RelayGrantIssuerService(db, cryptoService, settings);
+    this.linkRoutes = new RelayLinkRoutes({
+      db,
+      requireNodeIdentity: (nodeId) => this.grantIssuer.requireNodeIdentity(nodeId),
+      syncSnapshot: () => this.syncSnapshot(),
+      syncNodeGrants: (nodeId, options) => this.syncNodeGrants(nodeId, options),
+      policyNodeIds: () => this.grantIssuer.policyNodeIds(),
+      ensureEndpointAssignment: (endpointId) => this.ensureLegacyCompatibleAssignment(endpointId),
+    });
     this.grantKeys = new RelayGrantKeyService(db, cryptoService, settings);
     this.policyKeys = new RelayPolicySigningKeyService(db, cryptoService);
   }
 
   setManagedLinkReports(reports: Pick<NodeRegistryService, 'managedLinkReport' | 'requestHealthReport'>): void {
     this.managedLinkReports = reports;
+  }
+
+  /** The shared secure-link connector image that connector egress assignments name. */
+  setSecureLinkConnectorImage(image: string): void {
+    this.grantIssuer.setConnectorImage(image);
   }
 
   setNodeDispatch(
@@ -654,6 +670,73 @@ export class RelayPolicyService {
       }
     }
     throw lastError instanceof Error ? lastError : new Error('Managed database binding relay route is unavailable');
+  }
+
+  /**
+   * Delivers a node's grants until the daemon reports the connector egress of one link route listening for the route's
+   * current generation (egressStatuses in the ACK). Throws with the daemon's reason when it does not get there.
+   */
+  async awaitSecureLinkEgress(
+    nodeId: string,
+    ownerKind: 'managed_storage_binding' | 'managed_database_binding' | 'container_link',
+    ownerId: string,
+    options: { attempts?: number; delayMs?: number } = {}
+  ): Promise<SecureLinkEgressStatus> {
+    const attempts = options.attempts ?? 10;
+    let reason = 'the daemon did not report it';
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, options.delayMs ?? 1_000));
+      const [route] = await this.db
+        .select({ generation: relayRoutes.generation, egress: relayRoutes.secureLinkEgress })
+        .from(relayRoutes)
+        .where(
+          and(
+            eq(relayRoutes.ownerKind, ownerKind),
+            eq(relayRoutes.ownerId, ownerId),
+            eq(relayRoutes.sourceKind, 'daemon'),
+            eq(relayRoutes.sourceId, nodeId)
+          )
+        )
+        .limit(1);
+      if (!route?.egress) throw new Error('the link route has no connector egress');
+      const result = await this.syncNodeGrantBundle(nodeId);
+      if (!result.success) {
+        reason = result.error || 'the daemon rejected the relay grants';
+        continue;
+      }
+      const status = parseRelayGrantEgressStatuses(result.detail)[ownerId];
+      if (status?.state === 'ready' && status.routeGeneration === route.generation) return status;
+      reason = status?.error || (status ? `it is ${status.state}` : 'the daemon did not report it');
+    }
+    throw new Error(`the secure-link connector is not listening for the link: ${reason}`);
+  }
+
+  /** Probes the relay path of one link route from its source node, like a managed database link's. */
+  async probeLinkRoute(nodeId: string, ownerKind: string, ownerId: string): Promise<void> {
+    const bundle = this.lastNodeGrantBundles.get(nodeId) ?? (await this.getNodeGrantBundle(nodeId));
+    const assignment = bundle.grants.find(
+      (grant) => grant.role === 'connect' && grant.ownerKind === ownerKind && grant.ownerId === ownerId
+    );
+    if (!assignment?.routeId || !assignment.targetEndpointId) throw new Error('The link relay grant is unavailable');
+    const candidates = assignment.candidates ?? [];
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        await this.probeRelayCandidate(nodeId, {
+          probeId: ownerId,
+          role: 'source',
+          endpointId: assignment.targetEndpointId,
+          routeId: assignment.routeId,
+          assignmentGeneration: candidate.assignmentGeneration,
+          candidate,
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (candidates.length)
+      throw lastError instanceof Error ? lastError : new Error('The link relay route is unavailable');
   }
 
   syncSnapshot(): Promise<number> {
@@ -1279,7 +1362,9 @@ export class RelayPolicyService {
     managedDatabaseId: string,
     sourceNodeId: string,
     targetNodeId: string,
-    managedDatabaseListener?: RelayManagedDatabaseListenerConfig
+    managedDatabaseListener?: RelayManagedDatabaseListenerConfig,
+    /** The connector egress of the link's node; undefined keeps the route's. */
+    secureLinkEgress?: RelaySecureLinkEgressConfig | null
   ): Promise<string> {
     const endpointId = await this.ensureManagedDatabaseEndpoint(managedDatabaseId, targetNodeId);
     const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
@@ -1290,7 +1375,8 @@ export class RelayPolicyService {
       sourceNodeId,
       source.certificateFingerprint,
       endpointId,
-      managedDatabaseListener
+      managedDatabaseListener,
+      secureLinkEgress
     );
     await this.syncSnapshot();
     await Promise.all([
@@ -1306,7 +1392,9 @@ export class RelayPolicyService {
     managedDatabaseId: string,
     sourceNodeId: string,
     targetNodeId: string,
-    managedDatabaseListener: RelayManagedDatabaseListenerConfig
+    managedDatabaseListener: RelayManagedDatabaseListenerConfig | undefined,
+    /** The connector egress of the adopted route; undefined keeps the placement route's. */
+    secureLinkEgress?: RelaySecureLinkEgressConfig | null
   ): Promise<string> {
     const endpointId = await this.ensureManagedDatabaseEndpoint(managedDatabaseId, targetNodeId);
     const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
@@ -1328,7 +1416,17 @@ export class RelayPolicyService {
         placementRoute.sourceId !== sourceNodeId ||
         placementRoute.sourceCertificateSha256 !== source.certificateFingerprint ||
         placementRoute.targetEndpointId !== endpointId ||
-        managedDatabaseListenerRestartRequired(placementRoute.managedDatabaseListener, managedDatabaseListener);
+        routeTransportRestartRequired(
+          {
+            managedDatabaseListener: placementRoute.managedDatabaseListener ?? null,
+            secureLinkEgress: placementRoute.secureLinkEgress ?? null,
+          },
+          {
+            managedDatabaseListener: managedDatabaseListener ?? null,
+            secureLinkEgress:
+              secureLinkEgress === undefined ? (placementRoute.secureLinkEgress ?? null) : secureLinkEgress,
+          }
+        );
       await tx
         .update(relayRoutes)
         .set({
@@ -1337,7 +1435,8 @@ export class RelayPolicyService {
           sourceId: sourceNodeId,
           sourceCertificateSha256: source.certificateFingerprint,
           targetEndpointId: endpointId,
-          managedDatabaseListener,
+          managedDatabaseListener: managedDatabaseListener ?? null,
+          ...(secureLinkEgress === undefined ? {} : { secureLinkEgress }),
           generation: changed ? placementRoute.generation + 1 : placementRoute.generation,
           updatedAt: new Date(),
         })
@@ -1354,7 +1453,8 @@ export class RelayPolicyService {
         sourceNodeId,
         source.certificateFingerprint,
         endpointId,
-        managedDatabaseListener
+        managedDatabaseListener,
+        secureLinkEgress
       ));
     await this.syncSnapshot();
     await Promise.all([
@@ -1639,6 +1739,73 @@ export class RelayPolicyService {
     // An Availability workload runs the link from every placement node, one route each: the runtime is their sum.
     const routes = await this.managedLinkRoutes('managed_storage_binding', [bindingId]);
     return routes.length ? this.managedLinkRuntime(routes) : null;
+  }
+
+  /**
+   * Sets what the source daemon of one link route serves locally (its connector egress, and for a database link its
+   * host listener) without dropping the route's tunnels while one of them keeps serving. Delivering the grants is the
+   * caller's: the ACK of `syncNodeGrantBundle` reports the egress (egressStatuses).
+   */
+  setLinkRouteTransport(
+    ownerKind: 'managed_storage_binding' | 'managed_database_binding' | 'container_link',
+    ownerId: string,
+    sourceNodeId: string,
+    change: {
+      secureLinkEgress?: RelaySecureLinkEgressConfig | null;
+      managedDatabaseListener?: RelayManagedDatabaseListenerConfig | null;
+    }
+  ): Promise<{ routeId: string; generation: number } | null> {
+    return this.linkRoutes.setRouteTransport(ownerKind, ownerId, sourceNodeId, change);
+  }
+
+  /** What one link route from a node serves locally now (listener, connector egress), or null without a route. */
+  getLinkRouteTransport(
+    ownerKind: 'managed_storage_binding' | 'managed_database_binding' | 'container_link',
+    ownerId: string,
+    sourceNodeId: string
+  ) {
+    return this.linkRoutes.getRouteTransport(ownerKind, ownerId, sourceNodeId);
+  }
+
+  /** The relay endpoint of a container link (or of one target placement) on its target node. */
+  async ensureContainerLinkEndpoint(
+    ownerId: string,
+    targetNodeId: string
+  ): Promise<{ endpointId: string; formerTargetNodeId: string | null }> {
+    const result = await this.linkRoutes.ensureContainerLinkEndpoint(ownerId, targetNodeId);
+    await this.syncSnapshot();
+    await this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC);
+    return result;
+  }
+
+  /** The route of a container link from one source node to the endpoint that serves it for that node. */
+  ensureContainerLinkRoute(
+    linkId: string,
+    sourceNodeId: string,
+    endpointOwnerId: string,
+    secureLinkEgress: RelaySecureLinkEgressConfig
+  ): Promise<{ routeId: string; generation: number; targetNodeId: string }> {
+    return this.linkRoutes.ensureContainerLinkRoute(linkId, sourceNodeId, endpointOwnerId, secureLinkEgress);
+  }
+
+  revokeContainerLinkRoute(linkId: string, sourceNodeId: string): Promise<void> {
+    return this.linkRoutes.revokeContainerLinkRoute(linkId, sourceNodeId);
+  }
+
+  /** A container link's relay counters: the sum of its routes (one per source node). */
+  async getContainerLinkRouteRuntime(linkId: string): Promise<RelayRouteRuntime | null> {
+    const routes = await this.linkRoutes.containerLinkRoutes(linkId);
+    if (!routes.length) return null;
+    const results = await Promise.allSettled(routes.map((route) => this.relay.getRouteRuntime(route.id)));
+    const runtimes = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
+    if (!runtimes.length) throw (results[0] as PromiseRejectedResult).reason;
+    return runtimes.length === 1 ? relayRouteRuntime(runtimes[0]!) : sumRouteRuntimes(runtimes);
+  }
+
+  /** The source nodes a container link has routes from (its node and Availability placement nodes). */
+  async containerLinkSourceNodeIds(linkId: string): Promise<string[]> {
+    const routes = await this.linkRoutes.containerLinkRoutes(linkId);
+    return routes.filter((route) => route.ownerKind === CONTAINER_LINK_OWNER_KIND).map((route) => route.sourceId);
   }
 
   private managedLinkRoutes(ownerKind: 'managed_database_binding' | 'managed_storage_binding', ownerIds: string[]) {
@@ -1948,6 +2115,7 @@ export class RelayPolicyService {
       | 'managed_database_gateway'
       | 'managed_database'
       | 'proxy_host_secure_link'
+      | 'container_link'
       | RegistryRouteOwnerKind
       | 'internal_registry',
     ownerId: string,
@@ -1961,6 +2129,7 @@ export class RelayPolicyService {
       ownerKind === 'managed_database' ||
       ownerKind === 'managed_storage' ||
       ownerKind === 'proxy_host_secure_link' ||
+      ownerKind === 'container_link' ||
       ownerKind === 'internal_registry'
         ? this.db
             .select({ nodeId: relayEndpoints.subjectId })
@@ -1977,6 +2146,7 @@ export class RelayPolicyService {
         ownerKind === 'managed_database' ||
         ownerKind === 'managed_storage' ||
         ownerKind === 'proxy_host_secure_link' ||
+        ownerKind === 'container_link' ||
         ownerKind === 'internal_registry'
           ? await tx
               .delete(relayEndpoints)
@@ -2327,7 +2497,9 @@ export class RelayPolicyService {
     sourceId: string,
     sourceCertificateSha256: string,
     targetEndpointId: string,
-    managedDatabaseListener?: RelayManagedDatabaseListenerConfig
+    managedDatabaseListener?: RelayManagedDatabaseListenerConfig,
+    /** undefined keeps the route's connector egress. */
+    secureLinkEgress?: RelaySecureLinkEgressConfig | null
   ): Promise<string> {
     return this.db.transaction(async (tx) => {
       const [current] = await tx
@@ -2347,17 +2519,29 @@ export class RelayPolicyService {
             targetEndpointId,
             maxFrameBytes: RELAY_MAX_FRAME_BYTES,
             managedDatabaseListener,
+            secureLinkEgress: secureLinkEgress ?? null,
           })
           .returning({ id: relayRoutes.id });
         await bumpRelayPolicyRevision(tx);
         return created.id;
       }
+      const desiredEgress = secureLinkEgress === undefined ? (current.secureLinkEgress ?? null) : secureLinkEgress;
       const moved =
         current.sourceId !== sourceId ||
         current.sourceCertificateSha256 !== sourceCertificateSha256 ||
         current.targetEndpointId !== targetEndpointId ||
-        managedDatabaseListenerRestartRequired(current.managedDatabaseListener, managedDatabaseListener);
-      if (moved || !managedDatabaseListenerConfigsEqual(current.managedDatabaseListener, managedDatabaseListener)) {
+        routeTransportRestartRequired(
+          {
+            managedDatabaseListener: current.managedDatabaseListener ?? null,
+            secureLinkEgress: current.secureLinkEgress ?? null,
+          },
+          { managedDatabaseListener: managedDatabaseListener ?? null, secureLinkEgress: desiredEgress }
+        );
+      if (
+        moved ||
+        !managedDatabaseListenerConfigsEqual(current.managedDatabaseListener, managedDatabaseListener) ||
+        JSON.stringify(current.secureLinkEgress ?? null) !== JSON.stringify(desiredEgress)
+      ) {
         await tx
           .update(relayRoutes)
           .set({
@@ -2366,6 +2550,7 @@ export class RelayPolicyService {
             sourceCertificateSha256,
             targetEndpointId,
             managedDatabaseListener: managedDatabaseListener ?? null,
+            secureLinkEgress: desiredEgress,
             // Only the admitted workloads changed: the route keeps its tunnels (see managedDatabaseListenerRestartRequired).
             generation: moved ? current.generation + 1 : current.generation,
             updatedAt: new Date(),

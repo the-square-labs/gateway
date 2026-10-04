@@ -60,6 +60,12 @@ function withoutComposeLogging(composeYaml: Buffer | undefined, normalizedModelJ
 }
 
 /** The maintenance field of a route apply: sent only when Gateway knows the node keeps maintenance flags. */
+export {
+  parseRelayGrantEgressStatuses,
+  SECURE_LINK_EGRESS_CAPABILITY,
+  type SecureLinkEgressStatus,
+} from './secure-link-egress-status.js';
+
 function maintenanceFlagField(maintenance: boolean | undefined): { maintenance?: ProxyMaintenanceFlag } {
   if (maintenance === undefined) return {};
   return { maintenance: maintenance ? 'PROXY_MAINTENANCE_FLAG_ON' : 'PROXY_MAINTENANCE_FLAG_OFF' };
@@ -677,6 +683,7 @@ export class NodeDispatchService {
             schemaVersion: assignment.schemaVersion,
             candidates: assignment.candidates,
             managedDatabaseListener: assignment.managedDatabaseListener,
+            secureLinkEgress: assignment.secureLinkEgress,
           })),
           relayLatencyTargets: bundle.relayLatencyTargets ?? [],
           revocationFences: bundle.revocationFences ?? [],

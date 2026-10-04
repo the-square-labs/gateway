@@ -606,7 +606,9 @@ describe('RelayPolicyService route runtime', () => {
       'node-source',
       'sha256:source',
       'endpoint-1',
-      listener
+      listener,
+      // The connector egress of the route is kept as it is.
+      undefined
     );
   });
 

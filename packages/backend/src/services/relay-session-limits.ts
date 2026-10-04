@@ -16,9 +16,16 @@ export const MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS = 64;
 
 const MANAGED_LINK_ROUTE_OWNER_KINDS = new Set(['managed_database_binding', 'managed_storage_binding']);
 
+// A container link carries every connection of its consumer to one port of its target, whatever the protocol
+// (HTTP clients, connection pools, queues). It shares the proxy cap but not the proxy admission class.
+export const CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS = 1024;
+
 export function effectiveRelayMaxConcurrentSessions(owner: RelaySessionLimitOwner): number {
   if (owner.ownerKind === 'proxy_host_secure_link') {
     return Math.max(owner.maxConcurrentSessions, PROXY_RELAY_MAX_CONCURRENT_SESSIONS);
+  }
+  if (owner.ownerKind === 'container_link') {
+    return Math.max(owner.maxConcurrentSessions, CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS);
   }
   if (MANAGED_LINK_ROUTE_OWNER_KINDS.has(owner.ownerKind)) {
     return Math.max(owner.maxConcurrentSessions, MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS);
