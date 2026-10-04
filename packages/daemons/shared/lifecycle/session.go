@@ -253,7 +253,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	}
 	var grantSyncs *grantSyncWorker
 	if relayPlugin, ok := d.plugin.(RelayTunnelPlugin); ok {
-		grantSyncs = newGrantSyncWorker(sessionCtx, relayPlugin.SyncRelayGrants, func(result *pb.CommandResult) {
+		grantSyncs = newGrantSyncWorker(sessionCtx, &d.grantSyncs, relayPlugin.SyncRelayGrants, func(result *pb.CommandResult) {
 			sendAsyncResult(result, "relay grant sync result")
 		})
 	}

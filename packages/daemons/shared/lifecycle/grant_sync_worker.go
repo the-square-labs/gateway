@@ -11,18 +11,24 @@ import (
 // seconds (database link listeners, the connector's egress); run inline, it held every other command of the session
 // back, and Gateway's command timeouts expired one after the other (S6). Bundles that arrive while one is applied
 // collapse into the newest of them, and every one of those commands is answered with its result.
+//
+// Syncs never overlap, across sessions either (the grant store, the listener and egress reconciles and the relay lane
+// rebuild assume one caller): every worker of a daemon shares serial. A run of a session that ended finishes before
+// the next session's first one starts, and its results are not sent: the session that took them is gone, and
+// Gateway sends the bundle again on the new one.
 type grantSyncWorker struct {
-	ctx  context.Context
-	run  func(*pb.SyncRelayGrantsCommand) (string, error)
-	send func(*pb.CommandResult)
+	ctx    context.Context
+	serial *sync.Mutex
+	run    func(*pb.SyncRelayGrantsCommand) (string, error)
+	send   func(*pb.CommandResult)
 
 	mu      sync.Mutex
 	pending []*pb.GatewayCommand
 	running bool
 }
 
-func newGrantSyncWorker(ctx context.Context, run func(*pb.SyncRelayGrantsCommand) (string, error), send func(*pb.CommandResult)) *grantSyncWorker {
-	return &grantSyncWorker{ctx: ctx, run: run, send: send}
+func newGrantSyncWorker(ctx context.Context, serial *sync.Mutex, run func(*pb.SyncRelayGrantsCommand) (string, error), send func(*pb.CommandResult)) *grantSyncWorker {
+	return &grantSyncWorker{ctx: ctx, serial: serial, run: run, send: send}
 }
 
 // submit queues a grant sync command and returns at once.
@@ -47,7 +53,17 @@ func (w *grantSyncWorker) loop() {
 			return
 		}
 		w.mu.Unlock()
+		w.serial.Lock()
+		if w.ctx.Err() != nil {
+			// The session ended while this run waited for the previous one.
+			w.serial.Unlock()
+			continue
+		}
 		detail, err := w.run(newestGrantBundle(batch))
+		w.serial.Unlock()
+		if w.ctx.Err() != nil {
+			continue
+		}
 		for _, command := range batch {
 			result := &pb.CommandResult{CommandId: command.CommandId, Success: err == nil, Detail: detail}
 			if err != nil {
