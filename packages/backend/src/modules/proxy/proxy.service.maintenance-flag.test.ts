@@ -185,3 +185,40 @@ describe('Maintenance mode of a route whose config collides with the guard', () 
     });
   });
 });
+
+/** Evaluates an nginx map of `config` the way nginx does: the first matching regular expression gives the value. */
+function applyMap(config: string, variable: string, input: string): string {
+  const block = config.slice(config.indexOf(` ${variable} {`));
+  const rules = [...block.slice(0, block.indexOf('\n}')).matchAll(/"~(.+)" "(.*)";/g)];
+  for (const [, pattern, value] of rules) {
+    const match = new RegExp(pattern!).exec(input);
+    if (match) return value!.replace(/\$(\d)/g, (_, group: string) => match[Number(group)] ?? '');
+  }
+  return input;
+}
+
+describe('Maintenance access cookies on a node without maintenance flags', () => {
+  it('forwards the request cookies without the access cookies and without an empty or leading separator', () => {
+    const templates = new NginxTemplateService({} as never, {} as never, new ConfigValidatorService());
+    const config = templates.applyMaintenanceGuard(
+      'server {\n    listen 80;\n    location / { proxy_pass http://10.0.0.5; }\n}\n',
+      {
+        hostId: HOST_ID,
+        secret: 'route-secret',
+      }
+    );
+    const suffix = HOST_ID.replace(/-/g, '_');
+    const forward = (cookie: string) =>
+      applyMap(config, `$gm_cookie_${suffix}`, applyMap(config, `$gms_${suffix}`, cookie));
+    const sig = 'gateway_maintenance_access_sig=S1g';
+    const exp = 'gateway_maintenance_access_exp=1700000000';
+
+    expect(forward(`${sig}; ${exp}; mine=1`)).toBe('mine=1');
+    expect(forward(`${sig}; mine=1; ${exp}`)).toBe('mine=1');
+    expect(forward(`mine=1; ${sig}; ${exp}`)).toBe('mine=1');
+    expect(forward(`a=1; ${sig}; b=2; ${exp}; c=3`)).toBe('a=1; b=2; c=3');
+    expect(forward(`a=1;${sig};b=2;${exp}`)).toBe('a=1;b=2');
+    expect(forward(`${sig}; ${exp}`)).toBe('');
+    expect(forward('mine=1')).toBe('mine=1');
+  });
+});

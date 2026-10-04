@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -112,5 +113,38 @@ func (h *Handler) retainMaintenanceFlags(hostIDs []string) {
 		}
 		h.removeMaintenanceFlag(entry.Name())
 		h.logger.Info("maintenance flag of a route the node no longer serves removed", "host_id", entry.Name())
+	}
+}
+
+// ensureMaintenanceGuardMaps writes the shared maps of the flag-checked maintenance guard and reports whether nginx
+// must reload to use them. A first copy needs no reload of its own: only route configs Gateway renders for this
+// capability use the maps, and the reload that loads those configs loads them. A changed copy (a daemon update) is
+// loaded at once, since the routes already use the maps; one nginx does not accept is replaced by the copy before it.
+func (p *NginxPlugin) ensureMaintenanceGuardMaps(logger *slog.Logger) (reload bool) {
+	dir := p.cfg.Nginx.ConfigDir
+	previous, written, err := nginx.EnsureMaintenanceGuardConfig(dir)
+	if err != nil {
+		logger.Warn("maintenance guard maps are unavailable; maintenance changes reload nginx", "error", err)
+		p.maintenanceFlagsSupported = false
+		return false
+	}
+	if !written {
+		return false
+	}
+	valid, output := p.mgr.TestConfig()
+	switch {
+	case valid:
+		return previous != nil
+	case previous != nil:
+		if err := nginx.WriteAtomic(nginx.MaintenanceGuardConfigPath(dir), previous); err != nil {
+			logger.Warn("failed to restore the maintenance guard maps", "error", err)
+		}
+		logger.Warn("updated maintenance guard maps conflict with this node's nginx configuration; the previous maps stay", "output", output)
+		return false
+	default:
+		_ = nginx.RemoveFile(nginx.MaintenanceGuardConfigPath(dir))
+		logger.Warn("maintenance guard maps conflict with this node's nginx configuration; maintenance changes reload nginx", "output", output)
+		p.maintenanceFlagsSupported = false
+		return false
 	}
 }

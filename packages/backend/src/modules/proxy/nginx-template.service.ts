@@ -715,6 +715,15 @@ function maintenanceAccessVariable(hostId: string) {
   return hostId.replace(/-/g, '_');
 }
 
+/**
+ * Map rules that remove one cookie from a Cookie header with the separator that joined it to its neighbours, so no
+ * empty or leading `;` is left wherever it stood. Kept in step with maintenance_guard.go in the nginx daemon.
+ */
+function stripCookieRules(name: string) {
+  return `"~^${name}=[^;]*(?:;\\s*(.*))?$" "$1";
+    "~^(.*?);\\s*${name}=[^;]*(.*)$" "$1$2";`;
+}
+
 function maintenanceMaps(hostId: string) {
   const suffix = maintenanceAccessVariable(hostId);
   return `map "$uri:$secure_link" $gm_block_${suffix} {
@@ -733,12 +742,12 @@ map $secure_link $gm_active_${suffix} {
 
 map $http_cookie $gms_${suffix} {
     default $http_cookie;
-    "~^(.*)(?:^|;\\s*)gateway_maintenance_access_sig=[^;]*(;.*)?$" "$1$2";
+    ${stripCookieRules('gateway_maintenance_access_sig')}
 }
 
 map $gms_${suffix} $gm_cookie_${suffix} {
     default $gms_${suffix};
-    "~^(.*)(?:^|;\\s*)gateway_maintenance_access_exp=[^;]*(;.*)?$" "$1$2";
+    ${stripCookieRules('gateway_maintenance_access_exp')}
 }
 `;
 }
