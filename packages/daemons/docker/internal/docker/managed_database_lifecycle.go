@@ -64,6 +64,7 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	if record.OperationID == input.OperationID && !input.PreserveLifecycleOperationID {
 		return nil
 	}
+	keepAssignedHostPorts(*record, &input)
 	if input.StorageSizeBytes < record.StorageSize {
 		return errors.New("managed database storage cannot be reduced")
 	}
@@ -125,6 +126,21 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 	}
 	applyManagedDatabaseOperationID(record, input)
 	return nil
+}
+
+// keepAssignedHostPorts fills a published port the controller leaves to the
+// node (0) with the port the node already publishes it on. A controller that
+// has not stored the port yet (its create answer is still being settled) sends
+// 0; picking a new port then would replace the container and move its clients
+// to a port the controller does not know. A publication the node has no port
+// for yet still gets one picked when the container is created.
+func keepAssignedHostPorts(record managedDatabaseRecord, input *managedDatabaseCommand) {
+	if input.PublishTCP && input.PublishedPort == 0 {
+		input.PublishedPort = record.PublishedPort
+	}
+	if input.PublishNativeTCP && input.PublishedNativePort == 0 {
+		input.PublishedNativePort = record.PublishedNativePort
+	}
 }
 
 func applyManagedDatabaseOperationID(record *managedDatabaseRecord, input managedDatabaseCommand) {
@@ -367,6 +383,7 @@ func (m *managedDatabaseManager) restart(ctx context.Context, record *managedDat
 	if record.OperationID == input.OperationID {
 		return nil
 	}
+	keepAssignedHostPorts(*record, &input)
 	if err := m.ensureMounted(ctx, record); err != nil {
 		return err
 	}
@@ -460,8 +477,9 @@ func (m *managedDatabaseManager) recreateContainer(ctx context.Context, record *
 			}
 		}
 	}
-	// A disabled publication and an auto-assigned port must not inherit the
-	// previous host binding from the record.
+	// A disabled publication must not inherit the previous host binding from
+	// the record; a port left to the node arrives here as the one it already
+	// publishes (see keepAssignedHostPorts), or 0 when it has none.
 	record.ContainerID = ""
 	record.PublishedPort = input.PublishedPort
 	record.PublishedNativePort = input.PublishedNativePort
