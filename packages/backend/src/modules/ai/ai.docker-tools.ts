@@ -108,6 +108,7 @@ import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
 import { inspectConsoleCommand, parseConsoleCommandResult } from './ai.console-safety.js';
+import { manageContainerLinkForAgent } from './ai.container-link-tools.js';
 import { createDockerArchiveDownloadLink, createDockerArchiveUploadLink } from './ai.docker-archive-link.js';
 import { dockerArchiveTransferStore } from './ai.docker-archive-transfer.js';
 import { manageDockerAvailabilityTool } from './ai.docker-availability-tools.js';
@@ -166,6 +167,7 @@ export const DOCKER_TOOL_NAMES = new Set([
   'manage_docker_registry',
   'manage_docker_volume',
   'manage_docker_network',
+  'manage_container_link',
   'manage_docker_compose',
   'list_docker_builds',
   'manage_docker_build',
@@ -651,6 +653,8 @@ export async function executeDockerTool(
       return manageDockerVolume(context, user, args);
     case 'manage_docker_network':
       return manageDockerNetworkForAgent(context.dockerService, user, args);
+    case 'manage_container_link':
+      return manageContainerLinkForAgent(user, args);
     case 'manage_docker_compose':
       return manageDockerCompose(context, user, args);
     case 'list_docker_builds':

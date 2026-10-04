@@ -772,6 +772,47 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
     invalidateStores: [],
   },
   {
+    name: 'manage_container_link',
+    description:
+      "Private TCP links between workloads (container links): a consumer (container, deployment or Compose service) reaches one port of a target workload as alias:port on its own internal link network, through the shared secure-link connector on both nodes (no relay hop when both run on the same node). The target needs no published port and no route, cannot reach the consumer, and other containers get nothing. operation: list (the links of a workload: nodeId, type, resourceId; direction outgoing = the links it starts, incoming = the links that reach it), create (sourceNodeId/sourceType/sourceResourceId, targetNodeId/targetType/targetResourceId, targetPort; optional alias, a DNS label defaulting to the target's name, and environment {host, port, url} variable names: setting any recreates the consumer once, otherwise a container joins live, a deployment joins its running slots and a Compose service gets a revision), get_runtime (linkId: the link and its relay counters), delete (linkId). A container is named by its name, a deployment by its id, a Compose service as '<projectId>:<url-encoded service>'. Status: ready, pending (the consumer takes it on its next start or rollout), waiting (the target does not run; connections are refused until it does), update_required (a node's Docker daemon lacks secure_link_egress_v1), error (lastError says why, e.g. a port an Availability deployment does not route). Needs docker:containers:edit on the consumer (docker:compose:manage for a Compose service), docker:containers:environment when it sets variables, and docker:containers:link on the target (docker:compose:manage for a Compose service); listing and the runtime need view access to that end. Creating needs a Personal plan or higher; existing links stay readable and removable.",
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['list', 'create', 'get_runtime', 'delete'] },
+        nodeId: { type: 'string', description: 'list: the node of the workload' },
+        type: {
+          type: 'string',
+          enum: ['container', 'deployment', 'compose_service'],
+          description: 'list: workload type',
+        },
+        resourceId: {
+          type: 'string',
+          description: "list: container name, deployment id, or '<projectId>:<service>' of a Compose service",
+        },
+        direction: { type: 'string', enum: ['outgoing', 'incoming'], description: 'list: default outgoing' },
+        linkId: { type: 'string', description: 'get_runtime/delete: the container link id' },
+        sourceNodeId: { type: 'string' },
+        sourceType: { type: 'string', enum: ['container', 'deployment', 'compose_service'] },
+        sourceResourceId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
+        targetNodeId: { type: 'string' },
+        targetType: { type: 'string', enum: ['container', 'deployment', 'compose_service'] },
+        targetResourceId: { type: 'string' },
+        targetPort: { type: 'number', description: 'The port the target listens on (its container port)' },
+        alias: { type: 'string', description: 'DNS label the consumer reaches the target by' },
+        environment: {
+          type: 'object',
+          description: 'Variable names for the consumer: host (the alias), port, url (http://alias:port)',
+          properties: { host: { type: 'string' }, port: { type: 'string' }, url: { type: 'string' } },
+        },
+      },
+      required: ['operation'],
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'docker:containers:view',
+    invalidateStores: [],
+  },
+  {
     name: 'manage_docker_compose',
     description:
       'Inspect and manage first-class single-node Docker Compose Projects. Supports discovery, validation, create/adopt/delete, immutable revisions, lifecycle operations, operation history, project secrets, and recent service logs (logs, optionally one serviceName). Managed mutations require the Compose entitlement and exact docker:compose resource scopes. While a Git-source build rollout owns a project, revision, secret, and lifecycle changes are refused with 409 BUILD_ROLLOUT_IN_PROGRESS until it finishes. operation_start pull_apply applies a revision with the managed database links that exist when it runs: links deleted since the revision was built are left out (their variables, secrets and network), links the project runs are kept and links saved pending are added when the revision defines their service. When that changes the revision, a copy of it is applied (the operation names that revision); it is refused when it lacks the service of a link the project runs.',

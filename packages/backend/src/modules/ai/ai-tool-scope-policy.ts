@@ -163,6 +163,14 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'integrations:ssh:manage',
   ],
   manage_docker_network: ['docker:networks:create', 'docker:networks:edit', 'docker:networks:delete'],
+  // Consumer side (edit, compose manage), target side (link) or either end's view for list and runtime.
+  manage_container_link: [
+    'docker:containers:view',
+    'docker:compose:view',
+    'docker:containers:edit',
+    'docker:compose:manage',
+    'docker:containers:link',
+  ],
   manage_docker_deployment: ['docker:containers:create', 'docker:containers:edit', 'docker:containers:delete'],
   manage_docker_container_config: [
     'docker:containers:view',

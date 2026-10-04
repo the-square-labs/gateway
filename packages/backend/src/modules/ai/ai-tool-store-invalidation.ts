@@ -61,6 +61,8 @@ export function resolveToolStoreInvalidations(
     stores.add('dockerRegistries');
   } else if (toolName === 'manage_docker_volume') {
     stores.add('volumes');
+  } else if (toolName === 'manage_container_link') {
+    if (operation === 'create' || operation === 'delete') stores.add('containers');
   } else if (toolName === 'manage_docker_network') {
     stores.add('networks');
     if (operation === 'connect' || operation === 'disconnect') stores.add('containers');

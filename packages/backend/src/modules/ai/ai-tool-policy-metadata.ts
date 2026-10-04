@@ -155,6 +155,12 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     ],
     delete: ['delete', 'delete_file', 'upload_abort'],
   }),
+  // Creating a link changes its consumer (a network joins it, variables recreate it); deleting takes the path away.
+  manage_container_link: operationPolicies({
+    read: ['list', 'get_runtime'],
+    create: ['create'],
+    delete: ['delete'],
+  }),
   manage_docker_network: operationPolicies({
     create: ['create'],
     delete: ['delete', 'disconnect'],

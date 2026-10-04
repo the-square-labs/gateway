@@ -31,6 +31,7 @@ export const FOLDER_ACCESS_LIST_TOOLS: ReadonlySet<string> = new Set([
   'list_nodes',
   'manage_ingress_group',
   'manage_docker_compose',
+  'manage_container_link',
   'manage_managed_database',
   'manage_managed_storage',
   'manage_pages',

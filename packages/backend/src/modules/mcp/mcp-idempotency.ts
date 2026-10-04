@@ -38,6 +38,7 @@ export const MCP_IDEMPOTENT_CREATE_TOOLS: Readonly<Record<string, McpIdempotentT
   manage_docker_source: { operationField: 'operation', operations: ['create'] },
   manage_docker_volume: { operationField: 'operation', operations: ['create'] },
   manage_docker_network: { operationField: 'operation', operations: ['create'] },
+  manage_container_link: { operationField: 'operation', operations: ['create'] },
   manage_docker_registry: { operationField: 'operation', operations: ['create'] },
   create_route: {},
   create_route_folder: {},
