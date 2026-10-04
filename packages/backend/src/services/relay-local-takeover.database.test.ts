@@ -14,7 +14,11 @@ import {
   relayInstances,
   relayRoutes,
 } from '@/db/schema/index.js';
-import { localRelayTakeoverBlocker, waitForLocalRelayEvacuation } from './relay-local-takeover.js';
+import {
+  LOCAL_RELAY_DRAIN_CAPABILITY,
+  localRelayTakeoverBlocker,
+  waitForLocalRelayEvacuation,
+} from './relay-local-takeover.js';
 import { RelayPoolService } from './relay-pool.service.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
@@ -62,7 +66,12 @@ describe.skipIf(!url)('local relay takeover during a Relay Pool update', () => {
       )[0]!.id;
     await db
       .update(relayInstances)
-      .set({ state: 'ready', manualDrainStartedAt: null, drainForcedAt: null })
+      .set({
+        state: 'ready',
+        manualDrainStartedAt: null,
+        drainForcedAt: null,
+        capabilities: { protocolMajor: 1, features: ['relay_pool_v1', LOCAL_RELAY_DRAIN_CAPABILITY] },
+      })
       .where(eq(relayInstances.id, localId));
     const [node] = await db
       .insert(nodes)
@@ -91,7 +100,7 @@ describe.skipIf(!url)('local relay takeover during a Relay Pool update', () => {
       .values({
         ownerKind,
         ownerId: randomUUID(),
-        subjectKind: 'node',
+        subjectKind: ownerKind === 'internal_registry' ? 'local_service' : 'node',
         subjectId: randomUUID(),
         certificateSha256: `sha256:${'b'.repeat(64)}`,
       })
@@ -131,9 +140,9 @@ describe.skipIf(!url)('local relay takeover during a Relay Pool update', () => {
       localId
     );
 
-  it('lets a ready, connected remote relay take over the local relay workloads', async () => {
+  it('lets a ready, connected remote relay take over the local relay workloads; the registry stays', async () => {
     await localWorkload('managed_database');
-    await localWorkload('internal_registry', false);
+    await localWorkload('internal_registry');
 
     await expect(blocker()).resolves.toBeNull();
   });
@@ -142,8 +151,16 @@ describe.skipIf(!url)('local relay takeover during a Relay Pool update', () => {
     const { endpointId } = await localWorkload('managed_database');
     await expect(blocker([endpointId])).resolves.toContain('without Relay Pool support');
     await expect(blocker([], [endpointId])).resolves.toContain('reach no relay outside the Gateway host');
-    await localWorkload('internal_registry');
-    await expect(blocker()).resolves.toContain('internal registry');
+  });
+
+  it('does not drain a local relay that would refuse internal registry tunnels while it drains', async () => {
+    await localWorkload('managed_database');
+    await db
+      .update(relayInstances)
+      .set({ capabilities: { protocolMajor: 1, features: ['relay_pool_v1'] } })
+      .where(eq(relayInstances.id, localId));
+
+    await expect(blocker()).resolves.toContain('cannot keep serving the internal registry while it drains');
   });
 
   it('finds no takeover without a connected remote relay that holds a valid policy', async () => {
@@ -156,6 +173,7 @@ describe.skipIf(!url)('local relay takeover during a Relay Pool update', () => {
   });
 
   it('waits until the drained local relay no longer carries a workload with a route', async () => {
+    await localWorkload('internal_registry');
     const { generationId } = await localWorkload('managed_database');
     await expect(waitForLocalRelayEvacuation(db, localId, 0, () => undefined)).resolves.toBe(false);
     await db

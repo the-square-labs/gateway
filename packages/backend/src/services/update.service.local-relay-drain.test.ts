@@ -4,7 +4,11 @@ import type { TrustedRelayUpdateArtifact } from '@/lib/update-artifact-trust.js'
 import { waitForLocalRelayEvacuation } from './relay-local-takeover.js';
 import { UpdateService } from './update.service.js';
 
-vi.mock('./relay-local-takeover.js', () => ({ waitForLocalRelayEvacuation: vi.fn() }));
+vi.mock('./relay-local-takeover.js', () => ({
+  waitForLocalRelayEvacuation: vi.fn(),
+  localServiceEndpointIds: vi.fn(async () => new Set(['endpoint-registry'])),
+  drainingTunnels: vi.fn(() => 0),
+}));
 
 const MIGRATED = {
   exitCode: 0,
@@ -168,7 +172,7 @@ describe('The local relay step of a Relay Pool update', () => {
   });
 
   it('drains the local relay while another relay carries its workloads, recreates it, verifies and resumes it', async () => {
-    const { service, dockerService, runtime, state, verify } = localStepPool(null);
+    const { service, dockerService, runtime, state, verify, drainWait } = localStepPool(null);
     const events: string[] = [];
     runtime.drainInstance.mockImplementation(
       async (_id: string, _user: string, enabled: boolean) => void events.push(enabled ? 'drain' : 'resume')
@@ -191,6 +195,9 @@ describe('The local relay step of a Relay Pool update', () => {
     expect(runtime.drainInstance).toHaveBeenNthCalledWith(1, 'local', 'admin-1', true);
     expect(runtime.drainInstance).toHaveBeenLastCalledWith('local', 'admin-1', false);
     expect(verify).toHaveBeenCalledWith('local', 'v2.4.3', expect.any(AbortSignal));
+    // The internal registry stays on the local relay and keeps being served: its tunnels need not end.
+    const kept = new Set(['endpoint-registry']);
+    expect(drainWait).toHaveBeenCalledWith('local', 30 * 60_000, expect.any(AbortSignal), kept);
     expect(state).toMatchObject({ run: 'complete', step: 'ready', stepError: null });
     expect(state.drainDeadlineAt).toBeInstanceOf(Date);
   });

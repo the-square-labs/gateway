@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   relayEndpointAssignmentGenerations,
@@ -15,16 +15,26 @@ import type { RelayPolicyService } from './relay-policy.service.js';
  * A Relay Pool update recreates the local Compose relay last. When another relay can carry the local relay's
  * workloads, the update drains it like a remote relay first, so its sessions move instead of dropping when the
  * container is recreated. Only the update drains the local relay; an operator cannot.
+ *
+ * Built-in local services (the internal registry, subject kind `local_service`) are served only by the local relay.
+ * A relay that advertises LOCAL_RELAY_DRAIN_CAPABILITY keeps admitting their tunnels while it drains, so they neither
+ * move nor count toward the drain; an older relay refuses them too, and is not drained.
  */
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
 
+/** The relay refuses only workload tunnels while it drains and keeps serving its built-in local services. */
+export const LOCAL_RELAY_DRAIN_CAPABILITY = 'drain_keeps_local_services_v1';
+const LOCAL_SERVICE_SUBJECT_KIND = 'local_service';
 const EVACUATION_POLL_MS = 2_000;
 
-/** The workloads the local relay carries sessions for: endpoints of its active assignments that some route targets. */
+/**
+ * The workloads the local relay carries sessions for: endpoints of its active assignments that some route targets,
+ * built-in local services aside.
+ */
 async function localRelayRoutedEndpoints(db: DrizzleClient, localInstanceId: string) {
   const assigned = await db
-    .selectDistinct({ id: relayEndpoints.id, ownerKind: relayEndpoints.ownerKind })
+    .selectDistinct({ id: relayEndpoints.id })
     .from(relayEndpointAssignments)
     .innerJoin(
       relayEndpointAssignmentGenerations,
@@ -35,7 +45,8 @@ async function localRelayRoutedEndpoints(db: DrizzleClient, localInstanceId: str
       and(
         eq(relayEndpointAssignments.relayInstanceId, localInstanceId),
         eq(relayEndpointAssignmentGenerations.state, 'active'),
-        eq(relayEndpoints.status, 'active')
+        eq(relayEndpoints.status, 'active'),
+        ne(relayEndpoints.subjectKind, LOCAL_SERVICE_SUBJECT_KIND)
       )
     );
   if (!assigned.length) return [];
@@ -53,11 +64,12 @@ async function localRelayRoutedEndpoints(db: DrizzleClient, localInstanceId: str
 }
 
 /**
- * Why no other relay can carry the local relay's workloads while an update recreates it, or null when one can: a
- * connected remote relay is ready with a valid policy (every pool member is its own fault domain), and every workload
- * with a route can move to it. The internal registry and paths with a daemon without Relay Pool support are served
- * only by the local relay, and a workload whose node reaches no relay off the Gateway host cannot move; a drain would
- * refuse their new sessions for the whole drain instead of dropping the open ones for a second.
+ * Why no other relay can carry the local relay's workloads while an update recreates it, or null when one can: the
+ * running local relay keeps its built-in local services through a drain, a connected remote relay is ready with a
+ * valid policy (every pool member is its own fault domain), and every workload with a route can move to it. Paths
+ * with a daemon without Relay Pool support are served only by the local relay, and a workload whose node reaches no
+ * relay off the Gateway host cannot move; a drain would refuse their new sessions for the whole drain instead of
+ * dropping the open ones for a second.
  */
 export async function localRelayTakeoverBlocker(
   db: DrizzleClient,
@@ -68,6 +80,9 @@ export async function localRelayTakeoverBlocker(
 ): Promise<string | null> {
   const local = pool.instances.find(({ id }) => id === localInstanceId);
   if (!local) return 'the local relay is not in the Relay Pool';
+  if (!local.capabilities?.features?.includes(LOCAL_RELAY_DRAIN_CAPABILITY)) {
+    return 'the running local relay cannot keep serving the internal registry while it drains (it can from the next update on)';
+  }
   const takeover = pool.instances.some(
     (instance) =>
       instance.kind === 'remote' &&
@@ -78,9 +93,6 @@ export async function localRelayTakeoverBlocker(
   );
   if (!takeover) return 'no other relay was ready to take its workloads over';
   const endpoints = await localRelayRoutedEndpoints(db, local.id);
-  if (endpoints.some(({ ownerKind }) => ownerKind === 'internal_registry')) {
-    return 'nodes pull images from the internal registry through it, and only the local relay serves the registry';
-  }
   const endpointIds = endpoints.map(({ id }) => id);
   const legacy = endpointIds.length ? await policy.poolIncapableEndpointIds(endpointIds) : new Set<string>();
   if (legacy.size) {
@@ -89,6 +101,28 @@ export async function localRelayTakeoverBlocker(
   const hostOnly = endpointIds.filter((id) => pool.gatewayHostOnlyEndpointIds.has(id)).length;
   if (hostOnly) return `${hostOnly} workload(s) reach no relay outside the Gateway host`;
   return null;
+}
+
+/** Endpoints of the built-in local services, whose tunnels a draining local relay keeps admitting. */
+export async function localServiceEndpointIds(db: DrizzleClient): Promise<Set<string>> {
+  const rows = await db
+    .select({ id: relayEndpoints.id })
+    .from(relayEndpoints)
+    .where(eq(relayEndpoints.subjectKind, LOCAL_SERVICE_SUBJECT_KIND));
+  return new Set(rows.map(({ id }) => id));
+}
+
+/** A drained relay's tunnels that still have to end: all of them but those to the `kept` endpoints. */
+export function drainingTunnels(
+  health: { activeTunnels?: number; assignmentTunnels?: Array<{ endpointId: string; activeTunnels: number }> } | null,
+  kept?: ReadonlySet<string>
+): number {
+  const total = Number(health?.activeTunnels ?? 0);
+  if (!kept?.size) return total;
+  const keptTunnels = (health?.assignmentTunnels ?? [])
+    .filter(({ endpointId }) => kept.has(endpointId))
+    .reduce((sum, { activeTunnels }) => sum + Number(activeTunnels), 0);
+  return Math.max(0, total - keptTunnels);
 }
 
 /**

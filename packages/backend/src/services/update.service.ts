@@ -33,7 +33,7 @@ import {
   waitForOrchestrationIdle,
 } from './orchestration-activity.js';
 import { saveInstalledRelayArtifact } from './relay-installed-artifact.js';
-import { waitForLocalRelayEvacuation } from './relay-local-takeover.js';
+import { drainingTunnels, localServiceEndpointIds, waitForLocalRelayEvacuation } from './relay-local-takeover.js';
 
 const logger = createChildLogger('UpdateService');
 export const DOCKER_COMPOSE_CLI_IMAGE_REF =
@@ -1409,7 +1409,11 @@ chmod 700 "$backup"
               drainedInstanceId = instance.id;
               interruption = await this.drainLocalRelay(runtime, instance.id, userId, signal);
               if (interruption) drainedInstanceId = null;
-              else await this.waitForUpdateDrain(runtime, instance, userId, signal);
+              else {
+                // The internal registry stays on the local relay, which keeps serving it through the drain.
+                const kept = await localServiceEndpointIds(this.db);
+                await this.waitForUpdateDrain(runtime, instance, userId, signal, kept);
+              }
               throwIfAbandoned();
             }
             await this.updatePoolStep(step.id, 'updating');
@@ -1526,21 +1530,29 @@ chmod 700 "$backup"
   /**
    * Long-lived streams (a database pool, a WebSocket) may never end on their own. After the grace they are
    * disconnected, as a manual drain does after its own, and the update goes on: the restart would end them anyway,
-   * and a run that waited for an operator kept the relay out of the pool meanwhile.
+   * and a run that waited for an operator kept the relay out of the pool meanwhile. `kept`: endpoints whose tunnels
+   * the relay keeps admitting through the drain, which need not end.
    */
   private async waitForUpdateDrain(
     runtime: RelayPoolUpdateRuntime,
     instance: typeof relayInstances.$inferSelect,
     userId: string | null,
-    signal: AbortSignal
+    signal: AbortSignal,
+    kept?: ReadonlySet<string>
   ): Promise<void> {
-    if (await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_DRAIN_GRACE_MS, signal)) return;
+    if (await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_DRAIN_GRACE_MS, signal, kept)) return;
     logger.warn('Relay drain grace ended with active streams; disconnecting them to continue the update', {
       relayInstanceId: instance.id,
       relay: instance.displayName,
     });
     await runtime.forceDisconnectInstance(instance.id, userId);
-    if (!(await this.waitForRelayInstanceDrain(instance.id, RELAY_UPDATE_FORCED_DRAIN_SETTLE_MS, signal))) {
+    const settled = await this.waitForRelayInstanceDrain(
+      instance.id,
+      RELAY_UPDATE_FORCED_DRAIN_SETTLE_MS,
+      signal,
+      kept
+    );
+    if (!settled) {
       logger.warn('Relay still reports streams after the forced disconnect; its update ends them', {
         relayInstanceId: instance.id,
       });
@@ -1877,21 +1889,23 @@ exit 1`,
     return instance.capabilities?.architecture || 'amd64';
   }
 
+  /** `keptEndpointIds`: endpoints whose tunnels the draining relay keeps admitting, which do not have to end. */
   private async waitForRelayInstanceDrain(
     instanceId: string,
     timeoutMs: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    keptEndpointIds?: ReadonlySet<string>
   ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new RelayPoolUpdateAbandonedError();
       const [instance] = await this.db
-        .select({ activeTunnels: relayInstances.health })
+        .select({ health: relayInstances.health })
         .from(relayInstances)
         .where(eq(relayInstances.id, instanceId))
         .limit(1);
       if (!instance) throw new Error(`Relay instance ${instanceId} disappeared while draining`);
-      if (Number(instance.activeTunnels?.activeTunnels ?? 0) === 0) return true;
+      if (drainingTunnels(instance.health, keptEndpointIds) === 0) return true;
       await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
     return false;
