@@ -930,12 +930,15 @@ export class RelayPoolService {
       .orderBy(desc(relayPoolUpdateRuns.startedAt))
       .limit(1);
     const updateRun = latestUpdateRun?.state === 'complete' ? undefined : latestUpdateRun;
-    const updateSteps = updateRun
-      ? await this.db
-          .select()
-          .from(relayPoolUpdateSteps)
-          .where(eq(relayPoolUpdateSteps.runId, updateRun.id))
-          .orderBy(relayPoolUpdateSteps.sequence)
+    // A completed run still shows the members it skipped (not connected), until a later run updates them.
+    const updateSteps = latestUpdateRun
+      ? (
+          await this.db
+            .select()
+            .from(relayPoolUpdateSteps)
+            .where(eq(relayPoolUpdateSteps.runId, latestUpdateRun.id))
+            .orderBy(relayPoolUpdateSteps.sequence)
+        ).filter((step) => updateRun || step.state === 'skipped')
       : [];
     const updateStepByInstance = new Map(updateSteps.map((step) => [step.relayInstanceId, step]));
     const attempts = await this.getRecentAttempts();

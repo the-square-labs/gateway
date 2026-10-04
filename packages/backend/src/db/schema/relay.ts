@@ -61,6 +61,8 @@ export const relayPoolUpdateStepStateEnum = pgEnum('relay_pool_update_step_state
   'rolling_back',
   'rolled_back',
   'failed',
+  // A member that was not connected; a later run updates it once it reconnects.
+  'skipped',
 ]);
 
 export interface RelayInstanceCapabilities {

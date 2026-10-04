@@ -189,11 +189,16 @@ export interface RelayPoolUpdateRuntime {
   awaitLeasePeers?(relayInstanceId: string, signal: AbortSignal): Promise<void>;
   /** After the relay restarted at `since`: waits (bounded) until it reports a lease acceptor that votes again. */
   awaitLeaseSettled?(relayInstanceId: string, since: number, signal: AbortSignal): Promise<void>;
+  /** Whether the remote relay of this node is connected now; an offline member is skipped, not waited for. */
+  isRelayConnected?(nodeId: string): boolean;
   prepareWorkerUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
   dispatchWorkerUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
   prepareSupervisorUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
   dispatchSupervisorUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
 }
+
+/** The note of a member a Relay Pool update skipped. */
+export const RELAY_UPDATE_SKIPPED_OFFLINE = 'Skipped: the relay is not connected; it is updated when it reconnects';
 
 /** First relay release whose shutdown drains for at most 5 s while it keeps serving its tunnels. */
 const RELAY_BOUNDED_DRAIN_VERSION = 'v2.11.0-rc.7';
@@ -500,7 +505,7 @@ export class UpdateService {
       latestRelayVersion != null &&
       relayMinGatewayVersion != null &&
       isGatewayCompatibleWithRelayUpdate(currentVersion, relayMinGatewayVersion) &&
-      isNewerVersion(latestRelayVersion, currentRelayVersion);
+      (isNewerVersion(latestRelayVersion, currentRelayVersion) || (await this.remoteRelayBehind(latestRelayVersion)));
     const updateAvailable =
       gatewayUpdateAvailable &&
       latestVersion != null &&
@@ -1450,12 +1455,28 @@ chmod 700 "$backup"
           currentStepId = null;
           continue;
         }
+        // A member that is not connected (its host is down) does not hold the pool's update: it is skipped and
+        // updated by the next run once it reconnects. Nothing of it can be drained or verified meanwhile.
+        if (runtime.isRelayConnected && !runtime.isRelayConnected(instance.nodeId)) {
+          await this.skipPoolStep(step.id);
+          currentStepId = null;
+          continue;
+        }
         // A voter or candidate of the relay's lease policies that is restarting or settling goes first.
         await runtime.awaitLeasePeers?.(instance.id, signal);
         throwIfAbandoned();
         await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + RELAY_UPDATE_DRAIN_GRACE_MS));
         drainedInstanceId = instance.id;
-        await runtime.drainInstance(instance.id, userId, true);
+        try {
+          await runtime.drainInstance(instance.id, userId, true);
+        } catch (error) {
+          // Disconnected since the check: the drain was refused before it took the relay out of service.
+          if (!(error instanceof AppError && error.code === 'RELAY_NOT_CONNECTED')) throw error;
+          drainedInstanceId = null;
+          await this.skipPoolStep(step.id);
+          currentStepId = null;
+          continue;
+        }
         await this.waitForUpdateDrain(runtime, instance, userId, signal);
         throwIfAbandoned();
         await this.updatePoolStep(step.id, 'updating');
@@ -1785,7 +1806,9 @@ exit 1`,
     const readyFaultDomains = new Set(
       instances.filter(({ state }) => state === 'ready').map(({ faultDomainId }) => faultDomainId)
     );
-    if (instances.length > 1 && readyFaultDomains.size < 2) {
+    // A member that is offline is skipped by the run, so it neither needs nor provides capacity for the others.
+    const live = instances.filter(({ state }) => state !== 'offline');
+    if (live.length > 1 && readyFaultDomains.size < 2) {
       throw new AppError(409, 'RELAY_UPDATE_CAPACITY_UNAVAILABLE', 'Two ready relay fault domains are required');
     }
     const [run] = await tx
@@ -1821,6 +1844,40 @@ exit 1`,
       }))
     );
     return run;
+  }
+
+  /**
+   * A connected remote relay runs an older release than the latest one: a member an earlier run skipped while it was
+   * offline. The update is offered again for it (the local relay and members on the target are left as they are).
+   */
+  private async remoteRelayBehind(latestRelayVersion: string): Promise<boolean> {
+    let rows: Array<{ state: string; buildVersion: string | null }>;
+    try {
+      rows = await this.db
+        .select({ state: relayInstances.state, buildVersion: relayInstances.buildVersion })
+        .from(relayInstances)
+        .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.kind, 'remote')));
+    } catch {
+      return false;
+    }
+    return rows.some(
+      ({ state, buildVersion }) =>
+        state !== 'offline' && Boolean(buildVersion) && isNewerVersion(latestRelayVersion, buildVersion!)
+    );
+  }
+
+  /** A member skipped because it is not connected; the run completes without it and a later run updates it. */
+  private async skipPoolStep(stepId: string): Promise<void> {
+    logger.warn('Relay Pool update skips a relay that is not connected', { stepId });
+    await this.db
+      .update(relayPoolUpdateSteps)
+      .set({
+        state: 'skipped',
+        completedAt: new Date(),
+        error: RELAY_UPDATE_SKIPPED_OFFLINE,
+        updatedAt: new Date(),
+      })
+      .where(eq(relayPoolUpdateSteps.id, stepId));
   }
 
   /** `note`: what the step could not avoid, such as interrupted sessions, kept on a step that completed. */
