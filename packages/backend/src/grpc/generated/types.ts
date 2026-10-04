@@ -276,6 +276,8 @@ export interface ManagedLinkRuntime {
   openedTotal: string;
   sourceToTargetBytes: string;
   targetToSourceBytes: string;
+  /** uint64 as string (proto-loader): the sessions of openedTotal that ended (an active one is not). */
+  completedTotal?: string;
 }
 
 export interface StatsReport {

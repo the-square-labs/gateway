@@ -1603,8 +1603,10 @@ type ManagedLinkRuntime struct {
 	OpenedTotal         uint64 `protobuf:"varint,8,opt,name=opened_total,json=openedTotal,proto3" json:"opened_total,omitempty"`
 	SourceToTargetBytes uint64 `protobuf:"varint,9,opt,name=source_to_target_bytes,json=sourceToTargetBytes,proto3" json:"source_to_target_bytes,omitempty"`
 	TargetToSourceBytes uint64 `protobuf:"varint,10,opt,name=target_to_source_bytes,json=targetToSourceBytes,proto3" json:"target_to_source_bytes,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// The sessions of opened_total that ended (an active session is not one).
+	CompletedTotal uint64 `protobuf:"varint,11,opt,name=completed_total,json=completedTotal,proto3" json:"completed_total,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ManagedLinkRuntime) Reset() {
@@ -1703,6 +1705,13 @@ func (x *ManagedLinkRuntime) GetSourceToTargetBytes() uint64 {
 func (x *ManagedLinkRuntime) GetTargetToSourceBytes() uint64 {
 	if x != nil {
 		return x.TargetToSourceBytes
+	}
+	return 0
+}
+
+func (x *ManagedLinkRuntime) GetCompletedTotal() uint64 {
+	if x != nil {
+		return x.CompletedTotal
 	}
 	return 0
 }
@@ -12687,7 +12696,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x0econfig_applied\x18\x05 \x01(\bR\rconfigApplied\x12.\n" +
 	"\x13secure_link_sources\x18\x06 \x01(\rR\x11secureLinkSources\x126\n" +
 	"\x17usable_relay_transports\x18\a \x01(\rR\x15usableRelayTransports\x12+\n" +
-	"\x12checked_at_unix_ms\x18\b \x01(\x03R\x0fcheckedAtUnixMs\"\xc8\x03\n" +
+	"\x12checked_at_unix_ms\x18\b \x01(\x03R\x0fcheckedAtUnixMs\"\xf1\x03\n" +
 	"\x12ManagedLinkRuntime\x12\x1d\n" +
 	"\n" +
 	"owner_kind\x18\x01 \x01(\tR\townerKind\x12\x19\n" +
@@ -12700,7 +12709,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\fopened_total\x18\b \x01(\x04R\vopenedTotal\x123\n" +
 	"\x16source_to_target_bytes\x18\t \x01(\x04R\x13sourceToTargetBytes\x123\n" +
 	"\x16target_to_source_bytes\x18\n" +
-	" \x01(\x04R\x13targetToSourceBytes\"_\n" +
+	" \x01(\x04R\x13targetToSourceBytes\x12'\n" +
+	"\x0fcompleted_total\x18\v \x01(\x04R\x0ecompletedTotal\"_\n" +
 	"\x12RelayLatencySample\x12*\n" +
 	"\x11relay_instance_id\x18\x01 \x01(\tR\x0frelayInstanceId\x12\x1d\n" +
 	"\n" +

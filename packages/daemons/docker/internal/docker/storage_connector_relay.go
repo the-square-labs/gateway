@@ -160,6 +160,7 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 	// Tracked so a restart lets the request in flight finish (link_listener_handover.go).
 	flow, done := p.linkFlows.track(connection)
 	defer done()
+	defer p.linkTraffic.completed(link)
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 

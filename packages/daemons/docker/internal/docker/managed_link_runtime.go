@@ -64,6 +64,7 @@ type linkTraffic struct {
 
 type linkTrafficCounts struct {
 	opened         atomic.Uint64
+	completed      atomic.Uint64
 	sourceToTarget atomic.Uint64
 	targetToSource atomic.Uint64
 }
@@ -84,6 +85,16 @@ func (t *linkTraffic) carry(link linkKey, connection net.Conn) net.Conn {
 	return &linkCountedConn{Conn: connection, counts: counts}
 }
 
+// completed counts a session of link that ended: call it once the session carry returned closed.
+func (t *linkTraffic) completed(link linkKey) {
+	t.mu.Lock()
+	counts := t.links[link]
+	t.mu.Unlock()
+	if counts != nil {
+		counts.completed.Add(1)
+	}
+}
+
 // counts returns what the links in keep carried and forgets every other link (a link that left the node).
 func (t *linkTraffic) counts(keep map[linkKey]struct{}) map[linkKey]*pb.ManagedLinkRuntime {
 	t.mu.Lock()
@@ -94,7 +105,7 @@ func (t *linkTraffic) counts(keep map[linkKey]struct{}) map[linkKey]*pb.ManagedL
 			delete(t.links, link)
 			continue
 		}
-		result[link] = &pb.ManagedLinkRuntime{OpenedTotal: counts.opened.Load(),
+		result[link] = &pb.ManagedLinkRuntime{OpenedTotal: counts.opened.Load(), CompletedTotal: counts.completed.Load(),
 			SourceToTargetBytes: counts.sourceToTarget.Load(), TargetToSourceBytes: counts.targetToSource.Load()}
 	}
 	return result
@@ -174,8 +185,8 @@ func (p *DockerPlugin) managedLinkRuntime() []*pb.ManagedLinkRuntime {
 			report.LastRejectedAtUnixMs = counts.lastAt.UnixMilli()
 		}
 		if carried := traffic[link.key]; carried != nil {
-			report.OpenedTotal, report.SourceToTargetBytes, report.TargetToSourceBytes =
-				carried.GetOpenedTotal(), carried.GetSourceToTargetBytes(), carried.GetTargetToSourceBytes()
+			report.OpenedTotal, report.SourceToTargetBytes, report.TargetToSourceBytes, report.CompletedTotal =
+				carried.GetOpenedTotal(), carried.GetSourceToTargetBytes(), carried.GetTargetToSourceBytes(), carried.GetCompletedTotal()
 		}
 		reports = append(reports, report)
 	}

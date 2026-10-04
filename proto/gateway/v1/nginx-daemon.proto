@@ -236,6 +236,8 @@ message ManagedLinkRuntime {
   uint64 opened_total = 8;
   uint64 source_to_target_bytes = 9;
   uint64 target_to_source_bytes = 10;
+  // The sessions of opened_total that ended (an active session is not one).
+  uint64 completed_total = 11;
 }
 
 message RelayLatencySample {

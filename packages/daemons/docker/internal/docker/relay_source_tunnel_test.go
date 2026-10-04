@@ -260,6 +260,10 @@ func TestManagedLinkTrafficIsCountedOnTheNode(t *testing.T) {
 			break
 		}
 	}
+	// The session is open: it counts as opened, not as completed.
+	if reports := plugin.managedLinkRuntime(); len(reports) != 1 || reports[0].GetOpenedTotal() != 1 || reports[0].GetCompletedTotal() != 0 {
+		t.Fatalf("link report of an open session %+v", reports)
+	}
 	close(hold)
 	reply := make([]byte, 5)
 	if _, err := io.ReadFull(client, reply); err != nil || string(reply) != "pong!" {
@@ -272,7 +276,7 @@ func TestManagedLinkTrafficIsCountedOnTheNode(t *testing.T) {
 		t.Fatalf("link reports %+v", reports)
 	}
 	if report := reports[0]; report.GetOpenedTotal() != 1 || report.GetSourceToTargetBytes() != 4 ||
-		report.GetTargetToSourceBytes() != 5 || report.GetActiveConnections() != 0 {
+		report.GetTargetToSourceBytes() != 5 || report.GetActiveConnections() != 0 || report.GetCompletedTotal() != 1 {
 		t.Fatalf("link report %+v", report)
 	}
 }

@@ -139,6 +139,7 @@ func (p *DockerPlugin) handleSecureLinkEgress(connection net.Conn) {
 	// Tracked so a restart lets the request in flight finish (link_listener_handover.go).
 	flow, done := p.linkFlows.track(connection)
 	defer done()
+	defer p.linkTraffic.completed(link)
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 
@@ -167,6 +168,7 @@ func (p *DockerPlugin) carryLocalEgress(connection net.Conn, link linkKey, refus
 	tracked := newDrainConn(target)
 	// Held: a replacement of the connector lets the session run until it ends or the retire limit (R3).
 	defer p.proxyTunnels.addHeld(tracked, func() { _ = target.Close() })()
+	defer p.linkTraffic.completed(link)
 	pipeConnections(p.linkTraffic.carry(link, flow), tracked)
 }
 

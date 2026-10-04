@@ -640,7 +640,9 @@ func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID
 	// Tracked so a restart lets the request in flight finish (link_listener_handover.go).
 	flow, done := p.linkFlows.track(connection)
 	defer done()
-	tunnel.bridge(p.linkTraffic.carry(linkKey{kind: linkKindManagedDatabaseBinding, id: bindingID}, flow))
+	link := linkKey{kind: linkKindManagedDatabaseBinding, id: bindingID}
+	defer p.linkTraffic.completed(link)
+	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 
 // openRelaySource opens a source tunnel for assignment on the first of its relay candidates (in load and latency
