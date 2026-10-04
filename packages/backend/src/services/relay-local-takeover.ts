@@ -103,6 +103,25 @@ export async function localRelayTakeoverBlocker(
   return null;
 }
 
+/**
+ * The assignment state a relay candidate is issued with. A draining relay's candidates are draining, so sources open
+ * no new tunnels through it, except the local relay's for its built-in local services while it keeps admitting them:
+ * it is their only relay, and a draining candidate left every internal registry pull without a relay for the whole
+ * drain (stand rc.20).
+ */
+export function candidateAssignmentState(
+  assignment: { state: 'active' | 'staging' | 'draining'; instanceState: string; kind: 'local' | 'remote' },
+  endpointSubjectKind: string,
+  relayCapabilities: readonly string[]
+): 'active' | 'staging' | 'draining' {
+  if (assignment.instanceState !== 'draining') return assignment.state;
+  const keepsServing =
+    assignment.kind === 'local' &&
+    endpointSubjectKind === LOCAL_SERVICE_SUBJECT_KIND &&
+    relayCapabilities.includes(LOCAL_RELAY_DRAIN_CAPABILITY);
+  return keepsServing ? assignment.state : 'draining';
+}
+
 /** Endpoints of the built-in local services, whose tunnels a draining local relay keeps admitting. */
 export async function localServiceEndpointIds(db: DrizzleClient): Promise<Set<string>> {
   const rows = await db

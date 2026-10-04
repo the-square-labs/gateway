@@ -14,6 +14,7 @@ import {
   relayInstances,
   relayRoutes,
 } from '@/db/schema/index.js';
+import { RelayGrantIssuerService } from './relay-grant-issuer.service.js';
 import {
   LOCAL_RELAY_DRAIN_CAPABILITY,
   localRelayTakeoverBlocker,
@@ -94,7 +95,7 @@ describe.skipIf(!url)('local relay takeover during a Relay Pool update', () => {
   });
 
   /** An endpoint whose active generation the local relay serves; `routed` adds a route to it. */
-  async function localWorkload(ownerKind: string, routed = true) {
+  async function localWorkload(ownerKind: string, routed = true, sourceId: string = randomUUID()) {
     const [endpoint] = await db
       .insert(relayEndpoints)
       .values({
@@ -117,7 +118,7 @@ describe.skipIf(!url)('local relay takeover during a Relay Pool update', () => {
         ownerKind: 'managed_database_binding',
         ownerId: randomUUID(),
         sourceKind: 'daemon',
-        sourceId: randomUUID(),
+        sourceId,
         sourceCertificateSha256: `sha256:${'c'.repeat(64)}`,
         targetEndpointId: endpoint!.id,
       });
@@ -224,6 +225,47 @@ describe.skipIf(!url)('local relay takeover during a Relay Pool update', () => {
       .from(relayInstances)
       .where(and(eq(relayInstances.id, localId), eq(relayInstances.state, 'ready')));
     expect(resumed?.drainForcedAt).toBeNull();
+  });
+
+  it('keeps the internal registry route on the local relay through its update drain; workloads leave it (stand rc.20)', async () => {
+    const [source] = await db
+      .insert(nodes)
+      .values({
+        type: 'docker',
+        hostname: 'app-node',
+        slug: `app-${randomUUID().slice(0, 8)}`,
+        certificateFingerprint: `sha256:${'d'.repeat(64)}`,
+        capabilities: { capabilities: ['relay_pool_v1'] } as never,
+      })
+      .returning();
+    const registry = await localWorkload('internal_registry', true, source!.id);
+    const workload = await localWorkload('managed_database', true, source!.id);
+    await db
+      .update(relayEndpoints)
+      .set({ subjectKind: 'daemon', subjectId: source!.id })
+      .where(eq(relayEndpoints.id, workload.endpointId));
+    await db
+      .insert(schema.relayPolicyState)
+      .values({ id: 'current', gatewayInstanceId: randomUUID(), revision: 1 })
+      .onConflictDoNothing();
+    const { service } = poolService();
+
+    await service.drainInstance(localId, null, true, { manual: false });
+
+    const issuer = new RelayGrantIssuerService(db, {} as never, {} as never) as unknown as {
+      signGrant: (claims: unknown) => Promise<unknown>;
+      getNodeGrantBundle: RelayGrantIssuerService['getNodeGrantBundle'];
+    };
+    issuer.signGrant = async (claims) => ({ keyId: 'grant', payload: claims, signature: Buffer.alloc(0) });
+    const bundle = await issuer.getNodeGrantBundle(source!.id);
+    const candidates = (endpointId: string) =>
+      bundle.grants
+        .filter((grant) => grant.role === 'connect' && grant.targetEndpointId === endpointId)
+        .flatMap((grant) => grant.candidates ?? [])
+        .map(({ relayInstanceId, assignmentState }) => ({ relayInstanceId, assignmentState }));
+    // The registry route keeps its only relay for new tunnels; a draining candidate would leave pulls no relay.
+    expect(candidates(registry.endpointId)).toEqual([{ relayInstanceId: localId, assignmentState: 'active' }]);
+    expect(candidates(workload.endpointId)).toEqual([{ relayInstanceId: localId, assignmentState: 'draining' }]);
   });
 
   it('resumes a local relay a finished update left drained', async () => {

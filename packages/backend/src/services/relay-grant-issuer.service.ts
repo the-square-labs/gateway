@@ -20,6 +20,7 @@ import {
   LONG_POLICY_LEASE_CAPABILITY,
 } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
+import { candidateAssignmentState } from './relay-local-takeover.js';
 import type { RelayRevokedRouteFence } from './relay-revocation-fence.js';
 import { loadRevocationFenceState } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
@@ -416,10 +417,11 @@ export class RelayGrantIssuerService {
         certificateFingerprint: assignment.certificateFingerprint ?? '',
         capabilities: this.instanceCapabilities(assignment),
         grant,
-        assignmentState:
-          assignment.instanceState === 'draining'
-            ? 'draining'
-            : (assignment.state as 'active' | 'staging' | 'draining'),
+        assignmentState: candidateAssignmentState(
+          { ...assignment, state: assignment.state as 'active' | 'staging' | 'draining' },
+          endpoint.subjectKind,
+          this.instanceCapabilities(assignment)
+        ),
         ...(topology ? { topology } : {}),
       });
     }
