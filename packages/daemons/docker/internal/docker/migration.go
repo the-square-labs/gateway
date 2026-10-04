@@ -37,6 +37,9 @@ type dockerMigrationCapabilities struct {
 	SecurityOptions   []string                    `json:"securityOptions"`
 	MaxChunkBytes     int                         `json:"maxChunkBytes"`
 	ArtifactMaxAgeSec int64                       `json:"artifactMaxAgeSeconds"`
+	// ManifestValidation: the daemon answers validate_manifest, so Gateway's
+	// preflight shows the manifest blockers before the migration starts.
+	ManifestValidation bool `json:"manifestValidation"`
 }
 
 func (p *DockerPlugin) handleMigrationCommand(cmd *pb.DockerMigrationCommand, result *pb.CommandResult) {
@@ -55,6 +58,8 @@ func (p *DockerPlugin) handleMigrationCommand(cmd *pb.DockerMigrationCommand, re
 		err = p.migrationStore.heartbeat(cmd.MigrationId)
 	case "capture_manifest":
 		detail, err = p.client.CaptureMigrationManifest(ctx, cmd.ResourceId)
+	case "validate_manifest":
+		detail, err = p.client.ValidateMigrationManifest(ctx, cmd.ResourceId)
 	case "open_archive_export", "open_archive_export_v2":
 		detail, err = p.openArchiveExport(ctx, cmd.MigrationId, cmd.ArtifactId, cmd.ResourceId, cmd.ConfigJson)
 	case "open_archive_import", "open_archive_import_v2":
@@ -142,7 +147,7 @@ func (p *DockerPlugin) migrationCapabilities(ctx context.Context) (dockerMigrati
 		DockerRootDir: dockerCapacity, StateDir: stateCapacity, Runtimes: runtimes,
 		VolumePlugins: append([]string(nil), info.Plugins.Volume...), NetworkPlugins: append([]string(nil), info.Plugins.Network...),
 		SecurityOptions: append([]string(nil), info.SecurityOptions...), MaxChunkBytes: migrationChunkBytes,
-		ArtifactMaxAgeSec: int64(migrationArtifactMaxAge.Seconds()),
+		ArtifactMaxAgeSec: int64(migrationArtifactMaxAge.Seconds()), ManifestValidation: true,
 	}, nil
 }
 

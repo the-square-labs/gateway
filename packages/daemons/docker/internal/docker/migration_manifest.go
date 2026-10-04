@@ -52,8 +52,30 @@ func configuredArchiveImageReference(image string, labels map[string]string) str
 	return strings.TrimSpace(image)
 }
 
+// migrationManifestValidation is the preflight answer for a container: the
+// blockers its migration would stop at, with the same text.
+type migrationManifestValidation struct {
+	Blockers []string `json:"blockers"`
+}
+
 func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (dockerMigrationManifest, error) {
-	inspected, err := c.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{Size: true})
+	return c.captureMigrationManifest(ctx, id, true)
+}
+
+// ValidateMigrationManifest runs the checks of the manifest capture for
+// Gateway's migration preflight. It reads the container and its image only,
+// and skips the writable layer size, which Docker computes by walking the
+// layer and which only adds a warning.
+func (c *Client) ValidateMigrationManifest(ctx context.Context, id string) (migrationManifestValidation, error) {
+	manifest, err := c.captureMigrationManifest(ctx, id, false)
+	if err != nil {
+		return migrationManifestValidation{}, err
+	}
+	return migrationManifestValidation{Blockers: append([]string{}, manifest.Blockers...)}, nil
+}
+
+func (c *Client) captureMigrationManifest(ctx context.Context, id string, withSize bool) (dockerMigrationManifest, error) {
+	inspected, err := c.cli.ContainerInspect(ctx, id, mobyclient.ContainerInspectOptions{Size: withSize})
 	if err != nil {
 		return dockerMigrationManifest{}, fmt.Errorf("inspect migration source container: %w", err)
 	}
@@ -138,9 +160,8 @@ func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (docke
 		manifest.NetworkingConfig = &network.NetworkingConfig{EndpointsConfig: endpoints}
 	}
 
-	if err := rejectUnknownCreateFields(inspected.Raw, reflect.TypeOf(container.Config{}), reflect.TypeOf(container.HostConfig{})); err != nil {
-		manifest.Blockers = append(manifest.Blockers, err.Error())
-	}
+	manifest.Blockers = append(manifest.Blockers,
+		unsupportedCreateFields(inspected.Raw, reflect.TypeOf(container.Config{}), reflect.TypeOf(container.HostConfig{}))...)
 	if ctr.SizeRw != nil && *ctr.SizeRw > 0 {
 		manifest.Warnings = append(manifest.Warnings, fmt.Sprintf("writable layer contains %d bytes and is not migrated", *ctr.SizeRw))
 	}
@@ -395,28 +416,85 @@ func cloneStringMap(source map[string]string) map[string]string {
 	return target
 }
 
-func rejectUnknownCreateFields(raw []byte, configType, hostConfigType reflect.Type) error {
+// legacyCreateFields are the create fields Docker Engine 20.10 to 28 still
+// reports in a container inspect and the API types of this daemon no longer
+// have, with what a set value means. Engine 20.10 reports both kernel memory
+// fields on every container, as 0; later engines report all three only when
+// they are set. A zero value configures nothing. A set value is a setting the
+// target container cannot be created with, so it blocks the migration.
+var legacyCreateFields = map[string]map[string]string{
+	"Config": {
+		"MacAddress": "the container has a fixed MAC address, which the migrated container cannot keep; remove it before migrating",
+	},
+	"HostConfig": {
+		"KernelMemory":    "the container has a kernel memory limit, which the migrated container cannot keep; remove it before migrating",
+		"KernelMemoryTCP": "the container has a kernel TCP memory limit, which the migrated container cannot keep; remove it before migrating",
+	},
+}
+
+// unsupportedCreateFields compares the create configuration of a raw container
+// inspect with the API types the target container is created from, and
+// returns a blocker for every field those types do not have, except a legacy
+// field at its zero value.
+func unsupportedCreateFields(raw []byte, configType, hostConfigType reflect.Type) []string {
 	var inspect map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &inspect); err != nil {
-		return fmt.Errorf("decode raw container inspect: %w", err)
+		return []string{fmt.Sprintf("decode raw container inspect: %v", err)}
 	}
 	checks := []struct {
 		name string
 		typ  reflect.Type
 	}{{"Config", configType}, {"HostConfig", hostConfigType}}
+	var blockers []string
 	for _, check := range checks {
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(inspect[check.name], &object); err != nil {
-			return fmt.Errorf("decode raw %s: %w", check.name, err)
+			blockers = append(blockers, fmt.Sprintf("decode raw %s: %v", check.name, err))
+			continue
 		}
 		known := jsonFieldNames(check.typ)
+		keys := make([]string, 0, len(object))
 		for key := range object {
 			if !known[key] {
-				return fmt.Errorf("unknown Docker create field %s.%s", check.name, key)
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			reason, legacy := legacyCreateFields[check.name][key]
+			switch {
+			case !legacy:
+				blockers = append(blockers, fmt.Sprintf("unknown Docker create field %s.%s", check.name, key))
+			case !zeroJSONValue(object[key]):
+				blockers = append(blockers, fmt.Sprintf("unsupported Docker create field %s.%s: %s", check.name, key, reason))
 			}
 		}
 	}
-	return nil
+	return blockers
+}
+
+// zeroJSONValue reports whether a raw JSON value is null or the zero value of
+// its type.
+func zeroJSONValue(raw json.RawMessage) bool {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case bool:
+		return !typed
+	case float64:
+		return typed == 0
+	case string:
+		return typed == ""
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	}
+	return false
 }
 
 func jsonFieldNames(typ reflect.Type) map[string]bool {
