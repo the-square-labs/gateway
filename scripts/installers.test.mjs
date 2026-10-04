@@ -1340,3 +1340,39 @@ test('the Docker installer restarts an installed lease watchdog after the run-us
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// rc.21: a switch to a non-root daemon left the record files to root (only the directory followed), the new daemon could
+// not read them and the watchdog fenced the node's Availability copies. The switch hands the directory and the record
+// files to the new user, never a file linked in from elsewhere; the watchdog follows the daemon's release channel.
+test('a run-user switch hands the lease watchdog records to the new daemon user', { skip: !linux || userInfo().uid !== 0 }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-records-'));
+  try {
+    const records = path.join(dir, 'records');
+    const outside = path.join(dir, 'outside');
+    const record = path.join(records, `${'a'.repeat(64)}.json`);
+    const run = (user, group) =>
+      runShell(
+        [
+          /^hand_lease_records_to_run_user\(\) \{\n[\s\S]*?^\}$/m.exec(source)[0],
+          'warn() { echo "WARN $*"; }',
+          `LOG_FILE=/dev/null LEASE_RECORDS_DIR='${records}' RUN_USER=${user} RUN_GROUP=${group}`,
+          `mkdir -p '${records}' && touch '${record}' '${outside}' && ln -f '${outside}' '${records}/linked.json'`,
+          `hand_lease_records_to_run_user && stat -c '%u' '${records}' '${record}' '${outside}'`,
+        ].join('\n')
+      ).output;
+    const nobody = String(Number(spawnSync('id', ['-u', 'nobody'], { encoding: 'utf8' }).stdout.trim()));
+    const group = spawnSync('id', ['-gn', 'nobody'], { encoding: 'utf8' }).stdout.trim();
+    assert.deepEqual(run('nobody', group).trim().split('\n'), [nobody, nobody, '0']);
+    assert.deepEqual(run('root', 'root').trim().split('\n'), ['0', '0', '0']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  const channel = (version) =>
+    runShell([/^lease_watchdog_channel\(\) \{\n[\s\S]*?^\}$/m.exec(source)[0], `RESOLVED_DAEMON_VERSION=${version}`, 'lease_watchdog_channel'].join('\n'))
+      .output.trim();
+  assert.equal(channel('v2.11.1-rc.22'), 'preview');
+  assert.equal(channel('v2.11.1'), 'stable');
+  assert.match(source, /component=lease-watchdog&channel=\$\(lease_watchdog_channel\)/);
+  assert.match(source, /--records-owner \$\{RUN_USER\}.*--channel \$\(lease_watchdog_channel\)/);
+});

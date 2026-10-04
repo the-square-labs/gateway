@@ -710,6 +710,7 @@ grant_daemon_paths_to_run_user() {
     local path
     # While a switch away from a non-root user waits for the daemon to stop, that user keeps what it owns.
     [[ "$RUN_USER_SWITCH_PENDING" -eq 0 ]] || return 0
+    hand_lease_records_to_run_user
     if [[ "$RUN_USER" == "root" ]]; then
         return_paths_to_root /etc/docker-daemon /var/lib/docker-daemon "$DOCKER_DAEMON_OWN_DIR" "$DOCKER_REGISTRY_PROXY_TRUST_DIR"
         return
@@ -721,6 +722,19 @@ grant_daemon_paths_to_run_user() {
         install -d -m 0755 "$(dirname "$DOCKER_REGISTRY_PROXY_TRUST_DIR")"
         install -d -m 0755 -o "$RUN_USER" -g "$RUN_GROUP" "$DOCKER_REGISTRY_PROXY_TRUST_DIR"
     fi
+}
+
+# The lease watchdog's deadline records (tmpfs) belong to the daemon user, which writes and reads them. A run-user switch
+# hands the directory and the records the previous daemon wrote to the new user before it starts, in both directions: a
+# daemon that cannot read them cannot recover its running Availability copies, and the watchdog fences them at their
+# deadline (a watchdog of an earlier release hands over only the directory). Only the directory and the singly linked
+# record files in it change owner.
+LEASE_RECORDS_DIR="/run/gateway-lease-watchdog/records"
+hand_lease_records_to_run_user() {
+    [[ -d "$LEASE_RECORDS_DIR" && ! -L "$LEASE_RECORDS_DIR" ]] || return 0
+    chown -h "${RUN_USER}:${RUN_GROUP}" "$LEASE_RECORDS_DIR" 2>>"$LOG_FILE" || warn "Could not hand the lease watchdog records to ${RUN_USER}."
+    find "$LEASE_RECORDS_DIR" -mindepth 1 -maxdepth 1 -type f -links 1 -name '*.json' \
+        -exec chown -h "${RUN_USER}:${RUN_GROUP}" {} + 2>>"$LOG_FILE" || warn "Could not hand the lease watchdog records to ${RUN_USER}."
 }
 
 # The user a previous install ran the daemon as: the first owner other than root of its configuration, state or own binary
@@ -2539,12 +2553,19 @@ LEASE_WATCHDOG_UNIT="gateway-lease-watchdog"
 LEASE_WATCHDOG_VERSION="${GATEWAY_LEASE_WATCHDOG_VERSION:-latest}"
 LEASE_WATCHDOG_INSTALLED=0
 
+# The release channel the watchdog follows: the daemon's (preview for a release candidate). A daemon without root cannot
+# set it on the watchdog's service later, so the installer does.
+lease_watchdog_channel() {
+    if [[ "$RESOLVED_DAEMON_VERSION" == *-rc.* ]]; then echo preview; else echo stable; fi
+}
+
 install_lease_watchdog() {
     [[ "$DOCKER_MODE" == "docker" ]] || return 0
     local artifact="lease-watchdog-linux-${ARCH}"
     local tag base checksums expected actual current
     if [[ "$LEASE_WATCHDOG_VERSION" == "latest" ]]; then
-        tag=$(curl -fsSL "${RELEASES_API_URL}?component=lease-watchdog" 2>>"$LOG_FILE" \
+        # The watchdog of the daemon's channel: a release candidate's watchdog changes ship as preview releases.
+        tag=$(curl -fsSL "${RELEASES_API_URL}?component=lease-watchdog&channel=$(lease_watchdog_channel)" 2>>"$LOG_FILE" \
             | grep -o '"tag_name":"v[0-9]*\.[0-9]*\.[0-9]*\(-rc\.[0-9]*\)\{0,1\}-watchdog"' | head -1 | cut -d'"' -f4 || true)
     else
         tag="$(normalize_daemon_version "$LEASE_WATCHDOG_VERSION")-watchdog"
@@ -2588,7 +2609,7 @@ start_lease_watchdog() {
     [[ "$LEASE_WATCHDOG_INSTALLED" -eq 1 || -x "$LEASE_WATCHDOG_BIN" ]] || return 0
     # Runs as root: it must kill container processes of any user. The records
     # directory is owned by the docker-daemon user, which writes the deadlines.
-    local args="run --records-owner ${RUN_USER} --auto-update --releases-url ${RELEASES_API_URL} --artifact-base-url ${ARTIFACT_BASE_URL}"
+    local args="run --records-owner ${RUN_USER} --auto-update --releases-url ${RELEASES_API_URL} --artifact-base-url ${ARTIFACT_BASE_URL} --channel $(lease_watchdog_channel)"
     if has_systemd; then
         cat > "/etc/systemd/system/${LEASE_WATCHDOG_UNIT}.service" <<UNIT
 [Unit]
