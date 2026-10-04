@@ -607,6 +607,15 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     return this.buildNginxConfig(host, certPaths, accessList);
   }
 
+  /**
+   * Whether the maintenance page of a route in maintenance offers team access: its guard carries the access-code
+   * bypass, which a config that sets secure_link itself cannot (nginx-template.service.ts, applyMaintenanceGuard).
+   */
+  async maintenanceAccessOffered(id: string): Promise<boolean> {
+    const rendered = await this.getRenderedConfig(id);
+    return rendered.includes(`maintenance-access.sock:/redeem/${id};`);
+  }
+
   // -----------------------------------------------------------------------
   // Internal system host management
   // -----------------------------------------------------------------------

@@ -7,7 +7,6 @@ import { nginxTemplates } from '@/db/schema/nginx-templates.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import {
   escapeNginxReturnText,
-  GATEWAY_MAINTENANCE_HTML,
   GATEWAY_NOT_FOUND_HTML,
   gatewayMaintenanceHtml,
   gatewayNotFoundHtml,
@@ -770,30 +769,67 @@ function maintenanceAccessLocation(hostId: string) {
 `;
 }
 
+/**
+ * The internal location that answers with the maintenance page. Its name is not a URI, so no request reaches it except
+ * through the guard's rewrite. The page keeps the server-level add_header of the route and of the guard; default_type
+ * is set here because a route may set its own on the server, where a second one fails nginx -t.
+ */
+const MAINTENANCE_PAGE_LOCATION = 'gateway-maintenance';
+
+function maintenancePageLocation(hideExternalBranding: boolean, teamAccess: boolean) {
+  return `
+    location = ${MAINTENANCE_PAGE_LOCATION} {
+        internal;
+        default_type text/html;
+        return 503 ${escapeNginxReturnText(gatewayMaintenanceHtml(hideExternalBranding, teamAccess))};
+    }
+`;
+}
+
 function maintenanceServerGuard(hostId: string, accessSecret: string, hideExternalBranding: boolean) {
   const suffix = maintenanceAccessVariable(hostId);
   return `
     # Gateway maintenance mode. Server-rewrite directives run before location
     # selection, so upstream/access/cache/rewrite behavior is never reached.
-    default_type text/html;
     add_header Cache-Control "no-store" always;
     secure_link "$cookie_gateway_maintenance_access_sig,$cookie_gateway_maintenance_access_exp";
     secure_link_md5 "\${secure_link_expires}\${host}${accessSecret}";
     if ($gm_block_${suffix}) {
-        return 503 ${escapeNginxReturnText(gatewayMaintenanceHtml(hideExternalBranding))};
+        rewrite ^ ${MAINTENANCE_PAGE_LOCATION} last;
     }
-${maintenanceAccessLocation(hostId)}`;
+${maintenancePageLocation(hideExternalBranding, true)}${maintenanceAccessLocation(hostId)}`;
 }
 
-const LEGACY_MAINTENANCE_SERVER_GUARD = `
+/** The guard without the access-code bypass: every request but ACME and the ingress health check gets the page. */
+function plainMaintenanceServerGuard(hideExternalBranding: boolean) {
+  return `
     # Gateway maintenance mode. Server-rewrite directives run before location
     # selection, so upstream/access/cache/rewrite behavior is never reached.
-    default_type text/html;
     add_header Cache-Control "no-store" always;
     if ($uri !~ ^/\\.well-known/(acme-challenge/|gateway-ingress-health$)) {
-        return 503 ${escapeNginxReturnText(GATEWAY_MAINTENANCE_HTML)};
+        rewrite ^ ${MAINTENANCE_PAGE_LOCATION} last;
     }
-`;
+${maintenancePageLocation(hideExternalBranding, false)}`;
+}
+
+/**
+ * Whether the access-code bypass fits the route's config. It sets secure_link on the server, defines the $gm_*
+ * variables of maintenanceMaps and the /_gateway/maintenance-access locations. A route that sets secure_link itself
+ * would get a second server-level secure_link (nginx -t fails) or, in its own locations, Gateway's $secure_link; such
+ * a config, or one that uses those variables or locations, gets the maintenance page without team access.
+ */
+function maintenanceAccessFits(renderedConfig: string): boolean {
+  return !(
+    /(?:^|[\s;{}])secure_link(?:_md5|_secret)?[\s;]/m.test(renderedConfig) ||
+    /\$\{?(?:secure_link|gms?_)/.test(renderedConfig) ||
+    /\blocation\s*=\s*\/_gateway\/maintenance-access(?:\/status)?[\s{]/.test(renderedConfig)
+  );
+}
+
+/** A location named like the guard's page location would be a duplicate location in nginx -t. */
+function declaresMaintenancePageLocation(renderedConfig: string): boolean {
+  return /\blocation\s*=\s*gateway-maintenance[\s{]/.test(renderedConfig);
+}
 
 const BUILTIN_TEMPLATES = [
   {
@@ -1379,38 +1415,38 @@ ${rendered}`;
     });
   }
 
+  /**
+   * The guard a route runs only during maintenance (each toggle reloads nginx). With `access` it lets a visitor with a
+   * team access cookie through, unless the route's config cannot carry that (maintenanceAccessFits): it then gets the
+   * page without team access, as on a node without maintenance access support.
+   */
   applyMaintenanceGuard(
     renderedConfig: string,
     access?: { hostId: string; secret: string },
     hideExternalBranding = false
   ): string {
-    if (!access) return this.applyLegacyMaintenanceGuard(renderedConfig, hideExternalBranding);
+    if (!/^[\t ]*server[\t ]*\{/m.test(renderedConfig)) {
+      throw new AppError(500, 'MAINTENANCE_CONFIG_INVALID', 'Rendered proxy config has no server block');
+    }
+    if (declaresMaintenancePageLocation(renderedConfig)) {
+      throw new AppError(
+        409,
+        'MAINTENANCE_CONFIG_CONFLICT',
+        `The route config declares location ${MAINTENANCE_PAGE_LOCATION}, which maintenance mode uses; rename it to enter maintenance`
+      );
+    }
+    if (!access || !maintenanceAccessFits(renderedConfig)) {
+      return renderedConfig.replace(
+        /^[\t ]*server[\t ]*\{/gm,
+        (match) => `${match}${plainMaintenanceServerGuard(hideExternalBranding)}`
+      );
+    }
     const cookieDirective = `proxy_set_header Cookie $gm_cookie_${maintenanceAccessVariable(access.hostId)};`;
     const guarded = this.appendLocationDirective(this.stripProxyCookieHeaders(renderedConfig), cookieDirective).replace(
       /^[\t ]*server[\t ]*\{/gm,
       (match) => `${match}${maintenanceServerGuard(access.hostId, access.secret, hideExternalBranding)}`
     );
-    if (!/^[\t ]*server[\t ]*\{/m.test(renderedConfig)) {
-      throw new AppError(500, 'MAINTENANCE_CONFIG_INVALID', 'Rendered proxy config has no server block');
-    }
     return `${maintenanceMaps(access.hostId)}\n${guarded}`;
-  }
-
-  private applyLegacyMaintenanceGuard(renderedConfig: string, hideExternalBranding: boolean): string {
-    let serverCount = 0;
-    const guarded = renderedConfig.replace(/^[\t ]*server[\t ]*\{/gm, (match) => {
-      serverCount += 1;
-      return `${match}${LEGACY_MAINTENANCE_SERVER_GUARD.replace(
-        escapeNginxReturnText(GATEWAY_MAINTENANCE_HTML),
-        escapeNginxReturnText(gatewayMaintenanceHtml(hideExternalBranding))
-      )}`;
-    });
-
-    if (serverCount === 0) {
-      throw new AppError(500, 'MAINTENANCE_CONFIG_INVALID', 'Rendered proxy config has no server block');
-    }
-
-    return guarded;
   }
 
   /**

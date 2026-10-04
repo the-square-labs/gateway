@@ -16,7 +16,8 @@ import { type NginxConfigDirective, parseNginxConfig, walkNginxConfig } from './
  *   through the guard's rewrite, which happens only while the flag exists; no path of the route is reserved;
  * - default_type and add_header of the maintenance page live in those locations only;
  * - secure_link is configured on the server but evaluated only while the flag exists; a config that uses
- *   secure_link itself keeps the reload-based guard (its own $secure_link would see Gateway's settings);
+ *   secure_link itself keeps the reload-based guard (its own $secure_link would see Gateway's settings), whose page
+ *   then has no team access (nginx-template.service.ts, maintenanceAccessFits);
  * - the Cookie each proxying scope sends is "$http_cookie", or the value of the route's own Cookie override, until
  *   the flag exists; then Gateway's access cookies are removed from it. A scope gets the directive only where it
  *   already sets proxy_set_header itself, so nginx's inheritance of proxy_set_header is unchanged. A proxying location
@@ -32,6 +33,8 @@ export const MAINTENANCE_FLAG_DIR = '/etc/nginx/gateway/maintenance';
 
 const PAGES_ROUTE_INCLUDE = /\/pages\/routes\/[A-Za-z0-9-]+\.inc$/;
 const SECURE_LINK_DIRECTIVES = new Set(['secure_link', 'secure_link_md5', 'secure_link_secret']);
+/** The names of the guard's own locations, as `location = <name>` or `location =<name>`. */
+const GUARD_LOCATION = /^=?gateway-maintenance(?:-access|-status)?$/;
 
 export interface MaintenanceFlagGuardInput {
   hostId: string;
@@ -64,7 +67,7 @@ function proxies(directives: NginxConfigDirective[]): boolean {
   );
 }
 
-/** Whether the config uses something the guard would change the meaning of. */
+/** Whether the config uses something the guard would change the meaning of, or declares what the guard declares. */
 function usesReservedFeatures(directives: NginxConfigDirective[]): boolean {
   let reserved = false;
   walkNginxConfig(directives, (directive) => {
@@ -72,7 +75,8 @@ function usesReservedFeatures(directives: NginxConfigDirective[]): boolean {
       SECURE_LINK_DIRECTIVES.has(directive.name) ||
       directive.name === 'proxy_pass_request_headers' ||
       (directive.name === 'include' && !PAGES_ROUTE_INCLUDE.test(directive.args[0]?.value ?? '')) ||
-      directive.args.some((arg) => /\$\{?(secure_link|gateway_maintenance)/.test(arg.raw))
+      (directive.name === 'location' && directive.args.some((arg) => GUARD_LOCATION.test(arg.value))) ||
+      directive.args.some((arg) => /\$\{?(secure_link|gateway_maintenance|gm_cookie_)/.test(arg.raw))
     ) {
       reserved = true;
     }

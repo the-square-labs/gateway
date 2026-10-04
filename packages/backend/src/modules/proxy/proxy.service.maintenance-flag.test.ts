@@ -2,13 +2,14 @@
 import '@/db/schema/index.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ConfigValidatorService } from '@/services/config-validator.service.js';
+import { type NginxConfigDirective, parseNginxConfig } from './nginx-config-tree.js';
 import { MAINTENANCE_FLAG_CAPABILITY, MAINTENANCE_FLAG_DIR } from './nginx-maintenance-flag-guard.js';
 import { NginxTemplateService } from './nginx-template.service.js';
 import { ProxyService } from './proxy.service.js';
 
 const HOST_ID = '22222222-2222-4222-8222-222222222222';
 
-function route(maintenanceEnabled: boolean) {
+function route(maintenanceEnabled: boolean, advancedConfig: string | null = null) {
   return {
     id: HOST_ID,
     type: 'proxy',
@@ -37,7 +38,7 @@ function route(maintenanceEnabled: boolean) {
     rateLimitEnabled: false,
     rateLimitOptions: null,
     customRewrites: [],
-    advancedConfig: null,
+    advancedConfig,
     rawConfig: null,
     rawConfigEnabled: false,
     accessListId: null,
@@ -119,5 +120,49 @@ describe('Maintenance mode on a node that keeps maintenance flags', () => {
     expect(left![2]).not.toContain('return 503');
     expect(entered![6]).toBeUndefined();
     expect(left![6]).toBeUndefined();
+  });
+});
+
+/** The names of the directives each server block sets itself, once per occurrence. */
+function serverDirectives(config: string): string[][] {
+  return parseNginxConfig(config)
+    .filter((directive) => directive.name === 'server' && directive.block)
+    .map((server) => server.block!.children.map((directive: NginxConfigDirective) => directive.name));
+}
+
+const ACCESS_ONLY = ['proxy_maintenance_access_v1'];
+const ACCESS_AND_FLAGS = ['proxy_maintenance_access_v1', MAINTENANCE_FLAG_CAPABILITY];
+const OWN_SECURE_LINK = 'secure_link $arg_md5,$arg_expires;\nsecure_link_md5 "$secure_link_expires$uri route-secret";';
+
+describe('Maintenance mode of a route whose config collides with the guard', () => {
+  it.each([
+    ['a node that keeps maintenance flags', ACCESS_AND_FLAGS],
+    ['a node without maintenance flags', ACCESS_ONLY],
+  ])('enters maintenance with its own secure_link on %s: one secure_link, the page without team access', async (_, capabilities) => {
+    const enter = toggleHarness(route(false, OWN_SECURE_LINK), route(true, OWN_SECURE_LINK), capabilities);
+    await enter.service.toggleMaintenance(HOST_ID, true, 'user-id');
+
+    const config = enter.applyConfig.mock.calls[0]![2] as string;
+    for (const directives of serverDirectives(config)) {
+      expect(directives.filter((name) => name === 'secure_link')).toHaveLength(1);
+      expect(directives.filter((name) => name === 'secure_link_md5')).toHaveLength(1);
+    }
+    expect(config).toContain('return 503');
+    expect(config).not.toContain('maintenance-access.sock');
+    expect(config).not.toContain('Team access');
+  });
+
+  it('enters maintenance with its own server-level default_type on a node without maintenance flags', async () => {
+    const own = 'default_type application/json;';
+    const enter = toggleHarness(route(false, own), route(true, own), ACCESS_ONLY);
+    await enter.service.toggleMaintenance(HOST_ID, true, 'user-id');
+
+    const config = enter.applyConfig.mock.calls[0]![2] as string;
+    for (const directives of serverDirectives(config)) {
+      expect(directives.filter((name) => name === 'default_type')).toHaveLength(1);
+    }
+    // The access-code bypass fits this config, so the page keeps it.
+    expect(config).toContain('maintenance-access.sock');
+    expect(config).toContain('Team access');
   });
 });
