@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { dockerMigrationError } from "@/lib/docker-migration-status";
 import { formatBytes } from "@/lib/utils";
 import type { DockerMigration, DockerMigrationIssue, DockerMigrationPreflight } from "@/types";
 import type { MigrationResource } from "./DockerMigrationDialog";
@@ -138,6 +139,7 @@ function MigrationProgress({ migration }: { migration: DockerMigration }) {
     ? Math.min(100, Math.round((transferredBytes / totalBytes) * 100))
     : null;
   const completed = migration.status === "completed";
+  const migrationError = dockerMigrationError(migration);
   const statusVariant = completed
     ? "success"
     : migration.status === "failed" || migration.status === "needs_attention"
@@ -177,7 +179,7 @@ function MigrationProgress({ migration }: { migration: DockerMigration }) {
         </Notice>
       ) : null}
 
-      {migration.errorMessage ? (
+      {migrationError ? (
         <Notice
           tone="destructive"
           role="alert"
@@ -187,7 +189,7 @@ function MigrationProgress({ migration }: { migration: DockerMigration }) {
               : "Migration failed"
           }
         >
-          {migration.errorMessage}
+          {migrationError}
         </Notice>
       ) : null}
 

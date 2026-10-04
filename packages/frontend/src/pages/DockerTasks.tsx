@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/select";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
+import { dockerMigrationError } from "@/lib/docker-migration-status";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -93,7 +94,7 @@ function migrationToTask(migration: DockerMigration): DockerTaskRow {
       typeof migration.progress.message === "string"
         ? migration.progress.message
         : migration.phase.replaceAll("_", " "),
-    error: migration.errorMessage ?? undefined,
+    error: dockerMigrationError(migration) ?? undefined,
     createdAt: migration.createdAt,
     completedAt: migration.completedAt ?? undefined,
     migration,
