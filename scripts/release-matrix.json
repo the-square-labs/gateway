@@ -2780,6 +2780,31 @@
       "expect": [
         "The dot and a matching Dashboard warning appear and clear together; the limited user sees neither for the out-of-scope replica."
       ]
+    },
+    {
+      "id": "FEAT-LINK-01",
+      "area": "daemon",
+      "title": "Secure-link network address pool",
+      "where": "stand",
+      "os": [
+        "debian"
+      ],
+      "covers": [
+        "config docker.secure_links.subnet_pool"
+      ],
+      "preconditions": [
+        "An enrolled docker node on the release under test and a running target container with a TCP port."
+      ],
+      "steps": [
+        "Create a container link to the target from a container on the node and read the link network's subnet with docker network inspect.",
+        "Set docker.secure_links.subnet_pool to a different /20 in /etc/docker-daemon/config.yaml, restart docker-daemon, and create a second container link.",
+        "Remove the setting, restart, and create a third link; delete all three links."
+      ],
+      "expect": [
+        "The first network is a /26 inside the default pool that docs/nodes.md names, and the connector holds its base address +2.",
+        "The second network is a /26 inside the configured /20; the first link keeps working.",
+        "The third network is again inside the default pool; deleting the links removes their networks."
+      ]
     }
   ]
 }
