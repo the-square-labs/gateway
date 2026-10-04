@@ -445,7 +445,10 @@ nginx_master_pid() {
 # The daemon writes /etc/nginx and reloads nginx itself, so a non-root daemon needs an nginx master that runs as the
 # same user. The installer does not convert the host's nginx service; it stops before changing anything instead.
 preflight_run_user_nginx() {
-    [[ "$RUN_USER" != "root" ]] || return 0
+    if [[ "$RUN_USER" == "root" ]]; then
+        preflight_root_nginx
+        return
+    fi
     local run_uid master_pid master_uid problem=""
     run_uid=$(id -u "$RUN_USER")
     if ! command_exists nginx; then
@@ -472,17 +475,69 @@ preflight_run_user_nginx() {
     die "nginx is not prepared for a non-root nginx-daemon; nothing was changed."
 }
 
+# A root daemon writes nginx's configuration and keys as root, which an nginx master running as another user cannot
+# read. A node switched back to root therefore needs its nginx service back to root first.
+preflight_root_nginx() {
+    local master_pid master_uid master_user
+    command_exists nginx && master_pid=$(nginx_master_pid) || return 0
+    master_uid=$(stat -c '%u' "/proc/${master_pid}")
+    [[ "$master_uid" != 0 ]] || return 0
+    master_user=$(id -nu "$master_uid" 2>/dev/null || echo "uid ${master_uid}")
+    err "nginx-daemon runs as root here, but the nginx master process (PID ${master_pid}) runs as ${master_user}."
+    err "Run the nginx service as root again (remove the drop-in that sets User=, Group= and AmbientCapabilities= for"
+    err "nginx.service and restart nginx), give nginx's temp directories and log rotation back to its packaged owner,"
+    err "then run this installer again. The installer gives /etc/nginx, /var/log/nginx and /var/www/acme-challenge back"
+    err "to root itself. To keep nginx as ${master_user}, install nginx-daemon with --user ${master_user}."
+    die "nginx runs as ${master_user}, not root; nothing was changed."
+}
+
 # Hands the daemon everything it writes: its configuration, state and binary, nginx's configuration and logs, the ACME
-# challenge directory and its runtime socket directories.
+# challenge directory and its runtime socket directories. A daemon switched back to root gets back what its previous
+# user owned there, so that user can no longer change what a root nginx loads.
 grant_daemon_paths_to_run_user() {
-    [[ "$RUN_USER" != "root" ]] || return 0
     local path
+    if [[ "$RUN_USER" == "root" ]]; then
+        return_paths_to_root /etc/nginx-daemon /var/lib/nginx-daemon "$NGINX_DAEMON_OWN_DIR" /etc/nginx /var/log/nginx \
+            /var/www/acme-challenge "${NGINX_DAEMON_RUNTIME_DIRS[@]/#//run/}"
+        return
+    fi
     for path in /etc/nginx-daemon /var/lib/nginx-daemon "$NGINX_DAEMON_OWN_DIR" /etc/nginx /var/log/nginx /var/www/acme-challenge; do
         [[ ! -e "$path" ]] || chown -hR "${RUN_USER}:${RUN_GROUP}" "$path"
     done
     for path in "${NGINX_DAEMON_RUNTIME_DIRS[@]}"; do
         install -d -m 0755 -o "$RUN_USER" -g "$RUN_GROUP" "/run/${path}"
     done
+}
+
+# The user a previous install ran the daemon as: the owner of its configuration directory (root without one).
+PREVIOUS_RUN_UID=$(stat -c '%u' /etc/nginx-daemon 2>/dev/null || echo 0)
+
+# Gives root every entry in the paths that the previous non-root user owns; entries of other owners keep theirs.
+return_paths_to_root() {
+    local path
+    [[ "$PREVIOUS_RUN_UID" != 0 ]] || return 0
+    for path in "$@"; do
+        [[ ! -e "$path" ]] || find "$path" -xdev -user "$PREVIOUS_RUN_UID" -exec chown -h 0:0 {} +
+    done
+}
+
+# A daemon that leaves a non-root user is stopped first and gets a new launcher: the launcher copies in its state
+# directory were written by that user, and no other user may run them.
+prepare_run_user_switch() {
+    [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+    log "nginx-daemon ran as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); switching it to ${RUN_USER}..."
+    stop_daemon_service || die "Could not stop nginx-daemon to switch its user."
+    rm -rf /var/lib/nginx-daemon/launcher
+}
+
+stop_daemon_service() {
+    if has_systemd; then
+        [[ ! -f /etc/systemd/system/nginx-daemon.service ]] || systemctl stop nginx-daemon >>"$LOG_FILE" 2>&1
+    elif has_openrc; then
+        [[ ! -f /etc/init.d/nginx-daemon ]] || rc-service --ifstarted nginx-daemon stop >>"$LOG_FILE" 2>&1
+    else
+        stop_manual_launcher /var/lib/nginx-daemon/launcher nginx
+    fi
 }
 
 new_host_identity() {
@@ -549,7 +604,11 @@ set_config_host_identity_path() {
 
 # A daemon running as its own user enrolls with its copy of the host identity and owns everything it writes.
 prepare_run_user_identity() {
-    [[ "$RUN_USER" != "root" ]] || return 0
+    if [[ "$RUN_USER" == "root" ]]; then
+        clear_config_host_identity_path /etc/nginx-daemon/config.yaml \
+            || die "Could not point /etc/nginx-daemon/config.yaml at the shared host identity."
+        return 0
+    fi
     seed_host_identity_copy "$SHARED_HOST_IDENTITY" "$NGINX_DAEMON_OWN_HOST_IDENTITY" \
         || die "Could not prepare the host identity for ${RUN_USER}."
     set_config_host_identity_path /etc/nginx-daemon/config.yaml "$NGINX_DAEMON_OWN_HOST_IDENTITY" \
@@ -557,25 +616,128 @@ prepare_run_user_identity() {
     grant_daemon_paths_to_run_user
 }
 
-# The daemon enrolls when it starts; it has its certificate and state once Gateway accepted the token.
-await_enrollment() {
-    local waited=0 limit="${GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS:-90}"
+# A root daemon reads the shared host identity, as on a fresh root install.
+clear_config_host_identity_path() {
+    local config="$1" temporary
+    [[ ! -L "$config" ]] || return 1
+    [[ -f "$config" ]] && grep -q '^host_identity_path:' "$config" || return 0
+    temporary=$(mktemp) || return 1
+    grep -v '^host_identity_path:' "$config" >"$temporary" || true
+    cat "$temporary" >"$config" || { rm -f "$temporary"; return 1; }
+    rm -f "$temporary"
+}
+
+# The daemon records each control session Gateway accepted in its state directory (from GATEWAY_SESSION_SINCE on).
+# The installer removes the record before it starts the daemon, so only a session of the daemon it started counts.
+GATEWAY_SESSION_SINCE="v2.11.1-rc.2"
+GATEWAY_SESSION_FILE="/var/lib/nginx-daemon/gateway-session.json"
+GATEWAY_SESSION_STARTED=0
+
+forget_gateway_session() {
+    rm -f "$GATEWAY_SESSION_FILE"
+    GATEWAY_SESSION_STARTED=$(date +%s)
+}
+
+# Orders vX.Y.Z and vX.Y.Z-rc.N; a release orders after its release candidates.
+release_order() {
+    [[ "${1#v}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.([0-9]+))?$ ]] || return 1
+    echo $(( ((BASH_REMATCH[1] * 1000 + BASH_REMATCH[2]) * 1000 + BASH_REMATCH[3]) * 100000 + ${BASH_REMATCH[5]:-99999} ))
+}
+
+# Daemons older than GATEWAY_SESSION_SINCE write no session record; development builds do.
+daemon_records_gateway_session() {
+    local order
+    order=$(release_order "$1") || return 0
+    (( order >= $(release_order "$GATEWAY_SESSION_SINCE") ))
+}
+
+# Gateway accepted a session of the daemon this run started, and that process still runs under its service manager.
+gateway_session_is_current() {
+    local pid connected_at
+    [[ -f "$GATEWAY_SESSION_FILE" && ! -L "$GATEWAY_SESSION_FILE" ]] || return 1
+    pid=$(sed -nE 's/.*"pid":([0-9]+).*/\1/p' "$GATEWAY_SESSION_FILE")
+    connected_at=$(sed -nE 's/.*"connected_at":([0-9]+).*/\1/p' "$GATEWAY_SESSION_FILE")
+    [[ -n "$pid" && -n "$connected_at" ]] || return 1
+    (( connected_at >= GATEWAY_SESSION_STARTED )) || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    if [[ "$MANUAL_FALLBACK_USED" -eq 0 ]] && has_systemd; then
+        grep -q '/nginx-daemon\.service$' "/proc/${pid}/cgroup" 2>/dev/null || return 1
+    fi
+}
+
+# The enrollment error the daemon started by this run recorded instead of a session, if any.
+gateway_session_enrollment_error() {
+    [[ -f "$GATEWAY_SESSION_FILE" && ! -L "$GATEWAY_SESSION_FILE" ]] || return 1
+    sed -nE 's/.*"enrollment_error":"(([^"\\]|\\.)*)".*/\1/p' "$GATEWAY_SESSION_FILE" | grep .
+}
+
+daemon_service_running() {
+    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+        launcher_pid_is_live "${MANUAL_OWNER_PID:-}"
+    elif has_systemd; then
+        systemctl is-active --quiet nginx-daemon
+    else
+        rc-service nginx-daemon status >/dev/null 2>&1
+    fi
+}
+
+show_daemon_log() {
+    local manual_log=/var/lib/nginx-daemon/launcher/manual.log
+    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+        err "Daemon log: ${manual_log}"
+        tail -n 20 "$manual_log" >&2 2>/dev/null || true
+    elif has_systemd; then
+        err "Daemon log: journalctl -u nginx-daemon"
+        journalctl -u nginx-daemon -n 20 --no-pager >&2 2>/dev/null || true
+    elif has_openrc; then
+        err "Daemon log: /var/log/nginx-daemon.err and /var/log/nginx-daemon.log"
+        tail -n 20 /var/log/nginx-daemon.err /var/log/nginx-daemon.log >&2 2>/dev/null || true
+    fi
+}
+
+fail_daemon_start() {
+    err "$1"
+    show_daemon_log
+    die "nginx-daemon is installed, but it is not running."
+}
+
+# An install is done once the daemon it started runs and Gateway accepted it. A daemon too old to record its session
+# must have enrolled and keep running for 10 s instead.
+await_gateway_connection() {
+    local waited=0 limit="${GATEWAY_NODE_ENROLLMENT_WAIT_SECONDS:-90}" running=0
     while (( waited < limit )); do
-        if [[ -f /etc/nginx-daemon/certs/node.pem && -f /var/lib/nginx-daemon/state.json ]]; then
-            ok "nginx-daemon enrolled with Gateway"
-            return 0
+        if daemon_records_gateway_session "$RESOLVED_DAEMON_VERSION"; then
+            if gateway_session_is_current; then
+                ok "nginx-daemon is connected to Gateway"
+                return 0
+            fi
+            # Gateway answered and refused the token: waiting cannot change that.
+            if grep -q '"enrollment_refused":true' "$GATEWAY_SESSION_FILE" 2>/dev/null; then
+                err "Gateway refused the enrollment token (already used, expired, or for another node): $(gateway_session_enrollment_error)"
+                err "Create a new setup command in Gateway and run it on this host."
+                show_daemon_log
+                return 1
+            fi
+        elif [[ -f /etc/nginx-daemon/certs/node.pem && -f /var/lib/nginx-daemon/state.json ]] && daemon_service_running; then
+            running=$((running + 1))
+            if (( running >= 10 )); then
+                ok "nginx-daemon enrolled with Gateway and is running"
+                warn "nginx-daemon ${RESOLVED_DAEMON_VERSION} does not report its Gateway connection; check that the node is online in Gateway."
+                return 0
+            fi
+        else
+            running=0
         fi
         sleep 1
         waited=$((waited + 1))
     done
-    err "nginx-daemon has not enrolled with Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
-    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
-        err "Check the daemon log: /var/lib/nginx-daemon/launcher/manual.log"
-    elif has_systemd; then
-        err "Check the daemon log: journalctl -u nginx-daemon"
-    elif has_openrc; then
-        err "Check the daemon log: /var/log/nginx-daemon.err and /var/log/nginx-daemon.log"
+    local enrollment_error
+    if enrollment_error=$(gateway_session_enrollment_error); then
+        err "nginx-daemon could not enroll with Gateway: ${enrollment_error}"
+    else
+        err "nginx-daemon has not connected to Gateway within ${limit} s; check that Gateway at ${GATEWAY_ADDR} is reachable."
     fi
+    show_daemon_log
     return 1
 }
 
@@ -700,16 +862,28 @@ prepare_manual_launcher_state() {
     [[ ! -L "$launcher_dir" ]] || return 1
     mkdir -p "$launcher_dir" || return 1
     chmod 0700 "$launcher_dir" || return 1
-    if [[ "$RUN_USER" != "root" ]] && ! chown "${RUN_USER}:${RUN_GROUP}" "$launcher_dir"; then
-        return 1
-    fi
+    chown "${RUN_USER}:${RUN_GROUP}" "$launcher_dir" || return 1
     [[ ! -L "$manual_log" ]] || return 1
     touch "$manual_log" || return 1
     chmod 0640 "$manual_log" || return 1
-    if [[ "$RUN_USER" != "root" ]] && ! chown "${RUN_USER}:${RUN_GROUP}" "$manual_log"; then
-        return 1
-    fi
+    chown "${RUN_USER}:${RUN_GROUP}" "$manual_log" || return 1
 }
+
+# Stops the launcher a previous manual start left running, as a service manager does on restart. Only a process whose
+# command line is this daemon's launcher is signalled.
+stop_manual_launcher() {
+    local launcher_dir="$1" daemon_type="$2" pid waited=0
+    pid="$(launcher_pid_from_json "${launcher_dir}/owner.json" || true)"
+    launcher_pid_is_live "$pid" || return 0
+    tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null | grep -Fq -- " launcher --daemon-type ${daemon_type} " || return 0
+    kill -TERM "$pid" 2>/dev/null || true
+    while launcher_pid_is_live "$pid" && (( waited < 30 )); do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    ! launcher_pid_is_live "$pid"
+}
+
 
 detach_manual_launcher() {
     local daemon_binary="$1"
@@ -763,13 +937,15 @@ wait_for_manual_launcher_ready() {
     return 1
 }
 
+# Runs the daemon under its own launcher on a host without a service manager. A launcher a previous run started is
+# stopped first, as a service restart would, so the daemon installed now runs.
 manual_launcher_fallback() {
     local daemon_name="$1"
     local daemon_binary="$2"
     local state_dir="$3"
     local launcher_dir="${state_dir}/launcher"
     local manual_log="${launcher_dir}/manual.log"
-    local owner_pid daemon_type
+    local daemon_type
     MANUAL_FALLBACK_USED=1
 
     case "$daemon_binary" in
@@ -777,50 +953,36 @@ manual_launcher_fallback() {
         */nginx-daemon) daemon_type="nginx" ;;
         */monitoring-daemon) daemon_type="monitoring" ;;
         */relay-supervisor) daemon_type="relay" ;;
-        *) warn "Unknown launcher daemon binary ${daemon_binary}; preserving installed files."; return 0 ;;
+        *) err "Unknown launcher daemon binary ${daemon_binary}."; return 1 ;;
     esac
 
-    owner_pid="$(launcher_pid_from_json "${launcher_dir}/owner.json" || true)"
-    if launcher_pid_is_live "$owner_pid"; then
-        if wait_for_manual_launcher_ready "$launcher_dir" "$daemon_type"; then
-            ok "${daemon_name} launcher is already ready (PID ${MANUAL_OWNER_PID}, child PID ${MANUAL_CHILD_PID})."
-            echo "Manual launcher log: ${manual_log}"
-            echo "Manual mode is not persistent across reboot."
-        else
-            warn "${daemon_name} has a live launcher owner but no verified ready child; refusing to start a competing launcher."
-            echo "Launcher state: ${launcher_dir}"
-            echo "Launcher log: ${manual_log}"
-        fi
-        return 0
+    if ! stop_manual_launcher "$launcher_dir" "$daemon_type"; then
+        err "The running ${daemon_name} launcher did not stop; installed files were preserved."
+        return 1
     fi
-
     if ! prepare_manual_launcher_state "$state_dir"; then
-        warn "Could not prepare manual launcher state for ${daemon_name}; installed files were preserved."
+        err "Could not prepare manual launcher state for ${daemon_name}; installed files were preserved."
         echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-        return 0
+        return 1
     fi
+    forget_gateway_session
     if ! detach_manual_launcher "$daemon_binary" "$manual_log"; then
-        warn "Could not detach ${daemon_name}; installed files and launcher files were preserved."
-        echo "Launcher log: ${manual_log}"
+        err "Could not detach ${daemon_name}; installed files and launcher files were preserved."
         echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-        return 0
+        return 1
     fi
 
     if wait_for_manual_launcher_ready "$launcher_dir" "$daemon_type"; then
         ok "${daemon_name} is running in manual mode (launcher PID ${MANUAL_OWNER_PID}, child PID ${MANUAL_CHILD_PID})."
-        echo "Launcher PID: ${MANUAL_OWNER_PID}"
-        echo "Child PID: ${MANUAL_CHILD_PID}"
         echo "Manual launcher log: ${manual_log}"
         echo "Manual mode is not persistent across reboot."
         return 0
     fi
 
-    warn "Could not verify the detached ${daemon_name} launcher; installed files and launcher files were preserved."
+    err "Could not verify the detached ${daemon_name} launcher; installed files and launcher files were preserved."
     echo "Launcher state: ${launcher_dir}"
-    echo "Launcher log: ${manual_log}"
     echo "Foreground command: $(launcher_foreground_command "$daemon_binary")"
-    echo "Manual mode is not persistent across reboot."
-    return 0
+    return 1
 }
 
 check_dependencies() {
@@ -1182,34 +1344,152 @@ nginx_version() {
     nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9.]*\).*#\1#p' | head -n 1
 }
 
-dry_run_preview() {
-    if command_exists nginx; then
-        ok "nginx already installed ($(nginx_version))"
+# ── Host access switches ─────────────────────────────────────────────
+# --disable-console / --disable-files write console.enabled: false and
+# files.enabled: false to the daemon config on this node. The installer only
+# turns them off and keeps them off when enrollment rewrites the config;
+# turning one back on is an edit of the config file on the node.
+host_feature_disabled() {
+    local config_file="$1"
+    local section="$2"
+    [[ -f "$config_file" ]] || return 1
+    awk -v section="$section" '
+        $0 ~ ("^" section ":[[:space:]]*(#.*)?$") { in_section = 1; next }
+        in_section && /^[^[:space:]#]/ { in_section = 0 }
+        in_section && /^[[:space:]]+enabled:[[:space:]]*(false|False|FALSE)[[:space:]]*(#.*)?$/ { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$config_file"
+}
+
+disable_host_feature() {
+    local config_file="$1"
+    local section="$2"
+    local tmp_file
+    tmp_file=$(mktemp "${config_file}.XXXXXX") || die "Could not update ${section}.enabled in ${config_file}"
+    if ! awk -v section="$section" '
+        function emit() { if (!done) { print indent "enabled: false"; done = 1 } }
+        BEGIN { indent = "  " }
+        !in_section && $0 ~ ("^" section ":") {
+            if ($0 !~ ("^" section ":[[:space:]]*(#.*)?$")) { failed = 1; exit 3 }
+            print; in_section = 1; seen = 1; next
+        }
+        in_section && /^[^[:space:]#]/ { emit(); in_section = 0 }
+        in_section && /^[[:space:]]+[^[:space:]#]/ {
+            if (!child) { match($0, /^[[:space:]]+/); indent = substr($0, 1, RLENGTH); child = 1 }
+            if ($0 ~ ("^" indent "enabled:")) { emit(); next }
+        }
+        { print }
+        END {
+            if (failed) exit 3
+            if (in_section) emit()
+            if (!seen) { print ""; print section ":"; print "  enabled: false" }
+        }
+    ' "$config_file" > "$tmp_file"; then
+        rm -f "$tmp_file"
+        die "Could not set ${section}.enabled: false in ${config_file}; edit the file by hand."
+    fi
+    # Write in place so the config keeps its owner and mode.
+    cat "$tmp_file" > "$config_file" || die "Could not write ${config_file}"
+    rm -f "$tmp_file"
+    ok "${section}.enabled: false written to ${config_file}"
+}
+
+remember_host_access_config() {
+    if host_feature_disabled "$1" console; then DISABLE_CONSOLE=1; fi
+    if host_feature_disabled "$1" files; then DISABLE_FILES=1; fi
+}
+
+apply_host_access_config() {
+    if [[ "$DISABLE_CONSOLE" == "1" ]]; then disable_host_feature "$1" console; fi
+    if [[ "$DISABLE_FILES" == "1" ]]; then disable_host_feature "$1" files; fi
+}
+
+preview_host_access_config() {
+    if [[ "$DISABLE_CONSOLE" == "1" ]]; then ok "console.enabled: false written to $1 (dry run)"; fi
+    if [[ "$DISABLE_FILES" == "1" ]]; then ok "files.enabled: false written to $1 (dry run)"; fi
+}
+
+# What a real run does with the daemon binary: nginx-daemon at the path this run installs it to is kept when it already has
+# the version to install, else downloaded.
+preview_daemon_binary() {
+    local target="${NGINX_DAEMON_OWN_BINARY}"
+    if [[ "$RUN_USER" == "root" ]]; then
+        target="${NGINX_DAEMON_BIN_LINK}"
+        # A link or wrapper of a non-root install is replaced by a downloaded root binary.
+        if [[ -L "$target" ]] || is_daemon_wrapper "$target"; then target=""; fi
+    fi
+    if [[ -n "$target" && -f "$target" && "$(daemon_binary_version "$target" || true)" == "$RESOLVED_DAEMON_VERSION" ]]; then
+        ok "nginx-daemon already installed (${RESOLVED_DAEMON_VERSION})"
     else
+        log "Downloading nginx-daemon..."
+        ok "nginx-daemon installed (${RESOLVED_DAEMON_VERSION}; dry run)"
+    fi
+    if [[ "$RUN_USER" != "root" ]]; then
+        ok "${NGINX_DAEMON_BIN_LINK} runs ${NGINX_DAEMON_OWN_BINARY} as ${RUN_USER} (dry run)"
+    fi
+}
+
+preview_run_user_switch() {
+    [[ "$PREVIOUS_RUN_UID" != 0 && "$PREVIOUS_RUN_UID" != "$(id -u "$RUN_USER")" ]] || return 0
+    log "nginx-daemon runs as $(id -nu "$PREVIOUS_RUN_UID" 2>/dev/null || echo "uid ${PREVIOUS_RUN_UID}"); it is stopped and switched to ${RUN_USER} (dry run)"
+}
+
+preview_service_start() {
+    local manager="manual mode (no supported service manager; not persistent across reboot)"
+    if has_systemd; then
+        manager="systemd unit nginx-daemon"
+    elif has_openrc; then
+        manager="OpenRC service nginx-daemon"
+    fi
+    log "Enabling and starting nginx-daemon as ${RUN_USER} (${manager})..."
+    ok "nginx-daemon is connected to Gateway (dry run)"
+}
+
+preview_nginx_install() {
+    local ver
+    if ! command_exists nginx; then
+        [[ "$SKIP_NGINX" -eq 0 ]] || die "--skip-nginx requires nginx ${NGINX_MIN_VERSION}+ to be installed."
         log "Adding nginx.org stable repository..."
         log "Installing nginx..."
         ok "nginx installed (dry run)"
+        return
     fi
+    ver=$(nginx_version)
+    ver="${ver:-unknown}"
+    if nginx_version_at_least "$ver" "$NGINX_MIN_VERSION"; then
+        ok "nginx already installed (${ver})"
+        return
+    fi
+    [[ "$SKIP_NGINX" -eq 0 ]] || die "--skip-nginx requires nginx ${NGINX_MIN_VERSION}+; found ${ver}."
+    [[ "$NON_INTERACTIVE" -eq 0 ]] || die "nginx ${NGINX_MIN_VERSION}+ is required. Re-run interactively to approve the stable nginx upgrade."
+    log "nginx ${ver} is below ${NGINX_MIN_VERSION}; the real run asks to upgrade it from the nginx.org stable repository."
+}
+
+dry_run_preview() {
+    preview_run_user_switch
+    preview_nginx_install
     log "Creating required directories..."
     ok "Directories created (dry run)"
     log "Configuring nginx (${NGINX_MODE} mode)..."
     ok "nginx configuration updated (${NGINX_MODE} mode; dry run)"
-    log "Downloading nginx-daemon..."
-    log "Verifying checksum..."
-    ok "Checksum verified (dry run)"
-    ok "nginx-daemon installed (${RESOLVED_DAEMON_VERSION}; dry run)"
-    log "Writing config and enrolling with Gateway..."
-    ok "Config written to /etc/nginx-daemon/config.yaml (dry run)"
+    preview_daemon_binary
+    if [[ -n "$ENROLL_TOKEN" && ( -n "$(ls -A /etc/nginx-daemon/certs 2>/dev/null)" || -f /var/lib/nginx-daemon/state.json ) ]]; then
+        log "Fresh enrollment token provided — the existing nginx-daemon enrollment state is backed up and replaced (dry run)"
+    fi
+    if [[ -z "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 ]]; then
+        ok "Node already enrolled — skipping enrollment (dry run)"
+    else
+        log "Writing config and enrolling with Gateway..."
+        ok "Config written to /etc/nginx-daemon/config.yaml (dry run)"
+    fi
     preview_host_access_config /etc/nginx-daemon/config.yaml
-    log "Enabling and starting nginx-daemon..."
-    ok "nginx-daemon is running (dry run)"
+    if [[ "$RUN_USER" != "root" ]]; then
+        ok "nginx-daemon gets CAP_NET_BIND_SERVICE for nginx -t (dry run)"
+    fi
+    preview_service_start
     complete_success "Dry run completed successfully — no host changes were made."
 }
 
-if [[ "$DRY_RUN" -eq 1 ]]; then
-    dry_run_preview
-    exit 0
-fi
 
 # ── Step 1: Install nginx ────────────────────────────────────────────
 run_apt_with_lock_retry() {
@@ -1919,12 +2199,7 @@ create_directories() {
     mkdir -p /var/www/acme-challenge/.well-known/acme-challenge
     mkdir -p /etc/nginx-daemon/certs
     mkdir -p /var/lib/nginx-daemon
-
-    # Chown if non-root user
-    if [[ "$RUN_USER" != "root" ]]; then
-        chown -R "${RUN_USER}:${RUN_GROUP}" /etc/nginx-daemon
-        chown -R "${RUN_USER}:${RUN_GROUP}" /var/lib/nginx-daemon
-    fi
+    grant_daemon_paths_to_run_user
 
     ok "Directories created"
 }
@@ -2023,70 +2298,6 @@ install_daemon_binary() {
     fi
 }
 
-# ── Host access switches ─────────────────────────────────────────────
-# --disable-console / --disable-files write console.enabled: false and
-# files.enabled: false to the daemon config on this node. The installer only
-# turns them off and keeps them off when enrollment rewrites the config;
-# turning one back on is an edit of the config file on the node.
-host_feature_disabled() {
-    local config_file="$1"
-    local section="$2"
-    [[ -f "$config_file" ]] || return 1
-    awk -v section="$section" '
-        $0 ~ ("^" section ":[[:space:]]*(#.*)?$") { in_section = 1; next }
-        in_section && /^[^[:space:]#]/ { in_section = 0 }
-        in_section && /^[[:space:]]+enabled:[[:space:]]*(false|False|FALSE)[[:space:]]*(#.*)?$/ { found = 1 }
-        END { exit found ? 0 : 1 }
-    ' "$config_file"
-}
-
-disable_host_feature() {
-    local config_file="$1"
-    local section="$2"
-    local tmp_file
-    tmp_file=$(mktemp "${config_file}.XXXXXX") || die "Could not update ${section}.enabled in ${config_file}"
-    if ! awk -v section="$section" '
-        function emit() { if (!done) { print indent "enabled: false"; done = 1 } }
-        BEGIN { indent = "  " }
-        !in_section && $0 ~ ("^" section ":") {
-            if ($0 !~ ("^" section ":[[:space:]]*(#.*)?$")) { failed = 1; exit 3 }
-            print; in_section = 1; seen = 1; next
-        }
-        in_section && /^[^[:space:]#]/ { emit(); in_section = 0 }
-        in_section && /^[[:space:]]+[^[:space:]#]/ {
-            if (!child) { match($0, /^[[:space:]]+/); indent = substr($0, 1, RLENGTH); child = 1 }
-            if ($0 ~ ("^" indent "enabled:")) { emit(); next }
-        }
-        { print }
-        END {
-            if (failed) exit 3
-            if (in_section) emit()
-            if (!seen) { print ""; print section ":"; print "  enabled: false" }
-        }
-    ' "$config_file" > "$tmp_file"; then
-        rm -f "$tmp_file"
-        die "Could not set ${section}.enabled: false in ${config_file}; edit the file by hand."
-    fi
-    # Write in place so the config keeps its owner and mode.
-    cat "$tmp_file" > "$config_file" || die "Could not write ${config_file}"
-    rm -f "$tmp_file"
-    ok "${section}.enabled: false written to ${config_file}"
-}
-
-remember_host_access_config() {
-    if host_feature_disabled "$1" console; then DISABLE_CONSOLE=1; fi
-    if host_feature_disabled "$1" files; then DISABLE_FILES=1; fi
-}
-
-apply_host_access_config() {
-    if [[ "$DISABLE_CONSOLE" == "1" ]]; then disable_host_feature "$1" console; fi
-    if [[ "$DISABLE_FILES" == "1" ]]; then disable_host_feature "$1" files; fi
-}
-
-preview_host_access_config() {
-    if [[ "$DISABLE_CONSOLE" == "1" ]]; then ok "console.enabled: false written to $1 (dry run)"; fi
-    if [[ "$DISABLE_FILES" == "1" ]]; then ok "files.enabled: false written to $1 (dry run)"; fi
-}
 
 # ── Step 5: Install and enroll ───────────────────────────────────────
 reset_existing_enrollment_for_token() {
@@ -2094,7 +2305,8 @@ reset_existing_enrollment_for_token() {
         return
     fi
 
-    if [[ ! -d /etc/nginx-daemon/certs && ! -f /var/lib/nginx-daemon/state.json ]]; then
+    # Only a node that enrolled before has anything to replace; create_directories made an empty certs directory.
+    if [[ -z "$(ls -A /etc/nginx-daemon/certs 2>/dev/null)" && ! -f /var/lib/nginx-daemon/state.json ]]; then
         return
     fi
 
@@ -2102,7 +2314,7 @@ reset_existing_enrollment_for_token() {
     log "Fresh enrollment token provided — replacing existing nginx-daemon enrollment state..."
     mkdir -p "$backup_dir"
 
-    if [[ -d /etc/nginx-daemon/certs ]]; then
+    if [[ -n "$(ls -A /etc/nginx-daemon/certs 2>/dev/null)" ]]; then
         cp -a /etc/nginx-daemon/certs "$backup_dir/certs"
         rm -rf /etc/nginx-daemon/certs
     fi
@@ -2165,21 +2377,25 @@ enroll_daemon() {
 }
 
 # ── Step 6: Start the daemon ─────────────────────────────────────────
+# A host with systemd or OpenRC runs the daemon as a service, and a service that does not start fails the install.
+# Manual mode is only for hosts without a service manager.
 start_daemon() {
     retire_legacy_update_guard "nginx-daemon" "/usr/local/bin/nginx-daemon"
     log "Enabling and starting nginx-daemon..."
-    # A daemon running as its own user cannot create its socket directories in /run; the service manager does.
-    local unit_runtime="" openrc_runtime="" runtime_dirs
+    # A daemon running as its own user cannot create its socket directories in /run; the service manager does. Its
+    # nginx -t binds the configured listen ports, below 1024 too, so it gets the capability its nginx has.
+    local unit_runtime="" openrc_capabilities="" openrc_runtime="" runtime_dirs
     if [[ "$RUN_USER" != "root" ]]; then
         runtime_dirs=$(printf '%s ' "${NGINX_DAEMON_RUNTIME_DIRS[@]}")
         runtime_dirs="${runtime_dirs% }"
-        unit_runtime=$'\nRuntimeDirectory='"${runtime_dirs}"$'\nRuntimeDirectoryMode=0755\nRuntimeDirectoryPreserve=yes'
+        unit_runtime=$'\nRuntimeDirectory='"${runtime_dirs}"$'\nRuntimeDirectoryMode=0755\nRuntimeDirectoryPreserve=yes\nAmbientCapabilities=CAP_NET_BIND_SERVICE'
+        openrc_capabilities=$'\ncapabilities="^cap_net_bind_service"'
         openrc_runtime=$'\n\nstart_pre() {\n    for dir in '"${runtime_dirs}"$'; do\n        checkpath --directory --mode 0755 --owner '"${RUN_USER}:${RUN_GROUP}"$' "/run/${dir}"\n    done\n}'
     fi
 
     if has_systemd; then
         # Write systemd unit with user/group support
-        if ! cat > /etc/systemd/system/nginx-daemon.service <<UNIT
+        cat > /etc/systemd/system/nginx-daemon.service <<UNIT || die "Could not write the nginx-daemon systemd unit."
 [Unit]
 Description=Gateway Nginx Daemon
 After=network-online.target nginx.service
@@ -2200,37 +2416,12 @@ NotifyAccess=main${unit_runtime}
 [Install]
 WantedBy=multi-user.target
 UNIT
-        then
-            warn "Could not write the nginx-daemon systemd unit; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-            return 0
-        fi
-
-        if ! systemctl daemon-reload >> "$LOG_FILE" 2>&1; then
-            warn "systemd daemon-reload failed; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-            return 0
-        fi
-        if ! systemctl enable nginx-daemon >> "$LOG_FILE" 2>&1; then
-            warn "Could not enable nginx-daemon; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-            return 0
-        fi
-        if ! systemctl restart nginx-daemon >> "$LOG_FILE" 2>&1; then
-            warn "Could not start or restart nginx-daemon; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-            return 0
-        fi
-        sleep 2
-
-        if systemctl is-active --quiet nginx-daemon; then
-            ok "nginx-daemon is running"
-        else
-            warn "nginx-daemon is not active; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-        fi
+        systemctl daemon-reload >> "$LOG_FILE" 2>&1 || die "systemd daemon-reload failed."
+        systemctl enable nginx-daemon >> "$LOG_FILE" 2>&1 || die "Could not enable nginx-daemon."
+        forget_gateway_session
+        systemctl restart nginx-daemon >> "$LOG_FILE" 2>&1 || fail_daemon_start "Could not start nginx-daemon."
     elif has_openrc; then
-        if ! cat > /etc/init.d/nginx-daemon <<UNIT
+        cat > /etc/init.d/nginx-daemon <<UNIT || die "Could not write the nginx-daemon OpenRC service."
 #!/sbin/openrc-run
 name="Gateway Nginx Daemon"
 description="Gateway Nginx Daemon"
@@ -2239,7 +2430,7 @@ command_args="run"
 command_user="${RUN_USER}:${RUN_GROUP}"
 pidfile="/run/\${RC_SVCNAME}.pid"
 supervisor="supervise-daemon"
-respawn_delay=5
+respawn_delay=5${openrc_capabilities}
 output_log="/var/log/nginx-daemon.log"
 error_log="/var/log/nginx-daemon.err"
 
@@ -2248,43 +2439,28 @@ depend() {
     use nginx
 }${openrc_runtime}
 UNIT
-        then
-            warn "Could not write the nginx-daemon OpenRC service; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-            return 0
-        fi
-        if ! chmod +x /etc/init.d/nginx-daemon; then
-            warn "Could not make the nginx-daemon OpenRC service executable; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-            return 0
-        fi
-        if ! rc-update add nginx-daemon default >> "$LOG_FILE" 2>&1; then
-            warn "Could not enable nginx-daemon in OpenRC; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-            return 0
-        fi
-        if ! rc-service nginx-daemon restart >> "$LOG_FILE" 2>&1; then
-            if ! rc-service nginx-daemon start >> "$LOG_FILE" 2>&1; then
-                warn "Could not start nginx-daemon in OpenRC; using manual mode."
-                manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
-                return 0
-            fi
-        fi
-        sleep 2
-
-        if rc-service nginx-daemon status >> "$LOG_FILE" 2>&1; then
-            ok "nginx-daemon is running"
-        else
-            warn "nginx-daemon is not active in OpenRC; using manual mode."
-            manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
+        chmod +x /etc/init.d/nginx-daemon || die "Could not make the nginx-daemon OpenRC service executable."
+        rc-update add nginx-daemon default >> "$LOG_FILE" 2>&1 || die "Could not enable nginx-daemon in OpenRC."
+        forget_gateway_session
+        if ! rc-service nginx-daemon restart >> "$LOG_FILE" 2>&1 && ! rc-service nginx-daemon start >> "$LOG_FILE" 2>&1; then
+            fail_daemon_start "Could not start nginx-daemon in OpenRC."
         fi
     else
         warn "No supported service manager found; using manual mode."
-        manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
+        manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon" \
+            || fail_daemon_start "Could not start nginx-daemon in manual mode."
     fi
+    ok "nginx-daemon started"
 }
 
+# A dry run stops here, once every function it uses is defined.
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    dry_run_preview
+    exit 0
+fi
+
 # ── Run ──────────────────────────────────────────────────────────────
+prepare_run_user_switch
 install_nginx
 create_directories
 migrate_legacy_gateway_paths
@@ -2294,9 +2470,9 @@ remember_host_access_config /etc/nginx-daemon/config.yaml
 enroll_daemon
 apply_host_access_config /etc/nginx-daemon/config.yaml
 start_daemon
-# The daemon enrolls once it runs: an install whose daemon did not enroll is not done.
-if ! await_enrollment; then
-    die "nginx-daemon is installed, but it did not enroll with Gateway."
+# An install whose daemon does not run or did not connect to Gateway is not done.
+if ! await_gateway_connection; then
+    die "nginx-daemon is installed, but it did not connect to Gateway."
 fi
 
 echo ""
