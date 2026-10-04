@@ -659,6 +659,22 @@ message RelayGrantAssignment {
   repeated RelayDataCandidate candidates = 8;
   uint32 schema_version = 9;
   ManagedDatabaseListener managed_database_listener = 10;
+  SecureLinkEgress secure_link_egress = 11;
+}
+
+// Desired connector egress listener for a consumer-side link. Carried with the
+// signed connect assignment so revocation also removes the local entry point.
+message SecureLinkEgress {
+  string network_name = 1;      // gateway-db-*, gateway-storage-*, gateway-link-*
+  string alias = 2;             // DNS alias the connector gets on that network
+  uint32 listen_port = 3;
+  uint32 max_sessions = 4;      // 0 = unlimited
+  string tls_ca_pem = 5;        // storage only: connector originates TLS
+  string tls_server_name = 6;
+  uint64 route_generation = 7;
+  // The secure-link connector image, for a node that has egress but no proxy
+  // secure-link target binding to take the image from.
+  string connector_image = 8;
 }
 
 // Desired daemon-side listener for a managed-database binding. It is carried

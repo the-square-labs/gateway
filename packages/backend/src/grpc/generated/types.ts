@@ -1046,6 +1046,28 @@ export interface RelayGrantAssignment {
   grant: RelaySignedGrant;
   candidates?: RelayDataCandidate[];
   schemaVersion?: number;
+  secureLinkEgress?: SecureLinkEgress;
+}
+
+/**
+ * Desired connector egress listener for a consumer-side link (managed storage, managed database or container
+ * link), carried with the signed connect assignment so revocation also removes the local entry point.
+ */
+export interface SecureLinkEgress {
+  /** gateway-db-*, gateway-storage-* or gateway-link-* */
+  networkName: string;
+  /** DNS alias the connector gets on that network */
+  alias: string;
+  listenPort: number;
+  /** 0 = unlimited */
+  maxSessions?: number;
+  /** storage only: the connector originates TLS */
+  tlsCaPem?: string;
+  tlsServerName?: string;
+  /** uint64: relay_routes.generation (proto-loader accepts a number or a decimal string) */
+  routeGeneration: number | string;
+  /** The secure-link connector image, for a node without a proxy secure-link target binding to take it from. */
+  connectorImage?: string;
 }
 
 export interface RelayDataCandidate {

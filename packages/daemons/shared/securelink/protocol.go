@@ -11,9 +11,24 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
-	maxFrameBytes   = 1024 * 1024
+	// ProtocolVersion is the connector control protocol: 2 adds egress
+	// listeners. A connector still answers a version 1 request (ingress only)
+	// with version 1, so a daemon rolled back to a v1 release keeps working.
+	ProtocolVersion = 2
+	// ProtocolVersionIngressOnly is the first control protocol: ingress
+	// bindings only.
+	ProtocolVersionIngressOnly = 1
+	// RelayProtocolVersion is the version of RelayRequest and RelayResponse on
+	// the daemon's connector sockets (storage-relay.sock, egress.sock). It did
+	// not change with the control protocol: daemons and storage connectors of
+	// every release speak it.
+	RelayProtocolVersion = 1
+	maxFrameBytes        = 1024 * 1024
 )
+
+// UnsupportedVersionError is what a connector answers a request of a control
+// protocol version it does not speak (a v1 connector answers it to v2).
+const UnsupportedVersionError = "unsupported protocol version"
 
 type BindingConfig struct {
 	ID         string `json:"id"`
@@ -23,9 +38,32 @@ type BindingConfig struct {
 	TargetPort uint16 `json:"targetPort"`
 }
 
+// EgressConfig is one egress listener of the connector: a workload on a link
+// network connects to ListenHost:ListenPort, and the connector carries the
+// connection through the daemon's egress socket (a RelayRequest with
+// OwnerKind and ID). The daemon decides where the connection goes.
+type EgressConfig struct {
+	ID         string `json:"id"`
+	OwnerKind  string `json:"ownerKind"`
+	Generation uint64 `json:"generation"`
+	// ListenHost is the connector's own IPv4 address on the link network.
+	ListenHost string `json:"listenHost"`
+	ListenPort uint16 `json:"listenPort"`
+	// AllowedPrefix is the CIDR of that network; a peer outside it is closed
+	// at once.
+	AllowedPrefix string `json:"allowedPrefix"`
+	// MaxSessions bounds the concurrent connections; 0 means no bound.
+	MaxSessions int `json:"maxSessions,omitempty"`
+	// TLSCAPEM and TLSServerName make the connector originate TLS over the
+	// relayed stream (managed storage with TLS).
+	TLSCAPEM      string `json:"tlsCaPem,omitempty"`
+	TLSServerName string `json:"tlsServerName,omitempty"`
+}
+
 type SyncRequest struct {
 	Version  int             `json:"version"`
 	Bindings []BindingConfig `json:"bindings"`
+	Egress   []EgressConfig  `json:"egress,omitempty"`
 }
 
 type BindingStatus struct {
@@ -34,10 +72,28 @@ type BindingStatus struct {
 	Port       uint16 `json:"port"`
 }
 
+// Egress listener states.
+const (
+	EgressListening = "listening"
+	EgressError     = "error"
+)
+
+// EgressStatus reports one egress listener. A listener that failed (State
+// EgressError) never affects the other bindings of the request.
+type EgressStatus struct {
+	ID         string `json:"id"`
+	Generation uint64 `json:"generation"`
+	State      string `json:"state"`
+	Error      string `json:"error,omitempty"`
+}
+
 type SyncResponse struct {
 	Version  int             `json:"version"`
 	Bindings []BindingStatus `json:"bindings,omitempty"`
-	Error    string          `json:"error,omitempty"`
+	Egress   []EgressStatus  `json:"egress,omitempty"`
+	// Error refuses the ingress bindings of the request (or the whole request
+	// when it is malformed); the egress statuses stand on their own.
+	Error string `json:"error,omitempty"`
 }
 
 // RelayRequest switches a connector into a single server-authorized raw TCP
@@ -90,7 +146,37 @@ func WriteJSON(w io.Writer, value any) error {
 	return err
 }
 
-func Sync(ctx context.Context, socketPath string, bindings []BindingConfig) (*SyncResponse, error) {
+// Sync replaces the ingress bindings and the egress listeners of a connector
+// (egress nil: none). A connector of protocol v1 is sent the ingress bindings
+// only: the response then has Version ProtocolVersionIngressOnly and no egress
+// statuses, and the caller reports its egress listeners as not served. When
+// the connector refused the ingress bindings (response Error), the response is
+// returned with the error, so the egress statuses it carries are kept.
+func Sync(ctx context.Context, socketPath string, bindings []BindingConfig, egress []EgressConfig) (*SyncResponse, error) {
+	response, err := exchange(ctx, socketPath, SyncRequest{Version: ProtocolVersion, Bindings: bindings, Egress: egress})
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case response.Version == ProtocolVersionIngressOnly && response.Error == UnsupportedVersionError:
+		response, err = exchange(ctx, socketPath, SyncRequest{Version: ProtocolVersionIngressOnly, Bindings: bindings})
+		if err != nil {
+			return nil, err
+		}
+		if response.Version != ProtocolVersionIngressOnly {
+			return nil, errors.New("unsupported secure-link connector protocol version")
+		}
+		response.Egress = nil
+	case response.Version != ProtocolVersion:
+		return nil, errors.New("unsupported secure-link connector protocol version")
+	}
+	if response.Error != "" {
+		return response, errors.New(response.Error)
+	}
+	return response, nil
+}
+
+func exchange(ctx context.Context, socketPath string, request SyncRequest) (*SyncResponse, error) {
 	dialer := net.Dialer{}
 	connection, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
@@ -100,19 +186,12 @@ func Sync(ctx context.Context, socketPath string, bindings []BindingConfig) (*Sy
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = connection.SetDeadline(deadline)
 	}
-	request := SyncRequest{Version: ProtocolVersion, Bindings: bindings}
 	if err := WriteJSON(connection, request); err != nil {
 		return nil, err
 	}
 	var response SyncResponse
 	if err := ReadJSON(connection, &response); err != nil {
 		return nil, err
-	}
-	if response.Version != ProtocolVersion {
-		return nil, errors.New("unsupported secure-link connector protocol version")
-	}
-	if response.Error != "" {
-		return nil, errors.New(response.Error)
 	}
 	return &response, nil
 }
