@@ -36,6 +36,10 @@ class CertificateChangedDuringRenewalError extends Error {
 const ENROLLMENT_FAILED_MESSAGE = 'Enrollment failed; see the Gateway log for details';
 const RENEWAL_FAILED_MESSAGE = 'Certificate renewal failed; see the Gateway log for details';
 
+function relayHostTakenMessage(relayName: string | null): string {
+  return `This host already has ${relayName ? `relay "${relayName}"` : 'a relay'} in the Relay Pool. Re-enroll that relay (Settings > Relay > Re-enroll) or remove it first.`;
+}
+
 export function createEnrollmentHandlers(deps: GrpcServerDeps) {
   return {
     async Enroll(call: ServerUnaryCall<EnrollRequest, EnrollResponse>, callback: sendUnaryData<EnrollResponse>) {
@@ -123,6 +127,17 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             return;
           }
           if (!instance) {
+            // One relay per host in the pool. A relay that went offline on this host stays in the pool until its
+            // policy expires; the new node must not get certificates only to fail on the pool's host constraint.
+            const [sameHost] = await deps.db
+              .select({ displayName: relayInstances.displayName })
+              .from(relayInstances)
+              .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.faultDomainId, hostIdentityId)))
+              .limit(1);
+            if (sameHost) {
+              callback({ code: 6, message: relayHostTakenMessage(sameHost.displayName) });
+              return;
+            }
             [instance] = await deps.db
               .insert(relayInstances)
               .values({
@@ -278,8 +293,10 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           callback({ code: 16, message: 'Invalid enrollment token' });
           return;
         }
-        if ((err as { constraint?: string }).constraint === 'relay_instances_pool_fault_domain_unique') {
-          callback({ code: 6, message: 'This physical host already has a relay instance in the system pool' });
+        // Drizzle wraps the driver error: the constraint is on its cause. Reached when two enrollments race.
+        const failed = err as { constraint?: string; cause?: { constraint?: string } };
+        if ((failed.constraint ?? failed.cause?.constraint) === 'relay_instances_pool_fault_domain_unique') {
+          callback({ code: 6, message: relayHostTakenMessage(null) });
           return;
         }
         logger.error('Enrollment failed', { hostname: call.request?.hostname, error: (err as Error).message });

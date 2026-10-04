@@ -167,3 +167,79 @@ describe('Enrollment errors returned to the daemon', () => {
     });
   });
 });
+
+describe('Enroll a new relay on a host that already has one in the pool', () => {
+  async function newRelayDb(sameHost: Array<{ displayName: string }>, insertError?: Error) {
+    const token = createNodeEnrollmentToken();
+    const pending = {
+      id: nodeId,
+      type: 'relay',
+      status: 'pending',
+      displayName: 'relay-2',
+      serviceAddresses: ['relay-2.example.test'],
+      enrollmentTokenSelector: token.selector,
+      enrollmentTokenHash: await bcrypt.hash(token.token, 4),
+    };
+    let instanceLookups = 0;
+    const db = {
+      select: vi.fn(() => ({
+        from: (table: unknown) => ({
+          where: () => ({
+            limit: async () => {
+              if (table === nodes) return [pending];
+              instanceLookups += 1;
+              // The node's own instance first, then any relay of the pool on the same host.
+              return instanceLookups === 1 ? [] : sameHost;
+            },
+          }),
+        }),
+      })),
+      insert: vi.fn(() => ({
+        values: () => ({
+          returning: async () => {
+            if (insertError) throw insertError;
+            return [{ id: instanceId, nodeId, poolId: 'system', advertisedAddresses: ['relay-2.example.test'] }];
+          },
+        }),
+      })),
+      update: vi.fn(),
+    } as any;
+    return { db, token };
+  }
+
+  it('refuses it naming the relay to re-enroll or remove, before issuing any certificate', async () => {
+    const { db, token } = await newRelayDb([{ displayName: 'relay-1' }]);
+    const deps = makeDeps(db);
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).Enroll(relayEnrollCall(token.token, relayHostIdentityId), callback);
+
+    expect(callback).toHaveBeenCalledWith({
+      code: 6,
+      message:
+        'This host already has relay "relay-1" in the Relay Pool. Re-enroll that relay (Settings > Relay > Re-enroll) or remove it first.',
+    });
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
+    expect(deps.systemCA.issueRelayServerCert).not.toHaveBeenCalled();
+    expect(deps.systemCA.issueNodeCert).not.toHaveBeenCalled();
+  });
+
+  it('refuses it without the query when a concurrent enrollment took the host first', async () => {
+    const constraintError = Object.assign(new Error('Failed query: insert into "relay_instances" params: …'), {
+      cause: { constraint: 'relay_instances_pool_fault_domain_unique' },
+    });
+    const { db, token } = await newRelayDb([], constraintError);
+    const deps = makeDeps(db);
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).Enroll(relayEnrollCall(token.token, relayHostIdentityId), callback);
+
+    expect(callback).toHaveBeenCalledWith({
+      code: 6,
+      message:
+        'This host already has a relay in the Relay Pool. Re-enroll that relay (Settings > Relay > Re-enroll) or remove it first.',
+    });
+    expect(deps.systemCA.issueRelayServerCert).not.toHaveBeenCalled();
+  });
+});
