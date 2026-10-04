@@ -250,7 +250,7 @@ func (p *Plugin) collectRuntime(ctx context.Context) *pb.RelayRuntimeStatus {
 	if state != nil {
 		status.RelayInstanceId = state.InstanceID
 	}
-	if err := p.worker.ensureRunning(); err != nil {
+	if err := p.worker.keepRunning(); err != nil {
 		status.State = "error"
 		status.Error = err.Error()
 		return status
