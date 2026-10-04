@@ -73,7 +73,21 @@ curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/se
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
-**Alpine, OpenRC and LXC requirements.** Docker nodes need Docker to be able to give its containers the `memory`, `pids` and `cpu` cgroup controllers, because the Secure Link connector and managed workloads run with memory, CPU and pids limits. The installer checks this after Docker is present and refuses to enroll the node when a controller is missing. On an LXC guest running Alpine with OpenRC the root cgroup can have no controllers enabled: `cat /sys/fs/cgroup/cgroup.subtree_control` is empty, and OpenRC's `cgroups` service reports `Resource busy` because every process sits in the root cgroup. Docker and plain containers still start there, but a container with limits fails with `pids.max: no such file or directory`. The host cgroup setup has to enable the controllers before the node is installed; verify with `cat /sys/fs/cgroup/cgroup.subtree_control /sys/fs/cgroup/docker/cgroup.controllers`, which must list `memory`, `pids` and `cpu`. The installer does not change the host's cgroup setup, and no particular OpenRC or Proxmox setting is documented here as the fix.
+**Alpine, OpenRC and LXC requirements.** Docker nodes need Docker to be able to give its containers the `memory`, `pids` and `cpu` cgroup controllers, because the Secure Link connector and managed workloads run with memory, CPU and pids limits. The installer checks this after Docker is present and refuses to enroll the node when a controller is missing. On an LXC guest running Alpine with OpenRC the root cgroup can have no controllers enabled: `cat /sys/fs/cgroup/cgroup.subtree_control` is empty, and OpenRC's `cgroups` service reports `Resource busy` because every process sits in the root cgroup. Docker and plain containers still start there, but a container with limits fails with `pids.max: no such file or directory`. The host cgroup setup has to enable the controllers before the node is installed; verify with `cat /sys/fs/cgroup/cgroup.subtree_control /sys/fs/cgroup/docker/cgroup.controllers`, which must list `memory`, `pids` and `cpu`. The installer does not change the host's cgroup setup. On an Alpine LXC guest, let OpenRC's `cgroups` service move the processes out of the root cgroup before it enables the controllers: run `rc-update add cgroups boot`, put the following into `/etc/conf.d/cgroups`, and reboot the guest:
+
+```sh
+# Move every process out of the root cgroup so that the cgroups service can pass the controllers down.
+start_pre() {
+	[ -w /sys/fs/cgroup/cgroup.subtree_control ] || return 0
+	mkdir -p /sys/fs/cgroup/init
+	for pid in $(cat /sys/fs/cgroup/cgroup.procs); do
+		echo "$pid" > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null
+	done
+	return 0
+}
+```
+
+No change to the Proxmox container configuration is needed for this.
 
 A Build Worker uses the same Docker installer with `--mode builder`.
 
