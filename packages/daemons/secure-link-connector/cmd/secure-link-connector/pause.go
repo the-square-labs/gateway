@@ -19,10 +19,16 @@ const pauseCommand = "pause"
 func runPause(ctx context.Context) {
 	children := make(chan os.Signal, 1)
 	signal.Notify(children, syscall.SIGCHLD)
+	// As PID 1 the anchor gets no default signal action: it exits at once on a stop, so docker stop and restart do
+	// not wait out their timeout.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGHUP)
 	for {
 		select {
+		case <-stop:
+			os.Exit(0)
 		case <-ctx.Done():
-			return
+			os.Exit(0)
 		case <-children:
 			for {
 				var status syscall.WaitStatus
