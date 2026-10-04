@@ -158,6 +158,15 @@ export type ManagedDatabaseBindingObservedState =
   | 'absent'
   | 'error';
 
+/**
+ * How a link's workloads reach the database on their node. `listener`: the daemon's host listener on the link
+ * network's gateway IP, named through ExtraHosts (daemons without `secure_link_egress_v1`). `migrating`: the shared
+ * connector serves the alias too while the workloads are recreated one at a time without ExtraHosts; the listener
+ * keeps serving the ones not recreated yet. `connector`: only the connector serves it. `reverting`: the node lost
+ * the capability (a daemon rollback); the listener is back and the workloads are recreated with ExtraHosts again.
+ */
+export type ManagedDatabaseLinkTransport = 'listener' | 'migrating' | 'connector' | 'reverting';
+
 export interface DatabaseBindingEnvironment {
   connectionUri?: string;
   host?: string;
@@ -289,6 +298,11 @@ export const managedDatabaseBindings = pgTable(
       .$type<ManagedDatabaseBindingObservedState>()
       .notNull()
       .default('legacy'),
+    // How the workload reaches the database (see ManagedDatabaseLinkTransport); durable migration state.
+    linkTransport: varchar('link_transport', { length: 16 })
+      .$type<ManagedDatabaseLinkTransport>()
+      .notNull()
+      .default('listener'),
     status: databaseBindingStatusEnum('status').notNull().default('creating'),
     lastError: text('last_error'),
     createdById: uuid('created_by_id')
@@ -341,6 +355,10 @@ export const managedDatabaseBindingPlacements = pgTable(
       .$type<ManagedDatabaseBindingObservedState>()
       .notNull()
       .default('legacy'),
+    linkTransport: varchar('link_transport', { length: 16 })
+      .$type<ManagedDatabaseLinkTransport>()
+      .notNull()
+      .default('listener'),
     status: databaseBindingStatusEnum('status').notNull().default('creating'),
     lastError: text('last_error'),
     lastObservedAt: timestamp('last_observed_at', { withTimezone: true }),

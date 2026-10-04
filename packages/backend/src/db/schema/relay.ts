@@ -109,6 +109,20 @@ export interface RelayManagedDatabaseListenerConfig {
   allowedSources: string[];
 }
 
+/**
+ * A connector egress listener on the source node of a link route: the shared secure-link connector joins
+ * `networkName` with `alias` and accepts the link's workloads on `listenPort` (C2). Storage links originate TLS.
+ */
+export interface RelaySecureLinkEgressConfig {
+  networkName: string;
+  alias: string;
+  listenPort: number;
+  /** 0 = unlimited. */
+  maxSessions: number;
+  tlsCaPem?: string;
+  tlsServerName?: string;
+}
+
 export interface RelayArtifactDescriptor {
   version: string;
   digest: string;
@@ -225,22 +239,26 @@ export const relayRoutes = pgTable(
       .notNull()
       .default(1024 * 1024),
     managedDatabaseListener: jsonb('managed_database_listener').$type<RelayManagedDatabaseListenerConfig>(),
+    secureLinkEgress: jsonb('secure_link_egress').$type<RelaySecureLinkEgressConfig>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
-    // One route per owner, except proxy Secure Links and storage links: a route served by an ingress group has one
-    // source (and so one route, connect grant and relay placement term) per member nginx node for the same link
-    // endpoint, and a storage link of an Availability workload one per placement node.
+    // One route per owner, except proxy Secure Links, storage links and container links: a route served by an
+    // ingress group has one source (and so one route, connect grant and relay placement term) per member nginx node
+    // for the same link endpoint, and a storage or container link of an Availability workload one per placement node.
     ownerUnique: uniqueIndex('relay_routes_owner_unique')
       .on(table.ownerKind, table.ownerId)
-      .where(sql`${table.ownerKind} not in ('proxy_host_secure_link', 'managed_storage_binding')`),
+      .where(sql`${table.ownerKind} not in ('proxy_host_secure_link', 'managed_storage_binding', 'container_link')`),
     proxyLinkSourceUnique: uniqueIndex('relay_routes_proxy_link_source_unique')
       .on(table.ownerKind, table.ownerId, table.sourceKind, table.sourceId)
       .where(sql`${table.ownerKind} = 'proxy_host_secure_link'`),
     storageLinkSourceUnique: uniqueIndex('relay_routes_storage_link_source_unique')
       .on(table.ownerKind, table.ownerId, table.sourceKind, table.sourceId)
       .where(sql`${table.ownerKind} = 'managed_storage_binding'`),
+    containerLinkSourceUnique: uniqueIndex('relay_routes_container_link_source_unique')
+      .on(table.ownerKind, table.ownerId, table.sourceKind, table.sourceId)
+      .where(sql`${table.ownerKind} = 'container_link'`),
     sourceIdx: index('relay_routes_source_idx').on(table.sourceKind, table.sourceId),
     targetIdx: index('relay_routes_target_idx').on(table.targetEndpointId),
   })
