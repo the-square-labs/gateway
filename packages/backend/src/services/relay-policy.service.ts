@@ -2244,6 +2244,11 @@ export class RelayPolicyService {
     );
   }
 
+  /**
+   * Delivers the node's grant bundle; resolves with the daemon's ACK, sent once the bundle is applied. A daemon applies
+   * grant syncs off its command loop, so a command sent before this ACK may run before the grants: a caller whose next
+   * command depends on them (a probe, registry bindings, an egress wait) awaits this first.
+   */
   async syncNodeGrantBundle(nodeId: string, options: RelayGrantSyncOptions = {}) {
     if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
     const epoch = this.nodeGrantEpochs.get(nodeId) ?? { valid: true, pending: 0 };
