@@ -58,6 +58,9 @@ export const containerLinks = pgTable(
     targetNetwork: varchar('target_network', { length: 128 }),
     targetDialPort: integer('target_dial_port'),
     generation: integer('generation').notNull().default(1),
+    // The link generation a container consumer was last recreated for to take the link's variables: one recreate per
+    // generation at most, so a check that cannot see the variables never recreates it over and over.
+    consumerRecreatedGeneration: integer('consumer_recreated_generation'),
     desiredState: varchar('desired_state', { length: 32 })
       .$type<ContainerLinkDesiredState>()
       .notNull()
