@@ -64,6 +64,10 @@ type SyncRequest struct {
 	Version  int             `json:"version"`
 	Bindings []BindingConfig `json:"bindings"`
 	Egress   []EgressConfig  `json:"egress,omitempty"`
+	// IngressPeer (v2) is the only address the ingress listeners accept connections from: the management network's
+	// gateway, from which the daemon dials. Every other peer is closed at once. A v1 request has none (an older
+	// daemon), and its ingress listeners accept every peer as before.
+	IngressPeer string `json:"ingressPeer,omitempty"`
 }
 
 type BindingStatus struct {
@@ -147,19 +151,21 @@ func WriteJSON(w io.Writer, value any) error {
 }
 
 // Sync replaces the ingress bindings and the egress listeners of a connector
-// (egress nil: none). A connector of protocol v1 is sent the ingress bindings
-// only: the response then has Version ProtocolVersionIngressOnly and no egress
-// statuses, and the caller reports its egress listeners as not served. When
-// the connector refused the ingress bindings (response Error), the response is
-// returned with the error, so the egress statuses it carries are kept.
-func Sync(ctx context.Context, socketPath string, bindings []BindingConfig, egress []EgressConfig) (*SyncResponse, error) {
-	response, err := exchange(ctx, socketPath, SyncRequest{Version: ProtocolVersion, Bindings: bindings, Egress: egress})
+// (request.Egress nil: none) in protocol v2. A connector of protocol v1 is
+// sent the ingress bindings only: the response then has Version
+// ProtocolVersionIngressOnly and no egress statuses, and the caller reports
+// its egress listeners as not served. When the connector refused the ingress
+// bindings (response Error), the response is returned with the error, so the
+// egress statuses it carries are kept.
+func Sync(ctx context.Context, socketPath string, request SyncRequest) (*SyncResponse, error) {
+	request.Version = ProtocolVersion
+	response, err := exchange(ctx, socketPath, request)
 	if err != nil {
 		return nil, err
 	}
 	switch {
 	case response.Version == ProtocolVersionIngressOnly && response.Error == UnsupportedVersionError:
-		response, err = exchange(ctx, socketPath, SyncRequest{Version: ProtocolVersionIngressOnly, Bindings: bindings})
+		response, err = exchange(ctx, socketPath, SyncRequest{Version: ProtocolVersionIngressOnly, Bindings: request.Bindings})
 		if err != nil {
 			return nil, err
 		}

@@ -24,6 +24,8 @@ type bindingManager struct {
 	bindings        map[string]*bindingListener
 	globalSessions  chan struct{}
 	perBindingLimit int
+	// peer is the address the ingress listeners accept connections from (ingress_peer.go).
+	peer ingressPeer
 	closed          bool
 }
 
@@ -36,6 +38,7 @@ type bindingListener struct {
 	active    map[net.Conn]struct{}
 	done      chan struct{}
 	closeOnce sync.Once
+	peer      *ingressPeer
 }
 
 func newBindingManager(globalLimit, perBindingLimit int) *bindingManager {
@@ -79,7 +82,7 @@ func (m *bindingManager) sync(configs []securelink.BindingConfig) ([]securelink.
 		if m.bindings[id] != nil {
 			continue
 		}
-		created, err := newBindingListener(config, m.globalSessions, m.perBindingLimit)
+		created, err := newBindingListener(config, m.globalSessions, m.perBindingLimit, &m.peer)
 		if err != nil {
 			for _, binding := range staged {
 				binding.close()
@@ -142,7 +145,7 @@ func validateBindingConfig(config securelink.BindingConfig) error {
 	return nil
 }
 
-func newBindingListener(config securelink.BindingConfig, globalSessions chan struct{}, perBindingLimit int) (*bindingListener, error) {
+func newBindingListener(config securelink.BindingConfig, globalSessions chan struct{}, perBindingLimit int, peer *ingressPeer) (*bindingListener, error) {
 	listener, err := net.Listen("tcp", net.JoinHostPort(config.ListenHost, "0"))
 	if err != nil {
 		return nil, fmt.Errorf("listen for secure-link binding: %w", err)
@@ -157,6 +160,7 @@ func newBindingListener(config securelink.BindingConfig, globalSessions chan str
 		sessions: sessions,
 		active:   map[net.Conn]struct{}{},
 		done:     make(chan struct{}),
+		peer:     peer,
 	}
 	go binding.accept(globalSessions)
 	return binding, nil
@@ -193,6 +197,10 @@ func (b *bindingListener) accept(globalSessions chan struct{}) {
 		connection, err := b.listener.Accept()
 		if err != nil {
 			return
+		}
+		if !b.peer.allows(connection.RemoteAddr()) {
+			connection.Close()
+			continue
 		}
 		if !acquireSession(globalSessions) {
 			connection.Close()

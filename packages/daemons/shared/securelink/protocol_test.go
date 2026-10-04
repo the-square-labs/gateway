@@ -47,7 +47,7 @@ func TestSyncFallsBackToIngressOnlyForAV1Connector(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	bindings := []BindingConfig{{ID: "a", Generation: 1}}
-	response, err := Sync(ctx, path, bindings, []EgressConfig{{ID: "e"}})
+	response, err := Sync(ctx, path, SyncRequest{Bindings: bindings, Egress: []EgressConfig{{ID: "e"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestSyncKeepsEgressStatusesWhenIngressIsRefused(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	response, err := Sync(ctx, path, nil, []EgressConfig{{ID: "e"}})
+	response, err := Sync(ctx, path, SyncRequest{Egress: []EgressConfig{{ID: "e"}}})
 	if err == nil || response == nil || len(response.Egress) != 1 || response.Egress[0].State != EgressListening {
 		t.Fatalf("response %+v, error %v", response, err)
 	}

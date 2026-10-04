@@ -97,6 +97,7 @@ func handleControlConnection(connection net.Conn, manager *bindingManager, egres
 func handleSyncRequest(request securelink.SyncRequest, manager *bindingManager, egress *egressManager) securelink.SyncResponse {
 	switch request.Version {
 	case securelink.ProtocolVersionIngressOnly:
+		_ = manager.peer.set("")
 		if _, err := egress.sync(nil); err != nil {
 			return securelink.SyncResponse{Version: securelink.ProtocolVersionIngressOnly, Error: err.Error()}
 		}
@@ -106,6 +107,9 @@ func handleSyncRequest(request securelink.SyncRequest, manager *bindingManager, 
 		}
 		return securelink.SyncResponse{Version: securelink.ProtocolVersionIngressOnly, Bindings: statuses}
 	case securelink.ProtocolVersion:
+		if err := manager.peer.set(request.IngressPeer); err != nil {
+			return securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: err.Error()}
+		}
 		egressStatuses, err := egress.sync(request.Egress)
 		if err != nil {
 			return securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: err.Error()}
