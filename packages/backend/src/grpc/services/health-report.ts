@@ -91,6 +91,7 @@ export function managedLinkHealth(rawLinks: unknown): { managedLinks?: NodeManag
         openedTotal: count(value.openedTotal),
         sourceToTargetBytes: count(value.sourceToTargetBytes),
         targetToSourceBytes: count(value.targetToSourceBytes),
+        completedTotal: count(value.completedTotal),
       },
     ];
   });

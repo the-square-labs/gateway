@@ -165,6 +165,8 @@ export interface NodeManagedLinkReport {
   openedTotal: number;
   sourceToTargetBytes: number;
   targetToSourceBytes: number;
+  /** Sessions of openedTotal that ended on the node (same-node ones included); 0 from a daemon that does not count them. */
+  completedTotal?: number;
 }
 
 /** What an nginx daemon's `/.well-known/gateway-ingress-health` endpoint answered when it last reported. */

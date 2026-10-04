@@ -20,6 +20,8 @@ export interface ManagedLinkConnections {
   openedTotal: string;
   sourceToTargetBytes: string;
   targetToSourceBytes: string;
+  /** Sessions that ended, as the nodes counted them; null when a node does not count them (the relays' stand). */
+  completedTotal: string | null;
   /** When the oldest of the reports was taken. */
   reportedAt: string;
 }
@@ -28,6 +30,8 @@ export interface ManagedLinkConnections {
 export interface ManagedLinkNodeReport {
   link: NodeManagedLinkReport | null;
   reportedAt: Date;
+  /** The node counts the link sessions that ended (completed_total). */
+  countsCompleted?: boolean;
 }
 
 /**
@@ -53,6 +57,9 @@ export function sumManagedLinkReports(reports: Array<ManagedLinkNodeReport | nul
     openedTotal: String(total((link) => link.openedTotal)),
     sourceToTargetBytes: String(total((link) => link.sourceToTargetBytes)),
     targetToSourceBytes: String(total((link) => link.targetToSourceBytes)),
+    completedTotal: present.every((report) => report.countsCompleted)
+      ? String(total((link) => link.completedTotal))
+      : null,
     reportedAt: new Date(Math.min(...present.map(({ reportedAt }) => reportedAt.getTime()))).toISOString(),
   };
 }
@@ -60,8 +67,8 @@ export function sumManagedLinkReports(reports: Array<ManagedLinkNodeReport | nul
 /**
  * A link's runtime with its nodes' counts: activeStreams are the link's open connections, openedTotal and the byte
  * counters what it carried through them whichever relays carried it, and throttledTotal adds the connections the
- * nodes refused at the link's limit to those the relays refused. Completions, failures, setup latency and duration
- * stay the relays' (the nodes do not measure them).
+ * nodes refused at the link's limit to those the relays refused. completedTotal is the nodes' when every node counts
+ * completions (same-node sessions included), else the relays'. Failures, setup latency and duration stay the relays'.
  */
 export function withManagedLinkConnections<
   Runtime extends {
@@ -70,6 +77,7 @@ export function withManagedLinkConnections<
     sourceToTargetBytes: string;
     targetToSourceBytes: string;
     throttledTotal: string;
+    completedTotal?: string;
   },
 >(
   runtime: Runtime,
@@ -82,6 +90,9 @@ export function withManagedLinkConnections<
     openedTotal: connections.openedTotal,
     sourceToTargetBytes: connections.sourceToTargetBytes,
     targetToSourceBytes: connections.targetToSourceBytes,
+    // The nodes see every session, same-node ones included, and count only those that ended; the relays also count
+    // probes and failed opens. Their value stands for a node that does not count completions.
+    ...(connections.completedTotal !== null ? { completedTotal: connections.completedTotal } : {}),
     throttledTotal: String(Number(runtime.throttledTotal || 0) + Number(connections.rejectedTotal)),
     connections,
   };

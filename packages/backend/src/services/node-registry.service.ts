@@ -17,6 +17,8 @@ const TRAFFIC_STATS_CACHE_TTL_MS = 60_000;
 const TRAFFIC_STATS_CACHE_MAX_ENTRIES = 4_096;
 /** Docker daemons whose health report carries their managed links (HealthReport.managed_links). */
 export const MANAGED_LINK_RUNTIME_CAPABILITY = 'managed_link_runtime_v1';
+/** The node's link report counts the sessions that ended (completed_total), same-node ones included. */
+export const MANAGED_LINK_COMPLETED_CAPABILITY = 'managed_link_completed_v1';
 /**
  * After Gateway starts, nodes that were online reconnect to the new process within seconds (1–11 s on a test stand,
  * over the relay). Until then they count as reconnecting, not offline; one still missing after this long is shown
@@ -460,15 +462,18 @@ export class NodeRegistryService {
     nodeId: string,
     ownerKind: string,
     ownerId: string
-  ): { link: NodeManagedLinkReport | null; reportedAt: Date } | null {
+  ): { link: NodeManagedLinkReport | null; reportedAt: Date; countsCompleted?: boolean } | null {
     const node = this.nodes.get(nodeId);
     if (!node?.capabilities.has(MANAGED_LINK_RUNTIME_CAPABILITY) || !node.lastHealthReport || !node.lastReportAt) {
       return null;
     }
-    const link = node.lastHealthReport.managedLinks?.find(
-      (candidate) => candidate.ownerKind === ownerKind && candidate.ownerId === ownerId
-    );
-    return { link: link ?? null, reportedAt: node.lastReportAt };
+    const links = node.lastHealthReport.managedLinks ?? [];
+    const link = links.find((candidate) => candidate.ownerKind === ownerKind && candidate.ownerId === ownerId);
+    // The proto reads an absent completed_total as 0: a node counts completions when it says so, or once it reported one.
+    const countsCompleted =
+      node.capabilities.has(MANAGED_LINK_COMPLETED_CAPABILITY) ||
+      links.some((candidate) => (candidate.completedTotal ?? 0) > 0);
+    return { link: link ?? null, reportedAt: node.lastReportAt, countsCompleted };
   }
 
   /**

@@ -41,6 +41,7 @@ describe('managedLinkHealth', () => {
           openedTotal: 120,
           sourceToTargetBytes: 4096,
           targetToSourceBytes: 65536,
+          completedTotal: 0,
         },
         {
           ownerKind: 'managed_storage_binding',
@@ -53,6 +54,7 @@ describe('managedLinkHealth', () => {
           openedTotal: 0,
           sourceToTargetBytes: 0,
           targetToSourceBytes: 0,
+          completedTotal: 0,
         },
       ],
     });
@@ -73,6 +75,11 @@ describe('managedLinkHealth', () => {
       openedTotal: 9,
       sourceToTargetBytes: 10,
       targetToSourceBytes: 20,
+    });
+    expect(
+      managedLinkHealth([{ ownerKind: 'container_link', ownerId: 'link-1', completedTotal: '5' }]).managedLinks?.[0]
+    ).toMatchObject({
+      completedTotal: 5,
     });
     expect(managedLinkHealth(undefined)).toEqual({});
     expect(managedLinkHealth([])).toEqual({});

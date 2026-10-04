@@ -438,6 +438,33 @@ describe('RelayPolicyService route runtime', () => {
       expect(requestHealthReport).not.toHaveBeenCalled();
     });
 
+    it('takes completed sessions from nodes that count them and from the relays otherwise', async () => {
+      const route = {
+        id: 'route-1',
+        ownerKind: 'container_link',
+        ownerId: 'link-1',
+        sourceKind: 'daemon',
+        sourceId: 'node-1',
+      };
+      const db = routesDb([route], [route]);
+      const service = createService(db, {
+        applySnapshot: vi.fn(),
+        getRouteRuntime: vi.fn().mockResolvedValue(relayReport('route-1', 0, 0)),
+      });
+      const report = (countsCompleted: boolean) => ({
+        link: { ...linkReport('container_link', 'link-1', 1, 0, null), completedTotal: 7 },
+        reportedAt: new Date(),
+        countsCompleted,
+      });
+      service.setManagedLinkReports({ managedLinkReport: vi.fn(() => report(true)), requestHealthReport: vi.fn() });
+      // Same-node sessions never reach a relay: the node's count is the link's.
+      await expect(service.getContainerLinkRouteRuntime('link-1')).resolves.toMatchObject({ completedTotal: '7' });
+
+      service.setManagedLinkReports({ managedLinkReport: vi.fn(() => report(false)), requestHealthReport: vi.fn() });
+      // An older daemon reports no completions: the relay's value stands.
+      await expect(service.getContainerLinkRouteRuntime('link-1')).resolves.toMatchObject({ completedTotal: '20' });
+    });
+
     it('counts the connections a node reports for a container link, same-node dials included', async () => {
       const db = routesDb([
         { id: 'route-1', ownerKind: 'container_link', ownerId: 'link-1', sourceKind: 'daemon', sourceId: 'node-1' },
