@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"syscall"
@@ -865,4 +866,30 @@ func waitForOpening(t *testing.T, manager *sourceLinkManager, count int) {
 		}
 	}
 	t.Fatalf("connections opening their tunnel = %d, want %d", manager.opening(), count)
+}
+
+// After the daemon switched between root and its own user, a kept socket that nginx's workers cannot reach (another
+// owner, or not 0600) is created anew instead of adopted.
+func TestSecureLinkSocketFitsOnlyTheWorkerOwnedLayout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "link.sock")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !secureLinkSocketFits(path, os.Geteuid()) {
+		t.Fatal("refused a socket in the layout the daemon creates")
+	}
+	if secureLinkSocketFits(path, os.Geteuid()+1) {
+		t.Fatal("accepted a socket owned by another user than the nginx workers")
+	}
+	if err := os.Chmod(path, 0o660); err != nil {
+		t.Fatal(err)
+	}
+	if secureLinkSocketFits(path, os.Geteuid()) {
+		t.Fatal("accepted a socket with a mode the daemon does not create")
+	}
 }

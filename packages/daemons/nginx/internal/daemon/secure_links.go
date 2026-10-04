@@ -621,11 +621,28 @@ func (m *sourceLinkManager) adoptKeptUnixSocket(socketPath string) (net.Listener
 		return nil, ""
 	}
 	unixListener.SetUnlinkOnClose(false)
-	if ownerUID, err := m.socketOwnerUID(); err == nil {
+	ownerUID, err := m.socketOwnerUID()
+	if err == nil {
 		// The nginx worker user may have changed while no daemon ran.
 		_ = os.Chown(socketPath, ownerUID, -1)
 	}
+	// A socket nginx's workers cannot reach, after the daemon switched between root and its own user, is created anew.
+	if err != nil || !secureLinkSocketFits(socketPath, ownerUID) {
+		_ = listener.Close()
+		_ = listenerkeep.Drop(name)
+		return nil, ""
+	}
 	return listener, name
+}
+
+// secureLinkSocketFits reports whether the socket file at socketPath is owned by ownerUID with mode 0600, as created.
+func secureLinkSocketFits(socketPath string, ownerUID int) bool {
+	info, err := os.Lstat(socketPath)
+	if err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(stat.Uid) == ownerUID
 }
 
 // keepUnixListener hands a copy of a Unix listener to the listener keeper so
