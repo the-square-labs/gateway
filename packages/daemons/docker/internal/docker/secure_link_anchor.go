@@ -251,6 +251,27 @@ func (m *dockerSecureLinkManager) removeAnchor(ctx context.Context) error {
 	return nil
 }
 
+// adoptConnectorLocked takes a running connector found by name as the serving one, with the addresses of the
+// namespace it runs in (the anchor's, or its own), so a replacement can start next to it and drain it.
+func (m *dockerSecureLinkManager) adoptConnectorLocked(ctx context.Context, inspect container.InspectResponse, slot int, controlDirectory string) error {
+	holder := inspect.NetworkSettings
+	if inspect.HostConfig != nil {
+		if owner, inAnchor := strings.CutPrefix(string(inspect.HostConfig.NetworkMode), "container:"); inAnchor {
+			anchor, err := m.plugin.client.cli.ContainerInspect(ctx, owner, mobyclient.ContainerInspectOptions{})
+			if err != nil {
+				return fmt.Errorf("inspect the namespace of the secure-link connector: %w", err)
+			}
+			holder = anchor.Container.NetworkSettings
+		}
+	}
+	runtime, err := connectorRuntimeOf(inspect, holder, slot, controlDirectory)
+	if err != nil {
+		return err
+	}
+	m.useConnector(runtime)
+	return nil
+}
+
 // anchorNetworks returns the network endpoints of the container holding them.
 func (m *dockerSecureLinkManager) anchorNetworks(ctx context.Context) (map[string]*network.EndpointSettings, error) {
 	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.networkHolder(), mobyclient.ContainerInspectOptions{})

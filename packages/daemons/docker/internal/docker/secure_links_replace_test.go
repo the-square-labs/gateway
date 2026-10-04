@@ -59,6 +59,8 @@ type fakeConnectorContainer struct {
 	// networkMode is a connector's "container:<anchor id>"; anchor marks the anchor container.
 	networkMode string
 	anchor      bool
+	// pidsLimit overrides a connector's pids limit (a shape that drifted).
+	pidsLimit int64
 }
 
 // fakeAnchor is a running anchor, as a daemon finds it after its restart.
@@ -197,7 +199,7 @@ func (e *fakeConnectorEngine) connectorInspect(current *fakeConnectorContainer) 
 		"HostConfig": map[string]any{
 			"Binds": []string{e.controlDir + ":/run/gateway"}, "ReadonlyRootfs": true, "CapDrop": []string{"ALL"},
 			"SecurityOpt": []string{"no-new-privileges:true"}, "RestartPolicy": map[string]any{"Name": "unless-stopped"},
-			"Memory": secureLinkConnectorMemory(), "NanoCpus": secureLinkConnectorNanoCPUs, "PidsLimit": secureLinkConnectorPidsLimit,
+			"Memory": secureLinkConnectorMemory(), "NanoCpus": secureLinkConnectorNanoCPUs, "PidsLimit": connectorPids(current),
 			"GroupAdd": current.groups, "NetworkMode": current.networkMode,
 		},
 		"State":           map[string]any{"Running": current.running},
@@ -447,6 +449,13 @@ func TestDaemonStartKeepsTheConnectorRunningTheImage(t *testing.T) {
 	if removed := engine.removedIDs(); len(removed) != 1 || removed[0] != "old-id" {
 		t.Fatalf("removed %v, want the leftover connector", removed)
 	}
+}
+
+func connectorPids(current *fakeConnectorContainer) int64 {
+	if current.pidsLimit != 0 {
+		return current.pidsLimit
+	}
+	return secureLinkConnectorPidsLimit
 }
 
 // receivedDrain reports a connector told to stop accepting (its replacement took its addresses over).

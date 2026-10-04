@@ -1073,6 +1073,13 @@ export interface SecureLinkEgress {
    * the host listener still serves the consumers not moved yet.
    */
   consumersUseAlias?: boolean;
+  /** The connector joins the network and listens, but takes no DNS alias yet (storage cutover, sidecar still up). */
+  aliasDisabled?: boolean;
+  /**
+   * The connector's IPv4 address on the network (taken over from a removed sidecar, for DNS-pinning clients).
+   * Empty: the pool's reserved address, else the address the connector already holds.
+   */
+  connectorAddress?: string;
 }
 
 export interface RelayDataCandidate {

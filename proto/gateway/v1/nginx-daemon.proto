@@ -679,6 +679,13 @@ message SecureLinkEgress {
   // (recreated without the ExtraHosts entry) while the host listener still
   // serves the ones not moved yet.
   bool consumers_use_alias = 9;
+  // The connector joins the network and listens, but takes no DNS alias yet
+  // (a storage cutover while the sidecar still holds it).
+  bool alias_disabled = 10;
+  // The connector's IPv4 address on the network (the address DNS-pinning
+  // clients keep, taken over from a removed sidecar). Empty: the pool's
+  // reserved address, else the address the connector already holds.
+  string connector_address = 11;
 }
 
 // Desired daemon-side listener for a managed-database binding. It is carried

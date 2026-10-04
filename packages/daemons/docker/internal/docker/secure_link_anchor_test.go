@@ -88,7 +88,7 @@ func TestAnchorSysctlFollowsTheKernel(t *testing.T) {
 	}
 }
 
-func waitRemoved(t *testing.T, engine *egressFakeEngine, id string) {
+func waitRemoved(t *testing.T, engine interface{ removedIDs() []string }, id string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for !slices.Contains(engine.removedIDs(), id) && time.Now().Before(deadline) {
@@ -161,5 +161,32 @@ func TestConnectorAnchorFollowsTheImage(t *testing.T) {
 	}
 	if !slices.Contains(engine.removedIDs(), anchor.id) {
 		t.Fatalf("the anchor no connector runs in stayed: %v", engine.removedIDs())
+	}
+}
+
+// A connector whose shape drifted (here its pids limit) may carry sessions: found running at a daemon start, it is
+// taken as the serving connector, the new one starts next to it, and it drains before it goes (F-C9).
+func TestDriftedConnectorIsReplacedSideBySide(t *testing.T) {
+	engine := newFakeConnectorEngine(t)
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	anchor := fakeAnchor(replaceTestNewImage, "10.99.0.2")
+	drifted := &fakeConnectorContainer{id: "drifted-id", name: secureLinkConnectorSlots[0].name, image: replaceTestNewImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, networkMode: "container:" + anchor.id, pidsLimit: 128}
+	engine.containers[anchor.name], engine.containers[drifted.name] = anchor, drifted
+	engine.serveControl(drifted)
+	plugin := &DockerPlugin{client: engine.client()}
+	manager := &dockerSecureLinkManager{plugin: plugin, socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{}}
+	manager.publishViewLocked()
+
+	if _, err := manager.restore(replaceTestCommand(replaceTestNewImage)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if view := manager.currentView(); view.connectorID != "created-1" || manager.slot != 1 || view.bindings[replaceTestLinkID].port == 0 {
+		t.Fatalf("view %+v slot %d, want the replacement next to the drifted connector", view, manager.slot)
+	}
+	waitRemoved(t, engine, drifted.id)
+	if !receivedDrain(engine, drifted) {
+		t.Fatal("the drifted connector was removed without draining")
 	}
 }

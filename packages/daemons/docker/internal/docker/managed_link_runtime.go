@@ -127,7 +127,7 @@ func (c *linkCountedConn) CloseWrite() error {
 	return nil
 }
 
-// managedLinkRuntime reports every managed database and storage link this node serves workloads of (a connect grant
+// managedLinkRuntime reports every managed database, storage and container link this node serves workloads of (a connect grant
 // in the bundle): its open connections, its limit, what it refused and what it carried.
 func (p *DockerPlugin) managedLinkRuntime() []*pb.ManagedLinkRuntime {
 	if p.relayGrants == nil {
@@ -146,7 +146,7 @@ func (p *DockerPlugin) managedLinkRuntime() []*pb.ManagedLinkRuntime {
 	p.relayGrants.withCurrent(func(bundle *pb.SyncRelayGrantsCommand) {
 		for _, assignment := range bundle.GetGrants() {
 			kind := assignment.GetOwnerKind()
-			if assignment.GetRole() != "connect" || (kind != linkKindManagedDatabaseBinding && kind != linkKindManagedStorageBinding) {
+			if assignment.GetRole() != "connect" || (kind != linkKindManagedDatabaseBinding && kind != linkKindManagedStorageBinding && kind != containerLinkOwnerKind) {
 				continue
 			}
 			key := linkKey{kind: kind, id: assignment.GetOwnerId()}

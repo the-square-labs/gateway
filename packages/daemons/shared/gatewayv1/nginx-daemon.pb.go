@@ -5231,8 +5231,15 @@ type SecureLinkEgress struct {
 	// (recreated without the ExtraHosts entry) while the host listener still
 	// serves the ones not moved yet.
 	ConsumersUseAlias bool `protobuf:"varint,9,opt,name=consumers_use_alias,json=consumersUseAlias,proto3" json:"consumers_use_alias,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The connector joins the network and listens, but takes no DNS alias yet
+	// (a storage cutover while the sidecar still holds it).
+	AliasDisabled bool `protobuf:"varint,10,opt,name=alias_disabled,json=aliasDisabled,proto3" json:"alias_disabled,omitempty"`
+	// The connector's IPv4 address on the network (the address DNS-pinning
+	// clients keep, taken over from a removed sidecar). Empty: the pool's
+	// reserved address, else the address the connector already holds.
+	ConnectorAddress string `protobuf:"bytes,11,opt,name=connector_address,json=connectorAddress,proto3" json:"connector_address,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SecureLinkEgress) Reset() {
@@ -5326,6 +5333,20 @@ func (x *SecureLinkEgress) GetConsumersUseAlias() bool {
 		return x.ConsumersUseAlias
 	}
 	return false
+}
+
+func (x *SecureLinkEgress) GetAliasDisabled() bool {
+	if x != nil {
+		return x.AliasDisabled
+	}
+	return false
+}
+
+func (x *SecureLinkEgress) GetConnectorAddress() string {
+	if x != nil {
+		return x.ConnectorAddress
+	}
+	return ""
 }
 
 // Desired daemon-side listener for a managed-database binding. It is carried
@@ -12955,7 +12976,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x0eschema_version\x18\t \x01(\rR\rschemaVersion\x12_\n" +
 	"\x19managed_database_listener\x18\n" +
 	" \x01(\v2#.gateway.v1.ManagedDatabaseListenerR\x17managedDatabaseListener\x12J\n" +
-	"\x12secure_link_egress\x18\v \x01(\v2\x1c.gateway.v1.SecureLinkEgressR\x10secureLinkEgress\"\xd9\x02\n" +
+	"\x12secure_link_egress\x18\v \x01(\v2\x1c.gateway.v1.SecureLinkEgressR\x10secureLinkEgress\"\xad\x03\n" +
 	"\x10SecureLinkEgress\x12!\n" +
 	"\fnetwork_name\x18\x01 \x01(\tR\vnetworkName\x12\x14\n" +
 	"\x05alias\x18\x02 \x01(\tR\x05alias\x12\x1f\n" +
@@ -12967,7 +12988,10 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x0ftls_server_name\x18\x06 \x01(\tR\rtlsServerName\x12)\n" +
 	"\x10route_generation\x18\a \x01(\x04R\x0frouteGeneration\x12'\n" +
 	"\x0fconnector_image\x18\b \x01(\tR\x0econnectorImage\x12.\n" +
-	"\x13consumers_use_alias\x18\t \x01(\bR\x11consumersUseAlias\"\xd8\x01\n" +
+	"\x13consumers_use_alias\x18\t \x01(\bR\x11consumersUseAlias\x12%\n" +
+	"\x0ealias_disabled\x18\n" +
+	" \x01(\bR\raliasDisabled\x12+\n" +
+	"\x11connector_address\x18\v \x01(\tR\x10connectorAddress\"\xd8\x01\n" +
 	"\x17ManagedDatabaseListener\x12!\n" +
 	"\fnetwork_name\x18\x01 \x01(\tR\vnetworkName\x12%\n" +
 	"\x0elisten_address\x18\x02 \x01(\tR\rlistenAddress\x12\x1f\n" +

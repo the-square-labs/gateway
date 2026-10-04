@@ -241,6 +241,7 @@ func newDockerSecureLinkManager(plugin *DockerPlugin) (*dockerSecureLinkManager,
 		plugin: plugin, socketPath: filepath.Join(directory, "secure-link.sock"),
 		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
 	}
+	manager.loadEgressAddresses(plugin.cfg.StateDir)
 	manager.publishViewLocked()
 	return manager, nil
 }
@@ -590,13 +591,20 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 		return nil, secureLinkConnectorUnchangedError{err}
 	}
 	controlDirectory := filepath.Dir(m.socketPath)
-	// Another image, the limits of an earlier release, or a connector outside the anchor (an earlier release's): the
-	// new connector starts next to the serving one, in the anchor.
-	if inspect != nil && inspect.Config != nil &&
-		(inspect.Config.Image != image || !currentSecureLinkConnectorShape(*inspect) || !inConnectorNamespace(*inspect, m.anchorID)) &&
-		managedSecureLinkConnector(*inspect, controlDirectory) && inspect.State != nil && inspect.State.Running &&
-		inspect.ID == m.connectorID && m.servingLocked() {
-		return m.startReplacement(ctx, image, slot)
+	// A running connector of this node that no longer fits (another image, other limits, environment or labels, a
+	// connector outside the anchor) may carry sessions: the new one starts next to it and it drains (F-C9). Only a
+	// stopped one is replaced in place.
+	if inspect != nil && inspect.State != nil && inspect.State.Running && ownedSecureLinkConnector(*inspect) &&
+		!validSecureLinkConnector(*inspect, image, controlDirectory, m.anchorID) {
+		if inspect.ID != m.connectorID {
+			// Found at a daemon start: it becomes the serving connector the replacement drains.
+			if err := m.adoptConnectorLocked(ctx, *inspect, slot, controlDirectory); err != nil && m.plugin.logger != nil {
+				m.plugin.logger.Warn("could not take over the running secure-link connector; it is replaced in place", "error", err)
+			}
+		}
+		if inspect.ID == m.connectorID {
+			return m.startReplacement(ctx, image, slot)
+		}
 	}
 	if inspect != nil && !validSecureLinkConnector(*inspect, image, controlDirectory, m.anchorID) {
 		if !ownedSecureLinkConnector(*inspect) {

@@ -70,6 +70,9 @@ type egressDesired struct {
 	maxSessions        int
 	tlsCAPEM, tlsName  string
 	image              string
+	// aliasDisabled: listen without the DNS alias yet; connectorAddress: the connector's address on the network.
+	aliasDisabled    bool
+	connectorAddress netip.Addr
 }
 
 // egressStatus is what Gateway hears of one egress (SyncRelayGrants ACK, egressStatuses).
@@ -104,6 +107,11 @@ type secureLinkEgress struct {
 	// ingressNetworks are the target networks the last apply attached the connector to.
 	ingressNetworks map[string]struct{}
 	networks        map[string]egressNetwork
+	// addresses are the connector's addresses on the link networks (secure_link_egress_attach.go), kept in
+	// addressFile; retryScheduled is set while a reconcile waits for an address still in use.
+	addresses      map[string]netip.Addr
+	addressFile    string
+	retryScheduled bool
 
 	// The published statuses: the ACK and the ExtraHosts rule read them without waiting for a sync.
 	viewMu    sync.RWMutex
@@ -222,7 +230,16 @@ func egressFromAssignment(assignment *pb.RelayGrantAssignment) (egressDesired, e
 	case assignment.GetGrant() == nil && len(relaybridge.PoolCandidates(assignment, false)) == 0:
 		return egressDesired{}, errors.New("secure-link egress relay grant is unavailable")
 	}
+	var connectorAddress netip.Addr
+	if value := egress.GetConnectorAddress(); value != "" {
+		address, err := netip.ParseAddr(value)
+		if err != nil || !address.Is4() || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() {
+			return egressDesired{}, errors.New("secure-link egress connector address is invalid")
+		}
+		connectorAddress = address
+	}
 	return egressDesired{
+		aliasDisabled: egress.GetAliasDisabled(), connectorAddress: connectorAddress,
 		id: assignment.GetOwnerId(), ownerKind: kind, generation: egress.GetRouteGeneration(),
 		networkName: egress.GetNetworkName(), alias: egress.GetAlias(), listenPort: uint16(egress.GetListenPort()),
 		maxSessions: int(egress.GetMaxSessions()), tlsCAPEM: egress.GetTlsCaPem(), tlsName: egress.GetTlsServerName(),
