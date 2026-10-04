@@ -200,6 +200,10 @@ func (p *DockerPlugin) reconcileStorageConnectorGroups(ctx context.Context) {
 			image = inspected.Container.Config.Image
 		}
 	}
+	// Every connector of the previous mode is recreated: its relay socket is served no longer.
+	if ready {
+		p.storageConnectorPrevious.retire()
+	}
 	// The relay socket of this mode listens and every connector fits it: what the previous mode left can go.
 	if ready && len(setAsideDirectories(p.cfg.StateDir, storageConnectorSocketDirectory)) > 0 {
 		if image == "" {

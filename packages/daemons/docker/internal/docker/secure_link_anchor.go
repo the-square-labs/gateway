@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -268,8 +270,27 @@ func (m *dockerSecureLinkManager) adoptConnectorLocked(ctx context.Context, insp
 	if err != nil {
 		return err
 	}
+	runtime.socketPath = m.adoptedControlSocket(runtime.socketPath)
 	m.useConnector(runtime)
 	return nil
+}
+
+// adoptedControlSocket is the control socket of a connector found running: where it is, or in the control directory
+// a switch of the daemon's user set aside with it (the connector's mount follows the directory), so it can be told to
+// drain.
+func (m *dockerSecureLinkManager) adoptedControlSocket(path string) string {
+	if _, err := os.Stat(path); err == nil || m.plugin == nil || m.plugin.cfg == nil {
+		return path
+	}
+	asides := setAsideDirectories(m.plugin.cfg.StateDir, "secure-link-connector")
+	sort.Sort(sort.Reverse(sort.StringSlice(asides)))
+	for _, directory := range asides {
+		candidate := filepath.Join(directory, filepath.Base(path))
+		if info, err := os.Stat(candidate); err == nil && info.Mode()&os.ModeSocket != 0 {
+			return candidate
+		}
+	}
+	return path
 }
 
 // anchorNetworks returns the network endpoints of the container holding them.

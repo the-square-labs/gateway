@@ -863,6 +863,8 @@ func (m *dockerSecureLinkManager) retireConnector(previous connectorRuntime) {
 			// The next daemon start removes it.
 			m.plugin.logger.Warn("could not remove the replaced secure-link connector", "error", err)
 		}
+		// A connector of the daemon's previous mode used the egress socket of that mode: it is gone now.
+		m.plugin.secureLinkEgressPrevious.retire()
 	}()
 }
 

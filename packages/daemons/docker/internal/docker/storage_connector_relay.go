@@ -55,12 +55,15 @@ func (p *DockerPlugin) startStorageConnectorRelay() error {
 		}
 	}
 	path := filepath.Join(directory, storageConnectorSocketName)
-	// The socket the previous process handed over keeps the connections the connectors made meanwhile.
-	if listener, keptName := adoptKeptUnixListener(path, storageConnectorSocketFits); listener != nil {
-		p.storageConnectorListener = listener
+	// The socket the previous process handed over keeps the connections the connectors made meanwhile; one of the
+	// previous mode's is served as well until its connectors are recreated (link_socket_mode_handover.go).
+	kept, keptName, previous := adoptKeptUnixListeners(path, storageConnectorSocketFits)
+	p.storageConnectorPrevious.serve(previous, p.handleStorageConnectorRelay)
+	if kept != nil {
+		p.storageConnectorListener = kept
 		p.storageConnectorSocket = path
-		p.storageConnectorKept.set(listener, keptName)
-		go p.serveStorageConnectorRelay(listener)
+		p.storageConnectorKept.set(kept, keptName)
+		go p.serveStorageConnectorRelay(kept)
 		return nil
 	}
 	if info, err := os.Lstat(path); err == nil {

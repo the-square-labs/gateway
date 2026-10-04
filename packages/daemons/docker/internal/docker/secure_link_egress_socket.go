@@ -39,9 +39,13 @@ func (p *DockerPlugin) startSecureLinkEgressSocket() error {
 	if p.egressDatabaseSlots == nil {
 		p.egressDatabaseSlots = make(chan struct{}, egressDatabaseSessions)
 	}
-	if listener, keptName := adoptKeptUnixListener(path, storageConnectorSocketFits); listener != nil {
-		p.secureLinkEgressKept.set(listener, keptName)
-		go netaccept.Serve(listener, nil, p.handleSecureLinkEgress)
+	// One of the previous mode's is served as well until the connector of that mode is retired
+	// (link_socket_mode_handover.go).
+	kept, keptName, previous := adoptKeptUnixListeners(path, storageConnectorSocketFits)
+	p.secureLinkEgressPrevious.serve(previous, p.handleSecureLinkEgress)
+	if kept != nil {
+		p.secureLinkEgressKept.set(kept, keptName)
+		go netaccept.Serve(kept, nil, p.handleSecureLinkEgress)
 		return nil
 	}
 	if info, err := os.Lstat(path); err == nil {

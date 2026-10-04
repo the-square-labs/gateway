@@ -98,7 +98,11 @@ type DockerPlugin struct {
 	// (link_listener_handover.go); linkFlows are the link connections it lets finish.
 	storageConnectorKept keptUnixListener
 	secureLinkEgressKept keptUnixListener
-	linkFlows            linkFlowSet
+	// The previous mode's link sockets after a switch of the daemon's user, served until their connectors are
+	// retired (link_socket_mode_handover.go).
+	secureLinkEgressPrevious previousUnixListeners
+	storageConnectorPrevious previousUnixListeners
+	linkFlows                linkFlowSet
 	// egressDatabaseSlots holds the database link sessions of the egress socket at their node limit.
 	egressDatabaseSlots chan struct{}
 	// startedAt is when Init began: link connections accepted before the relay lanes are up wait for them
