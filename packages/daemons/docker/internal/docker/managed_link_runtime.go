@@ -17,7 +17,7 @@ const managedLinkRuntimeCapability = "managed_link_runtime_v1"
 const managedLinkDefaultSessions = 64
 
 // linkConnectionCounts holds the links that reach the relay without a host listener (a storage link's connector, a
-// database binding's legacy sidecar) at their limit: the node is the link's single gate, whichever relay of the pool
+// link of the shared connector's egress) at their limit: the node is the link's single gate, whichever relay of the pool
 // carries a connection. The zero value is ready to use.
 type linkConnectionCounts struct {
 	mu     sync.Mutex

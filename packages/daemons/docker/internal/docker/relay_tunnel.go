@@ -8,7 +8,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,7 +26,25 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const databaseTunnelIdleTimeout = 5 * time.Minute
+const (
+	databaseTunnelIdleTimeout   = 5 * time.Minute
+	databaseTunnelMaxChunkBytes = 1024 * 1024
+)
+
+// writeDatabaseTunnelBytes writes all of data.
+func writeDatabaseTunnelBytes(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := w.Write(data)
+		if err != nil {
+			return err
+		}
+		if n <= 0 || n > len(data) {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+	return nil
+}
 
 var _ lifecycle.RelayPoolTunnelPlugin = (*DockerPlugin)(nil)
 
@@ -119,12 +136,6 @@ func (p *DockerPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Cli
 		}
 		p.relayTunnelMu.Unlock()
 	}()
-	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
-		if err := p.startRelayListener(); err != nil {
-			p.logger.Warn("relay tunnel listener failed", "error", err)
-			return
-		}
-	}
 	router.reconcileRegistrations()
 	router.reconcileAfterRestoreHold(ctx)
 	p.lease.attachRelay(ctx, conn, relayInstanceID)
@@ -600,71 +611,6 @@ func isManagedDatabaseRelayOwnerKind(ownerKind string) bool {
 func isBackupRelayOwnerKind(ownerKind string) bool {
 	return ownerKind == "database_backup_source" || ownerKind == "database_backup_restore" ||
 		ownerKind == "storage_backup_target" || ownerKind == "storage_backup_staging"
-}
-
-func (p *DockerPlugin) startRelayListener() error {
-	p.relayTunnelMu.Lock()
-	defer p.relayTunnelMu.Unlock()
-	if p.relayListener != nil {
-		return nil
-	}
-	if err := prepareDatabaseTunnelSocketDirectory(p.cfg.StateDir); err != nil {
-		return err
-	}
-	path := databaseTunnelSocketPath(p.cfg.StateDir)
-	// The socket the previous process handed over keeps the connections the sidecars made meanwhile.
-	if listener, keptName := adoptKeptUnixListener(path, databaseTunnelSocketFits); listener != nil {
-		p.relayListener = listener
-		p.relayListenerKept.set(listener, keptName)
-		go p.acceptRelayLoop(listener)
-		return nil
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	listener, err := net.Listen("unix", path)
-	if err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0666); err != nil {
-		listener.Close()
-		return err
-	}
-	p.relayListener = listener
-	p.relayListenerKept.set(listener, keepUnixListener(listener, path))
-	go p.acceptRelayLoop(listener)
-	return nil
-}
-
-// databaseTunnelSocketFits reports whether the sidecar socket file is open to every sidecar (0666), as created.
-func databaseTunnelSocketFits(info os.FileInfo) bool {
-	return info.Mode().Perm() == 0o666
-}
-
-func (p *DockerPlugin) acceptRelayLoop(listener net.Listener) {
-	// A transient accept error (out of descriptors) must not end the loop.
-	netaccept.Serve(listener, nil, p.openSidecar)
-}
-
-func (p *DockerPlugin) openSidecar(connection net.Conn) {
-	defer connection.Close()
-	_ = connection.SetReadDeadline(time.Now().Add(5 * time.Second))
-	bindingID, err := readDatabaseTunnelHandshake(connection)
-	_ = connection.SetReadDeadline(time.Time{})
-	if err != nil {
-		return
-	}
-	// A binding served through a legacy sidecar has no host listener: the link is held at its limit here.
-	if assignment := p.relayGrants.lookup("connect", linkKindManagedDatabaseBinding, bindingID); assignment != nil {
-		link := linkKey{kind: linkKindManagedDatabaseBinding, id: bindingID}
-		limit := relayGrantSessionLimit(assignment, managedLinkDefaultSessions)
-		if !p.linkConnections.acquire(link, int(limit)) {
-			p.linkRejections.rejected(p.logger, link.kind, link.id, linkRejectedLinkLimit, "limit", limit)
-			return
-		}
-		defer p.linkConnections.release(link)
-	}
-	p.openManagedDatabaseBinding(connection, bindingID, 0)
 }
 
 func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID string, routeGeneration uint64) {

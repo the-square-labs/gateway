@@ -170,12 +170,10 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 		egressStatuses = p.secureLinks.syncEgress(p.relayGrants.get())
 	}
 	detail, err := json.Marshal(struct {
-		SocketPath        string                                       `json:"socketPath"`
 		StorageSocketPath string                                       `json:"storageSocketPath"`
 		ListenerStatuses  map[string]managedDatabaseHostListenerStatus `json:"listenerStatuses"`
 		EgressStatuses    map[string]egressStatus                      `json:"egressStatuses"`
 	}{
-		SocketPath:        databaseTunnelSocketPath(p.cfg.StateDir),
 		StorageSocketPath: storageConnectorRelaySocketPath(p.cfg.StateDir),
 		ListenerStatuses:  listenerStatuses,
 		EgressStatuses:    egressStatuses,

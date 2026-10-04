@@ -274,7 +274,7 @@ func keepUnixListener(listener net.Listener, path string) string {
 	return keepListener(unixListener, name)
 }
 
-// keptUnixListener is a link's Unix socket (the storage connectors', the legacy database sidecars') with its keeper
+// keptUnixListener is a link's Unix socket (the storage connectors', the shared connector's egress) with its keeper
 // name.
 type keptUnixListener struct {
 	mu       sync.Mutex
@@ -308,9 +308,6 @@ func (k *keptUnixListener) suspend() bool {
 func (p *DockerPlugin) suspendLinkListeners() int {
 	handed := p.databaseListeners.suspendForHandover()
 	if p.storageConnectorKept.suspend() {
-		handed++
-	}
-	if p.relayListenerKept.suspend() {
 		handed++
 	}
 	if p.secureLinkEgressKept.suspend() {

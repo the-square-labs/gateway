@@ -62,7 +62,6 @@ type DockerPlugin struct {
 	restartAnnounced         atomic.Bool
 	proxyTunnels             proxyTunnelSet
 	relaySelection           uint64
-	relayListener            net.Listener
 	storageConnectorListener net.Listener
 	storageConnectorSocket   string
 	databaseListeners        *managedDatabaseHostListenerManager
@@ -98,7 +97,6 @@ type DockerPlugin struct {
 	// The link sockets' copies in the listener keeper, handed to the next process on a restart
 	// (link_listener_handover.go); linkFlows are the link connections it lets finish.
 	storageConnectorKept keptUnixListener
-	relayListenerKept    keptUnixListener
 	secureLinkEgressKept keptUnixListener
 	linkFlows            linkFlowSet
 	// egressDatabaseSlots holds the database link sessions of the egress socket at their node limit.
@@ -286,6 +284,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		p.logger.Info("gave the daemon unit a file descriptor store for link sockets", "drop_in", listenerkeep.SystemdDropInName)
 	}
 	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
+		removeLegacyDatabaseTunnelSocket(p.cfg.StateDir)
 		p.databaseListeners = newManagedDatabaseHostListenerManager(p)
 		// Runs for the life of the process: it keeps the listeners' address book (listenerPeers).
 		go p.databaseListeners.watchPeers(context.Background())
