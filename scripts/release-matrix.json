@@ -355,7 +355,7 @@
       ]
     },
     "builder.egress": {
-      "description": "Build Worker egress internet (public downloads, private and control-plane ranges blocked) and offline.",
+      "description": "Build Worker egress internet (public downloads, private and control-plane ranges and the worker host itself blocked) and offline.",
       "doc": "docs/installation.md#build-worker-requirements",
       "os": [
         "debian"
@@ -1909,7 +1909,7 @@
       ],
       "expect": [
         "Git and iptables are installed with apt; containerd, BuildKit, runc, CNI, Syft and Grype are downloaded and checksum-verified into /opt/gateway-builder/bin; gateway-builder-egress, gateway-builder-containerd and gateway-builder-buildkit units run; connected with every builder capability.",
-        "internet: both builds succeed; a build step reaching a private address or the Gateway gRPC endpoint fails.",
+        "internet: both builds succeed; a build step reaching a private address, the worker host (its own addresses and the build bridge gateway) or the Gateway gRPC endpoint fails.",
         "offline: the npm build fails at the download, the offline build succeeds.",
         "After re-run, restart and reboot the worker takes builds again."
       ]
@@ -2115,7 +2115,7 @@
         "Install a Build Worker with the default egress; force the build on it."
       ],
       "expect": [
-        "The build resolves and downloads its dependencies and succeeds; the egress policy still blocks private ranges."
+        "The build resolves and downloads its dependencies and succeeds; the egress policy still blocks private ranges and the worker host itself."
       ]
     },
     {

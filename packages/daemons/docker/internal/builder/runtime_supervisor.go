@@ -183,6 +183,13 @@ func renderCNIConfig(config RuntimeConfig) string {
 	return RenderInternetCNIConfig()
 }
 
+// renderEgressScript renders the idempotent policy for build steps. Forwarded
+// traffic goes through GATEWAY_BUILDER_EGRESS. Traffic to the worker host
+// itself (any of its addresses, including the bridge gateway) goes through
+// INPUT and is rejected in every egress profile: build steps resolve names
+// through public resolvers and need no host service. The bridge carries no
+// IPv6, so IPv6 from it is dropped too. Packets from the bridge with a source
+// outside the build subnet are spoofed and dropped.
 func renderEgressScript(config RuntimeConfig) string {
 	host, port := splitControlPlaneAddress(config.ControlPlaneAddress)
 	modeRule := "-A $CHAIN -s $SUBNET -j ACCEPT"
@@ -193,11 +200,14 @@ func renderEgressScript(config RuntimeConfig) string {
 set -eu
 IPT="$(command -v iptables)"
 CHAIN=GATEWAY_BUILDER_EGRESS
+HOST_CHAIN=GATEWAY_BUILDER_HOST
+BRIDGE=%s
 SUBNET=%s
 CONTROL_HOST=%s
 CONTROL_PORT=%s
 $IPT -N "$CHAIN" 2>/dev/null || true
 $IPT -F "$CHAIN"
+$IPT -A "$CHAIN" ! -s "$SUBNET" -j DROP
 for CIDR in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4; do
   $IPT -A "$CHAIN" -s "$SUBNET" -d "$CIDR" -j REJECT
 done
@@ -207,10 +217,24 @@ if [ -n "$CONTROL_HOST" ]; then
   done
 fi
 $IPT %s
+$IPT -N "$HOST_CHAIN" 2>/dev/null || true
+$IPT -F "$HOST_CHAIN"
+$IPT -A "$HOST_CHAIN" -j REJECT
 $IPT -N CNI-ADMIN 2>/dev/null || true
 $IPT -C CNI-ADMIN -s "$SUBNET" -j "$CHAIN" 2>/dev/null || $IPT -I CNI-ADMIN 1 -s "$SUBNET" -j "$CHAIN"
 $IPT -C FORWARD -s "$SUBNET" -j "$CHAIN" 2>/dev/null || $IPT -I FORWARD 1 -s "$SUBNET" -j "$CHAIN"
-`, BuilderNetworkSubnet, strconv.Quote(host), strconv.Quote(port), modeRule)
+$IPT -C FORWARD -i "$BRIDGE" -j "$CHAIN" 2>/dev/null || $IPT -I FORWARD 1 -i "$BRIDGE" -j "$CHAIN"
+$IPT -C INPUT -s "$SUBNET" -j "$HOST_CHAIN" 2>/dev/null || $IPT -I INPUT 1 -s "$SUBNET" -j "$HOST_CHAIN"
+$IPT -C INPUT -i "$BRIDGE" -j "$HOST_CHAIN" 2>/dev/null || $IPT -I INPUT 1 -i "$BRIDGE" -j "$HOST_CHAIN"
+if [ -e /proc/net/if_inet6 ]; then
+  IP6T="$(command -v ip6tables)" || { echo "ip6tables is required to isolate the build network on an IPv6 host" >&2; exit 1; }
+  $IP6T -N "$HOST_CHAIN" 2>/dev/null || true
+  $IP6T -F "$HOST_CHAIN"
+  $IP6T -A "$HOST_CHAIN" -j DROP
+  $IP6T -C INPUT -i "$BRIDGE" -j "$HOST_CHAIN" 2>/dev/null || $IP6T -I INPUT 1 -i "$BRIDGE" -j "$HOST_CHAIN"
+  $IP6T -C FORWARD -i "$BRIDGE" -j "$HOST_CHAIN" 2>/dev/null || $IP6T -I FORWARD 1 -i "$BRIDGE" -j "$HOST_CHAIN"
+fi
+`, BuilderBridgeName, BuilderNetworkSubnet, strconv.Quote(host), strconv.Quote(port), modeRule)
 }
 
 func splitControlPlaneAddress(address string) (string, string) {
