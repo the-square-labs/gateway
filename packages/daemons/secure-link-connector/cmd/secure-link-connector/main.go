@@ -72,6 +72,14 @@ func main() {
 		manager.close()
 		egress.close()
 	}()
+	// The daemon's way to stop a replaced connector accepting when it cannot reach its control socket (a switch of the
+	// daemon's user): the same as a drain request.
+	drainSignals := make(chan os.Signal, 1)
+	signal.Notify(drainSignals, drainSignal)
+	go drainOnSignal(ctx, drainSignals, func() {
+		active := manager.drain() + egress.drain()
+		log.Printf("draining on signal: listeners closed, %d sessions go on", active)
+	})
 
 	for {
 		connection, err := listener.Accept()
