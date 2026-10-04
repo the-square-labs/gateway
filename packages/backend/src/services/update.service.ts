@@ -292,6 +292,11 @@ export class UpdateService {
   private relayPoolRuntime?: RelayPoolUpdateRuntime;
   /** Set while this process drives a Relay Pool run; aborting it abandons the run. */
   private relayPoolRun: AbortController | null = null;
+  /**
+   * Set once the local relay update rewrote the installation and recreates the relay: the last step of a run, which
+   * finishes or rolls back on its own and cannot be abandoned, until the update ends.
+   */
+  private localRelayUpdateCommitted = false;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -1319,7 +1324,11 @@ chmod 700 "$backup"
     userId: string | null = null
   ): Promise<void> {
     if (!this.relayPoolRuntime) {
-      await this.performLocalRelayUpdate(targetVersion, artifact, true);
+      try {
+        await this.performLocalRelayUpdate(targetVersion, artifact, true);
+      } finally {
+        this.localRelayUpdateCommitted = false;
+      }
       return;
     }
     if (this.relayPoolRun) throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A Relay Pool update is already in progress');
@@ -1334,6 +1343,7 @@ chmod 700 "$backup"
       throw error;
     } finally {
       if (this.relayPoolRun === control) this.relayPoolRun = null;
+      this.localRelayUpdateCommitted = false;
     }
   }
 
@@ -1387,7 +1397,9 @@ chmod 700 "$backup"
             throwIfAbandoned();
             await this.updatePoolStep(step.id, 'updating');
             const restartedAt = Date.now();
-            await this.performLocalRelayUpdate(targetVersion, artifact, false);
+            // From the point the local relay update commits, abandoning is refused: the pool ends on the target (or the
+            // relay rolls back), and the run records that outcome rather than a failure (abandonRelayUpdate).
+            await this.performLocalRelayUpdate(targetVersion, artifact, false, signal);
             await runtime.awaitLeaseSettled?.(instance.id, restartedAt, signal);
           }
           await this.updatePoolStep(step.id, 'ready', true);
@@ -1496,7 +1508,8 @@ chmod 700 "$backup"
   private async performLocalRelayUpdate(
     targetVersion: string,
     artifact: TrustedRelayUpdateArtifact,
-    promoteConnectors: boolean
+    promoteConnectors: boolean,
+    signal?: AbortSignal
   ): Promise<void> {
     const version = normalizeVersionTag(targetVersion);
     const selfInfo = await this.dockerService.inspectSelf();
@@ -1514,6 +1527,10 @@ chmod 700 "$backup"
 
     await this.dockerService.pullImageRef(artifact.imageRef);
     await this.dockerService.pullImageRef(DOCKER_COMPOSE_CLI_IMAGE_REF);
+    // The migration rewrites the installation and the relay is recreated on it: from here the update finishes or
+    // rolls back, and abandoning it is refused. Checked and set together, so an abandon either came first or is refused.
+    if (signal?.aborted) throw new RelayPoolUpdateAbandonedError();
+    this.localRelayUpdateCommitted = true;
     const migrationResult = await this.dockerService.runOneShot({
       Image: selfInfo.Config.Image,
       Cmd: [
@@ -1864,6 +1881,15 @@ exit 1`,
     if (!run && operation?.status !== 'updating' && !this.relayPoolRun) {
       throw new AppError(409, 'RELAY_UPDATE_NOT_ACTIVE', 'No Relay Pool update is in progress');
     }
+    // A remote relay's step can be left: a later run picks up where the relays are. The local relay goes last and its
+    // update cannot be stopped once it began; abandoning then would record a failure for a pool that ends updated.
+    if (this.localRelayUpdateCommitted) {
+      throw new AppError(
+        409,
+        'RELAY_UPDATE_COMMITTED',
+        'The local relay is being updated, which is the last step and cannot be stopped. The update finishes, or rolls back if it fails, within a few minutes.'
+      );
+    }
     const message = 'Abandoned by an administrator';
     this.relayPoolRun?.abort();
     const drained = run ? await this.failRelayPoolRun(run.id, message, UNFINISHED_RELAY_POOL_RUN_STATES) : [];
@@ -2036,7 +2062,8 @@ exit 1`,
       targetVersion: run.targetArtifact.version,
       startedAt: run.startedAt.toISOString(),
       error: run.terminalError,
-      abandonable: (UNFINISHED_RELAY_POOL_RUN_STATES as readonly string[]).includes(run.state),
+      abandonable:
+        (UNFINISHED_RELAY_POOL_RUN_STATES as readonly string[]).includes(run.state) && !this.localRelayUpdateCommitted,
       runState: run.state,
       lastProgressAt: lastProgressAt.toISOString(),
     };
