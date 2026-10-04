@@ -77,6 +77,8 @@ type DockerPlugin struct {
 	availability             *availabilityManager
 	lease                    *leaseIntegration
 	registrationChanged      chan struct{}
+	// healthRefresh asks the session for a health report now (container_state_events.go).
+	healthRefresh chan struct{}
 	// memberReadiness gates availability member endpoints on their workload
 	// (D6); memberProbe replaces its probe in tests.
 	memberReadiness *memberReadiness
@@ -133,7 +135,12 @@ func dockerTimeoutProvided(configJSON string) bool {
 
 // NewDockerPlugin creates a new DockerPlugin with the given configuration.
 func NewDockerPlugin(cfg *config.Config) *DockerPlugin {
-	return &DockerPlugin{cfg: cfg, registrationChanged: make(chan struct{}, 1), memberReadiness: newMemberReadiness()}
+	return &DockerPlugin{
+		cfg:                 cfg,
+		registrationChanged: make(chan struct{}, 1),
+		healthRefresh:       make(chan struct{}, 1),
+		memberReadiness:     newMemberReadiness(),
+	}
 }
 
 // backupCommandHandler is deliberately narrow: backup runtime files can

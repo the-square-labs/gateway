@@ -29,6 +29,8 @@ type StatsCollector struct {
 	logger    *slog.Logger
 	mu        sync.RWMutex
 	stats     map[string]*pb.ContainerStats // keyed by container ID
+	// stateVersion counts refreshStates passes: a metrics pass that a state refresh overtook keeps the newer states.
+	stateVersion uint64
 	// logReadWarning reports once that log files are unreadable, typically a
 	// daemon running as a user outside the Docker data directory's group.
 	logReadWarning sync.Once
@@ -76,6 +78,9 @@ func (sc *StatsCollector) GetStats() []*pb.ContainerStats {
 
 // collect gathers stats from all containers filtered by the allowlist.
 func (sc *StatsCollector) collect(ctx context.Context) {
+	sc.mu.RLock()
+	version := sc.stateVersion
+	sc.mu.RUnlock()
 	containers, err := sc.client.ListContainers(ctx)
 	if err != nil {
 		sc.logger.Debug("stats: list containers failed", "error", err)
@@ -119,8 +124,52 @@ func (sc *StatsCollector) collect(ctx context.Context) {
 	}
 
 	sc.mu.Lock()
+	if sc.stateVersion != version {
+		// A container event refreshed the states while this pass sampled: which containers exist and their states
+		// come from that newer list, the metrics from this pass where the state still matches.
+		merged := make(map[string]*pb.ContainerStats, len(sc.stats))
+		for id, current := range sc.stats {
+			if sampled, ok := newStats[id]; ok && sampled.State == current.State {
+				merged[id] = sampled
+			} else {
+				merged[id] = current
+			}
+		}
+		newStats = merged
+	}
 	sc.stats = newStats
 	sc.mu.Unlock()
+}
+
+// refreshStates reads which containers exist and their states again, without sampling metrics, and reports whether
+// any of them changed. A container that started or exited keeps its last metrics only while it still runs.
+func (sc *StatsCollector) refreshStates(ctx context.Context) (bool, error) {
+	containers, err := sc.client.ListContainers(ctx)
+	if err != nil {
+		return false, err
+	}
+	containers = sc.allowlist.Filter(containers)
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.stateVersion++
+	next := make(map[string]*pb.ContainerStats, len(containers))
+	changed := len(containers) != len(sc.stats)
+	for _, ctr := range containers {
+		if current, ok := sc.stats[ctr.ID]; ok && current.State == ctr.State {
+			next[ctr.ID] = current
+			continue
+		}
+		changed = true
+		next[ctr.ID] = &pb.ContainerStats{
+			ContainerId: ctr.ID,
+			Name:        ctr.Name,
+			Image:       ctr.Image,
+			State:       ctr.State,
+		}
+	}
+	sc.stats = next
+	return changed, nil
 }
 
 // collectOne fetches a one-shot stats sample for a single container and

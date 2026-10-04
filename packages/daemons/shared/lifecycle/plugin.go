@@ -109,6 +109,12 @@ type RegistrationRefreshPlugin interface {
 	RegistrationChanged() <-chan struct{}
 }
 
+// HealthRefreshPlugin is implemented by plugins whose health report can change between the periodic reports in a
+// way the gateway should see at once (a container that exited on its own): each signal sends a report now.
+type HealthRefreshPlugin interface {
+	HealthRefreshRequested() <-chan struct{}
+}
+
 // RestartAnnouncerPlugin is implemented by plugins that tell their peers the
 // daemon is about to restart, while it can still reach them (B-13): the
 // relays then hold the daemon's traffic for its next process instead of

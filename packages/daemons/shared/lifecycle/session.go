@@ -507,23 +507,28 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	}
 }
 
-// runHealthReporter periodically sends health reports to the gateway.
+// runHealthReporter periodically sends health reports to the gateway, and at once when the plugin asks for one.
 func runHealthReporter(ctx context.Context, d *DaemonBase, writer *stream.Writer) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	var refresh <-chan struct{}
+	if plugin, ok := d.plugin.(HealthRefreshPlugin); ok {
+		refresh = plugin.HealthRefreshRequested()
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			report := collectFullHealth(d)
-			if err := writer.Send(&pb.DaemonMessage{
-				Payload: &pb.DaemonMessage_HealthReport{HealthReport: report},
-			}); err != nil {
-				d.logger.Debug("failed to send health report", "error", err)
-				return
-			}
+		case <-refresh:
+		}
+		report := collectFullHealth(d)
+		if err := writer.Send(&pb.DaemonMessage{
+			Payload: &pb.DaemonMessage_HealthReport{HealthReport: report},
+		}); err != nil {
+			d.logger.Debug("failed to send health report", "error", err)
+			return
 		}
 	}
 }

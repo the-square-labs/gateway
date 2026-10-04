@@ -72,8 +72,10 @@ func (p *DockerPlugin) OnSessionStart(ctx context.Context, writer *stream.Writer
 		return nil
 	}
 	// Start stats collector goroutine
-	p.statsCollector = NewStatsCollector(p.client, p.allowlist, p.logger)
-	go p.statsCollector.Run(ctx)
+	collector := NewStatsCollector(p.client, p.allowlist, p.logger)
+	p.statsCollector = collector
+	go collector.Run(ctx)
+	go p.followContainerStates(ctx, collector)
 	go p.runMigrationArtifactCleanup(ctx)
 
 	// Create exec manager with stream writer for async output
