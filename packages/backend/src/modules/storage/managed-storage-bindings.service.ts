@@ -35,6 +35,7 @@ export class ManagedStorageBindingsService {
           | 'getLinkRouteTransport'
           | 'awaitSecureLinkEgress'
           | 'probeLinkRoute'
+          | 'secureLinkEgressStatuses'
         >
       | undefined,
     _storageCA?: import('@/services/storage-ca.service.js').StorageCAService | undefined,

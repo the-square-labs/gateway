@@ -722,6 +722,15 @@ export class RelayPolicyService {
     throw new Error(`the secure-link connector is not listening for the link: ${reason}`);
   }
 
+  /**
+   * What the node's daemon reports about its connector egress now, by owner id: the ACK of a freshly delivered bundle
+   * (egressStatuses). Null when the bundle was not delivered.
+   */
+  async secureLinkEgressStatuses(nodeId: string): Promise<Record<string, SecureLinkEgressStatus> | null> {
+    const result = await this.syncNodeGrantBundle(nodeId);
+    return result.success ? parseRelayGrantEgressStatuses(result.detail) : null;
+  }
+
   /** Probes the relay path of one link route from its source node, like a managed database link's. */
   async probeLinkRoute(nodeId: string, ownerKind: string, ownerId: string): Promise<void> {
     const bundle = this.lastNodeGrantBundles.get(nodeId) ?? (await this.getNodeGrantBundle(nodeId));
