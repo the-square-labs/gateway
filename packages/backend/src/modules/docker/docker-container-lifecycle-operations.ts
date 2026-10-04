@@ -40,6 +40,8 @@ export interface ContainerOperationAnswer {
   containerId: string;
   name: string;
   pending?: PendingTransition;
+  /** A kill found no process to signal: the container was not running. */
+  notRunning?: true;
 }
 
 /** The body of a 202 answer: the task that still runs and the container's transition. */
@@ -332,6 +334,24 @@ export async function killContainer(
   // must still prove that the target is not a Gateway-owned container.
   if (!trustedStableName) await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const name = trustedStableName ?? (await ctx.resolveContainerName(nodeId, containerId));
+  if (!(await containerHasProcessToStop(ctx, nodeId, containerId))) {
+    // Docker refuses to signal a container without a process ("is not running"). Like a stop of it, the kill is
+    // done at once: the container is already stopped.
+    const task = await ctx.createTask(nodeId, containerId, name, 'kill');
+    if (task && ctx.taskService) {
+      await ctx.taskService
+        .update(task.id, { status: 'succeeded', progress: 'Container is not running', completedAt: new Date() })
+        .catch(() => undefined);
+    }
+    await ctx.auditService.log({
+      action: 'docker.container.kill',
+      userId,
+      resourceType: 'docker-container',
+      resourceId: containerId,
+      details: { nodeId, name, containerName: name, signal },
+    });
+    return { taskId: task?.id, containerId, name, notRunning: true };
+  }
   ctx.setTransition(nodeId, name, 'killing');
   ctx.emitTransition(nodeId, name, containerId, 'killing');
   const task = await ctx.createTask(nodeId, containerId, name, 'kill');

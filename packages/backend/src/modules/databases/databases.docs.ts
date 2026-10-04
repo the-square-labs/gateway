@@ -134,6 +134,8 @@ export const retryManagedDatabaseProvisioningRoute = appRoute({
   path: '/managed/{id}/retry-provisioning',
   tags: ['Databases'],
   summary: 'Retry failed managed database provisioning',
+  description:
+    'Provisions a managed database in `error` again on its node and answers 200 with the database once the node answered (`ready`, or `error` with the new lastError): the database already exists, so nothing is created (201 is for create). What the node kept of it (storage image, container) is taken over with its data. 409 MANAGED_DATABASE_NOT_RETRYABLE when the database did not fail or its node still holds it (change its settings, restart or delete it instead), 409 MANAGED_DATABASE_NODE_STATE_UNKNOWN when the node daemon cannot tell what it kept (update the node first), 409 NODE_OFFLINE when the node is offline.',
   request: { params: IdParamSchema },
   responses: okJson(UnknownDataResponseSchema),
 });

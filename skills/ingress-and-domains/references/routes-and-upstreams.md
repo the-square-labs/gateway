@@ -31,7 +31,7 @@ A workload with Docker Availability is routed through its logical identity; Gate
 ## Other Route tools
 
 - `get_route`, `update_route`, `delete_route` (does not delete its certificate or Access List), `list_routes`, `create_route_folder`, `move_routes_to_folder`, `delete_route_folder`, `resync_tls_distribution`.
-- `manage_route` reads: `get_config`, `get_by_slug`, `health_history`, `secure_link_status`, `access_logs` (tail up to 200 lines), `maintenance_access_code` (a 5-minute bypass code, needs `proxy:maintenance:bypass`), and `validate_config`, which dry-checks an advanced snippet or, with `mode: "raw"`, a full raw config. Validate before switching a Route to raw mode or applying an unusual snippet.
+- `manage_route` reads: `get_config`, `get_by_slug`, `health_history`, `secure_link_status`, `access_logs` (tail up to 200 lines), `maintenance_access_code` (a 5-minute bypass code, needs `proxy:maintenance:bypass`; a Route whose advanced config sets `secure_link` shows the maintenance page without team access, and the code is refused with `MAINTENANCE_ACCESS_UNAVAILABLE`), and `validate_config`, which dry-checks an advanced snippet or, with `mode: "raw"`, a full raw config. Validate before switching a Route to raw mode or applying an unusual snippet.
 
 ## Additional Routes and Secure Links
 

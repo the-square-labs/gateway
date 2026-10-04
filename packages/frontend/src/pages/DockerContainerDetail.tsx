@@ -1098,6 +1098,8 @@ export function DockerContainerDetail({
   // ── Action helpers ──
   // The header action whose request is running, so its button shows the pending state.
   const [pendingHeaderAction, setPendingHeaderAction] = useState<string | null>(null);
+  // A removal started while a stop or kill request still runs owns the header state from then on.
+  const removingRef = useRef(false);
   const doAction = async (fn: () => Promise<unknown>, successMsg: string, actionLabel?: string) => {
     setActionLoading(true);
     setPendingHeaderAction(actionLabel ?? null);
@@ -1114,8 +1116,10 @@ export function DockerContainerDetail({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Action failed");
     } finally {
-      setActionLoading(false);
-      setPendingHeaderAction(null);
+      if (!removingRef.current) {
+        setActionLoading(false);
+        setPendingHeaderAction(null);
+      }
     }
   };
 
@@ -1130,6 +1134,7 @@ export function DockerContainerDetail({
       confirmLabel: "Remove",
     });
     if (!ok) return;
+    removingRef.current = true;
     setActionLoading(true);
     setPendingHeaderAction("Remove");
     try {
@@ -1142,6 +1147,7 @@ export function DockerContainerDetail({
       navigate(backTarget);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to remove");
+      removingRef.current = false;
       setActionLoading(false);
       setPendingHeaderAction(null);
     }
@@ -1379,6 +1385,18 @@ export function DockerContainerDetail({
     (availabilityManaged ? availabilityBusy : !!effectiveTransition || unavailable) ||
     composeManaged ||
     !!buildRolloutReason;
+  // A container that is stopping can be removed: the removal waits for the stop, or removes the container once the
+  // stop has ended (202).
+  const stopping =
+    effectiveTransition === "stopping" ||
+    effectiveTransition === "killing" ||
+    pendingHeaderAction === "Stop" ||
+    pendingHeaderAction === "Kill";
+  const removeDisabled =
+    availabilityManaged ||
+    (stopping
+      ? unavailable || composeManaged || !!buildRolloutReason || pendingHeaderAction === "Remove"
+      : actionDisabled);
   const deploymentManaged = labels["wiolett.gateway.deployment.managed"] === "true";
   const gpuMapped =
     container?.gpuAttachment?.mode === "managed" || container?.gpuAttachment?.mode === "external";
@@ -1622,7 +1640,7 @@ export function DockerContainerDetail({
             label: "Remove",
             icon: <Trash2 className="h-4 w-4" />,
             onClick: handleRemove,
-            disabled: actionDisabled || availabilityManaged,
+            disabled: removeDisabled,
             disabledReason: availabilityManaged
               ? "Disable Availability in Settings before removing this container."
               : undefined,

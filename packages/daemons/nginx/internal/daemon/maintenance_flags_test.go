@@ -1,12 +1,17 @@
 package daemon
 
 import (
+	"io"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/nginx-daemon/internal/config"
+	"github.com/wiolett-industries/gateway/nginx-daemon/internal/nginx"
 )
 
 const maintenanceTestHostC = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
@@ -129,5 +134,66 @@ func TestMaintenanceFlagsFollowTheRoutesTheNodeServes(t *testing.T) {
 	// The full sync removed host B's config (one reload); the flag changes reloaded nothing.
 	if got := h.reloads(t) - reloads; got != 1 {
 		t.Fatalf("the full syncs reloaded nginx %d times, want 1", got)
+	}
+}
+
+// maintenanceMapsPlugin is a plugin whose nginx -t is the given binary ("true" accepts, "false" rejects).
+func maintenanceMapsPlugin(t *testing.T, tester string) *NginxPlugin {
+	t.Helper()
+	binary, err := exec.LookPath(tester)
+	if err != nil {
+		t.Skipf("%s binary unavailable", tester)
+	}
+	configDir := t.TempDir()
+	return &NginxPlugin{
+		cfg:                       &config.Config{Nginx: config.NginxConfig{ConfigDir: configDir}},
+		mgr:                       nginx.NewManager(binary, configDir, t.TempDir(), ""),
+		maintenanceFlagsSupported: true,
+	}
+}
+
+// TestMaintenanceGuardMapsReloadOnlyWhenRoutesUseAnOlderCopy: the first copy waits for the reload that brings the
+// routes using it; a changed copy (a daemon update) reloads at once, because the routes already use the maps.
+func TestMaintenanceGuardMapsReloadOnlyWhenRoutesUseAnOlderCopy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := maintenanceMapsPlugin(t, "true")
+	if p.ensureMaintenanceGuardMaps(logger) {
+		t.Fatal("the first copy of the maps asked for a reload")
+	}
+	if p.ensureMaintenanceGuardMaps(logger) {
+		t.Fatal("an unchanged copy asked for a reload")
+	}
+	path := nginx.MaintenanceGuardConfigPath(p.cfg.Nginx.ConfigDir)
+	if err := os.WriteFile(path, []byte("# an older copy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !p.ensureMaintenanceGuardMaps(logger) || !p.maintenanceFlagsSupported {
+		t.Fatalf("a changed copy did not ask for a reload (supported=%v)", p.maintenanceFlagsSupported)
+	}
+}
+
+// TestRejectedMaintenanceGuardMapsKeepThePreviousCopy: routes rendered for the flag guard use the maps, so a copy
+// nginx rejects is replaced by the one before it instead of being removed.
+func TestRejectedMaintenanceGuardMapsKeepThePreviousCopy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := maintenanceMapsPlugin(t, "false")
+	path := nginx.MaintenanceGuardConfigPath(p.cfg.Nginx.ConfigDir)
+	older := []byte("# an older copy\n")
+	if err := os.WriteFile(path, older, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if p.ensureMaintenanceGuardMaps(logger) || !p.maintenanceFlagsSupported {
+		t.Fatalf("a rejected update: supported=%v, want the previous maps kept", p.maintenanceFlagsSupported)
+	}
+	if content, err := os.ReadFile(path); err != nil || string(content) != string(older) {
+		t.Fatalf("maps after a rejected update = %q, %v; want the previous copy", content, err)
+	}
+
+	first := maintenanceMapsPlugin(t, "false")
+	if first.ensureMaintenanceGuardMaps(logger) || first.maintenanceFlagsSupported {
+		t.Fatal("a rejected first copy left maintenance flags supported")
+	}
+	if _, err := os.Stat(nginx.MaintenanceGuardConfigPath(first.cfg.Nginx.ConfigDir)); !os.IsNotExist(err) {
+		t.Fatalf("a rejected first copy stayed: %v", err)
 	}
 }

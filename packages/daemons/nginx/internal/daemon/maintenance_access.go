@@ -52,7 +52,29 @@ func startMaintenanceAccessServer(conn *grpc.ClientConn, logger interface{ Warn(
 		return nil, err
 	}
 
-	client := pb.NewMaintenanceAccessClient(conn)
+	mux := maintenanceAccessHandler(pb.NewMaintenanceAccessClient(conn), logger)
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Warn("maintenance access socket stopped", "error", err)
+		}
+	}()
+	return &maintenanceAccessServer{listener: listener, server: server}, nil
+}
+
+func (s *maintenanceAccessServer) close() {
+	if s == nil {
+		return
+	}
+	_ = s.server.Close()
+	_ = s.listener.Close()
+	_ = os.Remove(maintenanceAccessSocketPath)
+}
+
+// maintenanceAccessHandler redeems an access code the maintenance page posts. 204 sets the access cookies; 403 means
+// the code was not accepted (wrong, expired, already used, for another route or host), and the page says so; 502
+// means Gateway could not be asked.
+func maintenanceAccessHandler(client pb.MaintenanceAccessClient, logger interface{ Warn(string, ...any) }) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/redeem/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -68,12 +90,12 @@ func startMaintenanceAccessServer(conn *grpc.ClientConn, logger interface{ Warn(
 			Code string `json:"code"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 512)).Decode(&body); err != nil || len(body.Code) < 32 || len(body.Code) > 128 {
-			w.WriteHeader(http.StatusAccepted)
+			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		requestHost := r.Header.Get("X-Gateway-Maintenance-Host")
 		if requestHost == "" {
-			w.WriteHeader(http.StatusAccepted)
+			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -86,7 +108,7 @@ func startMaintenanceAccessServer(conn *grpc.ClientConn, logger interface{ Warn(
 			return
 		}
 		if !reply.Allowed || reply.SessionToken == "" {
-			w.WriteHeader(http.StatusAccepted)
+			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		signature, expires, ok := strings.Cut(reply.SessionToken, ",")
@@ -116,20 +138,5 @@ func startMaintenanceAccessServer(conn *grpc.ClientConn, logger interface{ Warn(
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() {
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Warn("maintenance access socket stopped", "error", err)
-		}
-	}()
-	return &maintenanceAccessServer{listener: listener, server: server}, nil
-}
-
-func (s *maintenanceAccessServer) close() {
-	if s == nil {
-		return
-	}
-	_ = s.server.Close()
-	_ = s.listener.Close()
-	_ = os.Remove(maintenanceAccessSocketPath)
+	return mux
 }

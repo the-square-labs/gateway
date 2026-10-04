@@ -196,7 +196,8 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
           rollbackError,
         });
       }
-      if (error instanceof AppError && error.code === 'NGINX_TLS_DAEMON_UPDATE_REQUIRED') throw error;
+      // A config the node rejected (422 NGINX_CONFIG_FAILED) and every other caller error already says what failed.
+      if (error instanceof AppError) throw error;
       throw new AppError(
         500,
         'NGINX_CONFIG_FAILED',
@@ -299,6 +300,7 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
           rollbackError,
         });
       }
+      if (error instanceof AppError) throw error;
       throw new AppError(
         500,
         'NGINX_CONFIG_FAILED',

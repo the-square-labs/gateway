@@ -17,7 +17,8 @@ const maintenanceGuardFilename = "00-gateway-maintenance.conf"
 //   - $gateway_maintenance_route names the guard location that answers the request, empty when the route handles it:
 //     the paths the maintenance page itself needs and ACME challenges, and a request with a valid access cookie.
 //   - $gateway_maintenance_cookie is the Cookie a route forwards: the request's own, without Gateway's access cookies
-//     during maintenance.
+//     during maintenance. Each cookie goes with the separator that joined it to its neighbours (the first rule of a map
+//     takes the cookie at the start, the second one anywhere after it), so no empty or leading ";" is left.
 const maintenanceGuardConfig = `# Gateway managed: maintenance of the routes on this node (auto-generated).
 map $pid $gateway_maintenance {
     default "";
@@ -48,12 +49,14 @@ map $secure_link $gateway_maintenance_access {
 
 map $http_cookie $gateway_maintenance_cookie_sig {
     default $http_cookie;
-    "~^(.*)(?:^|;\s*)gateway_maintenance_access_sig=[^;]*(;.*)?$" "$1$2";
+    "~^gateway_maintenance_access_sig=[^;]*(?:;\s*(.*))?$" "$1";
+    "~^(.*?);\s*gateway_maintenance_access_sig=[^;]*(.*)$" "$1$2";
 }
 
 map $gateway_maintenance_cookie_sig $gateway_maintenance_cookie_stripped {
     default $gateway_maintenance_cookie_sig;
-    "~^(.*)(?:^|;\s*)gateway_maintenance_access_exp=[^;]*(;.*)?$" "$1$2";
+    "~^gateway_maintenance_access_exp=[^;]*(?:;\s*(.*))?$" "$1";
+    "~^(.*?);\s*gateway_maintenance_access_exp=[^;]*(.*)$" "$1$2";
 }
 
 map $gateway_maintenance $gateway_maintenance_cookie {
@@ -68,15 +71,16 @@ func MaintenanceGuardConfigPath(configDir string) string {
 	return filepath.Join(configDir, maintenanceGuardFilename)
 }
 
-// EnsureMaintenanceGuardConfig writes the shared maps when they are missing or differ. Returns true when written.
-func EnsureMaintenanceGuardConfig(configDir string) (bool, error) {
+// EnsureMaintenanceGuardConfig writes the shared maps when they are missing or differ. It returns the content it
+// replaced (nil when the file was missing) and whether it wrote.
+func EnsureMaintenanceGuardConfig(configDir string) (previous []byte, written bool, err error) {
 	path := MaintenanceGuardConfigPath(configDir)
 	existing, err := ReadFile(path)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if bytes.Equal(existing, []byte(maintenanceGuardConfig)) {
-		return false, nil
+		return existing, false, nil
 	}
-	return true, WriteAtomic(path, []byte(maintenanceGuardConfig))
+	return existing, true, WriteAtomic(path, []byte(maintenanceGuardConfig))
 }

@@ -273,21 +273,9 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		configDirModified = true
 	}
 	// The shared maps of the flag-checked maintenance guard; without them Gateway keeps rendering the guard only
-	// during maintenance. They need no reload of their own: only route configs Gateway renders for this capability
-	// use them, and the reload that loads those configs loads the maps.
-	if p.maintenanceFlagsSupported {
-		if written, err := nginx.EnsureMaintenanceGuardConfig(p.cfg.Nginx.ConfigDir); err != nil {
-			logger.Warn("maintenance guard maps are unavailable; maintenance changes reload nginx", "error", err)
-			p.maintenanceFlagsSupported = false
-		} else if written {
-			// Kept only when nginx accepts the configuration with them (the routes that use them were rendered
-			// against an earlier copy, so an unchanged file is never removed).
-			if valid, output := p.mgr.TestConfig(); !valid {
-				_ = nginx.RemoveFile(nginx.MaintenanceGuardConfigPath(p.cfg.Nginx.ConfigDir))
-				logger.Warn("maintenance guard maps conflict with this node's nginx configuration; maintenance changes reload nginx", "output", output)
-				p.maintenanceFlagsSupported = false
-			}
-		}
+	// during maintenance.
+	if p.maintenanceFlagsSupported && p.ensureMaintenanceGuardMaps(logger) {
+		configDirModified = true
 	}
 
 	if healthReady {

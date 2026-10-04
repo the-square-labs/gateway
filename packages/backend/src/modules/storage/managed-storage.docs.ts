@@ -90,6 +90,8 @@ export const retryManagedStorageProvisioningRoute = appRoute({
   path: '/{id}/retry-provisioning',
   tags: [TAG],
   summary: 'Retry failed managed object storage provisioning',
+  description:
+    'Provisions a managed storage cluster in `error` again on its node and answers 200 with the cluster once the node answered (`ready`, or `error` with the new lastError): the cluster already exists, so nothing is created (201 is for create). What the node kept of it (storage image, container) is taken over with its data. 409 MANAGED_STORAGE_NOT_RETRYABLE when the cluster did not fail or its node still holds it (change its settings, restart or delete it instead), 409 MANAGED_STORAGE_NODE_STATE_UNKNOWN when the node daemon cannot tell what it kept (update the node first), 409 MANAGED_STORAGE_NODE_UNAVAILABLE when the node is offline.',
   request: { params: IdParamSchema },
   responses: okJson(UnknownDataResponseSchema),
 });

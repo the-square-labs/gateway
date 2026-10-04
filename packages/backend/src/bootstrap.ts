@@ -1342,6 +1342,7 @@ export async function initializeContainer(): Promise<void> {
   );
   proxyService.setEventBus(eventBus);
   proxyService.setWebTransportSettings(webTransportSettingsService);
+  proxyMaintenanceAccessService.setRouteAccessCheck((hostId) => proxyService.maintenanceAccessOffered(hostId));
   container.registerInstance(ProxyService, proxyService);
   const dockerWorkloadResolver = new DockerWorkloadResolverService(db);
   container.registerInstance(DockerWorkloadResolverService, dockerWorkloadResolver);

@@ -19,6 +19,8 @@ function digest(value: string) {
 }
 
 export class ProxyMaintenanceAccessService {
+  private routeOffersAccess?: (hostId: string) => Promise<boolean>;
+
   constructor(
     private readonly db: DrizzleClient,
     private readonly cache: CacheService,
@@ -26,10 +28,23 @@ export class ProxyMaintenanceAccessService {
     private readonly crypto: CryptoService
   ) {}
 
+  /** How issue() learns whether a route's maintenance page offers team access (ProxyService renders the route). */
+  setRouteAccessCheck(check: (hostId: string) => Promise<boolean>) {
+    this.routeOffersAccess = check;
+  }
+
   async issue(hostId: string, userId: string): Promise<{ code: string; expiresInSeconds: number }> {
     const host = await this.requireMaintainedHost(hostId);
     if (!host.nodeId) throw new AppError(409, 'MAINTENANCE_ACCESS_UNAVAILABLE', 'Proxy host has no nginx node');
     await this.requireSupportedNode(host.nodeId);
+    // A render failure leaves the decision to the page: the code is issued as before.
+    if (this.routeOffersAccess && !(await this.routeOffersAccess(hostId).catch(() => true))) {
+      throw new AppError(
+        409,
+        'MAINTENANCE_ACCESS_UNAVAILABLE',
+        "This route's maintenance page has no team access: its config uses secure_link or the /_gateway/maintenance-access paths"
+      );
+    }
 
     const code = randomBytes(24).toString('base64url');
     await this.cache.set(

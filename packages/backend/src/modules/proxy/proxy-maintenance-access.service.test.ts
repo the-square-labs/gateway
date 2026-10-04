@@ -89,6 +89,17 @@ describe('ProxyMaintenanceAccessService', () => {
     await expect(service.redeem(host.id, host.nodeId, 'example.test', issued.code)).resolves.toBeNull();
   });
 
+  it('does not issue a code for a route whose maintenance page has no team access', async () => {
+    const { service, cache } = harness();
+    service.setRouteAccessCheck(async () => false);
+
+    await expect(service.issue(host.id, 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'MAINTENANCE_ACCESS_UNAVAILABLE',
+    });
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
   it('does not issue a code until the target nginx daemon advertises support', async () => {
     const { service } = harness({ supportsMaintenanceAccess: false });
 

@@ -8,10 +8,30 @@ export const GATEWAY_NOT_FOUND_HTML = pageShell(
   'Error 404'
 );
 
-export const GATEWAY_MAINTENANCE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>Maintenance in progress</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#fff;color:#09090b;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:100%;max-width:560px;text-align:center}.status{color:#71717a;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}h1{margin:16px 0 0;font-size:clamp(40px,8vw,64px);line-height:1.05;font-weight:700;letter-spacing:-.04em}p.message{margin:20px auto 0;max-width:440px;color:#71717a;font-size:15px;line-height:1.6}.footer{margin-top:48px;color:#71717a;font-size:12px}.footer a,.access{color:inherit;text-decoration:none}.footer a:hover,.access:hover{text-decoration:underline}@media(prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}.status,p.message,.footer{color:#a1a1aa}.footer a,.access{color:#fafafa}}</style></head><body><main><section><div class="status">Temporarily unavailable</div><h1>Maintenance in progress</h1><p class="message">This service is temporarily unavailable while scheduled work is completed. Please try again later.</p></section><div class="footer"><a class="access" href="#access" id="maintenance-access-link">Team access</a><span aria-hidden="true"> · </span>Powered by <a href="https://goodgateway.dev" rel="noopener noreferrer">Good Gateway</a></div></main><script>(()=>{const link=document.getElementById('maintenance-access-link');link.addEventListener('click',async e=>{e.preventDefault();const code=window.prompt('Access code')?.trim();if(!code)return;try{const r=await fetch('/_gateway/maintenance-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});if(r.status===204)window.location.reload()}catch{}})})();</script></body></html>`;
-
 const EXTERNAL_BRANDING_HTML =
   'Powered by <a href="https://goodgateway.dev" rel="noopener noreferrer">Good Gateway</a>';
+
+const MAINTENANCE_ACCESS_LINK_HTML = '<a class="access" href="#access" id="maintenance-access-link">Team access</a>';
+
+/**
+ * Redeems an access code. A rejected code is 403 (202 from nginx daemons before 2.11.1); anything else means the code
+ * could not be checked.
+ */
+const MAINTENANCE_ACCESS_SCRIPT = `<script>(()=>{const link=document.getElementById('maintenance-access-link');const error=document.getElementById('maintenance-access-error');const show=text=>{error.textContent=text;error.hidden=false};link.addEventListener('click',async e=>{e.preventDefault();const code=window.prompt('Access code')?.trim();if(!code)return;error.hidden=true;try{const r=await fetch('/_gateway/maintenance-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});if(r.status===204){window.location.reload();return}show(r.status===403||r.status===202?'This access code is not valid or has expired.':'The access code could not be checked. Try again.')}catch{show('The access code could not be checked. Try again.')}})})();</script>`;
+
+/**
+ * The maintenance page. `teamAccess` offers the access-code form; a route whose config cannot carry the access-code
+ * bypass gets the page without it.
+ */
+function maintenancePageHtml(teamAccess: boolean, hideExternalBranding: boolean): string {
+  const footer = [teamAccess ? MAINTENANCE_ACCESS_LINK_HTML : '', hideExternalBranding ? '' : EXTERNAL_BRANDING_HTML]
+    .filter(Boolean)
+    .join('<span aria-hidden="true"> · </span>');
+  const access = teamAccess ? '<p class="access-error" id="maintenance-access-error" role="alert" hidden></p>' : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>Maintenance in progress</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#fff;color:#09090b;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:100%;max-width:560px;text-align:center}.status{color:#71717a;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}h1{margin:16px 0 0;font-size:clamp(40px,8vw,64px);line-height:1.05;font-weight:700;letter-spacing:-.04em}p.message{margin:20px auto 0;max-width:440px;color:#71717a;font-size:15px;line-height:1.6}.footer{margin-top:48px;color:#71717a;font-size:12px}.footer a,.access{color:inherit;text-decoration:none}.footer a:hover,.access:hover{text-decoration:underline}.access-error{margin:12px 0 0;color:#dc2626;font-size:12px}@media(prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}.status,p.message,.footer{color:#a1a1aa}.footer a,.access{color:#fafafa}.access-error{color:#f87171}}</style></head><body><main><section><div class="status">Temporarily unavailable</div><h1>Maintenance in progress</h1><p class="message">This service is temporarily unavailable while scheduled work is completed. Please try again later.</p></section><div class="footer">${footer}</div>${access}</main>${teamAccess ? MAINTENANCE_ACCESS_SCRIPT : ''}</body></html>`;
+}
+
+export const GATEWAY_MAINTENANCE_HTML = maintenancePageHtml(true, false);
 
 export function gatewayNotFoundHtml(hideExternalBranding = false): string {
   if (!hideExternalBranding) return GATEWAY_NOT_FOUND_HTML;
@@ -35,9 +55,8 @@ export function gatewayStatusPageUnavailableHtml(hideExternalBranding = false): 
   return GATEWAY_STATUS_PAGE_UNAVAILABLE_HTML.replace(`<div class="footer">${EXTERNAL_BRANDING_HTML}</div>`, '');
 }
 
-export function gatewayMaintenanceHtml(hideExternalBranding = false): string {
-  if (!hideExternalBranding) return GATEWAY_MAINTENANCE_HTML;
-  return GATEWAY_MAINTENANCE_HTML.replace(`<span aria-hidden="true"> · </span>${EXTERNAL_BRANDING_HTML}`, '');
+export function gatewayMaintenanceHtml(hideExternalBranding = false, teamAccess = true): string {
+  return maintenancePageHtml(teamAccess, hideExternalBranding);
 }
 
 export const GATEWAY_RESTARTING_SCRIPT = `(() => {
