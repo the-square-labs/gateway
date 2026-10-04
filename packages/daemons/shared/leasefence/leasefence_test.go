@@ -39,6 +39,25 @@ func TestRecordsRoundTripAndMalformedFilesAreReported(t *testing.T) {
 	}
 }
 
+// A record is readable to the owner of the records directory whoever wrote it: after a switch of the daemon's user the
+// directory is the new user's, and the records the previous daemon wrote must not stop it from recovering its copies.
+func TestRecordsAreReadableToTheDirectoryOwner(t *testing.T) {
+	dir := Dir{Root: t.TempDir()}
+	if err := os.MkdirAll(dir.RecordsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.WriteRecord(Record{ContainerID: testID, PolicyID: "p1", DeadlineNs: 42}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir.RecordsDir(), testID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("record mode %v, want 0644", info.Mode())
+	}
+}
+
 // A record the daemon may not read (another user's, after a switch of the daemon's user) is an error for the daemon,
 // never a missing record: a missing record makes its running copy look unfenced.
 func TestRecordTheDaemonMayNotReadIsAnError(t *testing.T) {

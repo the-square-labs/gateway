@@ -131,20 +131,37 @@ func (r *Runtime) Recovering(policyID string) bool {
 // loop starts, for at most wait, so the endpoints of a recovered copy
 // register serving from the first registration (B-13). A hung dockerd only
 // delays the start by wait; Run finishes the steps then.
+//
+// Records it cannot read (a switch of the daemon's user the records have not followed yet) shorten the wait to
+// primeUnreadableWait: the daemon's relays and links wait for Prime, and only a watchdog that hands the records over
+// within moments helps here; Run finishes the start once they can be read.
 func (r *Runtime) Prime(wait time.Duration) {
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
 		r.Step()
 		r.mu.Lock()
-		started := r.started
+		started, unreadable := r.started, r.recordsUnreadable
 		r.mu.Unlock()
 		if started {
 			// The recovered keys show up in the next step's holder view.
 			r.Step()
 			return
 		}
+		if unreadable {
+			deadline = earlier(deadline, time.Now().Add(primeUnreadableWait))
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// primeUnreadableWait bounds Prime while the watchdog records cannot be read.
+var primeUnreadableWait = time.Second
+
+func earlier(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 func (r *Runtime) Holds(policyID string) bool {

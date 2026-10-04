@@ -67,6 +67,24 @@ func TestStartupWaitsForUnreadableRecords(t *testing.T) {
 	}
 }
 
+// Unreadable records do not hold the daemon's start (its relays and links wait for Prime) for the whole prime wait: on
+// the stand that added five seconds to every link cut of a switch to a non-root daemon.
+func TestPrimeDoesNotWaitOutUnreadableRecords(t *testing.T) {
+	previous := primeUnreadableWait
+	primeUnreadableWait = 100 * time.Millisecond
+	t.Cleanup(func() { primeUnreadableWait = previous })
+	w := twoCandidateWorld(t)
+	w.waitServing("d1", 45*time.Second)
+	d1 := w.daemon("d1")
+	d1.fence.unreadable = true
+	w.restartDaemon("d1")
+	started := time.Now()
+	d1.runtime.Prime(3 * time.Second)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Prime waited %s with unreadable records", elapsed)
+	}
+}
+
 func TestStartupKillsContainerWithoutRecord(t *testing.T) {
 	w := twoCandidateWorld(t)
 	w.waitServing("d1", 45*time.Second)

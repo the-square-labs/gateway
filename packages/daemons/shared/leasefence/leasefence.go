@@ -160,7 +160,10 @@ func (d Dir) WriteRecord(r Record) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(d.RecordsDir(), d.recordPath(r.ContainerID), data, 0o600)
+	// Readable to the owner of the records directory (0700, the docker daemon's user), whoever wrote it: after a
+	// switch of the daemon's user the new daemon reads the records the previous one wrote as soon as the directory
+	// is its own, before the watchdog or the installer hands the files over.
+	return writeAtomic(d.RecordsDir(), d.recordPath(r.ContainerID), data, 0o644)
 }
 
 // DeleteRecord removes a record; a missing record is not an error.
