@@ -1804,13 +1804,13 @@ export class RelayPolicyService {
   }
 
   /** A container link's relay counters: the sum of its routes (one per source node). */
+  /**
+   * A container link's runtime: its routes (one per consumer node) and what those nodes report about it, same-node
+   * dials that never reach a relay included, as for managed database and storage links.
+   */
   async getContainerLinkRouteRuntime(linkId: string): Promise<RelayRouteRuntime | null> {
     const routes = await this.linkRoutes.containerLinkRoutes(linkId);
-    if (!routes.length) return null;
-    const results = await Promise.allSettled(routes.map((route) => this.relay.getRouteRuntime(route.id)));
-    const runtimes = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
-    if (!runtimes.length) throw (results[0] as PromiseRejectedResult).reason;
-    return runtimes.length === 1 ? relayRouteRuntime(runtimes[0]!) : sumRouteRuntimes(runtimes);
+    return routes.length ? this.managedLinkRuntime(routes) : null;
   }
 
   /** The source nodes a container link has routes from (its node and Availability placement nodes). */

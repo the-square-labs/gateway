@@ -438,6 +438,26 @@ describe('RelayPolicyService route runtime', () => {
       expect(requestHealthReport).not.toHaveBeenCalled();
     });
 
+    it('counts the connections a node reports for a container link, same-node dials included', async () => {
+      const db = routesDb([
+        { id: 'route-1', ownerKind: 'container_link', ownerId: 'link-1', sourceKind: 'daemon', sourceId: 'node-1' },
+      ]);
+      const service = createService(db, {
+        applySnapshot: vi.fn(),
+        getRouteRuntime: vi.fn().mockResolvedValue(relayReport('route-1', 0, 0)),
+      });
+      const managedLinkReport = vi.fn(() => ({
+        link: linkReport('container_link', 'link-1', 5, 0, null),
+        reportedAt: new Date(),
+      }));
+      service.setManagedLinkReports({ managedLinkReport, requestHealthReport: vi.fn() });
+
+      const runtime = await service.getContainerLinkRouteRuntime('link-1');
+
+      expect(runtime).toMatchObject({ activeStreams: 5, connections: { active: 5 } });
+      expect(managedLinkReport).toHaveBeenCalledWith('node-1', 'container_link', 'link-1');
+    });
+
     it('asks the node for a fresh report when its last one is older than the runtime poll', async () => {
       const db = routesDb([
         {
