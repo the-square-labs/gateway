@@ -23,6 +23,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) > 1 && os.Args[1] == pauseCommand {
+		runPause(ctx)
+		return
+	}
+	// The Go memory limit follows the container's memory limit, which the daemon may change in place.
+	go followCgroupMemoryLimit(ctx)
 	storageConfig, storageMode, err := storageConnectorConfigFromEnv(storageConnectorEnvironment())
 	if err != nil {
 		log.Fatal(err)
@@ -107,6 +113,9 @@ func handleSyncRequest(request securelink.SyncRequest, manager *bindingManager, 
 		}
 		return securelink.SyncResponse{Version: securelink.ProtocolVersionIngressOnly, Bindings: statuses}
 	case securelink.ProtocolVersion:
+		if request.Drain {
+			return securelink.SyncResponse{Version: securelink.ProtocolVersion, Active: manager.drain() + egress.drain()}
+		}
 		if err := manager.peer.set(request.IngressPeer); err != nil {
 			return securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: err.Error()}
 		}

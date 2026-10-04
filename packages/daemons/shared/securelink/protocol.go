@@ -68,6 +68,9 @@ type SyncRequest struct {
 	// gateway, from which the daemon dials. Every other peer is closed at once. A v1 request has none (an older
 	// daemon), and its ingress listeners accept every peer as before.
 	IngressPeer string `json:"ingressPeer,omitempty"`
+	// Drain (v2) stops a connector that a replacement took over from accepting: it closes every listener, keeps the
+	// sessions it carries, and answers how many are still open (Active). Bindings and Egress are ignored.
+	Drain bool `json:"drain,omitempty"`
 }
 
 type BindingStatus struct {
@@ -98,6 +101,22 @@ type SyncResponse struct {
 	// Error refuses the ingress bindings of the request (or the whole request
 	// when it is malformed); the egress statuses stand on their own.
 	Error string `json:"error,omitempty"`
+	// Active answers a Drain request: the sessions the connector still carries.
+	Active int `json:"active,omitempty"`
+}
+
+// Drain tells a connector that a replacement took over to stop accepting and
+// returns the sessions it still carries. A v1 connector cannot drain: the
+// error says so, and the caller retires it the way it did before.
+func Drain(ctx context.Context, socketPath string) (int, error) {
+	response, err := exchange(ctx, socketPath, SyncRequest{Version: ProtocolVersion, Drain: true})
+	if err != nil {
+		return 0, err
+	}
+	if response.Version != ProtocolVersion || response.Error != "" {
+		return 0, fmt.Errorf("secure-link connector cannot drain: %s", response.Error)
+	}
+	return response.Active, nil
 }
 
 // RelayRequest switches a connector into a single server-authorized raw TCP

@@ -45,8 +45,14 @@ func fakeEgressDaemon(t *testing.T) (string, chan securelink.RelayRequest) {
 				if securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion}) != nil {
 					return
 				}
-				line, _ := bufio.NewReader(connection).ReadString('\n')
-				_, _ = fmt.Fprint(connection, strings.ToUpper(line))
+				reader := bufio.NewReader(connection)
+				for {
+					line, err := reader.ReadString('\n')
+					if err != nil {
+						return
+					}
+					_, _ = fmt.Fprint(connection, strings.ToUpper(line))
+				}
 			}()
 		}
 	}()

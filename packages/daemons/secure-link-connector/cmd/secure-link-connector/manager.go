@@ -25,8 +25,8 @@ type bindingManager struct {
 	globalSessions  chan struct{}
 	perBindingLimit int
 	// peer is the address the ingress listeners accept connections from (ingress_peer.go).
-	peer ingressPeer
-	closed          bool
+	peer   ingressPeer
+	closed bool
 }
 
 type bindingListener struct {
@@ -112,6 +112,22 @@ func (m *bindingManager) sync(configs []securelink.BindingConfig) ([]securelink.
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].ID < statuses[j].ID })
 	return statuses, nil
+}
+
+// drain stops accepting on every ingress listener of a connector a replacement took over and returns the
+// connections still open; they finish on their own. The manager takes no sync after it.
+func (m *bindingManager) drain() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	active := 0
+	for _, binding := range m.bindings {
+		_ = binding.listener.Close()
+		binding.activeMu.Lock()
+		active += len(binding.active)
+		binding.activeMu.Unlock()
+	}
+	return active
 }
 
 func (m *bindingManager) close() {

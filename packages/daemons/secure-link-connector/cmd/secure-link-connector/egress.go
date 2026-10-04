@@ -145,7 +145,7 @@ func (m *egressManager) apply(id string, config securelink.EgressConfig) securel
 		current.close()
 		delete(m.listeners, id)
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(config.ListenHost, fmt.Sprintf("%d", config.ListenPort)))
+	listener, err := listenReusePort(net.JoinHostPort(config.ListenHost, fmt.Sprintf("%d", config.ListenPort)))
 	if err != nil {
 		return failed(fmt.Errorf("listen for secure-link egress: %w", err))
 	}
@@ -184,6 +184,22 @@ func validateEgressConfig(config securelink.EgressConfig) (netip.Prefix, *tls.Co
 		return netip.Prefix{}, nil, err
 	}
 	return prefix.Masked(), tlsConfig, nil
+}
+
+// drain stops accepting on every egress listener (a replacement listens on the same addresses) and returns the
+// sessions still open; they finish on their own. The manager takes no sync after it.
+func (m *egressManager) drain() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	active := 0
+	for _, listener := range m.listeners {
+		_ = listener.listener.Close()
+		listener.mu.Lock()
+		active += listener.sessions
+		listener.mu.Unlock()
+	}
+	return active
 }
 
 func (m *egressManager) close() {
