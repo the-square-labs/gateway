@@ -28,6 +28,21 @@ export function secureLinkEgressEqual(
   );
 }
 
+/** Field by field (jsonb read back from Postgres does not keep key order); admitted sources in any order. */
+export function listenerConfigsEqual(
+  current: RelayManagedDatabaseListenerConfig | null | undefined,
+  desired: RelayManagedDatabaseListenerConfig | null | undefined
+): boolean {
+  if (!current || !desired) return current == null && desired == null;
+  const sources = (config: RelayManagedDatabaseListenerConfig) => [...(config.allowedSources ?? [])].sort().join('\n');
+  return (
+    current.networkName === desired.networkName &&
+    current.listenAddress === desired.listenAddress &&
+    current.listenPort === desired.listenPort &&
+    sources(current) === sources(desired)
+  );
+}
+
 /**
  * Whether a change of what the source daemon serves must move the route's generation. A new generation makes the
  * relay close the route's tunnels, so adding or removing one of the two entry points while the other serves (the
@@ -114,7 +129,7 @@ export class RelayLinkRoutes {
         secureLinkEgress: change.secureLinkEgress === undefined ? current.secureLinkEgress : change.secureLinkEgress,
       };
       const listenerSame =
-        JSON.stringify(current.managedDatabaseListener) === JSON.stringify(desired.managedDatabaseListener);
+        listenerConfigsEqual(current.managedDatabaseListener, desired.managedDatabaseListener);
       if (listenerSame && secureLinkEgressEqual(current.secureLinkEgress, desired.secureLinkEgress)) {
         return { routeId: route.id, generation: route.generation, changed: false };
       }

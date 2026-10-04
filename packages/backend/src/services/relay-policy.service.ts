@@ -47,7 +47,12 @@ import {
   RelayPolicyNotAcknowledgedError,
 } from './relay-grant-issuer.service.js';
 import { RelayGrantKeyService } from './relay-grant-key.service.js';
-import { CONTAINER_LINK_OWNER_KIND, RelayLinkRoutes, routeTransportRestartRequired } from './relay-link-routes.js';
+import {
+  CONTAINER_LINK_OWNER_KIND,
+  RelayLinkRoutes,
+  routeTransportRestartRequired,
+  secureLinkEgressEqual,
+} from './relay-link-routes.js';
 import {
   backfillRelayNodeFingerprints,
   bumpRelayPolicyRevision,
@@ -2546,7 +2551,7 @@ export class RelayPolicyService {
       if (
         moved ||
         !managedDatabaseListenerConfigsEqual(current.managedDatabaseListener, managedDatabaseListener) ||
-        JSON.stringify(current.secureLinkEgress ?? null) !== JSON.stringify(desiredEgress)
+        !secureLinkEgressEqual(current.secureLinkEgress, desiredEgress)
       ) {
         await tx
           .update(relayRoutes)
