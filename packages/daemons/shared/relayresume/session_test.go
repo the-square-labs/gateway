@@ -562,6 +562,31 @@ func TestSessionWithoutRecv(t *testing.T) {
 	session.Abort(RstAborted, "done")
 }
 
+// A stream the target ended for a revocation answers a later resume with
+// RESUME_REJ unauthorized (its tombstone keeps the reason).
+func TestTombstoneKeepsRevocation(t *testing.T) {
+	h := newHarness(t, "relay-a")
+	_, session := h.stream()
+	waitOpen(t, session)
+	target := h.table.Sessions()[0]
+	key := TargetKey{RouteID: "route-1", SourceKind: "daemon", SourceID: "node-1", SessionID: target.core.SessionID()}
+	h.table.Prune(func(TargetKey, *Session) bool { return false })
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.table.mu.Lock()
+		tomb, ok := h.table.tombs[key]
+		h.table.mu.Unlock()
+		if ok {
+			if tomb.reject != RejectUnauthorized {
+				t.Fatalf("tombstone answers %d", tomb.reject)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no tombstone")
+}
+
 func TestSessionPruneResetsSource(t *testing.T) {
 	h := newHarness(t, "relay-a")
 	app, session := h.stream()

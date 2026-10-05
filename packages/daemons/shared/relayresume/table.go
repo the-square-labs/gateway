@@ -235,8 +235,13 @@ func (t *TargetTable) ended(key TargetKey, s *Session) {
 	state, err := s.core.State(), s.core.Err()
 	s.mu.Unlock()
 	reject := RejectReset
-	if state == StateFinished {
+	switch {
+	case state == StateFinished:
 		reject = RejectFinished
+	case errors.Is(err, ErrRevoked):
+		// A later resume (its REJ answer may have been lost with the path)
+		// learns why the stream ended.
+		reject = RejectUnauthorized
 	}
 	t.mu.Lock()
 	if t.sessions[key] == s {
