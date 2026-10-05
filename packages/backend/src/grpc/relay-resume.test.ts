@@ -1049,6 +1049,42 @@ describe('ResumableRelayDuplex', () => {
     expect(registry.snapshot().sessions.resumable).toBe(0);
   }, 30_000);
 
+  it('keeps a drain notice that arrives during the handshake and moves once open', async () => {
+    const key = Buffer.alloc(32, 4);
+    const target = echoTarget(key, 'v1');
+    let relay = 0;
+    const registry = new RelayResumeRegistry();
+    const opening = ResumableRelayDuplex.open({
+      routeId: 'route-echo',
+      keyId: 'v1',
+      key,
+      registry,
+      dial: async (avoid) => {
+        let relayId = `relay-${relay++ % 2}`;
+        if (relayId === avoid) relayId = `relay-${relay++ % 2}`;
+        const pair = memoryPair(relayId);
+        // The target answers the HELLO late (a slow backend dial).
+        if (relayId === 'relay-0') {
+          const attach = pair.target.attach.bind(pair.target);
+          let first = true;
+          pair.target.attach = (sink) => {
+            if (!first) return attach(sink);
+            first = false;
+            setTimeout(() => attach(sink), 200);
+          };
+        }
+        target.accept(pair.target);
+        return { path: pair.source };
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(registry.drainRelay('relay-0')).toBe(1);
+    const duplex = await opening;
+    for (let i = 0; i < 200 && duplex.relayId !== 'relay-1'; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(duplex.relayId).toBe('relay-1');
+    duplex.destroy();
+  });
+
   it('rejects with legacy_peer and latches the route when the target is old', async () => {
     const registry = new RelayResumeRegistry();
     const open = ResumableRelayDuplex.open({

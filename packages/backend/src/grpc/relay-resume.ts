@@ -1762,6 +1762,7 @@ export class ResumableRelayDuplex extends Duplex {
   private openWaiters: { resolve: () => void; reject: (error: Error) => void } | null = null;
   private migration: Promise<void> | null = null;
   private recoverRequested = false;
+  private deferred: { trigger: MigrationTrigger; relayId: string } | null = null;
   private suspendedAt = -1;
   private closedError: ResumeSessionError | undefined;
   private sessionClosed = false;
@@ -1819,6 +1820,8 @@ export class ResumableRelayDuplex extends Duplex {
       duplex.openWaiters = { resolve, reject };
     });
     duplex.attach(first.path);
+    // Registered from the HELLO on: a drain notice during the handshake waits for it (see migrate).
+    duplex.registry.add(duplex);
     duplex.session.startSource(first.path, options.helloTimeoutMs ?? HELLO_ACK_TIMEOUT_MS);
     try {
       await opened;
@@ -1829,7 +1832,7 @@ export class ResumableRelayDuplex extends Duplex {
       duplex.destroy();
       throw error;
     }
-    duplex.registry.add(duplex);
+    duplex.runDeferred();
     return duplex;
   }
 
@@ -1860,14 +1863,29 @@ export class ResumableRelayDuplex extends Duplex {
 
   /** Planned move off the current relay; stays on it when no other path answers within the budget. */
   migrate(trigger: MigrationTrigger): Promise<void> {
-    if (this.migration || this.sessionClosed) return this.migration ?? Promise.resolve();
-    if (!this.session.isOpen) return Promise.resolve();
+    if (this.sessionClosed) return Promise.resolve();
+    if (this.migration || !this.session.isOpen) {
+      // The handshake or another move is running: keep the request for when the stream can move, unless it
+      // has left this relay by then.
+      const relayId = this.session.currentRelayId;
+      if (relayId) this.deferred = { trigger, relayId };
+      return this.migration ?? Promise.resolve();
+    }
     const run = this.runPlanned(trigger).finally(() => {
       this.migration = null;
       if (this.recoverRequested || this.session.isSuspended) this.requestRecover();
+      else this.runDeferred();
     });
     this.migration = run;
     return run;
+  }
+
+  /** Starts a move requested while the stream could not move, if it still runs through that relay. */
+  private runDeferred(): void {
+    const deferred = this.deferred;
+    if (!deferred || this.migration || this.sessionClosed || !this.session.isOpen) return;
+    this.deferred = null;
+    if (this.session.currentRelayId === deferred.relayId) void this.migrate(deferred.trigger);
   }
 
   private requestRecover(): void {
@@ -1880,6 +1898,7 @@ export class ResumableRelayDuplex extends Duplex {
     this.recoverRequested = false;
     const run = this.runRecover().finally(() => {
       this.migration = null;
+      this.runDeferred();
     });
     this.migration = run;
   }
