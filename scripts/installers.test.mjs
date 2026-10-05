@@ -1485,3 +1485,279 @@ test('the nginx installer gives the nginx temp directories to a non-root run use
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// F-B5: a relay installed through a mirror (GATEWAY_ARTIFACT_BASE_URL) took its binaries from the origin named in the
+// signed manifest. It takes them from the mirror, next to their manifests, and they must still match the signed
+// checksum. F-B4: the latest release resolves without jq, which a dry run cannot install.
+test('the relay installer downloads its binaries from the mirror and checks them against the signed manifest', { skip: !linux || spawnSync('sh', ['-c', 'command -v jq']).status !== 0 }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-relay-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-relay-mirror-'));
+  try {
+    const name = 'relay-supervisor-linux-amd64';
+    const tag = 'v2.11.1-relay';
+    const binary = 'relay supervisor binary\n';
+    const sha256 = (text) => spawnSync('sha256sum', { input: text, encoding: 'utf8' }).stdout.split(' ')[0];
+    const base64url = (text) => Buffer.from(text).toString('base64url');
+    const manifest = (digest) =>
+      JSON.stringify({
+        schemaVersion: 1,
+        keyId: 'wiolett-update-v1',
+        payload: base64url(
+          JSON.stringify({
+            kind: 'daemon-binary',
+            version: 'v2.11.1',
+            tag,
+            daemonType: 'relay',
+            arch: 'amd64',
+            artifactName: name,
+            // Not the artifact base: the test tells the two sources apart.
+            downloadUrl: `https://objects.thesqlabs.com/gateway/relay-supervisor/${tag}/${name}`,
+            sha256: digest,
+          })
+        ),
+        signature: base64url('signature'),
+      });
+    const run = (env, digest, served = binary) => {
+      runShell(`mkdir -p '${dir}/serve' '${dir}/tmp' && rm -f '${dir}/tmp/'* '${dir}/requests'`);
+      return runShell(
+        [
+          'set -euo pipefail',
+          `${env} ARTIFACT_BASE_URL="\${GATEWAY_ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/gateway}"`,
+          `TAG=${tag}; VERSION=v2.11.1; ARCH=amd64; LOG_FILE=/dev/null; TEMP_DIR='${dir}/tmp'`,
+          'PACKAGE_BASE="${ARTIFACT_BASE_URL%/}/relay-supervisor/${TAG}"',
+          // The signature check is the real openssl call in the installer; here every signature verifies.
+          'openssl() { case "$1" in pkeyutl) return 0 ;; base64) base64 -d ;; esac; }',
+          `curl() { local url="" out=""; while [[ $# -gt 0 ]]; do case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac; done; echo "$url" >> '${dir}/requests'; case "$url" in *.update.json) printf '%s' "$MANIFEST" > "$out" ;; *) printf '%s' "$SERVED" > "$out" ;; esac; }`,
+          `MANIFEST='${manifest(digest)}'; SERVED='${served}'`,
+          shellFunction(source, 'decode_base64url'),
+          shellFunction(source, 'relay_artifact_url'),
+          shellFunction(source, 'fetch_verified'),
+          `fetch_verified ${name} relay && echo FETCHED`,
+          `cat '${dir}/requests'`,
+        ].join('\n')
+      );
+    };
+    const mirrored = run("GATEWAY_ARTIFACT_BASE_URL='http://mirror.example:18991/gateway/';", sha256(binary));
+    assert.equal(mirrored.status, 0, mirrored.output);
+    assert.match(mirrored.output, /FETCHED/);
+    assert.deepEqual(mirrored.output.trim().split('\n').slice(-2), [
+      `http://mirror.example:18991/gateway/relay-supervisor/${tag}/${name}.update.json`,
+      `http://mirror.example:18991/gateway/relay-supervisor/${tag}/${name}`,
+    ]);
+    // Without a mirror the binary comes from the URL the signed manifest names.
+    const origin = run('', sha256(binary));
+    assert.equal(origin.status, 0, origin.output);
+    assert.equal(origin.output.trim().split('\n').at(-1), `https://objects.thesqlabs.com/gateway/relay-supervisor/${tag}/${name}`);
+    // A mirror that serves another binary is refused, as before.
+    const tampered = run("GATEWAY_ARTIFACT_BASE_URL='http://mirror.example:18991/gateway';", sha256(binary), 'tampered\n');
+    assert.notEqual(tampered.status, 0);
+    assert.match(tampered.output, /Checksum mismatch for relay-supervisor-linux-amd64/);
+    assert.doesNotMatch(tampered.output, /FETCHED/);
+
+    // The feed names its target release; jq is not needed to read it.
+    const feed = JSON.stringify({ component: 'relay', current: null, target: { tag_name: 'v2.11.0-relay', body: 'x "tag_name":"v9.9.9-relay"' }, reason: 'latest' });
+    const tagOf = (answer) =>
+      runShell(
+        [
+          `RELEASES_API_URL=https://updates.example/gateway/releases; LOG_FILE=/dev/null`,
+          `curl() { printf '%s' '${answer}'; }`,
+          'jq() { echo "jq is not installed" >&2; return 127; }',
+          shellFunction(source, 'relay_feed_tag'),
+          'echo "tag=[$(relay_feed_tag)]"',
+        ].join('\n')
+      ).output.trim();
+    assert.equal(tagOf(feed), 'tag=[v2.11.0-relay]');
+    assert.equal(tagOf(feed.replace('v2.11.0-relay', 'v2.11.1-rc.24-relay')), 'tag=[v2.11.1-rc.24-relay]');
+    assert.equal(tagOf('{"error":"release_source_unavailable"}'), 'tag=[]');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// INS-RLY-02: GATEWAY_RELAY_SETUP_LOG stayed empty and the package manager wrote to the terminal. The log holds what
+// the terminal shows and the detail it does not.
+test('the relay installer keeps a setup log with the terminal output and the detail', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-relay-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-relay-log-'));
+  try {
+    const log = path.join(dir, 'relay-setup.log');
+    const result = runShell(
+      [
+        'set -euo pipefail',
+        `GATEWAY_RELAY_SETUP_LOG='${log}'; LOG_FILE=/dev/null`,
+        'command_exists() { command -v "$1" >/dev/null 2>&1; }',
+        'apt-get() { echo "apt-get $* output"; }',
+        shellFunction(source, 'open_setup_log'),
+        shellFunction(source, 'close_setup_log'),
+        'SETUP_LOG_OUT_PID=""; SETUP_LOG_ERR_PID=""',
+        'open_setup_log',
+        'trap close_setup_log EXIT',
+        'echo "Installing missing Relay installer dependencies: jq"',
+        'apt-get install -y jq >>"$LOG_FILE" 2>&1',
+        'echo "Relay enrollment failed: refused" >&2',
+      ].join('\n')
+    );
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Installing missing Relay installer dependencies: jq/);
+    assert.match(result.output, /Relay enrollment failed: refused/);
+    assert.doesNotMatch(result.output, /apt-get install -y jq output/, 'the package manager output stays out of the terminal');
+    const written = await readFile(log, 'utf8');
+    for (const line of ['Installing missing Relay installer dependencies: jq', 'apt-get install -y jq output', 'Relay enrollment failed: refused']) {
+      assert.ok(written.includes(line), `${line}\n---\n${written}`);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// F-C1: a refused storage preflight removed only the storage root it created and left its new parents behind (an
+// empty /var/lib/docker-daemon). It removes every directory it created, and none it found.
+test('a refused storage preflight removes exactly the directories it created', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-storage-preflight-'));
+  try {
+    const result = runShell(
+      [
+        'set -euo pipefail',
+        "IFS=$'\\n\\t'",
+        'LOG_FILE=/dev/null; DATABASE_PREFLIGHT_DIR=""; DATABASE_PREFLIGHT_MOUNT_DIR=""; DATABASE_PREFLIGHT_LOOP_DEVICE=""; DATABASE_PREFLIGHT_CREATED_DIRS=""',
+        'command_exists() { command -v "$1" >/dev/null 2>&1; }; die() { echo "DIE $*"; exit 1; }',
+        shellFunction(source, 'create_database_storage_root'),
+        shellFunction(source, 'cleanup_database_preflight'),
+        `mkdir -p '${dir}/var/lib/kept' && echo data > '${dir}/var/lib/kept/file'`,
+        `DATABASE_STORAGE_ROOT='${dir}/var/lib/docker-daemon/databases'`,
+        'create_database_storage_root "$DATABASE_STORAGE_ROOT"',
+        `test -d '${dir}/var/lib/docker-daemon/databases' && echo CREATED`,
+        // A refused preflight: its probe directory is there, then the exit cleanup runs.
+        'DATABASE_PREFLIGHT_DIR=$(mktemp -d "$DATABASE_STORAGE_ROOT/.gateway-db-preflight.XXXXXX"); mkdir "$DATABASE_PREFLIGHT_DIR/mnt"',
+        'cleanup_database_preflight || true',
+        `find '${dir}' -mindepth 1 | sort`,
+        // A root that exists is never removed, nor are its parents.
+        `mkdir -p '${dir}/srv/disk2/gateway-databases'`,
+        `create_database_storage_root '${dir}/srv/disk2/gateway-databases/images'`,
+        'cleanup_database_preflight || true',
+        `find '${dir}/srv' | sort`,
+      ].join('\n')
+    );
+    assert.equal(result.status, 0, result.output);
+    const lines = result.output.trim().split('\n');
+    assert.equal(lines[0], 'CREATED');
+    assert.deepEqual(lines.slice(1, 5), [`${dir}/var`, `${dir}/var/lib`, `${dir}/var/lib/kept`, `${dir}/var/lib/kept/file`]);
+    assert.deepEqual(lines.slice(5), [`${dir}/srv`, `${dir}/srv/disk2`, `${dir}/srv/disk2/gateway-databases`]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// F-B13: the daemon rewrites its config with four-space indentation; a re-run of the installer then inserted the
+// profile again and nested the daemon's docker keys under docker.database. The installer reads and writes
+// docker.mode and docker.database.storage_root, the keys the daemon reads, at any indentation and once.
+test('the storage profile is written once to the keys the docker-daemon reads', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-docker-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-storage-config-'));
+  const config = path.join(dir, 'config.yaml');
+  const write = async (content, root = '/srv/disk2/gateway-databases') => {
+    await writeFile(config, content);
+    const result = runShell(
+      [
+        'set -euo pipefail',
+        "IFS=$'\\n\\t'",
+        'ok() { echo "OK $*"; }; log() { echo "INFO $*"; }; die() { echo "DIE $*"; exit 1; }',
+        `DOCKER_MODE=storage; RUN_USER=root; DATABASE_STORAGE_ROOT='${root}'`,
+        shellFunction(source, 'docker_config_value'),
+        shellFunction(source, 'restricted_node_kind'),
+        shellFunction(source, 'repair_duplicated_database_profile'),
+        shellFunction(source, 'set_database_profile_keys'),
+        shellFunction(source, 'write_database_profile_config').replaceAll('/etc/docker-daemon/config.yaml', config),
+        'write_database_profile_config',
+        `for key in docker.mode docker.database.storage_root docker.socket; do printf '%s=%s\\n' "$key" "$(docker_config_value '${config}' "$key" || echo MISSING)"; done`,
+      ].join('\n')
+    );
+    return { ...result, content: await readFile(config, 'utf8') };
+  };
+  const daemonLayout = [
+    'gateway:',
+    '    address: gw.example.com:9443',
+    'docker:',
+    '    allowlist:',
+    "        - '*'",
+    '    database:',
+    '        storage_root: /srv/disk2/gateway-databases',
+    '    mode: storage',
+    '    socket: unix:///var/run/docker.sock',
+    'state_dir: /var/lib/docker-daemon',
+    '',
+  ].join('\n');
+  const keys = (output) => output.trim().split('\n').slice(-3);
+  const expected = ['docker.mode=storage', 'docker.database.storage_root=/srv/disk2/gateway-databases', 'docker.socket=unix:///var/run/docker.sock'];
+  try {
+    // A config just enrolled (two spaces) gets the profile.
+    let result = await write('gateway:\n  address: gw.example.com:9443\ndocker:\n  socket: "unix:///var/run/docker.sock"\nstate_dir: /var/lib/docker-daemon\n');
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /OK Database docker profile written/);
+    assert.deepEqual(keys(result.output), expected);
+    assert.equal(result.content.match(/storage_root/g).length, 1, result.content);
+    // A re-run on the config the daemon rewrote changes nothing.
+    result = await write(daemonLayout);
+    assert.match(result.output, /OK Database docker profile already configured/, result.output);
+    assert.equal(result.content, daemonLayout);
+    // Keys a four-space config lacks go into its sections with its indentation.
+    result = await write('docker:\n    database:\n        reserve_bytes: 1073741824\n    socket: unix:///var/run/docker.sock\n');
+    assert.equal(result.status, 0, result.output);
+    assert.equal(
+      result.content,
+      'docker:\n    mode: "storage"\n    database:\n        storage_root: "/srv/disk2/gateway-databases"\n        reserve_bytes: 1073741824\n    socket: unix:///var/run/docker.sock\n'
+    );
+    // The config an rc.21 re-run left (the profile again on top, the daemon's keys under docker.database) is repaired.
+    const damaged = daemonLayout.replace('docker:\n', 'docker:\n  mode: "storage"\n  database:\n    storage_root: "/srv/disk2/gateway-databases"\n');
+    result = await write(damaged);
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /Removed the duplicated database profile lines/);
+    assert.equal(result.content, daemonLayout);
+    assert.deepEqual(keys(result.output), expected);
+    // Another storage root or another profile is never overwritten.
+    result = await write(daemonLayout, '/var/lib/docker-daemon/databases');
+    assert.match(result.output, /DIE Refusing to overwrite an existing database storage root \(\/srv\/disk2\/gateway-databases\)/);
+    assert.equal(result.content, daemonLayout);
+    result = await write(daemonLayout.replace('mode: storage', 'mode: databases'));
+    assert.match(result.output, /DIE Refusing to overwrite an existing docker profile/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// F-B8: on an enrolled host the monitoring and Docker installers skipped a new node's token and exited 0, and the new
+// node stayed pending. They refuse it before they change anything, say which node the host is, and how to go on; the
+// token the node enrolled with keeps working for re-runs.
+test('the monitoring and Docker installers refuse a new token on an enrolled host', { skip: !linux }, async () => {
+  const host = path.join(work, 'host');
+  const withoutToken = ['--gateway', 'gw.example.com:9443', '--gateway-cert-sha256', CERT, '--version', VERSION];
+  for (const [script, daemon, extra] of [
+    ['setup-monitoring-node.sh', 'monitoring-daemon', []],
+    ['setup-docker-node.sh', 'docker-daemon', ['--mode', 'docker']],
+  ]) {
+    const etc = path.join(host, 'etc', daemon);
+    const lib = path.join(host, 'var/lib', daemon);
+    try {
+      runShell(`mkdir -p '${etc}/certs' '${lib}' && echo PEM > '${etc}/certs/node.pem' && echo '{"node_id":"0eb357ee-node"}' > '${lib}/state.json'`);
+      const refused = dryRun(script, ['-y', ...common, ...extra]);
+      assert.equal(refused.status, 1, `${script}\n${refused.output}`);
+      assert.match(refused.output, /already enrolled as (monitoring|docker) node 0eb357ee-node; the enrollment token was not used, and nothing was changed/, script);
+      assert.match(refused.output, /run the installer again without --token/, script);
+      assert.match(refused.output, new RegExp(`move /.*/etc/${daemon}/certs and /.*/var/lib/${daemon}/state\\.json`), script);
+      assert.doesNotMatch(refused.output, /Dry run completed/, script);
+      assert.equal(readFileSync(path.join(etc, 'certs/node.pem'), 'utf8'), 'PEM\n', `${script} keeps the enrollment`);
+      // Without a token the enrolled node re-runs as before.
+      const kept = dryRun(script, ['-y', ...withoutToken, ...extra]);
+      assert.equal(kept.status, 0, `${script}\n${kept.output}`);
+      assert.match(kept.output, /Node already enrolled/, script);
+      // The token of the node's own enrollment (its setup command run again) keeps the enrollment.
+      runShell(`printf '%s' gw_node_test | sha256sum | awk '{print $1}' > '${lib}/enrollment-token.sha256'`);
+      const same = dryRun(script, ['-y', ...common, ...extra]);
+      assert.equal(same.status, 0, `${script}\n${same.output}`);
+      assert.match(same.output, /already enrolled with this setup command's token; keeping its enrollment/, script);
+    } finally {
+      runShell(`rm -rf '${etc}' '${lib}'`);
+    }
+  }
+});

@@ -796,6 +796,42 @@ normalize_daemon_version() {
     echo "$version"
 }
 
+# The token a completed enrollment used, as a digest: a re-run of the same setup command (its token now used) keeps
+# the node's enrollment.
+ENROLLMENT_TOKEN_DIGEST_FILE="/var/lib/monitoring-daemon/enrollment-token.sha256"
+enrollment_token_digest() {
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+}
+
+# A node already enrolled with this setup command's token keeps that enrollment: the re-run goes on as one without a
+# token.
+keep_enrollment_of_used_token() {
+    [[ -n "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 && -f "$ENROLLMENT_TOKEN_DIGEST_FILE" ]] || return 0
+    [[ "$(cat "$ENROLLMENT_TOKEN_DIGEST_FILE" 2>/dev/null)" == "$(enrollment_token_digest "$ENROLL_TOKEN")" ]] || return 0
+    log "This node is already enrolled with this setup command's token; keeping its enrollment."
+    ENROLL_TOKEN=""
+}
+
+remember_enrollment_token() {
+    [[ -n "$ENROLL_TOKEN" && -f /etc/monitoring-daemon/certs/node.pem ]] || return 0
+    (umask 077; enrollment_token_digest "$ENROLL_TOKEN" > "$ENROLLMENT_TOKEN_DIGEST_FILE") 2>> "$LOG_FILE" || return 0
+    chown "${RUN_USER}:${RUN_GROUP}" "$ENROLLMENT_TOKEN_DIGEST_FILE" 2>> "$LOG_FILE" || true
+}
+
+# monitoring-daemon enrolls once: a host that is enrolled cannot take another node's token in place. Such a token is not used,
+# the host keeps its node, and the run fails before it changes anything, so the new node (still pending in Gateway)
+# does not go unnoticed.
+refuse_token_for_enrolled_node() {
+    [[ -n "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 ]] || return 0
+    local node_id
+    node_id=$(sed -nE 's/.*"node_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' /var/lib/monitoring-daemon/state.json 2>/dev/null | head -n 1 || true)
+    err "This host is already enrolled as monitoring node ${node_id:-(unknown id)}${EXISTING_GATEWAY_ADDR:+ of Gateway ${EXISTING_GATEWAY_ADDR}}; the enrollment token was not used, and nothing was changed."
+    err "To keep this node (update, repair, change its run user), run the installer again without --token."
+    err "To enroll this host as the new node instead: stop monitoring-daemon, move /etc/monitoring-daemon/certs and /var/lib/monitoring-daemon/state.json"
+    err "out of the way, run this command again, and delete the old node in Gateway."
+    die "The host is already enrolled; the new node stays pending in Gateway."
+}
+
 detect_existing_install() {
     local target="/usr/local/bin/monitoring-daemon"
     local config_path="/etc/monitoring-daemon/config.yaml"
@@ -1103,6 +1139,8 @@ detect_os
 detect_arch
 check_dependencies
 detect_existing_install
+keep_enrollment_of_used_token
+refuse_token_for_enrolled_node
 
 if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
     GATEWAY_ADDR="$EXISTING_GATEWAY_ADDR"
@@ -1179,6 +1217,7 @@ if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
         guide "${GRAY}Selected: ${NC}${RUN_USER}"
     fi
     guide_end
+    refuse_token_for_enrolled_node
 else
     # Non-interactive: validate required fields
     if [[ -z "$GATEWAY_ADDR" && "$EXISTING_ENROLLED" -eq 0 ]]; then
@@ -1471,6 +1510,7 @@ enroll_daemon() {
     if ! run_as_run_user "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" >> "$LOG_FILE" 2>&1; then
         die "Failed to enroll monitoring-daemon. Check ${LOG_FILE} for details."
     fi
+    remember_enrollment_token
     prepare_run_user_identity
     ok "Config written to /etc/monitoring-daemon/config.yaml"
 }

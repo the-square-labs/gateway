@@ -140,7 +140,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --user)
             [[ $# -ge 2 ]] || die "--user requires a value"
-            [[ "$2" == "root" ]] || die "Database nodes must run docker-daemon as root."
+            # setup-storage-node.sh runs this installer for storage nodes.
+            if [[ "$2" != "root" ]]; then
+                [[ "${GATEWAY_DOCKER_MODE:-databases}" == "storage" ]] && die "Storage nodes must run docker-daemon as root."
+                die "Database nodes must run docker-daemon as root."
+            fi
             shift 2
             ;;
         --dry-run)

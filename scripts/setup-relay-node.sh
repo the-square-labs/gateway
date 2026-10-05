@@ -14,7 +14,8 @@ ARTIFACT_BASE_URL="${GATEWAY_ARTIFACT_BASE_URL:-https://updates.thesqlabs.com/ga
 RUN_USER="${GATEWAY_RELAY_RUN_USER:-root}"
 # Defaults to the run user's primary group (root for root).
 RUN_GROUP="${GATEWAY_RELAY_RUN_GROUP:-}"
-LOG_FILE="${GATEWAY_RELAY_SETUP_LOG:-/dev/null}"
+# The setup log: GATEWAY_RELAY_SETUP_LOG, or a new file under /tmp as the other installers keep. A dry run writes none.
+LOG_FILE=/dev/null
 MANUAL_LAUNCH_TIMEOUT_SECONDS="${GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS:-30}"
 MANUAL_FALLBACK_USED=0
 ENROLLMENT_WAIT_SECONDS="${GATEWAY_RELAY_ENROLLMENT_WAIT_SECONDS:-90}"
@@ -66,28 +67,29 @@ ensure_dependencies() {
   printf 'Installing missing Relay installer dependencies:'
   printf ' %s' "${missing[@]}"
   printf '\n'
+  # The package manager's output goes to the setup log; a failure shows its last lines.
   if command_exists apt-get; then
-    if ! apt-get update; then
-      echo 'Could not refresh APT package metadata; Relay installation stopped.' >&2
+    if ! apt-get update >>"$LOG_FILE" 2>&1; then
+      dependency_install_failed 'Could not refresh APT package metadata'
       return 1
     fi
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"; then
-      echo 'Could not install Relay dependencies with apt-get; Relay installation stopped.' >&2
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" >>"$LOG_FILE" 2>&1; then
+      dependency_install_failed 'Could not install Relay dependencies with apt-get'
       return 1
     fi
   elif command_exists dnf; then
-    if ! dnf install -y "${packages[@]}"; then
-      echo 'Could not install Relay dependencies with dnf; Relay installation stopped.' >&2
+    if ! dnf install -y "${packages[@]}" >>"$LOG_FILE" 2>&1; then
+      dependency_install_failed 'Could not install Relay dependencies with dnf'
       return 1
     fi
   elif command_exists yum; then
-    if ! yum install -y "${packages[@]}"; then
-      echo 'Could not install Relay dependencies with yum; Relay installation stopped.' >&2
+    if ! yum install -y "${packages[@]}" >>"$LOG_FILE" 2>&1; then
+      dependency_install_failed 'Could not install Relay dependencies with yum'
       return 1
     fi
   elif command_exists apk; then
-    if ! apk add --no-cache "${packages[@]}"; then
-      echo 'Could not install Relay dependencies with apk; Relay installation stopped.' >&2
+    if ! apk add --no-cache "${packages[@]}" >>"$LOG_FILE" 2>&1; then
+      dependency_install_failed 'Could not install Relay dependencies with apk'
       return 1
     fi
   else
@@ -104,6 +106,51 @@ ensure_dependencies() {
     fi
   done
   return 0
+}
+
+# A package manager that failed: its last lines (its reason) under the message, and where the rest is.
+dependency_install_failed() {
+  local tail_lines=""
+  [[ "$LOG_FILE" == /dev/null ]] || tail_lines=$(tail -n 5 "$LOG_FILE" 2>/dev/null | sed 's/^/  /' || true)
+  echo "$1; Relay installation stopped." >&2
+  [[ -z "$tail_lines" ]] || printf '%s\n' "$tail_lines" >&2
+  [[ "$LOG_FILE" == /dev/null ]] || echo "Setup log: ${LOG_FILE}" >&2
+}
+
+# A real run keeps a setup log: what the terminal shows (each status line, every error) and the detail it does not
+# show (package manager and service manager output).
+SETUP_LOG_OUT_PID=""
+SETUP_LOG_ERR_PID=""
+open_setup_log() {
+  if [[ -n "${GATEWAY_RELAY_SETUP_LOG:-}" ]]; then
+    LOG_FILE="$GATEWAY_RELAY_SETUP_LOG"
+    if ! (umask 077 && : >>"$LOG_FILE"); then
+      echo "Could not write the setup log ${LOG_FILE} (GATEWAY_RELAY_SETUP_LOG); Relay installation stopped." >&2
+      exit 1
+    fi
+  elif ! LOG_FILE=$(mktemp /tmp/gateway_relay_setup.XXXXXX); then
+    echo "Could not create the setup log under /tmp; Relay installation stopped." >&2
+    exit 1
+  fi
+  chmod 0600 "$LOG_FILE" 2>/dev/null || true
+  command_exists tee || return 0
+  exec 3>&1 4>&2
+  exec > >(tee -a "$LOG_FILE")
+  SETUP_LOG_OUT_PID=$!
+  exec 2> >(tee -a "$LOG_FILE" >&4)
+  SETUP_LOG_ERR_PID=$!
+}
+
+# Waits (briefly) for the log copies to finish so the last lines reach the terminal and the log before the run ends.
+close_setup_log() {
+  [[ -n "$SETUP_LOG_OUT_PID" ]] || return 0
+  exec 1>&3 2>&4 3>&- 4>&-
+  local waited=0
+  while (( waited < 50 )) && { kill -0 "$SETUP_LOG_OUT_PID" 2>/dev/null || kill -0 "$SETUP_LOG_ERR_PID" 2>/dev/null; }; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  SETUP_LOG_OUT_PID=""
 }
 
 has_systemd() { command_exists systemctl && [[ -d /run/systemd/system ]]; }
@@ -587,9 +634,9 @@ detach_manual_launcher() {
   fi
 
   if command_exists setsid && command_exists nohup; then
-    setsid nohup "${user_prefix[@]}" "$daemon_binary" run </dev/null >>"$manual_log" 2>&1 &
+    setsid nohup "${user_prefix[@]}" "$daemon_binary" run </dev/null >>"$manual_log" 2>&1 3>&- 4>&- &
   elif command_exists nohup; then
-    nohup "${user_prefix[@]}" "$daemon_binary" run </dev/null >>"$manual_log" 2>&1 &
+    nohup "${user_prefix[@]}" "$daemon_binary" run </dev/null >>"$manual_log" 2>&1 3>&- 4>&- &
   else
     return 1
   fi
@@ -749,16 +796,24 @@ case "$(uname -m)" in
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
+# The relay release the feed names as its target ('' without one). Read without jq: a dry run installs nothing, jq
+# included. The target is the only release in the answer, and its tag_name comes first.
+relay_feed_tag() {
+  curl -fsSL "${RELEASES_API_URL}?component=relay" 2>>"$LOG_FILE" | tr -d '\n' \
+    | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?-relay"' | head -n 1 \
+    | sed -E 's/.*"(v[^"]+)"$/\1/' || true
+}
+
 # Shows what a real run does, without installing dependencies or changing the host.
 relay_dry_run() {
   local version="$VERSION" manager="manual mode (not persistent across reboot)"
   if [[ "$version" == "latest" ]]; then
-    if ! command_exists curl || ! command_exists jq; then
-      echo "curl and jq are required to resolve the latest Relay release during a dry run; pass --version." >&2
+    if ! command_exists curl; then
+      echo "curl is required to resolve the latest Relay release during a dry run; install curl or pass --version." >&2
       exit 1
     fi
-    version=$(curl -fsSL "${RELEASES_API_URL}?component=relay" | jq -r '.target.tag_name // empty')
-    [[ -n "$version" ]] || { echo "No Relay release is available" >&2; exit 1; }
+    version=$(relay_feed_tag)
+    [[ -n "$version" ]] || { echo "Could not resolve the latest Relay release from ${RELEASES_API_URL}; pass --version." >&2; exit 1; }
     version=$(relay_version_to_install latest "${version%-relay}")
     version="v${version#v}"
   else
@@ -786,19 +841,22 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   relay_dry_run
   exit 0
 fi
+open_setup_log
+trap close_setup_log EXIT
+echo "Setup log: ${LOG_FILE}"
 ensure_dependencies
 
 if [[ "$VERSION" == "latest" ]]; then
-  TAG=$(curl -fsSL "${RELEASES_API_URL}?component=relay" | jq -r '.target.tag_name // empty')
-  [[ -n "$TAG" ]] || { echo "No Relay release is available" >&2; exit 1; }
+  TAG=$(relay_feed_tag)
+  [[ -n "$TAG" ]] || { echo "Could not resolve the latest Relay release from ${RELEASES_API_URL}; pass --version." >&2; exit 1; }
   VERSION=$(relay_version_to_install latest "${TAG%-relay}")
 fi
 VERSION="v${VERSION#v}"
 TAG="${VERSION}-relay"
 
-PACKAGE_BASE="${ARTIFACT_BASE_URL}/relay-supervisor/${TAG}"
+PACKAGE_BASE="${ARTIFACT_BASE_URL%/}/relay-supervisor/${TAG}"
 TEMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TEMP_DIR"' EXIT
+trap 'rm -rf "$TEMP_DIR"; close_setup_log' EXIT
 
 cat >"${TEMP_DIR}/update-public-key.pem" <<'KEY'
 -----BEGIN PUBLIC KEY-----
@@ -815,19 +873,31 @@ decode_base64url() {
   printf '%s' "$value" | openssl base64 -d -A
 }
 
+# Where a binary is downloaded from. The signed manifest names its origin URL; a mirror (GATEWAY_ARTIFACT_BASE_URL) serves
+# the binary next to its manifest, at the same path under its base. Either way it must match the signed checksum.
+relay_artifact_url() {
+  local signed_url="$1" name="$2"
+  if [[ -n "${GATEWAY_ARTIFACT_BASE_URL:-}" ]]; then
+    printf '%s/%s\n' "$PACKAGE_BASE" "$name"
+  else
+    printf '%s\n' "$signed_url"
+  fi
+}
+
 fetch_verified() {
   local name="$1" daemon_type="$2"
   local manifest="${TEMP_DIR}/${name}.update.json"
   local payload="${TEMP_DIR}/${name}.payload"
   local signature="${TEMP_DIR}/${name}.sig"
-  local binary="${TEMP_DIR}/${name}"
+  local binary="${TEMP_DIR}/${name}" url
   curl -fsSL "${PACKAGE_BASE}/${name}.update.json" -o "$manifest"
   [[ "$(jq -r '.schemaVersion' "$manifest")" == "1" && "$(jq -r '.keyId' "$manifest")" == "wiolett-update-v1" ]] || { echo "Untrusted manifest envelope for ${name}" >&2; exit 1; }
   decode_base64url "$(jq -r '.payload' "$manifest")" >"$payload"
   decode_base64url "$(jq -r '.signature' "$manifest")" >"$signature"
   openssl pkeyutl -verify -pubin -inkey "${TEMP_DIR}/update-public-key.pem" -rawin -in "$payload" -sigfile "$signature" >/dev/null
   [[ "$(jq -r '.kind' "$payload")" == "daemon-binary" && "$(jq -r '.version' "$payload")" == "$VERSION" && "$(jq -r '.tag' "$payload")" == "$TAG" && "$(jq -r '.daemonType' "$payload")" == "$daemon_type" && "$(jq -r '.arch' "$payload")" == "$ARCH" && "$(jq -r '.artifactName' "$payload")" == "$name" ]] || { echo "Manifest scope mismatch for ${name}" >&2; exit 1; }
-  curl -fsSL "$(jq -r '.downloadUrl' "$payload")" -o "$binary"
+  url=$(relay_artifact_url "$(jq -r '.downloadUrl' "$payload")" "$name")
+  curl -fsSL "$url" -o "$binary" || { echo "Could not download ${name} from ${url}" >&2; exit 1; }
   [[ "$(sha256sum "$binary" | awk '{print $1}')" == "$(jq -r '.sha256' "$payload")" ]] || { echo "Checksum mismatch for ${name}" >&2; exit 1; }
 }
 

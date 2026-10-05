@@ -69,7 +69,9 @@ MANUAL_FALLBACK_USED=0
 DATABASE_PREFLIGHT_DIR=""
 DATABASE_PREFLIGHT_MOUNT_DIR=""
 DATABASE_PREFLIGHT_LOOP_DEVICE=""
-DATABASE_PREFLIGHT_CREATED_ROOT=0
+# The directories the storage preflight created, deepest first (newline-separated): a refused preflight removes
+# exactly these and leaves every directory it found in place.
+DATABASE_PREFLIGHT_CREATED_DIRS=""
 
 # ── Helpers ──────────────────────────────────────────────────────────
 log()  {
@@ -158,6 +160,56 @@ guide_start() {
     fi
 }
 
+# A value of the docker-daemon config by its key path (docker.mode, docker.database.storage_root), unquoted, whatever
+# indentation the file uses: the installer writes two spaces, and the daemon rewrites the file with four when it drops
+# the enrollment token. Status 1 when the key is not there.
+docker_config_value() {
+    local config_path="$1" want="$2"
+    [[ -f "$config_path" ]] || return 1
+    awk -v want="$want" -v q="'" '
+        /^[[:space:]]*(#.*)?$/ || /^[[:space:]]*-/ { next }
+        {
+            match($0, /^ */)
+            n = RLENGTH
+            line = substr($0, n + 1)
+            if (line !~ /^[A-Za-z0-9_.-]+:/) next
+            key = line
+            sub(/:.*/, "", key)
+            value = substr(line, length(key) + 2)
+            if (value != "" && value !~ /^[ \t]/) next
+            while (depth > 0 && indent[depth] >= n) depth--
+            depth++
+            indent[depth] = n
+            keys[depth] = key
+            path = keys[1]
+            for (i = 2; i <= depth; i++) path = path "." keys[i]
+            if (path != want) next
+            sub(/^[ \t]+/, "", value)
+            sub(/[ \t]+#.*$/, "", value)
+            sub(/[ \t]+$/, "", value)
+            if (length(value) >= 2 && (substr(value, 1, 1) == "\"" || substr(value, 1, 1) == q) && substr(value, length(value)) == substr(value, 1, 1))
+                value = substr(value, 2, length(value) - 2)
+            print value
+            found = 1
+            exit
+        }
+        END { exit found ? 0 : 1 }
+    ' "$config_path"
+}
+
+# The storage root an enrolled storage or database node runs with ('' without one): a re-run keeps it by default.
+configured_database_storage_root() {
+    local config_path="/etc/docker-daemon/config.yaml" mode
+    mode=$(docker_config_value "$config_path" docker.mode 2>/dev/null) || return 0
+    [[ "$mode" == "databases" || "$mode" == "storage" ]] || return 0
+    docker_config_value "$config_path" docker.database.storage_root 2>/dev/null || echo "/var/lib/docker-daemon/databases"
+}
+
+# The node kind of a restricted profile, for messages: storage, or the legacy databases.
+restricted_node_kind() {
+    if [[ "$DOCKER_MODE" == "storage" ]]; then echo "Storage"; else echo "Database"; fi
+}
+
 database_storage_root_for_mount() {
     local mountpoint="$1"
     if [[ "$mountpoint" == "/" ]]; then
@@ -192,13 +244,14 @@ cleanup_database_preflight() {
         rm -f "$DATABASE_PREFLIGHT_DIR/mnt/.write-test" "$DATABASE_PREFLIGHT_DIR/test.img" >/dev/null 2>&1 || true
         rmdir "$DATABASE_PREFLIGHT_DIR/mnt" "$DATABASE_PREFLIGHT_DIR" >/dev/null 2>&1 || true
     fi
-    if [[ "$DATABASE_PREFLIGHT_CREATED_ROOT" -eq 1 && -n "$DATABASE_STORAGE_ROOT" ]]; then
-        rmdir "$DATABASE_STORAGE_ROOT" >/dev/null 2>&1 || true
-    fi
+    local created
+    while IFS= read -r created; do
+        [[ -z "$created" ]] || rmdir -- "$created" >/dev/null 2>&1 || true
+    done <<< "$DATABASE_PREFLIGHT_CREATED_DIRS"
     DATABASE_PREFLIGHT_DIR=""
     DATABASE_PREFLIGHT_MOUNT_DIR=""
     DATABASE_PREFLIGHT_LOOP_DEVICE=""
-    DATABASE_PREFLIGHT_CREATED_ROOT=0
+    DATABASE_PREFLIGHT_CREATED_DIRS=""
     set -e
     return "$previous_status"
 }
@@ -207,6 +260,8 @@ trap cleanup_database_preflight EXIT
 
 select_database_storage() {
     [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
+    # A re-run keeps the storage root the node runs with unless another is given.
+    [[ -n "$DATABASE_STORAGE_ROOT" ]] || DATABASE_STORAGE_ROOT=$(configured_database_storage_root)
     if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
         [[ -n "$DATABASE_STORAGE_ROOT" ]] || DATABASE_STORAGE_ROOT="/var/lib/docker-daemon/databases"
         return
@@ -217,8 +272,10 @@ select_database_storage() {
     local target source fstype candidate entry index mountpoint free storage_default=1 storage_choice custom_choice
     if command_exists findmnt; then
         while IFS=' ' read -r target source fstype; do
-            case "$fstype" in tmpfs|devtmpfs|proc|sysfs|cgroup*|overlay|squashfs|ramfs|nsfs) continue ;; esac
-            case "$target" in /proc*|/sys*|/dev*|/run*|/snap*) continue ;; esac
+            # Database images need a Linux filesystem with room: not a pseudo or image filesystem, and not the boot or
+            # EFI system partition (small, often vfat).
+            case "$fstype" in tmpfs|devtmpfs|proc|sysfs|cgroup*|overlay|squashfs|ramfs|nsfs|vfat|msdos|fat|exfat) continue ;; esac
+            case "$target" in /proc*|/sys*|/dev*|/run*|/snap*|/boot|/boot/*) continue ;; esac
             [[ -d "$target" ]] || continue
             candidate=$(database_storage_root_for_mount "$target")
             mounts+=("$target|$candidate")
@@ -260,6 +317,18 @@ select_database_storage() {
     guide_blank
 }
 
+# Creates the storage root and the parents it lacks, and records each directory it created (deepest first) for the
+# cleanup of a refused preflight.
+create_database_storage_root() {
+    local dir="$1" missing=""
+    while [[ "$dir" == /?* && ! -e "$dir" && ! -L "$dir" ]]; do
+        missing+="${dir}"$'\n'
+        dir=$(dirname -- "$dir")
+    done
+    DATABASE_PREFLIGHT_CREATED_DIRS="$missing"
+    mkdir -p -- "$1" || die "Could not create the storage root ${1}."
+}
+
 preflight_database_storage() {
     [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
     [[ -n "$DATABASE_STORAGE_ROOT" && "$DATABASE_STORAGE_ROOT" == /* && "$DATABASE_STORAGE_ROOT" != "/" ]] || die "Database storage root is invalid."
@@ -272,8 +341,7 @@ preflight_database_storage() {
     for cmd in "${required[@]}"; do command_exists "$cmd" || die "Required command '$cmd' is missing; refusing enrollment."; done
     [[ ! -L "$DATABASE_STORAGE_ROOT" ]] || die "Refusing symlink storage root: ${DATABASE_STORAGE_ROOT}"
     if [[ ! -e "$DATABASE_STORAGE_ROOT" ]]; then
-        mkdir -p -- "$DATABASE_STORAGE_ROOT"
-        DATABASE_PREFLIGHT_CREATED_ROOT=1
+        create_database_storage_root "$DATABASE_STORAGE_ROOT"
     fi
     [[ -d "$DATABASE_STORAGE_ROOT" && -w "$DATABASE_STORAGE_ROOT" ]] || die "Storage root is not writable: ${DATABASE_STORAGE_ROOT}"
     available_kib=$(df -Pk -- "$DATABASE_STORAGE_ROOT" | awk 'NR==2 {print $4}')
@@ -318,7 +386,7 @@ preflight_database_storage() {
     rm -f "$image"
     rmdir "$DATABASE_PREFLIGHT_DIR/mnt" "$DATABASE_PREFLIGHT_DIR"
     DATABASE_PREFLIGHT_DIR=""
-    DATABASE_PREFLIGHT_CREATED_ROOT=0
+    DATABASE_PREFLIGHT_CREATED_DIRS=""
     ok "Storage preflight passed for ${DATABASE_STORAGE_ROOT}"
 }
 
@@ -1611,6 +1679,42 @@ normalize_daemon_version() {
     echo "$version"
 }
 
+# The token a completed enrollment used, as a digest: a re-run of the same setup command (its token now used) keeps
+# the node's enrollment.
+ENROLLMENT_TOKEN_DIGEST_FILE="/var/lib/docker-daemon/enrollment-token.sha256"
+enrollment_token_digest() {
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+}
+
+# A node already enrolled with this setup command's token keeps that enrollment: the re-run goes on as one without a
+# token.
+keep_enrollment_of_used_token() {
+    [[ -n "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 && -f "$ENROLLMENT_TOKEN_DIGEST_FILE" ]] || return 0
+    [[ "$(cat "$ENROLLMENT_TOKEN_DIGEST_FILE" 2>/dev/null)" == "$(enrollment_token_digest "$ENROLL_TOKEN")" ]] || return 0
+    log "This node is already enrolled with this setup command's token; keeping its enrollment."
+    ENROLL_TOKEN=""
+}
+
+remember_enrollment_token() {
+    [[ -n "$ENROLL_TOKEN" && -f /etc/docker-daemon/certs/node.pem ]] || return 0
+    (umask 077; enrollment_token_digest "$ENROLL_TOKEN" > "$ENROLLMENT_TOKEN_DIGEST_FILE") 2>> "$LOG_FILE" || return 0
+    chown "${RUN_USER}:${RUN_GROUP}" "$ENROLLMENT_TOKEN_DIGEST_FILE" 2>> "$LOG_FILE" || true
+}
+
+# docker-daemon enrolls once: a host that is enrolled cannot take another node's token in place. Such a token is not used,
+# the host keeps its node, and the run fails before it changes anything, so the new node (still pending in Gateway)
+# does not go unnoticed.
+refuse_token_for_enrolled_node() {
+    [[ -n "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 ]] || return 0
+    local node_id
+    node_id=$(sed -nE 's/.*"node_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' /var/lib/docker-daemon/state.json 2>/dev/null | head -n 1 || true)
+    err "This host is already enrolled as docker node ${node_id:-(unknown id)}${EXISTING_GATEWAY_ADDR:+ of Gateway ${EXISTING_GATEWAY_ADDR}}; the enrollment token was not used, and nothing was changed."
+    err "To keep this node (update, repair, change its run user), run the installer again without --token."
+    err "To enroll this host as the new node instead: stop docker-daemon, move /etc/docker-daemon/certs and /var/lib/docker-daemon/state.json"
+    err "out of the way, run this command again, and delete the old node in Gateway."
+    die "The host is already enrolled; the new node stays pending in Gateway."
+}
+
 detect_existing_install() {
     local target="/usr/local/bin/docker-daemon"
     local config_path="/etc/docker-daemon/config.yaml"
@@ -1826,6 +1930,8 @@ detect_os
 detect_arch
 check_dependencies
 detect_existing_install
+keep_enrollment_of_used_token
+refuse_token_for_enrolled_node
 
 if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
     GATEWAY_ADDR="$EXISTING_GATEWAY_ADDR"
@@ -1895,6 +2001,7 @@ if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
         guide_blank
     fi
 
+    refuse_token_for_enrolled_node
     select_database_storage
     preflight_database_storage
 
@@ -1933,7 +2040,7 @@ if [[ "$DOCKER_MODE" == "builder" && "$RUN_USER" != "root" ]]; then
     die "Builder docker-daemon profile must run as root to manage its dedicated BuildKit/containerd runtime."
 fi
 if [[ ( "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ) && "$RUN_USER" != "root" ]]; then
-    die "Database docker-daemon profile must run as root."
+    die "$(restricted_node_kind) nodes must run docker-daemon as root."
 fi
 
 # ── Resolve run user/group ───────────────────────────────────────────
@@ -2465,47 +2572,117 @@ setup_secure_runtime() {
     warn "Continuing without Secure Runtime${reason:+ (${reason})}. The node reports the same reason in its capabilities."
 }
 
+# Re-runs of v2.11.1-rc.21 and older inserted the profile (two-space "mode", "database" and "storage_root" lines) again
+# under "docker:" of a config the daemon had rewritten with four spaces, which nested the daemon's own docker keys under
+# docker.database. Those three lines are taken out again when the daemon's own section says the same.
+repair_duplicated_database_profile() {
+    local config_path="$1" candidate="${1}.repair.$$" mode root
+    mode=$(sed -n 's/^  mode: "\(.*\)"$/\1/p' "$config_path" | head -n 1)
+    root=$(sed -n 's/^    storage_root: "\(.*\)"$/\1/p' "$config_path" | head -n 1)
+    awk '
+        { line[NR] = $0 }
+        END {
+            for (i = 1; i <= NR; i++) if (line[i] ~ /^docker:[[:space:]]*$/) { d = i; break }
+            if (!d || line[d + 1] !~ /^  mode: "[^"]*"$/ || line[d + 2] != "  database:" || line[d + 3] !~ /^    storage_root: "[^"]*"$/) exit 1
+            n = d + 4
+            while (n <= NR && line[n] ~ /^[[:space:]]*(#.*)?$/) n++
+            # The next key sits at the depth of storage_root and is a docker key of the daemon, not one of docker.database.
+            if (n > NR || line[n] !~ /^    [A-Za-z_]/ || line[n] ~ /^    (storage_root|reserve_bytes):/) exit 1
+            for (i = 1; i <= NR; i++) if (i < d + 1 || i > d + 3) print line[i]
+        }
+    ' "$config_path" > "$candidate" 2>/dev/null || { rm -f "$candidate"; return 0; }
+    if [[ "$(docker_config_value "$candidate" docker.mode || echo "$mode")" != "$mode" ]] ||
+        [[ "$(docker_config_value "$candidate" docker.database.storage_root || echo "$root")" != "$root" ]]; then
+        rm -f "$candidate"
+        return 0
+    fi
+    chmod 600 "$candidate" && mv -f "$candidate" "$config_path" || { rm -f "$candidate"; die "Could not repair ${config_path}."; }
+    log "Removed the duplicated database profile lines from ${config_path}"
+}
+
+# Writes docker.mode and docker.database.storage_root, the keys the daemon reads, once: a key that is there keeps its
+# place, and a missing one goes into its section with the indentation the file uses.
+set_database_profile_keys() {
+    local config_path="$1" mode="$2" root="$3" tmp_config="${1}.tmp.$$" status=0
+    awk -v mode="$mode" -v root="$root" '
+        { line[NR] = $0 }
+        END {
+            for (i = 1; i <= NR; i++) if (line[i] ~ /^docker:[[:space:]]*$/) { d = i; break }
+            if (!d) exit 1
+            ci = 2
+            for (i = d + 1; i <= NR; i++) {
+                if (line[i] ~ /^[[:space:]]*(#.*)?$/) continue
+                match(line[i], /^ */)
+                if (RLENGTH > 0) ci = RLENGTH
+                break
+            }
+            pad = sprintf("%" ci "s", "")
+            db = 0
+            for (i = d + 1; i <= NR; i++) {
+                if (line[i] ~ /^[[:space:]]*(#.*)?$/) continue
+                match(line[i], /^ */)
+                if (RLENGTH == 0) break
+                if (RLENGTH == ci && substr(line[i], ci + 1) ~ /^database:/) {
+                    if (substr(line[i], ci + 1) !~ /^database:[ \t]*(#.*)?$/) exit 2
+                    db = i
+                    break
+                }
+            }
+            dpad = pad pad
+            if (db) {
+                for (i = db + 1; i <= NR; i++) {
+                    if (line[i] ~ /^[[:space:]]*(#.*)?$/) continue
+                    match(line[i], /^ */)
+                    if (RLENGTH > ci) dpad = sprintf("%" RLENGTH "s", "")
+                    break
+                }
+            }
+            for (i = 1; i <= NR; i++) {
+                print line[i]
+                if (i == d && mode != "") print pad "mode: \"" mode "\""
+                if (i == d && root != "" && !db) {
+                    print pad "database:"
+                    print dpad "storage_root: \"" root "\""
+                }
+                if (i == db && root != "") print dpad "storage_root: \"" root "\""
+            }
+        }
+    ' "$config_path" > "$tmp_config" || status=$?
+    if [[ "$status" -ne 0 ]]; then
+        rm -f "$tmp_config"
+        [[ "$status" -ne 2 ]] || die "docker.database in ${config_path} is not a section; fix it and run the installer again."
+        die "Could not write database docker profile."
+    fi
+    chmod 600 "$tmp_config"
+    mv -f "$tmp_config" "$config_path"
+}
+
 write_database_profile_config() {
     [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
-    [[ "$RUN_USER" == "root" ]] || die "Database docker-daemon profile must run as root."
+    [[ "$RUN_USER" == "root" ]] || die "$(restricted_node_kind) nodes must run docker-daemon as root."
     [[ -n "$DATABASE_STORAGE_ROOT" && "$DATABASE_STORAGE_ROOT" == /* && "$DATABASE_STORAGE_ROOT" != "/" ]] || die "Database storage root is invalid."
     [[ "$DATABASE_STORAGE_ROOT" =~ ^[A-Za-z0-9._/@+-]+$ ]] || die "Database storage root contains unsupported characters."
 
     local config_path="/etc/docker-daemon/config.yaml"
     [[ -f "$config_path" ]] || die "docker-daemon config was not created by enrollment."
-    grep -q '^docker:$' "$config_path" || die "docker-daemon config has no docker section."
+    grep -q '^docker:[[:space:]]*$' "$config_path" || die "docker-daemon config has no docker section."
+    repair_duplicated_database_profile "$config_path"
 
-    local has_mode=0
-    local has_storage_root=0
-    grep -q '^  mode:' "$config_path" && has_mode=1
-    grep -q '^    storage_root:' "$config_path" && has_storage_root=1
-    if [[ "$has_mode" -eq 1 || "$has_storage_root" -eq 1 ]]; then
-        grep -q "^  mode: \"${DOCKER_MODE}\"$" "$config_path" || die "Refusing to overwrite an existing docker profile."
-        grep -q "^    storage_root: \"${DATABASE_STORAGE_ROOT}\"$" "$config_path" || die "Refusing to overwrite an existing database storage root."
+    local mode root set_mode="" set_root=""
+    mode=$(docker_config_value "$config_path" docker.mode || true)
+    root=$(docker_config_value "$config_path" docker.database.storage_root || true)
+    [[ -z "$mode" || "$mode" == "$DOCKER_MODE" ]] || die "Refusing to overwrite an existing docker profile (docker.mode: ${mode})."
+    # A profile without its own storage root runs with the daemon's default one.
+    [[ -n "$root" || -z "$mode" ]] || root="/var/lib/docker-daemon/databases"
+    [[ -z "$root" || "$root" == "$DATABASE_STORAGE_ROOT" ]] || die "Refusing to overwrite an existing database storage root (${root})."
+    [[ -n "$mode" ]] || set_mode="$DOCKER_MODE"
+    docker_config_value "$config_path" docker.database.storage_root >/dev/null || set_root="$DATABASE_STORAGE_ROOT"
+    if [[ -z "$set_mode" && -z "$set_root" ]]; then
         chmod 600 "$config_path"
         ok "Database docker profile already configured (root daemon, storage: ${DATABASE_STORAGE_ROOT})"
         return 0
     fi
-
-    if grep -q '^  database:$' "$config_path"; then
-        die "Database config section exists without a storage_root."
-    else
-        local tmp_config="${config_path}.tmp.$$"
-        awk -v root="$DATABASE_STORAGE_ROOT" -v mode="$DOCKER_MODE" '
-            $0 == "docker:" {
-                print
-                print "  mode: \"" mode "\""
-                print "  database:"
-                print "    storage_root: \"" root "\""
-                inserted = 1
-                next
-            }
-            { print }
-            END { if (!inserted) exit 1 }
-        ' "$config_path" > "$tmp_config" || { rm -f "$tmp_config"; die "Could not write database docker profile."; }
-        chmod 600 "$tmp_config"
-        mv -f "$tmp_config" "$config_path"
-    fi
+    set_database_profile_keys "$config_path" "$set_mode" "$set_root"
     chmod 600 "$config_path"
     ok "Database docker profile written (root daemon, storage: ${DATABASE_STORAGE_ROOT})"
 }
@@ -2691,6 +2868,7 @@ enroll_daemon() {
     elif ! run_as_run_user "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --docker-socket "$DOCKER_SOCKET" >> "$LOG_FILE" 2>&1; then
         die "Failed to enroll docker-daemon. Check ${LOG_FILE} for details."
     fi
+    remember_enrollment_token
     prepare_run_user_identity
     ok "Config written to /etc/docker-daemon/config.yaml"
 }
