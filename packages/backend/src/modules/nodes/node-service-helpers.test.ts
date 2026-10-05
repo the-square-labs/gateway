@@ -8,8 +8,14 @@ describe('node file command results', () => {
     );
   });
 
+  it('answers a path that does not exist with 404', () => {
+    expect(() =>
+      parseNodeCommandResult({ success: false, error: 'write file: stat /srv/a.txt: no such file or directory' })
+    ).toThrow(expect.objectContaining({ statusCode: 404, code: 'NODE_FILE_NOT_FOUND' }));
+  });
+
   it('keeps every other daemon failure a dispatch error', () => {
-    expect(() => parseNodeCommandResult({ success: false, error: 'no such file or directory' })).toThrow(
+    expect(() => parseNodeCommandResult({ success: false, error: 'file is not writable: /srv/a' })).toThrow(
       expect.objectContaining({ statusCode: 502, code: 'DISPATCH_ERROR' })
     );
     expect(parseNodeCommandResult({ success: true, detail: '{"ok":true}' })).toEqual({ ok: true });

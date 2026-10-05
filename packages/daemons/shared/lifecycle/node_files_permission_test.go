@@ -31,3 +31,11 @@ func TestWriteUnderAnUnenterableDirectoryNamesThePermissionError(t *testing.T) {
 		}
 	}
 }
+
+// Saving a file that was deleted meanwhile names the missing file, so Gateway answers 404.
+func TestWriteOfADeletedFileNamesTheMissingFile(t *testing.T) {
+	err := writeNodeFile(filepath.Join(t.TempDir(), "gone.txt"), []byte("y"), false)
+	if err == nil || !strings.Contains(err.Error(), "no such file or directory") {
+		t.Fatalf("error %v, want a no such file or directory error", err)
+	}
+}

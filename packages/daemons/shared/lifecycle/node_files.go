@@ -230,7 +230,7 @@ func writeNodeFile(path string, content []byte, create bool) error {
 	}
 	if !create {
 		info, err := os.Stat(cleanPath)
-		if errors.Is(err, fs.ErrPermission) {
+		if errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("write file: %w", err)
 		}
 		if err != nil {

@@ -35,6 +35,10 @@ export function parseNodeCommandResult(result: { success: boolean; error?: strin
         `The node's daemon has no permission for this path: ${result.error}`
       );
     }
+    // A path that does not exist (for example a file deleted while its editor was open) is a 404, not a daemon failure.
+    if (/no such file or directory/i.test(result.error ?? '')) {
+      throw new AppError(404, 'NODE_FILE_NOT_FOUND', `The path does not exist on the node: ${result.error}`);
+    }
     throw new AppError(502, 'DISPATCH_ERROR', result.error || 'Command failed on daemon');
   }
   try {
