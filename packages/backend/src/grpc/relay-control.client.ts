@@ -727,9 +727,9 @@ export class RelayControlClient {
   }
 
   /** Counts a raw (legacy) Gateway stream for telemetry while it is open. */
-  trackLegacyTunnel(tunnel: Duplex): Duplex {
-    this.resumeRegistry.countLegacy(1);
-    tunnel.once('close', () => this.resumeRegistry.countLegacy(-1));
+  trackLegacyTunnel(tunnel: Duplex, relayInstanceId = LEGACY_RELAY_PATH_ID): Duplex {
+    this.resumeRegistry.countLegacy(1, relayInstanceId);
+    tunnel.once('close', () => this.resumeRegistry.countLegacy(-1, relayInstanceId));
     return tunnel;
   }
 

@@ -1587,6 +1587,8 @@ export type MigrationResult = 'ok' | 'no_relay' | 'rejected' | 'resume_rejected'
 
 export interface RelayResumeStatsSnapshot {
   sessions: { resumable: number; legacy: number };
+  /** Open streams per relay instance id (a suspended resumable stream counts under no relay). */
+  byRelay: Record<string, { resumable: number; legacy: number }>;
   suspended: number;
   unackedBytes: number;
   migrations: Record<string, number>;
@@ -1603,6 +1605,7 @@ export class RelayResumeRegistry {
   private readonly sessions = new Set<ResumableRelayDuplex>();
   private readonly legacyUntil = new Map<string, number>();
   private legacyStreams = 0;
+  private readonly legacyByRelay = new Map<string, number>();
   private readonly migrations = new Map<string, number>();
   private readonly stalls: number[] = [];
   readonly stats: ResumeStats = { retransmittedBytes: 0, windowBlockedMs: 0 };
@@ -1622,9 +1625,13 @@ export class RelayResumeRegistry {
     this.sessions.delete(session);
   }
 
-  /** A legacy (raw) stream opened or closed. */
-  countLegacy(delta: 1 | -1): void {
+  /** A legacy (raw) stream through `relayId` opened or closed. */
+  countLegacy(delta: 1 | -1, relayId = ''): void {
     this.legacyStreams = Math.max(0, this.legacyStreams + delta);
+    if (!relayId) return;
+    const count = Math.max(0, (this.legacyByRelay.get(relayId) ?? 0) + delta);
+    if (count) this.legacyByRelay.set(relayId, count);
+    else this.legacyByRelay.delete(relayId);
   }
 
   isLegacy(routeId: string): boolean {
@@ -1693,12 +1700,18 @@ export class RelayResumeRegistry {
       sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]! : 0;
     let suspended = 0;
     let unacked = 0;
+    const byRelay: Record<string, { resumable: number; legacy: number }> = {};
+    const relayEntry = (relayId: string) => (byRelay[relayId] ??= { resumable: 0, legacy: 0 });
     for (const session of this.sessions) {
       if (session.suspended) suspended++;
       unacked += session.unackedBytes;
+      const relayId = session.relayId;
+      if (relayId) relayEntry(relayId).resumable++;
     }
+    for (const [relayId, count] of this.legacyByRelay) relayEntry(relayId).legacy += count;
     return {
       sessions: { resumable: this.sessions.size, legacy: this.legacyStreams },
+      byRelay,
       suspended,
       unackedBytes: unacked,
       migrations: Object.fromEntries(this.migrations),

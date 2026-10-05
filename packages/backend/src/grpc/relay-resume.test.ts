@@ -747,7 +747,7 @@ describe('RSv1 session simulator', () => {
     // The schedule must actually exercise both kinds of moves.
     expect(cuts).toBeGreaterThan(seeds / 2);
     expect(migrations).toBeGreaterThan(seeds / 4);
-  }, 120_000);
+  }, Math.max(120_000, Number(process.env.RELAY_RESUME_SIM_SEEDS ?? 0) * 100));
 
   it('refuses a replayed RESUME and a RESUME through another relay id', () => {
     const sim = new Simulator(99, { source: 10, target: 10 });
@@ -1014,6 +1014,7 @@ describe('ResumableRelayDuplex', () => {
       },
     });
     expect(duplex.relayId).toBe('relay-0');
+    expect(registry.snapshot().byRelay).toEqual({ 'relay-0': { resumable: 1, legacy: 0 } });
     const payload = Buffer.alloc(3 * 1024 * 1024);
     for (let i = 0; i < payload.length; i++) payload[i] = (i * 31 + (i >> 9)) & 0xff;
     const received = collect(duplex);

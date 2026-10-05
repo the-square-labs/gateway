@@ -2010,7 +2010,8 @@ export class RelayPolicyService {
         return this.relay.trackLegacyTunnel(
           candidate.local
             ? await this.relay.openTunnel(candidate.grant)
-            : await this.relay.openCandidateTunnel(candidate)
+            : await this.relay.openCandidateTunnel(candidate),
+          candidate.relayInstanceId
         );
       } catch (error) {
         lastError = error;
