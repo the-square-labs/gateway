@@ -129,8 +129,10 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
   const gatewayUpdateAvailable = Boolean(
     updateStatus?.updateAvailable && updateStatus.latestVersion
   );
+  const relayRolloutRunning = relayOperation?.status === "updating";
+  // While a rollout runs, the panel shows the rollout, not another update offer.
   const relayUpdateAvailable = Boolean(
-    updateStatus?.relay?.updateAvailable && updateStatus.relay.latestVersion
+    updateStatus?.relay?.updateAvailable && updateStatus.relay.latestVersion && !relayRolloutRunning
   );
   const showRelayPanel = relayUpdateAvailable || relayOperationAbandonable;
   const anyUpdateAvailable = gatewayUpdateAvailable || relayUpdateAvailable;
@@ -201,13 +203,19 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
           id={gatewayUpdateAvailable ? undefined : "system-updates"}
           title={
             <span className="text-warning-text">
-              {relayUpdateAvailable ? "Relay Pool Update Available" : "Relay Pool Update"}
+              {relayUpdateAvailable
+                ? "Relay Pool Update Available"
+                : relayRolloutRunning
+                  ? "Relay Pool Updating"
+                  : "Relay Pool Update"}
             </span>
           }
           description={
             relayUpdateAvailable
               ? "A signed Relay release is ready for a one-instance-at-a-time rollout"
-              : "A Relay Pool rollout has not finished"
+              : relayRolloutRunning
+                ? "Relays update one at a time while Gateway stays usable"
+                : "A Relay Pool rollout has not finished"
           }
           className={cn(
             "xl:col-span-2",
