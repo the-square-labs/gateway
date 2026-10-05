@@ -58,7 +58,9 @@ export const RstCode = {
 
 export const MigrateReason = { drain: 1, goaway: 2 } as const;
 
-export const INITIAL_WINDOW = 256 * 1024;
+/** A stream starts at 1 MiB, or at FALLBACK_WINDOW, then MIN_WINDOW, when the process budget is short. */
+export const INITIAL_WINDOW = 1024 * 1024;
+export const FALLBACK_WINDOW = 256 * 1024;
 export const MIN_WINDOW = 64 * 1024;
 export const MAX_WINDOW = 4 * 1024 * 1024;
 export const DEFAULT_PROCESS_BUDGET = 256 * 1024 * 1024;
@@ -721,7 +723,12 @@ export class ResumeSession {
     this.targetNonce = options.targetNonce ?? ZERO_ID;
     const initial = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, options.initialWindow ?? INITIAL_WINDOW));
     this.window = MIN_WINDOW;
-    this.growWindow(initial - MIN_WINDOW);
+    for (const target of [initial, Math.min(initial, FALLBACK_WINDOW)]) {
+      if (target > MIN_WINDOW && this.budget.tryTake(target - MIN_WINDOW)) {
+        this.window = target;
+        break;
+      }
+    }
   }
 
   get isOpen(): boolean {

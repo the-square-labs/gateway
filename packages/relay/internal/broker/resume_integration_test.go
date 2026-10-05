@@ -1455,7 +1455,7 @@ func pushThrough(stream frameStream, chunk []byte, total int) error {
 		}
 	}()
 	for sent := 0; sent < total; sent += len(chunk) {
-		data := make([]byte, len(chunk))
+		data := make([]byte, min(len(chunk), total-sent))
 		copy(data, chunk)
 		if err := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: data}}}); err != nil {
 			return fmt.Errorf("send: %w (stream ended: %v)", err, <-received)
@@ -1520,7 +1520,8 @@ func (r *rhThroughput) resumable(total int) error {
 	if err != nil {
 		return err
 	}
-	if err := pushThrough(session, r.chunk, total); err != nil {
+	// As the docker and nginx bridges read for a session: a frame (read plus record header) stays within 32 KiB.
+	if err := pushThrough(session, r.chunk[:relayresume.ReadChunk(len(r.chunk))], total); err != nil {
 		return err
 	}
 	_ = session.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}})

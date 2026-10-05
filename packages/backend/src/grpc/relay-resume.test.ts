@@ -8,6 +8,7 @@ import {
   computeMac,
   DEFAULT_PROCESS_BUDGET,
   DELAYED_ACK_MS,
+  FALLBACK_WINDOW,
   deriveRouteKey,
   encodeRecord,
   HELLO_ACK_TIMEOUT_MS,
@@ -106,6 +107,7 @@ describe('RSv1 vectors (proto/testdata/relay-resume-v1.json)', () => {
     const c = vectors.constants;
     expect(c.capability).toBe('relay_stream_resume_v1');
     expect(c.initial_window).toBe(INITIAL_WINDOW);
+    expect(c.fallback_window).toBe(FALLBACK_WINDOW);
     expect(c.min_window).toBe(MIN_WINDOW);
     expect(c.max_window).toBe(MAX_WINDOW);
     expect(c.max_frame_bytes).toBe(MAX_FRAME_BYTES);
