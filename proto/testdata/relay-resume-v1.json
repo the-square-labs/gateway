@@ -1,0 +1,496 @@
+{
+  "version": 1,
+  "spec": "packages/daemons/shared/relayresume/doc.go (wire format, offsets, MAC transcripts, key derivation)",
+  "constants": {
+    "capability": "relay_stream_resume_v1",
+    "close_linger_timeout_ms": 10000,
+    "delayed_ack_ms": 20,
+    "drain_deadline_margin_ms": 15000,
+    "first_record_timeout_ms": 1000,
+    "hello_ack_timeout_ms": 10000,
+    "initial_window": 262144,
+    "key_len": 32,
+    "legacy_latch_ms": 600000,
+    "mac_len": 16,
+    "magic": "GWRS",
+    "max_frame_bytes": 1048576,
+    "max_key_id_len": 64,
+    "max_migrations_in_flight": 32,
+    "max_window": 4194304,
+    "migrate_reasons": {
+      "drain": 1,
+      "goaway": 2
+    },
+    "min_window": 65536,
+    "nonce_len": 16,
+    "open_timeout_ms": 5000,
+    "planned_budget_ms": 30000,
+    "process_budget": 268435456,
+    "proxy_half_close_timeout_ms": 30000,
+    "record_types": {
+      "ack": 2,
+      "close": 5,
+      "data": 1,
+      "fin": 3,
+      "hello": 16,
+      "hello_ack": 17,
+      "migrate_req": 21,
+      "resume": 18,
+      "resume_ack": 19,
+      "resume_rej": 20,
+      "rst": 4
+    },
+    "reject_codes": {
+      "finished": 2,
+      "reset": 3,
+      "stale_epoch": 5,
+      "unauthorized": 4,
+      "unknown": 1
+    },
+    "resume_ack_timeout_ms": 5000,
+    "rst_codes": {
+      "aborted": 7,
+      "half_close_idle": 5,
+      "idle": 4,
+      "legacy_peer": 9,
+      "local": 2,
+      "protocol": 1,
+      "resume_rejected": 8,
+      "revoked": 6,
+      "suspend_timeout": 3,
+      "window_violation": 10
+    },
+    "session_id_len": 16,
+    "target_suspend_timeout_ms": 60000,
+    "tombstone_ttl_ms": 120000,
+    "transcript_domain": "gw-relay-resume/v1",
+    "unplanned_backoff_max_ms": 2000,
+    "unplanned_backoff_min_ms": 250,
+    "unplanned_budget_ms": 55000,
+    "version": 1
+  },
+  "kdf": [
+    {
+      "secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "route_id": "route-1",
+      "key_version": "1",
+      "info_hex": "67772d72656c61792d726573756d652f76310007726f7574652d310000000000000001",
+      "key_hex": "b41afbc8cd9bd27e27a28ba587b41c55d72e74947a249bc3466a3d50ca6a5fdc",
+      "key_id": "v1"
+    },
+    {
+      "secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "route_id": "7f1c2a9e-5b3d-4c8e-9a10-2b3c4d5e6f70",
+      "key_version": "42",
+      "info_hex": "67772d72656c61792d726573756d652f7631002437663163326139652d356233642d346338652d396131302d326233633464356536663730000000000000002a",
+      "key_hex": "8479ca748a4592eba35cd26102afa0b4180869e4eca3d05b41b33116a7d6c940",
+      "key_id": "v42"
+    }
+  ],
+  "macs": [
+    {
+      "name": "hello",
+      "label": "hello",
+      "key_hex": "b41afbc8cd9bd27e27a28ba587b41c55d72e74947a249bc3466a3d50ca6a5fdc",
+      "route_id": "route-1",
+      "relay_id": "relay-a",
+      "key_id": "v1",
+      "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+      "wnd": "262144",
+      "transcript_hex": "001267772d72656c61792d726573756d652f7631000568656c6c6f0007726f7574652d31000772656c61792d6100027631101112131415161718191a1b1c1d1e1f0000000000040000",
+      "mac_hex": "89f93ee82657b4c0c5f79fe85f1cac51",
+      "record_hex": "104757525301027631101112131415161718191a1b1c1d1e1f80801089f93ee82657b4c0c5f79fe85f1cac51"
+    },
+    {
+      "name": "hello_ack",
+      "label": "hello_ack",
+      "key_hex": "b41afbc8cd9bd27e27a28ba587b41c55d72e74947a249bc3466a3d50ca6a5fdc",
+      "route_id": "route-1",
+      "relay_id": "relay-a",
+      "key_id": "v1",
+      "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+      "target_nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "hello_mac_hex": "89f93ee82657b4c0c5f79fe85f1cac51",
+      "wnd": "262144",
+      "transcript_hex": "001267772d72656c61792d726573756d652f7631000968656c6c6f5f61636b0007726f7574652d31000772656c61792d6100027631101112131415161718191a1b1c1d1e1f89f93ee82657b4c0c5f79fe85f1cac51a0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000000040000",
+      "mac_hex": "47fd748a02509d71e6360888390d18cc",
+      "record_hex": "11101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf80801047fd748a02509d71e6360888390d18cc"
+    },
+    {
+      "name": "resume",
+      "label": "resume",
+      "key_hex": "b41afbc8cd9bd27e27a28ba587b41c55d72e74947a249bc3466a3d50ca6a5fdc",
+      "route_id": "route-1",
+      "relay_id": "relay-b",
+      "key_id": "v1",
+      "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+      "target_nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "epoch": "2",
+      "rcv_nxt": "300000",
+      "transcript_hex": "001267772d72656c61792d726573756d652f76310006726573756d650007726f7574652d31000772656c61792d6200027631101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf000000000000000200000000000493e0",
+      "mac_hex": "f90bf1053701523e073eab1f45754b4e",
+      "record_hex": "124757525301101112131415161718191a1b1c1d1e1f02e0a712027631f90bf1053701523e073eab1f45754b4e"
+    },
+    {
+      "name": "resume_ack",
+      "label": "resume_ack",
+      "key_hex": "b41afbc8cd9bd27e27a28ba587b41c55d72e74947a249bc3466a3d50ca6a5fdc",
+      "route_id": "route-1",
+      "relay_id": "relay-b",
+      "key_id": "v1",
+      "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+      "target_nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "resume_mac_hex": "f90bf1053701523e073eab1f45754b4e",
+      "epoch": "2",
+      "rcv_nxt": "5000000000",
+      "send_from": "300000",
+      "transcript_hex": "001267772d72656c61792d726573756d652f7631000a726573756d655f61636b0007726f7574652d31000772656c61792d6200027631101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf0000000000000002000000012a05f20000000000000493e0f90bf1053701523e073eab1f45754b4e",
+      "mac_hex": "06c570f6b16e1fcafcf614952fbae9c7",
+      "record_hex": "13101112131415161718191a1b1c1d1e1f0280e497d012e0a71206c570f6b16e1fcafcf614952fbae9c7"
+    }
+  ],
+  "records": [
+    {
+      "name": "data_small",
+      "hex": "010068656c6c6f2c20776f726c64",
+      "record": {
+        "type": "data",
+        "ack": "0",
+        "payload_hex": "68656c6c6f2c20776f726c64"
+      }
+    },
+    {
+      "name": "data_ack_300",
+      "hex": "01ac0200",
+      "record": {
+        "type": "data",
+        "ack": "300",
+        "payload_hex": "00"
+      }
+    },
+    {
+      "name": "data_ack_max",
+      "hex": "01ffffffffffffffffff01ff00",
+      "record": {
+        "type": "data",
+        "ack": "18446744073709551615",
+        "payload_hex": "ff00"
+      }
+    },
+    {
+      "name": "ack",
+      "hex": "02808004808010",
+      "record": {
+        "type": "ack",
+        "ack": "65536",
+        "wnd": "262144"
+      }
+    },
+    {
+      "name": "ack_zero",
+      "hex": "0200808004",
+      "record": {
+        "type": "ack",
+        "ack": "0",
+        "wnd": "65536"
+      }
+    },
+    {
+      "name": "fin",
+      "hex": "037f",
+      "record": {
+        "type": "fin",
+        "ack": "127"
+      }
+    },
+    {
+      "name": "fin_128",
+      "hex": "038001",
+      "record": {
+        "type": "fin",
+        "ack": "128"
+      }
+    },
+    {
+      "name": "rst",
+      "hex": "040218636f6e6e656374696f6e2072657365742062792070656572",
+      "record": {
+        "type": "rst",
+        "code": 2,
+        "reason_hex": "636f6e6e656374696f6e2072657365742062792070656572"
+      }
+    },
+    {
+      "name": "rst_empty",
+      "hex": "040300",
+      "record": {
+        "type": "rst",
+        "code": 3
+      }
+    },
+    {
+      "name": "close",
+      "hex": "05",
+      "record": {
+        "type": "close"
+      }
+    },
+    {
+      "name": "hello",
+      "hex": "104757525301027631101112131415161718191a1b1c1d1e1f80801089f93ee82657b4c0c5f79fe85f1cac51",
+      "record": {
+        "type": "hello",
+        "wnd": "262144",
+        "key_id": "v1",
+        "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+        "mac_hex": "89f93ee82657b4c0c5f79fe85f1cac51"
+      }
+    },
+    {
+      "name": "hello_ack",
+      "hex": "11101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf80801047fd748a02509d71e6360888390d18cc",
+      "record": {
+        "type": "hello_ack",
+        "wnd": "262144",
+        "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+        "target_nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "mac_hex": "47fd748a02509d71e6360888390d18cc"
+      }
+    },
+    {
+      "name": "resume",
+      "hex": "124757525301101112131415161718191a1b1c1d1e1f02e0a712027631f90bf1053701523e073eab1f45754b4e",
+      "record": {
+        "type": "resume",
+        "key_id": "v1",
+        "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+        "epoch": "2",
+        "rcv_nxt": "300000",
+        "mac_hex": "f90bf1053701523e073eab1f45754b4e"
+      }
+    },
+    {
+      "name": "resume_ack",
+      "hex": "13101112131415161718191a1b1c1d1e1f0280e497d012e0a71206c570f6b16e1fcafcf614952fbae9c7",
+      "record": {
+        "type": "resume_ack",
+        "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+        "epoch": "2",
+        "rcv_nxt": "5000000000",
+        "send_from": "300000",
+        "mac_hex": "06c570f6b16e1fcafcf614952fbae9c7"
+      }
+    },
+    {
+      "name": "resume_rej_unknown",
+      "hex": "14101112131415161718191a1b1c1d1e1f01",
+      "record": {
+        "type": "resume_rej",
+        "code": 1,
+        "session_id_hex": "101112131415161718191a1b1c1d1e1f"
+      }
+    },
+    {
+      "name": "resume_rej_stale",
+      "hex": "14101112131415161718191a1b1c1d1e1f05",
+      "record": {
+        "type": "resume_rej",
+        "code": 5,
+        "session_id_hex": "101112131415161718191a1b1c1d1e1f"
+      }
+    },
+    {
+      "name": "migrate_req",
+      "hex": "1501",
+      "record": {
+        "type": "migrate_req",
+        "code": 1
+      }
+    }
+  ],
+  "frames": [
+    {
+      "name": "hello_then_data",
+      "hex": "104757525301027631101112131415161718191a1b1c1d1e1f80801089f93ee82657b4c0c5f79fe85f1cac510100474554202f20485454502f312e310d0a",
+      "records": [
+        {
+          "type": "hello",
+          "wnd": "262144",
+          "key_id": "v1",
+          "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+          "mac_hex": "89f93ee82657b4c0c5f79fe85f1cac51"
+        },
+        {
+          "type": "data",
+          "ack": "0",
+          "payload_hex": "474554202f20485454502f312e310d0a"
+        }
+      ]
+    },
+    {
+      "name": "hello_ack_ack_data",
+      "hex": "11101112131415161718191a1b1c1d1e1fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf80801047fd748a02509d71e6360888390d18cc02108080100110485454502f312e3120323030204f4b0d0a",
+      "records": [
+        {
+          "type": "hello_ack",
+          "wnd": "262144",
+          "session_id_hex": "101112131415161718191a1b1c1d1e1f",
+          "target_nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+          "mac_hex": "47fd748a02509d71e6360888390d18cc"
+        },
+        {
+          "type": "ack",
+          "ack": "16",
+          "wnd": "262144"
+        },
+        {
+          "type": "data",
+          "ack": "16",
+          "payload_hex": "485454502f312e3120323030204f4b0d0a"
+        }
+      ]
+    },
+    {
+      "name": "ack_fin",
+      "hex": "02e80780801003e807",
+      "records": [
+        {
+          "type": "ack",
+          "ack": "1000",
+          "wnd": "262144"
+        },
+        {
+          "type": "fin",
+          "ack": "1000"
+        }
+      ]
+    },
+    {
+      "name": "fin_close",
+      "hex": "030705",
+      "records": [
+        {
+          "type": "fin",
+          "ack": "7"
+        },
+        {
+          "type": "close"
+        }
+      ]
+    },
+    {
+      "name": "migrate_req_ack",
+      "hex": "1502020180808002",
+      "records": [
+        {
+          "type": "migrate_req",
+          "code": 2
+        },
+        {
+          "type": "ack",
+          "ack": "1",
+          "wnd": "4194304"
+        }
+      ]
+    }
+  ],
+  "invalid": [
+    {
+      "name": "empty",
+      "hex": "",
+      "reason": "empty frame"
+    },
+    {
+      "name": "unknown_type",
+      "hex": "06",
+      "reason": "unknown record type"
+    },
+    {
+      "name": "unknown_type_high",
+      "hex": "ff00",
+      "reason": "unknown record type"
+    },
+    {
+      "name": "data_empty_payload",
+      "hex": "0100",
+      "reason": "empty DATA payload"
+    },
+    {
+      "name": "data_no_ack",
+      "hex": "01",
+      "reason": "truncated uvarint"
+    },
+    {
+      "name": "ack_truncated",
+      "hex": "0205",
+      "reason": "missing wnd"
+    },
+    {
+      "name": "uvarint_overlong",
+      "hex": "02800000",
+      "reason": "non-minimal uvarint"
+    },
+    {
+      "name": "uvarint_overflow",
+      "hex": "03ffffffffffffffffff02",
+      "reason": "uvarint over 64 bits"
+    },
+    {
+      "name": "uvarint_11_bytes",
+      "hex": "03ffffffffffffffffff8001",
+      "reason": "uvarint over 10 bytes"
+    },
+    {
+      "name": "fin_trailing_garbage",
+      "hex": "030506",
+      "reason": "unknown record type after FIN"
+    },
+    {
+      "name": "rst_short_reason",
+      "hex": "040205616263",
+      "reason": "reason shorter than its length"
+    },
+    {
+      "name": "rst_truncated",
+      "hex": "04",
+      "reason": "truncated RST"
+    },
+    {
+      "name": "hello_bad_magic",
+      "hex": "104757525801027631101112131415161718191a1b1c1d1e1f80801089f93ee82657b4c0c5f79fe85f1cac51",
+      "reason": "bad magic"
+    },
+    {
+      "name": "hello_bad_version",
+      "hex": "104757525302027631101112131415161718191a1b1c1d1e1f80801089f93ee82657b4c0c5f79fe85f1cac51",
+      "reason": "unknown version"
+    },
+    {
+      "name": "hello_zero_key_id",
+      "hex": "10475752530100101112131415161718191a1b1c1d1e1f010000000000000000000000000000000000",
+      "reason": "empty key id"
+    },
+    {
+      "name": "hello_truncated_mac",
+      "hex": "104757525301027631101112131415161718191a1b1c1d1e1f80801089f93ee82657b4c0c5f79fe85f1cac",
+      "reason": "truncated MAC"
+    },
+    {
+      "name": "resume_rej_truncated",
+      "hex": "14101112131415161718191a1b1c1d1e1f",
+      "reason": "missing code"
+    },
+    {
+      "name": "migrate_req_truncated",
+      "hex": "15",
+      "reason": "missing reason"
+    }
+  ],
+  "notes": {
+    "frames": "a TunnelData payload is one or more records; DATA is last and runs to the end of the frame",
+    "handshake": "the target table key is (route_id, source_kind, source_id, session_id) from the relay-vouched IncomingTunnel.route",
+    "integers": "64-bit values are decimal strings",
+    "invalid": "every invalid vector must be rejected by the frame parser",
+    "offsets": "DATA offsets are implicit per path; FIN consumes one offset unit; ack = receiver rcv_nxt (bytes handed to the local socket)"
+  }
+}

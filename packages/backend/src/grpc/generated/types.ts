@@ -1049,6 +1049,33 @@ export interface RelayGrantAssignment {
   candidates?: RelayDataCandidate[];
   schemaVersion?: number;
   secureLinkEgress?: SecureLinkEgress;
+  /** Connect assignments only: streams of this route are resumable (RSv1). Absent: raw streams. */
+  streamResume?: RelayStreamResume;
+  /** Endpoint assignments only: routes to this endpoint whose streams may be resumable, with their keys. */
+  resumeRoutes?: RelayRouteResume[];
+}
+
+/** The source side of a resumable route (RSv1). The key never travels through a relay. */
+export interface RelayStreamResume {
+  /** 1 */
+  version: number;
+  /** 1..64 bytes, names the key to the target */
+  keyId: string;
+  /** 32 bytes: HKDF-SHA256 route resume key */
+  key: Buffer;
+  /** Proxy routes: reset a stream this long after its target -> source direction finished without traffic. 0: none. */
+  halfCloseTimeoutMs?: number;
+}
+
+/** The target side of one resumable route (RSv1). The previous key stays valid while a rotation reaches the sources. */
+export interface RelayRouteResume {
+  routeId: string;
+  /** 1 */
+  version: number;
+  keyId: string;
+  key: Buffer;
+  prevKeyId?: string;
+  prevKey?: Buffer;
 }
 
 /**
@@ -1095,6 +1122,11 @@ export interface RelayDataCandidate {
   capabilities: string[];
   grant: RelaySignedGrant;
   assignmentState: string;
+  /**
+   * int64 unix ms. Draining candidates: resumable streams leave this relay before this time, spread over the time
+   * left. 0 or absent: as soon as possible.
+   */
+  drainDeadlineUnixMs?: number | string;
   topology?: RelayCandidateTopology;
 }
 

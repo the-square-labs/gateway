@@ -662,6 +662,34 @@ message RelayGrantAssignment {
   uint32 schema_version = 9;
   ManagedDatabaseListener managed_database_listener = 10;
   SecureLinkEgress secure_link_egress = 11;
+  // Connect assignments only: streams of this route are resumable (RSv1,
+  // capability relay_stream_resume_v1). Absent: streams are raw, as before.
+  RelayStreamResume stream_resume = 12;
+  // Endpoint assignments only: the routes to this endpoint whose streams may
+  // be resumable, with their current and previous resume keys.
+  repeated RelayRouteResume resume_routes = 13;
+}
+
+// The source side of a resumable route (RSv1). The key never travels through
+// a relay: it reaches the daemons only over their control sessions.
+message RelayStreamResume {
+  uint32 version = 1;  // 1
+  string key_id = 2;   // 1..64 bytes, names the key to the target
+  bytes key = 3;       // 32 bytes: HKDF-SHA256 route resume key
+  // Proxy routes: a stream whose target -> source direction finished is reset
+  // after this long without traffic (the relay's half-close reaping). 0: none.
+  uint32 half_close_timeout_ms = 4;
+}
+
+// The target side of one resumable route (RSv1). The previous key stays valid
+// while a rotation reaches the sources.
+message RelayRouteResume {
+  string route_id = 1;
+  uint32 version = 2;  // 1
+  string key_id = 3;
+  bytes key = 4;
+  string prev_key_id = 5;
+  bytes prev_key = 6;
 }
 
 // Desired connector egress listener for a consumer-side link. Carried with the
@@ -718,6 +746,9 @@ message RelayDataCandidate {
   repeated string capabilities = 8;
   RelaySignedGrant grant = 9;
   string assignment_state = 10; // "active", "staging", or "draining"
+  // Draining candidates: resumable streams leave this relay before this time
+  // (unix ms), spread over the time left. 0: as soon as possible.
+  int64 drain_deadline_unix_ms = 11;
   // Absent when Gateway placed the endpoint without latency data.
   RelayCandidateTopology topology = 20;
 }
