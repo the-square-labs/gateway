@@ -236,6 +236,59 @@ export function relaySessionSplit(
   return { resumable, legacy, reporting: reports.length > 0 };
 }
 
+/** What Gateway's own relayed streams (RelayControlClient.relayResumeStats) look like as a daemon report. */
+export interface GatewayRelayResumeStats {
+  sessions: { resumable: number; legacy: number };
+  byRelay?: Record<string, { resumable: number; legacy: number }>;
+  suspended: number;
+  unackedBytes: number;
+  migrations: Record<string, number>;
+  migrationStallMs: { p50: number; p95: number };
+  retransmittedBytes: number;
+}
+
+/**
+ * Gateway's own streams as one more reporting source. Migration outcomes are keyed "trigger:result": "ok" moved a
+ * stream, any other result cut it. Raw streams through a pre-pool relay are keyed "local", which is the local relay.
+ */
+export function gatewayStreamReport(
+  stats: GatewayRelayResumeStats,
+  localRelayInstanceId: string | null
+): NodeRelayStreamReport {
+  let moved = 0;
+  let failed = 0;
+  for (const [key, count] of Object.entries(stats.migrations ?? {})) {
+    if (key.endsWith(':ok')) moved += count;
+    else failed += count;
+  }
+  const byRelay = new Map<string, { resumable: number; legacy: number }>();
+  for (const [relay, counts] of Object.entries(stats.byRelay ?? {})) {
+    const relayInstanceId = relay === 'local' ? localRelayInstanceId : relay;
+    if (!relayInstanceId) continue;
+    const entry = byRelay.get(relayInstanceId) ?? { resumable: 0, legacy: 0 };
+    entry.resumable += counts.resumable;
+    entry.legacy += counts.legacy;
+    byRelay.set(relayInstanceId, entry);
+  }
+  return {
+    resumableSessions: stats.sessions.resumable,
+    legacySessions: stats.sessions.legacy,
+    suspendedSessions: stats.suspended,
+    migrationsOkTotal: moved,
+    migrationsFailedTotal: failed,
+    cutTotal: failed,
+    retransmittedBytesTotal: stats.retransmittedBytes,
+    unackedBytes: stats.unackedBytes,
+    migrationStallP50Ms: stats.migrationStallMs.p50,
+    migrationStallP95Ms: stats.migrationStallMs.p95,
+    resumeRefusedTotal: 0,
+    byRelay: [...byRelay].map(([relayInstanceId, counts]) => ({ relayInstanceId, ...counts })),
+  };
+}
+
+/** The report source name of Gateway's own streams. */
+export const GATEWAY_STREAM_REPORT_SOURCE = 'gateway';
+
 /** Per daemon: streams it moved to another relay and resumable streams it lost, since it started. */
 export type RelayStreamCounters = Map<string, { moved: number; cut: number }>;
 

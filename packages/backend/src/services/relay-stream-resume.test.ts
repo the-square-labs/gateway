@@ -10,6 +10,7 @@ import {
   drainDeadline,
   drainGraceMs,
   drainOutcomeNote,
+  gatewayStreamReport,
   localRelayPauseNote,
   MANUAL_DRAIN_TIMEOUT_MS,
   PROXY_HALF_CLOSE_TIMEOUT_MS,
@@ -398,5 +399,42 @@ describe('RelayGrantIssuerService RSv1 fields', () => {
     const assignment = await service.issueGatewayConnectAssignment('route-1', 'sha256:app');
     expect(assignment.streamResume?.keyId).toBe('v4');
     expect(assignment.candidates.map(({ local }: { local: boolean }) => local)).toEqual([false, false]);
+  });
+});
+
+describe("Gateway's own streams", () => {
+  it('reports them like a daemon, with the local relay for pre-pool streams', () => {
+    const report = gatewayStreamReport(
+      {
+        sessions: { resumable: 2, legacy: 1 },
+        byRelay: { 'relay-1': { resumable: 2, legacy: 0 }, local: { resumable: 0, legacy: 1 } },
+        suspended: 0,
+        unackedBytes: 10,
+        migrations: { 'drain:ok': 3, 'goaway:ok': 1, 'path_failure:timeout': 1 },
+        migrationStallMs: { p50: 4, p95: 9 },
+        retransmittedBytes: 100,
+      },
+      'local-relay-id'
+    );
+    expect(report).toMatchObject({ migrationsOkTotal: 4, cutTotal: 1, migrationStallP95Ms: 9 });
+    expect(relaySessionSplit([{ nodeId: 'gateway', report }], 'local-relay-id')).toEqual({
+      resumable: 0,
+      legacy: 1,
+      reporting: true,
+    });
+    // Before the local relay identity is known, its streams are not attributed.
+    const unattributed = gatewayStreamReport(
+      {
+        sessions: { resumable: 0, legacy: 1 },
+        byRelay: { local: { resumable: 0, legacy: 1 } },
+        suspended: 0,
+        unackedBytes: 0,
+        migrations: {},
+        migrationStallMs: { p50: 0, p95: 0 },
+        retransmittedBytes: 0,
+      },
+      null
+    );
+    expect(unattributed.byRelay).toEqual([]);
   });
 });

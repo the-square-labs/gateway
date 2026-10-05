@@ -73,7 +73,13 @@ import {
   recordBuiltSnapshot,
 } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
-import { candidateDrainDeadline, type RelayStreamReports, RelayStreamResumeService } from './relay-stream-resume.js';
+import {
+  candidateDrainDeadline,
+  GATEWAY_STREAM_REPORT_SOURCE,
+  gatewayStreamReport,
+  type RelayStreamReports,
+  RelayStreamResumeService,
+} from './relay-stream-resume.js';
 import type { RelayAssignmentRole } from './relay-topology.js';
 import { parseRelayGrantEgressStatuses, type SecureLinkEgressStatus } from './secure-link-egress-status.js';
 
@@ -345,6 +351,8 @@ export class RelayPolicyService {
   private readonly grantKeys: RelayGrantKeyService;
   private readonly policyKeys: RelayPolicySigningKeyService;
   private readonly streamResume: RelayStreamResumeService;
+  /** The local relay's instance id, once its identity was checked: Gateway's pre-pool streams run through it. */
+  private localRelayInstanceId: string | null = null;
   private relaySettingsSync: Promise<void> = Promise.resolve();
   private snapshotSync: Promise<unknown> = Promise.resolve();
   private readonly nodeGrantSyncs = new Map<
@@ -417,9 +425,21 @@ export class RelayPolicyService {
     this.managedLinkReports = reports;
   }
 
-  /** The relay stream sessions (RSv1) daemons reported recently; empty when none reports them. */
+  /** The relay stream sessions (RSv1) daemons reported recently, plus Gateway's own; empty when none reports them. */
   relayStreamReports(): RelayStreamReports {
-    return this.managedLinkReports?.relayStreamReports?.() ?? [];
+    const reports = [...(this.managedLinkReports?.relayStreamReports?.() ?? [])];
+    try {
+      const stats = this.relay.relayResumeStats?.();
+      if (stats) {
+        reports.push({
+          nodeId: GATEWAY_STREAM_REPORT_SOURCE,
+          report: gatewayStreamReport(stats, this.localRelayInstanceId),
+        });
+      }
+    } catch (error) {
+      logger.debug("Gateway's own relay stream counts are unavailable", { error: errorMessage(error) });
+    }
+    return reports;
   }
 
   /**
@@ -843,6 +863,7 @@ export class RelayPolicyService {
       if (!local || health.relayInstanceId !== local.id) {
         throw new Error('Local Relay Pool identity does not match persisted instance identity');
       }
+      this.localRelayInstanceId = local.id;
       const liveFeatures = [...new Set(health.capabilities)].sort();
       const persistedFeatures = Array.isArray(local.capabilities?.features)
         ? [...local.capabilities.features].sort()
