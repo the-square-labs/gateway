@@ -1790,6 +1790,7 @@ export class RelayPoolService {
     });
     this.events.publish('system.relay.health.changed', { poolId: instance.poolId, instanceId: instance.id });
     if (!enabled) return;
+    if (connected) this.policy.migrateGatewayStreams?.(instance.id, deadlineAt);
     if (manual) await this.evacuateInstance(instance.id);
     else await this.evacuateUpdateDrainedInstance(instance.id);
   }

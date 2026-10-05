@@ -73,7 +73,7 @@ import {
   recordBuiltSnapshot,
 } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
-import { type RelayStreamReports, RelayStreamResumeService } from './relay-stream-resume.js';
+import { candidateDrainDeadline, type RelayStreamReports, RelayStreamResumeService } from './relay-stream-resume.js';
 import type { RelayAssignmentRole } from './relay-topology.js';
 import { parseRelayGrantEgressStatuses, type SecureLinkEgressStatus } from './secure-link-egress-status.js';
 
@@ -420,6 +420,22 @@ export class RelayPolicyService {
   /** The relay stream sessions (RSv1) daemons reported recently; empty when none reports them. */
   relayStreamReports(): RelayStreamReports {
     return this.managedLinkReports?.relayStreamReports?.() ?? [];
+  }
+
+  /**
+   * Moves Gateway's own resumable streams (database tools, storage browser) off a relay that started draining, paced
+   * to its drain deadline. Daemons learn the same from their grant bundles.
+   */
+  migrateGatewayStreams(relayInstanceId: string, drainDeadlineAt: Date | null): void {
+    try {
+      const deadline = drainDeadlineAt ? Number(candidateDrainDeadline(drainDeadlineAt) ?? 0) : 0;
+      this.relay.migrateResumableTunnels?.(relayInstanceId, deadline);
+    } catch (error) {
+      logger.warn("Moving Gateway's own streams off a draining relay failed", {
+        relayInstanceId,
+        error: errorMessage(error),
+      });
+    }
   }
 
   /**

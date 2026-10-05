@@ -167,7 +167,7 @@ export async function waitForLocalRelayEvacuation(
 interface LocalRelayDrainDeps {
   db: DrizzleClient;
   policy: Pick<RelayPolicyService, 'setLocalInstanceDrain' | 'reconcileAndSync'> &
-    Partial<Pick<RelayPolicyService, 'relayStreamReports'>>;
+    Partial<Pick<RelayPolicyService, 'relayStreamReports' | 'migrateGatewayStreams'>>;
   audit: Pick<AuditService, 'log'>;
   events: Pick<EventBusService, 'publish'>;
 }
@@ -203,6 +203,7 @@ export async function setLocalRelayUpdateDrain(
     })
     .where(and(eq(relayInstances.id, instance.id), inArray(relayInstances.state, ['ready', 'draining'])));
   await deps.policy.reconcileAndSync();
+  if (enabled) deps.policy.migrateGatewayStreams?.(instance.id, drainDeadlineAt);
   await deps.audit.log({
     userId,
     action: enabled ? 'relay.instance.drain' : 'relay.instance.resume',
