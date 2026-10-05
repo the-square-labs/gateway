@@ -27,6 +27,14 @@ export function stripNodeHealthHistory<T extends { healthHistory?: unknown }>(no
 
 export function parseNodeCommandResult(result: { success: boolean; error?: string; detail?: string }) {
   if (!result.success) {
+    // The daemon's own user may not open the path (a daemon that runs without root): a refusal, not a daemon failure.
+    if (/permission denied|operation not permitted/i.test(result.error ?? '')) {
+      throw new AppError(
+        403,
+        'NODE_FILE_PERMISSION_DENIED',
+        `The node's daemon has no permission for this path: ${result.error}`
+      );
+    }
     throw new AppError(502, 'DISPATCH_ERROR', result.error || 'Command failed on daemon');
   }
   try {
