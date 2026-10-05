@@ -14,7 +14,7 @@ import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useUpdateStore } from "@/stores/update";
-import type { GatewayUpdateOperation, RelayUpdateStatus } from "@/types";
+import type { GatewayUpdateOperation } from "@/types";
 
 export { isGatewayUpdateTargetVersion, normalizeGatewayUpdateVersion };
 
@@ -518,113 +518,6 @@ function GatewayOperationScreen() {
   );
 }
 
-/** A Relay Pool update that has not moved for this long counts as stuck and can be abandoned. */
-const RELAY_UPDATE_STUCK_AFTER_MS = 5 * 60_000;
-
-function relayUpdateStuck(
-  operation: RelayUpdateStatus["operation"] | undefined,
-  now: number
-): boolean {
-  if (!operation) return false;
-  if (operation.runState === "paused" || operation.status === "failed") return true;
-  const lastProgress = Date.parse(operation.lastProgressAt ?? operation.startedAt);
-  return Number.isFinite(lastProgress) && now - lastProgress >= RELAY_UPDATE_STUCK_AFTER_MS;
-}
-
-function RelayOperationScreen() {
-  const status = useUpdateStore((state) => state.status);
-  const optimisticTargetVersion = useUpdateStore((state) => state.updatingTargetVersion);
-  const abandonRelayUpdate = useUpdateStore((state) => state.abandonRelayUpdate);
-  const canUpdate = useAuthStore((state) => state.hasScope("admin:update"));
-  const [confirming, setConfirming] = useState(false);
-  const [abandoning, setAbandoning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    // The run's progress is re-read here too, so a moving update never looks stuck.
-    const timer = setInterval(() => {
-      setNow(Date.now());
-      void useUpdateStore.getState().fetchStatus();
-    }, 15_000);
-    return () => clearInterval(timer);
-  }, []);
-  const operation = status?.relay.operation;
-  // Abandoning is for an update that stopped moving, not an escape from a normal one.
-  const stuck = relayUpdateStuck(operation, now) && operation?.abandonable !== false;
-  const targetVersion =
-    operation?.targetVersion ??
-    optimisticTargetVersion ??
-    status?.relay.latestVersion ??
-    "the latest version";
-
-  const handleAbandon = async () => {
-    setAbandoning(true);
-    setError(null);
-    try {
-      await abandonRelayUpdate();
-    } catch (abandonError) {
-      setError(
-        abandonError instanceof Error ? abandonError.message : "The update could not be abandoned"
-      );
-      setAbandoning(false);
-    }
-  };
-
-  return (
-    <UpdateOperationScreen
-      title="Updating Relay"
-      description={`Relay is updating to ${targetVersion}. Active Secure Links may be briefly interrupted.`}
-    >
-      {canUpdate && (stuck || confirming) && (
-        <div className="mt-5 space-y-2">
-          {confirming ? (
-            <>
-              <p className="text-xs leading-[1.5] text-[color:var(--restart-page-muted)]">
-                Abandon this update? Relays it drained return to service. Relays that already
-                updated keep the new version.
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  className="flex-1"
-                  onClick={() => setConfirming(false)}
-                  disabled={abandoning}
-                >
-                  Keep waiting
-                </Button>
-                <Button
-                  variant="destructive"
-                  className="flex-1"
-                  onClick={handleAbandon}
-                  pending={abandoning}
-                >
-                  Abandon update
-                </Button>
-              </div>
-            </>
-          ) : (
-            <div className="flex justify-center">
-              <Button
-                type="button"
-                variant="link"
-                className="h-auto p-0"
-                onClick={() => setConfirming(true)}
-              >
-                Abandon update
-              </Button>
-            </div>
-          )}
-          {error && (
-            <p role="alert" className="text-xs text-[color:var(--restart-page-error)]">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
-    </UpdateOperationScreen>
-  );
-}
-
 function GatewayReloadCoordinator() {
   const gatewayUpdatingActive = useAppStatusStore((s) => s.gatewayUpdatingActive);
   const gatewayRestartingActive = useAppStatusStore((s) => s.gatewayRestartingActive);
@@ -786,17 +679,13 @@ function RateLimitScreen() {
   );
 }
 
+/** A Relay Pool update never blocks the app; the sidebar shows it and links to Settings > Relay. */
 export function AppStatusGate() {
   const maintenanceActive = useAppStatusStore((s) => s.maintenanceActive);
   const gatewayUpdatingActive = useAppStatusStore((s) => s.gatewayUpdatingActive);
   const gatewayRestartingActive = useAppStatusStore((s) => s.gatewayRestartingActive);
   const gatewayUpdateError = useAppStatusStore((s) => s.gatewayUpdateError);
   const rateLimitedUntil = useAppStatusStore((s) => s.rateLimitedUntil);
-  const relayUpdatingActive = useUpdateStore(
-    (state) =>
-      (state.isUpdating && state.updatingComponent === "relay") ||
-      state.status?.relay.operation?.status === "updating"
-  );
   const [showMaintenanceScreen, setShowMaintenanceScreen] = useState(false);
 
   useEffect(() => {
@@ -821,8 +710,6 @@ export function AppStatusGate() {
         <GatewayUpdateErrorScreen />
       ) : gatewayUpdatingActive || gatewayRestartingActive ? (
         <GatewayOperationScreen />
-      ) : relayUpdatingActive ? (
-        <RelayOperationScreen />
       ) : showMaintenanceScreen ? (
         <MaintenanceScreen />
       ) : null}

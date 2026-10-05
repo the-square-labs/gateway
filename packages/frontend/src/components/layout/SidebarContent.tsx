@@ -1,6 +1,14 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpCircle, PanelLeft, PanelLeftClose, Search, UserRoundX, X } from "lucide-react";
-import { useState } from "react";
+import {
+  ArrowUpCircle,
+  PanelLeft,
+  PanelLeftClose,
+  RotateCw,
+  Search,
+  UserRoundX,
+  X,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AIButton } from "@/components/ai/AIButton";
@@ -46,6 +54,39 @@ function getInitials(name: string | null): string {
     .toUpperCase();
 }
 
+const RELAY_UPDATE_STATUS_CHECK_INTERVAL_MS = 15_000;
+
+/**
+ * The label of a running Relay Pool update, or null. The update never blocks the app: the sidebar shows this and
+ * links to Settings > Relay, which shows the progress and can abandon a stuck update.
+ */
+function useRelayPoolUpdateLabel(): string | null {
+  const active = useUpdateStore(
+    (state) =>
+      (state.isUpdating && state.updatingComponent === "relay") ||
+      state.status?.relay.operation?.status === "updating"
+  );
+  const targetVersion = useUpdateStore(
+    (state) =>
+      state.status?.relay.operation?.targetVersion ??
+      state.updatingTargetVersion ??
+      state.status?.relay.latestVersion ??
+      null
+  );
+  useEffect(() => {
+    if (!active) return;
+    // Re-read the status so the indicator clears once the update finishes, even without its event.
+    const timer = window.setInterval(() => {
+      void useUpdateStore.getState().fetchStatus();
+    }, RELAY_UPDATE_STATUS_CHECK_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  if (!active) return null;
+  return targetVersion ? `Relay Pool is updating to ${targetVersion}` : "Relay Pool is updating";
+}
+
+const RELAY_UPDATE_ICON_CLASS = "animate-spin motion-reduce:[animation-duration:1.8s]";
+
 export interface SidebarContentProps {
   onNavigate?: () => void;
   alwaysExpanded?: boolean;
@@ -82,6 +123,8 @@ export function SidebarContent({
     ? "Relay update available"
     : "Gateway update available";
   const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
+  const relayUpdateLabel = useRelayPoolUpdateLabel();
+  const showRelayUpdate = relayUpdateLabel !== null && hasScope("settings:gateway:view");
   const statusPageEnabled = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.statusPageEnabled ?? false
   );
@@ -231,6 +274,22 @@ export function SidebarContent({
               <div className="flex-1" />
 
               <AIButton iconOnly />
+
+              {showRelayUpdate && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="secondary"
+                      size="icon-sm"
+                      aria-label={relayUpdateLabel}
+                      onClick={() => navigate("/settings/relay")}
+                    >
+                      <RotateCw className={cn("h-4 w-4", RELAY_UPDATE_ICON_CLASS)} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">{relayUpdateLabel}</TooltipContent>
+                </Tooltip>
+              )}
 
               {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
                 <Tooltip>
@@ -426,6 +485,21 @@ export function SidebarContent({
             </ScrollArea>
 
             <Separator />
+
+            {/* Relay Pool update in progress; it never blocks the app. */}
+            {showRelayUpdate && (
+              <>
+                <div className="px-2 py-2">
+                  <Button asChild variant="secondary" className="w-full justify-start px-3">
+                    <Link to="/settings/relay" onClick={onNavigate}>
+                      <RotateCw className={cn("h-4 w-4 shrink-0", RELAY_UPDATE_ICON_CLASS)} />
+                      <span className="truncate">{relayUpdateLabel}</span>
+                    </Link>
+                  </Button>
+                </div>
+                <Separator />
+              </>
+            )}
 
             {/* Update notification */}
             {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
