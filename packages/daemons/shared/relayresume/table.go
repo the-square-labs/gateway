@@ -188,8 +188,12 @@ func (t *TargetTable) resume(op OpenedPath, req AcceptRequest, record *Record) *
 }
 
 // Establish starts the new stream after the backend dial succeeded: it
-// answers HELLO_ACK and registers the session.
-func (a *Accepted) Establish() (*Session, error) {
+// answers HELLO_ACK and registers the session. tag is the caller's (the
+// endpoint owner), returned by Session.Tag.
+func (a *Accepted) Establish() (*Session, error) { return a.EstablishTagged(nil) }
+
+// EstablishTagged is Establish with a caller tag.
+func (a *Accepted) EstablishTagged(tag any) (*Session, error) {
 	if a.Kind != AcceptHello || a.Session != nil {
 		return nil, errors.New("relayresume: nothing to establish")
 	}
@@ -208,6 +212,7 @@ func (a *Accepted) Establish() (*Session, error) {
 	core := NewTarget(Config{RouteID: a.req.RouteID, Keys: a.req.Keys, TargetNonce: t.nonce, Authorize: a.req.Authorize, Budget: t.budget},
 		path, &a.hello, a.hello.KeyID, a.req.Keys(a.hello.KeyID), a.rest, time.Now())
 	s := newSession(core, a.req.RouteID, a.op.MaxFrame)
+	s.tag = tag
 	t.sessions[key] = s
 	t.mu.Unlock()
 	s.onChange = func(s *Session) {
@@ -258,11 +263,11 @@ func (t *TargetTable) sweepLocked(now time.Time) {
 
 // Prune resets the sessions keep refuses (their route or endpoint is no
 // longer assigned to this daemon).
-func (t *TargetTable) Prune(keep func(TargetKey) bool) {
+func (t *TargetTable) Prune(keep func(TargetKey, *Session) bool) {
 	t.mu.Lock()
 	var gone []*Session
 	for key, s := range t.sessions {
-		if !keep(key) {
+		if !keep(key, s) {
 			gone = append(gone, s)
 		}
 	}

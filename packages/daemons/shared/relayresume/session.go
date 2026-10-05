@@ -85,15 +85,21 @@ type Session struct {
 	onChange func(*Session) // the target table watches its sessions
 
 	routeID string
+	tag     any
 }
 
 func newSession(core *Core, routeID string, recvMax int) *Session {
-	s := &Session{core: core, paths: map[*Path]*pathRun{}, done: make(chan struct{}), routeID: routeID, recvMax: recvMax}
-	if s.recvMax <= 0 || s.recvMax > MaxFrameBytes {
-		s.recvMax = MaxFrameBytes
+	if recvMax <= 0 || recvMax > MaxFrameBytes {
+		recvMax = MaxFrameBytes
 	}
+	// The bridges read and receive at most MaxFrame bytes: one read is one
+	// DATA frame on a path with the first path's frame size.
+	s := &Session{core: core, paths: map[*Path]*pathRun{}, done: make(chan struct{}), routeID: routeID, recvMax: ReadChunk(recvMax)}
 	s.readCond, s.writeCond, s.stateCond, s.bgCond = sync.NewCond(&s.mu), sync.NewCond(&s.mu), sync.NewCond(&s.mu), sync.NewCond(&s.mu)
+	// Until a bridge calls Recv the background reader reads (the handshake
+	// answer must be read even if nobody receives yet).
 	s.recvExit = time.Now()
+	s.bgTimer = time.AfterFunc(readGrace, s.graceCheck)
 	return s
 }
 
@@ -402,6 +408,15 @@ func (s *Session) Send(frame *relayv1.TunnelFrame) error {
 	case *relayv1.TunnelFrame_HalfClose:
 		return s.CloseWrite()
 	case *relayv1.TunnelFrame_Close:
+		// The bridges send Close after both directions ended: wait for the
+		// CLOSE exchange. A Close after a failure is a reset.
+		s.mu.Lock()
+		clean := s.core.finQueued && s.core.finDelivered
+		s.mu.Unlock()
+		if !clean {
+			s.Abort(RstAborted, "local side ended the stream")
+			return nil
+		}
 		s.WaitFinished()
 		return nil
 	case *relayv1.TunnelFrame_Error:
@@ -557,7 +572,8 @@ func (s *Session) RelayID() string {
 // RouteID is the route the stream belongs to.
 func (s *Session) RouteID() string { return s.routeID }
 
-// MaxFrame is the Data size the bridges should be given.
+// MaxFrame is the Data size the bridges should be given (their read size
+// for bridgeRelayConnection-style bridges, their frame limit always).
 func (s *Session) MaxFrame() int { return s.recvMax }
 
 // Unacked is the retained send data.

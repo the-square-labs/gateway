@@ -68,6 +68,10 @@ type Manager struct {
 	OnMigration func(MigrationEvent)
 	// OnEnd observes resumable streams that ended (optional).
 	OnEnd func(s *Session, err error)
+	// MigrateRequestDeadline paces a target's drain hint (MIGRATE_REQ drain):
+	// the time the stream must leave relayID by (optional; called with the
+	// session locked, so it must not call into the session).
+	MigrateRequestDeadline func(relayID string, tag any) time.Time
 
 	migrationsOK     atomic.Uint64
 	migrationsFailed atomic.Uint64
@@ -120,12 +124,20 @@ func (m *Manager) NewSource(cfg SourceConfig, first OpenedPath) (*Session, error
 	return s, nil
 }
 
-// Tag is the SourceConfig tag.
+// Tag is the SourceConfig tag (source) or the Establish tag (target).
 func (s *Session) Tag() any {
 	if s.source == nil {
-		return nil
+		return s.tag
 	}
 	return s.source.cfg.Tag
+}
+
+// RequestMigrate asks the source of a target session to move (MIGRATE_REQ).
+func (s *Session) RequestMigrate(reason byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.core.RequestMigrate(reason)
+	s.afterLocked(false)
 }
 
 // observeLocked runs after every session event (mu held): it starts the
@@ -139,9 +151,15 @@ func (st *sourceState) observeLocked(s *Session) {
 		}
 		return
 	}
-	if reason, ok := c.TakeMigrateRequest(); ok && !st.migrating {
-		_ = reason
-		st.start(s, TriggerTargetHint, false, "", time.Time{})
+	if reason, ok := c.TakeMigrateRequest(); ok && !st.migrating && c.Current() != nil {
+		at := time.Now()
+		if hook := st.mgr.MigrateRequestDeadline; hook != nil && reason == MigrateDrain {
+			// A drain hint is paced like the source's own drain.
+			if deadline := hook(c.Current().RelayID(), st.cfg.Tag); time.Until(deadline) > 0 {
+				at = at.Add(time.Duration(rand.Int64N(int64(time.Until(deadline)))))
+			}
+		}
+		st.start(s, TriggerTargetHint, false, c.Current().RelayID(), at)
 		return
 	}
 	if c.NeedsPath() && !st.migrating {

@@ -431,6 +431,34 @@ func TestSessionRevokedWhileSuspended(t *testing.T) {
 	}
 }
 
+// A source that only sends (its bridge not receiving yet) still reads the
+// handshake answer and the acks: the background reader takes the stream.
+func TestSessionWithoutRecv(t *testing.T) {
+	h := newHarness(t, "relay-a")
+	first, err := h.dial(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Dial: h.dial,
+		Key: func() (string, []byte, bool) { return "v1", h.key, true }}, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 64; i++ {
+		if err := session.Write(make([]byte, 16*1024)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for session.State() == StateHandshake && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if state := session.State(); state != StateOpen {
+		t.Fatalf("state %s err %v", state, session.Err())
+	}
+	session.Abort(RstAborted, "done")
+}
+
 func TestSessionPruneResetsSource(t *testing.T) {
 	h := newHarness(t, "relay-a")
 	app, session := h.stream()
@@ -440,7 +468,7 @@ func TestSessionPruneResetsSource(t *testing.T) {
 	if _, err := io.ReadFull(app, make([]byte, 1)); err != nil {
 		t.Fatal(err)
 	}
-	h.table.Prune(func(TargetKey) bool { return false })
+	h.table.Prune(func(TargetKey, *Session) bool { return false })
 	waitDone(t, session)
 	var reset *ResetError
 	if !errors.As(session.Err(), &reset) || !reset.Remote || reset.Code != RstRevoked {
