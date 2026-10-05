@@ -100,6 +100,8 @@ export class HealthCheckJob {
   private evaluator?: NotificationEvaluatorService;
   private relayUnavailable = false;
   private readonly startedAt = Date.now();
+  /** Routes whose last probe failed but were kept up as a transient failure; the next failure takes them down. */
+  private readonly pendingFailures = new Set<string>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -110,7 +112,9 @@ export class HealthCheckJob {
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
     (bus as Partial<EventBusService>).subscribe?.('system.relay.health.changed', (payload) => {
-      this.relayUnavailable = (payload as { state?: unknown } | null)?.state === 'critical';
+      // Most publishers announce a relay change without a state; only the supervisor's own state counts.
+      const state = (payload as { state?: unknown } | null)?.state;
+      if (typeof state === 'string') this.relayUnavailable = state === 'critical';
     });
   }
 
@@ -192,6 +196,20 @@ export class HealthCheckJob {
         }
       }
 
+      // Derive the stored healthStatus field from the check
+      const previousProbeFailed = this.pendingFailures.has(host.id) || existingHistory.at(-1)?.status === 'offline';
+      const transientFailure =
+        checkStatus === 'offline' &&
+        (previousStatus === 'online' || previousStatus === 'degraded') &&
+        !previousProbeFailed;
+      if (transientFailure) {
+        // The failure is absorbed: no history entry (it would read as an outage and keep the route "recovering"),
+        // no alert, and lastHealthCheckAt stays so the next run confirms or clears it.
+        this.pendingFailures.add(host.id);
+        return { hostId: host.id, status: 'skipped' as const };
+      }
+      this.pendingFailures.delete(host.id);
+
       // Push new entry
       const entry: HealthEntry = { ts: new Date(now).toISOString(), status: checkStatus };
       if (responseMs != null) entry.responseMs = responseMs;
@@ -199,23 +217,9 @@ export class HealthCheckJob {
       if (memberSamples) entry.members = memberSamples;
       const history = compactHealthHistory([...existingHistory, entry], { nowMs: now });
 
-      // Derive the stored healthStatus field from the check
-      const previousProbeFailed = existingHistory.at(-1)?.status === 'offline';
-      const transientFailure =
-        checkStatus === 'offline' &&
-        (previousStatus === 'online' || previousStatus === 'degraded') &&
-        !previousProbeFailed;
       // A group route with a failing member is degraded right away: the other members still serve it.
       const newStatus: HealthStatus =
-        checkStatus === 'online'
-          ? slow
-            ? 'degraded'
-            : 'online'
-          : checkStatus === 'degraded'
-            ? 'degraded'
-            : transientFailure
-              ? previousStatus
-              : 'offline';
+        checkStatus === 'online' ? (slow ? 'degraded' : 'online') : checkStatus === 'degraded' ? 'degraded' : 'offline';
 
       // Write to DB
       const persisted = await this.db
@@ -240,21 +244,19 @@ export class HealthCheckJob {
         return { hostId: host.id, status: 'skipped' as const };
       }
 
-      if (!transientFailure) {
-        await this.evaluator?.observeStatefulEvent(
-          'proxy',
-          newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded',
-          {
-            type: 'proxy',
-            id: host.id,
-            name: host.domainNames?.[0] ?? host.id,
-          },
-          { health_status: newStatus },
-          undefined,
-          // Alert windows need the previous sample as an anchor; keep it for at least the check interval.
-          Math.max(5, host.healthCheckInterval ?? 30) * 1000
-        );
-      }
+      await this.evaluator?.observeStatefulEvent(
+        'proxy',
+        newStatus === 'online' ? 'health.online' : newStatus === 'offline' ? 'health.offline' : 'health.degraded',
+        {
+          type: 'proxy',
+          id: host.id,
+          name: host.domainNames?.[0] ?? host.id,
+        },
+        { health_status: newStatus },
+        undefined,
+        // Alert windows need the previous sample as an anchor; keep it for at least the check interval.
+        Math.max(5, host.healthCheckInterval ?? 30) * 1000
+      );
 
       // Keep alerts/logging transition-based, but publish every persisted sample so
       // an open detail page can advance its health history without a reload.
@@ -411,6 +413,7 @@ export class HealthCheckJob {
   private async awaitingNodeReconnect(nodeId: string, errors: string[]): Promise<boolean> {
     if (!failedOnlyBecauseNodeIsNotConnected(nodeId, errors)) return false;
     if (Date.now() - this.startedAt < NODE_RECONNECT_GRACE_MS) return true;
+    if (this.nodeDispatch?.isNodeReconnecting?.(nodeId)) return true;
     return (await this.nodeDispatch?.isNodeUpdateInProgress?.(nodeId)?.catch(() => false)) === true;
   }
 
