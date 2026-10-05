@@ -102,5 +102,5 @@ const (
 	CloseLingerTimeout     = 10 * time.Second // finishing: wait for the peer's CLOSE
 	DrainDeadlineMargin    = 15 * time.Second // Gateway: drain start + grace - margin
 	MaxMigrationsInFlight  = 32
-	DefaultDrainSpreadTime = 60 * time.Second // no deadline: spread over this
+	DefaultDrainSpreadTime = 60 * time.Second // drain moves spread over at most this
 )

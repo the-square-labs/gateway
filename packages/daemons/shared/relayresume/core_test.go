@@ -336,3 +336,17 @@ func TestCoreResumeAckComesFirst(t *testing.T) {
 	}
 	t.Fatal("no RESUME_ACK")
 }
+
+// Drain moves start within DefaultDrainSpreadTime even under a long drain
+// grace (it exists for raw streams).
+func TestPacedStartIsCapped(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		at := pacedStart(time.Now().Add(30 * time.Minute))
+		if time.Until(at) > DefaultDrainSpreadTime {
+			t.Fatalf("move starts in %s", time.Until(at))
+		}
+		if at = pacedStart(time.Time{}); time.Until(at) > time.Second {
+			t.Fatalf("an immediate move starts in %s", time.Until(at))
+		}
+	}
+}

@@ -40,9 +40,13 @@ type miniRelay struct {
 
 	mu       sync.Mutex
 	targets  map[string]chan *relayv1.IncomingTunnel
-	pending  map[string]chan acceptedTunnel
+	pending  map[string]chan *acceptedTunnel
 	active   int
 	sessions int
+	// draining refuses new tunnels as a draining relay does; force ends the
+	// established ones as ForceDisconnect does.
+	draining atomic.Bool
+	force    chan struct{}
 }
 
 func startMiniRelay(t *testing.T, id string, routes map[string]string) *miniRelay {
@@ -52,7 +56,7 @@ func startMiniRelay(t *testing.T, id string, routes map[string]string) *miniRela
 		t.Fatal(err)
 	}
 	relay := &miniRelay{id: id, listener: listener, routes: routes, targets: map[string]chan *relayv1.IncomingTunnel{},
-		pending: map[string]chan acceptedTunnel{}}
+		pending: map[string]chan *acceptedTunnel{}, force: make(chan struct{})}
 	relay.server = grpc.NewServer()
 	relayv1.RegisterTunnelBrokerServer(relay.server, relay)
 	go relay.server.Serve(listener)
@@ -117,11 +121,15 @@ func (r *miniRelay) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) err
 		return status.Error(codes.InvalidArgument, "open first")
 	}
 	routeID := strings.TrimPrefix(first.GetOpen().GetGrant().GetKeyId(), "route:")
+	if r.draining.Load() {
+		return status.Error(codes.Unavailable, "relay is draining")
+	}
 	r.mu.Lock()
+	force := r.force
 	incoming := r.targets[r.routes[routeID]]
 	r.sessions++
 	token := fmt.Sprintf("%s-%d", r.id, r.sessions)
-	accepted := make(chan acceptedTunnel, 1)
+	accepted := make(chan *acceptedTunnel, 1)
 	r.pending[token] = accepted
 	r.mu.Unlock()
 	if incoming == nil {
@@ -129,7 +137,7 @@ func (r *miniRelay) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) err
 	}
 	incoming <- &relayv1.IncomingTunnel{SessionId: token, AcceptToken: token,
 		Route: &relayv1.IncomingTunnelRoute{RouteId: routeID, RouteGeneration: 1, SourceKind: "daemon", SourceId: "node-source", AssignmentGeneration: 1}}
-	var tunnel acceptedTunnel
+	var tunnel *acceptedTunnel
 	select {
 	case tunnel = <-accepted:
 	case <-time.After(5 * time.Second):
@@ -138,8 +146,12 @@ func (r *miniRelay) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) err
 		return stream.Context().Err()
 	}
 	target := tunnel.stream
-	// The target's handler ends with the bridge.
-	defer close(tunnel.done)
+	// The target's handler ends with the bridge, with the bridge's result.
+	var result error
+	defer func() {
+		tunnel.result = result
+		close(tunnel.done)
+	}()
 	ready := &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Ready{Ready: &relayv1.TunnelReady{MaxFrameBytes: 1 << 20}}}
 	if err := target.Send(ready); err != nil {
 		return err
@@ -161,18 +173,36 @@ func (r *miniRelay) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) err
 	// As the relay's bridge: a direction ends with HalfClose, the tunnel with
 	// Close, Error or a failed stream.
 	for finished := 0; finished < 2; finished++ {
-		if err := <-done; err == errTunnelClosed {
-			return nil
-		} else if err != nil {
-			return err
+		select {
+		case err := <-done:
+			if err == errTunnelClosed {
+				return nil
+			} else if err != nil {
+				result = err
+				return err
+			}
+		case <-force:
+			result = status.Error(codes.PermissionDenied, "tunnel policy was revoked")
+			return result
 		}
 	}
 	return nil
 }
 
+// forceDisconnect drains the relay and ends every established tunnel with
+// the relay's ForceDisconnect status (both ends get it).
+func (r *miniRelay) forceDisconnect() {
+	r.draining.Store(true)
+	r.mu.Lock()
+	close(r.force)
+	r.force = make(chan struct{})
+	r.mu.Unlock()
+}
+
 type acceptedTunnel struct {
 	stream relayv1.TunnelBroker_AcceptTunnelServer
 	done   chan struct{}
+	result error
 }
 
 func (r *miniRelay) AcceptTunnel(stream relayv1.TunnelBroker_AcceptTunnelServer) error {
@@ -187,13 +217,14 @@ func (r *miniRelay) AcceptTunnel(stream relayv1.TunnelBroker_AcceptTunnelServer)
 	if accepted == nil {
 		return status.Error(codes.NotFound, "unknown accept token")
 	}
-	done := make(chan struct{})
-	accepted <- acceptedTunnel{stream: stream, done: done}
+	tunnel := &acceptedTunnel{stream: stream, done: make(chan struct{})}
+	accepted <- tunnel
 	select {
-	case <-done:
+	case <-tunnel.done:
+		return tunnel.result
 	case <-stream.Context().Done():
+		return nil
 	}
-	return nil
 }
 
 type miniStream interface {
@@ -626,5 +657,107 @@ func TestResumableSourceEndsWhenRouteRevoked(t *testing.T) {
 	waitFor(t, "the stream to end", func() bool { return tunnel.session.State() == relayresume.StateReset })
 	if !errors.Is(tunnel.session.Err(), relayresume.ErrAborted) && !strings.Contains(fmt.Sprint(tunnel.session.Err()), "no longer assigned") {
 		t.Fatalf("err %v", tunnel.session.Err())
+	}
+}
+
+// drainBundle is the source bundle with relay draining until deadline.
+func drainBundle(revision uint64, draining, other, otherState string, deadline time.Time) *pb.SyncRelayGrantsCommand {
+	bundle, _ := testBundles(revision, map[string]string{draining: "draining", other: otherState}, true, true)
+	for _, candidate := range bundle.GetGrants()[0].GetCandidates() {
+		if candidate.GetRelayInstanceId() == draining {
+			candidate.DrainDeadlineUnixMs = deadline.UnixMilli()
+		}
+	}
+	return bundle
+}
+
+// An idle stream (nothing in flight) leaves a draining relay too: the move
+// follows the bundle, not traffic.
+func TestResumableIdleStreamLeavesDrainingRelay(t *testing.T) {
+	pair := newStreamPair(t, true, true)
+	app, tunnel := pair.open()
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
+	if _, err := app.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(app, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	first := tunnel.session.RelayID()
+	other := map[string]string{"relay-a": "relay-b", "relay-b": "relay-a"}[first]
+	if _, err := pair.source.SyncRelayGrants(drainBundle(2, first, other, "active", time.Now().Add(2*time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the idle stream to move", func() bool { return tunnel.session.RelayID() == other })
+	waitFor(t, "the drained relay to end its tunnel", func() bool { return pair.relays[first].activeTunnels() == 0 })
+	echoExact(t, app, 64*1024)
+}
+
+// A relay force-disconnected at the end of a drain (its tunnels end with
+// "tunnel policy was revoked", new ones are refused) takes no resumable
+// stream with it: the stream resumes on the other relay.
+func TestResumableStreamSurvivesForceDisconnect(t *testing.T) {
+	pair := newStreamPair(t, true, true)
+	app, tunnel := pair.open()
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
+	first := tunnel.session.RelayID()
+	echoThrough(t, app, 4<<20, func() { pair.relays[first].forceDisconnect() })
+	if pair.dials.Load() != 1 {
+		t.Fatalf("backend dialed %d times", pair.dials.Load())
+	}
+}
+
+// The only other relay of the route is still staging when the drained relay
+// is forced: the stream resumes there instead of being cut.
+func TestResumableStreamForcedOntoStagingRelay(t *testing.T) {
+	pair := newStreamPair(t, true, true)
+	app, tunnel := pair.open()
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
+	first := tunnel.session.RelayID()
+	other := map[string]string{"relay-a": "relay-b", "relay-b": "relay-a"}[first]
+	source, target := testBundles(2, map[string]string{first: "active", other: "staging"}, true, true)
+	if _, err := pair.source.SyncRelayGrants(source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pair.target.SyncRelayGrants(target); err != nil {
+		t.Fatal(err)
+	}
+	echoThrough(t, app, 2<<20, func() {
+		pair.relays[first].forceDisconnect()
+		waitUntil(t, "the stream to resume on the staging relay", func() bool { return tunnel.session.RelayID() == other })
+	})
+}
+
+// A websocket-like stream (small messages every 50 ms, each echoed) keeps
+// its sequence and sees only a short gap when its relay is forced off.
+func TestResumableChattyStreamSurvivesForceDisconnect(t *testing.T) {
+	pair := newStreamPair(t, true, true)
+	app, tunnel := pair.open()
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
+	first := tunnel.session.RelayID()
+	var maxGap time.Duration
+	last := time.Now()
+	reply := make([]byte, 8)
+	for seq := uint64(0); seq < 60; seq++ {
+		if seq == 20 {
+			pair.relays[first].forceDisconnect()
+		}
+		message := []byte(fmt.Sprintf("%08d", seq))
+		if _, err := app.Write(message); err != nil {
+			t.Fatalf("write %d: %v", seq, err)
+		}
+		_ = app.SetReadDeadline(time.Now().Add(10 * time.Second))
+		if _, err := io.ReadFull(app, reply); err != nil || !bytes.Equal(reply, message) {
+			t.Fatalf("message %d: %q %v", seq, reply, err)
+		}
+		maxGap = max(maxGap, time.Since(last))
+		last = time.Now()
+		time.Sleep(50 * time.Millisecond)
+	}
+	if tunnel.session.RelayID() == first {
+		t.Fatal("the stream stayed on the forced relay")
+	}
+	if maxGap > 3*time.Second {
+		t.Fatalf("gap %s at the force", maxGap)
 	}
 }

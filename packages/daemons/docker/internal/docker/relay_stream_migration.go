@@ -149,14 +149,25 @@ func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer 
 		if current == nil || current.GetRouteId() != tag.routeID {
 			return relayresume.OpenedPath{}, errors.New("relay route is no longer assigned")
 		}
-		candidates := relaybridge.PoolCandidates(current, false)
+		// Active candidates first; a staging one (registered on both ends,
+		// admitted by its relay) when no active one takes the stream: a
+		// stream whose only active relay drains or was force-disconnected
+		// moves there instead of being cut.
+		candidates := relaybridge.PoolCandidates(current, true)
 		if len(candidates) == 0 {
 			candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: current.GetGrant()}}
 		}
 		ordered := p.orderRelayCandidates(candidates)
-		sort.SliceStable(ordered, func(i, j int) bool {
-			return ordered[i].GetRelayInstanceId() != avoid && ordered[j].GetRelayInstanceId() == avoid
-		})
+		rank := func(candidate *pb.RelayDataCandidate) int {
+			switch {
+			case candidate.GetRelayInstanceId() == avoid:
+				return 2
+			case candidate.GetAssignmentState() == "staging":
+				return 1
+			}
+			return 0
+		}
+		sort.SliceStable(ordered, func(i, j int) bool { return rank(ordered[i]) < rank(ordered[j]) })
 		err := errRelayLaneUnavailable
 		for _, candidate := range ordered {
 			if ctx.Err() != nil {
@@ -338,7 +349,9 @@ func (p *DockerPlugin) relayStreamsOnBundle() {
 		for _, candidate := range relaybridge.PreparedCandidates(assignment) {
 			if candidate.GetRelayInstanceId() == relayID {
 				current = candidate
-			} else if candidate.GetAssignmentState() == "active" {
+			} else if state := candidate.GetAssignmentState(); state == "active" || state == "staging" {
+				// A staging relay serves too: better than staying until the
+				// drain is forced.
 				if router := p.relayRouter(candidate.GetRelayInstanceId()); router != nil && router.connected() {
 					otherActive = true
 				}

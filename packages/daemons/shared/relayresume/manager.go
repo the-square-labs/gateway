@@ -181,9 +181,7 @@ func (st *sourceState) observeLocked(s *Session) {
 		at := time.Now()
 		if hook := st.mgr.MigrateRequestDeadline; hook != nil && reason == MigrateDrain {
 			// A drain hint is paced like the source's own drain.
-			if deadline := hook(c.Current().RelayID(), st.cfg.Tag); time.Until(deadline) > 0 {
-				at = at.Add(time.Duration(rand.Int64N(int64(time.Until(deadline)))))
-			}
+			at = pacedStart(hook(c.Current().RelayID(), st.cfg.Tag))
 		}
 		st.requestLocked(s, TriggerTargetHint, c.Current().RelayID(), at)
 		return
@@ -388,16 +386,23 @@ func (m *Manager) attempt(s *Session, unplanned bool, avoid string) (bool, strin
 	return ok, op.RelayID, err
 }
 
+// pacedStart is when a paced move starts: uniformly before deadline, but
+// within DefaultDrainSpreadTime. A long drain grace exists for raw streams
+// that cannot move; a resumable stream leaves early, so a forced end of the
+// drain finds none (zero deadline: within a second).
+func pacedStart(deadline time.Time) time.Time {
+	spread := min(time.Until(deadline), DefaultDrainSpreadTime)
+	if spread <= 0 {
+		spread = time.Second
+	}
+	return time.Now().Add(time.Duration(rand.Int64N(int64(spread))))
+}
+
 // Migrate moves s off its relay, paced: the attempt starts at a random time
 // before deadline (zero deadline: within a second). Planned: the stream
 // stays where it is if no other relay takes it.
 func (m *Manager) Migrate(s *Session, trigger Trigger, deadline time.Time) {
-	at := time.Now()
-	if spread := time.Until(deadline); spread > 0 {
-		at = at.Add(time.Duration(rand.Int64N(int64(spread))))
-	} else {
-		at = at.Add(time.Duration(rand.Int64N(int64(time.Second))))
-	}
+	at := pacedStart(deadline)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.source == nil || s.core.Current() == nil {
