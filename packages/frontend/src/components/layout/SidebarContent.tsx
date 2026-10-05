@@ -116,8 +116,11 @@ export function SidebarContent({
 
   const updateStatus = useUpdateStore((s) => s.status);
   const gatewayUpdateAvailable = updateStatus?.updateAvailable ?? false;
+  // A running Relay Pool rollout shows its own indicator, not another update offer.
   const relayOnlyUpdateAvailable =
-    !gatewayUpdateAvailable && (updateStatus?.relay?.updateAvailable ?? false);
+    !gatewayUpdateAvailable &&
+    (updateStatus?.relay?.updateAvailable ?? false) &&
+    updateStatus?.relay?.operation?.status !== "updating";
   const updateAvailable = gatewayUpdateAvailable || relayOnlyUpdateAvailable;
   const updateLabel = relayOnlyUpdateAvailable
     ? "Relay update available"
