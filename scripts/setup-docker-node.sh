@@ -1679,8 +1679,8 @@ normalize_daemon_version() {
     echo "$version"
 }
 
-# The token a completed enrollment used, as a digest: a re-run of the same setup command (its token now used) keeps
-# the node's enrollment.
+# The token a completed enrollment used, as a digest, written once the daemon this run started enrolled and connected:
+# a re-run of the same setup command (its token now used) keeps the node's enrollment.
 ENROLLMENT_TOKEN_DIGEST_FILE="/var/lib/docker-daemon/enrollment-token.sha256"
 enrollment_token_digest() {
     printf '%s' "$1" | sha256sum | awk '{print $1}'
@@ -1712,9 +1712,10 @@ refuse_token_for_enrolled_node() {
     node_id=$(sed -nE 's/.*"node_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' /var/lib/docker-daemon/state.json 2>/dev/null | head -n 1 || true)
     node="docker node ${node_id:-(unknown id)}${EXISTING_GATEWAY_ADDR:+ of Gateway ${EXISTING_GATEWAY_ADDR}}"
     if [[ ! -f "$ENROLLMENT_TOKEN_DIGEST_FILE" ]]; then
-        warn "This host is already enrolled as ${node}; the enrollment token was not used, and the run goes on without it."
-        warn "To enroll this host as another node instead: stop docker-daemon, move /etc/docker-daemon/certs and /var/lib/docker-daemon/state.json"
-        warn "out of the way, run that node's setup command, and delete the old node in Gateway."
+        warn "This host is already enrolled as ${node}; the run keeps that enrollment and does not use the enrollment token."
+        warn "If this is this node's own setup command (its token already used), nothing else is needed. If it is not, the"
+        warn "new node was not enrolled: to enroll this host as that node, stop docker-daemon, move /etc/docker-daemon/certs and"
+        warn "/var/lib/docker-daemon/state.json out of the way, run its setup command again, and delete the old node in Gateway."
         ENROLL_TOKEN=""
         return 0
     fi
@@ -2878,7 +2879,6 @@ enroll_daemon() {
     elif ! run_as_run_user "$target" install --gateway "$GATEWAY_ADDR" --token "$ENROLL_TOKEN" --gateway-cert-sha256 "$GATEWAY_CERT_SHA256" --docker-socket "$DOCKER_SOCKET" >> "$LOG_FILE" 2>&1; then
         die "Failed to enroll docker-daemon. Check ${LOG_FILE} for details."
     fi
-    remember_enrollment_token
     prepare_run_user_identity
     ok "Config written to /etc/docker-daemon/config.yaml"
 }
@@ -3002,6 +3002,8 @@ start_daemon
 if ! await_gateway_connection; then
     die "docker-daemon is installed, but it did not connect to Gateway."
 fi
+# The daemon enrolls when it first runs, not at install: only now are its certificate and the token's use there.
+remember_enrollment_token
 
 echo ""
 echo ""

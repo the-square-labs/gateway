@@ -1747,8 +1747,9 @@ test('the monitoring and Docker installers refuse a new token on an enrolled hos
       // A legacy enrollment: the original setup command (its token used) updates the node as before.
       const legacy = dryRun(script, ['-y', ...withToken('gw_node_original'), ...extra]);
       assert.equal(legacy.status, 0, `${script}\n${legacy.output}`);
-      assert.match(legacy.output, /WARN .*already enrolled as (monitoring|docker) node 0eb357ee-node; the enrollment token was not used, and the run goes on without it/, script);
-      assert.match(legacy.output, new RegExp(`move /.*/etc/${daemon}/certs and /.*/var/lib/${daemon}/state\\.json`), script);
+      assert.match(legacy.output, /WARN .*already enrolled as (monitoring|docker) node 0eb357ee-node; the run keeps that enrollment and does not use the enrollment token/, script);
+      assert.match(legacy.output, /If this is this node's own setup command \(its token already used\), nothing else is needed/, script);
+      assert.match(legacy.output, new RegExp(`move \\S*/etc/${daemon}/certs and[\\s\\S]*?/var/lib/${daemon}/state\\.json out of the way`), script);
       assert.match(legacy.output, /Node already enrolled/, script);
       assert.match(legacy.output, /Dry run completed/, script);
       assert.equal(spawnSync('test', ['-e', digest]).status, 1, `${script} records no digest of an unused token`);
@@ -1771,5 +1772,88 @@ test('the monitoring and Docker installers refuse a new token on an enrolled hos
     } finally {
       runShell(`rm -rf '${etc}' '${lib}'`);
     }
+  }
+});
+
+// The daemons enroll when they first run, not at `install`: the digest of the token was looked for before the daemon
+// had its certificate and never written, so a new token on a host the current installer enrolled took the legacy path.
+// A fresh install through the whole run (stubbed downloads and a stub daemon that enrolls and records its Gateway
+// session when it runs) leaves the digest, and a re-run with another token is refused while the node's own token keeps it.
+test('a fresh monitoring install records its token, so a new token is refused afterwards', { skip: !linux || userInfo().uid !== 0 }, async () => {
+  for (const script of ['setup-monitoring-node.sh', 'setup-docker-node.sh']) {
+    const { topLevel } = parseShell(readFileSync(path.join(scriptsDir, script), 'utf8'));
+    const line = (name) => topLevel.find((entry) => entry.calls.includes(name))?.line ?? -1;
+    assert.ok(line('remember_enrollment_token') > line('await_gateway_connection'), `${script} records the token after the daemon connected`);
+    assert.ok(line('await_gateway_connection') > line('start_daemon'), script);
+  }
+  const host = path.join(work, 'host');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-monitoring-fresh-'));
+  const etc = path.join(host, 'etc/monitoring-daemon');
+  const lib = path.join(host, 'var/lib/monitoring-daemon');
+  const arch = spawnSync('uname', ['-m'], { encoding: 'utf8' }).stdout.trim() === 'aarch64' ? 'arm64' : 'amd64';
+  const binaryName = `monitoring-daemon-linux-${arch}`;
+  try {
+    // The daemon: install writes its config; run starts as its own launcher, enrolls (certificate, state) and records
+    // the Gateway session, as the real daemon does on its first start.
+    const daemon = [
+      '#!/bin/bash',
+      'case "$1" in',
+      '  version) echo "monitoring-daemon v2.11.1" ;;',
+      `  install) mkdir -p '${etc}' && printf 'gateway:\n  address: gw.example.com:9443\n  token: %s\nlog_level: info\n' "$5" > '${etc}/config.yaml' ;;`,
+      '  run)',
+      `    printf '{"protocolVersion":1,"daemonType":"monitoring","pid":%s}' $$ > '${lib}/launcher/owner.json'`,
+      `    printf '{"pid":%s,"ready":true}' $$ > '${lib}/launcher/child.json'`,
+      `    mkdir -p '${etc}/certs' && echo PEM > '${etc}/certs/node.pem' && echo '{"node_id":"fresh-node"}' > '${lib}/state.json'`,
+      `    printf '{"pid":%s,"connected_at":%s}' $$ "$(date +%s)" > '${lib}/gateway-session.json'`,
+      '    exec -a gateway-test-monitoring-stub sleep 60 ;;',
+      'esac',
+    ].join('\n');
+    await writeFile(path.join(dir, binaryName), `${daemon}\n`);
+    const digest = spawnSync('sha256sum', [path.join(dir, binaryName)], { encoding: 'utf8' }).stdout.split(' ')[0];
+    await writeFile(path.join(dir, 'checksums.txt'), `${digest}  ${binaryName}\n`);
+    // The directories a host has before any install.
+    await spawnAsync('mkdir', ['-p', path.join(dir, 'bin'), path.join(host, 'usr/local/bin')]);
+    await writeFile(
+      path.join(dir, 'bin/curl'),
+      `#!/bin/sh\nout=""; url=""\nwhile [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac; done\nfile='${dir}'/$(basename "$url")\n[ -f "$file" ] || exit 22\nif [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi\n`
+    );
+    await chmod(path.join(dir, 'bin/curl'), 0o755);
+    const install = (token) => {
+      const result = spawnSync(
+        'bash',
+        [path.join(work, 'scripts/setup-monitoring-node.sh'), '-y', '--no-logo', '--gateway', 'gw.example.com:9443', '--token', token, '--gateway-cert-sha256', CERT, '--version', VERSION, '--user', 'root'],
+        {
+          encoding: 'utf8',
+          timeout: 90_000,
+          input: '',
+          env: {
+            ...process.env,
+            PATH: `${path.join(dir, 'bin')}:${path.join(work, 'bin')}:${process.env.PATH}`,
+            GATEWAY_ARTIFACT_BASE_URL: 'https://mirror.example/gateway',
+            GATEWAY_MONITORING_ENROLLMENT_WAIT_SECONDS: '20',
+            GATEWAY_MANUAL_LAUNCH_TIMEOUT_SECONDS: '20',
+          },
+        }
+      );
+      return { status: result.status, output: `${result.stdout}\n${result.stderr}` };
+    };
+    const fresh = install('gw_node_fresh');
+    assert.equal(fresh.status, 0, fresh.output);
+    assert.match(fresh.output, /monitoring-daemon is connected to Gateway/);
+    const recorded = readFileSync(path.join(lib, 'enrollment-token.sha256'), 'utf8').trim();
+    assert.equal(recorded, spawnSync('sh', ['-c', "printf '%s' gw_node_fresh | sha256sum | cut -d' ' -f1"], { encoding: 'utf8' }).stdout.trim());
+    const config = readFileSync(path.join(etc, 'config.yaml'), 'utf8');
+    // A new node's token: refused, nothing changed.
+    const refused = install('gw_node_other');
+    assert.equal(refused.status, 1, refused.output);
+    assert.match(refused.output, /already enrolled as monitoring node fresh-node of Gateway gw\.example\.com:9443; the enrollment token was not used, and nothing was changed/);
+    assert.equal(readFileSync(path.join(etc, 'config.yaml'), 'utf8'), config);
+    // The node's own setup command again: it keeps its enrollment and the run completes.
+    const same = install('gw_node_fresh');
+    assert.equal(same.status, 0, same.output);
+    assert.match(same.output, /already enrolled with this setup command's token; keeping its enrollment/);
+  } finally {
+    runShell(`pkill -f 'gateway-test-monitoring-stu[b]' || true; rm -rf '${etc}' '${lib}' '${path.join(host, 'usr/local/bin/monitoring-daemon')}'*`);
+    await rm(dir, { recursive: true, force: true });
   }
 });
