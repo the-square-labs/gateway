@@ -87,6 +87,11 @@ export class NodeDispatchService {
     return !!nodeId && !!this.registry.getNode(nodeId);
   }
 
+  /** The node is not connected but is expected back: its stream closed moments ago, or Gateway just started. */
+  isNodeReconnecting(nodeId: string): boolean {
+    return this.registry.isReconnecting(nodeId);
+  }
+
   /** True while a daemon update is replacing this node's daemon. */
   async isNodeUpdateInProgress(nodeId: string): Promise<boolean> {
     if (this.registry.isNodeUpdateInProgress(nodeId)) return true;

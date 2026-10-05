@@ -26,6 +26,39 @@ import { DEFAULT_CONFIG, healthAction, normalizePath, parseDispatchResult } from
 
 const logger = createChildLogger('DockerHealthCheckService');
 
+/** Within this long after start, a probe that failed only because its node has not reconnected yet is retried. */
+export const DOCKER_HEALTH_RECONNECT_GRACE_MS = 60_000;
+/** Consecutive failed probes before a workload that was up is reported offline; one success brings it back. */
+export const DOCKER_HEALTH_OFFLINE_AFTER_FAILURES = 2;
+/** Consecutive checks that must see a binding in `error` before the workload is reported offline for it. */
+export const DOCKER_HEALTH_BINDING_ERROR_CHECKS = 2;
+/** Binding events for one workload within this window cause a single recheck. */
+export const DOCKER_HEALTH_RECHECK_DEBOUNCE_MS = 5_000;
+
+type ProbeOutcome = {
+  ok: boolean;
+  status: DockerHealthStatus | 'stopped';
+  responseMs?: number;
+  httpStatus?: number;
+  skipped?: boolean;
+  /** The probe never reached the daemon because this node was not connected. */
+  unreachableNodeId?: string;
+};
+
+/** The registry's not-connected / disconnected errors and the dispatch layer's wrappers of them. */
+export function isNodeUnreachableError(error: unknown): boolean {
+  if (error instanceof AppError && ['NODE_NOT_CONNECTED', 'AVAILABILITY_NODE_DISCONNECTED'].includes(error.code)) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return message === 'Node disconnected' || /^Node \S+ is not connected$/.test(message);
+}
+
+function healthCheckDue(row: Pick<HealthRow, 'lastHealthCheckAt' | 'intervalSeconds'>, now: number): boolean {
+  if (!row.lastHealthCheckAt) return true;
+  return now - new Date(row.lastHealthCheckAt).getTime() >= Math.max(5, row.intervalSeconds ?? 30) * 1000;
+}
+
 export interface DockerHealthRouteOption {
   id: string;
   scheme: 'http' | 'https';
@@ -67,8 +100,15 @@ type HealthWorkloadResolver = Pick<DockerWorkloadResolverService, 'resolveContai
 export class DockerHealthCheckService {
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
-  private relayUnavailable = false;
   private workloadResolver?: HealthWorkloadResolver;
+  private readonly startedAt = Date.now();
+  /** Consecutive failed probes per health check row, kept until a probe succeeds. */
+  private readonly failureStreaks = new Map<string, number>();
+  /** Consecutive checks per row that saw a managed database binding in `error`. */
+  private readonly bindingErrorStreaks = new Map<string, number>();
+  /** Rows being checked; a recheck and the scheduled run never check one row at the same time. */
+  private readonly inFlight = new Set<string>();
+  private readonly recheckTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -77,11 +117,8 @@ export class DockerHealthCheckService {
 
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
-    bus.subscribe('system.relay.health.changed', (payload) => {
-      const state = (payload as { state?: unknown } | null)?.state;
-      this.relayUnavailable = state === 'critical';
-      void this.recheckBindingTargets();
-    });
+    // Relay health is not judged here: a binding's own status reflects its path, and its changes arrive as
+    // database.changed. Each burst of those events causes at most one recheck per workload, and only when due.
     bus.subscribe('database.changed', (payload) => {
       const event = payload as {
         resourceKind?: unknown;
@@ -97,7 +134,7 @@ export class DockerHealthCheckService {
       ) {
         return;
       }
-      void this.recheckTarget(event.targetNodeId, event.targetType, event.targetResourceId);
+      this.scheduleRecheck(event.targetNodeId, event.targetType, event.targetResourceId);
     });
   }
 
@@ -457,9 +494,45 @@ export class DockerHealthCheckService {
   }
 
   private async checkAndStore(row: HealthRow) {
+    if (this.inFlight.has(row.id)) return;
+    this.inFlight.add(row.id);
+    try {
+      await this.checkAndStoreRow(row);
+    } finally {
+      this.inFlight.delete(row.id);
+    }
+  }
+
+  /**
+   * Whether a probe that never reached its node should be retried instead of recorded: Gateway started moments ago,
+   * the node's stream closed moments ago, or the node's daemon is being updated. Same graces as the route job.
+   */
+  private async nodeExpectedBack(nodeId: string): Promise<boolean> {
+    if (Date.now() - this.startedAt < DOCKER_HEALTH_RECONNECT_GRACE_MS) return true;
+    if (this.dispatch.isNodeReconnecting?.(nodeId)) return true;
+    return (await this.dispatch.isNodeUpdateInProgress?.(nodeId)?.catch(() => false)) === true;
+  }
+
+  private async checkAndStoreRow(row: HealthRow) {
     const previousStatus = row.healthStatus as DockerHealthStatus;
-    const probe = await this.probeRow(row);
+    const probe: ProbeOutcome = await this.probeRow(row);
     if (probe.status === 'stopped') return this.storeStopped(row);
+    if (probe.unreachableNodeId && (await this.nodeExpectedBack(probe.unreachableNodeId))) {
+      // Nothing is recorded and lastHealthCheckAt stays, so the next run probes again once the node is back.
+      logger.debug('Docker health probe waits for its node to reconnect', {
+        healthCheckId: row.id,
+        nodeId: probe.unreachableNodeId,
+      });
+      return;
+    }
+    const probeFailed = probe.status === 'offline';
+    const failures = probeFailed ? (this.failureStreaks.get(row.id) ?? 0) + 1 : 0;
+    if (probeFailed) this.failureStreaks.set(row.id, failures);
+    else this.failureStreaks.delete(row.id);
+    if (probeFailed && previousStatus !== 'offline' && failures < DOCKER_HEALTH_OFFLINE_AFTER_FAILURES) {
+      // One failed probe is not an outage: keep the status, record and report nothing, probe again next run.
+      return;
+    }
     const dependency = await this.databaseDependencyState(row);
     // A stop may have been requested while a probe/dependency lookup was in flight.
     if (await this.isIntentionallyStopped(row)) return this.storeStopped(row);
@@ -482,28 +555,26 @@ export class DockerHealthCheckService {
     const resourceName =
       row.target === 'deployment' ? await this.getDeploymentName(row.deploymentId!) : row.containerName!;
     if (await this.isIntentionallyStopped(row)) return this.storeStopped(row, true);
-    if (dependency.cause !== 'relay_unavailable') {
+    await this.evaluator?.observeStatefulEvent(
+      'container',
+      healthAction(status),
+      { type: resourceType, id: resourceId, name: resourceName },
+      {
+        health_status: status,
+        ...(dependency.cause ? { health_cause: dependency.cause } : {}),
+        nodeId: row.nodeId,
+        resource_type: resourceType,
+      },
+      ['health.online', 'health.degraded', 'health.offline']
+    );
+    if (dependency.hasBindings) {
       await this.evaluator?.observeStatefulEvent(
         'container',
-        healthAction(status),
+        dependency.offline ? 'dependency.database_offline' : 'dependency.database_online',
         { type: resourceType, id: resourceId, name: resourceName },
-        {
-          health_status: status,
-          ...(dependency.cause ? { health_cause: dependency.cause } : {}),
-          nodeId: row.nodeId,
-          resource_type: resourceType,
-        },
-        ['health.online', 'health.degraded', 'health.offline']
+        { health_status: status, health_cause: dependency.cause, nodeId: row.nodeId, resource_type: resourceType },
+        ['dependency.database_offline']
       );
-      if (dependency.hasBindings) {
-        await this.evaluator?.observeStatefulEvent(
-          'container',
-          dependency.offline ? 'dependency.database_offline' : 'dependency.database_online',
-          { type: resourceType, id: resourceId, name: resourceName },
-          { health_status: status, health_cause: dependency.cause, nodeId: row.nodeId, resource_type: resourceType },
-          ['dependency.database_offline']
-        );
-      }
     }
 
     if (previousStatus !== status) {
@@ -554,7 +625,7 @@ export class DockerHealthCheckService {
 
   private async databaseDependencyState(row: HealthRow): Promise<{
     offline: boolean;
-    cause: 'relay_unavailable' | 'binding_error' | null;
+    cause: 'binding_error' | null;
     hasBindings: boolean;
   }> {
     const targetResourceId = row.target === 'deployment' ? row.deploymentId : row.containerName;
@@ -571,12 +642,35 @@ export class DockerHealthCheckService {
           eq(managedDatabaseBindings.targetResourceId, targetResourceId)
         )
       );
+    // Judged only by the bindings' own status, never by a global relay signal. A binding that flips to `error` for
+    // one check (a relay or node restart) does not take the workload offline; one that stays in error does.
+    const bindingError = bindings.some((binding) => binding.status === 'error');
+    const errorChecks = bindingError ? (this.bindingErrorStreaks.get(row.id) ?? 0) + 1 : 0;
+    if (bindingError) this.bindingErrorStreaks.set(row.id, errorChecks);
+    else this.bindingErrorStreaks.delete(row.id);
     if (bindings.length === 0) return { offline: false, cause: null, hasBindings: false };
-    if (this.relayUnavailable) return { offline: true, cause: 'relay_unavailable', hasBindings: true };
-    if (bindings.some((binding) => binding.status === 'error')) {
+    if (errorChecks >= DOCKER_HEALTH_BINDING_ERROR_CHECKS) {
       return { offline: true, cause: 'binding_error', hasBindings: true };
     }
     return { offline: false, cause: null, hasBindings: true };
+  }
+
+  private scheduleRecheck(nodeId: string, target: 'container' | 'deployment', targetResourceId: string): void {
+    const key = `${nodeId}:${target}:${targetResourceId}`;
+    if (this.recheckTimers.has(key)) return;
+    const timer = setTimeout(() => {
+      this.recheckTimers.delete(key);
+      this.recheckTarget(nodeId, target, targetResourceId).catch((error) => {
+        logger.debug('Docker health recheck failed', {
+          nodeId,
+          target,
+          targetResourceId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, DOCKER_HEALTH_RECHECK_DEBOUNCE_MS);
+    timer.unref?.();
+    this.recheckTimers.set(key, timer);
   }
 
   private async recheckTarget(
@@ -601,23 +695,8 @@ export class DockerHealthCheckService {
               eq(dockerHealthChecks.containerName, targetResourceId)
             ),
     });
-    if (row) await this.checkAndStore(row);
-  }
-
-  private async recheckBindingTargets(): Promise<void> {
-    const bindings = await this.db
-      .select({
-        nodeId: managedDatabaseBindings.targetNodeId,
-        target: managedDatabaseBindings.targetType,
-        resourceId: managedDatabaseBindings.targetResourceId,
-      })
-      .from(managedDatabaseBindings);
-    const unique = new Map(
-      bindings.map((binding) => [`${binding.nodeId}:${binding.target}:${binding.resourceId}`, binding])
-    );
-    await Promise.allSettled(
-      [...unique.values()].map((binding) => this.recheckTarget(binding.nodeId, binding.target, binding.resourceId))
-    );
+    // A row checked within its interval waits for its turn: history never gets more than one sample per interval.
+    if (row && healthCheckDue(row, Date.now())) await this.checkAndStore(row);
   }
 
   private async getDeploymentName(deploymentId: string) {
@@ -625,16 +704,24 @@ export class DockerHealthCheckService {
     return row?.name ?? deploymentId;
   }
 
-  private async probeRow(row: HealthRow) {
+  private async probeRow(row: HealthRow): Promise<ProbeOutcome> {
     const availability = await this.availabilityHealth(row);
     if (availability) return availability;
     const probeNodeId = await this.resolveAvailabilityProbeNodeId(row);
-    const options =
-      row.target === 'deployment' && row.deploymentId
-        ? await this.getDeploymentRouteOptions(row.deploymentId)
-        : row.containerName
-          ? await this.getContainerRouteOptions(row.nodeId, row.containerName).catch(() => [])
-          : [];
+    let options: DockerHealthRouteOption[] = [];
+    if (row.target === 'deployment' && row.deploymentId) {
+      options = await this.getDeploymentRouteOptions(row.deploymentId);
+    } else if (row.containerName) {
+      try {
+        options = await this.getContainerRouteOptions(row.nodeId, row.containerName);
+      } catch (error) {
+        // A node that cannot be asked is not a container without its route.
+        if (isNodeUnreachableError(error)) {
+          return { ok: false, status: 'offline', unreachableNodeId: row.nodeId };
+        }
+        options = [];
+      }
+    }
     const routeAvailable = options.some(
       (option) => option.hostPort === row.hostPort && option.containerPort === row.containerPort
     );
@@ -817,7 +904,7 @@ export class DockerHealthCheckService {
     return placement?.nodeId ?? row.nodeId;
   }
 
-  private async probeConfig(config: DockerHealthCheckDto, requireEnabledRoute: boolean) {
+  private async probeConfig(config: DockerHealthCheckDto, requireEnabledRoute: boolean): Promise<ProbeOutcome> {
     if (await this.isIntentionallyStopped(config)) return { ok: true, status: 'stopped' as const, skipped: true };
     if (!config.enabled && requireEnabledRoute) {
       throw new AppError(400, 'HEALTH_CHECK_DISABLED', 'Enable the health check before testing it');
@@ -866,7 +953,12 @@ export class DockerHealthCheckService {
         path: config.path,
         error: error instanceof Error ? error.message : String(error),
       });
-      return { ok: false, status: 'offline' as DockerHealthStatus };
+      const unreachable = isNodeUnreachableError(error) || !this.dispatch.isNodeConnected(config.nodeId);
+      return {
+        ok: false,
+        status: 'offline' as DockerHealthStatus,
+        ...(unreachable ? { unreachableNodeId: config.nodeId } : {}),
+      };
     }
   }
 
