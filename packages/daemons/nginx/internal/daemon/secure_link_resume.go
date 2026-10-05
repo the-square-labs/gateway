@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
@@ -296,9 +297,21 @@ func relayCandidateState(assignment *pb.RelayGrantAssignment, relayID string) (s
 	return "", time.Time{}
 }
 
-// watchRelayLane moves the streams on a relay at once when a lane to it
-// stops being ready while it was: GOAWAY from a stopping relay (its open
-// streams live a few seconds more), or a lane that broke.
+var _ lifecycle.RelayLaneStatePlugin = (*NginxPlugin)(nil)
+
+// RelayLaneLeftReady moves the streams on a relay at once when a pool lane to
+// it stops being ready: GOAWAY from a stopping relay (its open streams live a
+// few seconds more), or a lane that broke. Every lane to a relay goes through
+// it, so the whole relay is left; a planned move that finds no other relay
+// keeps the stream where it is.
+func (p *NginxPlugin) RelayLaneLeftReady(relayInstanceID string, _ *grpc.ClientConn) {
+	if p.relayStreams != nil {
+		p.relayStreams.RelayLost(relayInstanceID)
+	}
+}
+
+// watchRelayLane does what RelayLaneLeftReady does for the pre-pool lane,
+// which the lifecycle does not report.
 func (p *NginxPlugin) watchRelayLane(ctx context.Context, conn *grpc.ClientConn, relayID string) {
 	if conn == nil || p.relayStreams == nil {
 		return

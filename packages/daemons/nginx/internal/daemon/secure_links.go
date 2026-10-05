@@ -1014,6 +1014,8 @@ func (p *NginxPlugin) ProbeProxySecureLink(command *pb.ProbeProxySecureLinkComma
 }
 
 func (p *NginxPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn, _ string) {
+	// Pool lanes report leaving READY through RelayLaneLeftReady; the pre-pool lane is watched here.
+	go p.watchRelayLane(ctx, conn, relaybridge.LegacyTargetID)
 	p.RunRelayTargetTunnels(ctx, conn, "", relaybridge.LegacyTargetID)
 }
 
@@ -1026,7 +1028,6 @@ func (p *NginxPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Clie
 	if p.availabilityLease != nil {
 		go p.availabilityLease.runForTarget(ctx, conn, relayInstanceID)
 	}
-	go p.watchRelayLane(ctx, conn, relayInstanceID)
 	<-ctx.Done()
 	p.relayTunnelMu.Lock()
 	for index, candidate := range p.relayTunnels {

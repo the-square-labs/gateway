@@ -266,6 +266,21 @@ func TestSecureLinkStreamSurvivesRelayLoss(t *testing.T) {
 	}
 }
 
+// A pool lane leaving READY (GOAWAY from a stopping relay) moves the stream
+// while the relay still carries it.
+func TestSecureLinkStreamMovesWhenItsLaneLeavesReady(t *testing.T) {
+	fixture := newResumeFixture(t, true)
+	connection := openLinkConnection(t, fixture.plugin)
+	connection.roundTrip(32 * 1024)
+	session := onlySession(t, fixture.plugin)
+	fixture.plugin.RelayLaneLeftReady("relay-near", fixture.nearLane)
+	waitFor(t, "the stream to leave the stopping relay", func() bool { return session.RelayID() == "relay-far" })
+	connection.roundTrip(128 * 1024)
+	if fixture.target.backends.Load() != 1 || fixture.target.resumed.Load() != 1 {
+		t.Fatalf("backends %d, resumed %d: want one backend and one planned resume", fixture.target.backends.Load(), fixture.target.resumed.Load())
+	}
+}
+
 // A drain notice in the grant bundle moves open streams off the draining
 // relay while it still works.
 func TestSecureLinkStreamMovesOffADrainingRelay(t *testing.T) {
