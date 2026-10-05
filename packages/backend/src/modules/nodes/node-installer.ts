@@ -115,14 +115,28 @@ export function nodeInstallCommand(input: {
  * installs Secure Runtime from a copy it downloads and verifies. Gateway shows it as one line that fetches and checks
  * this release's installer first, like the setup commands. Any other command is shown as the daemon reported it.
  */
-export function secureRuntimeLocalCommand(command: string, release: string | null): string {
-  const match = /^sudo bash setup-docker-node\.sh --user ([A-Za-z0-9_][A-Za-z0-9_.-]*) --secure-runtime$/.exec(command);
+export function secureRuntimeLocalCommand(
+  command: string,
+  release: string | null,
+  daemonVersion?: string | null
+): string {
+  const match =
+    /^sudo bash setup-docker-node\.sh --user ([A-Za-z0-9_][A-Za-z0-9_.-]*) --secure-runtime(?: --version (v\d+\.\d+\.\d+(?:-rc\.\d+)?))?$/.exec(
+      command
+    );
   if (!match) return command;
+  const args: Array<readonly [flag: string, value?: string]> = [['--user', match[1] as string], ['--secure-runtime']];
+  // The node keeps the daemon version it runs (its daemon names it from 2.11.1 on, else the version it registered):
+  // without it the installer offers the latest stable release, which can be older than a release candidate (F-B6).
+  const version =
+    match[2] ??
+    (daemonVersion && RELEASE_VERSION_PATTERN.test(daemonVersion) ? `v${daemonVersion.replace(/^v/, '')}` : null);
+  if (version) args.push(['--version', version]);
   return nodeInstallCommand({
     installer: 'setup-docker-node.sh',
     release,
     transport: 'curl',
-    args: [['--user', match[1] as string], ['--secure-runtime']],
+    args,
     oneLine: true,
   });
 }

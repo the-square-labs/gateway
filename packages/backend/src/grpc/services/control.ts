@@ -62,7 +62,8 @@ async function markRelayInstanceOffline(deps: GrpcServerDeps, nodeId: string): P
     .where(eq(relayInstances.nodeId, nodeId));
 }
 
-export function mapDockerRuntimeStatus(raw: DaemonMessage['dockerRuntimeStatus']) {
+/** `daemonVersion`: the node's own daemon version, pinned in the local setup command so it never changes the version. */
+export function mapDockerRuntimeStatus(raw: DaemonMessage['dockerRuntimeStatus'], daemonVersion?: string | null) {
   if (!raw) return undefined;
   const checkedAtMs = Number(raw.checkedAtUnixMs);
   const result = DockerRuntimeStatusSchema.safeParse({
@@ -74,7 +75,7 @@ export function mapDockerRuntimeStatus(raw: DaemonMessage['dockerRuntimeStatus']
     checkedAt: Number.isFinite(checkedAtMs) ? new Date(checkedAtMs).toISOString() : undefined,
     remoteInstallable: Boolean(raw.remoteInstallable),
     localInstallCommand: raw.localInstallCommand
-      ? secureRuntimeLocalCommand(raw.localInstallCommand, installerRelease(getEnv().APP_VERSION))
+      ? secureRuntimeLocalCommand(raw.localInstallCommand, installerRelease(getEnv().APP_VERSION), daemonVersion)
       : undefined,
     step: raw.step || undefined,
     progressPercent: raw.step === 'downloading' ? Number(raw.progressPercent) : undefined,
@@ -714,7 +715,10 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 ? (((msg.register as any).dockerVersion as string | undefined) ?? msg.register.nginxVersion)
                 : ((msg.register as any).dockerVersion as string | undefined);
             const reportedNginxVersion = msg.register.daemonType === 'docker' ? undefined : msg.register.nginxVersion;
-            const reportedRuntimeStatus = mapDockerRuntimeStatus(msg.register.dockerRuntimeStatus);
+            const reportedRuntimeStatus = mapDockerRuntimeStatus(
+              msg.register.dockerRuntimeStatus,
+              msg.register.daemonVersion
+            );
 
             try {
               await deps.db
@@ -1065,7 +1069,14 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 }
               }
             } else if (msg.dockerRuntimeStatus) {
-              const runtimeStatus = mapDockerRuntimeStatus(msg.dockerRuntimeStatus);
+              const [reporting] = msg.dockerRuntimeStatus.localInstallCommand
+                ? await deps.db
+                    .select({ daemonVersion: nodes.daemonVersion })
+                    .from(nodes)
+                    .where(eq(nodes.id, activeNodeId))
+                    .limit(1)
+                : [];
+              const runtimeStatus = mapDockerRuntimeStatus(msg.dockerRuntimeStatus, reporting?.daemonVersion);
               if (!runtimeStatus) {
                 logger.warn('Ignored invalid Docker runtime status update', { nodeId: activeNodeId });
                 return;

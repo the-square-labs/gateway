@@ -14,11 +14,14 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 )
 
 const (
@@ -675,8 +678,16 @@ func localInstallCommand() string {
 	if account, err := user.LookupId(name); err == nil {
 		name = account.Username
 	}
-	return "sudo bash setup-docker-node.sh --user " + name + " --secure-runtime"
+	command := "sudo bash setup-docker-node.sh --user " + name + " --secure-runtime"
+	// The node keeps the daemon version it runs: without --version the installer offers the latest stable release,
+	// which can be older than the release candidate this node runs (F-B6: a downgrade offer to v2.11.0).
+	if releaseVersion.MatchString(lifecycle.Version) {
+		command += " --version " + lifecycle.Version
+	}
+	return command
 }
+
+var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
 
 func failedStatus(reason string, err error) Status {
 	return Status{

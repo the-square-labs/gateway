@@ -45,6 +45,19 @@ describe('Secure Runtime local command', () => {
     );
   });
 
+  it("pins the node's own daemon version, so the command never offers another release (F-B6)", () => {
+    const local = 'sudo bash setup-docker-node.sh --user gwdock --secure-runtime';
+    expect(secureRuntimeLocalCommand(local, 'v2.11.1-rc.20', 'v2.11.1-rc.20')).toMatch(
+      /&& sudo bash setup-docker-node\.sh --user gwdock --secure-runtime --version v2\.11\.1-rc\.20$/
+    );
+    expect(secureRuntimeLocalCommand(local, 'v2.11.0', '2.11.0')).toMatch(/--secure-runtime --version v2\.11\.0$/);
+    expect(secureRuntimeLocalCommand(local, 'v2.11.0', 'dev')).toMatch(/--secure-runtime$/);
+    // A 2.11.1 daemon names its version itself.
+    expect(secureRuntimeLocalCommand(`${local} --version v2.11.1-rc.24`, 'v2.11.1-rc.24', 'v2.11.1-rc.20')).toMatch(
+      /--secure-runtime --version v2\.11\.1-rc\.24$/
+    );
+  });
+
   it('keeps every other command as the daemon reported it', () => {
     for (const command of [
       'sudo docker-daemon runtime install runsc',
