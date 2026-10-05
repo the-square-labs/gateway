@@ -302,7 +302,10 @@ func newCore(cfg Config, now time.Time) *Core {
 	wnd = max(wnd, MinWindow)
 	wnd = min(wnd, MaxWindow)
 	if wnd > MinWindow && cfg.Budget != nil && !cfg.Budget.reserve(wnd-MinWindow) {
-		wnd = MinWindow
+		wnd = min(wnd, FallbackWindow)
+		if wnd > MinWindow && !cfg.Budget.reserve(wnd-MinWindow) {
+			wnd = MinWindow
+		}
 	}
 	c.wnd = wnd
 	c.reserved = wnd - MinWindow

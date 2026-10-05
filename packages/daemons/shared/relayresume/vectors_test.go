@@ -15,6 +15,10 @@ var updateVectors = flag.Bool("update-vectors", false, "rewrite proto/testdata/r
 
 const vectorsPath = "../../../../proto/testdata/relay-resume-v1.json"
 
+// vectorWindow is the wnd the record vectors carry (frozen; not tied to the
+// current InitialWindow).
+const vectorWindow = 256 * 1024
+
 type vectorFile struct {
 	Version   int               `json:"version"`
 	Spec      string            `json:"spec"`
@@ -143,7 +147,7 @@ func buildVectors(t *testing.T) vectorFile {
 			"magic": Magic, "version": Version, "mac_len": MACLen, "session_id_len": SessionIDLen, "nonce_len": NonceLen,
 			"key_len": KeyLen, "max_key_id_len": MaxKeyIDLen, "max_frame_bytes": MaxFrameBytes, "transcript_domain": transcriptDomain,
 			"capability":     Capability,
-			"initial_window": InitialWindow, "min_window": MinWindow, "max_window": MaxWindow, "process_budget": DefaultProcessBudget,
+			"initial_window": InitialWindow, "fallback_window": FallbackWindow, "min_window": MinWindow, "max_window": MaxWindow, "process_budget": DefaultProcessBudget,
 			"delayed_ack_ms": DelayedAck.Milliseconds(), "first_record_timeout_ms": FirstRecordTimeout.Milliseconds(),
 			"open_timeout_ms": OpenTimeout.Milliseconds(), "resume_ack_timeout_ms": ResumeAckTimeout.Milliseconds(),
 			"hello_ack_timeout_ms": HelloAckTimeout.Milliseconds(), "planned_budget_ms": PlannedBudget.Milliseconds(),
@@ -190,11 +194,11 @@ func buildVectors(t *testing.T) vectorFile {
 	var nonce [NonceLen]byte
 	copy(nonce[:], seqBytes(0xa0, 16))
 
-	helloMAC := ComputeMAC(key, ctx.HelloTranscript(InitialWindow))
-	hello := Record{Type: TypeHello, KeyID: "v1", SessionID: ctx.SessionID, Wnd: InitialWindow, MAC: helloMAC}
+	helloMAC := ComputeMAC(key, ctx.HelloTranscript(vectorWindow))
+	hello := Record{Type: TypeHello, KeyID: "v1", SessionID: ctx.SessionID, Wnd: vectorWindow, MAC: helloMAC}
 	ctx.HelloMAC = helloMAC
-	helloAckMAC := ComputeMAC(key, ctx.HelloAckTranscript(nonce, InitialWindow))
-	helloAck := Record{Type: TypeHelloAck, SessionID: ctx.SessionID, Nonce: nonce, Wnd: InitialWindow, MAC: helloAckMAC}
+	helloAckMAC := ComputeMAC(key, ctx.HelloAckTranscript(nonce, vectorWindow))
+	helloAck := Record{Type: TypeHelloAck, SessionID: ctx.SessionID, Nonce: nonce, Wnd: vectorWindow, MAC: helloAckMAC}
 
 	resumeCtx := ctx
 	resumeCtx.RelayID = "relay-b"
@@ -214,9 +218,9 @@ func buildVectors(t *testing.T) vectorFile {
 		fields.SessionIDHex, fields.TranscriptHex, fields.MACHex, fields.RecordHex = hex.EncodeToString(c.SessionID[:]), hex.EncodeToString(transcript), hex.EncodeToString(mac[:]), hex.EncodeToString(encoded)
 		file.MACs = append(file.MACs, fields)
 	}
-	addMAC("hello", "hello", ctx, ctx.HelloTranscript(InitialWindow), helloMAC, &hello, macVector{Wnd: u64s(InitialWindow)})
-	addMAC("hello_ack", "hello_ack", ctx, ctx.HelloAckTranscript(nonce, InitialWindow), helloAckMAC, &helloAck,
-		macVector{Wnd: u64s(InitialWindow), TargetNonce: hex.EncodeToString(nonce[:]), HelloMACHex: hex.EncodeToString(helloMAC[:])})
+	addMAC("hello", "hello", ctx, ctx.HelloTranscript(vectorWindow), helloMAC, &hello, macVector{Wnd: u64s(vectorWindow)})
+	addMAC("hello_ack", "hello_ack", ctx, ctx.HelloAckTranscript(nonce, vectorWindow), helloAckMAC, &helloAck,
+		macVector{Wnd: u64s(vectorWindow), TargetNonce: hex.EncodeToString(nonce[:]), HelloMACHex: hex.EncodeToString(helloMAC[:])})
 	addMAC("resume", "resume", resumeCtx, resumeCtx.ResumeTranscript(2, 300000), resumeMAC, &resume,
 		macVector{Epoch: "2", RcvNxt: "300000", TargetNonce: hex.EncodeToString(nonce[:])})
 	addMAC("resume_ack", "resume_ack", resumeCtx, resumeCtx.ResumeAckTranscript(2, 5000000000, 300000), resumeAckMAC, &resumeAck,
@@ -229,7 +233,7 @@ func buildVectors(t *testing.T) vectorFile {
 		{"data_small", Record{Type: TypeData, Ack: 0, Payload: []byte("hello, world")}},
 		{"data_ack_300", Record{Type: TypeData, Ack: 300, Payload: []byte{0x00}}},
 		{"data_ack_max", Record{Type: TypeData, Ack: ^uint64(0), Payload: []byte{0xff, 0x00}}},
-		{"ack", Record{Type: TypeAck, Ack: 65536, Wnd: InitialWindow}},
+		{"ack", Record{Type: TypeAck, Ack: 65536, Wnd: vectorWindow}},
 		{"ack_zero", Record{Type: TypeAck, Ack: 0, Wnd: MinWindow}},
 		{"fin", Record{Type: TypeFin, Ack: 127}},
 		{"fin_128", Record{Type: TypeFin, Ack: 128}},
@@ -257,8 +261,8 @@ func buildVectors(t *testing.T) vectorFile {
 		records []Record
 	}{
 		{"hello_then_data", []Record{hello, {Type: TypeData, Ack: 0, Payload: []byte("GET / HTTP/1.1\r\n")}}},
-		{"hello_ack_ack_data", []Record{helloAck, {Type: TypeAck, Ack: 16, Wnd: InitialWindow}, {Type: TypeData, Ack: 16, Payload: []byte("HTTP/1.1 200 OK\r\n")}}},
-		{"ack_fin", []Record{{Type: TypeAck, Ack: 1000, Wnd: InitialWindow}, {Type: TypeFin, Ack: 1000}}},
+		{"hello_ack_ack_data", []Record{helloAck, {Type: TypeAck, Ack: 16, Wnd: vectorWindow}, {Type: TypeData, Ack: 16, Payload: []byte("HTTP/1.1 200 OK\r\n")}}},
+		{"ack_fin", []Record{{Type: TypeAck, Ack: 1000, Wnd: vectorWindow}, {Type: TypeFin, Ack: 1000}}},
 		{"fin_close", []Record{{Type: TypeFin, Ack: 7}, {Type: TypeClose}}},
 		{"migrate_req_ack", []Record{{Type: TypeMigrateReq, Code: MigrateGoAway}, {Type: TypeAck, Ack: 1, Wnd: MaxWindow}}},
 	}

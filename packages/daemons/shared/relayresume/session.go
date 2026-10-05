@@ -60,8 +60,10 @@ type Session struct {
 	readCond, writeCond, stateCond *sync.Cond
 	readers, writers               int
 	bgCond                         *sync.Cond // background readers wait for the stream
-	inRecv, recvGone               bool
+	inRecv, recvGone, bgArmed      bool
 	recvExit                       time.Time
+	recvFrame                      *relayv1.TunnelFrame
+	recvData                       *relayv1.TunnelData
 	bgTimer                        *time.Timer
 	lastUna                        uint64
 	lastState                      State
@@ -99,7 +101,7 @@ func newSession(core *Core, routeID string, recvMax int) *Session {
 	// Until a bridge calls Recv the background reader reads (the handshake
 	// answer must be read even if nobody receives yet).
 	s.recvExit = time.Now()
-	s.bgTimer = time.AfterFunc(readGrace, s.graceCheck)
+	s.armGraceLocked(readGrace)
 	return s
 }
 
@@ -181,8 +183,11 @@ func (s *Session) handleFrameLocked(run *pathRun, frame *relayv1.TunnelFrame, er
 		}
 	}
 	s.afterLocked(true)
-	// Paths changed or the stream is free again: let the readers re-decide.
-	s.bgCond.Broadcast()
+	// The stream is free again: wake this path's background reader only if
+	// it may take it now (not on every frame the bridge reads itself).
+	if run.bgWaiting && s.backgroundMayRead(run) {
+		s.bgCond.Broadcast()
+	}
 	if s.readers > 0 {
 		s.readCond.Signal()
 	}
@@ -198,17 +203,31 @@ func (s *Session) recvExitLocked(gone bool) {
 		s.bgCond.Broadcast()
 		return
 	}
+	// One armed timer at a time (not a reset per frame): when it fires
+	// it checks how long the bridge has been away.
+	if !s.bgArmed {
+		s.armGraceLocked(readGrace)
+	}
+}
+
+func (s *Session) armGraceLocked(after time.Duration) {
+	s.bgArmed = true
 	if s.bgTimer == nil {
-		s.bgTimer = time.AfterFunc(readGrace, s.graceCheck)
+		s.bgTimer = time.AfterFunc(after, s.graceCheck)
 	} else {
-		s.bgTimer.Reset(readGrace)
+		s.bgTimer.Reset(after)
 	}
 }
 
 func (s *Session) graceCheck() {
 	s.mu.Lock()
+	s.bgArmed = false
 	if !s.inRecv {
-		s.bgCond.Broadcast()
+		if away := time.Since(s.recvExit); away >= readGrace {
+			s.bgCond.Broadcast()
+		} else {
+			s.armGraceLocked(readGrace - away)
+		}
 	}
 	s.mu.Unlock()
 }
@@ -460,7 +479,8 @@ func (s *Session) CloseWrite() error {
 
 // Recv hands the bridge the next Data frame, HalfClose for the peer's FIN,
 // Close once the stream finished, or the error that reset it. While nothing
-// is queued it reads the current path itself.
+// is queued it reads the current path itself. A returned Data frame is valid
+// until the next Recv.
 func (s *Session) Recv() (*relayv1.TunnelFrame, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -513,7 +533,14 @@ func (s *Session) dataFrame() *relayv1.TunnelFrame {
 		data = data[:s.recvMax]
 	}
 	s.partial = s.partial[len(data):]
-	return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: data}}}
+	// One frame object per session, refilled on every Recv: a bridge uses
+	// a frame before it receives the next one.
+	if s.recvData == nil {
+		s.recvData = &relayv1.TunnelData{}
+		s.recvFrame = &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: s.recvData}}
+	}
+	s.recvData.Data = data
+	return s.recvFrame
 }
 
 // WaitFinished blocks until the stream finished or was reset (the CLOSE

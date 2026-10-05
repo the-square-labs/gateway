@@ -72,9 +72,13 @@ const (
 
 // Flow control.
 const (
-	InitialWindow = 256 * 1024
-	MinWindow     = 64 * 1024
-	MaxWindow     = 4 * 1024 * 1024
+	// InitialWindow: a stream starts here (fewer ACK records on bulk
+	// transfers), or at FallbackWindow, then MinWindow, when the process
+	// budget is short.
+	InitialWindow  = 1024 * 1024
+	FallbackWindow = 256 * 1024
+	MinWindow      = 64 * 1024
+	MaxWindow      = 4 * 1024 * 1024
 	// DefaultProcessBudget bounds the unacked bytes all sessions of a process
 	// may hold beyond their floor windows.
 	DefaultProcessBudget = 256 * 1024 * 1024
