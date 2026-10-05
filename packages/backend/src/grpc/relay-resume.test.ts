@@ -8,9 +8,9 @@ import {
   computeMac,
   DEFAULT_PROCESS_BUDGET,
   DELAYED_ACK_MS,
-  FALLBACK_WINDOW,
   deriveRouteKey,
   encodeRecord,
+  FALLBACK_WINDOW,
   HELLO_ACK_TIMEOUT_MS,
   helloAckTranscript,
   helloTranscript,
@@ -713,43 +713,47 @@ async function runSeed(seed: number): Promise<Simulator> {
 }
 
 describe('RSv1 session simulator', () => {
-  it('delivers both streams byte-exact across migrations, cuts and backpressure', async () => {
-    const seeds = Number(process.env.RELAY_RESUME_SIM_SEEDS ?? 100);
-    const first = Number(process.env.RELAY_RESUME_SIM_FIRST_SEED ?? 1);
-    let cuts = 0;
-    let migrations = 0;
-    for (let seed = first; seed < first + seeds; seed++) {
-      const sim = await runSeed(seed);
-      cuts += sim.cuts;
-      migrations += sim.migrations;
-      const label = `seed ${seed} (cuts ${sim.cuts}, migrations ${sim.migrations})`;
-      const src = sim.sourceSide;
-      const tgt = sim.targetSide;
-      if ((!src.closed || !tgt.closed) && process.env.RELAY_RESUME_SIM_TRACE) {
-        console.log(sim.trace.slice(-120).join('\n'));
-        const state = (side: Side) =>
-          `${side.name}: closed=${side.closed} written=${side.writtenBytes}/${side.total} fin=${side.finSent} delivered=${side.deliveredBytes} blocked=${side.blocked} slow=${side.readerSlow} open=${side.session?.isOpen} susp=${side.session?.isSuspended} mig=${side.session?.migrating} unacked=${side.session?.unackedBytes} relay=${side.session?.currentRelayId}`;
-        console.log(state(src));
-        console.log(state(tgt));
-        console.log(`timers=${sim.clock.pending} recovering=${sim.recovering}`);
+  it(
+    'delivers both streams byte-exact across migrations, cuts and backpressure',
+    async () => {
+      const seeds = Number(process.env.RELAY_RESUME_SIM_SEEDS ?? 100);
+      const first = Number(process.env.RELAY_RESUME_SIM_FIRST_SEED ?? 1);
+      let cuts = 0;
+      let migrations = 0;
+      for (let seed = first; seed < first + seeds; seed++) {
+        const sim = await runSeed(seed);
+        cuts += sim.cuts;
+        migrations += sim.migrations;
+        const label = `seed ${seed} (cuts ${sim.cuts}, migrations ${sim.migrations})`;
+        const src = sim.sourceSide;
+        const tgt = sim.targetSide;
+        if ((!src.closed || !tgt.closed) && process.env.RELAY_RESUME_SIM_TRACE) {
+          console.log(sim.trace.slice(-120).join('\n'));
+          const state = (side: Side) =>
+            `${side.name}: closed=${side.closed} written=${side.writtenBytes}/${side.total} fin=${side.finSent} delivered=${side.deliveredBytes} blocked=${side.blocked} slow=${side.readerSlow} open=${side.session?.isOpen} susp=${side.session?.isSuspended} mig=${side.session?.migrating} unacked=${side.session?.unackedBytes} relay=${side.session?.currentRelayId}`;
+          console.log(state(src));
+          console.log(state(tgt));
+          console.log(`timers=${sim.clock.pending} recovering=${sim.recovering}`);
+        }
+        expect(src.closed, label).toBe(true);
+        expect(tgt.closed, label).toBe(true);
+        if (src.closeError || tgt.closeError) {
+          if (process.env.RELAY_RESUME_SIM_TRACE) console.log(sim.trace.join('\n'));
+          // Only a suspend timeout may end a run early (a cut every path could not cure); never wrong bytes.
+          throw new Error(`${label}: ${src.closeError?.message ?? ''} / ${tgt.closeError?.message ?? ''}`);
+        }
+        expect(Buffer.concat(src.delivered).equals(sim.targetStream), label).toBe(true);
+        expect(Buffer.concat(tgt.delivered).equals(sim.sourceStream), label).toBe(true);
+        expect(src.finDelivered, label).toBe(1);
+        expect(tgt.finDelivered, label).toBe(1);
+        expect(sim.budget.inUse, label).toBe(0);
       }
-      expect(src.closed, label).toBe(true);
-      expect(tgt.closed, label).toBe(true);
-      if (src.closeError || tgt.closeError) {
-        if (process.env.RELAY_RESUME_SIM_TRACE) console.log(sim.trace.join('\n'));
-        // Only a suspend timeout may end a run early (a cut every path could not cure); never wrong bytes.
-        throw new Error(`${label}: ${src.closeError?.message ?? ''} / ${tgt.closeError?.message ?? ''}`);
-      }
-      expect(Buffer.concat(src.delivered).equals(sim.targetStream), label).toBe(true);
-      expect(Buffer.concat(tgt.delivered).equals(sim.sourceStream), label).toBe(true);
-      expect(src.finDelivered, label).toBe(1);
-      expect(tgt.finDelivered, label).toBe(1);
-      expect(sim.budget.inUse, label).toBe(0);
-    }
-    // The schedule must actually exercise both kinds of moves.
-    expect(cuts).toBeGreaterThan(seeds / 2);
-    expect(migrations).toBeGreaterThan(seeds / 4);
-  }, Math.max(120_000, Number(process.env.RELAY_RESUME_SIM_SEEDS ?? 0) * 100));
+      // The schedule must actually exercise both kinds of moves.
+      expect(cuts).toBeGreaterThan(seeds / 2);
+      expect(migrations).toBeGreaterThan(seeds / 4);
+    },
+    Math.max(120_000, Number(process.env.RELAY_RESUME_SIM_SEEDS ?? 0) * 100)
+  );
 
   it('refuses a replayed RESUME and a RESUME through another relay id', () => {
     const sim = new Simulator(99, { source: 10, target: 10 });
