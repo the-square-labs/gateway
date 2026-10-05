@@ -162,36 +162,14 @@ func runInstall() {
 		os.Exit(1)
 	}
 
-	configContent := fmt.Sprintf(`gateway:
-  address: "%s"
-  token: "%s"
-  cert_sha256: "%s"
-
-tls:
-  ca_cert: "/etc/nginx-daemon/certs/ca.pem"
-  client_cert: "/etc/nginx-daemon/certs/node.pem"
-  client_key: "/etc/nginx-daemon/certs/node-key.pem"
-
-nginx:
-  config_dir: "%s"
-  certs_dir: "/etc/nginx/certs"
-  logs_dir: "/var/log/nginx"
-  global_config: "/etc/nginx/nginx.conf"
-  binary: "/usr/sbin/nginx"
-  stub_status_url: "http://127.0.0.1/nginx_status"
-  htpasswd_dir: "/etc/nginx/gateway/htpasswd"
-  acme_challenge_dir: "/var/www/acme-challenge"
-
-state_dir: "/var/lib/nginx-daemon"
-log_level: "info"
-log_format: "json"
-`, address, token, certSHA256, defaultNginxConfigDir())
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+	kept, err := writeInstallConfig(configPath, address, token, certSHA256)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write config: %v\n", err)
 		os.Exit(1)
 	}
-
+	if kept {
+		fmt.Printf("Kept the existing %s; set its gateway address, token and certificate fingerprint\n", configPath)
+	}
 	fmt.Printf("Config written to %s\n", configPath)
 
 	// Create systemd service unit
