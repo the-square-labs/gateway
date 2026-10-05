@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -38,7 +39,9 @@ import (
 	"github.com/wiolett-industries/gateway/relay/internal/policy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -1280,6 +1283,9 @@ type memEnd struct {
 	err    error
 	peer   *memEnd
 	closed bool
+	// stalled: Send blocks until the end fails, like a gRPC Send whose
+	// peer stopped reading (flow control).
+	stalled bool
 }
 
 func memPair() (*memEnd, *memEnd) {
@@ -1291,10 +1297,18 @@ func memPair() (*memEnd, *memEnd) {
 
 func (e *memEnd) Send(frame *relayv1.TunnelFrame) error {
 	e.mu.Lock()
+	for e.stalled && e.err == nil {
+		e.cond.Wait()
+	}
 	err := e.err
 	e.mu.Unlock()
 	if err != nil {
 		return err
+	}
+	// gRPC marshals a copy, and sessions reuse their frame buffers once Send
+	// returns: do the same.
+	if data := frame.GetData(); data != nil {
+		frame = &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: append([]byte(nil), data.GetData()...)}}}
 	}
 	peer := e.peer
 	peer.mu.Lock()
@@ -1319,6 +1333,12 @@ func (e *memEnd) Recv() (*relayv1.TunnelFrame, error) {
 		return frame, nil
 	}
 	return nil, e.err
+}
+
+func (e *memEnd) stall() {
+	e.mu.Lock()
+	e.stalled = true
+	e.mu.Unlock()
 }
 
 func (e *memEnd) fail(err error) {
@@ -1691,4 +1711,83 @@ func TestResumeTriggerDuringHandshakeIsKept(t *testing.T) {
 			finish(t, session)
 		})
 	}
+}
+
+// memRelayPath is one path through the relay's own bridge over in-memory
+// streams: the source's and the target's client ends.
+type memRelayPath struct {
+	relayID        string
+	source, target *memEnd
+}
+
+func newMemRelayPath(relayID string) *memRelayPath {
+	sourceClient, sourceServer := memPair()
+	targetClient, targetServer := memPair()
+	go func() {
+		err := bridgeWithTimeouts(sourceServer, targetServer, 64*1024, make(chan struct{}), 0, 0, nil)
+		if err == nil {
+			err = io.EOF
+		}
+		sourceClient.fail(err)
+		targetClient.fail(err)
+	}()
+	return &memRelayPath{relayID: relayID, source: sourceClient, target: targetClient}
+}
+
+// The target is still sending on a path the relay no longer reads (a
+// tunnel the relay dropped, its gRPC Send stuck in flow control) when the
+// source resumes on another relay: the RESUME must still be answered and the
+// stuck path given up, not wait behind that Send forever.
+func TestResumeAnsweredWhileTheOldPathSendIsStuck(t *testing.T) {
+	keyID, key := rhRouteKey(t, "route-stuck")
+	table := relayresume.NewTargetTable(nil)
+	accept := func(path *memRelayPath) {
+		go func() {
+			decision := table.Accept(relayresume.OpenedPath{Stream: path.target, Cancel: func() { path.target.fail(context.Canceled) }, RelayID: path.relayID, MaxFrame: 64 * 1024},
+				relayresume.AcceptRequest{RouteID: "route-stuck", SourceKind: "daemon", SourceID: rhSourceNode, RelayID: path.relayID,
+					Keys: func(id string) []byte {
+						if id == keyID {
+							return key
+						}
+						return nil
+					}})
+			switch decision.Kind {
+			case relayresume.AcceptHello:
+				session, err := decision.Establish()
+				if err == nil {
+					serveEcho(session)
+				}
+			case relayresume.AcceptResumed, relayresume.AcceptRefused:
+				<-decision.PathDone
+			}
+		}()
+	}
+	first := newMemRelayPath("relay-a")
+	accept(first)
+	manager := relayresume.NewManager(nil)
+	session, err := manager.NewSource(relayresume.SourceConfig{
+		RouteID: "route-stuck",
+		Key:     func() (string, []byte, bool) { return keyID, key, true },
+		Dial: func(context.Context, string) (relayresume.OpenedPath, error) {
+			path := newMemRelayPath("relay-b")
+			accept(path)
+			return relayresume.OpenedPath{Stream: path.source, Cancel: func() { path.source.fail(context.Canceled) }, RelayID: path.relayID, MaxFrame: 64 * 1024}, nil
+		},
+	}, relayresume.OpenedPath{Stream: first.source, Cancel: func() { first.source.fail(context.Canceled) }, RelayID: first.relayID, MaxFrame: 64 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cut path A only once the stream is open: before HELLO_ACK a path failure is a cut by design.
+	rhWait(t, "the handshake", 10*time.Second, func() bool { return session.State() == relayresume.StateOpen })
+	payload := rhRandom(t, 4*1024*1024)
+	echoed, err := exchange(t, session, payload, 32*1024, len(payload)/4, func() {
+		// The relay stops reading what the target sends on path A, then the
+		// source loses path A and resumes elsewhere.
+		first.target.stall()
+		time.Sleep(50 * time.Millisecond)
+		first.source.fail(status.Error(codes.Unavailable, "relay connection lost"))
+		rhWaitFor(t, "the stream to resume on relay-b", 10*time.Second, func() bool { return session.RelayID() == "relay-b" })
+	})
+	checkEcho(t, echoed, payload, err)
+	finish(t, session)
 }
