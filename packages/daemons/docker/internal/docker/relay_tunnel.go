@@ -18,6 +18,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
+	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -511,66 +512,49 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		r.tunnelFailed(assignment, "ready", err)
 		return
 	}
-	var connection net.Conn
-	switch assignment.OwnerKind {
-	case "managed_database":
-		if r.plugin.databaseManager == nil {
+	var tunnel relayFrameStream = stream
+	if request, ok := r.plugin.targetResumeRequest(assignment, incoming, r.targetID); ok {
+		accepted := r.plugin.relayStreams().targets.Accept(relayresume.OpenedPath{Stream: stream, Cancel: cancel, CloseSend: stream.CloseSend,
+			RelayID: request.RelayID, MaxFrame: int(first.GetReady().MaxFrameBytes)}, request)
+		switch accepted.Kind {
+		case relayresume.AcceptLegacy:
+			// A raw source during version skew: served exactly as before.
+			tunnel = accepted.Stream
+		case relayresume.AcceptHello:
+			r.serveResumableTunnel(ctx, assignment, accepted, stream)
+			return
+		default:
+			// A stream that moved onto this tunnel (no dial), or a refused
+			// resume: the tunnel lives until the session gives it up.
+			<-accepted.PathDone
 			return
 		}
+	}
+	dialed, err := r.dialEndpoint(ctx, assignment)
+	if err == nil && dialed.postgres != nil {
 		// Links and the Gateway's database tools: TLS-enabled PostgreSQL gets
 		// TLS from this daemon unless the client negotiates it itself.
-		connection, err = r.plugin.databaseManager.dialLink(ctx, assignment.OwnerId, stream, cancel)
-	case "database_backup_source", "database_backup_restore":
-		if r.plugin.databaseManager == nil || !managedDatabaseIDPattern.MatchString(assignment.GetRouteId()) {
-			return
-		}
-		// ownerId is the signed backup-run UUID. routeId is the server-selected
-		// managed database UUID, never a client-provided address or port.
-		connection, err = r.plugin.databaseManager.dial(ctx, assignment.GetRouteId())
-	case proxySecureLinkOwnerKind, containerLinkOwnerKind:
-		if r.plugin.secureLinks == nil {
-			return
-		}
-		if r.plugin.memberEndpointState(assignment.OwnerId) == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
-			// A dormant member (standby, released or fenced holder, or a holder
-			// whose workload is not ready) takes no traffic even if a relay
-			// admitted a tunnel before it heard so (D6, D7). The error reaches
-			// the opener at once instead of an accept timeout.
-			err = errMemberEndpointDormant
-			break
-		}
-		connection, err = r.plugin.secureLinks.dial(ctx, assignment.OwnerId)
-		if err == nil {
-			// Tracked so a restart finishes the request in flight and closes
-			// the tunnel once it is idle (B-13).
-			tracked := newDrainConn(connection)
-			connection = tracked
-			if assignment.OwnerKind == containerLinkOwnerKind {
-				// A container link session survives a connector replacement until it ends.
-				defer r.plugin.proxyTunnels.addHeld(tracked, cancel)()
-			} else {
-				defer r.plugin.proxyTunnels.add(tracked, cancel)()
-			}
-		}
-	case "managed_storage", "managed_storage_binding", "managed_storage_gateway":
-		if r.plugin.storageManager == nil {
-			return
-		}
-		connection, err = r.plugin.storageManager.dial(ctx, assignment.OwnerId)
-	case "storage_backup_target", "storage_backup_staging":
-		if r.plugin.storageManager == nil || !managedStorageIDPattern.MatchString(assignment.GetRouteId()) {
-			return
-		}
-		// ownerId is the signed backup-run UUID. routeId is the server-selected
-		// managed storage UUID, never an address supplied by the backup runner.
-		connection, err = r.plugin.storageManager.dial(ctx, assignment.GetRouteId())
-	default:
-		return
+		dialed.conn, err = r.plugin.databaseManager.prepareLinkConnection(ctx, dialed.conn, *dialed.postgres, tunnel, cancel)
 	}
 	if err != nil {
-		r.tunnelFailed(assignment, "dial", err)
-		_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Error{Error: &relayv1.RelayError{Code: "endpoint_unavailable", Message: "Endpoint is unavailable"}}})
+		if !errors.Is(err, errEndpointNotServed) {
+			r.tunnelFailed(assignment, "dial", err)
+			_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Error{Error: &relayv1.RelayError{Code: "endpoint_unavailable", Message: "Endpoint is unavailable"}}})
+		}
 		return
+	}
+	connection := dialed.conn
+	if dialed.ingress {
+		// Tracked so a restart finishes the request in flight and closes
+		// the tunnel once it is idle (B-13).
+		tracked := newDrainConn(connection)
+		connection = tracked
+		if assignment.OwnerKind == containerLinkOwnerKind {
+			// A container link session survives a connector replacement until it ends.
+			defer r.plugin.proxyTunnels.addHeld(tracked, cancel)()
+		} else {
+			defer r.plugin.proxyTunnels.add(tracked, cancel)()
+		}
 	}
 	defer connection.Close()
 	r.plugin.relayTunnelOutcomes.Succeeded(r.plugin.logger, relayTunnelOutcome(assignment))
@@ -579,10 +563,82 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		if readChunk == 0 {
 			readChunk = relaybridge.DefaultChunkBytes
 		}
-		_ = relaybridge.BridgeWithChunk(tunnelCtx, connection, stream, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
+		_ = relaybridge.BridgeWithChunk(tunnelCtx, connection, tunnel, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
 		return
 	}
-	_ = bridgeRelayConnection(connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
+	_ = bridgeRelayConnection(connection, tunnel, int(first.GetReady().MaxFrameBytes), cancel)
+}
+
+// errEndpointNotServed: this daemon does not serve the endpoint kind (no
+// manager for it, an unknown kind): the tunnel is dropped without an answer.
+var errEndpointNotServed = errors.New("endpoint kind is not served here")
+
+// dialedEndpoint is a backend connection for an incoming tunnel.
+type dialedEndpoint struct {
+	conn net.Conn
+	// postgres: a managed PostgreSQL link whose opening the daemon still
+	// negotiates over the tunnel (prepareLinkConnection).
+	postgres *managedDatabaseRecord
+	// ingress: a connector ingress binding (proxy secure link, container link).
+	ingress bool
+}
+
+// dialEndpoint connects the backend of an incoming tunnel of assignment.
+func (r *relayTunnelRouter) dialEndpoint(ctx context.Context, assignment *pb.RelayGrantAssignment) (dialedEndpoint, error) {
+	if r.plugin.endpointDialer != nil {
+		return r.plugin.endpointDialer(ctx, assignment)
+	}
+	switch assignment.OwnerKind {
+	case "managed_database":
+		if r.plugin.databaseManager == nil {
+			return dialedEndpoint{}, errEndpointNotServed
+		}
+		connection, record, err := r.plugin.databaseManager.dialRecord(ctx, assignment.OwnerId)
+		if err != nil {
+			return dialedEndpoint{}, err
+		}
+		dialed := dialedEndpoint{conn: connection}
+		if managedDatabaseLinkNeedsPostgresTLS(record) {
+			dialed.postgres = &record
+		}
+		return dialed, nil
+	case "database_backup_source", "database_backup_restore":
+		if r.plugin.databaseManager == nil || !managedDatabaseIDPattern.MatchString(assignment.GetRouteId()) {
+			return dialedEndpoint{}, errEndpointNotServed
+		}
+		// ownerId is the signed backup-run UUID. routeId is the server-selected
+		// managed database UUID, never a client-provided address or port.
+		connection, err := r.plugin.databaseManager.dial(ctx, assignment.GetRouteId())
+		return dialedEndpoint{conn: connection}, err
+	case proxySecureLinkOwnerKind, containerLinkOwnerKind:
+		if r.plugin.secureLinks == nil {
+			return dialedEndpoint{}, errEndpointNotServed
+		}
+		if r.plugin.memberEndpointState(assignment.OwnerId) == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
+			// A dormant member (standby, released or fenced holder, or a holder
+			// whose workload is not ready) takes no traffic even if a relay
+			// admitted a tunnel before it heard so (D6, D7). The error reaches
+			// the opener at once instead of an accept timeout.
+			return dialedEndpoint{}, errMemberEndpointDormant
+		}
+		connection, err := r.plugin.secureLinks.dial(ctx, assignment.OwnerId)
+		return dialedEndpoint{conn: connection, ingress: true}, err
+	case "managed_storage", "managed_storage_binding", "managed_storage_gateway":
+		if r.plugin.storageManager == nil {
+			return dialedEndpoint{}, errEndpointNotServed
+		}
+		connection, err := r.plugin.storageManager.dial(ctx, assignment.OwnerId)
+		return dialedEndpoint{conn: connection}, err
+	case "storage_backup_target", "storage_backup_staging":
+		if r.plugin.storageManager == nil || !managedStorageIDPattern.MatchString(assignment.GetRouteId()) {
+			return dialedEndpoint{}, errEndpointNotServed
+		}
+		// ownerId is the signed backup-run UUID. routeId is the server-selected
+		// managed storage UUID, never an address supplied by the backup runner.
+		connection, err := r.plugin.storageManager.dial(ctx, assignment.GetRouteId())
+		return dialedEndpoint{conn: connection}, err
+	}
+	return dialedEndpoint{}, errEndpointNotServed
 }
 
 // relayTunnelOutcome keys the outcome log of incoming tunnels by endpoint owner (L-1): while a workload is down,
@@ -672,6 +728,7 @@ func (p *DockerPlugin) openRelaySourceOnce(assignment *pb.RelayGrantAssignment) 
 		}
 		tunnel, err := router.openSource(candidate.GetGrant())
 		if err == nil {
+			p.makeResumable(tunnel, assignment)
 			return tunnel, nil
 		}
 		if relayRefusalReason(refusal) != linkRejectedRelayCapacity {
@@ -765,7 +822,7 @@ func (p *DockerPlugin) OpenBackupRelayRoute(ctx context.Context, ownerKind, rout
 				}
 				for _, candidate := range p.orderRelayCandidates(candidates) {
 					router := p.relayRouter(candidate.GetRelayInstanceId())
-					if router != nil && router.openSourceTunnel(connection, candidate.GetGrant()) {
+					if router != nil && router.openSourceTunnel(connection, candidate.GetGrant(), current) {
 						return
 					}
 				}
@@ -777,10 +834,17 @@ func (p *DockerPlugin) OpenBackupRelayRoute(ctx context.Context, ownerKind, rout
 
 // openSourceTunnel opens a source tunnel with grant and bridges connection over it until either side ends it. It
 // reports false, before any data moved, when the relay did not admit the tunnel.
-func (r *relayTunnelRouter) openSourceTunnel(connection net.Conn, grant *pb.RelaySignedGrant) bool {
+func (r *relayTunnelRouter) openSourceTunnel(connection net.Conn, grant *pb.RelaySignedGrant, assignment *pb.RelayGrantAssignment) bool {
 	tunnel, err := r.openSource(grant)
 	if err != nil {
 		return false
+	}
+	if assignment == nil {
+		// The registry: its streams end at the local relay and are never
+		// resumable, so they are not counted as raw streams either.
+		tunnel.localService = true
+	} else {
+		r.plugin.makeResumable(tunnel, assignment)
 	}
 	tunnel.bridge(connection)
 	return true
@@ -788,16 +852,32 @@ func (r *relayTunnelRouter) openSourceTunnel(connection net.Conn, grant *pb.Rela
 
 // relaySourceTunnel is a source tunnel the relay admitted, before it carries any data.
 type relaySourceTunnel struct {
-	router   *relayTunnelRouter
-	stream   relayFrameStream
-	cancel   context.CancelFunc
-	maxFrame int
+	router    *relayTunnelRouter
+	stream    relayFrameStream
+	closeSend func() error
+	cancel    context.CancelFunc
+	maxFrame  int
+	// session carries the stream when its route is resumable (RSv1): it
+	// moves to another relay (or the same one, restarted) without the local
+	// connection noticing. nil: a raw tunnel, as before.
+	session *relayresume.Session
+	// localService: a stream to a service of the local relay (the registry).
+	localService bool
 }
 
 // openSource opens a source tunnel with grant and waits until the relay admits it. A refusal (the route's or
 // endpoint's session capacity, a revoked or stale grant) is the relay's status error.
 func (r *relayTunnelRouter) openSource(grant *pb.RelaySignedGrant) (*relaySourceTunnel, error) {
+	return r.openSourceWithin(grant, 0)
+}
+
+// openSourceWithin is openSource giving up after timeout (0: the relay's own accept timeout).
+func (r *relayTunnelRouter) openSourceWithin(grant *pb.RelaySignedGrant, timeout time.Duration) (*relaySourceTunnel, error) {
 	tunnelCtx, cancel := context.WithCancel(r.ctx)
+	if timeout > 0 {
+		timer := time.AfterFunc(timeout, cancel)
+		defer timer.Stop()
+	}
 	stream, err := r.client.OpenTunnel(tunnelCtx)
 	if err == nil {
 		err = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}})
@@ -816,7 +896,7 @@ func (r *relayTunnelRouter) openSource(grant *pb.RelaySignedGrant) (*relaySource
 		cancel()
 		return nil, err
 	}
-	return &relaySourceTunnel{router: r, stream: stream, cancel: cancel, maxFrame: int(first.GetReady().MaxFrameBytes)}, nil
+	return &relaySourceTunnel{router: r, stream: stream, closeSend: stream.CloseSend, cancel: cancel, maxFrame: int(first.GetReady().MaxFrameBytes)}, nil
 }
 
 // bridge carries connection over the tunnel until either side ends it.
@@ -824,11 +904,24 @@ func (t *relaySourceTunnel) bridge(connection net.Conn) {
 	defer t.cancel()
 	t.router.active.Add(1)
 	defer t.router.active.Add(-1)
+	if t.session != nil {
+		_ = bridgeRelayConnection(connection, t.session, t.session.MaxFrame(), t.session.Cancel)
+		t.session.Cancel()
+		return
+	}
+	if !t.localService {
+		// Counted per relay: a relay that still carries raw streams needs the
+		// long drain grace.
+		defer t.router.plugin.relayStreams().sources.TrackLegacy(t.router.targetID)()
+	}
 	_ = bridgeRelayConnection(connection, t.stream, t.maxFrame, t.cancel)
 }
 
 // close abandons a tunnel that was never bridged.
 func (t *relaySourceTunnel) close() {
+	if t.session != nil {
+		t.session.Abort(relayresume.RstAborted, "local connection gone")
+	}
 	t.cancel()
 }
 

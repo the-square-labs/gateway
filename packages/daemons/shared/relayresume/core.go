@@ -1112,17 +1112,19 @@ func (c *Core) AcceptResume(p *Path, record *Record, now time.Time) ResumeVerdic
 	p.mac = ctx
 	c.epoch = record.Epoch
 	c.Migrations++
+	// RESUME_ACK is the first record on the path: the source trusts nothing
+	// before it (advanceUna may announce a grown window with an ACK).
+	answer := Record{Type: TypeResumeAck, SessionID: c.sessionID, Epoch: record.Epoch, RcvNxt: c.rcvNxt, SendFrom: record.RcvNxt}
+	answer.MAC = ComputeMAC(key, ctx.ResumeAckTranscript(answer.Epoch, answer.RcvNxt, answer.SendFrom))
+	c.emitRecord(p, &answer)
 	c.cur = p
 	p.established = true
 	p.sendCursor = record.RcvNxt
 	p.recvCursor = c.rcvNxt
 	c.Retransmitted += c.sndNxt - record.RcvNxt
-	c.advanceUna(record.RcvNxt)
 	c.state = StateOpen
 	c.suspendDeadline = time.Time{}
-	answer := Record{Type: TypeResumeAck, SessionID: c.sessionID, Epoch: record.Epoch, RcvNxt: c.rcvNxt, SendFrom: record.RcvNxt}
-	answer.MAC = ComputeMAC(key, ctx.ResumeAckTranscript(answer.Epoch, answer.RcvNxt, answer.SendFrom))
-	c.emitRecord(p, &answer)
+	c.advanceUna(record.RcvNxt)
 	c.ackSent = c.delivered
 	c.pump()
 	c.afterDeliver(now)

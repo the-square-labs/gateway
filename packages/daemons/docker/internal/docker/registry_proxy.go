@@ -422,7 +422,8 @@ func (m *dockerRegistryProxyManager) openRelayConnection(ctx context.Context, bi
 		m.trackConnection(binding.id, client, true)
 		go func() {
 			defer relaySide.Close()
-			_ = router.openSourceTunnel(relaySide, candidate.GetGrant())
+			// Registry streams end at the local relay: never resumable.
+			_ = router.openSourceTunnel(relaySide, candidate.GetGrant(), nil)
 		}()
 		go func() {
 			<-ctx.Done()

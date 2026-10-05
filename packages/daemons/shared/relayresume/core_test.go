@@ -305,3 +305,34 @@ func TestCoreWindowBlocksAndGrows(t *testing.T) {
 		t.Fatalf("window %d, budget used %d", pair.src.Window(), budget.Used())
 	}
 }
+
+// RESUME_ACK is the first record on the resumed path even when the resume
+// acknowledges enough to grow the target's window (which announces itself
+// with an ACK).
+func TestCoreResumeAckComesFirst(t *testing.T) {
+	pair := newCorePair(t)
+	pair.tgt.Write(make([]byte, 200*1024), pair.now)
+	// The source receives everything, its acks are lost.
+	pair.deliverOutputs(pair.tgt, pair.tgt.TakeOutputs(), pair.src)
+	for {
+		if _, _, ok := pair.src.Read(pair.now); !ok {
+			break
+		}
+	}
+	pair.src.TakeOutputs()
+	pair.tgt.blocked, pair.tgt.ackedBlocked = true, 10*MaxWindow
+	_, tgtPath, resume := pair.resumeFrame("relay-b")
+	if verdict := pair.tgt.AcceptResume(tgtPath, &resume, pair.now); !verdict.Accepted {
+		t.Fatalf("verdict %+v", verdict)
+	}
+	for _, out := range pair.tgt.TakeOutputs() {
+		if out.Path != tgtPath || out.Close {
+			continue
+		}
+		if out.Frame[0] != TypeResumeAck {
+			t.Fatalf("first record on the resumed path is 0x%02x", out.Frame[0])
+		}
+		return
+	}
+	t.Fatal("no RESUME_ACK")
+}

@@ -59,17 +59,11 @@ func (m *managedDatabaseManager) dial(ctx context.Context, managedDatabaseID str
 	return connection, err
 }
 
-// dialLink connects a relay client of the managed_database endpoint. For a
-// TLS-enabled PostgreSQL it negotiates the opening of the client's session
-// (see negotiateManagedPostgresLink); every other engine is a plain dial.
-func (m *managedDatabaseManager) dialLink(ctx context.Context, managedDatabaseID string, stream relayFrameStream, cancel context.CancelFunc) (net.Conn, error) {
-	connection, record, err := m.dialRecord(ctx, managedDatabaseID)
-	if err != nil {
-		return nil, err
-	}
-	return m.prepareLinkConnection(ctx, connection, record, stream, cancel)
-}
-
+// prepareLinkConnection readies a relay client's connection of the
+// managed_database endpoint: for a TLS-enabled PostgreSQL it negotiates the
+// opening of the client's session (see negotiateManagedPostgresLink); every
+// other engine is used as dialed. stream is the raw tunnel or, for a
+// resumable stream, its session.
 func (m *managedDatabaseManager) prepareLinkConnection(ctx context.Context, connection net.Conn, record managedDatabaseRecord, stream relayFrameStream, cancel context.CancelFunc) (net.Conn, error) {
 	if !managedDatabaseLinkNeedsPostgresTLS(record) {
 		return connection, nil

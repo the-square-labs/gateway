@@ -16,6 +16,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
+	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"github.com/wiolett-industries/gateway/daemon-shared/sysmetrics"
@@ -105,6 +106,13 @@ type DockerPlugin struct {
 	linkFlows                linkFlowSet
 	// egressDatabaseSlots holds the database link sessions of the egress socket at their node limit.
 	egressDatabaseSlots chan struct{}
+
+	// resumable holds the resumable relay streams (RSv1) of both sides.
+	resumableMu sync.Mutex
+	resumable   *relayStreamSides
+	// endpointDialer replaces the backends of incoming relay tunnels in tests.
+	endpointDialer func(context.Context, *pb.RelayGrantAssignment) (dialedEndpoint, error)
+
 	// startedAt is when Init began: link connections accepted before the relay lanes are up wait for them
 	// (relayLaneStartupWait).
 	startedAt time.Time
@@ -498,13 +506,14 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				managedTLSReloadCapability,
 				"generic_relay_tunnel_v1",
 				"relay_pool_v1",
+				relayresume.Capability,
 			}
 			if p.backupHandler != nil {
 				values = append(values, "database_backups_v1", "database_backups_deadline_v1", "database_backups_tls_verification_v1", storageCopyCapability)
 			}
 			return values
 		}
-		values := []string{"docker_deployments_v1", "docker_gpu_v1", dockerMigrationCapability, "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1", "docker_duplicate_label_filter_v1", "docker_duplicate_env_removal_v1"}
+		values := []string{"docker_deployments_v1", "docker_gpu_v1", dockerMigrationCapability, "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", relayresume.Capability, "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1", "docker_duplicate_label_filter_v1", "docker_duplicate_env_removal_v1"}
 		if p.cfg.Docker.Mode == "" && p.availability != nil {
 			values = append(values, dockerAvailabilityCapability)
 		}

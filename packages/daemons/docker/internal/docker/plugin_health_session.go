@@ -16,6 +16,7 @@ func (p *DockerPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 	base.AvailabilityLease = p.availabilityLeaseReport()
 	// So do the link counters: they come from the daemon's own state.
 	base.ManagedLinks = p.managedLinkRuntime()
+	base.RelayStreams = p.relayStreamStats()
 	if p.storageManager != nil {
 		mount, err := p.storageManager.storageRootHealthMount()
 		if err != nil {

@@ -182,7 +182,7 @@ func runRelayPoolTarget(
 				liveRelayTransports.set(target.ID, conn)
 			}
 			connections = append(connections, conn)
-			go keepRelayLaneConnected(targetCtx, conn, laneDropped)
+			go keepRelayLaneConnected(targetCtx, conn, laneDropped, laneLeftReady(plugin, target.ID, conn))
 			go func() {
 				plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
 				laneEnded <- struct{}{}
@@ -226,13 +226,29 @@ func runRelayPoolTarget(
 	}
 }
 
+// RelayLaneStatePlugin is told when a relay lane leaves the connected state:
+// a stopping relay's GOAWAY (it keeps existing streams for seconds) or a
+// transport failure. Resumable streams on that lane move at once.
+type RelayLaneStatePlugin interface {
+	RelayLaneLeftReady(relayInstanceID string, conn *grpc.ClientConn)
+}
+
+func laneLeftReady(plugin RelayPoolTunnelPlugin, relayInstanceID string, conn *grpc.ClientConn) func() {
+	hook, ok := plugin.(RelayLaneStatePlugin)
+	if !ok {
+		return nil
+	}
+	return func() { hook.RelayLaneLeftReady(relayInstanceID, conn) }
+}
+
 // keepRelayLaneConnected reconnects a lane whose transport dropped. gRPC
 // leaves such a connection idle until the next call on it, but tunnels are
 // only opened on lanes that are connected: a relay that was unreachable for a
 // while would stay out of use after it came back. Each time the lane leaves
 // the connected state it is signalled on dropped (nil for none), even when it
-// is connected again by the time the signal is read.
-func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn, dropped chan<- struct{}) {
+// is connected again by the time the signal is read, and leftReady runs (nil
+// for none).
+func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn, dropped chan<- struct{}, leftReady func()) {
 	for {
 		state := conn.GetState()
 		if state == connectivity.Idle {
@@ -243,6 +259,9 @@ func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn, dropped 
 		}
 		if state == connectivity.Ready {
 			notifyRelayLanes(dropped)
+			if leftReady != nil {
+				leftReady()
+			}
 		}
 	}
 }

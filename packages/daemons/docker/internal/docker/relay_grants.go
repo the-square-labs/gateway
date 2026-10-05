@@ -159,6 +159,9 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 		return "", err
 	}
 	p.reconcileRelayRegistrations()
+	// Resumable streams follow the bundle: off draining relays, ended when
+	// their route or endpoint is gone.
+	p.relayStreamsOnBundle()
 	listenerStatuses := map[string]managedDatabaseHostListenerStatus{}
 	if p.databaseListeners != nil {
 		// Each network inspect has its own bound; this one bounds the whole set (a slow dockerd, many bindings).
