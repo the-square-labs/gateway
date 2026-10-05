@@ -242,7 +242,7 @@ func statsResponseToProto(stats *container.StatsResponse, inspect *container.Ins
 	cs.CpuPercent = calculateCPUPercent(stats, inspect)
 
 	// Memory
-	cs.MemoryUsageBytes = int64(stats.MemoryStats.Usage)
+	cs.MemoryUsageBytes = containerWorkingSetBytes(stats.MemoryStats)
 	cs.MemoryLimitBytes = int64(stats.MemoryStats.Limit)
 	// Docker may report host RAM here even for a configured container quota.
 	// Reuse the inspect already fetched for CPU accounting, retaining a lower
@@ -279,6 +279,25 @@ func statsResponseToProto(stats *container.StatsResponse, inspect *container.Ins
 	cs.Pids = int64(stats.PidsStats.Current)
 
 	return cs
+}
+
+// containerWorkingSetBytes is container memory as the docker stats CLI shows
+// it: usage minus the inactive file cache, which the kernel reclaims before
+// the container hits its limit. cgroup v2 reports inactive_file, cgroup v1
+// total_inactive_file; older v1 daemons only have cache.
+func containerWorkingSetBytes(mem container.MemoryStats) int64 {
+	usage := mem.Usage
+	cache, ok := mem.Stats["inactive_file"]
+	if !ok {
+		cache, ok = mem.Stats["total_inactive_file"]
+	}
+	if !ok {
+		cache = mem.Stats["cache"]
+	}
+	if cache >= usage {
+		return 0
+	}
+	return int64(usage - cache)
 }
 
 // calculateCPUPercent computes container CPU relative to the CPU capacity available
