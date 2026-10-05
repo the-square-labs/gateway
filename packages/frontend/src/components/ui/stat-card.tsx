@@ -10,6 +10,8 @@ export interface StatCardProps {
   color?: string;
   subtitle?: string;
   subtitleClassName?: string;
+  /** A small secondary line under the subtitle, such as a raw path. */
+  footnote?: string;
   progress?: { percent: number; color?: string };
   sparklineMax?: number;
   /** Override text color for label and value (e.g. for warning state) */
@@ -29,6 +31,7 @@ export function StatCard({
   color = "var(--color-primary)",
   subtitle,
   subtitleClassName,
+  footnote,
   progress,
   sparklineMax,
   valueColor,
@@ -82,6 +85,11 @@ export function StatCard({
             )}
           >
             {subtitle}
+          </p>
+        )}
+        {footnote && (
+          <p className="truncate text-2xs text-muted-foreground" title={footnote}>
+            {footnote}
           </p>
         )}
       </div>

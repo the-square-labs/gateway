@@ -21,7 +21,9 @@ import { StatCard } from "@/components/ui/stat-card";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import {
+  type DatabaseType,
   type DockerBuild,
   hasGpuMetric,
   hasGpuMonitoringMetrics,
@@ -30,6 +32,7 @@ import {
   type NodeMonitoringSnapshot,
 } from "@/types";
 import { ACTIVE_DOCKER_BUILD_STATUSES } from "../docker-detail/docker-build-status";
+import { MANAGED_STORAGE_ENGINE_LABELS } from "../storage-detail/managed-storage-engine";
 
 /** How long the tab waits for the stream's first sample before showing without it. */
 const MONITORING_FIRST_SAMPLE_WAIT_MS = 8000;
@@ -190,6 +193,86 @@ function buildMonitoringBootstrap(
   };
 }
 
+const MANAGED_DATABASE_MOUNT = /\/databases\/mounts\/([^/]+)$/;
+// Managed storage member mounts are named <storage id>-<member index>.
+const MANAGED_STORAGE_MOUNT = /\/databases\/storage\/mounts\/([^/]+)-\d+$/;
+
+const DATABASE_TYPE_LABELS: Record<DatabaseType, string> = {
+  postgres: "Postgres",
+  clickhouse: "ClickHouse",
+  redis: "Redis",
+};
+
+/**
+ * Names the disk mounts of managed databases and storage on the node ("orders (Postgres)"), from the managed
+ * resource lists the user may view. Mounts it cannot name keep their path.
+ */
+function useManagedDiskMountLabels(mountPoints: string[]): Record<string, string> {
+  const canViewDatabases = useAuthStore((state) => state.hasScopedAccess("databases:view"));
+  const canViewStorage = useAuthStore((state) => state.hasScopedAccess("storage:view"));
+  const needsDatabases = mountPoints.some((mountPoint) => MANAGED_DATABASE_MOUNT.test(mountPoint));
+  const needsStorage = mountPoints.some((mountPoint) => MANAGED_STORAGE_MOUNT.test(mountPoint));
+  const [databaseLabels, setDatabaseLabels] = useState<Record<string, string>>({});
+  const [storageLabels, setStorageLabels] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!needsDatabases || !canViewDatabases) return;
+    let cancelled = false;
+    api
+      .listManagedDatabases()
+      .then((databases) => {
+        if (cancelled) return;
+        setDatabaseLabels(
+          Object.fromEntries(
+            databases.map((database) => [
+              database.id,
+              `${database.name} (${DATABASE_TYPE_LABELS[database.type] ?? database.type})`,
+            ])
+          )
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewDatabases, needsDatabases]);
+
+  useEffect(() => {
+    if (!needsStorage || !canViewStorage) return;
+    let cancelled = false;
+    api
+      .listManagedObjectStorages()
+      .then((storages) => {
+        if (cancelled) return;
+        setStorageLabels(
+          Object.fromEntries(
+            storages.map((storage) => [
+              storage.id,
+              `${storage.name} (${MANAGED_STORAGE_ENGINE_LABELS[storage.engine ?? "minio"]} storage)`,
+            ])
+          )
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewStorage, needsStorage]);
+
+  const labels: Record<string, string> = {};
+  for (const mountPoint of mountPoints) {
+    const databaseId = MANAGED_DATABASE_MOUNT.exec(mountPoint)?.[1];
+    const storageId = MANAGED_STORAGE_MOUNT.exec(mountPoint)?.[1];
+    const label = databaseId
+      ? databaseLabels[databaseId]
+      : storageId
+        ? storageLabels[storageId]
+        : undefined;
+    if (label) labels[mountPoint] = label;
+  }
+  return labels;
+}
+
 export function NodeMonitoringTab({
   nodeId,
   nodeStatus,
@@ -305,6 +388,10 @@ export function NodeMonitoringTab({
     nodeStatus === "online" &&
       !streamStalled &&
       (!latest || (nodeType === "builder" && recentBuilds === null))
+  );
+
+  const managedMountLabels = useManagedDiskMountLabels(
+    latest?.health?.diskMounts?.map((mount) => mount.mountPoint) ?? []
   );
 
   if (nodeStatus !== "online") {
@@ -658,18 +745,23 @@ export function NodeMonitoringTab({
         <div>
           <h3 className="text-sm font-semibold mb-2 text-muted-foreground">Disk Mounts</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {otherMounts.map((mount) => (
-              <StatCard
-                key={mount.mountPoint}
-                label={mount.mountPoint}
-                value={`${fixed(mount.usagePercent, 1)}%`}
-                icon={HardDrive}
-                history={[]}
-                color="#f97316"
-                progress={{ percent: finiteNumber(mount.usagePercent) }}
-                subtitle={`${formatBytes(mount.usedBytes)} / ${formatBytes(mount.totalBytes)} (${mount.device})`}
-              />
-            ))}
+            {otherMounts.map((mount) => {
+              const managedLabel = managedMountLabels[mount.mountPoint];
+              const usage = `${formatBytes(mount.usedBytes)} / ${formatBytes(mount.totalBytes)}`;
+              return (
+                <StatCard
+                  key={mount.mountPoint}
+                  label={managedLabel ?? mount.mountPoint}
+                  value={`${fixed(mount.usagePercent, 1)}%`}
+                  icon={HardDrive}
+                  history={[]}
+                  color="#f97316"
+                  progress={{ percent: finiteNumber(mount.usagePercent) }}
+                  subtitle={managedLabel ? usage : `${usage} (${mount.device})`}
+                  footnote={managedLabel ? `${mount.mountPoint} (${mount.device})` : undefined}
+                />
+              );
+            })}
           </div>
         </div>
       )}
