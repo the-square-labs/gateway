@@ -252,6 +252,42 @@ describe.skipIf(!url)('resumable relay streams', () => {
       ]);
     });
 
+    it('makes a new route resumable before its source gets it: the target takes the key first', async () => {
+      await service.enableBeforeSourceSync({ sourceNodeId: sourceId });
+      expect(syncs).toEqual([{ nodeId: targetId, state: 'enabling', keyVersion: 1, prevKeyVersion: null }]);
+      expect((await routeState()).resumeState).toBe('on');
+      // Nothing left to do for the next delivery to this source.
+      syncs = [];
+      await service.enableBeforeSourceSync({ sourceNodeId: sourceId });
+      expect(syncs).toEqual([]);
+    });
+
+    it('leaves a new route raw while its target has not taken the key', async () => {
+      failing.add(targetId);
+      await service.enableBeforeSourceSync({ sourceNodeId: sourceId });
+      expect((await routeState()).resumeState).toBe('enabling');
+    });
+
+    it('leaves a new route raw when one of its ends does not support resumable streams', async () => {
+      await db
+        .update(nodes)
+        .set({ capabilities: capabilities(false) as never })
+        .where(eq(nodes.id, sourceId));
+      await service.enableBeforeSourceSync({ sourceNodeId: sourceId });
+      expect(syncs).toEqual([]);
+      expect((await routeState()).resumeState).toBe('off');
+    });
+
+    it('makes a new Gateway route resumable before Gateway opens it', async () => {
+      await db
+        .update(relayRoutes)
+        .set({ sourceKind: 'gateway', sourceId: 'gateway' })
+        .where(eq(relayRoutes.id, routeId));
+      await service.enableBeforeSourceSync({ routeIds: [routeId] });
+      expect(syncs.map(({ nodeId, state }) => [nodeId, state])).toEqual([[targetId, 'enabling']]);
+      expect((await routeState()).resumeState).toBe('on');
+    });
+
     it('needs no delivery for a Gateway source', async () => {
       await db
         .update(relayRoutes)

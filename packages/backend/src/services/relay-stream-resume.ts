@@ -1,5 +1,5 @@
 import { hkdfSync, randomBytes } from 'node:crypto';
-import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   nodes,
@@ -517,9 +517,36 @@ export class RelayStreamResumeService {
     return this.running;
   }
 
-  private async reconcileOnce(now = Date.now()): Promise<void> {
+  /**
+   * Turns on, targets first, the routes a source is about to get its grants for, while both their ends support
+   * resumable streams: a route created now is resumable in the very bundle that brings it to its source, so no stream
+   * on it ever opens raw. Only routes that are off or half-enabled are touched; the targets get their bundles here and
+   * the caller delivers the source's. A target that does not take its bundle leaves the route raw for now; the minute
+   * reconcile retries it.
+   */
+  async enableBeforeSourceSync(filter: { sourceNodeId: string } | { routeIds: string[] }): Promise<void> {
+    if ('routeIds' in filter && filter.routeIds.length === 0) return;
     if (!(await this.secret())) return;
-    const routes = await this.db
+    const { states, ends } = await this.loadRouteStates(
+      and(
+        'sourceNodeId' in filter
+          ? and(eq(relayRoutes.sourceKind, 'daemon'), eq(relayRoutes.sourceId, filter.sourceNodeId))
+          : inArray(relayRoutes.id, filter.routeIds),
+        inArray(relayRoutes.resumeState, ['off', 'enabling'])
+      )
+    );
+    const enable = states.filter(({ desired }) => desired).map(({ id }) => id);
+    if (!enable.length) return;
+    await this.setState(enable, ['off', 'enabling'], 'enabling');
+    const confirmed = await this.syncSides(
+      enable.map((id) => ends.get(id)!),
+      'target'
+    );
+    if (confirmed.length) await this.setState(confirmed, ['enabling'], 'on');
+  }
+
+  private async loadRouteStates(where?: SQL) {
+    const query = this.db
       .select({
         id: relayRoutes.id,
         sourceKind: relayRoutes.sourceKind,
@@ -532,7 +559,9 @@ export class RelayStreamResumeService {
       })
       .from(relayRoutes)
       .innerJoin(relayEndpoints, eq(relayRoutes.targetEndpointId, relayEndpoints.id));
-    if (!routes.length) return;
+    const routes = await (where ? query.where(where) : query);
+    const ends = new Map<string, RouteEnds>();
+    if (!routes.length) return { states: [] as ResumeRouteState[], ends };
     const nodeIds = [
       ...new Set(
         routes.flatMap((route) => [
@@ -557,7 +586,6 @@ export class RelayStreamResumeService {
             .map(({ id }) => id)
         : []
     );
-    const ends = new Map<string, RouteEnds>();
     const states: ResumeRouteState[] = routes.map((route) => {
       const targetNodeId = route.endpointSubjectKind === 'daemon' ? route.targetNodeId : null;
       ends.set(route.id, { id: route.id, sourceKind: route.sourceKind, sourceId: route.sourceId, targetNodeId });
@@ -573,6 +601,13 @@ export class RelayStreamResumeService {
           route.endpointStatus === 'active' && targetNodeId !== null && capable.has(targetNodeId) && sourceCapable,
       };
     });
+    return { states, ends };
+  }
+
+  private async reconcileOnce(now = Date.now()): Promise<void> {
+    if (!(await this.secret())) return;
+    const { states, ends } = await this.loadRouteStates();
+    if (!states.length) return;
     const plan = planResumeTransitions(states, now);
     if (!Object.values(plan).some((ids) => ids.length)) return;
     logger.info('Changing which relay routes carry resumable streams', {

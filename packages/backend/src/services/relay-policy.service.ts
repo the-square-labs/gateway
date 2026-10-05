@@ -115,6 +115,11 @@ const logger = createChildLogger('RelayPolicyService');
 export interface RelayGrantSyncOptions {
   /** Skip a daemon that recently got a bundle allowing exactly the same (see deliveredRecently). */
   skipUnchanged?: boolean;
+  /**
+   * Deliver without first turning on the daemon's new resumable routes at their targets (see
+   * RelayStreamResumeService.enableBeforeSourceSync). Set for the target deliveries that sequence itself makes.
+   */
+  skipResumeEnable?: boolean;
 }
 
 /**
@@ -413,7 +418,7 @@ export class RelayPolicyService {
     this.grantKeys = new RelayGrantKeyService(db, cryptoService, settings);
     this.policyKeys = new RelayPolicySigningKeyService(db, cryptoService);
     this.streamResume = new RelayStreamResumeService(db, cryptoService, {
-      syncNodeGrants: (nodeId) => this.syncNodeGrants(nodeId),
+      syncNodeGrants: (nodeId) => this.syncNodeGrants(nodeId, { skipResumeEnable: true }),
     });
     this.grantIssuer.setResumeSecretSource(() => this.streamResume.secret());
   }
@@ -768,6 +773,8 @@ export class RelayPolicyService {
     const deadline = Date.now() + (options.timeoutMs ?? 90_000);
     let delayMs = options.initialDelayMs ?? 1_000;
     let reason = 'the daemon did not report it';
+    // The bundle that brings a new link route to its source already makes it resumable.
+    await this.enableResumableRoutesOf(nodeId);
     for (let attempt = 0; attempt === 0 || Date.now() < deadline; attempt++) {
       if (attempt > 0) {
         await new Promise((resolve) => setTimeout(resolve, Math.min(delayMs, Math.max(0, deadline - Date.now()))));
@@ -1964,6 +1971,13 @@ export class RelayPolicyService {
       endpointId
     );
     await this.syncSnapshot();
+    // Gateway reads its route at every open: turned on at the target here, its streams are resumable from the first.
+    await this.streamResume.enableBeforeSourceSync({ routeIds: [routeId] }).catch((error) => {
+      logger.warn('Resumable streams for a Gateway relay route deferred to the next reconcile', {
+        routeId,
+        error: errorMessage(error),
+      });
+    });
     await this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC);
     return routeId;
   }
@@ -2238,6 +2252,13 @@ export class RelayPolicyService {
       endpointId
     );
     await this.syncSnapshot();
+    // Gateway reads its route at every open: turned on at the target here, its streams are resumable from the first.
+    await this.streamResume.enableBeforeSourceSync({ routeIds: [routeId] }).catch((error) => {
+      logger.warn('Resumable streams for a Gateway relay route deferred to the next reconcile', {
+        routeId,
+        error: errorMessage(error),
+      });
+    });
     await this.syncNodeGrants(targetNodeId, ROUTINE_GRANT_SYNC);
     return routeId;
   }
@@ -2461,12 +2482,27 @@ export class RelayPolicyService {
 
   async syncNodeGrants(nodeId: string, options: RelayGrantSyncOptions = {}): Promise<void> {
     if (!this.dispatch) return;
+    if (!options.skipResumeEnable) await this.enableResumableRoutesOf(nodeId);
     let result = await this.syncNodeGrantBundle(nodeId, options);
     if (!result.success && (await this.raiseRevisionAboveDaemon(nodeId, result.error))) {
       result = await this.syncNodeGrantBundle(nodeId, options);
     }
     if (result.success) this.staleGrantRefusals.delete(nodeId);
     if (!result.success) throw new Error(result.error || `Daemon ${nodeId} rejected relay grants`);
+  }
+
+  /**
+   * A route both of whose ends support resumable streams reaches its source already resumable: its targets get the key
+   * first, then the source's own delivery carries it. Runs before the source's queue, so two daemons that are each
+   * other's targets never wait on each other.
+   */
+  private async enableResumableRoutesOf(nodeId: string): Promise<void> {
+    await this.streamResume.enableBeforeSourceSync({ sourceNodeId: nodeId }).catch((error) => {
+      logger.warn('Resumable streams for new relay routes deferred to the next reconcile', {
+        nodeId,
+        error: errorMessage(error),
+      });
+    });
   }
 
   /**
