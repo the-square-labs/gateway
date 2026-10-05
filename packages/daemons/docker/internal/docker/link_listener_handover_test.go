@@ -33,7 +33,15 @@ func connectKeeper(t *testing.T, store *listenerkeep.Store, inherited map[string
 	}
 	descriptors := []kept{}
 	for name, file := range inherited {
-		descriptors = append(descriptors, kept{Name: name, FD: int(file.Fd())})
+		// The next process owns its inherited descriptors alone, as one the launcher started does: a second owner (this
+		// test's *os.File) would close the descriptor when the garbage collector finalizes it, under the process, and
+		// later a descriptor that reused the number (seen as listeners not kept or not adopted under load).
+		fd, err := syscall.Dup(int(file.Fd()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = file.Close()
+		descriptors = append(descriptors, kept{Name: name, FD: fd})
 	}
 	encoded, _ := json.Marshal(descriptors)
 	t.Setenv("GATEWAY_DAEMON_LAUNCHER_MANAGED", "1")
