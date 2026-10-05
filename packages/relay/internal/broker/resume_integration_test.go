@@ -1130,8 +1130,11 @@ func TestResumeRefusedAfterRevocation(t *testing.T) {
 		t.Fatal("a revoked stream was not cut")
 	}
 	var reset *relayresume.ResetError
-	if err := session.Err(); !errors.As(err, &reset) || reset.Reject != relayresume.RejectUnauthorized {
-		t.Fatalf("revoked stream ended with %v, want RESUME_REJ unauthorized", err)
+	// The first refusal is "unauthorized"; a retry that reaches the target after it reset the session meets the
+	// tombstone ("reset"). Either way the stream is cut.
+	if err := session.Err(); !errors.As(err, &reset) ||
+		(reset.Reject != relayresume.RejectUnauthorized && reset.Reject != relayresume.RejectReset) {
+		t.Fatalf("revoked stream ended with %v, want RESUME_REJ unauthorized or reset", err)
 	}
 	if setup.target.count(relayresume.AcceptRefused) == 0 {
 		t.Fatal("the target never refused the resume")
