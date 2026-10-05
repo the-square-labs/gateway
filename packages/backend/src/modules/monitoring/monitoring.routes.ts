@@ -42,7 +42,7 @@ import {
   dashboardPinnedDatabaseWarningIds,
   dashboardPinnedDockerWarningKeys,
   getDashboardAttentionSeverity,
-  hasNodeCapacityWarning,
+  hasSustainedNodeCapacityWarning,
   lowInferenceUsageWindows,
   nodeHealthAttentionIds,
   proxyHealthAttentionIds,
@@ -677,7 +677,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   ]);
   const now = Date.now();
   const nodeCardIds = nodeResponse.data
-    .filter((node: any) => dashboardPinNodeIds.includes(node.id) || hasNodeCapacityWarning(node))
+    .filter((node: any) => dashboardPinNodeIds.includes(node.id) || hasSustainedNodeCapacityWarning(node))
     .map((node: any) => node.id);
   const nodeHealthRows =
     nodeCardIds.length > 0
@@ -735,7 +735,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       Number.isFinite(mfa.graceExpiresAt) &&
       mfa.graceExpiresAt > now
   );
-  const nodeCapacityIds = dashboardNodes.filter(hasNodeCapacityWarning).map((node: any) => node.id);
+  const nodeCapacityIds = dashboardNodes.filter(hasSustainedNodeCapacityWarning).map((node: any) => node.id);
   const nodeHealthIds = nodeHealthAttentionIds(dashboardNodes, now);
   const proxyHealthIds = canViewProxy
     ? proxyHealthAttentionIds(

@@ -7,10 +7,14 @@ import {
   effectiveNodeStatus,
   getDashboardAttentionSeverity,
   hasNodeCapacityWarning,
+  hasSustainedNodeCapacityWarning,
   lowInferenceUsageWindows,
+  NODE_CAPACITY_SUSTAINED_REPORTS,
   nodeCapacityWarnings,
   nodeHealthAttentionIds,
   proxyHealthAttentionIds,
+  recordNodeCapacitySample,
+  resetNodeCapacityStreaksForTest,
 } from './dashboard-attention.js';
 
 /**
@@ -169,5 +173,26 @@ describe('getDashboardAttentionSeverity', () => {
     expect(getDashboardAttentionSeverity([{ severity: 'info' }])).toBe('info');
     expect(getDashboardAttentionSeverity([{ severity: 'info' }, { severity: 'warning' }])).toBe('warning');
     expect(getDashboardAttentionSeverity([{ severity: 'warning' }, { severity: 'critical' }])).toBe('critical');
+  });
+});
+
+describe('node capacity dot needs a sustained value', () => {
+  it('one busy report raises nothing; the dot comes on after consecutive busy reports and clears on one calm report', () => {
+    resetNodeCapacityStreaksForTest();
+    const busy = healthReport({ cpuPercent: 95 });
+    const calm = healthReport({});
+    const node = (report: Record<string, unknown>) => ({ id: 'node-1', lastHealthReport: report });
+
+    recordNodeCapacitySample('node-1', busy);
+    expect(hasSustainedNodeCapacityWarning(node(busy))).toBe(false);
+    recordNodeCapacitySample('node-1', calm);
+    for (let i = 1; i < NODE_CAPACITY_SUSTAINED_REPORTS; i++) recordNodeCapacitySample('node-1', busy);
+    expect(hasSustainedNodeCapacityWarning(node(busy))).toBe(false);
+    recordNodeCapacitySample('node-1', busy);
+    expect(hasSustainedNodeCapacityWarning(node(busy))).toBe(true);
+
+    recordNodeCapacitySample('node-1', calm);
+    expect(hasSustainedNodeCapacityWarning(node(calm))).toBe(false);
+    expect(hasSustainedNodeCapacityWarning({ id: 'node-2', lastHealthReport: busy })).toBe(false);
   });
 });

@@ -12,6 +12,7 @@ import {
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { HostingAccountObservation } from '@/modules/hosting/hosting-observations.service.js';
+import { recordNodeCapacitySample } from '@/modules/monitoring/dashboard-attention.js';
 import type { CacheService, RedisClient } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
@@ -40,6 +41,10 @@ import {
   renderTemplate,
 } from './notification-templates.js';
 import type { NotificationWebhookService } from './notification-webhook.service.js';
+
+/** Consecutive reports a default node CPU, memory or disk rule must breach before it fires. */
+export const NODE_METRIC_SUSTAINED_REPORTS = 3;
+const SUSTAINED_NODE_METRICS = new Set(['cpu', 'memory', 'disk']);
 
 const logger = createChildLogger('NotificationEvaluator');
 
@@ -145,6 +150,9 @@ export class NotificationEvaluatorService {
   private lastRuleCacheRefresh = 0;
   private readonly RULE_CACHE_TTL = 30_000;
 
+  /** Consecutive breaching reports per node metric rule and resource; see sustainedNodeMetricBreach. */
+  private readonly nodeMetricBreachStreaks = new Map<string, number>();
+
   constructor(
     private db: DrizzleClient,
     private ruleService: NotificationAlertRuleService,
@@ -232,6 +240,7 @@ export class NotificationEvaluatorService {
   // ── Health Report Evaluation ────────────────────────────────────────
 
   async evaluateHealthReport(nodeId: string, healthData: any): Promise<void> {
+    recordNodeCapacitySample(nodeId, healthData);
     const rules = await this.getThresholdRules();
     if (rules.length === 0) return;
 
@@ -289,12 +298,28 @@ export class NotificationEvaluatorService {
         );
 
         if (breached) {
+          if (!this.sustainedNodeMetricBreach(rule, compositeResourceId)) continue;
           await this.handleThresholdBreach(rule, compositeResourceId, value, nodeId, resourceId);
         } else {
+          this.nodeMetricBreachStreaks.delete(`${rule.id}:${compositeResourceId}`);
           await this.handleThresholdClear(rule, compositeResourceId, value, nodeId, resourceId);
         }
       }
     }
+  }
+
+  /**
+   * Node CPU, memory and disk rules without a duration of their own fire only after the value held for
+   * NODE_METRIC_SUSTAINED_REPORTS consecutive reports, not on one busy sample. A rule with an explicit duration keeps it.
+   */
+  private sustainedNodeMetricBreach(rule: any, compositeResourceId: string): boolean {
+    if (rule.category !== 'node' || !SUSTAINED_NODE_METRICS.has(rule.metric) || (rule.durationSeconds ?? 0) > 0) {
+      return true;
+    }
+    const key = `${rule.id}:${compositeResourceId}`;
+    const breaches = Math.min((this.nodeMetricBreachStreaks.get(key) ?? 0) + 1, NODE_METRIC_SUSTAINED_REPORTS);
+    this.nodeMetricBreachStreaks.set(key, breaches);
+    return breaches >= NODE_METRIC_SUSTAINED_REPORTS;
   }
 
   async evaluateDatabaseSnapshot(snapshot: {

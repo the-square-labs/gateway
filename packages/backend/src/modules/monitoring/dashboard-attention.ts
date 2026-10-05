@@ -46,6 +46,38 @@ export function hasNodeCapacityWarning(node: { lastHealthReport?: NodeCapacityHe
   return warnings.cpu || warnings.memory || warnings.disk;
 }
 
+/**
+ * Consecutive health reports that must all be at or above the capacity threshold before the node raises the
+ * Dashboard dot and gets a capacity card: one busy sample (a build, an update, a restart) is not a capacity problem.
+ */
+export const NODE_CAPACITY_SUSTAINED_REPORTS = 3;
+const nodeCapacityStreaks = new Map<string, number>();
+
+/** Counts one health report of a node towards its capacity streak; a report below the threshold resets it. */
+export function recordNodeCapacitySample(nodeId: string, health: NodeCapacityHealth | null | undefined): void {
+  const warnings = nodeCapacityWarnings(health);
+  if (warnings.cpu || warnings.memory || warnings.disk) {
+    nodeCapacityStreaks.set(
+      nodeId,
+      Math.min((nodeCapacityStreaks.get(nodeId) ?? 0) + 1, NODE_CAPACITY_SUSTAINED_REPORTS)
+    );
+  } else {
+    nodeCapacityStreaks.delete(nodeId);
+  }
+}
+
+/** The node's latest report is over the threshold and so were the reports before it. */
+export function hasSustainedNodeCapacityWarning(node: {
+  id: string;
+  lastHealthReport?: NodeCapacityHealth | null;
+}): boolean {
+  return hasNodeCapacityWarning(node) && (nodeCapacityStreaks.get(node.id) ?? 0) >= NODE_CAPACITY_SUSTAINED_REPORTS;
+}
+
+export function resetNodeCapacityStreaksForTest(): void {
+  nodeCapacityStreaks.clear();
+}
+
 const NODE_FLAP_WINDOW_MS = 5 * 60 * 1000;
 
 /** An online node that went offline or degraded in the last five minutes shows as degraded. */
