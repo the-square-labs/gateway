@@ -12,6 +12,10 @@ import (
 
 // keepSocketForNextProcess listens at path with mode, hands the listener to the keeper as a stopping daemon process
 // does, and returns the keeper name; the caller then starts the next process with connectKeeper.
+// keeperSettleWait bounds a test's wait for the keeper to apply the messages sent before; Settle returns as soon as
+// they are. One second was too short on a loaded host (the whole daemon suite runs its packages in parallel).
+const keeperSettleWait = 10 * time.Second
+
 func keepSocketForNextProcess(t *testing.T, store *listenerkeep.Store, path string, mode os.FileMode, uid, gid int) string {
 	t.Helper()
 	listener, err := net.Listen("unix", path)
@@ -32,7 +36,7 @@ func keepSocketForNextProcess(t *testing.T, store *listenerkeep.Store, path stri
 		t.Fatal("the listener was not kept")
 	}
 	_ = listener.Close()
-	store.Settle(time.Second)
+	store.Settle(keeperSettleWait)
 	return name
 }
 
@@ -65,7 +69,7 @@ func TestNonRootDaemonReplacesAHandedOverRootSocket(t *testing.T) {
 		_ = listener.Close()
 		t.Fatal("adopted a handed-over 0600 socket the connectors cannot reach")
 	}
-	store.Settle(time.Second)
+	store.Settle(keeperSettleWait)
 	for _, name := range store.Names() {
 		if name == stale {
 			t.Fatal("the socket that no longer fits stayed in the keeper")

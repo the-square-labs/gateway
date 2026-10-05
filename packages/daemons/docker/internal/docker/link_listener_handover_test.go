@@ -49,7 +49,7 @@ func connectKeeper(t *testing.T, store *listenerkeep.Store, inherited map[string
 // inheritedFrom hands the listeners store keeps to the next process, the way the launcher starts it.
 func inheritedFrom(t *testing.T, store *listenerkeep.Store) map[string]*os.File {
 	t.Helper()
-	store.Settle(time.Second)
+	store.Settle(keeperSettleWait)
 	names := store.Names()
 	files, _, _ := store.ChildFiles(3)
 	inherited := map[string]*os.File{}
@@ -75,7 +75,7 @@ func TestRestartHandsDatabaseLinkListenersToTheNextProcess(t *testing.T) {
 	if status := first.reconcile(assignment)[testListenerBindingA]; status.State != "ready" {
 		t.Fatalf("listener status %+v", status)
 	}
-	store.Settle(time.Second)
+	store.Settle(keeperSettleWait)
 	name := hostListenerKeepName(netip.MustParseAddr("127.0.0.1"), first.port)
 	if kept := store.Names(); len(kept) != 1 || kept[0] != name {
 		t.Fatalf("kept %v, want %s", kept, name)

@@ -98,7 +98,7 @@ func TestModeSwitchPreviousSockets(t *testing.T) {
 	if previous.count() != 0 {
 		t.Fatal("previous mode sockets still served after their connector was retired")
 	}
-	store.Settle(time.Second)
+	store.Settle(keeperSettleWait)
 	for _, name := range keptNames {
 		if slices.Contains(store.Names(), name) {
 			t.Fatalf("the listener keeper still holds %s", name)
@@ -145,7 +145,7 @@ func TestModeSwitchToRootPreviousSocket(t *testing.T) {
 		t.Fatalf("the connection made during the switch was not served: %q, %v", line, err)
 	}
 	previous.retire()
-	store.Settle(time.Second)
+	store.Settle(keeperSettleWait)
 	if slices.Contains(store.Names(), keptName) {
 		t.Fatal("the listener keeper still holds the previous mode's socket")
 	}
