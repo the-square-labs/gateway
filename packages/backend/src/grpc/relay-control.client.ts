@@ -6,6 +6,16 @@ import type { PeerCertificate } from 'node:tls';
 import * as grpc from '@grpc/grpc-js';
 import type { AvailabilityLeaseReport } from './generated/types.js';
 import { decodeRelayV1Message, loadRelayV1Proto } from './relay-proto.js';
+import {
+  type AttachablePath,
+  type PathEnd,
+  type RelayResumeRegistry,
+  type RelayResumeStatsSnapshot,
+  ResumableRelayDuplex,
+  type ResumeDialer,
+  type ResumePathSink,
+  relayResumeRegistry,
+} from './relay-resume.js';
 
 export const RELAY_MAX_FRAME_BYTES = 1024 * 1024;
 
@@ -122,6 +132,150 @@ class RelayTunnelDuplex extends Duplex {
     }
     callback(error);
   }
+}
+
+/** Pre-pool assignments without candidates: the path relay id both ends use. */
+export const LEGACY_RELAY_PATH_ID = 'local';
+
+type RelayTunnelStream = grpc.ClientDuplexStream<RelayTunnelMessage, RelayTunnelMessage>;
+
+/** A grpc status that keeps today's terminal semantics instead of starting a resume. */
+function isTerminalTunnelStatus(error: unknown): boolean {
+  const code = (error as { code?: number } | null)?.code;
+  const message = error instanceof Error ? error.message : '';
+  return code === grpc.status.DEADLINE_EXCEEDED && /idle timeout/i.test(message);
+}
+
+/**
+ * One relay tunnel stream after Ready, carrying RSv1 records for a ResumableRelayDuplex. Events wait in a queue until
+ * the session attaches. A relay Error frame or the relay idle timeout end the path terminally; any other end (GOAWAY
+ * cut, relay restart, force-disconnect, transport failure) lets the session resume elsewhere.
+ */
+class RelayResumePath implements AttachablePath {
+  private sink: ResumePathSink | null = null;
+  private readonly backlog: Array<(sink: ResumePathSink) => void> = [];
+  private ended = false;
+  private drainWaiting = false;
+  private laneWatched = false;
+
+  constructor(
+    private readonly stream: RelayTunnelStream,
+    readonly maxFrameBytes: number,
+    readonly relayId: string,
+    private readonly channel: grpc.Channel | null,
+    private readonly dispose: () => void
+  ) {
+    stream.on('data', (message: RelayTunnelMessage) => {
+      if (message.data) {
+        const frame = Buffer.from(message.data.data);
+        this.emit((sink) => sink.frame(frame));
+      } else if (message.error) {
+        this.finish({ error: new Error(message.error.message.slice(0, 256)), terminal: true });
+      } else if (message.close) {
+        this.finish({});
+      } else if (message.halfClose) {
+        // A resume-aware peer never half-closes at the relay level.
+        this.finish({ error: new Error('Relay peer half-closed a resumable stream'), terminal: true });
+      }
+    });
+    stream.once('end', () => this.finish({}));
+    stream.on('error', (error) => this.finish({ error, terminal: isTerminalTunnelStatus(error) }));
+    stream.on('drain', () => {
+      if (!this.drainWaiting) return;
+      this.drainWaiting = false;
+      this.emit((sink) => sink.drained());
+    });
+  }
+
+  attach(sink: ResumePathSink): void {
+    this.sink = sink;
+    for (const event of this.backlog.splice(0)) event(sink);
+    this.watchLane();
+  }
+
+  send(frame: Buffer): boolean {
+    if (this.ended) return true;
+    try {
+      if (this.stream.write({ data: { data: frame } })) return true;
+      this.drainWaiting = true;
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
+  close(): void {
+    if (this.ended) return;
+    this.ended = true;
+    try {
+      this.stream.write({ close: {} });
+      this.stream.end();
+    } catch {
+      this.stream.cancel();
+    }
+    // The relay ends the stream after Close; do not hold the channel for a slow peer.
+    const timer = setTimeout(() => {
+      this.stream.cancel();
+      this.dispose();
+    }, 10_000);
+    timer.unref?.();
+    this.stream.once('close', () => {
+      clearTimeout(timer);
+      this.dispose();
+    });
+  }
+
+  cancel(): void {
+    if (this.ended) return;
+    this.ended = true;
+    this.stream.cancel();
+    this.dispose();
+  }
+
+  private emit(event: (sink: ResumePathSink) => void): void {
+    if (this.sink) event(this.sink);
+    else this.backlog.push(event);
+  }
+
+  private finish(end: PathEnd): void {
+    if (this.ended) {
+      this.dispose();
+      return;
+    }
+    this.ended = true;
+    this.dispose();
+    this.emit((sink) => sink.ended(end));
+  }
+
+  /** GOAWAY leaves the channel not READY while this stream still runs: the session moves at once. */
+  private watchLane(): void {
+    const channel = this.channel;
+    if (!channel || this.laneWatched) return;
+    this.laneWatched = true;
+    const watch = (state: grpc.connectivityState) => {
+      if (this.ended) return;
+      channel.watchConnectivityState(state, Date.now() + 10 * 60_000, (error) => {
+        if (this.ended) return;
+        const next = channel.getConnectivityState(false);
+        if (!error && next !== grpc.connectivityState.READY && state === grpc.connectivityState.READY) {
+          this.emit((sink) => sink.laneLost());
+        }
+        watch(next);
+      });
+    };
+    try {
+      watch(channel.getConnectivityState(false));
+    } catch {
+      // A closed channel has no state to watch.
+    }
+  }
+}
+
+export interface RelayResumeConfig {
+  routeId: string;
+  keyId: string;
+  key: Buffer;
+  halfCloseTimeoutMs?: number;
 }
 
 export interface RelayHealthResponse {
@@ -246,6 +400,7 @@ function loadedIdentity(response: {
 }
 
 export class RelayControlClient {
+  readonly resumeRegistry: RelayResumeRegistry = relayResumeRegistry;
   private admin: any;
   private broker: any;
   private pendingIdentityReload?: { operationId: string; admin: any; broker: any; identity: ClientIdentity };
@@ -500,6 +655,84 @@ export class RelayControlClient {
     throw lastError instanceof Error ? lastError : new Error('Relay candidate is unavailable');
   }
 
+  /**
+   * Opens one relay path for a resumable stream through the local relay (`relayId` is the candidate's relay instance
+   * id, or LEGACY_RELAY_PATH_ID for a pre-pool assignment).
+   */
+  openLocalResumePath(grant: SignedRelayGrant, relayId: string, timeoutMs = 5_000): Promise<AttachablePath> {
+    const broker = this.broker;
+    return this.openStreamWithBroker(broker, grant, timeoutMs, (stream, maxFrameBytes) => {
+      return new RelayResumePath(stream, maxFrameBytes, relayId, channelOf(broker), () => undefined);
+    });
+  }
+
+  /** Opens one relay path for a resumable stream through a pool candidate, trying its addresses in order. */
+  async openCandidateResumePath(
+    candidate: RelayTunnelCandidate & { relayInstanceId: string },
+    timeoutMs = 5_000
+  ): Promise<AttachablePath> {
+    if (!candidate.addresses.length) throw new Error('Relay candidate has no advertised address');
+    if (!candidate.certificateIdentity || !candidate.certificateFingerprint) {
+      throw new Error('Relay candidate identity is incomplete');
+    }
+    const startedAt = Date.now();
+    let lastError: unknown;
+    for (const address of candidate.addresses) {
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) break;
+      const broker = this.createCandidateBroker(address, candidate);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        broker.close();
+      };
+      try {
+        return await this.openStreamWithBroker(broker, candidate.grant, remainingMs, (stream, maxFrameBytes) => {
+          return new RelayResumePath(stream, maxFrameBytes, candidate.relayInstanceId, channelOf(broker), dispose);
+        });
+      } catch (error) {
+        lastError = error;
+        dispose();
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('Relay candidate is unavailable');
+  }
+
+  /**
+   * Opens a resumable (RSv1) stream: the first path through `dial`, then HELLO. Rejects with a ResumeSessionError
+   * of code 'legacy_peer' when the target is not resume-aware; the route is then latched legacy for a while
+   * (isResumeLegacy) and the caller opens a raw tunnel.
+   */
+  openResumableTunnel(config: RelayResumeConfig, dial: ResumeDialer): Promise<Duplex> {
+    return ResumableRelayDuplex.open({ ...config, dial, registry: this.resumeRegistry });
+  }
+
+  /** The route's target answered a HELLO with something else within the latch time: use raw streams. */
+  isResumeLegacy(routeId: string): boolean {
+    return this.resumeRegistry.isLegacy(routeId);
+  }
+
+  /**
+   * Moves Gateway's resumable streams off a draining relay, spread until the deadline (unix ms; 0 or absent: over a
+   * minute). Returns how many streams are affected.
+   */
+  migrateResumableTunnels(relayInstanceId: string, deadlineUnixMs = 0): number {
+    return this.resumeRegistry.drainRelay(relayInstanceId, deadlineUnixMs);
+  }
+
+  /** Telemetry for Gateway's own relayed streams. */
+  relayResumeStats(): RelayResumeStatsSnapshot {
+    return this.resumeRegistry.snapshot();
+  }
+
+  /** Counts a raw (legacy) Gateway stream for telemetry while it is open. */
+  trackLegacyTunnel(tunnel: Duplex): Duplex {
+    this.resumeRegistry.countLegacy(1);
+    tunnel.once('close', () => this.resumeRegistry.countLegacy(-1));
+    return tunnel;
+  }
+
   async probeCandidate(candidate: RelayTunnelCandidate, timeoutMs = 5_000): Promise<void> {
     const tunnel = await this.openCandidateTunnel(candidate, timeoutMs);
     tunnel.destroy();
@@ -536,7 +769,18 @@ export class RelayControlClient {
   }
 
   private openTunnelWithBroker(broker: any, grant: SignedRelayGrant, timeoutMs: number): Promise<Duplex> {
-    const stream = broker.OpenTunnel() as grpc.ClientDuplexStream<RelayTunnelMessage, RelayTunnelMessage>;
+    return this.openStreamWithBroker(broker, grant, timeoutMs, (stream, maxFrameBytes) => {
+      return new RelayTunnelDuplex(stream, maxFrameBytes);
+    });
+  }
+
+  private openStreamWithBroker<T>(
+    broker: any,
+    grant: SignedRelayGrant,
+    timeoutMs: number,
+    wrap: (stream: RelayTunnelStream, maxFrameBytes: number) => T
+  ): Promise<T> {
+    const stream = broker.OpenTunnel() as RelayTunnelStream;
     return new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -564,7 +808,7 @@ export class RelayControlClient {
           settled = true;
           clearTimeout(timer);
           stream.off('error', fail);
-          resolve(new RelayTunnelDuplex(stream, maxFrameBytes));
+          resolve(wrap(stream, maxFrameBytes));
         } else if (message.error) fail(new Error(message.error.message.slice(0, 256)));
         else fail(new Error('Relay returned an invalid open response'));
       });
@@ -593,6 +837,14 @@ export class RelayControlClient {
     if (result.committed === true && this.pendingIdentityCommit === operationId) {
       this.pendingIdentityCommit = undefined;
     }
+  }
+}
+
+function channelOf(client: any): grpc.Channel | null {
+  try {
+    return typeof client?.getChannel === 'function' ? (client.getChannel() as grpc.Channel) : null;
+  } catch {
+    return null;
   }
 }
 

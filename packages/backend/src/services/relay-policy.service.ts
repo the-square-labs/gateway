@@ -1,3 +1,4 @@
+import type { Duplex } from 'node:stream';
 import { status as GrpcStatus } from '@grpc/grpc-js';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
@@ -16,12 +17,14 @@ import {
 } from '@/db/schema/index.js';
 import type { RelayManagedDatabaseListenerConfig, RelaySecureLinkEgressConfig } from '@/db/schema/relay.js';
 import {
+  LEGACY_RELAY_PATH_ID,
   RELAY_MAX_FRAME_BYTES,
   type RelayControlClient,
   type RelayHealthResponse,
   type RelayPolicySnapshot,
 } from '@/grpc/relay-control.client.js';
 import { encodeRelayV1Message } from '@/grpc/relay-proto.js';
+import { type AttachablePath, ResumeSessionError } from '@/grpc/relay-resume.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { leaseLaneNodeIds } from '@/modules/docker/availability/lease/lease-relay-lanes.js';
@@ -1945,22 +1948,84 @@ export class RelayPolicyService {
         database.nodeId,
         appCertificateFingerprint
       )) ?? (await this.ensureGatewayRoute(managedDatabaseId, database.nodeId, appCertificateFingerprint));
-    const assignment = await this.withAcknowledgedPolicy(() =>
-      this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)
-    );
+    return this.openGatewayRouteTunnel(routeId, appCertificateFingerprint);
+  }
+
+  /**
+   * A tunnel from Gateway itself on its route. Resumable (RSv1) when the connect assignment carries stream_resume:
+   * the stream then moves to another relay (or the same one back) on drain, GOAWAY or path failure, reissuing the
+   * assignment for every new path. A target that turns out not to be resume-aware latches the route raw for a while.
+   */
+  private async openGatewayRouteTunnel(routeId: string, appCertificateFingerprint: string): Promise<Duplex> {
+    const issue = () =>
+      this.withAcknowledgedPolicy(() =>
+        this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)
+      );
+    const assignment = await issue();
+    const resume = assignment.streamResume;
+    if (resume && !this.relay.isResumeLegacy(routeId)) {
+      let first: typeof assignment | null = assignment;
+      const dial = async (avoidRelayId: string | null) => {
+        const current = first ?? (await issue());
+        first = null;
+        const path = await this.openGatewayResumePath(current, avoidRelayId);
+        const key = current.streamResume;
+        return key ? { path, keyId: key.keyId, key: Buffer.from(key.key) } : { path };
+      };
+      try {
+        return await this.relay.openResumableTunnel(
+          {
+            routeId,
+            keyId: resume.keyId,
+            key: Buffer.from(resume.key),
+            halfCloseTimeoutMs: resume.halfCloseTimeoutMs ?? 0,
+          },
+          dial
+        );
+      } catch (error) {
+        if (!(error instanceof ResumeSessionError && error.code === 'legacy_peer')) throw error;
+        logger.warn('Gateway relay route target is not resume-aware; using raw streams', { routeId });
+      }
+    }
     const activeCandidates = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
     let lastError: unknown;
     for (const candidate of activeCandidates) {
       try {
-        return candidate.local
-          ? await this.relay.openTunnel(candidate.grant)
-          : await this.relay.openCandidateTunnel(candidate);
+        return this.relay.trackLegacyTunnel(
+          candidate.local
+            ? await this.relay.openTunnel(candidate.grant)
+            : await this.relay.openCandidateTunnel(candidate)
+        );
       } catch (error) {
         lastError = error;
       }
     }
-    if (!activeCandidates.length) return this.relay.openTunnel(assignment.grant);
+    if (!activeCandidates.length) return this.relay.trackLegacyTunnel(await this.relay.openTunnel(assignment.grant));
     throw lastError instanceof Error ? lastError : new Error('Relay pool is unavailable');
+  }
+
+  /** One relay path of a resumable Gateway stream: the first active candidate that opens, avoiding a relay we leave. */
+  private async openGatewayResumePath(
+    assignment: Awaited<ReturnType<RelayGrantIssuerService['issueGatewayConnectAssignment']>>,
+    avoidRelayId: string | null
+  ): Promise<AttachablePath> {
+    const activeCandidates = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
+    if (!activeCandidates.length) {
+      if (avoidRelayId === LEGACY_RELAY_PATH_ID) throw new Error('No other relay is available');
+      return this.relay.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
+    }
+    let lastError: unknown;
+    for (const candidate of activeCandidates) {
+      if (avoidRelayId && candidate.relayInstanceId === avoidRelayId) continue;
+      try {
+        return candidate.local
+          ? await this.relay.openLocalResumePath(candidate.grant, candidate.relayInstanceId)
+          : await this.relay.openCandidateResumePath(candidate);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('No other relay is available');
   }
 
   async probeGatewayRelayCandidate(
@@ -2146,22 +2211,7 @@ export class RelayPolicyService {
         database.nodeId,
         appCertificateFingerprint
       )) ?? (await this.ensureStorageGatewayRoute(clusterId, database.nodeId, appCertificateFingerprint));
-    const assignment = await this.withAcknowledgedPolicy(() =>
-      this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)
-    );
-    const activeCandidates = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
-    let lastError: unknown;
-    for (const candidate of activeCandidates) {
-      try {
-        return candidate.local
-          ? await this.relay.openTunnel(candidate.grant)
-          : await this.relay.openCandidateTunnel(candidate);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    if (!activeCandidates.length) return this.relay.openTunnel(assignment.grant);
-    throw lastError instanceof Error ? lastError : new Error('Relay pool is unavailable');
+    return this.openGatewayRouteTunnel(routeId, appCertificateFingerprint);
   }
 
   async revokeOwner(
