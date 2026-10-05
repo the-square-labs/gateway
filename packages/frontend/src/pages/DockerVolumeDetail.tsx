@@ -2,7 +2,6 @@ import {
   Boxes,
   Download,
   Folder,
-  HardDrive,
   Hash,
   Save,
   Scaling,
@@ -45,7 +44,6 @@ import {
   dockerVolumeRoute,
 } from "@/lib/resource-routes";
 import { createReturnNavigationState, getReturnNavigationTarget } from "@/lib/return-navigation";
-import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -53,6 +51,7 @@ import { useUIStore } from "@/stores/ui";
 import type { DockerVolume, DockerVolumeMetrics } from "@/types";
 import { type FileManagerOperations, FilesTab } from "./docker-detail/FilesTab";
 import { LabelsSection } from "./docker-detail/LabelsSection";
+import { VolumeSpaceStatCard } from "./docker-detail/VolumeSpaceStatCard";
 
 type LabelEntry = { key: string; value: string };
 type VolumeUsageContainer = {
@@ -783,37 +782,7 @@ export function DockerVolumeDetail({
               <div className="space-y-6">
                 <ContentLoading loading={settingsTabLoading} />
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                  <StatCard
-                    label="Space"
-                    value={
-                      metrics?.usedBytes == null
-                        ? "N/A"
-                        : metrics.capacityBytes != null
-                          ? `${formatBytes(metrics.usedBytes)} / ${formatBytes(metrics.capacityBytes)}`
-                          : formatBytes(metrics.usedBytes)
-                    }
-                    icon={HardDrive}
-                    history={metricHistory.space.length ? metricHistory.space : [0]}
-                    color="#3b82f6"
-                    sparklineMax={metrics?.capacityBytes ?? undefined}
-                    progress={
-                      metrics?.usedBytes != null && metrics.capacityBytes
-                        ? {
-                            percent: Math.min(
-                              100,
-                              (metrics.usedBytes / metrics.capacityBytes) * 100
-                            ),
-                          }
-                        : undefined
-                    }
-                    subtitle={
-                      metrics?.availableBytes != null
-                        ? `${formatBytes(metrics.availableBytes)} available`
-                        : metrics?.usedBytes != null
-                          ? "Capacity is shared with the node"
-                          : "Unavailable"
-                    }
-                  />
+                  <VolumeSpaceStatCard metrics={metrics} history={metricHistory.space} />
                   <StatCard
                     label="Inodes count"
                     value={

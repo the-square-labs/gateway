@@ -3,8 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { api } from "@/services/api";
+import { ApiRequestError } from "@/services/api-base";
+import type { DockerVolumeMetrics } from "@/types";
 import type { InspectData } from "./helpers";
 import { StatsTab } from "./StatsTab";
+import { VolumeSpaceStatCard } from "./VolumeSpaceStatCard";
 
 export interface ContainerMonitoringInstance {
   id: string;
@@ -69,6 +72,131 @@ function fallbackInspect(): InspectData {
       Status: "running",
     },
   } as InspectData;
+}
+
+type MountedVolume = { key: string; nodeId: string; name: string };
+
+const VOLUME_METRICS_INTERVAL_MS = 30_000;
+
+/** The named and anonymous volumes the instances mount, once per node and volume. */
+function mountedVolumes(
+  instances: ContainerMonitoringInstance[],
+  inspectById: Record<string, InspectData>
+): MountedVolume[] {
+  const volumes = new Map<string, MountedVolume>();
+  for (const instance of instances) {
+    const inspect = instance.data ?? inspectById[instance.id];
+    const mounts: unknown[] = Array.isArray(inspect?.Mounts) ? inspect.Mounts : [];
+    for (const mount of mounts as Array<{ Type?: unknown; Name?: unknown }>) {
+      if (mount.Type !== "volume" || typeof mount.Name !== "string" || !mount.Name) continue;
+      const key = `${instance.nodeId}\n${mount.Name}`;
+      if (!volumes.has(key)) volumes.set(key, { key, nodeId: instance.nodeId, name: mount.Name });
+    }
+  }
+  return [...volumes.values()];
+}
+
+function volumeLabel(name: string) {
+  // Docker names anonymous volumes with 64 hex characters.
+  return /^[a-f0-9]{64}$/i.test(name) ? name.slice(0, 12) : name;
+}
+
+/** Disk usage of the mounted volumes, shown exactly as on the volume detail page. */
+function MountedVolumesSection({ volumes }: { volumes: MountedVolume[] }) {
+  // Volume and node names never contain "|" or a newline.
+  const identity = volumes.map((volume) => volume.key).join("|");
+  const [metricsByKey, setMetricsByKey] = useState<Record<string, DockerVolumeMetrics | null>>({});
+  const [historyByKey, setHistoryByKey] = useState<Record<string, number[]>>({});
+  // Volumes the user may not view, or hidden ones such as unused anonymous volumes, are left out.
+  const [unavailableKeys, setUnavailableKeys] = useState<Record<string, true>>({});
+  const lastCollectedAtRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    setMetricsByKey({});
+    setHistoryByKey({});
+    setUnavailableKeys({});
+    lastCollectedAtRef.current = {};
+    const requested: MountedVolume[] = identity
+      ? identity.split("|").map((key) => {
+          const [nodeId = "", name = ""] = key.split("\n");
+          return { key, nodeId, name };
+        })
+      : [];
+    const load = async () => {
+      const results = await Promise.all(
+        requested.map(async (volume) => {
+          try {
+            return { volume, metrics: await api.getVolumeMetrics(volume.nodeId, volume.name) };
+          } catch (error) {
+            const hidden = error instanceof ApiRequestError && [403, 404].includes(error.status);
+            return { volume, metrics: null, hidden };
+          }
+        })
+      );
+      if (cancelled) return;
+      const sampled: Array<[string, number]> = [];
+      for (const { volume, metrics } of results) {
+        if (!metrics || lastCollectedAtRef.current[volume.key] === metrics.collectedAt) continue;
+        lastCollectedAtRef.current[volume.key] = metrics.collectedAt;
+        sampled.push([volume.key, metrics.usedBytes ?? 0]);
+      }
+      // Keep the last successful sample during transient daemon refreshes.
+      setMetricsByKey((previous) => {
+        const next = { ...previous };
+        for (const { volume, metrics } of results) {
+          if (metrics) next[volume.key] = metrics;
+          else if (!(volume.key in next)) next[volume.key] = null;
+        }
+        return next;
+      });
+      if (sampled.length > 0) {
+        setHistoryByKey((previous) => {
+          const next = { ...previous };
+          for (const [key, usedBytes] of sampled) {
+            next[key] = [...(next[key] ?? []), usedBytes].slice(-60);
+          }
+          return next;
+        });
+      }
+      setUnavailableKeys((previous) => {
+        const next = { ...previous };
+        for (const result of results) {
+          if ("hidden" in result && result.hidden) next[result.volume.key] = true;
+          else if (result.metrics) delete next[result.volume.key];
+        }
+        return next;
+      });
+    };
+    void load();
+    const interval = window.setInterval(() => void load(), VOLUME_METRICS_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [identity]);
+
+  const visible = volumes.filter((volume) => !unavailableKeys[volume.key]);
+  if (visible.length === 0) return null;
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">Volumes</h3>
+        <p className="text-xs text-muted-foreground">Disk usage of the mounted volumes.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+        {visible.map((volume) => (
+          <VolumeSpaceStatCard
+            key={volume.key}
+            label={volumeLabel(volume.name)}
+            metrics={metricsByKey[volume.key] ?? null}
+            history={historyByKey[volume.key] ?? []}
+          />
+        ))}
+      </div>
+    </section>
+  );
 }
 
 export function MultiContainerMonitoring({
@@ -194,6 +322,7 @@ export function MultiContainerMonitoring({
     );
   }
 
+  const volumes = mountedVolumes(instances, inspectById);
   const processTitles = instances
     .map((instance) => processesById[instance.id]?.titles)
     .find((titles) => titles && titles.length > 0) ?? ["COMMAND"];
@@ -236,6 +365,8 @@ export function MultiContainerMonitoring({
           })}
         </section>
       ))}
+
+      <MountedVolumesSection volumes={volumes} />
 
       <PanelShell
         title="Processes"
