@@ -95,3 +95,12 @@ func DeriveRouteKey(secret []byte, routeID string, keyVersion uint64) ([]byte, e
 func RouteKeyID(keyVersion uint64) string {
 	return "v" + strconv.FormatUint(keyVersion, 10)
 }
+
+// VerifyHello checks a HELLO received through relayID for routeID.
+func VerifyHello(record *Record, routeID, relayID string, key []byte) bool {
+	if record.Type != TypeHello || len(key) == 0 {
+		return false
+	}
+	ctx := PathContext{RouteID: routeID, RelayID: relayID, KeyID: record.KeyID, Key: key, SessionID: record.SessionID}
+	return VerifyMAC(key, ctx.HelloTranscript(record.Wnd), record.MAC)
+}

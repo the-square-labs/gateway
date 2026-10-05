@@ -1,0 +1,500 @@
+package relayresume
+
+import (
+	"context"
+	crand "crypto/rand"
+	"errors"
+	"math/rand/v2"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// Dialer opens a new tunnel for a source session's route: on the best
+// active candidate other than avoidRelayID when one exists (the same relay
+// is fine when it is the only one), each candidate within OpenTimeout.
+type Dialer func(ctx context.Context, avoidRelayID string) (OpenedPath, error)
+
+// SourceConfig configures a source session.
+type SourceConfig struct {
+	RouteID string
+	// Key returns the route key of the latest bundle; every RESUME is signed
+	// with it (rotation). ok=false: the route is no longer resumable.
+	Key              func() (keyID string, key []byte, ok bool)
+	HalfCloseTimeout time.Duration
+	Dial             Dialer
+	// Tag is the caller's (owner kind and id, for logs).
+	Tag any
+}
+
+// Trigger names why a stream migrated.
+type Trigger string
+
+const (
+	TriggerDrain       Trigger = "drain"
+	TriggerGoAway      Trigger = "goaway"
+	TriggerPathFailure Trigger = "path_failure"
+	TriggerTargetHint  Trigger = "target_hint"
+)
+
+// MigrationEvent reports one finished migration attempt series (logs,
+// metrics).
+type MigrationEvent struct {
+	Session *Session
+	Trigger Trigger
+	OK      bool
+	From    string
+	To      string
+	Stall   time.Duration
+	Err     error
+}
+
+// Manager is the process-wide source side: the registry of resumable
+// streams, the migration workers (at most MaxMigrationsInFlight at a time),
+// the legacy latch and the counters reported to Gateway.
+type Manager struct {
+	budget *WindowBudget
+	slots  chan struct{}
+
+	mu       sync.Mutex
+	sessions map[*Session]struct{}
+	legacy   map[string]time.Time
+	legacyBy map[string]int // live legacy streams per relay
+	stalls   []time.Duration
+	stallPos int
+
+	// OnMigration observes migrations (optional; called without locks held).
+	OnMigration func(MigrationEvent)
+	// OnEnd observes resumable streams that ended (optional).
+	OnEnd func(s *Session, err error)
+
+	migrationsOK     atomic.Uint64
+	migrationsFailed atomic.Uint64
+	cut              atomic.Uint64
+	retransmitted    atomic.Uint64
+}
+
+// NewManager creates the source side of a process.
+func NewManager(budget *WindowBudget) *Manager {
+	if budget == nil {
+		budget = NewWindowBudget(0)
+	}
+	return &Manager{budget: budget, slots: make(chan struct{}, MaxMigrationsInFlight), sessions: map[*Session]struct{}{},
+		legacy: map[string]time.Time{}, legacyBy: map[string]int{}}
+}
+
+// Budget is the process window budget (shared with the target table).
+func (m *Manager) Budget() *WindowBudget { return m.budget }
+
+type sourceState struct {
+	mgr       *Manager
+	cfg       SourceConfig
+	migrating bool
+	trigger   Trigger
+	stalled   time.Time // the stream stopped moving (suspend or planned stop)
+	ended     bool
+}
+
+// NewSource starts a resumable stream on first (HELLO, then data at once).
+func (m *Manager) NewSource(cfg SourceConfig, first OpenedPath) (*Session, error) {
+	keyID, key, ok := cfg.Key()
+	if !ok || !validKeyID(keyID) || len(key) == 0 {
+		return nil, errors.New("relayresume: route has no resume key")
+	}
+	var sid [SessionIDLen]byte
+	if _, err := crand.Read(sid[:]); err != nil {
+		return nil, err
+	}
+	path := NewPath(nil, first.RelayID, first.MaxFrame)
+	core := NewSource(Config{RouteID: cfg.RouteID, KeyID: keyID, Key: key, SessionID: sid, HalfCloseTimeout: cfg.HalfCloseTimeout, Budget: m.budget}, path, time.Now())
+	s := newSession(core, cfg.RouteID, first.MaxFrame)
+	s.source = &sourceState{mgr: m, cfg: cfg}
+	m.mu.Lock()
+	m.sessions[s] = struct{}{}
+	m.mu.Unlock()
+	s.mu.Lock()
+	s.attach(path, first)
+	s.afterLocked(false)
+	s.mu.Unlock()
+	return s, nil
+}
+
+// Tag is the SourceConfig tag.
+func (s *Session) Tag() any {
+	if s.source == nil {
+		return nil
+	}
+	return s.source.cfg.Tag
+}
+
+// observeLocked runs after every session event (mu held): it starts the
+// unplanned migration loop, answers MIGRATE_REQ and ends the bookkeeping.
+func (st *sourceState) observeLocked(s *Session) {
+	c := s.core
+	if c.State().Terminal() {
+		if !st.ended {
+			st.ended = true
+			go st.mgr.ended(s, c.Err(), c.Retransmitted)
+		}
+		return
+	}
+	if reason, ok := c.TakeMigrateRequest(); ok && !st.migrating {
+		_ = reason
+		st.start(s, TriggerTargetHint, false, "", time.Time{})
+		return
+	}
+	if c.NeedsPath() && !st.migrating {
+		st.start(s, TriggerPathFailure, true, "", time.Time{})
+	}
+}
+
+// start hands the session to a migration worker (mu held).
+func (st *sourceState) start(s *Session, trigger Trigger, unplanned bool, avoid string, at time.Time) {
+	st.migrating = true
+	st.trigger = trigger
+	if st.stalled.IsZero() {
+		st.stalled = time.Now()
+	}
+	go st.mgr.migrate(s, trigger, unplanned, avoid, at)
+}
+
+func (m *Manager) ended(s *Session, err error, retransmitted uint64) {
+	m.mu.Lock()
+	delete(m.sessions, s)
+	m.mu.Unlock()
+	m.retransmitted.Add(retransmitted)
+	if err != nil && isCut(err) {
+		m.cut.Add(1)
+	}
+	if errors.Is(err, ErrLegacyPeer) {
+		m.MarkLegacy(s.routeID)
+	}
+	if m.OnEnd != nil {
+		m.OnEnd(s, err)
+	}
+}
+
+// isCut reports a resumable stream that ended because it could not move:
+// not a local or peer socket decision.
+func isCut(err error) bool {
+	var reset *ResetError
+	if !errors.As(err, &reset) || reset.Remote {
+		return false
+	}
+	return reset.Reject != 0 || errors.Is(err, ErrSuspendTimeout) || errors.Is(err, ErrNotResumable) || errors.Is(err, ErrRevoked)
+}
+
+// migrate is one migration worker run for s.
+func (m *Manager) migrate(s *Session, trigger Trigger, unplanned bool, avoid string, at time.Time) {
+	if wait := time.Until(at); wait > 0 {
+		timer := time.NewTimer(wait)
+		select {
+		case <-timer.C:
+		case <-s.done:
+			timer.Stop()
+		}
+	}
+	select {
+	case m.slots <- struct{}{}:
+	case <-s.done:
+	}
+	defer func() {
+		select {
+		case <-m.slots:
+		default:
+		}
+	}()
+	from := s.RelayID()
+	ok, to, err := m.attempts(s, unplanned, avoid)
+	s.mu.Lock()
+	st := s.source
+	stall := time.Duration(0)
+	if ok && !st.stalled.IsZero() {
+		stall = time.Since(st.stalled)
+	}
+	if ok || s.core.State() == StateOpen {
+		st.stalled = time.Time{}
+	}
+	st.migrating = false
+	// A planned move that left the stream without a path: the unplanned
+	// loop takes over.
+	st.observeLocked(s)
+	s.mu.Unlock()
+	if ok {
+		m.migrationsOK.Add(1)
+		m.recordStall(stall)
+	} else if err != nil {
+		m.migrationsFailed.Add(1)
+	}
+	if m.OnMigration != nil && (ok || err != nil) {
+		m.OnMigration(MigrationEvent{Session: s, Trigger: trigger, OK: ok, From: from, To: to, Stall: stall, Err: err})
+	}
+}
+
+// attempts tries until the stream moved, the budget ran out or the stream
+// ended. Planned: within PlannedBudget, staying on the old path on failure.
+// Unplanned: until the core's suspend deadline (UnplannedBudget).
+func (m *Manager) attempts(s *Session, unplanned bool, avoid string) (bool, string, error) {
+	deadline := time.Now().Add(PlannedBudget)
+	if unplanned {
+		deadline = time.Now().Add(UnplannedBudget + time.Second)
+	}
+	backoff := UnplannedBackoffMin
+	var lastErr error
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		state := s.core.State()
+		canResume := s.core.CanResume()
+		current := s.core.Current()
+		s.mu.Unlock()
+		if state.Terminal() {
+			return false, "", lastErr
+		}
+		if !canResume {
+			return false, "", lastErr
+		}
+		if !unplanned && (current == nil || (avoid != "" && current.RelayID() != avoid)) {
+			if current == nil {
+				// The old path died meanwhile: carry on unplanned.
+				unplanned = true
+				deadline = time.Now().Add(UnplannedBudget + time.Second)
+				continue
+			}
+			return false, "", nil // already moved
+		}
+		pathAvoid := avoid
+		if pathAvoid == "" && current != nil {
+			pathAvoid = current.RelayID()
+		}
+		ok, to, err := m.attempt(s, unplanned, pathAvoid)
+		if ok {
+			return true, to, nil
+		}
+		lastErr = err
+		timer := time.NewTimer(backoff + time.Duration(rand.Int64N(int64(backoff/4)+1)))
+		select {
+		case <-timer.C:
+		case <-s.done:
+			timer.Stop()
+			return false, "", lastErr
+		}
+		backoff = min(backoff*2, UnplannedBackoffMax)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("relayresume: migration budget exhausted")
+	}
+	return false, "", lastErr
+}
+
+var errNotResumableNow = errors.New("relayresume: stream cannot resume now")
+
+// attempt opens one path and runs one RESUME exchange on it.
+func (m *Manager) attempt(s *Session, unplanned bool, avoid string) (bool, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), OpenTimeout*3)
+	defer cancel()
+	go func() {
+		select {
+		case <-s.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	op, err := s.source.cfg.Dial(ctx, avoid)
+	if err != nil {
+		return false, "", err
+	}
+	s.mu.Lock()
+	if !s.core.CanResume() || (!unplanned && s.core.Current() == nil && s.core.State() == StateOpen) {
+		s.mu.Unlock()
+		if op.Cancel != nil {
+			op.Cancel()
+		}
+		return false, "", errNotResumableNow
+	}
+	if keyID, key, ok := s.source.cfg.Key(); ok {
+		s.core.SetKey(keyID, key)
+	}
+	path := NewPath(nil, op.RelayID, op.MaxFrame)
+	s.attach(path, op)
+	if !s.core.BeginResume(path, time.Now()) {
+		s.core.DropPath(path)
+		s.afterLocked(false)
+		s.mu.Unlock()
+		return false, "", errNotResumableNow
+	}
+	s.afterLocked(false)
+	for s.core.Pending() == path && !s.core.State().Terminal() {
+		s.stateCond.Wait()
+	}
+	ok := s.core.Current() == path
+	err = nil
+	if !ok {
+		err = s.core.Err()
+		if err == nil {
+			err = errors.New("relayresume: resume attempt failed")
+		}
+	}
+	s.mu.Unlock()
+	return ok, op.RelayID, err
+}
+
+// Migrate moves s off its relay, paced: the attempt starts at a random time
+// before deadline (zero deadline: within a second). Planned: the stream
+// stays where it is if no other relay takes it.
+func (m *Manager) Migrate(s *Session, trigger Trigger, deadline time.Time) {
+	at := time.Now()
+	if spread := time.Until(deadline); spread > 0 {
+		at = at.Add(time.Duration(rand.Int64N(int64(spread))))
+	} else {
+		at = at.Add(time.Duration(rand.Int64N(int64(time.Second))))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.source == nil || s.source.migrating || !s.core.CanResume() || s.core.Current() == nil {
+		return
+	}
+	s.source.start(s, trigger, false, s.core.Current().RelayID(), at)
+}
+
+// DrainRelay moves every resumable stream off relayID, spread until
+// deadline.
+func (m *Manager) DrainRelay(relayID string, deadline time.Time) {
+	for _, s := range m.Sessions() {
+		if s.RelayID() == relayID {
+			m.Migrate(s, TriggerDrain, deadline)
+		}
+	}
+}
+
+// RelayLost moves every resumable stream off relayID at once (its lane got
+// GOAWAY: the relay stops within seconds).
+func (m *Manager) RelayLost(relayID string) {
+	for _, s := range m.Sessions() {
+		if s.RelayID() != relayID {
+			continue
+		}
+		s.mu.Lock()
+		if s.source != nil && !s.source.migrating && s.core.CanResume() && s.core.Current() != nil {
+			s.source.start(s, TriggerGoAway, false, relayID, time.Now().Add(time.Duration(rand.Int64N(int64(100*time.Millisecond)))))
+		}
+		s.mu.Unlock()
+	}
+}
+
+// Sessions is a snapshot of the live resumable source streams.
+func (m *Manager) Sessions() []*Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*Session, 0, len(m.sessions))
+	for s := range m.sessions {
+		out = append(out, s)
+	}
+	return out
+}
+
+// Legacy reports a route latched to raw streams (its target answered a
+// HELLO with something else).
+func (m *Manager) Legacy(routeID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	until, ok := m.legacy[routeID]
+	if ok && time.Now().After(until) {
+		delete(m.legacy, routeID)
+		return false
+	}
+	return ok
+}
+
+// MarkLegacy latches routeID to raw streams for LegacyLatch.
+func (m *Manager) MarkLegacy(routeID string) {
+	m.mu.Lock()
+	m.legacy[routeID] = time.Now().Add(LegacyLatch)
+	m.mu.Unlock()
+}
+
+// TrackLegacy counts a raw (not resumable) stream through relayID until the
+// returned func is called.
+func (m *Manager) TrackLegacy(relayID string) func() {
+	m.mu.Lock()
+	m.legacyBy[relayID]++
+	m.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			if m.legacyBy[relayID]--; m.legacyBy[relayID] <= 0 {
+				delete(m.legacyBy, relayID)
+			}
+			m.mu.Unlock()
+		})
+	}
+}
+
+func (m *Manager) recordStall(stall time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.stalls) < 256 {
+		m.stalls = append(m.stalls, stall)
+		return
+	}
+	m.stalls[m.stallPos] = stall
+	m.stallPos = (m.stallPos + 1) % len(m.stalls)
+}
+
+// SourceStats are the source-side counters (each stream counted once, at
+// the daemon that opened it).
+type SourceStats struct {
+	Resumable          uint64
+	Legacy             uint64
+	Suspended          uint64
+	MigrationsOK       uint64
+	MigrationsFailed   uint64
+	Cut                uint64
+	Retransmitted      uint64
+	Unacked            uint64
+	StallP50, StallP95 time.Duration
+	ByRelay            map[string][2]uint64 // relay -> {resumable, legacy}
+}
+
+// Stats snapshots the counters.
+func (m *Manager) Stats() SourceStats {
+	stats := SourceStats{ByRelay: map[string][2]uint64{}, MigrationsOK: m.migrationsOK.Load(), MigrationsFailed: m.migrationsFailed.Load(),
+		Cut: m.cut.Load(), Retransmitted: m.retransmitted.Load()}
+	sessions := m.Sessions()
+	for _, s := range sessions {
+		s.mu.Lock()
+		stats.Resumable++
+		stats.Unacked += s.core.Unacked()
+		stats.Retransmitted += s.core.Retransmitted
+		state := s.core.State()
+		relay := ""
+		if p := s.core.Current(); p != nil {
+			relay = p.RelayID()
+		}
+		s.mu.Unlock()
+		if state == StateSuspended || state == StateResuming {
+			stats.Suspended++
+		}
+		if relay != "" {
+			entry := stats.ByRelay[relay]
+			entry[0]++
+			stats.ByRelay[relay] = entry
+		}
+	}
+	m.mu.Lock()
+	for relay, n := range m.legacyBy {
+		stats.Legacy += uint64(n)
+		entry := stats.ByRelay[relay]
+		entry[1] += uint64(n)
+		stats.ByRelay[relay] = entry
+	}
+	stalls := slices.Clone(m.stalls)
+	m.mu.Unlock()
+	if len(stalls) > 0 {
+		slices.Sort(stalls)
+		stats.StallP50 = stalls[len(stalls)/2]
+		stats.StallP95 = stalls[min(len(stalls)-1, len(stalls)*95/100)]
+	}
+	return stats
+}

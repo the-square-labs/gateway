@@ -1,0 +1,590 @@
+package relayresume
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// Stream is one relay tunnel stream (OpenTunnel or AcceptTunnel).
+type Stream interface {
+	Send(*relayv1.TunnelFrame) error
+	Recv() (*relayv1.TunnelFrame, error)
+}
+
+// OpenedPath is a tunnel the relay admitted (its Ready frame was read).
+type OpenedPath struct {
+	Stream Stream
+	// Cancel ends the stream (its context).
+	Cancel func()
+	// CloseSend half-closes the stream, when the stream supports it.
+	CloseSend func() error
+	RelayID   string
+	MaxFrame  int
+}
+
+type queued struct {
+	frame  []byte
+	pooled bool
+}
+
+// pathRun is the driver state of one path.
+type pathRun struct {
+	path   *Path
+	op     OpenedPath
+	queue  []queued // frames to send, in order
+	close  bool     // close once the queue is sent
+	sendMu sync.Mutex
+	done   chan struct{} // closed once the stream is cancelled and the reader ended
+	// readerBusy: someone (the bridge's Recv or the background reader) is in
+	// Recv on this stream.
+	readerBusy bool
+	bgWaiting  bool
+	once       sync.Once
+	reader     chan struct{} // closed when the reader goroutine exits
+}
+
+// Session drives a Core over real relay streams. It implements the
+// relaybridge FrameStream interface (Send and Recv of Data, HalfClose and
+// Close frames) for the bridges, which work unchanged on top of it.
+type Session struct {
+	mu sync.Mutex
+	// readCond wakes Recv, writeCond wakes Write, stateCond wakes the
+	// migration worker; each only when its waiter can make progress.
+	readCond, writeCond, stateCond *sync.Cond
+	readers, writers               int
+	bgCond                         *sync.Cond // background readers wait for the stream
+	inRecv, recvGone               bool
+	recvExit                       time.Time
+	bgTimer                        *time.Timer
+	lastUna                        uint64
+	lastState                      State
+	lastPending                    *Path
+	lastCur                        *Path
+	core                           *Core
+	paths                          map[*Path]*pathRun
+	timer                          *time.Timer
+	armedAt                        time.Time
+
+	// The largest Data payload Recv hands out (the first path's frame size,
+	// which the bridges were given).
+	recvMax int
+	partial []byte
+
+	done     chan struct{}
+	doneOnce sync.Once
+
+	// Source side.
+	source   *sourceState
+	onChange func(*Session) // the target table watches its sessions
+
+	routeID string
+}
+
+func newSession(core *Core, routeID string, recvMax int) *Session {
+	s := &Session{core: core, paths: map[*Path]*pathRun{}, done: make(chan struct{}), routeID: routeID, recvMax: recvMax}
+	if s.recvMax <= 0 || s.recvMax > MaxFrameBytes {
+		s.recvMax = MaxFrameBytes
+	}
+	s.readCond, s.writeCond, s.stateCond, s.bgCond = sync.NewCond(&s.mu), sync.NewCond(&s.mu), sync.NewCond(&s.mu), sync.NewCond(&s.mu)
+	s.recvExit = time.Now()
+	return s
+}
+
+// attach registers a path and starts its reader. Called with mu held.
+func (s *Session) attach(path *Path, op OpenedPath) *pathRun {
+	run := &pathRun{path: path, op: op, done: make(chan struct{}), reader: make(chan struct{})}
+	s.paths[path] = run
+	go s.read(run)
+	return run
+}
+
+// readGrace is how long the bridge may stay out of Recv before the path's
+// own reader takes the stream over (acks of the other direction must not
+// wait behind a slow local socket).
+const readGrace = 2 * time.Millisecond
+
+// read is the path's background reader. The bridge's Recv reads the current
+// path itself while it keeps calling (no goroutine handoff per frame); this
+// reader takes over when the bridge stays away longer than readGrace (a
+// slow local socket, the peer's FIN delivered) and always reads paths that
+// are not current. It never blocks on a send, so both peers always drain
+// their inbound streams and gRPC flow control cannot deadlock.
+func (s *Session) read(run *pathRun) {
+	defer close(run.reader)
+	s.mu.Lock()
+	for {
+		for !run.path.Closed() && !s.backgroundMayRead(run) {
+			run.bgWaiting = true
+			s.bgCond.Wait()
+			run.bgWaiting = false
+		}
+		if run.path.Closed() {
+			s.mu.Unlock()
+			return
+		}
+		run.readerBusy = true
+		s.mu.Unlock()
+		frame, err := run.op.Stream.Recv()
+		s.mu.Lock()
+		run.readerBusy = false
+		s.handleFrameLocked(run, frame, err)
+	}
+}
+
+// backgroundMayRead: the path is free and the bridge is not about to read it.
+func (s *Session) backgroundMayRead(run *pathRun) bool {
+	if run.readerBusy {
+		return false
+	}
+	if run.path != s.core.Current() || s.recvGone {
+		return true
+	}
+	return !s.inRecv && time.Since(s.recvExit) >= readGrace
+}
+
+// handleFrameLocked processes what a path read returned (mu held).
+func (s *Session) handleFrameLocked(run *pathRun, frame *relayv1.TunnelFrame, err error) {
+	if run.path.Closed() {
+		s.bgCond.Broadcast()
+		return
+	}
+	now := time.Now()
+	if err != nil {
+		s.core.PathFailed(run.path, terminalPathError(err), err, now)
+	} else {
+		switch payload := frame.Payload.(type) {
+		case *relayv1.TunnelFrame_Data:
+			if len(payload.Data.GetData()) == 0 {
+				s.core.Abort(RstProtocol, "empty data frame", ErrProtocol)
+			} else {
+				s.core.PathFrame(run.path, payload.Data.GetData(), now)
+			}
+		case *relayv1.TunnelFrame_Error:
+			code := payload.Error.GetCode()
+			s.core.PathFailed(run.path, s.core.State() == StateHandshake, fmt.Errorf("relay tunnel error: %s", code), now)
+		default:
+			// Close, HalfClose or anything else: this path is over.
+			s.core.PathFailed(run.path, false, errors.New("relay tunnel ended"), now)
+		}
+	}
+	s.afterLocked(true)
+	// Paths changed or the stream is free again: let the readers re-decide.
+	s.bgCond.Broadcast()
+	if s.readers > 0 {
+		s.readCond.Signal()
+	}
+}
+
+// recvExitLocked notes that the bridge left Recv; the background reader
+// takes over if it does not come back within readGrace.
+func (s *Session) recvExitLocked(gone bool) {
+	s.inRecv = false
+	s.recvExit = time.Now()
+	if gone {
+		s.recvGone = true
+		s.bgCond.Broadcast()
+		return
+	}
+	if s.bgTimer == nil {
+		s.bgTimer = time.AfterFunc(readGrace, s.graceCheck)
+	} else {
+		s.bgTimer.Reset(readGrace)
+	}
+}
+
+func (s *Session) graceCheck() {
+	s.mu.Lock()
+	if !s.inRecv {
+		s.bgCond.Broadcast()
+	}
+	s.mu.Unlock()
+}
+
+// terminalPathError reports relay verdicts that end the stream itself: the
+// relay's idle and half-close timeouts and refused frames. Everything else
+// (transport loss, GOAWAY, a forced disconnect, a revocation) is resumable;
+// the target rechecks authorization on resume.
+func terminalPathError(err error) bool {
+	current, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch current.Code() {
+	case codes.DeadlineExceeded:
+		return strings.Contains(current.Message(), "idle timeout") || strings.Contains(current.Message(), "half-close timeout")
+	case codes.InvalidArgument:
+		return true
+	}
+	return false
+}
+
+// afterLocked moves outputs to the paths, rearms the timer and wakes
+// waiters. async: the caller is a reader, which must not block on sends.
+// Called with mu held; it may release and retake mu.
+func (s *Session) afterLocked(async bool) {
+	var kick []*pathRun
+	for _, out := range s.core.TakeOutputs() {
+		run := s.paths[out.Path]
+		if run == nil {
+			continue
+		}
+		if out.Close {
+			run.close = true
+			s.bgCond.Broadcast()
+		} else {
+			run.queue = append(run.queue, queued{out.Frame, out.Pooled})
+		}
+		if len(kick) == 0 || kick[len(kick)-1] != run {
+			kick = append(kick, run)
+		}
+	}
+	s.armLocked()
+	s.wakeLocked()
+	if s.core.State().Terminal() {
+		s.doneOnce.Do(func() { close(s.done) })
+	}
+	if s.source != nil {
+		s.source.observeLocked(s)
+	}
+	if s.onChange != nil {
+		s.onChange(s)
+	}
+	if len(kick) == 0 {
+		return
+	}
+	if async {
+		for _, run := range kick {
+			go s.drain(run)
+		}
+		return
+	}
+	s.mu.Unlock()
+	for _, run := range kick {
+		s.drain(run)
+	}
+	s.mu.Lock()
+}
+
+// drain sends a path's queued frames in order; one drainer per path at a
+// time.
+func (s *Session) drain(run *pathRun) {
+	run.sendMu.Lock()
+	defer run.sendMu.Unlock()
+	for {
+		s.mu.Lock()
+		if len(run.queue) == 0 {
+			closing := run.close
+			s.mu.Unlock()
+			if closing {
+				s.finishPath(run)
+			}
+			return
+		}
+		item := run.queue[0]
+		run.queue[0] = queued{}
+		run.queue = run.queue[1:]
+		s.mu.Unlock()
+		err := run.op.Stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: item.frame}}})
+		if item.pooled {
+			ReleaseFrame(item.frame)
+		}
+		if err != nil {
+			s.mu.Lock()
+			run.queue = nil
+			if !run.path.Closed() {
+				s.core.PathFailed(run.path, false, err, time.Now())
+			}
+			s.afterLocked(true)
+			s.mu.Unlock()
+			s.finishPath(run)
+			return
+		}
+	}
+}
+
+// finishPath ends a path's stream once the session gave it up.
+func (s *Session) finishPath(run *pathRun) {
+	run.once.Do(func() {
+		go func() {
+			s.mu.Lock()
+			state := s.core.State()
+			s.mu.Unlock()
+			if s.core.Role() == RoleSource {
+				if state == StateFinished {
+					// As the bridges always did: the relay ends the tunnel on Close.
+					_ = run.op.Stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}})
+				}
+			} else if run.op.CloseSend != nil {
+				// Let the last records (CLOSE echo, RST, RESUME_REJ) leave
+				// before the stream is cancelled: the source ends the tunnel.
+				_ = run.op.CloseSend()
+				select {
+				case <-run.reader:
+				case <-time.After(CloseLingerTimeout):
+				}
+			}
+			if run.op.Cancel != nil {
+				run.op.Cancel()
+			}
+			<-run.reader
+			s.mu.Lock()
+			delete(s.paths, run.path)
+			s.mu.Unlock()
+			close(run.done)
+		}()
+	})
+}
+
+func (s *Session) wakeLocked() {
+	state := s.core.State()
+	terminal := state.Terminal()
+	if s.readers > 0 && (terminal || s.core.Readable() || len(s.partial) > 0) {
+		s.readCond.Signal()
+	}
+	if una, _, _, _ := s.core.Offsets(); s.writers > 0 && (terminal || una != s.lastUna) {
+		s.writeCond.Signal()
+	}
+	s.lastUna, _, _, _ = s.core.Offsets()
+	if cur := s.core.Current(); cur != s.lastCur {
+		s.lastCur = cur
+		if s.readers > 0 {
+			s.readCond.Signal()
+		}
+		s.bgCond.Broadcast()
+	}
+	if pending := s.core.Pending(); state != s.lastState || pending != s.lastPending {
+		s.lastState, s.lastPending = state, pending
+		s.stateCond.Broadcast()
+	}
+}
+
+func (s *Session) armLocked() {
+	next := s.core.NextDeadline()
+	if next.Equal(s.armedAt) {
+		return
+	}
+	s.armedAt = next
+	if next.IsZero() {
+		if s.timer != nil {
+			s.timer.Stop()
+		}
+		return
+	}
+	delay := time.Until(next)
+	if s.timer == nil {
+		s.timer = time.AfterFunc(delay, s.tick)
+		return
+	}
+	s.timer.Reset(delay)
+}
+
+func (s *Session) tick() {
+	s.mu.Lock()
+	s.armedAt = time.Time{}
+	s.core.Tick(time.Now())
+	s.afterLocked(false)
+	s.mu.Unlock()
+}
+
+// Send takes a frame from a bridge: Data (owned by the session from now on),
+// HalfClose (FIN) or Close (wait until the stream finished).
+func (s *Session) Send(frame *relayv1.TunnelFrame) error {
+	switch payload := frame.Payload.(type) {
+	case *relayv1.TunnelFrame_Data:
+		return s.Write(payload.Data.GetData())
+	case *relayv1.TunnelFrame_HalfClose:
+		return s.CloseWrite()
+	case *relayv1.TunnelFrame_Close:
+		s.WaitFinished()
+		return nil
+	case *relayv1.TunnelFrame_Error:
+		s.Abort(RstAborted, payload.Error.GetCode())
+		return nil
+	}
+	return fmt.Errorf("%w: unexpected frame from the bridge", ErrProtocol)
+}
+
+// Write queues p for the peer, waiting while the window is full.
+func (s *Session) Write(p []byte) error {
+	if len(p) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for !s.core.CanWrite(len(p)) {
+		s.writers++
+		s.writeCond.Wait()
+		s.writers--
+	}
+	ok, err := s.core.Write(p, time.Now())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("relayresume: window refused a write")
+	}
+	s.afterLocked(false)
+	return nil
+}
+
+// CloseWrite sends FIN after the queued data.
+func (s *Session) CloseWrite() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := s.core.CloseWrite(time.Now())
+	s.afterLocked(false)
+	return err
+}
+
+// Recv hands the bridge the next Data frame, HalfClose for the peer's FIN,
+// Close once the stream finished, or the error that reset it. While nothing
+// is queued it reads the current path itself.
+func (s *Session) Recv() (*relayv1.TunnelFrame, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inRecv = true
+	frame, gone, err := s.recvLocked()
+	s.recvExitLocked(gone)
+	return frame, err
+}
+
+func (s *Session) recvLocked() (*relayv1.TunnelFrame, bool, error) {
+	for {
+		if len(s.partial) > 0 {
+			return s.dataFrame(), false, nil
+		}
+		data, fin, ok := s.core.Read(time.Now())
+		if ok {
+			// An ACK leaves on its own goroutine: the bridge goes back to
+			// writing the local socket.
+			s.afterLocked(true)
+			if fin {
+				return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}}, true, nil
+			}
+			s.partial = data
+			continue
+		}
+		switch s.core.State() {
+		case StateReset:
+			return nil, true, s.core.Err()
+		case StateFinished:
+			return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}}, true, nil
+		}
+		if run := s.paths[s.core.Current()]; run != nil && !run.readerBusy && !run.path.Closed() {
+			run.readerBusy = true
+			s.mu.Unlock()
+			frame, err := run.op.Stream.Recv()
+			s.mu.Lock()
+			run.readerBusy = false
+			s.handleFrameLocked(run, frame, err)
+			continue
+		}
+		s.readers++
+		s.readCond.Wait()
+		s.readers--
+	}
+}
+
+func (s *Session) dataFrame() *relayv1.TunnelFrame {
+	data := s.partial
+	if len(data) > s.recvMax {
+		data = data[:s.recvMax]
+	}
+	s.partial = s.partial[len(data):]
+	return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: data}}}
+}
+
+// WaitFinished blocks until the stream finished or was reset (the CLOSE
+// exchange; bounded by the session's own timers).
+func (s *Session) WaitFinished() {
+	<-s.done
+}
+
+// Abort resets the stream: the peer closes its socket hard.
+func (s *Session) Abort(code byte, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.core.Abort(code, reason, nil)
+	s.afterLocked(false)
+}
+
+// abortWith resets the stream with a cause.
+func (s *Session) abortWith(code byte, reason string, cause error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.core.Abort(code, reason, cause)
+	s.afterLocked(false)
+}
+
+// Cancel is the cancel func the bridges call when they end: a no-op for a
+// finished stream, a reset otherwise.
+func (s *Session) Cancel() { s.Abort(RstAborted, "local side ended the stream") }
+
+// Done closes when the stream finished or was reset.
+func (s *Session) Done() <-chan struct{} { return s.done }
+
+// Err is why the stream was reset (nil while open or after a clean finish).
+func (s *Session) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.core.Err()
+}
+
+// State is the session state.
+func (s *Session) State() State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.core.State()
+}
+
+// RelayID is the relay of the current path ("" while suspended).
+func (s *Session) RelayID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p := s.core.Current(); p != nil {
+		return p.RelayID()
+	}
+	return ""
+}
+
+// RouteID is the route the stream belongs to.
+func (s *Session) RouteID() string { return s.routeID }
+
+// MaxFrame is the Data size the bridges should be given.
+func (s *Session) MaxFrame() int { return s.recvMax }
+
+// Unacked is the retained send data.
+func (s *Session) Unacked() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.core.Unacked()
+}
+
+// pathDone returns a channel closed once path's stream ended (target).
+func (s *Session) pathDone(path *Path) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.paths[path]; run != nil {
+		return run.done
+	}
+	closed := make(chan struct{})
+	close(closed)
+	return closed
+}
+
+// ReadChunk is the read size for a bridge over a session: a DATA frame
+// (header and payload) then fits chunk bytes, so the common 32 KiB read stays
+// in the allocator's small size classes on both ends.
+func ReadChunk(chunk int) int {
+	if chunk <= 4*MaxRecordHeader {
+		return chunk
+	}
+	return chunk - MaxRecordHeader
+}
