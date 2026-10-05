@@ -281,6 +281,28 @@ func TestSecureLinkStreamMovesWhenItsLaneLeavesReady(t *testing.T) {
 	}
 }
 
+// The only active relay is lost while the other relay is still staging for
+// the route: the stream resumes there instead of being cut after the
+// suspend budget.
+func TestSecureLinkStreamResumesOnAStagingRelay(t *testing.T) {
+	fixture := newResumeFixture(t, true)
+	if _, err := fixture.plugin.SyncRelayGrants(resumeBundle(2, map[string]string{"relay-far": "staging"}, true)); err != nil {
+		t.Fatal(err)
+	}
+	connection := openLinkConnection(t, fixture.plugin)
+	connection.roundTrip(32 * 1024)
+	session := onlySession(t, fixture.plugin)
+	if session.RelayID() != "relay-near" {
+		t.Fatalf("stream runs through %q", session.RelayID())
+	}
+	fixture.nearPath.block()
+	connection.roundTrip(64 * 1024)
+	waitFor(t, "the stream to resume on the staging relay", func() bool { return session.RelayID() == "relay-far" })
+	if fixture.target.backends.Load() != 1 {
+		t.Fatalf("backends %d, want 1", fixture.target.backends.Load())
+	}
+}
+
 // A drain notice in the grant bundle moves open streams off the draining
 // relay while it still works.
 func TestSecureLinkStreamMovesOffADrainingRelay(t *testing.T) {

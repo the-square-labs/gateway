@@ -1049,6 +1049,26 @@ describe('ResumableRelayDuplex', () => {
     expect(registry.snapshot().sessions.resumable).toBe(0);
   }, 30_000);
 
+  it('spreads drain moves over at most a minute whatever the drain grace', () => {
+    const delays: number[] = [];
+    const timers: ResumeTimers = {
+      now: () => 1_000_000,
+      setTimeout: (_callback, ms) => {
+        delays.push(ms);
+        return delays.length;
+      },
+      clearTimeout: () => undefined,
+    };
+    const registry = new RelayResumeRegistry(timers);
+    for (let i = 0; i < 50; i++) registry.add({ relayId: 'relay-a', migrate: async () => undefined } as any);
+    expect(registry.drainRelay('relay-a', 1_000_000 + 30 * 60_000)).toBe(50);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(60_000);
+    expect(Math.max(...delays)).toBeGreaterThan(30_000);
+    delays.length = 0;
+    registry.drainRelay('relay-a', 0);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(1_000);
+  });
+
   it('keeps a drain notice that arrives during the handshake and moves once open', async () => {
     const key = Buffer.alloc(32, 4);
     const target = echoTarget(key, 'v1');

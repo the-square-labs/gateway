@@ -2042,19 +2042,29 @@ export class RelayPolicyService {
     throw lastError instanceof Error ? lastError : new Error('Relay pool is unavailable');
   }
 
-  /** One relay path of a resumable Gateway stream: the first active candidate that opens, avoiding a relay we leave. */
+  /**
+   * One relay path of a resumable Gateway stream: active candidates first, then staging ones (registered on both
+   * ends: when the only active relay drains or was force-disconnected the stream moves there instead of being cut),
+   * the relay it leaves last.
+   */
   private async openGatewayResumePath(
     assignment: Awaited<ReturnType<RelayGrantIssuerService['issueGatewayConnectAssignment']>>,
     avoidRelayId: string | null
   ): Promise<AttachablePath> {
-    const activeCandidates = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
-    if (!activeCandidates.length) {
+    const rank = (candidate: { assignmentState: string; relayInstanceId: string }) =>
+      (avoidRelayId && candidate.relayInstanceId === avoidRelayId ? 2 : 0) +
+      (candidate.assignmentState === 'staging' ? 1 : 0);
+    const candidates = assignment.candidates
+      .filter(({ assignmentState }) => assignmentState === 'active' || assignmentState === 'staging')
+      .map((candidate, index) => ({ candidate, index }))
+      .sort((a, b) => rank(a.candidate) - rank(b.candidate) || a.index - b.index)
+      .map(({ candidate }) => candidate);
+    if (!candidates.length) {
       if (avoidRelayId === LEGACY_RELAY_PATH_ID) throw new Error('No other relay is available');
       return this.relay.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
     }
     let lastError: unknown;
-    for (const candidate of activeCandidates) {
-      if (avoidRelayId && candidate.relayInstanceId === avoidRelayId) continue;
+    for (const candidate of candidates) {
       try {
         return candidate.local
           ? await this.relay.openLocalResumePath(candidate.grant, candidate.relayInstanceId)

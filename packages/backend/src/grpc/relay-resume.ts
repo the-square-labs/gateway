@@ -1656,11 +1656,13 @@ export class RelayResumeRegistry {
 
   /**
    * The relay is draining (its candidate turned draining or vanished): move every session on it, spread uniformly
-   * until the deadline (unix ms; 0: DEFAULT_DRAIN_SPREAD_MS from now).
+   * until the deadline (unix ms) but over at most DEFAULT_DRAIN_SPREAD_MS (0: within a second).
    */
   drainRelay(relayId: string, deadlineUnixMs = 0): number {
     const now = this.timers.now();
-    const spread = deadlineUnixMs > now ? deadlineUnixMs - now : DEFAULT_DRAIN_SPREAD_MS;
+    // A long drain grace is for raw streams that cannot move: resumable ones leave within DEFAULT_DRAIN_SPREAD_MS,
+    // so a forced end of the drain finds none (as relayresume paces).
+    const spread = deadlineUnixMs > now ? Math.min(deadlineUnixMs - now, DEFAULT_DRAIN_SPREAD_MS) : 1_000;
     const affected = [...this.sessions].filter((session) => session.relayId === relayId);
     affected.forEach((session, index) => {
       const delay = affected.length > 1 ? Math.floor((spread * index) / affected.length) : 0;

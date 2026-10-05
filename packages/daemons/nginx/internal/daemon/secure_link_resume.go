@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -128,30 +129,20 @@ func usableStreamResume(resume *pb.RelayStreamResume) bool {
 		len(resume.GetKeyId()) <= relayresume.MaxKeyIDLen && len(resume.GetKey()) == relayresume.KeyLen
 }
 
-// dialRelayStreamPath opens a fresh tunnel for a moving stream on the best
-// active candidate of the link's current assignment, avoiding the relay it
-// leaves when another one is there.
+// dialRelayStreamPath opens a fresh tunnel for a moving stream on the link's
+// current assignment: active candidates first, then staging ones (registered
+// on both ends: when the only active relay drains or was force-disconnected
+// the stream moves there instead of being cut), the relay it leaves last.
 func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID, avoidRelayID string) (relayresume.OpenedPath, error) {
 	assignment := p.relayGrants.lookup("connect", ownerKind, linkID)
 	if assignment == nil {
 		return relayresume.OpenedPath{}, errors.New("the link has no relay grant")
 	}
-	candidates := relaybridge.PoolCandidates(assignment, false)
+	candidates := relaybridge.PoolCandidates(assignment, true)
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
 	}
-	ordered := p.orderRelayCandidates(candidates)
-	if avoidRelayID != "" && len(ordered) > 1 {
-		others := ordered[:0:0]
-		for _, candidate := range ordered {
-			if candidate.GetRelayInstanceId() != avoidRelayID {
-				others = append(others, candidate)
-			}
-		}
-		if len(others) > 0 {
-			ordered = others
-		}
-	}
+	ordered := relayStreamDialOrder(p.orderRelayCandidates(candidates), avoidRelayID, p.relayLaneConnected)
 	lastErr := errors.New("no relay lane is ready")
 	for _, candidate := range ordered {
 		if ctx.Err() != nil {
@@ -173,6 +164,39 @@ func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID
 		lastErr = err
 	}
 	return relayresume.OpenedPath{}, lastErr
+}
+
+// relayStreamDialOrder keeps the usual order within each rank: relays with a
+// connected lane before the others (a dead lane costs a whole open timeout),
+// active before staging, the relay being left last.
+func relayStreamDialOrder(ordered []*pb.RelayDataCandidate, avoidRelayID string, connected func(string) bool) []*pb.RelayDataCandidate {
+	rank := func(candidate *pb.RelayDataCandidate) int {
+		rank := 0
+		if avoidRelayID != "" && candidate.GetRelayInstanceId() == avoidRelayID {
+			rank += 4
+		}
+		if !connected(candidate.GetRelayInstanceId()) {
+			rank += 2
+		}
+		if candidate.GetAssignmentState() == "staging" {
+			rank++
+		}
+		return rank
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return rank(ordered[i]) < rank(ordered[j]) })
+	return ordered
+}
+
+// relayLaneConnected reports a relay with at least one connected lane.
+func (p *NginxPlugin) relayLaneConnected(relayID string) bool {
+	p.relayTunnelMu.Lock()
+	defer p.relayTunnelMu.Unlock()
+	for _, tunnel := range p.relayTunnels {
+		if tunnel.targetID == relayID && tunnel.connected() {
+			return true
+		}
+	}
+	return false
 }
 
 // openRelayStreamPath opens one tunnel on a lane the caller selected (its
@@ -270,7 +294,8 @@ func (p *NginxPlugin) moveRelayStreams() {
 			continue
 		}
 		state, deadline := relayCandidateState(assignment, relayID)
-		if state == "active" {
+		// A stream on a staging relay (moved there when no active one took it) stays.
+		if state == "active" || state == "staging" {
 			continue
 		}
 		p.relayStreams.Migrate(session, relayresume.TriggerDrain, deadline)
