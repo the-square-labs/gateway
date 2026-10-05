@@ -82,11 +82,13 @@ func (m *dockerSecureLinkManager) syncEgress(bundle *pb.SyncRelayGrantsCommand) 
 	}
 }
 
-// runEgress applies the latest requested egress until none is left; requests made meanwhile collapse into one.
+// runEgress applies the latest requested egress until none is left; requests made meanwhile collapse into one. The
+// runner is idle again (running false) in the same step that answers the last request: a bundle sent right after that
+// answer (Gateway's next poll with the same bundle) is answered from the published statuses, not applied once more.
 func (m *dockerSecureLinkManager) runEgress() {
 	runner := &m.egressRun
+	runner.mu.Lock()
 	for {
-		runner.mu.Lock()
 		request, done := runner.next, runner.nextDone
 		runner.next, runner.nextDone = nil, nil
 		if request == nil {
@@ -103,8 +105,14 @@ func (m *dockerSecureLinkManager) runEgress() {
 		m.mu.Unlock()
 		runner.mu.Lock()
 		runner.lastKey, runner.lastDone = request.key, time.Now()
-		runner.mu.Unlock()
+		if runner.next == nil {
+			runner.running = false
+		}
 		close(done)
+		if !runner.running {
+			runner.mu.Unlock()
+			return
+		}
 	}
 }
 
