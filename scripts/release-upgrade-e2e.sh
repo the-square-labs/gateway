@@ -985,28 +985,39 @@ port_conflicts() {
   return 1
 }
 
-# Stops what still listens on a port this run binds once everything else is torn down (a rollback that left the stack
-# half-replaced, a docker-proxy or nginx that outlived its service): only processes started after the run began, so
-# nothing that was on the host before is touched. Each one is logged.
+# Waits (at most 60 s) until nothing listens on a port this run binds any more, once everything else is torn down:
+# docker-proxy, nginx or the run's own background servers can take a few seconds to exit after their service stopped
+# or their package was purged. A listener that stays and was started after the run began (a rollback that left the
+# stack half-replaced) is stopped; nothing that was on the host before is touched. Every pass is logged.
 free_run_ports() {
-  local port pid started now start_epoch tries
+  local port pid started now start_epoch deadline busy log="$WORK/logs/cleanup-ports.log"
   start_epoch="$(cat "$WORK/snapshot/start-epoch" 2>/dev/null || echo 0)"
-  for tries in 1 2 3; do
-    now="$(date +%s)"
+  deadline=$((SECONDS + 60))
+  echo "$(date -u +%T) listeners when the cleanup checks the run's ports:" >>"$log"
+  ss -Hltnup >>"$log" 2>&1
+  while :; do
+    busy=()
     for port in 3000 9443 80 443 "$WEB_PORT" "$FEED_PORT" 53; do
-      port_conflicts "$port" || continue
+      port_conflicts "$port" && busy+=("$port")
+    done
+    if ((${#busy[@]} == 0)); then
+      echo "$(date -u +%T) all of the run's ports are free" >>"$log"
+      return 0
+    fi
+    ((SECONDS < deadline)) || break
+    now="$(date +%s)"
+    for port in "${busy[@]}"; do
       for pid in $(ss -Hltnup "( sport = :${port} )" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
         started=$((now - $(ps -o etimes= -p "$pid" 2>/dev/null || echo "$now")))
         ((started >= start_epoch)) || continue
-        echo "port ${port}: stopping pid ${pid} ($(ps -o comm= -p "$pid" 2>/dev/null))" >>"$WORK/logs/cleanup-ports.log"
+        echo "$(date -u +%T) port ${port}: stopping pid ${pid} ($(ps -o comm= -p "$pid" 2>/dev/null))" >>"$log"
         kill "$pid" 2>/dev/null
       done
     done
     sleep 2
   done
-  for port in 3000 9443 80 443 "$WEB_PORT" "$FEED_PORT" 53; do
-    port_conflicts "$port" && ss -Hltnup "( sport = :${port} )" >>"$WORK/logs/cleanup-ports.log" 2>&1
-  done
+  echo "$(date -u +%T) still listening after 60 s on ${busy[*]}:" >>"$log"
+  ss -Hltnup >>"$log" 2>&1
 }
 
 # Whether the base release rewrites retired scope names to their current ones when they are granted (from 2.11.0).
