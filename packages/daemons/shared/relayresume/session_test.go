@@ -25,6 +25,10 @@ type memStream struct {
 	in     chan *relayv1.TunnelFrame
 	out    chan *relayv1.TunnelFrame
 	tunnel *memTunnel
+	target bool
+	// cancelled closes when the target cancels its own end.
+	cancelled  chan struct{}
+	cancelOnce sync.Once
 }
 
 type memTunnel struct {
@@ -32,6 +36,9 @@ type memTunnel struct {
 	dead  chan struct{}
 	once  sync.Once
 	err   error
+	// stall: the relay stops reading what the target sends (its sends block
+	// until the tunnel ends, as gRPC flow control does).
+	stall atomic.Bool
 }
 
 func (t *memTunnel) kill(err error) {
@@ -46,6 +53,11 @@ func (m *memStream) Send(frame *relayv1.TunnelFrame) error {
 	case <-m.tunnel.dead:
 		return m.tunnel.err
 	default:
+	}
+	if m.target && m.tunnel.stall.Load() {
+		// Like gRPC's write quota: only the sender's own cancel ends the wait.
+		<-m.cancelled
+		return status.Error(codes.Canceled, "context canceled")
 	}
 	// The transport copies a frame (gRPC marshals it): senders reuse buffers.
 	if data := frame.GetData(); data != nil {
@@ -88,7 +100,7 @@ func (r *memRelay) open() (*memStream, *memStream, *memTunnel) {
 	r.mu.Lock()
 	r.tunnels = append(r.tunnels, tunnel)
 	r.mu.Unlock()
-	return &memStream{in: b, out: a, tunnel: tunnel}, &memStream{in: a, out: b, tunnel: tunnel}, tunnel
+	return &memStream{in: b, out: a, tunnel: tunnel}, &memStream{in: a, out: b, tunnel: tunnel, target: true, cancelled: make(chan struct{})}, tunnel
 }
 
 // live counts the relay's tunnels nobody ended yet.
@@ -195,7 +207,10 @@ func (h *harness) dial(_ context.Context, avoid string) (OpenedPath, error) {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		h.serveTarget(OpenedPath{Stream: tgt, Cancel: func() { tunnel.kill(status.Error(codes.Canceled, "context canceled")) },
+		h.serveTarget(OpenedPath{Stream: tgt, Cancel: func() {
+			tgt.cancelOnce.Do(func() { close(tgt.cancelled) })
+			tunnel.kill(status.Error(codes.Canceled, "context canceled"))
+		},
 			CloseSend: func() error {
 				// The relay passes the end of one direction on as HalfClose.
 				select {
@@ -442,6 +457,37 @@ func TestSessionDrainDuringHandshake(t *testing.T) {
 	waitDone(t, session)
 	if session.State() != StateFinished || h.mgr.Stats().MigrationsOK != 1 {
 		t.Fatalf("state %s, migrations %d", session.State(), h.mgr.Stats().MigrationsOK)
+	}
+}
+
+// A target whose old path stopped taking its sends (a relay that no longer
+// reads it) still answers the RESUME on the new path: a send stuck on a
+// given-up path never holds back another path.
+func TestSessionResumeWhileOldPathSendIsStuck(t *testing.T) {
+	h := newHarness(t, "relay-a", "relay-b")
+	app, session := h.stream()
+	waitOpen(t, session)
+	relay := h.relay("relay-a")
+	started := time.Now()
+	echo(t, app, 2<<20, func() {
+		relay.mu.Lock()
+		for _, tunnel := range relay.tunnels {
+			tunnel.stall.Store(true)
+		}
+		relay.mu.Unlock()
+		time.Sleep(100 * time.Millisecond) // the target's sends pile up on relay-a
+		relay.down.Store(true)
+		h.mgr.DrainRelay("relay-a", time.Now().Add(10*time.Millisecond))
+		// The relay drops the tunnel; the target's stuck send does not notice.
+		relay.cut()
+	})
+	waitDone(t, session)
+	if session.State() != StateFinished {
+		t.Fatalf("state %s err %v", session.State(), session.Err())
+	}
+	// The first RESUME was answered (no RESUME_ACK timeout and retry).
+	if stats := h.mgr.Stats(); stats.MigrationsFailed != 0 || time.Since(started) > ResumeAckTimeout {
+		t.Fatalf("migrations failed %d, took %s", stats.MigrationsFailed, time.Since(started))
 	}
 }
 

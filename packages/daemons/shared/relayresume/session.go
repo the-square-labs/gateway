@@ -46,8 +46,12 @@ type pathRun struct {
 	// Recv on this stream.
 	readerBusy bool
 	bgWaiting  bool
-	once       sync.Once
 	reader     chan struct{} // closed when the reader goroutine exits
+	// closing: closeRun owns the path's end; flushed closes once its queue
+	// was sent (or failed).
+	closing   bool
+	flushed   chan struct{}
+	flushOnce sync.Once
 }
 
 // Session drives a Core over real relay streams. It implements the
@@ -107,7 +111,7 @@ func newSession(core *Core, routeID string, recvMax int) *Session {
 
 // attach registers a path and starts its reader. Called with mu held.
 func (s *Session) attach(path *Path, op OpenedPath) *pathRun {
-	run := &pathRun{path: path, op: op, done: make(chan struct{}), reader: make(chan struct{})}
+	run := &pathRun{path: path, op: op, done: make(chan struct{}), reader: make(chan struct{}), flushed: make(chan struct{})}
 	s.paths[path] = run
 	go s.read(run)
 	return run
@@ -263,6 +267,13 @@ func (s *Session) afterLocked(async bool) {
 		if out.Close {
 			run.close = true
 			s.bgCond.Broadcast()
+			if !run.closing {
+				// A given-up path ends on its own: its last records get a
+				// short time to leave, then it is cancelled even if a send
+				// on it is stuck (a stream nobody reads any more).
+				run.closing = true
+				go s.closeRun(run)
+			}
 		} else {
 			run.queue = append(run.queue, queued{out.Frame, out.Pooled})
 		}
@@ -290,8 +301,22 @@ func (s *Session) afterLocked(async bool) {
 		}
 		return
 	}
-	s.mu.Unlock()
+	// The caller (a writer, a resume) waits for the live paths only: a path
+	// being given up drains on its own goroutine, so a send stuck on it
+	// never holds back another path's frames (a RESUME_ACK).
+	var live []*pathRun
 	for _, run := range kick {
+		if run.close {
+			go s.drain(run)
+		} else {
+			live = append(live, run)
+		}
+	}
+	if len(live) == 0 {
+		return
+	}
+	s.mu.Unlock()
+	for _, run := range live {
 		s.drain(run)
 	}
 	s.mu.Lock()
@@ -305,11 +330,10 @@ func (s *Session) drain(run *pathRun) {
 	for {
 		s.mu.Lock()
 		if len(run.queue) == 0 {
-			closing := run.close
-			s.mu.Unlock()
-			if closing {
-				s.finishPath(run)
+			if run.close {
+				run.flushOnce.Do(func() { close(run.flushed) })
 			}
+			s.mu.Unlock()
 			return
 		}
 		item := run.queue[0]
@@ -322,49 +346,76 @@ func (s *Session) drain(run *pathRun) {
 		}
 		if err != nil {
 			s.mu.Lock()
+			for _, item := range run.queue {
+				if item.pooled {
+					ReleaseFrame(item.frame)
+				}
+			}
 			run.queue = nil
 			if !run.path.Closed() {
 				s.core.PathFailed(run.path, false, err, time.Now())
 			}
 			s.afterLocked(true)
+			if run.close {
+				run.flushOnce.Do(func() { close(run.flushed) })
+			}
 			s.mu.Unlock()
-			s.finishPath(run)
 			return
 		}
 	}
 }
 
-// finishPath ends a path's stream once the session gave it up.
-func (s *Session) finishPath(run *pathRun) {
-	run.once.Do(func() {
-		go func() {
-			s.mu.Lock()
-			state := s.core.State()
-			s.mu.Unlock()
-			if s.core.Role() == RoleSource {
-				if state == StateFinished {
-					// As the bridges always did: the relay ends the tunnel on Close.
-					_ = run.op.Stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}})
-				}
-			} else if run.op.CloseSend != nil {
-				// Let the last records (CLOSE echo, RST, RESUME_REJ) leave
-				// before the stream is cancelled: the source ends the tunnel.
-				_ = run.op.CloseSend()
-				select {
-				case <-run.reader:
-				case <-time.After(CloseLingerTimeout):
-				}
+// closeFlushTimeout bounds how long a given-up path's last records may take
+// to leave before its stream is cancelled under a stuck send.
+const closeFlushTimeout = 2 * time.Second
+
+// closeRun ends a path's stream once the session gave it up: after its
+// queued records left (or closeFlushTimeout), the source sends the relay
+// Close of a finished stream, a target half-closes and lingers so its last
+// record arrives, and the stream is cancelled.
+func (s *Session) closeRun(run *pathRun) {
+	go s.drain(run) // flushes what is queued, or reports an empty queue
+	flushed := true
+	select {
+	case <-run.flushed:
+	case <-time.After(closeFlushTimeout):
+		flushed = false
+	}
+	s.mu.Lock()
+	state := s.core.State()
+	s.mu.Unlock()
+	switch {
+	case !flushed:
+	case s.core.Role() == RoleSource:
+		if state == StateFinished {
+			// As the bridges always did: the relay ends the tunnel on Close.
+			sent := make(chan struct{})
+			go func() {
+				_ = run.op.Stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}})
+				close(sent)
+			}()
+			select {
+			case <-sent:
+			case <-time.After(closeFlushTimeout):
 			}
-			if run.op.Cancel != nil {
-				run.op.Cancel()
-			}
-			<-run.reader
-			s.mu.Lock()
-			delete(s.paths, run.path)
-			s.mu.Unlock()
-			close(run.done)
-		}()
-	})
+		}
+	case run.op.CloseSend != nil:
+		// Let the last records (CLOSE echo, RST, RESUME_REJ) leave before the
+		// stream is cancelled: the source ends the tunnel.
+		_ = run.op.CloseSend()
+		select {
+		case <-run.reader:
+		case <-time.After(CloseLingerTimeout):
+		}
+	}
+	if run.op.Cancel != nil {
+		run.op.Cancel()
+	}
+	<-run.reader
+	s.mu.Lock()
+	delete(s.paths, run.path)
+	s.mu.Unlock()
+	close(run.done)
 }
 
 func (s *Session) wakeLocked() {
