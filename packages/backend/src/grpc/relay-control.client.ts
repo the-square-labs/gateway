@@ -143,13 +143,15 @@ type RelayTunnelStream = grpc.ClientDuplexStream<RelayTunnelMessage, RelayTunnel
 function isTerminalTunnelStatus(error: unknown): boolean {
   const code = (error as { code?: number } | null)?.code;
   const message = error instanceof Error ? error.message : '';
-  return code === grpc.status.DEADLINE_EXCEEDED && /idle timeout/i.test(message);
+  // The relay's verdicts on the stream itself (as relayresume): its idle and half-close timeouts, refused frames.
+  if (code === grpc.status.DEADLINE_EXCEEDED) return /idle timeout|half-close timeout/i.test(message);
+  return code === grpc.status.INVALID_ARGUMENT;
 }
 
 /**
  * One relay tunnel stream after Ready, carrying RSv1 records for a ResumableRelayDuplex. Events wait in a queue until
- * the session attaches. A relay Error frame or the relay idle timeout end the path terminally; any other end (GOAWAY
- * cut, relay restart, force-disconnect, transport failure) lets the session resume elsewhere.
+ * the session attaches. The relay's idle timeout ends the path terminally (as relayresume does); any other end (GOAWAY
+ * cut, relay restart, force-disconnect, a frame ending the path, transport failure) lets the session resume elsewhere.
  */
 class RelayResumePath implements AttachablePath {
   private sink: ResumePathSink | null = null;
@@ -170,12 +172,11 @@ class RelayResumePath implements AttachablePath {
         const frame = Buffer.from(message.data.data);
         this.emit((sink) => sink.frame(frame));
       } else if (message.error) {
-        this.finish({ error: new Error(message.error.message.slice(0, 256)), terminal: true });
-      } else if (message.close) {
+        // Before HELLO_ACK the session cuts on any path end; after it, the target's error ends only this path.
+        this.finish({ error: new Error(message.error.message.slice(0, 256)) });
+      } else if (message.close || message.halfClose) {
+        // The target ends a path it gave up (after a RESUME elsewhere) with a half-close: this path is over.
         this.finish({});
-      } else if (message.halfClose) {
-        // A resume-aware peer never half-closes at the relay level.
-        this.finish({ error: new Error('Relay peer half-closed a resumable stream'), terminal: true });
       }
     });
     stream.once('end', () => this.finish({}));
