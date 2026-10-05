@@ -3,8 +3,10 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,6 +230,9 @@ func writeNodeFile(path string, content []byte, create bool) error {
 	}
 	if !create {
 		info, err := os.Stat(cleanPath)
+		if errors.Is(err, fs.ErrPermission) {
+			return fmt.Errorf("write file: %w", err)
+		}
 		if err != nil {
 			return fmt.Errorf("file is not writable: %s", cleanPath)
 		}
@@ -423,6 +428,10 @@ func nodeUploadTempPath(uploadID string, targetPath string) (string, string, err
 
 func ensureNodeWritableDirectory(path string) error {
 	info, err := os.Stat(path)
+	if errors.Is(err, fs.ErrPermission) {
+		// The daemon's user cannot enter a directory on the way: say so, so Gateway answers 403, not "does not exist".
+		return fmt.Errorf("parent directory: %w", err)
+	}
 	if err != nil {
 		return fmt.Errorf("parent directory does not exist: %s", path)
 	}
