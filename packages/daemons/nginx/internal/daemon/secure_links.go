@@ -883,6 +883,7 @@ func (p *NginxPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (strin
 			}
 		}
 	}
+	p.moveRelayStreams()
 	return "", nil
 }
 
@@ -1025,6 +1026,7 @@ func (p *NginxPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Clie
 	if p.availabilityLease != nil {
 		go p.availabilityLease.runForTarget(ctx, conn, relayInstanceID)
 	}
+	go p.watchRelayLane(ctx, conn, relayInstanceID)
 	<-ctx.Done()
 	p.relayTunnelMu.Lock()
 	for index, candidate := range p.relayTunnels {
@@ -1195,7 +1197,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 					break
 				}
 			}
-			result, failure := p.openProxySecureLinkOnTunnel(linkID, connection, tunnel, grant, setup, opened)
+			result, failure := p.openProxySecureLinkOnTunnel(ownerKind, linkID, connection, tunnel, grant, setup, opened)
 			if result == secureLinkOpened {
 				return
 			}
@@ -1291,8 +1293,14 @@ func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
 
 // openProxySecureLinkOnTunnel opens and bridges one connection through a relay lane. A failed attempt is logged at
 // debug only; openSecureLink reports the connection's outcome per link and state change (L-1).
-func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, setupTimeout time.Duration, opened func()) (secureLinkOpenResult, *secureLinkAttemptFailure) {
-	defer tunnel.active.Add(-1)
+func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, setupTimeout time.Duration, opened func()) (secureLinkOpenResult, *secureLinkAttemptFailure) {
+	// A resumable stream takes the lane slot over with its first path.
+	handedOver := false
+	defer func() {
+		if !handedOver {
+			tunnel.active.Add(-1)
+		}
+	}()
 	ctx, cancel, finishSetup := proxySecureLinkSetupContext(tunnel.ctx, setupTimeout)
 	defer cancel()
 	failed := func(stage, message string) *secureLinkAttemptFailure {
@@ -1332,7 +1340,16 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(linkID string, connection net.
 	if readChunk == 0 {
 		readChunk = relaybridge.DefaultChunkBytes
 	}
-	_ = relaybridge.BridgeWithChunk(ctx, connection, stream, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
+	maxFrame := int(first.GetReady().MaxFrameBytes)
+	handedOver = true
+	if p.bridgeRelayStream(ownerKind, linkID, connection, tunnel, stream, cancel, maxFrame, readChunk) {
+		return secureLinkOpened, nil
+	}
+	handedOver = false
+	if p.relayStreams != nil {
+		defer p.relayStreams.TrackLegacy(tunnel.targetID)()
+	}
+	_ = relaybridge.BridgeWithChunk(ctx, connection, stream, maxFrame, readChunk, cancel)
 	return secureLinkOpened, nil
 }
 

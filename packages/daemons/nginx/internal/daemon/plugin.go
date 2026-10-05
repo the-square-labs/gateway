@@ -20,6 +20,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
+	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	sharedstate "github.com/wiolett-industries/gateway/daemon-shared/state"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
@@ -61,6 +62,10 @@ type NginxPlugin struct {
 	registryListenersOnce    sync.Once
 	// secureLinkOutcomes logs Secure Link connection failures and holds per link and state change (L-1).
 	secureLinkOutcomes logepisode.Tracker
+	// relayStreams is the source side of resumable relay streams (RSv1); relayStreamOutcomes logs their moves
+	// and cuts per link and state change.
+	relayStreams        *relayresume.Manager
+	relayStreamOutcomes logepisode.Tracker
 	// Ingress groups: the reserved health endpoint's responder (nil when it could not start).
 	ingressHealth *ingressHealthResponder
 
@@ -175,6 +180,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	if err != nil {
 		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
+	p.relayStreams = newRelayStreamManager(p)
 	// Secure Link peers are authorized against the cached master PID: no
 	// subprocess per connection (B-22). Resolve it now, off the first
 	// connection's path.
@@ -474,6 +480,9 @@ func (p *NginxPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 	if p.ingressHealth != nil {
 		report.IngressHealth = p.ingressHealth.report()
 	}
+	if p.relayStreams != nil && report != nil {
+		report.RelayStreams = relayStreamStatsReport(p.relayStreams.Stats())
+	}
 	return report
 }
 
@@ -494,6 +503,9 @@ func (p *NginxPlugin) CollectStats() *pb.StatsReport {
 
 func (p *NginxPlugin) capabilities() []string {
 	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "nginx_secure_link_socket_only_v1", "nginx_registry_ingress_v1"}
+	if p.relayStreams != nil {
+		capabilities = append(capabilities, relayresume.Capability)
+	}
 	if p.maintenanceAccessSupported {
 		capabilities = append(capabilities, "proxy_maintenance_access_v1")
 	}
