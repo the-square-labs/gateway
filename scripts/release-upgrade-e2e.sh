@@ -936,7 +936,7 @@ cleanup_host() {
     leftovers+=("nftables ruleset differs")
   fi
   for port in 3000 9443 80 443 "$WEB_PORT" "$FEED_PORT" 53; do
-    ss -Hltnu "( sport = :${port} )" 2>/dev/null | grep -q . && leftovers+=("listener on port ${port}")
+    port_conflicts "$port" && leftovers+=("listener on port ${port}")
   done
   if ((${#leftovers[@]})); then
     fail "host restored" "left: ${leftovers[*]}"
@@ -947,6 +947,35 @@ cleanup_host() {
 }
 
 # ── Preflight ─────────────────────────────────────────────────────────
+
+# Whether a listener takes a port this run binds. The DNS guard binds only HOST_ADDR:53, so a resolver stub that listens
+# on a loopback address alone (systemd-resolved on 127.0.0.53 and 127.0.0.54) is no conflict; every other port is
+# bound on all addresses.
+port_conflicts() {
+  local port="$1" address
+  if [[ "$port" != 53 ]]; then
+    ss -Hltnu "( sport = :${port} )" 2>/dev/null | grep -q .
+    return
+  fi
+  while read -r address; do
+    address="${address%:53}"
+    address="${address#[}"
+    address="${address%]}"
+    address="${address%%%*}"
+    case "$address" in
+      127.* | ::1) ;;
+      *) return 0 ;;
+    esac
+  done < <(ss -Hltnu "( sport = :53 )" 2>/dev/null | awk '{print $5}')
+  return 1
+}
+
+# Whether the base release rewrites retired scope names to their current ones when they are granted (from 2.11.0).
+base_translates_retired_scopes() {
+  local major minor
+  IFS=. read -r major minor _ <<<"${BASE#v}"
+  ((major > 2 || (major == 2 && minor >= 11)))
+}
 
 preflight() {
   local tool port missing=()
@@ -964,7 +993,7 @@ preflight() {
   [[ "$HOST_ADDR" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Cannot determine the host address; pass --host-address." >&2; exit 2; }
   [[ ! -e "$INSTALL_DIR" ]] || { echo "${INSTALL_DIR} exists; this run needs a host without Gateway." >&2; exit 2; }
   for port in 3000 9443 80 443 "$WEB_PORT" "$FEED_PORT" 53; do
-    if ss -Hltnu "( sport = :${port} )" 2>/dev/null | grep -q .; then
+    if port_conflicts "$port"; then
       echo "Port ${port} is in use; this run needs it." >&2
       exit 2
     fi
@@ -1180,8 +1209,15 @@ phase1_base() {
     "proxy:advanced:bypass:${FACT[proxy]}")
   api POST /api/admin/groups "$(mkjson '{"name": "e2e-operators", "description": "E2E group with retired scope names", "scopes": a}' "${requested[@]}")"
   FACT[group]="$(jx "$RESP" 'D["id"]')"
-  missing="$(jx "$RESP" '[s for s in args if s not in D["scopes"]]' "${requested[@]}")"
-  check "custom group created with retired scopes" "HTTP ${CODE}; ${#requested[@]} scopes, not stored: ${missing:-unknown}" \
+  if base_translates_retired_scopes; then
+    # A base from 2.11.0 on stores the current names of the retired ones it is given (scopes-aliases.ts): it keeps
+    # every other requested scope as it is and no retired name; the later checks then prove the derived names.
+    missing="$(jx "$RESP" '[s for s in args[:args.index("--")] if not any(s == r or s.startswith(r + ":") for r in args[args.index("--") + 1:]) and s not in D["scopes"]] + [s for s in D["scopes"] if any(s == r or s.startswith(r + ":") for r in args[args.index("--") + 1:])]' \
+      "${requested[@]}" -- "${RETIRED_SCOPES[@]}")"
+  else
+    missing="$(jx "$RESP" '[s for s in args if s not in D["scopes"]]' "${requested[@]}")"
+  fi
+  check "custom group created with retired scopes" "HTTP ${CODE}; ${#requested[@]} scopes, not stored as expected: ${missing:-unknown}" \
     test -n "${FACT[group]}" -a "$missing" = "[]" || return 1
 
   api POST /api/admin/users "$(mkjson '{"email": a[0], "name": "E2E Operator", "groupIds": [a[1]], "authMethod": "password"}' "$OPERATOR_EMAIL" "${FACT[group]}")"
