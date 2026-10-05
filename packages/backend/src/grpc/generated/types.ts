@@ -238,8 +238,34 @@ export interface HealthReport {
   relayLatencies?: RelayLatencySample[];
   /** Docker daemons advertising managed_link_runtime_v1: the node's managed links (field 37). */
   managedLinks?: ManagedLinkRuntime[];
+  /** Daemons advertising relay_stream_resume_v1: their relay stream sessions (field 41). */
+  relayStreams?: RelayStreamStats | null;
   /** Present when the daemon advertises ingress_group_v1 (field 195). */
   ingressHealth?: IngressHealthReport | null;
+}
+
+/** Relay stream sessions of one daemon (RSv1). Totals count since the daemon started. uint64 values may be strings. */
+export interface RelayStreamStats {
+  resumableSessions?: number | string;
+  legacySessions?: number | string;
+  suspendedSessions?: number | string;
+  migrationsOkTotal?: number | string;
+  migrationsFailedTotal?: number | string;
+  /** Resumable streams that ended abnormally (no relay, resume refused, timeout). */
+  cutTotal?: number | string;
+  retransmittedBytesTotal?: number | string;
+  unackedBytes?: number | string;
+  migrationStallP50Ms?: number;
+  migrationStallP95Ms?: number;
+  byRelay?: RelayStreamRelaySessions[];
+  /** Target side: resumes this daemon refused. */
+  resumeRefusedTotal?: number | string;
+}
+
+export interface RelayStreamRelaySessions {
+  relayInstanceId: string;
+  resumable?: number | string;
+  legacy?: number | string;
 }
 
 /** What the reserved /.well-known/gateway-ingress-health endpoint answers on the node right now. */

@@ -189,9 +189,36 @@ message HealthReport {
   // Smoothed round-trip time from this node to each relay it measured
   // recently. Gateway places relay assignments by network distance with it.
   repeated RelayLatencySample relay_latencies = 40;
+  // Daemons advertising relay_stream_resume_v1: their relay stream sessions.
+  RelayStreamStats relay_streams = 41;
   // Nginx daemons advertising ingress_group_v1: what the reserved endpoint
   // /.well-known/gateway-ingress-health answers (sf-ingress range 195-199).
   IngressHealthReport ingress_health = 195;
+}
+
+// Relay stream sessions of one daemon (RSv1). Totals count since the daemon
+// started; gauges are the current values.
+message RelayStreamStats {
+  uint64 resumable_sessions = 1;
+  uint64 legacy_sessions = 2;
+  uint64 suspended_sessions = 3;
+  uint64 migrations_ok_total = 4;
+  uint64 migrations_failed_total = 5;
+  // Resumable streams that ended abnormally (no relay, resume refused, timeout).
+  uint64 cut_total = 6;
+  uint64 retransmitted_bytes_total = 7;
+  uint64 unacked_bytes = 8;
+  uint32 migration_stall_p50_ms = 9;
+  uint32 migration_stall_p95_ms = 10;
+  repeated RelayStreamRelaySessions by_relay = 11;
+  // Target side: resumes this daemon refused.
+  uint64 resume_refused_total = 12;
+}
+
+message RelayStreamRelaySessions {
+  string relay_instance_id = 1;
+  uint64 resumable = 2;
+  uint64 legacy = 3;
 }
 
 // The local answer of an nginx node's ingress health endpoint. Serving only
