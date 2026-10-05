@@ -818,14 +818,24 @@ remember_enrollment_token() {
     chown "${RUN_USER}:${RUN_GROUP}" "$ENROLLMENT_TOKEN_DIGEST_FILE" 2>> "$LOG_FILE" || true
 }
 
-# monitoring-daemon enrolls once: a host that is enrolled cannot take another node's token in place. Such a token is not used,
-# the host keeps its node, and the run fails before it changes anything, so the new node (still pending in Gateway)
-# does not go unnoticed.
+# monitoring-daemon enrolls once: a host that is enrolled cannot take another node's token in place, so such a token is not
+# used and the host keeps its node. An enrollment from an installer that kept no token digest (v2.11.0 and before)
+# cannot tell its own setup command, which operators re-run to update the daemon, from a new node's: the run goes on as
+# a re-run without a token and warns. With a digest, a different token is a new node's: the run fails before it changes
+# anything, so the new node (still pending in Gateway) does not go unnoticed.
 refuse_token_for_enrolled_node() {
     [[ -n "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 ]] || return 0
-    local node_id
+    local node_id node
     node_id=$(sed -nE 's/.*"node_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' /var/lib/monitoring-daemon/state.json 2>/dev/null | head -n 1 || true)
-    err "This host is already enrolled as monitoring node ${node_id:-(unknown id)}${EXISTING_GATEWAY_ADDR:+ of Gateway ${EXISTING_GATEWAY_ADDR}}; the enrollment token was not used, and nothing was changed."
+    node="monitoring node ${node_id:-(unknown id)}${EXISTING_GATEWAY_ADDR:+ of Gateway ${EXISTING_GATEWAY_ADDR}}"
+    if [[ ! -f "$ENROLLMENT_TOKEN_DIGEST_FILE" ]]; then
+        warn "This host is already enrolled as ${node}; the enrollment token was not used, and the run goes on without it."
+        warn "To enroll this host as another node instead: stop monitoring-daemon, move /etc/monitoring-daemon/certs and /var/lib/monitoring-daemon/state.json"
+        warn "out of the way, run that node's setup command, and delete the old node in Gateway."
+        ENROLL_TOKEN=""
+        return 0
+    fi
+    err "This host is already enrolled as ${node}; the enrollment token was not used, and nothing was changed."
     err "To keep this node (update, repair, change its run user), run the installer again without --token."
     err "To enroll this host as the new node instead: stop monitoring-daemon, move /etc/monitoring-daemon/certs and /var/lib/monitoring-daemon/state.json"
     err "out of the way, run this command again, and delete the old node in Gateway."

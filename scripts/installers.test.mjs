@@ -1727,35 +1727,47 @@ test('the storage profile is written once to the keys the docker-daemon reads', 
 });
 
 // F-B8: on an enrolled host the monitoring and Docker installers skipped a new node's token and exited 0, and the new
-// node stayed pending. They refuse it before they change anything, say which node the host is, and how to go on; the
-// token the node enrolled with keeps working for re-runs.
+// node stayed pending. With the digest of the token the node enrolled with, another token is refused before anything
+// changes, and the node's own token (its setup command run again) keeps working. An enrollment without a digest (an
+// installer of v2.11.0 or before) cannot tell its own used token, which operators re-run to update, from a new one: the
+// run goes on without the token and warns, and records no digest of it.
 test('the monitoring and Docker installers refuse a new token on an enrolled host', { skip: !linux }, async () => {
   const host = path.join(work, 'host');
   const withoutToken = ['--gateway', 'gw.example.com:9443', '--gateway-cert-sha256', CERT, '--version', VERSION];
+  const withToken = (token) => ['--gateway', 'gw.example.com:9443', '--token', token, '--gateway-cert-sha256', CERT, '--version', VERSION];
   for (const [script, daemon, extra] of [
     ['setup-monitoring-node.sh', 'monitoring-daemon', []],
     ['setup-docker-node.sh', 'docker-daemon', ['--mode', 'docker']],
   ]) {
     const etc = path.join(host, 'etc', daemon);
     const lib = path.join(host, 'var/lib', daemon);
+    const digest = path.join(lib, 'enrollment-token.sha256');
     try {
       runShell(`mkdir -p '${etc}/certs' '${lib}' && echo PEM > '${etc}/certs/node.pem' && echo '{"node_id":"0eb357ee-node"}' > '${lib}/state.json'`);
-      const refused = dryRun(script, ['-y', ...common, ...extra]);
-      assert.equal(refused.status, 1, `${script}\n${refused.output}`);
-      assert.match(refused.output, /already enrolled as (monitoring|docker) node 0eb357ee-node; the enrollment token was not used, and nothing was changed/, script);
-      assert.match(refused.output, /run the installer again without --token/, script);
-      assert.match(refused.output, new RegExp(`move /.*/etc/${daemon}/certs and /.*/var/lib/${daemon}/state\\.json`), script);
-      assert.doesNotMatch(refused.output, /Dry run completed/, script);
-      assert.equal(readFileSync(path.join(etc, 'certs/node.pem'), 'utf8'), 'PEM\n', `${script} keeps the enrollment`);
+      // A legacy enrollment: the original setup command (its token used) updates the node as before.
+      const legacy = dryRun(script, ['-y', ...withToken('gw_node_original'), ...extra]);
+      assert.equal(legacy.status, 0, `${script}\n${legacy.output}`);
+      assert.match(legacy.output, /WARN .*already enrolled as (monitoring|docker) node 0eb357ee-node; the enrollment token was not used, and the run goes on without it/, script);
+      assert.match(legacy.output, new RegExp(`move /.*/etc/${daemon}/certs and /.*/var/lib/${daemon}/state\\.json`), script);
+      assert.match(legacy.output, /Node already enrolled/, script);
+      assert.match(legacy.output, /Dry run completed/, script);
+      assert.equal(spawnSync('test', ['-e', digest]).status, 1, `${script} records no digest of an unused token`);
       // Without a token the enrolled node re-runs as before.
       const kept = dryRun(script, ['-y', ...withoutToken, ...extra]);
       assert.equal(kept.status, 0, `${script}\n${kept.output}`);
       assert.match(kept.output, /Node already enrolled/, script);
-      // The token of the node's own enrollment (its setup command run again) keeps the enrollment.
-      runShell(`printf '%s' gw_node_test | sha256sum | awk '{print $1}' > '${lib}/enrollment-token.sha256'`);
-      const same = dryRun(script, ['-y', ...common, ...extra]);
+      assert.doesNotMatch(kept.output, /WARN .*already enrolled as/, script);
+      // With the digest of the node's own token: that token keeps the enrollment, another one is refused.
+      runShell(`printf '%s' gw_node_original | sha256sum | awk '{print $1}' > '${digest}'`);
+      const same = dryRun(script, ['-y', ...withToken('gw_node_original'), ...extra]);
       assert.equal(same.status, 0, `${script}\n${same.output}`);
       assert.match(same.output, /already enrolled with this setup command's token; keeping its enrollment/, script);
+      const refused = dryRun(script, ['-y', ...withToken('gw_node_new'), ...extra]);
+      assert.equal(refused.status, 1, `${script}\n${refused.output}`);
+      assert.match(refused.output, /already enrolled as (monitoring|docker) node 0eb357ee-node; the enrollment token was not used, and nothing was changed/, script);
+      assert.match(refused.output, /run the installer again without --token/, script);
+      assert.doesNotMatch(refused.output, /Dry run completed/, script);
+      assert.equal(readFileSync(path.join(etc, 'certs/node.pem'), 'utf8'), 'PEM\n', `${script} keeps the enrollment`);
     } finally {
       runShell(`rm -rf '${etc}' '${lib}'`);
     }
