@@ -574,7 +574,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             )}
             {row.updateStep?.state === "draining" && row.updateStep.drainDeadlineAt && (
               <div className="text-xs text-muted-foreground">
-                Drains until {new Date(row.updateStep.drainDeadlineAt).toLocaleTimeString()}
+                Drains until {formatDateTime(row.updateStep.drainDeadlineAt)}
               </div>
             )}
             {row.updateStep?.error && (

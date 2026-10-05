@@ -140,6 +140,8 @@ export function targetRouteResume(
   };
 }
 
+const DRAIN_GRACE_LOOKUP_TIMEOUT_MS = 5_000;
+
 /** Drain grace: short when every stream through the relay moves on its own, today's otherwise. */
 export function drainGraceMs(kind: 'update' | 'manual', fullyResumable: boolean): number {
   if (fullyResumable) return RESUMABLE_DRAIN_GRACE_MS;
@@ -184,14 +186,25 @@ export async function relayDrainGraceMs(
   kind: 'update' | 'manual',
   legacySessions = 0
 ): Promise<number> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return drainGraceMs(kind, await relayInstanceFullyResumable(db, instanceId, legacySessions));
+    // Bounded: a drain, and the resume after it, never wait on this lookup.
+    const fullyResumable = await Promise.race([
+      relayInstanceFullyResumable(db, instanceId, legacySessions),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('lookup timed out')), DRAIN_GRACE_LOOKUP_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+    return drainGraceMs(kind, fullyResumable);
   } catch (error) {
     logger.warn('Could not tell whether a relay carries only resumable streams; using the full drain grace', {
       instanceId,
       error: error instanceof Error ? error.message : String(error),
     });
     return drainGraceMs(kind, false);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

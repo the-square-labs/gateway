@@ -38,10 +38,10 @@ import {
   drainOutcomeNote,
   localRelayPauseNote,
   RELAY_UPDATE_DRAIN_GRACE_MS,
+  RESUMABLE_DRAIN_GRACE_MS,
   type RelayStreamCounters,
   type RelayStreamReports,
   relayDrainGraceMs,
-  relayInstanceFullyResumable,
   relaySessionSplit,
   relayStreamCounters,
   relayStreamOutcome,
@@ -1415,6 +1415,7 @@ chmod 700 "$backup"
         // What the daemons' streams did while this relay drained, for the step note.
         const streamCounters = this.streamCounters(runtime);
         let legacyCut = 0;
+        let drainGraceMs = RELAY_UPDATE_DRAIN_GRACE_MS;
         if (instance.kind === 'local') {
           // A retried run finds the local relay already on the target image.
           let interruption: string | null = null;
@@ -1427,19 +1428,15 @@ chmod 700 "$backup"
             // sessions move instead of dropping when its container is recreated. Otherwise they drop once.
             interruption = await this.localRelayTakeoverBlocker(runtime, instance.id);
             if (!interruption) {
-              await this.updatePoolStep(
-                step.id,
-                'draining',
-                false,
-                new Date(Date.now() + (await this.updateDrainGraceMs(runtime, instance.id)))
-              );
+              drainGraceMs = await this.updateDrainGraceMs(runtime, instance.id);
+              await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + drainGraceMs));
               drainedInstanceId = instance.id;
               interruption = await this.drainLocalRelay(runtime, instance.id, userId, signal);
               if (interruption) drainedInstanceId = null;
               else {
                 // The internal registry stays on the local relay, which keeps serving it through the drain.
                 const kept = await localServiceEndpointIds(this.db);
-                legacyCut = await this.waitForUpdateDrain(runtime, instance, userId, signal, kept);
+                legacyCut = await this.waitForUpdateDrain(runtime, instance, userId, signal, drainGraceMs, kept);
               }
               throwIfAbandoned();
             }
@@ -1447,9 +1444,7 @@ chmod 700 "$backup"
             pausesStreams =
               Boolean(interruption) &&
               Boolean(runtime.relayStreamReports) &&
-              (await relayInstanceFullyResumable(this.db, instance.id, this.legacyStreams(runtime, instance.id)).catch(
-                () => false
-              ));
+              (await this.updateDrainGraceMs(runtime, instance.id)) === RESUMABLE_DRAIN_GRACE_MS;
             await this.updatePoolStep(step.id, 'updating');
             const restartedAt = Date.now();
             // From the point the local relay update commits, abandoning is refused: the pool ends on the target (or the
@@ -1501,12 +1496,8 @@ chmod 700 "$backup"
         // A voter or candidate of the relay's lease policies that is restarting or settling goes first.
         await runtime.awaitLeasePeers?.(instance.id, signal);
         throwIfAbandoned();
-        await this.updatePoolStep(
-          step.id,
-          'draining',
-          false,
-          new Date(Date.now() + (await this.updateDrainGraceMs(runtime, instance.id)))
-        );
+        drainGraceMs = await this.updateDrainGraceMs(runtime, instance.id);
+        await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + drainGraceMs));
         drainedInstanceId = instance.id;
         try {
           await runtime.drainInstance(instance.id, userId, true);
@@ -1518,7 +1509,7 @@ chmod 700 "$backup"
           currentStepId = null;
           continue;
         }
-        legacyCut = await this.waitForUpdateDrain(runtime, instance, userId, signal);
+        legacyCut = await this.waitForUpdateDrain(runtime, instance, userId, signal, drainGraceMs);
         throwIfAbandoned();
         await this.updatePoolStep(step.id, 'updating');
         const architecture = this.relayInstanceArchitecture(instance);
@@ -1545,13 +1536,9 @@ chmod 700 "$backup"
         await runtime.drainInstance(instance.id, userId, false);
         drainedInstanceId = null;
         const outcome = this.streamOutcomeSince(runtime, streamCounters);
-        await this.updatePoolStep(
-          step.id,
-          'ready',
-          true,
-          undefined,
-          outcome ? drainOutcomeNote(outcome, legacyCut) : null
-        );
+        const note = outcome ? drainOutcomeNote(outcome, legacyCut) : null;
+        if (note) await this.updatePoolStep(step.id, 'ready', true, undefined, note);
+        else await this.updatePoolStep(step.id, 'ready', true);
         currentStepId = null;
       }
       throwIfAbandoned();
@@ -1607,17 +1594,9 @@ chmod 700 "$backup"
     instance: typeof relayInstances.$inferSelect,
     userId: string | null,
     signal: AbortSignal,
+    graceMs: number,
     kept?: ReadonlySet<string>
   ): Promise<number> {
-    // The drain recorded its deadline: short when every stream through the relay can move to another one by itself.
-    const [drained] = await this.db
-      .select({ drainDeadlineAt: relayInstances.drainDeadlineAt })
-      .from(relayInstances)
-      .where(eq(relayInstances.id, instance.id))
-      .limit(1);
-    const graceMs = drained?.drainDeadlineAt
-      ? Math.max(0, drained.drainDeadlineAt.getTime() - Date.now())
-      : RELAY_UPDATE_DRAIN_GRACE_MS;
     if (await this.waitForRelayInstanceDrain(instance.id, graceMs, signal, kept)) return 0;
     logger.warn('Relay drain grace ended with active streams; disconnecting them to continue the update', {
       relayInstanceId: instance.id,
