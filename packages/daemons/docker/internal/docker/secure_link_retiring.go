@@ -185,13 +185,18 @@ func (r *retiringConnectors) forget(ids ...string) error {
 	return r.saveLocked()
 }
 
-// isRetiring reports a found connector that is being retired.
-func (m *dockerSecureLinkManager) isRetiring(inspect *container.InspectResponse) bool {
-	if inspect == nil {
-		return false
+// snapshot returns the connectors being retired. Taken before the slots are inspected, it names every retiring
+// connector an inspect can still find: a retirement forgets its connector only after removing it, and one that ended
+// in between would otherwise make the removed connector look like one to serve through.
+func (r *retiringConnectors) snapshot() map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.loadLocked()
+	ids := make(map[string]bool, len(r.until))
+	for id := range r.until {
+		ids[id] = true
 	}
-	_, ok := m.retiring.deadline(inspect.ID)
-	return ok
+	return ids
 }
 
 // resumeRetirementLocked goes on with the retirement of a connector found draining at a daemon start: it keeps

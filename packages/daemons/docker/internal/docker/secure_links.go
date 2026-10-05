@@ -745,6 +745,7 @@ func connectorRuntimeOf(inspect container.InspectResponse, anchorNetwork *contai
 // every binding and connection. It finishes its sessions in its slot.
 func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image string) (int, *container.InspectResponse, error) {
 	found := [len(secureLinkConnectorSlots)]*container.InspectResponse{}
+	retiringBefore := m.retiring.snapshot()
 	for slot, candidate := range secureLinkConnectorSlots {
 		if m.connectorID != "" && slot != m.slot {
 			// Serving: the other slot holds at most a connector being retired.
@@ -765,7 +766,7 @@ func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image strin
 	controlDirectory := m.controlDirectory()
 	retiring := [len(secureLinkConnectorSlots)]bool{}
 	for slot, inspect := range found {
-		retiring[slot] = m.isRetiring(inspect)
+		retiring[slot] = inspect != nil && retiringBefore[inspect.ID]
 	}
 	chosen := -1
 	for _, preferred := range []func(*container.InspectResponse) bool{
