@@ -14,14 +14,11 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 )
 
 const (
@@ -678,16 +675,10 @@ func localInstallCommand() string {
 	if account, err := user.LookupId(name); err == nil {
 		name = account.Username
 	}
-	command := "sudo bash setup-docker-node.sh --user " + name + " --secure-runtime"
-	// The node keeps the daemon version it runs: without --version the installer offers the latest stable release,
-	// which can be older than the release candidate this node runs (F-B6: a downgrade offer to v2.11.0).
-	if releaseVersion.MatchString(lifecycle.Version) {
-		command += " --version " + lifecycle.Version
-	}
-	return command
+	// Without a version: every Gateway since 2.11.1 rc builds matches exactly this form to show the
+	// download-and-verify command, and adds the node's daemon version there itself (F-B6, F-R1).
+	return "sudo bash setup-docker-node.sh --user " + name + " --secure-runtime"
 }
-
-var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
 
 func failedStatus(reason string, err error) Status {
 	return Status{

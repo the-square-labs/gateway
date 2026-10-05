@@ -8,13 +8,13 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 )
 
-// F-B6: the local Secure Runtime command of a daemon that runs as its own user pins the daemon's own version, so the
-// installer never offers another release (the latest stable one can be older than a release candidate).
-func TestLocalInstallCommandPinsTheDaemonVersion(t *testing.T) {
+// F-R1: the daemon reports the local Secure Runtime command without its version, whatever that is, so older Gateways
+// recognise it too; the Gateway adds the node's daemon version when it shows it.
+func TestLocalInstallCommandNamesNoVersion(t *testing.T) {
 	previous := lifecycle.Version
 	t.Cleanup(func() { lifecycle.Version = previous })
+	lifecycle.Version = "v2.11.1-rc.24"
 
-	lifecycle.Version = "v2.11.1-rc.20"
 	command := localInstallCommand()
 	if os.Geteuid() == 0 {
 		if command != "sudo docker-daemon runtime install runsc" {
@@ -22,13 +22,7 @@ func TestLocalInstallCommandPinsTheDaemonVersion(t *testing.T) {
 		}
 		return
 	}
-	if !strings.HasPrefix(command, "sudo bash setup-docker-node.sh --user ") ||
-		!strings.HasSuffix(command, " --secure-runtime --version v2.11.1-rc.20") {
+	if !strings.HasPrefix(command, "sudo bash setup-docker-node.sh --user ") || !strings.HasSuffix(command, " --secure-runtime") {
 		t.Fatalf("command = %q", command)
-	}
-
-	lifecycle.Version = "dev"
-	if command := localInstallCommand(); !strings.HasSuffix(command, " --secure-runtime") {
-		t.Fatalf("a development build names no version: %q", command)
 	}
 }
