@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { managedLinkHealth } from './health-report.js';
+import { managedLinkHealth, relayStreamHealth } from './health-report.js';
 
 describe('managedLinkHealth', () => {
   it('decodes the managed links a docker daemon reports and leaves the field out without any', () => {
@@ -83,5 +83,39 @@ describe('managedLinkHealth', () => {
     });
     expect(managedLinkHealth(undefined)).toEqual({});
     expect(managedLinkHealth([])).toEqual({});
+  });
+});
+
+describe('relayStreamHealth', () => {
+  it('decodes the relay stream sessions a daemon reports and leaves the field out without them', () => {
+    expect(relayStreamHealth(undefined)).toEqual({});
+    expect(
+      relayStreamHealth({
+        resumableSessions: '12',
+        legacySessions: 1,
+        migrationsOkTotal: '40',
+        cutTotal: '2',
+        migrationStallP95Ms: 35,
+        byRelay: [
+          { relayInstanceId: 'relay-1', resumable: '12', legacy: '1' },
+          { relayInstanceId: '', resumable: 3 },
+        ],
+      })
+    ).toEqual({
+      relayStreams: {
+        resumableSessions: 12,
+        legacySessions: 1,
+        suspendedSessions: 0,
+        migrationsOkTotal: 40,
+        migrationsFailedTotal: 0,
+        cutTotal: 2,
+        retransmittedBytesTotal: 0,
+        unackedBytes: 0,
+        migrationStallP50Ms: 0,
+        migrationStallP95Ms: 35,
+        resumeRefusedTotal: 0,
+        byRelay: [{ relayInstanceId: 'relay-1', resumable: 12, legacy: 1 }],
+      },
+    });
   });
 });

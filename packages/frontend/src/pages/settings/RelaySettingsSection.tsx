@@ -572,6 +572,11 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 {policyExpired ? "policy expired" : row.state}
               </Badge>
             )}
+            {row.updateStep?.state === "draining" && row.updateStep.drainDeadlineAt && (
+              <div className="text-xs text-muted-foreground">
+                Drains until {new Date(row.updateStep.drainDeadlineAt).toLocaleTimeString()}
+              </div>
+            )}
             {row.updateStep?.error && (
               <div className="text-xs text-muted-foreground">Update: {row.updateStep.error}</div>
             )}

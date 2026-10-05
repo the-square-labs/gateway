@@ -37,6 +37,7 @@ import {
 } from './relay-pool-errors.js';
 import { describeRelayRevocation } from './relay-revocation-fence.js';
 import { loadRelayRouteHistories, RelayRevocationFenceService } from './relay-revocation-fence.service.js';
+import { drainDeadline, MANUAL_DRAIN_TIMEOUT_MS, relayDrainGraceMs, relaySessionSplit } from './relay-stream-resume.js';
 import {
   chooseByRendezvous,
   chooseRelayAssignments,
@@ -83,7 +84,6 @@ type ProbeResult = { ready: true } | { ready: false; error: string; transient: b
  * activation time, and only a drained active generation retires otherwise.
  */
 const deferredGeneration = sql`(${relayEndpointAssignmentGenerations.state} = 'retired' and ${relayEndpointAssignmentGenerations.activatedAt} is null)`;
-const MANUAL_DRAIN_TIMEOUT_MS = 10 * 60_000;
 /** Supervisors report every 5 s; a remote relay silent this long is offline. */
 const REMOTE_HEARTBEAT_TIMEOUT_MS = 90_000;
 const UPDATE_DRAIN_RELEASE_INTERVAL_MS = 30_000;
@@ -493,7 +493,11 @@ export class RelayPoolService {
         if (!instance.nodeId || instance.kind !== 'remote' || !instance.manualDrainStartedAt) return;
         // A relay that is not connected gets the drain once it reconnects and reports admitting again.
         if (!this.policy.isRemoteInstanceConnected(instance.nodeId)) return;
-        const expired = Date.now() - instance.manualDrainStartedAt.getTime() >= MANUAL_DRAIN_TIMEOUT_MS;
+        // The drain's own deadline (short when every stream through the relay can move on its own); a drain begun
+        // before deadlines were recorded keeps the operator drain timeout.
+        const expired = instance.drainDeadlineAt
+          ? Date.now() >= instance.drainDeadlineAt.getTime()
+          : Date.now() - instance.manualDrainStartedAt.getTime() >= MANUAL_DRAIN_TIMEOUT_MS;
         // Reassert admission after a worker restart; an acknowledged forced drain
         // need not repeat unless the worker resumed admission or reports live streams.
         const resumed = instance.health?.admissionState !== 'draining';
@@ -1748,6 +1752,13 @@ export class RelayPoolService {
     if (!connected && !(enabled && manual)) {
       throw new AppError(409, 'RELAY_NOT_CONNECTED', 'The relay is not connected. Try again once it reconnects.');
     }
+    // When the drain disconnects what is left: resumable sources pace their moves to it (drain_deadline_unix_ms).
+    const deadlineAt = enabled
+      ? drainDeadline(
+          instance,
+          await relayDrainGraceMs(this.db, instance.id, manual ? 'manual' : 'update', this.legacyStreams(instance.id))
+        )
+      : null;
     // Persist user intent before remote I/O so a crash or failed delivery cannot
     // lose the deadline. Update-owned drains retain their separate rollout policy.
     const persist = () =>
@@ -1761,6 +1772,7 @@ export class RelayPoolService {
               : instance.manualDrainStartedAt
             : null,
           drainForcedAt: enabled ? instance.drainForcedAt : null,
+          drainDeadlineAt: deadlineAt,
           updatedAt: new Date(),
         })
         .where(eq(relayInstances.id, instance.id));
@@ -1780,6 +1792,11 @@ export class RelayPoolService {
     if (!enabled) return;
     if (manual) await this.evacuateInstance(instance.id);
     else await this.evacuateUpdateDrainedInstance(instance.id);
+  }
+
+  /** Raw streams the daemons report through this relay: they end only on their own or when cut. */
+  private legacyStreams(instanceId: string): number {
+    return relaySessionSplit(this.policy.relayStreamReports?.() ?? [], instanceId).legacy;
   }
 
   /** An update's drain stands on its own; moving workloads is retried by later placement. */
@@ -1845,6 +1862,9 @@ export class RelayPoolService {
     if (instance.state !== 'draining') {
       throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINING', 'Relay instance must be draining first');
     }
+    // What the forced disconnect ends, as the daemons last reported it: resumable streams move to another relay,
+    // raw ones are cut.
+    const split = relaySessionSplit(this.policy.relayStreamReports?.() ?? [], instance.id);
     if (nodeId) await this.policy.setRemoteInstanceDrain(nodeId, true, true);
     else await this.policy.setLocalInstanceDrain(true, true);
     await this.db
@@ -1858,6 +1878,7 @@ export class RelayPoolService {
       resourceId: instance.id,
       details: {
         activeTunnels: instance.health?.activeTunnels ?? 0,
+        ...(split.reporting ? { resumableStreams: split.resumable, legacyStreams: split.legacy } : {}),
         ...(update ? { reason: 'relay_pool_update_drain_grace_ended' } : {}),
       },
     });

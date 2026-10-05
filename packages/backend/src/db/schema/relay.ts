@@ -210,10 +210,23 @@ export const relayPools = pgTable('relay_pools', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * off: raw streams. enabling: the target accepts resumable streams, sources do not open them yet. on: both. rotating:
+ * the target has the new key, sources still the previous one. disabling: sources open raw streams, the target still
+ * accepts resumable ones.
+ */
+export type RelayRouteResumeState = 'off' | 'enabling' | 'on' | 'rotating' | 'disabling';
+
 export const relayPolicyState = pgTable('relay_policy_state', {
   id: varchar('id', { length: 32 }).primaryKey(),
   gatewayInstanceId: uuid('gateway_instance_id').notNull(),
   revision: bigint('revision', { mode: 'number' }).notNull().default(0),
+  /**
+   * The resumable relay stream (RSv1) secret every route resume key derives from, envelope-encrypted like the grant
+   * signing keys. Created once by Gateway; relays never see it or the keys.
+   */
+  resumeSecretEncrypted: text('resume_secret_encrypted'),
+  resumeSecretDek: text('resume_secret_dek'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -258,6 +271,14 @@ export const relayRoutes = pgTable(
       .default(1024 * 1024),
     managedDatabaseListener: jsonb('managed_database_listener').$type<RelayManagedDatabaseListenerConfig>(),
     secureLinkEgress: jsonb('secure_link_egress').$type<RelaySecureLinkEgressConfig>(),
+    /**
+     * Resumable streams (RSv1): where the route is in the ordered enable/rotate/disable sequence (see
+     * relay-stream-resume.ts), its current resume key version and the previous one the target keeps accepting.
+     */
+    resumeState: varchar('resume_state', { length: 16 }).$type<RelayRouteResumeState>().notNull().default('off'),
+    keyVersion: bigint('key_version', { mode: 'number' }).notNull().default(1),
+    prevKeyVersion: bigint('prev_key_version', { mode: 'number' }),
+    keyRotatedAt: timestamp('key_rotated_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -331,6 +352,8 @@ export const relayInstances = pgTable(
     state: relayInstanceStateEnum('state').notNull().default('joining'),
     manualDrainStartedAt: timestamp('manual_drain_started_at', { withTimezone: true }),
     drainForcedAt: timestamp('drain_forced_at', { withTimezone: true }),
+    /** When the current drain disconnects what is left; resumable streams leave before it. Null when not draining. */
+    drainDeadlineAt: timestamp('drain_deadline_at', { withTimezone: true }),
     certificateIdentity: varchar('certificate_identity', { length: 255 }),
     certificateFingerprint: varchar('certificate_fingerprint', { length: 71 }),
     certificateExpiresAt: timestamp('certificate_expires_at', { withTimezone: true }),

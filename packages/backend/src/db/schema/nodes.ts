@@ -143,6 +143,27 @@ export interface NodeHealthReport {
   // Docker daemons with managed_link_runtime_v1: the connections of the managed links whose workloads the node runs.
   // Absent when the node has none.
   managedLinks?: NodeManagedLinkReport[];
+  // Daemons with relay_stream_resume_v1: their relay stream sessions (RSv1).
+  relayStreams?: NodeRelayStreamReport;
+}
+
+/** A daemon's relay stream sessions (RSv1). Totals count since the daemon started. */
+export interface NodeRelayStreamReport {
+  resumableSessions: number;
+  legacySessions: number;
+  suspendedSessions: number;
+  migrationsOkTotal: number;
+  migrationsFailedTotal: number;
+  /** Resumable streams that ended abnormally: no relay to move to, resume refused, timeout. */
+  cutTotal: number;
+  retransmittedBytesTotal: number;
+  unackedBytes: number;
+  migrationStallP50Ms: number;
+  migrationStallP95Ms: number;
+  /** Target side: resumes the daemon refused. */
+  resumeRefusedTotal: number;
+  /** Open sessions per relay they currently run through. */
+  byRelay: Array<{ relayInstanceId: string; resumable: number; legacy: number }>;
 }
 
 /**

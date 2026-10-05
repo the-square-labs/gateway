@@ -689,6 +689,8 @@ export class NodeDispatchService {
             candidates: assignment.candidates,
             managedDatabaseListener: assignment.managedDatabaseListener,
             secureLinkEgress: assignment.secureLinkEgress,
+            streamResume: assignment.streamResume,
+            resumeRoutes: assignment.resumeRoutes ?? [],
           })),
           relayLatencyTargets: bundle.relayLatencyTargets ?? [],
           revocationFences: bundle.revocationFences ?? [],

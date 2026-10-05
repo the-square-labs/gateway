@@ -10,6 +10,7 @@ import {
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { RelayPolicyService } from './relay-policy.service.js';
+import { drainDeadline, relayDrainGraceMs, relaySessionSplit } from './relay-stream-resume.js';
 
 /**
  * A Relay Pool update recreates the local Compose relay last. When another relay can carry the local relay's
@@ -165,7 +166,8 @@ export async function waitForLocalRelayEvacuation(
 
 interface LocalRelayDrainDeps {
   db: DrizzleClient;
-  policy: Pick<RelayPolicyService, 'setLocalInstanceDrain' | 'reconcileAndSync'>;
+  policy: Pick<RelayPolicyService, 'setLocalInstanceDrain' | 'reconcileAndSync'> &
+    Partial<Pick<RelayPolicyService, 'relayStreamReports'>>;
   audit: Pick<AuditService, 'log'>;
   events: Pick<EventBusService, 'publish'>;
 }
@@ -177,6 +179,18 @@ export async function setLocalRelayUpdateDrain(
   userId: string | null,
   enabled: boolean
 ): Promise<void> {
+  // Resumable sources pace their moves to the drain's deadline; built-in local services stay and do not count.
+  const drainDeadlineAt = enabled
+    ? drainDeadline(
+        instance,
+        await relayDrainGraceMs(
+          deps.db,
+          instance.id,
+          'update',
+          relaySessionSplit(deps.policy.relayStreamReports?.() ?? [], instance.id).legacy
+        )
+      )
+    : null;
   await deps.policy.setLocalInstanceDrain(enabled);
   // The relay's health reports carry the state from now on; an unavailable relay keeps its own state.
   await deps.db
@@ -184,6 +198,7 @@ export async function setLocalRelayUpdateDrain(
     .set({
       state: enabled ? 'draining' : 'ready',
       drainForcedAt: enabled ? instance.drainForcedAt : null,
+      drainDeadlineAt,
       updatedAt: new Date(),
     })
     .where(and(eq(relayInstances.id, instance.id), inArray(relayInstances.state, ['ready', 'draining'])));

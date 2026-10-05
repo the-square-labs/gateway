@@ -27,7 +27,7 @@ import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate, promotePendingNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
-import { decodeHealthDiskMounts, managedLinkHealth, relayLatencyHealth } from './health-report.js';
+import { decodeHealthDiskMounts, managedLinkHealth, relayLatencyHealth, relayStreamHealth } from './health-report.js';
 
 const logger = createChildLogger('GrpcControl');
 /**
@@ -794,6 +794,15 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               setImmediate(async () => {
                 try {
                   if (!isClaimedStreamCurrent(claimedNodeId)) return;
+                  // A daemon that came back with other capabilities changes which of its routes are resumable;
+                  // that is settled first, so it never gets a resume key its peer would not accept.
+                  await deps.relayPolicy!.reconcileStreamResume().catch((error) => {
+                    logger.warn('Resumable relay stream changes after a daemon reconnect deferred', {
+                      nodeId: claimedNodeId,
+                      error: error instanceof Error ? error.message : String(error),
+                    });
+                  });
+                  if (!isClaimedStreamCurrent(claimedNodeId)) return;
                   await deps.relayPolicy!.syncNodeGrants(claimedNodeId);
                 } catch (error) {
                   logger.warn('Failed to sync relay grants after daemon reconnect', {
@@ -1233,6 +1242,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 gpuDevices: mapGpuHealthDevices(msg.healthReport.gpuDevices),
                 ...relayLatencyHealth(msg.healthReport.relayLatencies),
                 ...managedLinkHealth(msg.healthReport.managedLinks),
+                ...relayStreamHealth(msg.healthReport.relayStreams),
                 ...ingressHealthFromProto((msg.healthReport as { ingressHealth?: unknown }).ingressHealth),
               };
 

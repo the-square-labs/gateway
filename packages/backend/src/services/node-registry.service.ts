@@ -3,7 +3,12 @@ import type { ServerDuplexStream } from '@grpc/grpc-js';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
-import type { NodeHealthReport, NodeManagedLinkReport, NodeStatsReport } from '@/db/schema/nodes.js';
+import type {
+  NodeHealthReport,
+  NodeManagedLinkReport,
+  NodeRelayStreamReport,
+  NodeStatsReport,
+} from '@/db/schema/nodes.js';
 import type { CommandResult, DaemonMessage, GatewayCommand } from '@/grpc/generated/types.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -474,6 +479,20 @@ export class NodeRegistryService {
       node.capabilities.has(MANAGED_LINK_COMPLETED_CAPABILITY) ||
       links.some((candidate) => (candidate.completedTotal ?? 0) > 0);
     return { link: link ?? null, reportedAt: node.lastReportAt, countsCompleted };
+  }
+
+  /**
+   * The relay stream sessions (RSv1) connected daemons reported within maxAgeMs. Daemons that do not report them are
+   * left out; their streams are raw.
+   */
+  relayStreamReports(maxAgeMs = 90_000, now = Date.now()): Array<{ nodeId: string; report: NodeRelayStreamReport }> {
+    const reports: Array<{ nodeId: string; report: NodeRelayStreamReport }> = [];
+    for (const [nodeId, node] of this.nodes) {
+      const report = node.lastHealthReport?.relayStreams;
+      if (!report || !node.lastReportAt || now - node.lastReportAt.getTime() > maxAgeMs) continue;
+      reports.push({ nodeId, report });
+    }
+    return reports;
   }
 
   /**

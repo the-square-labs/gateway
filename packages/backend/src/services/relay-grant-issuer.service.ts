@@ -24,6 +24,13 @@ import { candidateAssignmentState } from './relay-local-takeover.js';
 import type { RelayRevokedRouteFence } from './relay-revocation-fence.js';
 import { loadRevocationFenceState } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
+import {
+  candidateDrainDeadline,
+  type RelayRouteResumeAssignment,
+  type RelayStreamResumeAssignment,
+  sourceStreamResume,
+  targetRouteResume,
+} from './relay-stream-resume.js';
 import { candidateTopology } from './relay-topology.js';
 import { type RelayLatencyTarget, RelayTopologyService } from './relay-topology.service.js';
 
@@ -93,6 +100,10 @@ export interface RelayGrantAssignment {
     /** The fixed IPv4 the connector takes on the link network (a legacy sidecar's address). */
     connectorAddress?: string;
   };
+  /** Connect assignments of a resumable route (RSv1): the key its streams are opened with. */
+  streamResume?: RelayStreamResumeAssignment;
+  /** Endpoint assignments: the routes to the endpoint that may open resumable streams, with their keys. */
+  resumeRoutes?: RelayRouteResumeAssignment[];
 }
 
 export interface RelayDataCandidate {
@@ -106,6 +117,8 @@ export interface RelayDataCandidate {
   capabilities: string[];
   grant: SignedRelayGrant;
   assignmentState: 'active' | 'staging' | 'draining';
+  /** Draining relays: resumable streams leave before this (unix ms). Absent: as soon as possible. */
+  drainDeadlineUnixMs?: string;
   /** Absent when Gateway placed the endpoint without latency data. */
   topology?: { role: 'primary' | 'standby'; endpointRttMicros: number };
 }
@@ -136,6 +149,8 @@ export class RelayGrantIssuerService {
   private readonly topology: RelayTopologyService;
   /** The shared secure-link connector image egress assignments name (SECURE_LINK_CONNECTOR_IMAGE). */
   private connectorImage = '';
+  /** The RSv1 secret route resume keys derive from; null: no route is resumable. */
+  private resumeSecret: () => Promise<Buffer | null> = async () => null;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -147,6 +162,10 @@ export class RelayGrantIssuerService {
 
   setConnectorImage(image: string): void {
     this.connectorImage = image;
+  }
+
+  setResumeSecretSource(source: () => Promise<Buffer | null>): void {
+    this.resumeSecret = source;
   }
 
   acknowledgeRevision(revision: number): void {
@@ -207,11 +226,30 @@ export class RelayGrantIssuerService {
     ]);
     const activeEndpointIds = new Set(targetEndpoints.filter(({ status }) => status === 'active').map(({ id }) => id));
     const grants: RelayGrantAssignment[] = [];
-    const [poolProjection, revocations] = await Promise.all([
+    const activeOwnEndpoints = endpoints.filter(({ status }) => status === 'active');
+    const [poolProjection, revocations, resumeSecret, inboundRoutes] = await Promise.all([
       this.getPoolProjection(),
       loadRevocationFenceState(this.db),
+      this.resumeSecret(),
+      activeOwnEndpoints.length
+        ? this.db
+            .select({
+              id: relayRoutes.id,
+              ownerKind: relayRoutes.ownerKind,
+              targetEndpointId: relayRoutes.targetEndpointId,
+              resumeState: relayRoutes.resumeState,
+              keyVersion: relayRoutes.keyVersion,
+              prevKeyVersion: relayRoutes.prevKeyVersion,
+            })
+            .from(relayRoutes)
+            .where(
+              inArray(
+                relayRoutes.targetEndpointId,
+                activeOwnEndpoints.map(({ id }) => id)
+              )
+            )
+        : Promise.resolve([]),
     ]);
-    const activeOwnEndpoints = endpoints.filter(({ status }) => status === 'active');
     for (const endpoint of activeOwnEndpoints) {
       const grant = await this.signGrant({
         kind: 'endpoint',
@@ -231,6 +269,10 @@ export class RelayGrantIssuerService {
         undefined,
         true
       );
+      const resumeRoutes = inboundRoutes
+        .filter(({ targetEndpointId }) => targetEndpointId === endpoint.id)
+        .flatMap((route) => targetRouteResume(resumeSecret, route) ?? [])
+        .sort((left, right) => left.routeId.localeCompare(right.routeId));
       grants.push({
         role: 'endpoint',
         ownerKind: endpoint.ownerKind,
@@ -239,6 +281,7 @@ export class RelayGrantIssuerService {
         grant,
         schemaVersion: candidates.length ? 2 : 1,
         candidates,
+        ...(resumeRoutes.length ? { resumeRoutes } : {}),
       });
     }
     for (const route of routes.filter(({ targetEndpointId }) => activeEndpointIds.has(targetEndpointId))) {
@@ -288,6 +331,7 @@ export class RelayGrantIssuerService {
               ...(this.connectorImage ? { connectorImage: this.connectorImage } : {}),
             }
           : undefined,
+        ...this.streamResumeOf(resumeSecret, route),
       });
     }
     // Lease lanes only add transports; they must never hold grants back.
@@ -322,6 +366,7 @@ export class RelayGrantIssuerService {
         certificateIdentity: relayInstances.certificateIdentity,
         certificateFingerprint: relayInstances.certificateFingerprint,
         capabilities: relayInstances.capabilities,
+        drainDeadlineAt: relayInstances.drainDeadlineAt,
       })
       .from(relayEndpointAssignments)
       .innerJoin(
@@ -407,6 +452,16 @@ export class RelayGrantIssuerService {
             }),
       });
       const topology = candidateTopology(assignment.role);
+      const assignmentState = candidateAssignmentState(
+        { ...assignment, state: assignment.state as 'active' | 'staging' | 'draining' },
+        endpoint.subjectKind,
+        this.instanceCapabilities(assignment)
+      );
+      // Only a relay drain has a deadline; a generation drained by placement can be left at once.
+      const drainDeadlineUnixMs =
+        assignmentState === 'draining' && assignment.instanceState === 'draining'
+          ? candidateDrainDeadline(assignment.drainDeadlineAt)
+          : undefined;
       result.push({
         poolId: assignment.poolId,
         relayInstanceId: assignment.instanceId,
@@ -417,11 +472,8 @@ export class RelayGrantIssuerService {
         certificateFingerprint: assignment.certificateFingerprint ?? '',
         capabilities: this.instanceCapabilities(assignment),
         grant,
-        assignmentState: candidateAssignmentState(
-          { ...assignment, state: assignment.state as 'active' | 'staging' | 'draining' },
-          endpoint.subjectKind,
-          this.instanceCapabilities(assignment)
-        ),
+        assignmentState,
+        ...(drainDeadlineUnixMs ? { drainDeadlineUnixMs } : {}),
         ...(topology ? { topology } : {}),
       });
     }
@@ -555,6 +607,15 @@ export class RelayGrantIssuerService {
     };
   }
 
+  /** A connect assignment's RSv1 key, while its route opens resumable streams. */
+  private streamResumeOf(
+    secret: Buffer | null,
+    route: Pick<typeof relayRoutes.$inferSelect, 'id' | 'ownerKind' | 'resumeState' | 'keyVersion' | 'prevKeyVersion'>
+  ): { streamResume?: RelayStreamResumeAssignment } {
+    const streamResume = sourceStreamResume(secret, route);
+    return streamResume ? { streamResume } : {};
+  }
+
   private instanceCapabilities(instance: { kind: 'local' | 'remote'; capabilities: unknown }): string[] {
     if (!instance.capabilities || typeof instance.capabilities !== 'object') return [];
     const features = (instance.capabilities as { features?: unknown }).features;
@@ -605,6 +666,7 @@ export class RelayGrantIssuerService {
     const kindByInstance = new Map(assignments.map(({ instanceId, kind }) => [instanceId, kind]));
     return {
       grant,
+      ...this.streamResumeOf(await this.resumeSecret(), route),
       candidates: candidates.map((candidate) => ({
         ...candidate,
         local: kindByInstance.get(candidate.relayInstanceId) === 'local',

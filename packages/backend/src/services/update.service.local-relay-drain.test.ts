@@ -18,7 +18,10 @@ const MIGRATED = {
 const IN_FLIGHT = ['draining', 'updating', 'verifying', 'rolling_back'];
 
 /** A Relay Pool run with the local relay left as its last step, and a remote relay that may take its workloads. */
-function localStepPool(blocker: string | null) {
+function localStepPool(
+  blocker: string | null,
+  options: { resumable?: boolean; relayDrainDeadlineAt?: Date; reports?: () => any[] } = {}
+) {
   const state = {
     run: 'updating',
     step: 'pending',
@@ -50,6 +53,7 @@ function localStepPool(blocker: string | null) {
           displayName: 'Local relay',
           state: 'draining',
           health: { admissionState: 'draining' },
+          drainDeadlineAt: options.relayDrainDeadlineAt ?? null,
         },
       ];
     }
@@ -85,8 +89,19 @@ function localStepPool(blocker: string | null) {
     },
   });
   const tx = { execute: vi.fn().mockResolvedValue(undefined), select, update };
+  // The routes through the relay (relayInstanceFullyResumable): all resumable, or one raw.
+  const selectDistinct = () => {
+    const query: Record<string, unknown> = {};
+    for (const method of ['from', 'innerJoin']) query[method] = () => query;
+    query.where = async () => [
+      { routeId: 'route-1', resumeState: 'on' },
+      { routeId: 'route-2', resumeState: options.resumable ? 'on' : 'off' },
+    ];
+    return query;
+  };
   const db = {
     select,
+    selectDistinct,
     update,
     insert: vi.fn(() => ({ values: () => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) }) })),
     transaction: vi.fn(async (write: (executor: typeof tx) => Promise<unknown>) => write(tx)),
@@ -132,6 +147,7 @@ function localStepPool(blocker: string | null) {
     dispatchWorkerUpdate: vi.fn(),
     prepareSupervisorUpdate: vi.fn(),
     dispatchSupervisorUpdate: vi.fn(),
+    ...(options.reports ? { relayStreamReports: options.reports } : {}),
   };
   service.setRelayPoolUpdateRuntime(runtime);
   const internals = service as unknown as Record<string, (...args: any[]) => any>;
@@ -284,5 +300,63 @@ describe('The local relay step of a Relay Pool update', () => {
     await update;
     expect(state).toMatchObject({ run: 'complete', step: 'ready' });
     expect(runtime.drainInstance).toHaveBeenLastCalledWith('local', 'admin-1', false);
+  });
+
+  it('gives a relay whose streams all resume a short drain and records what moved', async () => {
+    let moved = 10;
+    const reports = () => [
+      {
+        nodeId: 'node-1',
+        report: {
+          migrationsOkTotal: moved,
+          cutTotal: 0,
+          byRelay: [{ relayInstanceId: 'local', resumable: 3, legacy: 0 }],
+        },
+      },
+    ];
+    const relayDrainDeadlineAt = new Date(Date.now() + 2 * 60_000);
+    const { service, runtime, state, drainWait } = localStepPool(null, {
+      resumable: true,
+      relayDrainDeadlineAt,
+      reports,
+    });
+    runtime.drainInstance.mockImplementation(async (_id: string, _user: string, enabled: boolean) => {
+      if (!enabled) moved = 13;
+    });
+
+    await service.performRelayUpdate('v2.4.3', relayArtifact(), 'admin-1');
+
+    const graceMs = drainWait.mock.calls[0]![1] as number;
+    expect(graceMs).toBeGreaterThan(60_000);
+    expect(graceMs).toBeLessThanOrEqual(2 * 60_000);
+    expect(state.stepError).toBe('3 streams moved to other relays, none cut.');
+  });
+
+  it('notes that resumable streams paused when the local relay is recreated without another relay', async () => {
+    const reports = () => [
+      {
+        nodeId: 'node-1',
+        report: { migrationsOkTotal: 0, cutTotal: 0, byRelay: [{ relayInstanceId: 'local', resumable: 2, legacy: 0 }] },
+      },
+    ];
+    const { service, state } = localStepPool('no other relay was ready to take its workloads over', {
+      resumable: true,
+      reports,
+    });
+
+    await service.performRelayUpdate('v2.4.3', relayArtifact(), 'admin-1');
+
+    expect(state.stepError).toMatch(
+      /^Streams through the local relay paused for \d+ s while it was recreated \(no other relay was ready to take its workloads over\)\.$/
+    );
+  });
+
+  it('keeps the interruption note while some route through the local relay is raw', async () => {
+    const reports = () => [{ nodeId: 'node-1', report: { migrationsOkTotal: 0, cutTotal: 0, byRelay: [] } }];
+    const { service, state } = localStepPool('no other relay was ready to take its workloads over', { reports });
+
+    await service.performRelayUpdate('v2.4.3', relayArtifact(), 'admin-1');
+
+    expect(state.stepError).toContain('Sessions through the local relay were interrupted once');
   });
 });

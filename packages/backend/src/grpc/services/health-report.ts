@@ -1,4 +1,4 @@
-import type { NodeManagedLinkReport } from '@/db/schema/nodes.js';
+import type { NodeManagedLinkReport, NodeRelayStreamReport } from '@/db/schema/nodes.js';
 
 const managedStorageRootFilesystem = 'gateway-managed-storage-root';
 
@@ -96,4 +96,39 @@ export function managedLinkHealth(rawLinks: unknown): { managedLinks?: NodeManag
     ];
   });
   return managedLinks.length ? { managedLinks } : {};
+}
+
+/**
+ * The relay stream sessions of a daemon health report (relay_stream_resume_v1, RSv1). Absent when the daemon does not
+ * report them, so reports of older daemons keep their shape.
+ */
+export function relayStreamHealth(raw: unknown): { relayStreams?: NodeRelayStreamReport } {
+  if (!raw || typeof raw !== 'object') return {};
+  const value = raw as Record<string, unknown>;
+  const count = (field: unknown) => {
+    const parsed = Number(field ?? 0);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+  };
+  const byRelay = (Array.isArray(value.byRelay) ? value.byRelay : []).flatMap((entry) => {
+    const relay = (entry ?? {}) as Record<string, unknown>;
+    const relayInstanceId = typeof relay.relayInstanceId === 'string' ? relay.relayInstanceId : '';
+    if (!relayInstanceId) return [];
+    return [{ relayInstanceId, resumable: count(relay.resumable), legacy: count(relay.legacy) }];
+  });
+  return {
+    relayStreams: {
+      resumableSessions: count(value.resumableSessions),
+      legacySessions: count(value.legacySessions),
+      suspendedSessions: count(value.suspendedSessions),
+      migrationsOkTotal: count(value.migrationsOkTotal),
+      migrationsFailedTotal: count(value.migrationsFailedTotal),
+      cutTotal: count(value.cutTotal),
+      retransmittedBytesTotal: count(value.retransmittedBytesTotal),
+      unackedBytes: count(value.unackedBytes),
+      migrationStallP50Ms: count(value.migrationStallP50Ms),
+      migrationStallP95Ms: count(value.migrationStallP95Ms),
+      resumeRefusedTotal: count(value.resumeRefusedTotal),
+      byRelay,
+    },
+  };
 }

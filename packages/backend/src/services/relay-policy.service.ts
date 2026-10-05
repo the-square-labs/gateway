@@ -70,6 +70,7 @@ import {
   recordBuiltSnapshot,
 } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
+import { type RelayStreamReports, RelayStreamResumeService } from './relay-stream-resume.js';
 import type { RelayAssignmentRole } from './relay-topology.js';
 import { parseRelayGrantEgressStatuses, type SecureLinkEgressStatus } from './secure-link-egress-status.js';
 
@@ -340,6 +341,7 @@ export class RelayPolicyService {
   private readonly linkRoutes: RelayLinkRoutes;
   private readonly grantKeys: RelayGrantKeyService;
   private readonly policyKeys: RelayPolicySigningKeyService;
+  private readonly streamResume: RelayStreamResumeService;
   private relaySettingsSync: Promise<void> = Promise.resolve();
   private snapshotSync: Promise<unknown> = Promise.resolve();
   private readonly nodeGrantSyncs = new Map<
@@ -379,7 +381,8 @@ export class RelayPolicyService {
     routes: Array<{ id: string; ownerKind: string; ownerId: string }>
   ) => Promise<{ endpoints: Map<string, string>; routes: Map<string, string> }>;
   /** What the nodes running managed links' workloads report about the links' connections. */
-  private managedLinkReports?: Pick<NodeRegistryService, 'managedLinkReport' | 'requestHealthReport'>;
+  private managedLinkReports?: Pick<NodeRegistryService, 'managedLinkReport' | 'requestHealthReport'> &
+    Partial<Pick<NodeRegistryService, 'relayStreamReports'>>;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -398,10 +401,38 @@ export class RelayPolicyService {
     });
     this.grantKeys = new RelayGrantKeyService(db, cryptoService, settings);
     this.policyKeys = new RelayPolicySigningKeyService(db, cryptoService);
+    this.streamResume = new RelayStreamResumeService(db, cryptoService, {
+      syncNodeGrants: (nodeId) => this.syncNodeGrants(nodeId),
+    });
+    this.grantIssuer.setResumeSecretSource(() => this.streamResume.secret());
   }
 
-  setManagedLinkReports(reports: Pick<NodeRegistryService, 'managedLinkReport' | 'requestHealthReport'>): void {
+  setManagedLinkReports(
+    reports: Pick<NodeRegistryService, 'managedLinkReport' | 'requestHealthReport'> &
+      Partial<Pick<NodeRegistryService, 'relayStreamReports'>>
+  ): void {
     this.managedLinkReports = reports;
+  }
+
+  /** The relay stream sessions (RSv1) daemons reported recently; empty when none reports them. */
+  relayStreamReports(): RelayStreamReports {
+    return this.managedLinkReports?.relayStreamReports?.() ?? [];
+  }
+
+  /**
+   * Brings every route's resumable stream state in line with what its source and target support, in order (see
+   * RelayStreamResumeService). A node that reconnects with other capabilities is reconciled before its grants go out.
+   */
+  async reconcileStreamResume(maxWaitMs = 10_000): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Bounded: a pass waits for other daemons' acknowledgements, and the caller's own delivery must not.
+    await Promise.race([
+      this.streamResume.reconcile(),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, maxWaitMs);
+        timer.unref?.();
+      }),
+    ]).finally(() => clearTimeout(timer));
   }
 
   /** The shared secure-link connector image that connector egress assignments name. */
@@ -559,6 +590,7 @@ export class RelayPolicyService {
     await backfillRelayNodeFingerprints(this.db);
     await this.grantKeys.ensureInitialized();
     await this.policyKeys.ensureInitialized();
+    await this.streamResume.ensureInitialized();
     await this.reconcileInternalRegistryEndpoint();
     await reconcileManagedDatabaseRelayPolicy(this.db);
     await reconcileManagedStorageRelayPolicy(this.db);
@@ -1148,6 +1180,11 @@ export class RelayPolicyService {
       (error) => this.reportPendingGrantRefresh(error)
     );
     await this.withdrawOrphanedState(orphanedNodeIds);
+    // Resumable streams only add to raw ones; their state never holds the policy back, and a pass that waits for
+    // daemons to acknowledge does not hold up the caller (a drain, a placement) either.
+    void this.streamResume.reconcile().catch((error) => {
+      logger.warn('Resumable relay stream changes are retried at the next reconcile', { error: errorMessage(error) });
+    });
     return revision;
   }
 

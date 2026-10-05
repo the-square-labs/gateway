@@ -153,7 +153,8 @@ export interface DashboardRelayInstance {
   lastSeenAt: string | null;
   activeAssignments: number;
   retainedAssignments?: number;
-  updateStep?: { state: string; error: string | null } | null;
+  /** `error`: what the step could not avoid, or what its streams did; `drainDeadlineAt`: when its drain ends. */
+  updateStep?: { state: string; error: string | null; drainDeadlineAt?: string | null } | null;
   /** An offline remote relay: when Gateway allows its removal (policy expired, 90 s silent). */
   removableAfter?: string | null;
   health?: {

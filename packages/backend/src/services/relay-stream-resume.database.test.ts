@@ -1,0 +1,289 @@
+import { randomUUID } from 'node:crypto';
+import { eq, sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { DrizzleClient } from '@/db/client.js';
+import { migrateDatabase, tolerateDatabaseDrop } from '@/db/migration-database.test-helpers.js';
+import * as schema from '@/db/schema/index.js';
+import {
+  nodes,
+  relayEndpointAssignmentGenerations,
+  relayEndpointAssignments,
+  relayEndpoints,
+  relayInstances,
+  relayPolicyState,
+  relayRoutes,
+} from '@/db/schema/index.js';
+import {
+  RELAY_STREAM_RESUME_CAPABILITY,
+  RESUME_KEY_ROTATION_MS,
+  RelayStreamResumeService,
+  relayInstanceFullyResumable,
+} from './relay-stream-resume.js';
+
+const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
+
+/** Envelope encryption stand-in: the tests only need the secret to round-trip. */
+const crypto = {
+  encryptPrivateKey: (value: string) => ({
+    encryptedPrivateKey: Buffer.from(value).toString('base64'),
+    encryptedDek: 'dek',
+    dekIv: '',
+  }),
+  decryptPrivateKey: ({ encryptedPrivateKey }: { encryptedPrivateKey: string }) =>
+    Buffer.from(encryptedPrivateKey, 'base64').toString(),
+};
+
+/**
+ * RSv1 state in the database: the migration, the ordered enable/rotate/disable sequence and the drain grace rule.
+ * Opt-in: point GATEWAY_MIGRATION_TEST_DATABASE_URL at a disposable gateway_migration_test_* database.
+ */
+describe.skipIf(!url)('resumable relay streams', () => {
+  let pool: pg.Pool;
+  let db: DrizzleClient;
+
+  beforeAll(async () => {
+    if (!new URL(url!).pathname.startsWith('/gateway_migration_test_')) {
+      throw new Error('GATEWAY_MIGRATION_TEST_DATABASE_URL must name a disposable gateway_migration_test_* database');
+    }
+    pool = tolerateDatabaseDrop(new pg.Pool({ connectionString: url }));
+  });
+
+  afterAll(async () => {
+    await pool?.end();
+  });
+
+  describe('migration', () => {
+    it('keeps existing routes raw until their daemons support resumable streams', async () => {
+      await pool.query(
+        'drop schema if exists public cascade; drop schema if exists drizzle cascade; create schema public'
+      );
+      await migrateDatabase(pool, '0226_relay_pool_update_step_skipped');
+      const nodeId = randomUUID();
+      const endpointId = randomUUID();
+      await pool.query(`insert into relay_policy_state (id, gateway_instance_id, revision) values ('current', $1, 7)`, [
+        randomUUID(),
+      ]);
+      await pool.query(`insert into nodes (id, type, hostname, slug) values ($1, 'docker', 'n', $2)`, [
+        nodeId,
+        `n-${nodeId.slice(0, 8)}`,
+      ]);
+      await pool.query(
+        `insert into relay_endpoints (id, owner_kind, owner_id, subject_kind, subject_id, certificate_sha256)
+         values ($1, 'managed_database', 'db', 'daemon', $2, 'sha256:x')`,
+        [endpointId, nodeId]
+      );
+      await pool.query(
+        `insert into relay_routes (owner_kind, owner_id, source_kind, source_id, source_certificate_sha256, target_endpoint_id)
+         values ('managed_database_binding', 'b', 'daemon', $1, 'sha256:x', $2)`,
+        [nodeId, endpointId]
+      );
+      await migrateDatabase(pool);
+      const route = await pool.query(
+        'select resume_state, key_version, prev_key_version, key_rotated_at from relay_routes'
+      );
+      expect(route.rows).toEqual([
+        { resume_state: 'off', key_version: '1', prev_key_version: null, key_rotated_at: null },
+      ]);
+      const state = await pool.query('select revision, resume_secret_encrypted from relay_policy_state');
+      expect(state.rows).toEqual([{ revision: '7', resume_secret_encrypted: null }]);
+      const instance = await pool.query(
+        `select column_name from information_schema.columns where table_name = 'relay_instances' and column_name = 'drain_deadline_at'`
+      );
+      expect(instance.rowCount).toBe(1);
+      db = drizzle(pool, { schema }) as unknown as DrizzleClient;
+    });
+  });
+
+  describe('ordered capability changes', () => {
+    let sourceId: string;
+    let targetId: string;
+    let routeId: string;
+    let syncs: Array<{ nodeId: string; state: string; keyVersion: number; prevKeyVersion: number | null }>;
+    let failing: Set<string>;
+    let service: RelayStreamResumeService;
+
+    const capabilities = (capable: boolean) => ({
+      capabilities: capable ? ['relay_pool_v1', RELAY_STREAM_RESUME_CAPABILITY] : ['relay_pool_v1'],
+    });
+
+    const routeState = async () => {
+      const [row] = await db.select().from(relayRoutes).where(eq(relayRoutes.id, routeId));
+      return row!;
+    };
+
+    beforeEach(async () => {
+      await db.delete(relayRoutes);
+      await db.delete(relayEndpoints);
+      await db.delete(nodes);
+      const [source] = await db
+        .insert(nodes)
+        .values({
+          type: 'docker',
+          hostname: 's',
+          slug: `s-${randomUUID().slice(0, 8)}`,
+          capabilities: capabilities(true) as never,
+        })
+        .returning();
+      const [target] = await db
+        .insert(nodes)
+        .values({
+          type: 'docker',
+          hostname: 't',
+          slug: `t-${randomUUID().slice(0, 8)}`,
+          capabilities: capabilities(true) as never,
+        })
+        .returning();
+      sourceId = source!.id;
+      targetId = target!.id;
+      const [endpoint] = await db
+        .insert(relayEndpoints)
+        .values({
+          ownerKind: 'managed_database',
+          ownerId: randomUUID(),
+          subjectKind: 'daemon',
+          subjectId: targetId,
+          certificateSha256: 'sha256:t',
+        })
+        .returning();
+      const [route] = await db
+        .insert(relayRoutes)
+        .values({
+          ownerKind: 'managed_database_binding',
+          ownerId: randomUUID(),
+          sourceKind: 'daemon',
+          sourceId,
+          sourceCertificateSha256: 'sha256:s',
+          targetEndpointId: endpoint!.id,
+        })
+        .returning();
+      routeId = route!.id;
+      syncs = [];
+      failing = new Set();
+      service = new RelayStreamResumeService(db, crypto, {
+        syncNodeGrants: async (nodeId) => {
+          const row = await routeState();
+          syncs.push({
+            nodeId,
+            state: row.resumeState,
+            keyVersion: row.keyVersion,
+            prevKeyVersion: row.prevKeyVersion,
+          });
+          if (failing.has(nodeId)) throw new Error('not acknowledged');
+        },
+      });
+      await service.ensureInitialized();
+    });
+
+    it('creates the secret once', async () => {
+      const [first] = await db.select().from(relayPolicyState);
+      await new RelayStreamResumeService(db, crypto, { syncNodeGrants: async () => {} }).ensureInitialized();
+      const [second] = await db.select().from(relayPolicyState);
+      expect(first?.resumeSecretEncrypted).toBeTruthy();
+      expect(second?.resumeSecretEncrypted).toBe(first?.resumeSecretEncrypted);
+      expect((await service.secret())?.length).toBe(32);
+    });
+
+    it('enables the target first, then the source', async () => {
+      await service.reconcile();
+      expect(syncs).toEqual([
+        { nodeId: targetId, state: 'enabling', keyVersion: 1, prevKeyVersion: null },
+        { nodeId: sourceId, state: 'on', keyVersion: 1, prevKeyVersion: null },
+      ]);
+      syncs = [];
+      await service.reconcile();
+      expect(syncs).toEqual([]);
+    });
+
+    it('keeps the source raw until the target took the key', async () => {
+      failing.add(targetId);
+      await service.reconcile();
+      expect(syncs.map(({ nodeId }) => nodeId)).toEqual([targetId]);
+      expect((await routeState()).resumeState).toBe('enabling');
+      failing.clear();
+      syncs = [];
+      await service.reconcile();
+      expect(syncs.map(({ nodeId, state }) => [nodeId, state])).toEqual([
+        [targetId, 'enabling'],
+        [sourceId, 'on'],
+      ]);
+    });
+
+    it('disables the source first, then the target, when a daemon loses the capability', async () => {
+      await service.reconcile();
+      await db
+        .update(nodes)
+        .set({ capabilities: capabilities(false) as never })
+        .where(eq(nodes.id, targetId));
+      syncs = [];
+      await service.reconcile();
+      expect(syncs).toEqual([
+        { nodeId: sourceId, state: 'disabling', keyVersion: 1, prevKeyVersion: null },
+        { nodeId: targetId, state: 'off', keyVersion: 1, prevKeyVersion: null },
+      ]);
+    });
+
+    it('keeps the target accepting until the source dropped the key', async () => {
+      await service.reconcile();
+      await db
+        .update(nodes)
+        .set({ capabilities: capabilities(false) as never })
+        .where(eq(nodes.id, sourceId));
+      failing.add(sourceId);
+      syncs = [];
+      await service.reconcile();
+      expect(syncs.map(({ nodeId }) => nodeId)).toEqual([sourceId]);
+      expect((await routeState()).resumeState).toBe('disabling');
+    });
+
+    it('rotates a key on the target first; the source keeps the old one until then', async () => {
+      await service.reconcile();
+      await db
+        .update(relayRoutes)
+        .set({ keyRotatedAt: new Date(Date.now() - RESUME_KEY_ROTATION_MS - 1000) })
+        .where(eq(relayRoutes.id, routeId));
+      syncs = [];
+      await service.reconcile();
+      expect(syncs).toEqual([
+        { nodeId: targetId, state: 'rotating', keyVersion: 2, prevKeyVersion: 1 },
+        { nodeId: sourceId, state: 'on', keyVersion: 2, prevKeyVersion: 1 },
+      ]);
+    });
+
+    it('needs no delivery for a Gateway source', async () => {
+      await db
+        .update(relayRoutes)
+        .set({ sourceKind: 'gateway', sourceId: 'gateway' })
+        .where(eq(relayRoutes.id, routeId));
+      await service.reconcile();
+      expect(syncs.map(({ nodeId, state }) => [nodeId, state])).toEqual([[targetId, 'enabling']]);
+      expect((await routeState()).resumeState).toBe('on');
+    });
+  });
+
+  describe('drain grace', () => {
+    it('is short only when every route through the relay is resumable', async () => {
+      await db.execute(sql`insert into relay_pools (id) values ('system') on conflict do nothing`);
+      const [instance] = await db
+        .insert(relayInstances)
+        .values({ poolId: 'system', kind: 'remote', faultDomainId: randomUUID(), displayName: 'r', state: 'ready' })
+        .returning();
+      expect(await relayInstanceFullyResumable(db, instance!.id)).toBe(true);
+      const [route] = await db.select().from(relayRoutes).limit(1);
+      const [generation] = await db
+        .insert(relayEndpointAssignmentGenerations)
+        .values({ endpointId: route!.targetEndpointId, generation: 1, state: 'active' })
+        .returning();
+      await db
+        .insert(relayEndpointAssignments)
+        .values({ assignmentGenerationId: generation!.id, relayInstanceId: instance!.id, role: 'active' });
+      await db.update(relayRoutes).set({ resumeState: 'enabling' });
+      expect(await relayInstanceFullyResumable(db, instance!.id)).toBe(false);
+      await db.update(relayRoutes).set({ resumeState: 'on' });
+      expect(await relayInstanceFullyResumable(db, instance!.id)).toBe(true);
+      // Raw streams the daemons still report through the relay keep today's grace.
+      expect(await relayInstanceFullyResumable(db, instance!.id, 1)).toBe(false);
+    });
+  });
+});
