@@ -6,6 +6,7 @@ import {
   relayEndpointAssignmentGenerations,
   relayEndpointAssignments,
   relayEndpoints,
+  relayInstances,
   relayPolicyState,
   relayRoutes,
 } from '@/db/schema/index.js';
@@ -148,19 +149,58 @@ export function drainGraceMs(kind: 'update' | 'manual', fullyResumable: boolean)
   return kind === 'update' ? RELAY_UPDATE_DRAIN_GRACE_MS : MANUAL_DRAIN_TIMEOUT_MS;
 }
 
+/** Advertised by a relay that keeps serving its built-in local services while it drains (see relay-local-takeover). */
+export const DRAIN_KEEPS_LOCAL_SERVICES_CAPABILITY = 'drain_keeps_local_services_v1';
+
+/**
+ * Raw streams through a relay that keep it busy in a drain. Daemons count the internal registry's streams as raw (the
+ * registry is never resumable), but a local relay that keeps serving its built-in local services through a drain
+ * keeps those streams; the relay's own per-endpoint tunnel counts tell how many there are, and they are left out.
+ */
+export function workloadLegacyStreams(
+  legacySessions: number,
+  instance: {
+    kind: string;
+    capabilities?: { features?: unknown } | null;
+    health?: { assignmentTunnels?: Array<{ endpointId: string; activeTunnels: number }> } | null;
+  },
+  localServiceEndpointIds: ReadonlySet<string>
+): number {
+  if (legacySessions <= 0) return 0;
+  const features = instance.capabilities?.features;
+  const keepsLocalServices =
+    instance.kind === 'local' && Array.isArray(features) && features.includes(DRAIN_KEEPS_LOCAL_SERVICES_CAPABILITY);
+  if (!keepsLocalServices) return legacySessions;
+  const kept = (instance.health?.assignmentTunnels ?? [])
+    .filter(({ endpointId }) => localServiceEndpointIds.has(endpointId))
+    .reduce((sum, { activeTunnels }) => sum + Number(activeTunnels || 0), 0);
+  return Math.max(0, legacySessions - kept);
+}
+
 /**
  * Whether every route to an endpoint assigned to this relay is resumable: its streams then leave the relay by
  * themselves when it drains. Built-in local services are left out: a draining local relay keeps serving them.
  * A relay with no routed workload counts as resumable; there is nothing to wait for. `legacySessions`: raw streams
  * the daemons report through this relay (opened before their routes turned resumable, or by an older Gateway), which
- * only today's grace lets end on their own.
+ * only today's grace lets end on their own; those of the local services a draining local relay keeps do not count.
  */
 export async function relayInstanceFullyResumable(
   db: DrizzleClient,
   instanceId: string,
   legacySessions = 0
 ): Promise<boolean> {
-  if (legacySessions > 0) return false;
+  if (legacySessions > 0) {
+    const [[instance], localServices] = await Promise.all([
+      db
+        .select({ kind: relayInstances.kind, capabilities: relayInstances.capabilities, health: relayInstances.health })
+        .from(relayInstances)
+        .where(eq(relayInstances.id, instanceId))
+        .limit(1),
+      db.select({ id: relayEndpoints.id }).from(relayEndpoints).where(eq(relayEndpoints.subjectKind, 'local_service')),
+    ]);
+    const kept = new Set(localServices.map(({ id }) => id));
+    if (!instance || workloadLegacyStreams(legacySessions, instance, kept) > 0) return false;
+  }
   const rows = await db
     .selectDistinct({ routeId: relayRoutes.id, resumeState: relayRoutes.resumeState })
     .from(relayEndpointAssignments)

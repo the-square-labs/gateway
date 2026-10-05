@@ -3,9 +3,11 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { relayEndpoints, relayRoutes } from '@/db/schema/index.js';
 import { RelayGrantIssuerService } from './relay-grant-issuer.service.js';
+import { LOCAL_RELAY_DRAIN_CAPABILITY } from './relay-local-takeover.js';
 import {
   candidateDrainDeadline,
   DRAIN_DEADLINE_MARGIN_MS,
+  DRAIN_KEEPS_LOCAL_SERVICES_CAPABILITY,
   deriveRouteResumeKey,
   drainDeadline,
   drainGraceMs,
@@ -26,6 +28,7 @@ import {
   resumeKeyId,
   sourceStreamResume,
   targetRouteResume,
+  workloadLegacyStreams,
 } from './relay-stream-resume.js';
 
 interface Vectors {
@@ -436,5 +439,31 @@ describe("Gateway's own streams", () => {
       null
     );
     expect(unattributed.byRelay).toEqual([]);
+  });
+});
+
+describe('raw streams that hold a drain', () => {
+  const registry = new Set(['registry']);
+  const health = {
+    assignmentTunnels: [
+      { endpointId: 'registry', activeTunnels: 40 },
+      { endpointId: 'workload', activeTunnels: 2 },
+    ],
+  };
+  const local = { kind: 'local', capabilities: { features: [DRAIN_KEEPS_LOCAL_SERVICES_CAPABILITY] }, health };
+
+  it('names the capability the local relay advertises', () => {
+    expect(DRAIN_KEEPS_LOCAL_SERVICES_CAPABILITY).toBe(LOCAL_RELAY_DRAIN_CAPABILITY);
+  });
+
+  it('leaves out the registry streams a draining local relay keeps serving', () => {
+    expect(workloadLegacyStreams(40, local, registry)).toBe(0);
+    expect(workloadLegacyStreams(41, local, registry)).toBe(1);
+  });
+
+  it('counts every raw stream on a relay that does not keep local services', () => {
+    expect(workloadLegacyStreams(40, { ...local, kind: 'remote' }, registry)).toBe(40);
+    expect(workloadLegacyStreams(40, { ...local, capabilities: { features: [] } }, registry)).toBe(40);
+    expect(workloadLegacyStreams(0, local, registry)).toBe(0);
   });
 });

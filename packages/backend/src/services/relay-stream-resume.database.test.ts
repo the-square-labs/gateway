@@ -16,6 +16,7 @@ import {
   relayRoutes,
 } from '@/db/schema/index.js';
 import {
+  DRAIN_KEEPS_LOCAL_SERVICES_CAPABILITY,
   RELAY_STREAM_RESUME_CAPABILITY,
   RESUME_KEY_ROTATION_MS,
   RelayStreamResumeService,
@@ -284,6 +285,42 @@ describe.skipIf(!url)('resumable relay streams', () => {
       expect(await relayInstanceFullyResumable(db, instance!.id)).toBe(true);
       // Raw streams the daemons still report through the relay keep today's grace.
       expect(await relayInstanceFullyResumable(db, instance!.id, 1)).toBe(false);
+    });
+
+    it("leaves the local relay's registry streams out: it keeps serving them through the drain", async () => {
+      const [registry] = await db
+        .insert(relayEndpoints)
+        .values({
+          ownerKind: 'internal_registry',
+          ownerId: randomUUID(),
+          subjectKind: 'local_service',
+          subjectId: 'registry',
+          certificateSha256: 'sha256:r',
+        })
+        .returning();
+      const health = { assignmentTunnels: [{ endpointId: registry!.id, assignmentGeneration: 1, activeTunnels: 3 }] };
+      const [local] = await db
+        .insert(relayInstances)
+        .values({
+          poolId: 'system',
+          kind: 'local',
+          faultDomainId: randomUUID(),
+          displayName: 'local',
+          state: 'ready',
+          capabilities: { features: ['relay_pool_v1', DRAIN_KEEPS_LOCAL_SERVICES_CAPABILITY] } as never,
+          health: health as never,
+        })
+        .returning();
+      // Three raw streams, all of them the registry's: the local relay drains in 2 minutes.
+      expect(await relayInstanceFullyResumable(db, local!.id, 3)).toBe(true);
+      // A fourth raw stream is a workload's.
+      expect(await relayInstanceFullyResumable(db, local!.id, 4)).toBe(false);
+      // A relay that refuses its local services while it drains keeps today's grace for them.
+      await db
+        .update(relayInstances)
+        .set({ capabilities: { features: ['relay_pool_v1'] } as never })
+        .where(eq(relayInstances.id, local!.id));
+      expect(await relayInstanceFullyResumable(db, local!.id, 3)).toBe(false);
     });
   });
 });
