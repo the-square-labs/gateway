@@ -1169,6 +1169,22 @@ normalize_daemon_version() {
     echo "$version"
 }
 
+# The token a completed enrollment used, as a digest: a re-run of the same setup command (its token now used) keeps
+# the node's enrollment instead of replacing it with a token Gateway refuses.
+ENROLLMENT_TOKEN_DIGEST_FILE="/var/lib/nginx-daemon/enrollment-token.sha256"
+enrollment_token_digest() {
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+}
+
+# A node already enrolled with this setup command's token keeps that enrollment: the re-run goes on as one without a
+# token (Gateway would refuse the used token, and the node would lose a working enrollment).
+keep_enrollment_of_used_token() {
+    [[ -n "$ENROLL_TOKEN" && "$EXISTING_ENROLLED" -eq 1 && -f "$ENROLLMENT_TOKEN_DIGEST_FILE" ]] || return 0
+    [[ "$(cat "$ENROLLMENT_TOKEN_DIGEST_FILE" 2>/dev/null)" == "$(enrollment_token_digest "$ENROLL_TOKEN")" ]] || return 0
+    log "This node is already enrolled with this setup command's token; keeping its enrollment."
+    ENROLL_TOKEN=""
+}
+
 detect_existing_install() {
     local target="/usr/local/bin/nginx-daemon"
     local config_path="/etc/nginx-daemon/config.yaml"
@@ -1371,6 +1387,7 @@ detect_os
 detect_arch
 check_dependencies
 detect_existing_install
+keep_enrollment_of_used_token
 
 if [[ -z "$GATEWAY_ADDR" && -n "$EXISTING_GATEWAY_ADDR" ]]; then
     GATEWAY_ADDR="$EXISTING_GATEWAY_ADDR"
@@ -1705,6 +1722,16 @@ dry_run_preview() {
 
 
 # ── Step 1: Install nginx ────────────────────────────────────────────
+# An apt-get that failed ends the install with apt's own reason (the lock holder of a busy package manager) and the log.
+apt_failed() {
+    local attempt_log="$1" status="$2" reason
+    shift 2
+    reason=$(grep '^E: ' "$attempt_log" | head -n 2 | tr '\n' ' ')
+    rm -f "$attempt_log"
+    [[ -n "$reason" ]] || reason="exit status ${status}. "
+    die "apt-get $1 failed: ${reason}See ${LOG_FILE} for apt's full output."
+}
+
 run_apt_with_lock_retry() {
     local attempt=1
     local status=0
@@ -1721,15 +1748,11 @@ run_apt_with_lock_retry() {
         fi
 
         cat "$attempt_log" >> "$LOG_FILE"
-        if ! grep -Eqi 'Could not get lock|Unable to acquire the dpkg frontend lock|is another process using it' "$attempt_log"; then
-            rm -f "$attempt_log"
-            return "$status"
+        if ! grep -Eqi 'Could not get lock|Unable to acquire the dpkg frontend lock|is another process using it' "$attempt_log" ||
+            (( attempt == APT_LOCK_RETRY_ATTEMPTS )); then
+            apt_failed "$attempt_log" "$status" "$@"
         fi
         rm -f "$attempt_log"
-
-        if (( attempt == APT_LOCK_RETRY_ATTEMPTS )); then
-            return "$status"
-        fi
 
         warn "Package manager is busy; retrying in ${APT_LOCK_RETRY_DELAY_SECONDS}s (${attempt}/${APT_LOCK_RETRY_ATTEMPTS})..."
         sleep "$APT_LOCK_RETRY_DELAY_SECONDS"
@@ -2315,6 +2338,29 @@ EOF
     STUB_STATUS_URL="http://127.0.0.1:${INTEGRATED_STUB_STATUS_PORT}/nginx_status"
 }
 
+# nginx's temp directories (client bodies, proxied responses, ...), as built in: nginx -V names them, relative ones
+# under its prefix.
+nginx_temp_paths() {
+    local build prefix path
+    build=$(nginx -V 2>&1) || return 0
+    prefix=$(grep -o -- '--prefix=[^ ]*' <<< "$build" | head -n 1 | cut -d= -f2)
+    while IFS= read -r path; do
+        [[ -n "$path" ]] || continue
+        [[ "$path" == /* ]] || path="${prefix%/}/${path}"
+        echo "$path"
+    done < <(grep -o -- '--http-[a-z-]*-temp-path=[^ ]*' <<< "$build" | cut -d= -f2)
+}
+
+# An nginx run by the daemon's non-root user writes its temp files as that user.
+hand_nginx_temp_paths_to_run_user() {
+    [[ "$RUN_USER" != "root" ]] && command_exists nginx || return 0
+    local path
+    while IFS= read -r path; do
+        [[ -d "$path" && ! -L "$path" ]] || continue
+        chown -hR "${RUN_USER}:${RUN_GROUP}" "$path" 2>> "$LOG_FILE" || warn "Could not give ${path} to ${RUN_USER}; nginx may not buffer large responses."
+    done < <(nginx_temp_paths)
+}
+
 configure_nginx() {
     if [[ "$NGINX_MODE" == "managed" ]]; then
         configure_nginx_managed
@@ -2355,6 +2401,9 @@ configure_nginx() {
     else
         die "nginx config test failed after configuration changes — check $LOG_FILE"
     fi
+    # A root nginx -t (and -T) gives nginx's temp directories to the user nginx.conf names; an nginx running as the run
+    # user then cannot buffer a response (13: Permission denied).
+    hand_nginx_temp_paths_to_run_user
 }
 
 # ── Step 3: Create directories ───────────────────────────────────────
@@ -2491,6 +2540,9 @@ reset_existing_enrollment_for_token() {
     local backup_dir="/var/lib/nginx-daemon/enrollment-backup.$(date +%Y%m%d_%H%M%S)"
     log "Fresh enrollment token provided — replacing existing nginx-daemon enrollment state..."
     mkdir -p "$backup_dir"
+    ENROLLMENT_BACKUP_DIR="$backup_dir"
+    # The configuration holds the Gateway address, token and certificate the enrollment used.
+    [[ ! -f /etc/nginx-daemon/config.yaml ]] || cp -a /etc/nginx-daemon/config.yaml "$backup_dir/config.yaml"
 
     if [[ -n "$(ls -A /etc/nginx-daemon/certs 2>/dev/null)" ]]; then
         cp -a /etc/nginx-daemon/certs "$backup_dir/certs"
@@ -2503,6 +2555,53 @@ reset_existing_enrollment_for_token() {
     fi
 
     ok "Backed up previous enrollment state to ${backup_dir}"
+}
+
+# A token Gateway does not accept (already used, expired, another node's) must not cost an enrolled node its
+# enrollment: the enrollment reset_existing_enrollment_for_token set aside comes back, and the daemon runs on it again.
+# A new enrollment that completed (its certificate is there) stays.
+ENROLLMENT_BACKUP_DIR=""
+ENROLLMENT_RESTORED=0
+restore_previous_enrollment() {
+    [[ -n "$ENROLLMENT_BACKUP_DIR" && -d "$ENROLLMENT_BACKUP_DIR" ]] || return 0
+    [[ ! -f /etc/nginx-daemon/certs/node.pem ]] || return 0
+    warn "Restoring the previous enrollment from ${ENROLLMENT_BACKUP_DIR}..."
+    stop_daemon_service || true
+    if [[ -d "${ENROLLMENT_BACKUP_DIR}/certs" ]]; then
+        rm -rf /etc/nginx-daemon/certs
+        cp -a "${ENROLLMENT_BACKUP_DIR}/certs" /etc/nginx-daemon/certs
+    fi
+    [[ ! -f "${ENROLLMENT_BACKUP_DIR}/state.json" ]] || cp -a "${ENROLLMENT_BACKUP_DIR}/state.json" /var/lib/nginx-daemon/state.json
+    if [[ -f "${ENROLLMENT_BACKUP_DIR}/config.yaml" ]]; then
+        cp -a "${ENROLLMENT_BACKUP_DIR}/config.yaml" /etc/nginx-daemon/config.yaml
+        apply_host_access_config /etc/nginx-daemon/config.yaml
+    fi
+    grant_daemon_paths_to_run_user
+    forget_gateway_session
+    ENROLLMENT_RESTORED=1
+    if restart_daemon_service; then
+        ok "nginx-daemon runs on its previous enrollment again"
+    else
+        warn "nginx-daemon did not start on its previous enrollment; start it with the service manager."
+    fi
+}
+
+restart_daemon_service() {
+    if [[ "$MANUAL_FALLBACK_USED" -eq 1 ]]; then
+        manual_launcher_fallback "nginx-daemon" "/usr/local/bin/nginx-daemon" "/var/lib/nginx-daemon"
+    elif has_systemd; then
+        systemctl restart nginx-daemon >> "$LOG_FILE" 2>&1
+    elif has_openrc; then
+        rc-service nginx-daemon restart >> "$LOG_FILE" 2>&1
+    else
+        return 1
+    fi
+}
+
+remember_enrollment_token() {
+    [[ -n "$ENROLL_TOKEN" && -f /etc/nginx-daemon/certs/node.pem ]] || return 0
+    (umask 077; enrollment_token_digest "$ENROLL_TOKEN" > "$ENROLLMENT_TOKEN_DIGEST_FILE") 2>> "$LOG_FILE" || return 0
+    chown "${RUN_USER}:${RUN_GROUP}" "$ENROLLMENT_TOKEN_DIGEST_FILE" 2>> "$LOG_FILE" || true
 }
 
 set_daemon_config_value() {
@@ -2656,8 +2755,11 @@ finish_run_user_switch
 start_daemon
 # An install whose daemon does not run or did not connect to Gateway is not done.
 if ! await_gateway_connection; then
+    restore_previous_enrollment
+    [[ "$ENROLLMENT_RESTORED" -eq 0 ]] || die "The node keeps its previous enrollment; the enrollment token was not used."
     die "nginx-daemon is installed, but it did not connect to Gateway."
 fi
+remember_enrollment_token
 
 echo ""
 echo ""

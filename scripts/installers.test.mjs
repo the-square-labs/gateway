@@ -1380,3 +1380,108 @@ test('a run-user switch hands the lease watchdog records to the new daemon user'
   assert.match(source, /component=lease-watchdog&channel=\$\(lease_watchdog_channel\)/);
   assert.match(source, /--records-owner \$\{RUN_USER\}.*--channel \$\(lease_watchdog_channel\)/);
 });
+
+// F-C5: re-running the generated nginx command with its used token moved the working enrollment aside, Gateway refused
+// the token and the node was left without an enrollment. The refused run restores it and restarts the daemon on it, and
+// a re-run with the token a completed enrollment used keeps the enrollment from the start.
+test('the nginx installer keeps or restores the enrollment when its token was used', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-enrollment-'));
+  try {
+    const etc = path.join(dir, 'etc');
+    const lib = path.join(dir, 'lib');
+    const functions = ['reset_existing_enrollment_for_token', 'restore_previous_enrollment', 'enrollment_token_digest', 'keep_enrollment_of_used_token', 'remember_enrollment_token']
+      .map((name) => shellFunction(source, name).replaceAll('/etc/nginx-daemon', etc).replaceAll('/var/lib/nginx-daemon', lib))
+      .join('\n');
+    const run = (steps) =>
+      runShell(
+        [
+          'set -euo pipefail',
+          `LOG_FILE=/dev/null RUN_USER=$(id -un) RUN_GROUP=$(id -gn) ENROLLMENT_BACKUP_DIR='' ENROLLMENT_RESTORED=0 ENROLLMENT_TOKEN_DIGEST_FILE='${lib}/enrollment-token.sha256'`,
+          'log() { echo "LOG $*"; }; ok() { echo "OK $*"; }; warn() { echo "WARN $*"; }',
+          'stop_daemon_service() { echo STOP; }; restart_daemon_service() { echo RESTART; }; grant_daemon_paths_to_run_user() { :; }',
+          'forget_gateway_session() { :; }; apply_host_access_config() { :; }',
+          functions,
+          `mkdir -p '${etc}/certs' '${lib}' && echo OLD > '${etc}/certs/node.pem' && echo '{}' > '${lib}/state.json'`,
+          `printf 'gateway:\\n  token: ""\\n' > '${etc}/config.yaml'`,
+          ...steps,
+        ].join('\n')
+      );
+    // Refused: the enrollment set aside comes back with its configuration, and the daemon restarts on it.
+    let result = run([
+      'ENROLL_TOKEN=used; reset_existing_enrollment_for_token',
+      `printf 'gateway:\\n  token: "used"\\n' > '${etc}/config.yaml'`,
+      'restore_previous_enrollment; echo "restored=$ENROLLMENT_RESTORED"',
+      `cat '${etc}/certs/node.pem' '${lib}/state.json' '${etc}/config.yaml'`,
+    ]);
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /RESTART\n[\s\S]*restored=1\nOLD\n\{\}\ngateway:\n {2}token: ""/);
+    // A new enrollment that completed stays.
+    result = run([
+      'ENROLL_TOKEN=fresh; reset_existing_enrollment_for_token',
+      `mkdir -p '${etc}/certs' && echo NEW > '${etc}/certs/node.pem'`,
+      'restore_previous_enrollment; echo "restored=$ENROLLMENT_RESTORED"',
+      `cat '${etc}/certs/node.pem'`,
+    ]);
+    assert.match(result.output, /restored=0\nNEW/);
+    assert.doesNotMatch(result.output, /RESTART/);
+    // The token of a completed enrollment is remembered (as a digest) and a re-run with it keeps the enrollment.
+    result = run([
+      'ENROLL_TOKEN=done; remember_enrollment_token',
+      `grep -c done '${lib}/enrollment-token.sha256' || true`,
+      'EXISTING_ENROLLED=1; ENROLL_TOKEN=done; keep_enrollment_of_used_token; echo "token=[$ENROLL_TOKEN]"',
+      'ENROLL_TOKEN=other; keep_enrollment_of_used_token; echo "token=[$ENROLL_TOKEN]"',
+    ]);
+    assert.match(result.output, /^0\n[\s\S]*token=\[\]\ntoken=\[other\]/m);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// F-B2: a package manager that stays locked ended the install silently with apt's exit status. The installer names
+// apt's reason (the lock holder) and its log.
+test('the nginx installer names the apt failure', { skip: !linux }, () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  const result = runShell(
+    [
+      'set -euo pipefail',
+      'LOG_FILE=/tmp/gateway-node-test.log; APT_LOCK_RETRY_ATTEMPTS=2; APT_LOCK_RETRY_DELAY_SECONDS=0',
+      'warn() { echo "WARN $*"; }; die() { echo "ERROR $*"; exit 1; }',
+      'apt-get() { echo "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 906 (python3)"; return 100; }',
+      shellFunction(source, 'apt_failed'),
+      shellFunction(source, 'run_apt_with_lock_retry')
+        .replaceAll('>> "$LOG_FILE"', '>/dev/null')
+        .replaceAll('mktemp /tmp/gateway-node-apt.XXXXXX', 'mktemp "${TMPDIR:-/tmp}/gateway-node-apt.XXXXXX"'),
+      'run_apt_with_lock_retry install -y -qq nginx',
+    ].join('\n')
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /WARN Package manager is busy; retrying/);
+  assert.match(result.output, /ERROR apt-get install failed: E: Could not get lock \/var\/lib\/dpkg\/lock-frontend\. It is held by process 906 \(python3\) See \/tmp\/gateway-node-test\.log/);
+});
+
+// F-C6: a root nginx -t gives nginx's temp directories to the user nginx.conf names (www-data); an nginx running as the
+// daemon's user then truncated every response larger than its buffers. The installer gives them back to that user.
+test('the nginx installer gives the nginx temp directories to a non-root run user', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-temp-'));
+  try {
+    const build = `nginx version: nginx/1.22.1\\nconfigure arguments: --prefix=${dir}/share --http-client-body-temp-path=${dir}/body --http-proxy-temp-path=${dir}/proxy --http-fastcgi-temp-path=fastcgi`;
+    const paths = runShell([`nginx() { printf '%b\\n' '${build}' >&2; }`, shellFunction(source, 'nginx_temp_paths'), 'nginx_temp_paths'].join('\n'));
+    assert.deepEqual(paths.output.trim().split('\n'), [`${dir}/body`, `${dir}/proxy`, `${dir}/share/fastcgi`]);
+    assert.match(shellFunction(source, 'configure_nginx'), /hand_nginx_temp_paths_to_run_user\n\}$/);
+    if (userInfo().uid !== 0) return;
+    const result = runShell(
+      [
+        `nginx() { printf '%b\\n' '${build}' >&2; }; command_exists() { return 0; }; warn() { echo "WARN $*"; }`,
+        shellFunction(source, 'nginx_temp_paths'),
+        shellFunction(source, 'hand_nginx_temp_paths_to_run_user'),
+        `mkdir -p '${dir}/body' '${dir}/proxy/1' && LOG_FILE=/dev/null RUN_USER=nobody RUN_GROUP=$(id -gn nobody) hand_nginx_temp_paths_to_run_user`,
+        `stat -c '%U' '${dir}/body' '${dir}/proxy/1'`,
+      ].join('\n')
+    );
+    assert.equal(result.output.trim(), 'nobody\nnobody', result.output);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
