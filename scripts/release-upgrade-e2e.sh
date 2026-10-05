@@ -476,46 +476,60 @@ print(json.dumps({'apiSamples': len(api), 'apiFailures': len(down), 'apiOutageSe
                   'apiRecovered': recovered, 'routeSamples': len(route),
                   'routeFailures': len([1 for _, c in route if c != '200']), 'routeCodes': sorted({c for _, c in route})}))
 PY
-  cat >"$WORK/py/sidecar.py" <<'PY'
-# sidecar.py SOURCE PROJECT DIR OUT: writes the base updater's sidecar functions (through the EXIT
-# trap) with a forced failure instead of the update body, so its rollback runs as it would after a
-# failed health gate. Prints the sidecar image the base updater uses.
-import re, sys
-src, project, compose_dir, out = sys.argv[1:5]
-text = open(src).read()
-start = text.find('`set -eu\ncompose() {')
-if start < 0:
-    sys.exit('sidecar template not found')
-trap = 'trap on_exit EXIT'
-end = text.find(trap, start)
-if end < 0:
-    sys.exit('sidecar trap not found')
-raw = text[start + 1:end + len(trap)]
-escapes = {'n': '\n', 't': '\t', '\\': '\\', '`': '`', '$': '$', "'": "'", '"': '"'}
-body, i = [], 0
-while i < len(raw):
-    c = raw[i]
-    if c == '\\' and i + 1 < len(raw) and raw[i + 1] in escapes:
-        body.append(escapes[raw[i + 1]])
-        i += 2
-        continue
-    body.append(c)
-    i += 1
-script = ''.join(body).replace('${composeProject}', project).replace('${composeDir}', compose_dir)
-left = sorted(set(re.findall(r'\$\{[A-Za-z_][A-Za-z0-9_.]*\}', script)))
-if left:
-    sys.exit('unresolved template values: ' + ', '.join(left))
-for marker in ('rollback() {', 'on_exit() {'):
-    if marker not in script:
-        sys.exit('missing ' + marker)
-image = re.search(r'docker\.io/library/docker:[0-9A-Za-z._-]+@sha256:[0-9a-f]{64}', text)
-if not image:
-    sys.exit('sidecar image not found')
-with open(out, 'w') as f:
-    f.write('#!/bin/sh\n# Base updater sidecar functions; the update body is replaced by a forced failure.\n')
-    f.write(script + '\necho "gateway-e2e: forced update failure, running rollback()"\nexit 1\n')
-print(image.group(0))
-PY
+  cat >"$WORK/py/sidecar-render.cjs" <<'JS'
+// sidecar-render.cjs SOURCE PROJECT DIR: renders the base updater's sidecar script (through its EXIT trap) the way the
+// base itself does: its template literal and the module functions it calls are evaluated with node, so the result is
+// exactly what the base runs. Prints {"script": ..., "image": ...}; any value the template needs beyond its own
+// parameters and functions stops it with the name.
+const fs = require('fs');
+const [src, composeProject, composeDir] = process.argv.slice(2);
+const text = fs.readFileSync(src, 'utf8');
+function skipString(t, i) {
+  const quote = t[i];
+  i += 1;
+  while (i < t.length) {
+    if (t[i] === '\\') { i += 2; continue; }
+    if (t[i] === quote) return i + 1;
+    if (quote === '`' && t[i] === '$' && t[i + 1] === '{') { i = skipBlock(t, i + 1); continue; }
+    i += 1;
+  }
+  throw new Error('unterminated string');
+}
+function skipBlock(t, i) {
+  let depth = 0;
+  while (i < t.length) {
+    const c = t[i];
+    if (c === '"' || c === "'" || c === '`') { i = skipString(t, i); continue; }
+    if (c === '/' && t[i + 1] === '/') { i = t.indexOf('\n', i); if (i < 0) break; continue; }
+    if (c === '/' && t[i + 1] === '*') { i = t.indexOf('*/', i) + 2; continue; }
+    if (c === '{') depth += 1;
+    else if (c === '}' && --depth === 0) return i + 1;
+    i += 1;
+  }
+  throw new Error('unbalanced block');
+}
+const start = text.indexOf('`set -eu\ncompose() {');
+if (start < 0) throw new Error('sidecar template not found');
+const template = text.slice(start, skipString(text, start));
+const helpers = [];
+for (const name of new Set([...template.matchAll(/\$\{\s*([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]))) {
+  const at = text.search(new RegExp(`function\\s+${name.replace(/\$/g, '\\$')}\\s*\\(`));
+  if (at < 0) throw new Error(`template function ${name} not found`);
+  helpers.push(text.slice(at, skipBlock(text, text.indexOf('{', text.indexOf(')', at)))));
+}
+const rendered = new Function('composeProject', 'composeDir', `${helpers.join('\n')}\nreturn ${template};`)(
+  composeProject,
+  composeDir
+);
+const trap = 'trap on_exit EXIT';
+const cut = rendered.indexOf(trap);
+if (cut < 0) throw new Error('sidecar trap not found');
+const script = rendered.slice(0, cut + trap.length);
+for (const marker of ['rollback() {', 'on_exit() {']) if (!script.includes(marker)) throw new Error(`missing ${marker}`);
+const image = /docker\.io\/library\/docker:[0-9A-Za-z._-]+@sha256:[0-9a-f]{64}/.exec(text);
+if (!image) throw new Error('sidecar image not found');
+process.stdout.write(JSON.stringify({ script, image: image[0] }));
+JS
   cat >"$WORK/py/access.py" <<'PY'
 # access.py snapshot GROUP USERS TOKENS OPERATOR_EMAIL TOKEN_NAME OUT
 # access.py compare A B eq|superset      access.py retired SNAP SCOPE...
@@ -935,6 +949,7 @@ cleanup_host() {
     [[ "$(nft list ruleset 2>/dev/null | normalized_ruleset)" != "$(normalized_ruleset "$WORK/snapshot/ruleset.nft")" ]]; then
     leftovers+=("nftables ruleset differs")
   fi
+  free_run_ports
   for port in 3000 9443 80 443 "$WEB_PORT" "$FEED_PORT" 53; do
     port_conflicts "$port" && leftovers+=("listener on port ${port}")
   done
@@ -968,6 +983,30 @@ port_conflicts() {
     esac
   done < <(ss -Hltnu "( sport = :53 )" 2>/dev/null | awk '{print $5}')
   return 1
+}
+
+# Stops what still listens on a port this run binds once everything else is torn down (a rollback that left the stack
+# half-replaced, a docker-proxy or nginx that outlived its service): only processes started after the run began, so
+# nothing that was on the host before is touched. Each one is logged.
+free_run_ports() {
+  local port pid started now start_epoch tries
+  start_epoch="$(cat "$WORK/snapshot/start-epoch" 2>/dev/null || echo 0)"
+  for tries in 1 2 3; do
+    now="$(date +%s)"
+    for port in 3000 9443 80 443 "$WEB_PORT" "$FEED_PORT" 53; do
+      port_conflicts "$port" || continue
+      for pid in $(ss -Hltnup "( sport = :${port} )" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
+        started=$((now - $(ps -o etimes= -p "$pid" 2>/dev/null || echo "$now")))
+        ((started >= start_epoch)) || continue
+        echo "port ${port}: stopping pid ${pid} ($(ps -o comm= -p "$pid" 2>/dev/null))" >>"$WORK/logs/cleanup-ports.log"
+        kill "$pid" 2>/dev/null
+      done
+    done
+    sleep 2
+  done
+  for port in 3000 9443 80 443 "$WEB_PORT" "$FEED_PORT" 53; do
+    port_conflicts "$port" && ss -Hltnup "( sport = :${port} )" >>"$WORK/logs/cleanup-ports.log" 2>&1
+  done
 }
 
 # Whether the base release rewrites retired scope names to their current ones when they are granted (from 2.11.0).
@@ -1148,13 +1187,22 @@ phase1_base() {
     test "$(jx "$RESP" 'D["currentVersion"]')" = "$BASE"
 
   # The base updater's own rollback for phase 4, taken from the code the base runs.
+  # Rendered by the base's own code with node in its app container, so phase 4 runs exactly what the base runs.
+  docker cp "$WORK/py/sidecar-render.cjs" "$(service_id app):/tmp/gateway-e2e-sidecar-render.cjs" >/dev/null 2>&1
   for src in $(docker exec "$(service_id app)" sh -c 'grep -rl "trap on_exit EXIT" /app/packages/backend/dist 2>/dev/null' | grep -v '\.test\.js$' | grep '\.js$'); do
-    docker cp "$(service_id app):${src}" "$WORK/base-update-service.js" >/dev/null 2>&1 &&
-      FACT[sidecar_image]="$(python3 "$WORK/py/sidecar.py" "$WORK/base-update-service.js" "$PROJECT" "$INSTALL_DIR" "$WORK/rollback-${BASE}.sh" 2>"$WORK/logs/sidecar-extract.log")" &&
+    docker exec "$(service_id app)" node /tmp/gateway-e2e-sidecar-render.cjs "$src" "$PROJECT" "$INSTALL_DIR" \
+      >"$WORK/json/base-sidecar.json" 2>"$WORK/logs/sidecar-extract.log" &&
+      FACT[sidecar_image]="$(jx "$WORK/json/base-sidecar.json" 'D["image"]')" &&
+      jx "$WORK/json/base-sidecar.json" 'D["script"]' >"$WORK/rollback-functions-${BASE}.sh" &&
       break
     FACT[sidecar_image]=""
   done
-  check "base rollback() extracted" "${src#/app/packages/backend/} -> rollback-${BASE}.sh; sidecar image ${FACT[sidecar_image]%%@*} $(cat "$WORK/logs/sidecar-extract.log" 2>/dev/null)" \
+  # The update body is replaced by a forced failure. A base that snapshots the database before the update (2.11.0 on)
+  # restores the snapshot the update really took (captured in phase 2), as it does after a failed health gate.
+  if grep -q '^snapshot_database()' "$WORK/rollback-functions-${BASE}.sh" 2>/dev/null; then
+    FACT[base_snapshots]=1
+  fi
+  check "base rollback() rendered by the base" "${src#/app/packages/backend/} -> rollback-functions-${BASE}.sh; sidecar image ${FACT[sidecar_image]%%@*}; database snapshot: ${FACT[base_snapshots]:-0} $(tail -n 3 "$WORK/logs/sidecar-extract.log" 2>/dev/null)" \
     test -n "${FACT[sidecar_image]}"
 
   if [[ -n "$LICENSE_KEY" ]]; then
@@ -1322,8 +1370,11 @@ gateway_update() {
 
 check_upgraded_state() {
   local label="$1" snap="$2" errors cookie_code
+  # docker:volumes:create became docker:volumes:edit in the 2.10 -> 2.11 migration (0200); a 2.11 base keeps it as given.
+  local volumes=edit
+  base_translates_retired_scopes && volumes=create
   local expected=("${EXPECTED_OPERATOR_SCOPES[@]}" "nodes:manage:${FACT[nginx_node]}" "proxy:unrestricted:${FACT[proxy]}"
-    "docker:volumes:edit:${FACT[docker_node]}")
+    "docker:volumes:${volumes}:${FACT[docker_node]}")
   cookie_code="$(curl_code -ks -m 10 -o /dev/null -w '%{http_code}' -b "$JAR" "$API/auth/me")"
   check "${label}: admin session survived" "GET /auth/me with the pre-update cookie -> HTTP ${cookie_code}" test "$cookie_code" = 200
   ensure_session
@@ -1369,7 +1420,14 @@ phase2_update() {
   phase 2 "Update ${BASE} -> ${CANDIDATE} through the product"
   feed_pin "$CHANNEL" "gateway=${CANDIDATE}"
   ensure_session
-  gateway_update "update" || return 1
+  # A base that snapshots the database before an update removes the snapshot once the update succeeded; phase 4
+  # needs it for the base's own restore, so its inode is kept by a hard link while the update runs.
+  start_background dump-capture sh -c 'while :; do for f in "$1"/.gateway-foundation-backups/pre-update-*/gateway-db.dump; do
+      [ -s "$f" ] && ln -f "$f" "$2/pre-update-db.dump" 2>/dev/null; done; sleep 0.2; done' sh "$INSTALL_DIR" "$WORK"
+  gateway_update "update"
+  local updated=$?
+  stop_background dump-capture
+  ((updated == 0)) || return 1
   check "database migrated" "$(psql_gateway 'select count(*) from drizzle.__drizzle_migrations') applied migrations" true
   check_foundation_kept
   check_upgraded_state "after update" upgrade1
@@ -1450,7 +1508,7 @@ sidecar_exited() { [[ "$(docker inspect -f '{{.State.Status}}' gateway-e2e-rollb
 phase4_rollback() {
   local backup start=$SECONDS status code license_state probe_id pages id
   phase 4 "Forced rollback to ${BASE}, then update again"
-  [[ -s "$WORK/rollback-${BASE}.sh" ]] || { fail "rollback script available" "the base rollback() was not extracted"; return 1; }
+  [[ -s "$WORK/rollback-functions-${BASE}.sh" ]] || { fail "rollback script available" "the base rollback() was not rendered"; return 1; }
   for backup in "$INSTALL_DIR"/.gateway-foundation-backups/*/; do
     if grep -qxF "GATEWAY_IMAGE_REF=${FACT[base_image]}" "${backup}.env" 2>/dev/null; then
       FACT[backup]="${backup%/}"
@@ -1458,6 +1516,21 @@ phase4_rollback() {
     fi
   done
   check "foundation backup of the update found" "${FACT[backup]:-none}" test -n "${FACT[backup]}" || return 1
+  {
+    printf '#!/bin/sh\n# Base updater sidecar functions; the update body is replaced by a forced failure.\n'
+    cat "$WORK/rollback-functions-${BASE}.sh"
+    printf '\n'
+    if [[ "${FACT[base_snapshots]}" == 1 ]]; then
+      # The snapshot the update took is back where the base updater wrote it, as if the health gate had failed.
+      printf 'db_snapshot_ready=1\n'
+    fi
+    printf 'echo "gateway-e2e: forced update failure, running rollback()"\nexit 1\n'
+  } >"$WORK/rollback-${BASE}.sh"
+  if [[ "${FACT[base_snapshots]}" == 1 ]]; then
+    check "pre-update database snapshot of the update captured" "$(stat -c '%s bytes' "$WORK/pre-update-db.dump" 2>/dev/null || echo missing)" \
+      test -s "$WORK/pre-update-db.dump" || return 1
+    cp "$WORK/pre-update-db.dump" "${FACT[backup]}/gateway-db.dump" && chmod 600 "${FACT[backup]}/gateway-db.dump"
+  fi
   docker rm -f gateway-e2e-rollback >/dev/null 2>&1
   docker run -d --name gateway-e2e-rollback -e "FOUNDATION_BACKUP_DIR=${FACT[backup]}" -v "${INSTALL_DIR}:${INSTALL_DIR}" \
     -v /var/run/docker.sock:/var/run/docker.sock -v "$WORK/rollback-${BASE}.sh:/rollback.sh:ro" \
@@ -1473,7 +1546,7 @@ phase4_rollback() {
   ensure_session
   api GET /api/ui/bootstrap
   license_state="$(jx "$RESP" 'D["license"]["status"]')"
-  check "${BASE} license state valid on the migrated database" \
+  check "${BASE} license state valid after the rollback" \
     "policy status ${license_state}; license:cached_state entitlementsVersion $(psql_gateway "select value->>'entitlementsVersion' from settings where key='license:cached_state'")" \
     test -n "$license_state" -a "$license_state" != invalid
   check "no invalid license policy in the ${BASE} log" \
