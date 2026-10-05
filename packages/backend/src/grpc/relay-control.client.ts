@@ -243,6 +243,9 @@ class RelayResumePath implements AttachablePath {
       return;
     }
     this.ended = true;
+    // A path that ended by a relay frame (Close, HalfClose, Error) is still an open call: end it, or the relay
+    // keeps the tunnel (and its session capacity) until the whole stream ends.
+    this.stream.cancel();
     this.dispose();
     this.emit((sink) => sink.ended(end));
   }
