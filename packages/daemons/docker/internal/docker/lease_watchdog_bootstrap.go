@@ -261,10 +261,12 @@ func (b *watchdogBootstrap) install(ctx context.Context) error {
 }
 
 func (b *watchdogBootstrap) installService(ctx context.Context) error {
-	args := leasewatchdog.RunArgs(b.recordsOwner(), orDefaultURL(b.releasesURL, leasewatchdog.DefaultReleasesURL), orDefaultURL(b.artifactBaseURL, leasewatchdog.DefaultArtifactBaseURL))
+	// A development build never moves the watchdog off the stable channel.
+	channel := "stable"
 	if b.release {
-		args, _ = argsWithChannel(args, b.channel)
+		channel = b.channel
 	}
+	args := leasewatchdog.RunArgs(b.recordsOwner(), orDefaultURL(b.releasesURL, leasewatchdog.DefaultReleasesURL), orDefaultURL(b.artifactBaseURL, leasewatchdog.DefaultArtifactBaseURL), channel)
 	switch b.serviceManager() {
 	case "systemd":
 		if err := b.writeFile(leasewatchdog.SystemdUnitPath, []byte(leasewatchdog.SystemdUnit(leasewatchdog.BinaryPath, args)), 0o644); err != nil {

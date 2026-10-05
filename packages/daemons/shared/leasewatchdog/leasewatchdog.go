@@ -41,9 +41,11 @@ const (
 	maxResponseBytes = 64 * 1024
 )
 
-// RunArgs is the watchdog command line of the service (installer "args").
-func RunArgs(recordsOwner, releasesURL, artifactBaseURL string) string {
-	return fmt.Sprintf("run --records-owner %s --auto-update --releases-url %s --artifact-base-url %s", recordsOwner, releasesURL, artifactBaseURL)
+// RunArgs is the watchdog command line of the service (installer "args"), with the release channel it updates on: the
+// docker daemon's.
+func RunArgs(recordsOwner, releasesURL, artifactBaseURL, channel string) string {
+	return fmt.Sprintf("run --records-owner %s --auto-update --releases-url %s --artifact-base-url %s --channel %s",
+		recordsOwner, releasesURL, artifactBaseURL, channel)
 }
 
 // SystemdUnit is the installer's systemd unit for binary and args.

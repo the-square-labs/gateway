@@ -47,7 +47,7 @@ func TestServiceDefinitionsMatchTheNodeInstaller(t *testing.T) {
 		}
 	}
 	argsLine := regexp.MustCompile(`local args="([^"]+)"`).FindStringSubmatch(script)
-	if argsLine == nil || argsLine[1] != RunArgs("${RUN_USER}", "${RELEASES_API_URL}", "${ARTIFACT_BASE_URL}") {
+	if argsLine == nil || argsLine[1] != RunArgs("${RUN_USER}", "${RELEASES_API_URL}", "${ARTIFACT_BASE_URL}", "$(lease_watchdog_channel)") {
 		t.Fatalf("installer watchdog args %q differ from RunArgs", argsLine)
 	}
 	replacer := strings.NewReplacer("${LEASE_WATCHDOG_BIN}", BinaryPath, "${args}", "ARGS", "${LEASE_WATCHDOG_UNIT}", UnitName, `\${RC_SVCNAME}`, "${RC_SVCNAME}")
