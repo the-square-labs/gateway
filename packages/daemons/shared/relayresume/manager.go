@@ -98,6 +98,32 @@ type sourceState struct {
 	trigger   Trigger
 	stalled   time.Time // the stream stopped moving (suspend or planned stop)
 	ended     bool
+	// deferred is a planned move that arrived while the stream could not
+	// start one (handshake, a migration running): it starts once it can,
+	// unless the stream left that relay meanwhile.
+	deferred *plannedMove
+}
+
+type plannedMove struct {
+	trigger Trigger
+	avoid   string
+	at      time.Time
+}
+
+// requestLocked starts a planned move off avoid at at, or keeps it for
+// later (mu held).
+func (st *sourceState) requestLocked(s *Session, trigger Trigger, avoid string, at time.Time) {
+	c := s.core
+	if st.migrating || !c.CanResume() || c.Current() == nil {
+		if avoid != "" && (st.deferred == nil || at.Before(st.deferred.at)) {
+			st.deferred = &plannedMove{trigger: trigger, avoid: avoid, at: at}
+		}
+		return
+	}
+	if c.Current().RelayID() != avoid {
+		return // already elsewhere
+	}
+	st.start(s, trigger, false, avoid, at)
 }
 
 // NewSource starts a resumable stream on first (HELLO, then data at once).
@@ -151,7 +177,7 @@ func (st *sourceState) observeLocked(s *Session) {
 		}
 		return
 	}
-	if reason, ok := c.TakeMigrateRequest(); ok && !st.migrating && c.Current() != nil {
+	if reason, ok := c.TakeMigrateRequest(); ok && c.Current() != nil {
 		at := time.Now()
 		if hook := st.mgr.MigrateRequestDeadline; hook != nil && reason == MigrateDrain {
 			// A drain hint is paced like the source's own drain.
@@ -159,11 +185,16 @@ func (st *sourceState) observeLocked(s *Session) {
 				at = at.Add(time.Duration(rand.Int64N(int64(time.Until(deadline)))))
 			}
 		}
-		st.start(s, TriggerTargetHint, false, c.Current().RelayID(), at)
+		st.requestLocked(s, TriggerTargetHint, c.Current().RelayID(), at)
 		return
 	}
 	if c.NeedsPath() && !st.migrating {
 		st.start(s, TriggerPathFailure, true, "", time.Time{})
+		return
+	}
+	if d := st.deferred; d != nil && !st.migrating && c.CanResume() && c.Current() != nil {
+		st.deferred = nil
+		st.requestLocked(s, d.trigger, d.avoid, d.at)
 	}
 }
 
@@ -369,10 +400,10 @@ func (m *Manager) Migrate(s *Session, trigger Trigger, deadline time.Time) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.source == nil || s.source.migrating || !s.core.CanResume() || s.core.Current() == nil {
-		return
+	if s.source == nil || s.core.Current() == nil {
+		return // suspended: the unplanned loop picks a relay anyway
 	}
-	s.source.start(s, trigger, false, s.core.Current().RelayID(), at)
+	s.source.requestLocked(s, trigger, s.core.Current().RelayID(), at)
 }
 
 // DrainRelay moves every resumable stream off relayID, spread until
@@ -393,8 +424,8 @@ func (m *Manager) RelayLost(relayID string) {
 			continue
 		}
 		s.mu.Lock()
-		if s.source != nil && !s.source.migrating && s.core.CanResume() && s.core.Current() != nil {
-			s.source.start(s, TriggerGoAway, false, relayID, time.Now().Add(time.Duration(rand.Int64N(int64(100*time.Millisecond)))))
+		if s.source != nil {
+			s.source.requestLocked(s, TriggerGoAway, relayID, time.Now().Add(time.Duration(rand.Int64N(int64(100*time.Millisecond)))))
 		}
 		s.mu.Unlock()
 	}

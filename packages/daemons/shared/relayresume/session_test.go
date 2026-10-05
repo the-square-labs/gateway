@@ -127,8 +127,10 @@ type harness struct {
 	key     []byte
 	revoked atomic.Bool
 	legacy  atomic.Bool // the target is a pre-RSv1 daemon
-	backend net.Listener
-	wg      sync.WaitGroup
+	// helloDelay holds the target's first read (its HELLO_ACK comes late).
+	helloDelay atomic.Int64
+	backend    net.Listener
+	wg         sync.WaitGroup
 }
 
 func newHarness(t *testing.T, relays ...string) *harness {
@@ -221,6 +223,7 @@ func (h *harness) serveTarget(op OpenedPath) {
 		bridge(op.Stream, op.MaxFrame, op.Cancel)
 		return
 	}
+	time.Sleep(time.Duration(h.helloDelay.Swap(0)))
 	accepted := h.table.Accept(op, AcceptRequest{RouteID: "route-1", SourceKind: "daemon", SourceID: "node-1", RelayID: op.RelayID,
 		Keys: h.keys, Authorize: func() error {
 			if h.revoked.Load() {
@@ -317,6 +320,32 @@ func echo(t *testing.T, app net.Conn, size int, during func()) {
 	}
 }
 
+// waitMoved waits until s left relay (reported with Errorf: it runs on the
+// echo writer's goroutine).
+func waitMoved(t *testing.T, s *Session, relay string) bool {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if current := s.RelayID(); current != "" && current != relay {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Errorf("stream did not leave %s", relay)
+	return false
+}
+
+// waitOpen waits for the handshake: a path lost before it is a cut by design.
+func waitOpen(t *testing.T, s *Session) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for s.State() == StateHandshake && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if state := s.State(); state != StateOpen {
+		t.Fatalf("stream did not open: %s (%v)", state, s.Err())
+	}
+}
+
 func waitDone(t *testing.T, s *Session) {
 	t.Helper()
 	select {
@@ -339,6 +368,7 @@ func TestSessionEcho(t *testing.T) {
 func TestSessionPlannedDrain(t *testing.T) {
 	h := newHarness(t, "relay-a", "relay-b")
 	app, session := h.stream()
+	waitOpen(t, session)
 	echo(t, app, 6<<20, func() {
 		h.relay("relay-a").down.Store(true)
 		h.mgr.DrainRelay("relay-a", time.Time{})
@@ -369,6 +399,7 @@ func TestSessionPlannedDrain(t *testing.T) {
 func TestSessionRelayKilled(t *testing.T) {
 	h := newHarness(t, "relay-a", "relay-b")
 	app, session := h.stream()
+	waitOpen(t, session)
 	echo(t, app, 6<<20, func() {
 		h.relay("relay-a").down.Store(true)
 		h.relay("relay-a").cut()
@@ -382,6 +413,7 @@ func TestSessionRelayKilled(t *testing.T) {
 func TestSessionSameRelayComesBack(t *testing.T) {
 	h := newHarness(t, "relay-a")
 	app, session := h.stream()
+	waitOpen(t, session)
 	echo(t, app, 2<<20, func() {
 		relay := h.relay("relay-a")
 		relay.down.Store(true)
@@ -395,13 +427,37 @@ func TestSessionSameRelayComesBack(t *testing.T) {
 	}
 }
 
+// A drain notice that arrives while the stream is still in its handshake is
+// kept and carried out once the stream can move.
+func TestSessionDrainDuringHandshake(t *testing.T) {
+	h := newHarness(t, "relay-a", "relay-b")
+	h.helloDelay.Store(int64(300 * time.Millisecond))
+	app, session := h.stream()
+	first := session.RelayID()
+	if session.State() != StateHandshake {
+		t.Fatalf("state %s", session.State())
+	}
+	h.mgr.DrainRelay(first, time.Now().Add(50*time.Millisecond))
+	echo(t, app, 1<<20, nil)
+	waitDone(t, session)
+	if session.State() != StateFinished || h.mgr.Stats().MigrationsOK != 1 {
+		t.Fatalf("state %s, migrations %d", session.State(), h.mgr.Stats().MigrationsOK)
+	}
+}
+
 func TestSessionGoAwayAndTargetHint(t *testing.T) {
 	h := newHarness(t, "relay-a", "relay-b", "relay-c")
 	app, session := h.stream()
+	waitOpen(t, session)
 	echo(t, app, 4<<20, func() {
-		h.mgr.RelayLost(session.RelayID())
-		time.Sleep(200 * time.Millisecond)
-		h.table.RequestMigrate(session.RelayID(), MigrateGoAway)
+		first := session.RelayID()
+		h.mgr.RelayLost(first)
+		if !waitMoved(t, session, first) {
+			return
+		}
+		second := session.RelayID()
+		h.table.RequestMigrate(second, MigrateGoAway)
+		waitMoved(t, session, second)
 	})
 	waitDone(t, session)
 	if session.State() != StateFinished || h.mgr.Stats().MigrationsOK < 2 {
@@ -412,6 +468,7 @@ func TestSessionGoAwayAndTargetHint(t *testing.T) {
 func TestSessionRevokedWhileSuspended(t *testing.T) {
 	h := newHarness(t, "relay-a", "relay-b")
 	app, session := h.stream()
+	waitOpen(t, session)
 	if _, err := app.Write([]byte("hello")); err != nil {
 		t.Fatal(err)
 	}

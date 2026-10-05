@@ -475,13 +475,24 @@ func echoExact(t *testing.T, app net.Conn, size int) {
 
 func waitFor(t *testing.T, what string, condition func() bool) {
 	t.Helper()
+	if !waitUntil(t, what, condition) {
+		t.FailNow()
+	}
+}
+
+// waitUntil is waitFor for goroutines other than the test's: it reports
+// instead of stopping the goroutine.
+func waitUntil(t *testing.T, what string, condition func() bool) bool {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !condition() {
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
+			t.Errorf("timed out waiting for %s", what)
+			return false
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	return true
 }
 
 func TestResumableLinkStreamEchoes(t *testing.T) {
@@ -502,6 +513,8 @@ func TestResumableLinkStreamEchoes(t *testing.T) {
 func TestResumableLinkStreamMovesOffDrainingRelay(t *testing.T) {
 	pair := newStreamPair(t, true, true)
 	app, tunnel := pair.open()
+	// A path lost before the handshake is a cut by design.
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
 	first := tunnel.session.RelayID()
 	other := "relay-b"
 	if first == "relay-b" {
@@ -513,8 +526,9 @@ func TestResumableLinkStreamMovesOffDrainingRelay(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		waitFor(t, "the stream to move", func() bool { return tunnel.session.RelayID() == other })
-		waitFor(t, "the drained relay to end its tunnel", func() bool { return pair.relays[first].activeTunnels() == 0 })
+		if waitUntil(t, "the stream to move", func() bool { return tunnel.session.RelayID() == other }) {
+			waitUntil(t, "the drained relay to end its tunnel", func() bool { return pair.relays[first].activeTunnels() == 0 })
+		}
 	})
 	if pair.dials.Load() != 1 {
 		t.Fatalf("backend dialed %d times", pair.dials.Load())
@@ -529,6 +543,8 @@ func TestResumableLinkStreamMovesOffDrainingRelay(t *testing.T) {
 func TestResumableLinkStreamSurvivesRelayLoss(t *testing.T) {
 	pair := newStreamPair(t, true, true)
 	app, tunnel := pair.open()
+	// A path lost before the handshake is a cut by design.
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
 	echoThrough(t, app, 6<<20, func() {
 		pair.relays[tunnel.session.RelayID()].server.Stop()
 	})
@@ -541,6 +557,8 @@ func TestResumableLinkStreamSurvivesRelayLoss(t *testing.T) {
 func TestResumableLinkStreamMovesOnGoAway(t *testing.T) {
 	pair := newStreamPair(t, true, true)
 	app, tunnel := pair.open()
+	// A path lost before the handshake is a cut by design.
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
 	var stopping *miniRelay
 	echoThrough(t, app, 6<<20, func() {
 		relayID := tunnel.session.RelayID()
@@ -548,7 +566,7 @@ func TestResumableLinkStreamMovesOnGoAway(t *testing.T) {
 		go stopping.server.GracefulStop()
 		// The relay pool reports the lane leaving READY (lifecycle.RelayLaneStatePlugin).
 		pair.source.RelayLaneLeftReady(relayID, pair.source.relayRouter(relayID).conn)
-		waitFor(t, "the stream to leave the stopping relay", func() bool {
+		waitUntil(t, "the stream to leave the stopping relay", func() bool {
 			moved := tunnel.session.RelayID()
 			return moved != "" && moved != relayID
 		})
