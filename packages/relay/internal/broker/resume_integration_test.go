@@ -701,6 +701,8 @@ type rhResumeTarget struct {
 	backends atomic.Int64
 	// serve runs the backend of a new stream (default: echo).
 	serve func(frameStream)
+	// beforeEstablish runs before HELLO_ACK goes out (the backend dial).
+	beforeEstablish func()
 }
 
 func newRHResumeTarget(t testing.TB) *rhResumeTarget {
@@ -744,6 +746,9 @@ func (r *rhResumeTarget) handle(accepted *rhAccepted) {
 		accepted.cancel()
 	case relayresume.AcceptHello:
 		r.backends.Add(1)
+		if r.beforeEstablish != nil {
+			r.beforeEstablish()
+		}
 		session, err := decision.Establish()
 		if err != nil {
 			accepted.cancel()
@@ -1656,4 +1661,34 @@ func TestResumeWriterProgressesWhileNothingReads(t *testing.T) {
 		got += len(frame.GetData().GetData())
 	}
 	session.Cancel()
+}
+
+// A drain notice or a lane GOAWAY that arrives while a stream is still in its
+// handshake (HELLO sent, HELLO_ACK not back: a slow backend dial) is kept and
+// acted on once the stream is open, instead of being dropped.
+func TestResumeTriggerDuringHandshakeIsKept(t *testing.T) {
+	for _, trigger := range []string{"drain", "goaway"} {
+		t.Run(trigger, func(t *testing.T) {
+			setup := newRHSetup(t, 2, rhRoute{id: "route-early-" + trigger})
+			a, b := setup.relays[0], setup.relays[1]
+			setup.target.beforeEstablish = func() { time.Sleep(300 * time.Millisecond) }
+			session := setup.source.start(0)
+			if session.State() != relayresume.StateHandshake {
+				t.Fatalf("stream state %v, want the handshake", session.State())
+			}
+			if trigger == "drain" {
+				a.currentBroker().SetDraining(true)
+				setup.source.setDraining(a.id, true)
+				setup.source.manager.DrainRelay(a.id, time.Time{})
+			} else {
+				setup.source.manager.RelayLost(a.id)
+			}
+			payload := rhRandom(t, 1024*1024)
+			echoed, err := exchange(t, session, payload, 32*1024, len(payload)/2, func() {
+				rhWaitFor(t, "the stream to leave relay-a", 10*time.Second, func() bool { return session.RelayID() == b.id })
+			})
+			checkEcho(t, echoed, payload, err)
+			finish(t, session)
+		})
+	}
 }
