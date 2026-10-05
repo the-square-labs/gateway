@@ -88,6 +88,7 @@ import {
   watchDockerTransition,
 } from './docker-lifecycle-watch.js';
 import { assertManagedMountMutation } from './docker-managed-mounts.js';
+import { DOCKER_MANAGED_VOLUME_LABEL } from './docker-managed-volume.constants.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
 import type { DockerNetworkAccessResourceService } from './docker-network-access-resource.service.js';
 import { hasDockerPortBindIpV1Capability } from './docker-port-bindings.js';
@@ -131,6 +132,7 @@ import {
   deleteVolumeFile as deleteDockerVolumeFile,
   disconnectContainerFromNetwork as disconnectDockerContainerFromNetwork,
   exportVolume as exportDockerVolume,
+  gatewayManagedVolumeNames,
   initVolumeFileUpload as initDockerVolumeFileUpload,
   inspectVolume as inspectDockerVolume,
   listAllVolumes as listAllDockerVolumes,
@@ -2198,7 +2200,15 @@ export class DockerManagementService {
   /** Housekeeping inventory: every volume on the node, including the ones hidden from the user list. */
   async listHousekeepingVolumes(nodeId: string) {
     await this.validateDockerNode(nodeId);
-    return listAllDockerVolumes(this.volumeNetworkOperationContext(), nodeId);
+    const volumes = await listAllDockerVolumes(this.volumeNetworkOperationContext(), nodeId);
+    if (!Array.isArray(volumes)) return volumes;
+    // Managed volumes (created or adopted, anonymous ones included) are never orphan candidates.
+    const managed = await gatewayManagedVolumeNames(this.db, nodeId);
+    return volumes.filter((volume: Record<string, any>) => {
+      const name = String(volume?.Name ?? volume?.name ?? '');
+      const labels = volume?.Labels ?? volume?.labels;
+      return !managed.has(name) && labels?.[DOCKER_MANAGED_VOLUME_LABEL] !== 'true';
+    });
   }
 
   /**

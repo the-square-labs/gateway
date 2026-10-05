@@ -60,9 +60,12 @@ export async function inspectDockerVolumeSnapshot(nodeId: string, name: string) 
   const detail = await snapshots.getDetail(nodeId, 'volume-detail', name);
   const data = await resolveDockerVolumeByName({ inspectVolume: async () => detail?.data }, nodeId, name);
   const containerSnapshot = await snapshots.getList<any[]>(nodeId, 'containers');
-  const [decorated] = await container
-    .resolve(DockerManagementService)
-    .decoratePublicVolumeSnapshot(nodeId, [data], Array.isArray(containerSnapshot.data) ? containerSnapshot.data : []);
+  // The decorated list also carries managed rows it was not given; a hidden volume must not resolve to one of them.
+  const decorated = (
+    await container
+      .resolve(DockerManagementService)
+      .decoratePublicVolumeSnapshot(nodeId, [data], Array.isArray(containerSnapshot.data) ? containerSnapshot.data : [])
+  ).find((volume) => String(volume?.Name ?? volume?.name ?? '') === name);
   if (!decorated) throw new HTTPException(404, { message: 'Volume not found' });
   return {
     ...normalizeVolumeDetailItem(decorated),

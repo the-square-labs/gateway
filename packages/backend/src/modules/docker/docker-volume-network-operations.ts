@@ -11,6 +11,7 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { isGatewayInternalContainer } from './docker-internal-containers.js';
 import { isGatewayManagedDockerNetwork, isReservedGatewayNetworkName } from './docker-internal-networks.js';
+import { DOCKER_MANAGED_VOLUME_LABEL } from './docker-managed-volume.constants.js';
 import {
   assertDockerFileReadWithinLimit,
   DOCKER_FILE_READ_REQUEST_BYTES,
@@ -639,6 +640,35 @@ export function isAnonymousDockerVolumeName(name: string): boolean {
 }
 
 /**
+ * Whether Gateway manages the volume: it has a managed-volume row (created or adopted) or carries the Gateway
+ * managed-volume label. Anonymous-volume cleanup must never remove such a volume.
+ */
+export async function isGatewayManagedVolume(
+  db: DrizzleClient,
+  nodeId: string,
+  name: string,
+  volume?: Record<string, any> | null
+): Promise<boolean> {
+  const labels = volume?.Labels ?? volume?.labels;
+  if (labels && typeof labels === 'object' && labels[DOCKER_MANAGED_VOLUME_LABEL] === 'true') return true;
+  const rows = await db
+    .select({ volumeName: dockerManagedVolumes.volumeName })
+    .from(dockerManagedVolumes)
+    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** Names of the volumes Gateway manages on a node (created or adopted). */
+export async function gatewayManagedVolumeNames(db: DrizzleClient, nodeId: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ volumeName: dockerManagedVolumes.volumeName })
+    .from(dockerManagedVolumes)
+    .where(eq(dockerManagedVolumes.nodeId, nodeId));
+  return new Set(rows.map((row) => row.volumeName));
+}
+
+/**
  * Every volume on the node, including the ones listVolumes hides from users.
  * Only for housekeeping, which looks for orphaned anonymous volumes.
  */
@@ -664,6 +694,9 @@ export async function removeOrphanedAnonymousVolume(
   const usedBy = volume?.UsedBy ?? volume?.usedBy;
   if (Array.isArray(usedBy) && usedBy.length > 0) {
     throw new AppError(409, 'VOLUME_IN_USE', 'Volume is in use');
+  }
+  if (await isGatewayManagedVolume(context.db, nodeId, name, volume)) {
+    throw new AppError(409, 'VOLUME_MANAGED', 'Housekeeping never removes a volume managed by Gateway');
   }
   // force=false: Docker still refuses a volume that a container started using meanwhile.
   await removeVolume(context, nodeId, name, false, userId);
