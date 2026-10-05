@@ -49,7 +49,7 @@ curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts
 curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/install.sh | bash -s -- --http
 ```
 
-Supported options are `--install-dir`, `--image`, `--source-dir`, `--http`, `--https`, and `--dry-run`. `--source-dir` builds a fresh test installation from a local Gateway checkout instead of discovering and pulling a release; it cannot update an existing installation. `--dry-run` verifies the selected signed release and renders the planned flow without creating files, building or pulling images, or starting services. Run with `--help` for syntax. The installer has no domain, nginx, Cloudflare, OIDC, SMTP, or ClickHouse prompts.
+Supported options are `--install-dir`, `--image`, `--source-dir`, `--http`, `--https`, and `--dry-run`. `--source-dir` builds a fresh test installation from a local Gateway checkout instead of discovering and pulling a release; it cannot update an existing installation. A source build needs 8 GB RAM, or swap on a 4 GB host. `--dry-run` verifies the selected signed release and renders the planned flow without creating files, building or pulling images, or starting services. Run with `--help` for syntax. The installer has no domain, nginx, Cloudflare, OIDC, SMTP, or ClickHouse prompts.
 
 ## Browser Setup Wizard
 

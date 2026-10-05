@@ -338,13 +338,13 @@ tls:
   client_key: "/etc/nginx-daemon/certs/node-key.pem"
 
 nginx:
-  config_dir: "/etc/nginx/conf.d/sites"
+  config_dir: "/etc/nginx/gateway/conf.d"
   certs_dir: "/etc/nginx/certs"
   logs_dir: "/var/log/nginx"
   global_config: "/etc/nginx/nginx.conf"
   binary: "/usr/sbin/nginx"
   stub_status_url: "http://127.0.0.1/nginx_status"
-  htpasswd_dir: "/etc/nginx/htpasswd"
+  htpasswd_dir: "/etc/nginx/gateway/htpasswd"
   acme_challenge_dir: "/var/www/acme-challenge"
 
 console:
