@@ -1160,14 +1160,18 @@ test('a switch away from a non-root user stops the daemon last and keeps its lin
       const unitFile = path.join(dir, `${unit}.service`);
       await writeFile(unitFile, '[Service]\n');
       const calls = path.join(dir, `${unit}-calls`);
-      const text = ['grant_daemon_paths_to_run_user', 'prepare_run_user_switch', 'hold_fd_store', 'release_fd_store_hold', 'finish_run_user_switch']
+      // The Docker installer also hands the lease watchdog records over with the daemon's paths (to a directory of the
+      // test here).
+      const names = ['grant_daemon_paths_to_run_user', 'prepare_run_user_switch', 'hold_fd_store', 'release_fd_store_hold', 'finish_run_user_switch'];
+      if (source.includes('\nhand_lease_records_to_run_user() {')) names.push('hand_lease_records_to_run_user');
+      const text = names
         .map((name) =>
           shellFunction(source, name)
             .replaceAll(`/var/lib/${unit}/launcher`, launcher)
             .replaceAll(`/etc/systemd/system/${unit}.service`, unitFile)
         )
         .join('\n');
-      const fdHold = `FD_STORE_HOLD='${holdFile}'`;
+      const fdHold = `FD_STORE_HOLD='${holdFile}'; LEASE_RECORDS_DIR='${path.join(dir, `${unit}-records`)}'`;
       const run = async ({ enrolled, token = '', stopFails = false, steps }) => {
         await writeFile(calls, '');
         runShell(`mkdir -p '${launcher}'`);
