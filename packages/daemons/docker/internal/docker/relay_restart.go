@@ -165,7 +165,8 @@ func (s *proxyTunnelSet) drain(limit time.Duration) {
 
 // drainWhere drains the tunnels match selects like drain, and reports how
 // many were still busy when limit ran out. With keepHeld a held tunnel is not
-// closed when idle: it counts as busy until it ends.
+// closed when idle, nor is an upgraded HTTP connection: they count as busy
+// until they end.
 func (s *proxyTunnelSet) drainWhere(match func(*drainConn) bool, limit, tick time.Duration, keepHeld bool) int {
 	deadline := time.Now().Add(limit)
 	for {
@@ -176,7 +177,10 @@ func (s *proxyTunnelSet) drainWhere(match func(*drainConn) bool, limit, tick tim
 			if !match(connection) {
 				continue
 			}
-			if !(keepHeld && tunnel.held) && connection.idle(now, restartIdleQuiet) {
+			// An upgraded HTTP connection (websocket, h2c) is a session like a
+			// held one: idle between its messages is no point to end it at.
+			kept := keepHeld && (tunnel.held || connection.upgraded.Load())
+			if !kept && connection.idle(now, restartIdleQuiet) {
 				tunnel.cancel()
 				delete(s.tunnels, connection)
 				continue
@@ -199,6 +203,9 @@ type drainConn struct {
 	opened    int64
 	lastWrite atomic.Int64
 	lastRead  atomic.Int64
+	// upgraded: the workload answered "101 Switching Protocols" (websocket,
+	// h2c): from then on the connection is a session, not requests.
+	upgraded atomic.Bool
 }
 
 func newDrainConn(connection net.Conn) *drainConn {
@@ -209,8 +216,16 @@ func (c *drainConn) Read(buffer []byte) (int, error) {
 	n, err := c.Conn.Read(buffer)
 	if n > 0 {
 		c.lastRead.Store(time.Now().UnixNano())
+		if !c.upgraded.Load() && switchingProtocols(buffer[:n]) {
+			c.upgraded.Store(true)
+		}
 	}
 	return n, err
+}
+
+// switchingProtocols reports a read that starts an HTTP/1.x 101 response.
+func switchingProtocols(data []byte) bool {
+	return len(data) >= 12 && string(data[:7]) == "HTTP/1." && data[8] == ' ' && string(data[9:12]) == "101"
 }
 
 func (c *drainConn) Write(buffer []byte) (int, error) {
