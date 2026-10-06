@@ -656,8 +656,15 @@ export class RelayStreamResumeService {
       .set({
         resumeState: to,
         ...(to === 'off' ? { prevKeyVersion: null } : {}),
-        // The key an enabled route starts with is due for rotation a full period later.
-        ...(to === 'enabling' ? { keyRotatedAt: new Date() } : {}),
+        // The key an enabled route starts with is due for rotation a full period later. A route turned on from off
+        // gets a key it never had: a source that latched it to raw streams while its target could not resume them
+        // (an older daemon) sees a new key id and tries resumable streams again at once, not after its latch.
+        ...(to === 'enabling'
+          ? {
+              keyRotatedAt: new Date(),
+              keyVersion: sql`case when ${relayRoutes.resumeState} = 'off' then ${relayRoutes.keyVersion} + 1 else ${relayRoutes.keyVersion} end`,
+            }
+          : {}),
         updatedAt: new Date(),
       })
       .where(and(inArray(relayRoutes.id, ids), inArray(relayRoutes.resumeState, from)));

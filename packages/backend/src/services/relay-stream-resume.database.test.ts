@@ -189,8 +189,8 @@ describe.skipIf(!url)('resumable relay streams', () => {
     it('enables the target first, then the source', async () => {
       await service.reconcile();
       expect(syncs).toEqual([
-        { nodeId: targetId, state: 'enabling', keyVersion: 1, prevKeyVersion: null },
-        { nodeId: sourceId, state: 'on', keyVersion: 1, prevKeyVersion: null },
+        { nodeId: targetId, state: 'enabling', keyVersion: 2, prevKeyVersion: null },
+        { nodeId: sourceId, state: 'on', keyVersion: 2, prevKeyVersion: null },
       ]);
       syncs = [];
       await service.reconcile();
@@ -220,9 +220,33 @@ describe.skipIf(!url)('resumable relay streams', () => {
       syncs = [];
       await service.reconcile();
       expect(syncs).toEqual([
-        { nodeId: sourceId, state: 'disabling', keyVersion: 1, prevKeyVersion: null },
-        { nodeId: targetId, state: 'off', keyVersion: 1, prevKeyVersion: null },
+        { nodeId: sourceId, state: 'disabling', keyVersion: 2, prevKeyVersion: null },
+        { nodeId: targetId, state: 'off', keyVersion: 2, prevKeyVersion: null },
       ]);
+    });
+
+    it('gives a route turned on again a key its source never had', async () => {
+      await service.reconcile();
+      await db
+        .update(nodes)
+        .set({ capabilities: capabilities(false) as never })
+        .where(eq(nodes.id, targetId));
+      await service.reconcile();
+      expect((await routeState()).resumeState).toBe('off');
+      await db
+        .update(nodes)
+        .set({ capabilities: capabilities(true) as never })
+        .where(eq(nodes.id, targetId));
+      syncs = [];
+      await service.reconcile();
+      expect(syncs).toEqual([
+        { nodeId: targetId, state: 'enabling', keyVersion: 3, prevKeyVersion: null },
+        { nodeId: sourceId, state: 'on', keyVersion: 3, prevKeyVersion: null },
+      ]);
+      // A retried enable keeps the key it started with.
+      await db.update(relayRoutes).set({ resumeState: 'enabling' }).where(eq(relayRoutes.id, routeId));
+      await service.reconcile();
+      expect((await routeState()).keyVersion).toBe(3);
     });
 
     it('keeps the target accepting until the source dropped the key', async () => {
@@ -247,14 +271,14 @@ describe.skipIf(!url)('resumable relay streams', () => {
       syncs = [];
       await service.reconcile();
       expect(syncs).toEqual([
-        { nodeId: targetId, state: 'rotating', keyVersion: 2, prevKeyVersion: 1 },
-        { nodeId: sourceId, state: 'on', keyVersion: 2, prevKeyVersion: 1 },
+        { nodeId: targetId, state: 'rotating', keyVersion: 3, prevKeyVersion: 2 },
+        { nodeId: sourceId, state: 'on', keyVersion: 3, prevKeyVersion: 2 },
       ]);
     });
 
     it('makes a new route resumable before its source gets it: the target takes the key first', async () => {
       await service.enableBeforeSourceSync({ sourceNodeId: sourceId });
-      expect(syncs).toEqual([{ nodeId: targetId, state: 'enabling', keyVersion: 1, prevKeyVersion: null }]);
+      expect(syncs).toEqual([{ nodeId: targetId, state: 'enabling', keyVersion: 2, prevKeyVersion: null }]);
       expect((await routeState()).resumeState).toBe('on');
       // Nothing left to do for the next delivery to this source.
       syncs = [];
