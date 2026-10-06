@@ -49,7 +49,34 @@ describe.skipIf(!url)('resumable relay streams', () => {
       throw new Error('GATEWAY_MIGRATION_TEST_DATABASE_URL must name a disposable gateway_migration_test_* database');
     }
     pool = tolerateDatabaseDrop(new pg.Pool({ connectionString: url }));
-  });
+    // A database at the release before resumable streams, with a route, then upgraded: what the migration test checks
+    // and what every other test here runs on. Migrating takes longer than one test may on a slower database host.
+    await pool.query(
+      'drop schema if exists public cascade; drop schema if exists drizzle cascade; create schema public'
+    );
+    await migrateDatabase(pool, '0226_relay_pool_update_step_skipped');
+    const nodeId = randomUUID();
+    const endpointId = randomUUID();
+    await pool.query(`insert into relay_policy_state (id, gateway_instance_id, revision) values ('current', $1, 7)`, [
+      randomUUID(),
+    ]);
+    await pool.query(`insert into nodes (id, type, hostname, slug) values ($1, 'docker', 'n', $2)`, [
+      nodeId,
+      `n-${nodeId.slice(0, 8)}`,
+    ]);
+    await pool.query(
+      `insert into relay_endpoints (id, owner_kind, owner_id, subject_kind, subject_id, certificate_sha256)
+       values ($1, 'managed_database', 'db', 'daemon', $2, 'sha256:x')`,
+      [endpointId, nodeId]
+    );
+    await pool.query(
+      `insert into relay_routes (owner_kind, owner_id, source_kind, source_id, source_certificate_sha256, target_endpoint_id)
+       values ('managed_database_binding', 'b', 'daemon', $1, 'sha256:x', $2)`,
+      [nodeId, endpointId]
+    );
+    await migrateDatabase(pool);
+    db = drizzle(pool, { schema }) as unknown as DrizzleClient;
+  }, 180_000);
 
   afterAll(async () => {
     await pool?.end();
@@ -57,30 +84,6 @@ describe.skipIf(!url)('resumable relay streams', () => {
 
   describe('migration', () => {
     it('keeps existing routes raw until their daemons support resumable streams', async () => {
-      await pool.query(
-        'drop schema if exists public cascade; drop schema if exists drizzle cascade; create schema public'
-      );
-      await migrateDatabase(pool, '0226_relay_pool_update_step_skipped');
-      const nodeId = randomUUID();
-      const endpointId = randomUUID();
-      await pool.query(`insert into relay_policy_state (id, gateway_instance_id, revision) values ('current', $1, 7)`, [
-        randomUUID(),
-      ]);
-      await pool.query(`insert into nodes (id, type, hostname, slug) values ($1, 'docker', 'n', $2)`, [
-        nodeId,
-        `n-${nodeId.slice(0, 8)}`,
-      ]);
-      await pool.query(
-        `insert into relay_endpoints (id, owner_kind, owner_id, subject_kind, subject_id, certificate_sha256)
-         values ($1, 'managed_database', 'db', 'daemon', $2, 'sha256:x')`,
-        [endpointId, nodeId]
-      );
-      await pool.query(
-        `insert into relay_routes (owner_kind, owner_id, source_kind, source_id, source_certificate_sha256, target_endpoint_id)
-         values ('managed_database_binding', 'b', 'daemon', $1, 'sha256:x', $2)`,
-        [nodeId, endpointId]
-      );
-      await migrateDatabase(pool);
       const route = await pool.query(
         'select resume_state, key_version, prev_key_version, key_rotated_at from relay_routes'
       );
@@ -93,7 +96,6 @@ describe.skipIf(!url)('resumable relay streams', () => {
         `select column_name from information_schema.columns where table_name = 'relay_instances' and column_name = 'drain_deadline_at'`
       );
       expect(instance.rowCount).toBe(1);
-      db = drizzle(pool, { schema }) as unknown as DrizzleClient;
     });
   });
 
