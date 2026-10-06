@@ -177,7 +177,7 @@ func TestDaemonStartResumesARetirement(t *testing.T) {
 // the links and the egress go to a new connector at once.
 func TestDrainingConnectorIsReplacedAtOnce(t *testing.T) {
 	manager, engine := replaceTestManager(t)
-	previous := engine.containers[secureLinkConnectorSlots[0].name]
+	previous := engine.container(secureLinkConnectorSlots[0].name)
 	engine.mu.Lock()
 	previous.draining = true
 	engine.mu.Unlock()
@@ -204,7 +204,7 @@ func TestEgressLeavesADrainingConnector(t *testing.T) {
 	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
 		t.Fatalf("egress status %+v", status)
 	}
-	previous := engine.containers[secureLinkConnectorSlots[0].name]
+	previous := engine.container(secureLinkConnectorSlots[0].name)
 	engine.mu.Lock()
 	previous.draining = true
 	engine.mu.Unlock()
@@ -255,7 +255,7 @@ func TestIngressRefusalDuringEgressSyncsIsLoggedOnce(t *testing.T) {
 	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
 		t.Fatalf("egress status %+v", status)
 	}
-	connector := engine.containers[secureLinkConnectorSlots[0].name]
+	connector := engine.container(secureLinkConnectorSlots[0].name)
 	engine.mu.Lock()
 	connector.syncFails = true
 	engine.mu.Unlock()

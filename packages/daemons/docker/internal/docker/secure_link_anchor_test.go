@@ -29,7 +29,7 @@ func TestReplacedConnectorDrainsOnlyOnceEgressListens(t *testing.T) {
 	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
 		t.Fatalf("egress on the first connector %+v", status)
 	}
-	previous := engine.containers[secureLinkConnectorSlots[0].name]
+	previous := engine.container(secureLinkConnectorSlots[0].name)
 	engine.mu.Lock()
 	engine.egressFails = true
 	engine.mu.Unlock()
@@ -37,7 +37,7 @@ func TestReplacedConnectorDrainsOnlyOnceEgressListens(t *testing.T) {
 	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
 		t.Fatalf("apply with the new image: %v", err)
 	}
-	replacement := engine.containers[secureLinkConnectorSlots[1].name]
+	replacement := engine.container(secureLinkConnectorSlots[1].name)
 	time.Sleep(300 * time.Millisecond)
 	if receivedDrain(engine.fakeConnectorEngine, previous) || slices.Contains(engine.removedIDs(), previous.id) {
 		t.Fatal("the previous connector was drained before the egress listened on its replacement")
@@ -71,7 +71,7 @@ func TestReplacedConnectorServesUntilTheRetireLimit(t *testing.T) {
 	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
 		t.Fatalf("egress on the first connector %+v", status)
 	}
-	previous := engine.containers[secureLinkConnectorSlots[0].name]
+	previous := engine.container(secureLinkConnectorSlots[0].name)
 	engine.mu.Lock()
 	engine.egressFails = true
 	engine.mu.Unlock()
@@ -154,12 +154,12 @@ func TestConnectorAnchorFollowsTheImage(t *testing.T) {
 	if _, err := manager.apply(replaceTestCommand(replaceTestOldImage), nil, nil, false); err != nil {
 		t.Fatalf("apply with an image without the anchor: %v", err)
 	}
-	if engine.containers[secureLinkAnchorName] != nil {
+	if engine.container(secureLinkAnchorName) != nil {
 		t.Fatal("an anchor was created for an image without the pause subcommand")
 	}
 	view := manager.currentView()
 	if view.connectorID != "created-1" || view.managementIP != "10.99.0.11" || view.bindings[replaceTestLinkID].port == 0 ||
-		engine.containers[secureLinkConnectorSlots[0].name].networkMode != "" {
+		engine.container(secureLinkConnectorSlots[0].name).networkMode != "" {
 		t.Fatalf("proxy ingress on a connector in its own namespace: %+v", view)
 	}
 	statuses := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))
@@ -170,10 +170,10 @@ func TestConnectorAnchorFollowsTheImage(t *testing.T) {
 	if _, err := manager.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
 		t.Fatalf("apply with an image with the anchor: %v", err)
 	}
-	anchor := engine.containers[secureLinkAnchorName]
+	anchor := engine.container(secureLinkAnchorName)
 	view = manager.currentView()
 	if anchor == nil || view.connectorID != "created-3" || view.managementIP != anchor.ip ||
-		engine.containers[secureLinkConnectorSlots[1].name].networkMode != "container:"+anchor.id {
+		engine.container(secureLinkConnectorSlots[1].name).networkMode != "container:"+anchor.id {
 		t.Fatalf("the connector did not move into the anchor: %+v (anchor %+v)", view, anchor)
 	}
 	if status := manager.egress.currentStatuses()[egressTestLinkID]; status.State != egressStateReady || status.Address != "10.213.0.2" {
@@ -272,7 +272,7 @@ func TestReplacedConnectorDrainsAsLongAsTheRelay(t *testing.T) {
 // stop accepting by the drain signal instead, so new connections reach only its replacement (F3).
 func TestUnreachableConnectorIsSignalledToDrain(t *testing.T) {
 	manager, engine := replaceTestManager(t)
-	previous := engine.containers[secureLinkConnectorSlots[0].name]
+	previous := engine.container(secureLinkConnectorSlots[0].name)
 	engine.mu.Lock()
 	previous.drainFails = true
 	engine.mu.Unlock()

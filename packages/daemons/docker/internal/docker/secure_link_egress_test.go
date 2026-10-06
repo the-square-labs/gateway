@@ -223,7 +223,7 @@ func TestEgressFollowsTheGrantBundle(t *testing.T) {
 	if statuses[invalidID].State != egressStateError {
 		t.Fatalf("an egress on a user network was not refused: %+v", statuses[invalidID])
 	}
-	endpoint := engine.containers[secureLinkAnchorName].networks[egressTestNetwork]
+	endpoint := engine.container(secureLinkAnchorName).networks[egressTestNetwork]
 	if endpoint["IPAddress"] != "10.213.0.2" || len(endpoint["Aliases"].([]string)) != 1 || endpoint["Aliases"].([]string)[0] != "app" {
 		t.Fatalf("connector endpoint on the link network %+v", endpoint)
 	}

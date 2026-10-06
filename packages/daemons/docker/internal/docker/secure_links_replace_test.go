@@ -347,6 +347,14 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 	return respond(http.StatusInternalServerError, `{"message":"unexpected"}`)
 }
 
+// container is the named container, read under the engine's lock (a
+// replaced connector's removal runs on its own goroutine).
+func (e *fakeConnectorEngine) container(name string) *fakeConnectorContainer {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.containers[name]
+}
+
 func (e *fakeConnectorEngine) removedIDs() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -386,7 +394,7 @@ func replaceTestCommand(image string) *pb.SyncProxySecureLinksCommand {
 func TestNewConnectorImageReplacesTheConnectorWithoutAGap(t *testing.T) {
 	manager, engine := replaceTestManager(t)
 	previous := manager.currentView()
-	previousContainer := engine.containers[secureLinkConnectorSlots[0].name]
+	previousContainer := engine.container(secureLinkConnectorSlots[0].name)
 	if previous.connectorID != "created-2" || previous.bindings[replaceTestLinkID].port == 0 {
 		t.Fatalf("serving view = %+v", previous)
 	}
