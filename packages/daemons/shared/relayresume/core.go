@@ -241,6 +241,7 @@ type Core struct {
 
 	migrateReq byte
 	out        []Output
+	lostRelay  string // relay of the last current path that failed
 
 	// Statistics.
 	Retransmitted uint64
@@ -347,6 +348,10 @@ func (c *Core) Pending() *Path { return c.pending }
 
 // Old is the source's rx-only path during a planned resume.
 func (c *Core) Old() *Path { return c.old }
+
+// LostRelay is the relay of the last current path that failed (an unplanned
+// resume tries it last: its lane may still look up while it refuses).
+func (c *Core) LostRelay() string { return c.lostRelay }
 
 // Window is the current send window.
 func (c *Core) Window() uint64 { return c.wnd }
@@ -906,6 +911,7 @@ func (c *Core) PathFailed(p *Path, terminal bool, cause error, now time.Time) {
 		c.old = nil
 	case c.cur:
 		c.cur = nil
+		c.lostRelay = p.relayID
 		if c.state == StateHandshake {
 			c.err = &ResetError{Code: RstAborted, Reason: "path failed before HELLO_ACK", Err: ErrNotResumable}
 			c.state = StateReset

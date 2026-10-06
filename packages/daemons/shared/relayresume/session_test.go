@@ -674,3 +674,38 @@ func TestTargetFirstRecordRule(t *testing.T) {
 		t.Fatalf("answer %+v", record)
 	}
 }
+
+// An unplanned resume tries the relay whose path just failed last: its lane
+// may still look up while it refuses, and an open there waits OpenTimeout.
+func TestUnplannedResumeTriesTheFailedRelayLast(t *testing.T) {
+	h := newHarness(t, "relay-a", "relay-b")
+	var mu sync.Mutex
+	var avoided []string
+	first, err := h.dial(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1",
+		Key: func() (string, []byte, bool) { return "v1", h.key, true },
+		Dial: func(ctx context.Context, avoid string) (OpenedPath, error) {
+			mu.Lock()
+			avoided = append(avoided, avoid)
+			mu.Unlock()
+			return h.dial(ctx, avoid)
+		}}, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitOpen(t, session)
+	h.relay("relay-a").cut() // the relay stays "up" for the dialer
+	deadline := time.Now().Add(10 * time.Second)
+	for session.RelayID() != "relay-b" && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if session.RelayID() != "relay-b" || len(avoided) == 0 || avoided[0] != "relay-a" {
+		t.Fatalf("resumed on %q, dial avoided %v", session.RelayID(), avoided)
+	}
+	session.Abort(RstAborted, "done")
+}

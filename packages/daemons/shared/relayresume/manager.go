@@ -294,6 +294,7 @@ func (m *Manager) attempts(s *Session, unplanned bool, avoid string) (bool, stri
 		state := s.core.State()
 		canResume := s.core.CanResume()
 		current := s.core.Current()
+		lost := s.core.LostRelay()
 		s.mu.Unlock()
 		if state.Terminal() {
 			return false, "", lastErr
@@ -311,8 +312,14 @@ func (m *Manager) attempts(s *Session, unplanned bool, avoid string) (bool, stri
 			return false, "", nil // already moved
 		}
 		pathAvoid := avoid
-		if pathAvoid == "" && current != nil {
+		switch {
+		case pathAvoid != "":
+		case current != nil:
 			pathAvoid = current.RelayID()
+		default:
+			// Unplanned: the relay that just failed goes last (the dialers
+			// still try it when nothing else takes the stream).
+			pathAvoid = lost
 		}
 		ok, to, err := m.attempt(s, unplanned, pathAvoid)
 		if ok {
