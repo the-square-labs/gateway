@@ -9,6 +9,8 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -630,6 +632,26 @@ func TestResumableSourceFallsBackToRawTarget(t *testing.T) {
 		t.Fatal("latched route opened a resumable stream")
 	}
 	echoExact(t, app2, 64*1024)
+	// Gateway turns the route on again with a new key once the target is
+	// resume-aware: the latch clears with that bundle.
+	source, target := testBundles(5, map[string]string{"relay-a": "active", "relay-b": "active"}, true, true)
+	source.GetGrants()[0].GetStreamResume().KeyId = "v2"
+	target.GetGrants()[0].GetResumeRoutes()[0].KeyId = "v2"
+	if _, err := pair.target.SyncRelayGrants(target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pair.source.SyncRelayGrants(source); err != nil {
+		t.Fatal(err)
+	}
+	if pair.source.relayStreams().sources.Legacy(testRouteID) {
+		t.Fatal("the route stayed latched after it was turned on again")
+	}
+	app3, tunnel3 := pair.open()
+	if tunnel3.session == nil {
+		t.Fatal("the route turned on again opened a raw stream")
+	}
+	waitFor(t, "the stream to open", func() bool { return tunnel3.session.State() == relayresume.StateOpen })
+	echoExact(t, app3, 64*1024)
 }
 
 // A source without the flag reaches a target that has it: the first-record
@@ -759,5 +781,103 @@ func TestResumableChattyStreamSurvivesForceDisconnect(t *testing.T) {
 	}
 	if maxGap > 3*time.Second {
 		t.Fatalf("gap %s at the force", maxGap)
+	}
+}
+
+// downloadBackend answers every request byte with size bytes (a storage
+// GET on a keep-alive connection).
+func downloadBackend(t *testing.T, size int) string {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	chunk := make([]byte, 256*1024)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				request := make([]byte, 1)
+				for {
+					if _, err := io.ReadFull(conn, request); err != nil {
+						return
+					}
+					for sent := 0; sent < size; sent += len(chunk) {
+						if _, err := conn.Write(chunk[:min(len(chunk), size-sent)]); err != nil {
+							return
+						}
+					}
+				}
+			}()
+		}
+	}()
+	return listener.Addr().String()
+}
+
+// get requests one download on the stream and reads it, returning its time
+// and the longest gap between two reads (after, when set, runs once a third
+// of it arrived).
+func get(t *testing.T, app net.Conn, size int, after func()) (time.Duration, time.Duration) {
+	t.Helper()
+	if _, err := app.Write([]byte{'G'}); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 256*1024)
+	start, last := time.Now(), time.Now()
+	var maxGap time.Duration
+	_ = app.SetReadDeadline(time.Now().Add(120 * time.Second))
+	for received := 0; received < size; {
+		n, err := app.Read(buffer)
+		if err != nil {
+			t.Fatalf("download ended at %d of %d bytes: %v", received, size, err)
+		}
+		received += n
+		maxGap = max(maxGap, time.Since(last))
+		last = time.Now()
+		if after != nil && received >= size/3 {
+			after()
+			after = nil
+		}
+	}
+	return time.Since(start), maxGap
+}
+
+// Bulk downloads (target → source) and a hard relay kill: one across the
+// kill (the stall stays short) and one on the resumed stream afterwards
+// (as fast as before the kill).
+func TestResumableBulkDownloadAcrossRelayKill(t *testing.T) {
+	size := 64 << 20
+	if value := os.Getenv("RELAY_DOWNLOAD_MB"); value != "" {
+		if mb, err := strconv.Atoi(value); err == nil {
+			size = mb << 20
+		}
+	}
+	pair := newStreamPair(t, true, true)
+	address := downloadBackend(t, size)
+	pair.target.endpointDialer = func(ctx context.Context, _ *pb.RelayGrantAssignment) (dialedEndpoint, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
+		return dialedEndpoint{conn: conn}, err
+	}
+	app, tunnel := pair.open()
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
+	baseline, _ := get(t, app, size, nil)
+	first := tunnel.session.RelayID()
+	across, stall := get(t, app, size, func() { pair.relays[first].server.Stop() })
+	if tunnel.session.RelayID() == first {
+		t.Fatal("the stream did not move")
+	}
+	resumed, _ := get(t, app, size, nil)
+	mib := float64(size) / (1 << 20)
+	t.Logf("%.0f MiB: before the kill %s, across the kill %s (longest gap %s), after the resume %s",
+		mib, baseline.Round(time.Millisecond), across.Round(time.Millisecond), stall.Round(time.Millisecond), resumed.Round(time.Millisecond))
+	if stall > 2*time.Second {
+		t.Errorf("stall %s at the kill", stall)
+	}
+	if resumed > 2*baseline+time.Second {
+		t.Errorf("download after the resume took %s against %s before", resumed, baseline)
 	}
 }

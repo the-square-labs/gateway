@@ -17,6 +17,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 var testResumeKey = bytes.Repeat([]byte{7}, relayresume.KeyLen)
@@ -366,6 +367,29 @@ func TestSecureLinkStreamFallsBackForALegacyTarget(t *testing.T) {
 	if near.opened.Load() != 2 {
 		t.Fatalf("relay opened %d tunnels, want 2", near.opened.Load())
 	}
+	// The same key keeps the latch; Gateway turning the route on again with
+	// a new key clears it.
+	if _, err := plugin.SyncRelayGrants(resumeBundleWithKey(2, bundle, bundle.Grants[0].GetStreamResume().GetKeyId())); err != nil {
+		t.Fatal(err)
+	}
+	if !plugin.relayStreams.Legacy(testResumeRoute) {
+		t.Fatal("an unchanged key cleared the legacy latch")
+	}
+	if _, err := plugin.SyncRelayGrants(resumeBundleWithKey(3, bundle, "v-next")); err != nil {
+		t.Fatal(err)
+	}
+	if plugin.relayStreams.Legacy(testResumeRoute) {
+		t.Fatal("a route turned on again with a new key stayed latched")
+	}
+}
+
+// resumeBundleWithKey is bundle at revision with the route's resume key id
+// set to keyID.
+func resumeBundleWithKey(revision uint64, bundle *pb.SyncRelayGrantsCommand, keyID string) *pb.SyncRelayGrantsCommand {
+	next := proto.Clone(bundle).(*pb.SyncRelayGrantsCommand)
+	next.PolicyRevision = revision
+	next.Grants[0].StreamResume.KeyId = keyID
+	return next
 }
 
 func TestNginxAdvertisesResumableStreams(t *testing.T) {

@@ -282,6 +282,22 @@ func (p *NginxPlugin) moveRelayStreams() {
 	if p.relayStreams == nil || p.relayGrants == nil {
 		return
 	}
+	// A route Gateway turned on again (a new key) is tried resumable again
+	// even if its target answered raw before (the legacy latch).
+	bundle := p.relayGrants.get()
+	routes := map[string]bool{}
+	for _, assignment := range bundle.GetGrants() {
+		if assignment.GetRole() != "connect" || assignment.GetRouteId() == "" {
+			continue
+		}
+		keyID := ""
+		if resume := assignment.GetStreamResume(); usableStreamResume(resume) {
+			keyID = resume.GetKeyId()
+		}
+		routes[assignment.GetRouteId()] = true
+		p.relayStreams.NoteRouteKey(assignment.GetRouteId(), keyID)
+	}
+	p.relayStreams.ForgetRoutes(func(routeID string) bool { return routes[routeID] })
 	for _, session := range p.relayStreams.Sessions() {
 		link, ok := session.Tag().(relayStreamTag)
 		relayID := session.RelayID()

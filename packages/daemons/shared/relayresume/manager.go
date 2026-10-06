@@ -59,8 +59,9 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[*Session]struct{}
-	legacy   map[string]time.Time
-	legacyBy map[string]int // live legacy streams per relay
+	legacy   map[string]legacyLatch
+	routeKey map[string]string // last applied resume key id per route ("" absent)
+	legacyBy map[string]int    // live legacy streams per relay
 	stalls   []time.Duration
 	stallPos int
 
@@ -85,7 +86,7 @@ func NewManager(budget *WindowBudget) *Manager {
 		budget = NewWindowBudget(0)
 	}
 	return &Manager{budget: budget, slots: make(chan struct{}, MaxMigrationsInFlight), sessions: map[*Session]struct{}{},
-		legacy: map[string]time.Time{}, legacyBy: map[string]int{}}
+		legacy: map[string]legacyLatch{}, legacyBy: map[string]int{}, routeKey: map[string]string{}}
 }
 
 // Budget is the process window budget (shared with the target table).
@@ -215,7 +216,10 @@ func (m *Manager) ended(s *Session, err error, retransmitted uint64) {
 		m.cut.Add(1)
 	}
 	if errors.Is(err, ErrLegacyPeer) {
-		m.MarkLegacy(s.routeID)
+		s.mu.Lock()
+		keyID := s.core.keyID
+		s.mu.Unlock()
+		m.MarkLegacyKey(s.routeID, keyID)
 	}
 	if m.OnEnd != nil {
 		m.OnEnd(s, err)
@@ -459,19 +463,59 @@ func (m *Manager) Sessions() []*Session {
 func (m *Manager) Legacy(routeID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	until, ok := m.legacy[routeID]
-	if ok && time.Now().After(until) {
+	latch, ok := m.legacy[routeID]
+	if ok && time.Now().After(latch.until) {
 		delete(m.legacy, routeID)
 		return false
 	}
 	return ok
 }
 
+type legacyLatch struct {
+	until time.Time
+	keyID string // the key the refused HELLO carried ("" unknown)
+}
+
 // MarkLegacy latches routeID to raw streams for LegacyLatch.
-func (m *Manager) MarkLegacy(routeID string) {
+func (m *Manager) MarkLegacy(routeID string) { m.MarkLegacyKey(routeID, "") }
+
+// MarkLegacyKey latches routeID to raw streams for LegacyLatch, noting the
+// key the refused HELLO carried: a bundle with another key clears it.
+func (m *Manager) MarkLegacyKey(routeID, keyID string) {
 	m.mu.Lock()
-	m.legacy[routeID] = time.Now().Add(LegacyLatch)
+	m.legacy[routeID] = legacyLatch{until: time.Now().Add(LegacyLatch), keyID: keyID}
 	m.mu.Unlock()
+}
+
+// NoteRouteKey records the resume key id an applied bundle gives routeID
+// ("" when the route has none). A key id other than the one the latched
+// HELLO carried, or other than the last one applied (absent → present
+// included), clears the route's legacy latch: Gateway turned the route on
+// again for a target that is resume-aware now.
+func (m *Manager) NoteRouteKey(routeID, keyID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	last, seen := m.routeKey[routeID]
+	m.routeKey[routeID] = keyID
+	if keyID == "" {
+		return
+	}
+	latch, latched := m.legacy[routeID]
+	if latched && ((latch.keyID != "" && latch.keyID != keyID) || (seen && last != keyID)) {
+		delete(m.legacy, routeID)
+	}
+}
+
+// ForgetRoutes drops the recorded keys of routes keep refuses (gone from
+// the bundle).
+func (m *Manager) ForgetRoutes(keep func(routeID string) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for routeID := range m.routeKey {
+		if !keep(routeID) {
+			delete(m.routeKey, routeID)
+		}
+	}
 }
 
 // TrackLegacy counts a raw (not resumable) stream through relayID until the

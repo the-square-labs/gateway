@@ -328,11 +328,20 @@ func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, 
 // deadline), sources and targets whose route or endpoint Gateway no longer
 // assigns end, and targets ask their sources to move off draining relays.
 func (p *DockerPlugin) relayStreamsOnBundle() {
-	sides := p.relayStreamsIfAny()
-	if sides == nil {
-		return
-	}
+	sides := p.relayStreams()
 	bundle := p.relayGrants.get()
+	// A route Gateway turned on again (a new key) is tried resumable again
+	// even if its target answered raw before (the legacy latch).
+	routes := map[string]bool{}
+	for _, assignment := range bundle.GetGrants() {
+		if assignment.GetRole() != "connect" || assignment.GetRouteId() == "" {
+			continue
+		}
+		keyID, _, _ := streamResumeKey(assignment)
+		routes[assignment.GetRouteId()] = true
+		sides.sources.NoteRouteKey(assignment.GetRouteId(), keyID)
+	}
+	sides.sources.ForgetRoutes(func(routeID string) bool { return routes[routeID] })
 	for _, session := range sides.sources.Sessions() {
 		tag, _ := session.Tag().(relaySourceTag)
 		assignment := findRelayAssignment(bundle, "connect", tag.ownerKind, tag.ownerID)

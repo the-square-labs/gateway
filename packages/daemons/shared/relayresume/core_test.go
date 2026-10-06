@@ -350,3 +350,38 @@ func TestPacedStartIsCapped(t *testing.T) {
 		}
 	}
 }
+
+// A route's legacy latch clears once Gateway gives the route a new key
+// (turned on again); the same key, or the first one seen, keeps it.
+func TestNoteRouteKeyClearsLegacyLatch(t *testing.T) {
+	m := NewManager(nil)
+	m.NoteRouteKey("r", "v1")
+	m.MarkLegacy("r")
+	m.NoteRouteKey("r", "v1")
+	if !m.Legacy("r") {
+		t.Fatal("the same key cleared the latch")
+	}
+	m.NoteRouteKey("r", "")
+	if !m.Legacy("r") {
+		t.Fatal("a route turned off cleared the latch")
+	}
+	m.NoteRouteKey("r", "v2")
+	if m.Legacy("r") {
+		t.Fatal("a route turned on again with a new key stayed latched")
+	}
+	m.MarkLegacy("other")
+	m.NoteRouteKey("other", "v9")
+	if !m.Legacy("other") {
+		t.Fatal("the first key seen cleared a latch of unknown key")
+	}
+	// A latch that knows its key clears on the first bundle with another.
+	m.MarkLegacyKey("third", "v3")
+	m.NoteRouteKey("third", "v3")
+	if !m.Legacy("third") {
+		t.Fatal("the latched key cleared its own latch")
+	}
+	m.NoteRouteKey("third", "v4")
+	if m.Legacy("third") {
+		t.Fatal("a new key kept the latch")
+	}
+}
