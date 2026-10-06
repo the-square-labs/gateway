@@ -1610,7 +1610,7 @@ export interface RelayResumeStatsSnapshot {
  */
 export class RelayResumeRegistry {
   private readonly sessions = new Set<ResumableRelayDuplex>();
-  private readonly legacyUntil = new Map<string, number>();
+  private readonly legacyUntil = new Map<string, { until: number; keyId: string }>();
   private legacyStreams = 0;
   private readonly legacyByRelay = new Map<string, number>();
   private readonly migrations = new Map<string, number>();
@@ -1641,17 +1641,21 @@ export class RelayResumeRegistry {
     else this.legacyByRelay.delete(relayId);
   }
 
-  isLegacy(routeId: string): boolean {
-    const until = this.legacyUntil.get(routeId);
-    if (until === undefined) return false;
-    if (until > this.timers.now()) return true;
+  /**
+   * The route is latched to raw streams. A key id other than the one that latched it ends the latch: Gateway gives a
+   * route a new key version every time it turns resumable streams back on, so its targets are resume-aware again.
+   */
+  isLegacy(routeId: string, keyId?: string): boolean {
+    const latch = this.legacyUntil.get(routeId);
+    if (latch === undefined) return false;
+    if (latch.until > this.timers.now() && (keyId === undefined || keyId === latch.keyId)) return true;
     this.legacyUntil.delete(routeId);
     return false;
   }
 
-  /** The route's target answered a HELLO with something else: raw streams for LEGACY_LATCH_MS. */
-  markLegacy(routeId: string): void {
-    this.legacyUntil.set(routeId, this.timers.now() + LEGACY_LATCH_MS);
+  /** The route's target answered a HELLO signed with keyId with something else: raw streams for LEGACY_LATCH_MS. */
+  markLegacy(routeId: string, keyId = ''): void {
+    this.legacyUntil.set(routeId, { until: this.timers.now() + LEGACY_LATCH_MS, keyId });
   }
 
   /**
@@ -1833,7 +1837,7 @@ export class ResumableRelayDuplex extends Duplex {
       await opened;
     } catch (error) {
       if (error instanceof ResumeSessionError && error.code === 'legacy_peer') {
-        duplex.registry.markLegacy(options.routeId);
+        duplex.registry.markLegacy(options.routeId, first.keyId ?? options.keyId);
       }
       duplex.destroy();
       throw error;

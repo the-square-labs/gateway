@@ -712,9 +712,12 @@ export class RelayControlClient {
     return ResumableRelayDuplex.open({ ...config, dial, registry: this.resumeRegistry });
   }
 
-  /** The route's target answered a HELLO with something else within the latch time: use raw streams. */
-  isResumeLegacy(routeId: string): boolean {
-    return this.resumeRegistry.isLegacy(routeId);
+  /**
+   * The route's target answered a HELLO with something else within the latch time: use raw streams. A new key id
+   * (Gateway turned the route's resumable streams back on) ends the latch.
+   */
+  isResumeLegacy(routeId: string, keyId?: string): boolean {
+    return this.resumeRegistry.isLegacy(routeId, keyId);
   }
 
   /**

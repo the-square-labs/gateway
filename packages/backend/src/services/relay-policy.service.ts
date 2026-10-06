@@ -2014,7 +2014,7 @@ export class RelayPolicyService {
       );
     const assignment = await issue();
     const resume = assignment.streamResume;
-    if (resume && !this.relay.isResumeLegacy(routeId)) {
+    if (resume && !this.relay.isResumeLegacy(routeId, resume.keyId)) {
       let first: typeof assignment | null = assignment;
       const dial = async (avoidRelayId: string | null) => {
         const current = first ?? (await issue());

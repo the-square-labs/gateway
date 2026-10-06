@@ -1130,6 +1130,10 @@ describe('ResumableRelayDuplex', () => {
     });
     await expect(open).rejects.toMatchObject({ code: 'legacy_peer' });
     expect(registry.isLegacy('route-old')).toBe(true);
+    expect(registry.isLegacy('route-old', 'v1')).toBe(true);
     expect(registry.isLegacy('route-other')).toBe(false);
+    // Gateway turned the route back on with a new key version: the latch ends at once.
+    expect(registry.isLegacy('route-old', 'v2')).toBe(false);
+    expect(registry.isLegacy('route-old', 'v1')).toBe(false);
   });
 });
