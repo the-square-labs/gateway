@@ -1765,6 +1765,9 @@ export class ResumableRelayDuplex extends Duplex {
   private migration: Promise<void> | null = null;
   private recoverRequested = false;
   private deferred: { trigger: MigrationTrigger; relayId: string } | null = null;
+  /** The relay of the current path, and of the path that failed last (tried last when recovering). */
+  private lastRelayId: string | null = null;
+  private lostRelayId: string | null = null;
   private suspendedAt = -1;
   private closedError: ResumeSessionError | undefined;
   private sessionClosed = false;
@@ -1822,6 +1825,7 @@ export class ResumableRelayDuplex extends Duplex {
       duplex.openWaiters = { resolve, reject };
     });
     duplex.attach(first.path);
+    duplex.lastRelayId = first.path.relayId;
     // Registered from the HELLO on: a drain notice during the handshake waits for it (see migrate).
     duplex.registry.add(duplex);
     duplex.session.startSource(first.path, options.helloTimeoutMs ?? HELLO_ACK_TIMEOUT_MS);
@@ -1892,6 +1896,7 @@ export class ResumableRelayDuplex extends Duplex {
 
   private requestRecover(): void {
     if (this.sessionClosed) return;
+    if (this.lastRelayId) this.lostRelayId = this.lastRelayId;
     if (this.suspendedAt < 0) this.suspendedAt = this.timers.now();
     if (this.migration) {
       this.recoverRequested = true;
@@ -1923,6 +1928,12 @@ export class ResumableRelayDuplex extends Duplex {
       opened.path.cancel();
       return;
     }
+    if (avoid && opened.path.relayId === avoid) {
+      // Only the relay being left answered: stay on the current path.
+      opened.path.cancel();
+      this.registry.recordMigration(trigger, 'no_relay');
+      return;
+    }
     const result = await this.resumeOn(opened);
     const outcome = migrationOutcome(result);
     this.registry.recordMigration(trigger, outcome, outcome === 'ok' ? this.timers.now() - startedAt : undefined);
@@ -1941,7 +1952,12 @@ export class ResumableRelayDuplex extends Duplex {
       }
       let opened: OpenedResumePath | null = null;
       try {
-        opened = await withTimeout(this.options.dial(null), Math.max(1, deadline - this.timers.now()), this.timers);
+        // The relay whose path just failed is tried last: its lane may still look up and cost a whole open timeout.
+        opened = await withTimeout(
+          this.options.dial(this.lostRelayId),
+          Math.max(1, deadline - this.timers.now()),
+          this.timers
+        );
       } catch {
         opened = null;
       }
@@ -1968,10 +1984,12 @@ export class ResumableRelayDuplex extends Duplex {
     }
   }
 
-  private resumeOn(opened: OpenedResumePath): Promise<ResumeResult> {
+  private async resumeOn(opened: OpenedResumePath): Promise<ResumeResult> {
     if (opened.keyId && opened.key) this.session.setKey(opened.keyId, opened.key);
     this.attach(opened.path);
-    return this.session.resume(opened.path, this.options.resumeAckTimeoutMs ?? RESUME_ACK_TIMEOUT_MS);
+    const result = await this.session.resume(opened.path, this.options.resumeAckTimeoutMs ?? RESUME_ACK_TIMEOUT_MS);
+    if (result === 'resumed') this.lastRelayId = opened.path.relayId;
+    return result;
   }
 
   private onSessionClosed(error?: ResumeSessionError): void {

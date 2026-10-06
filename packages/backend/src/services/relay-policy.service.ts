@@ -2073,10 +2073,8 @@ export class RelayPolicyService {
       .map((candidate, index) => ({ candidate, index }))
       .sort((a, b) => rank(a.candidate) - rank(b.candidate) || a.index - b.index)
       .map(({ candidate }) => candidate);
-    if (!candidates.length) {
-      if (avoidRelayId === LEGACY_RELAY_PATH_ID) throw new Error('No other relay is available');
-      return this.relay.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
-    }
+    // A pre-pool assignment has only the local relay: a recovering stream comes back to it.
+    if (!candidates.length) return this.relay.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
     let lastError: unknown;
     for (const candidate of candidates) {
       try {

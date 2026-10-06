@@ -1005,12 +1005,14 @@ describe('ResumableRelayDuplex', () => {
     const paths: MemoryPath[] = [];
     let relay = 0;
     const registry = new RelayResumeRegistry();
+    const avoided: Array<string | null> = [];
     const duplex = await ResumableRelayDuplex.open({
       routeId: 'route-echo',
       keyId: 'v1',
       key,
       registry,
       dial: async (avoid) => {
+        avoided.push(avoid);
         let relayId = `relay-${relay++ % 2}`;
         if (relayId === avoid) relayId = `relay-${relay++ % 2}`;
         const pair = memoryPair(relayId);
@@ -1042,6 +1044,8 @@ describe('ResumableRelayDuplex', () => {
     const stats = registry.snapshot();
     expect(stats.migrations['path_failure:ok']).toBe(1);
     expect(stats.migrations['drain:ok']).toBe(1);
+    // First path, recovery after the cut (the lost relay tried last), planned move off relay-1.
+    expect(avoided).toEqual([null, 'relay-0', 'relay-1']);
     if (!duplex.destroyed) await new Promise((resolve) => duplex.once('close', resolve));
     // The CLOSE echo ends the session shortly after the Duplex.
     for (let i = 0; i < 100 && !duplex.resumeSession.isClosed; i++) await new Promise((r) => setTimeout(r, 10));
