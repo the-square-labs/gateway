@@ -19,6 +19,8 @@ type relayGrantStore struct {
 	writeMu sync.Mutex
 	mu      sync.RWMutex
 	current *pb.SyncRelayGrantsCommand
+	// index maps current's assignments (nil: lookups scan current).
+	index   map[relaybridge.AssignmentKey]*pb.RelayGrantAssignment
 	changed chan struct{}
 }
 
@@ -37,7 +39,7 @@ func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
 		return nil, fmt.Errorf("decode relay grants: %w", err)
 	}
 	if found {
-		store.current = command
+		store.current, store.index = command, relaybridge.IndexAssignments(command)
 	}
 	return store, nil
 }
@@ -66,8 +68,9 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 	runtimeChanged := current.GetDataLanes() != command.GetDataLanes() ||
 		!reflect.DeepEqual(relaybridge.RequiredTargets(current), relaybridge.RequiredTargets(command))
 	next := proto.Clone(command).(*pb.SyncRelayGrantsCommand)
+	index := relaybridge.IndexAssignments(next)
 	s.mu.Lock()
-	s.current = next
+	s.current, s.index = next, index
 	s.mu.Unlock()
 	if runtimeChanged {
 		select {
@@ -90,7 +93,12 @@ func (s *relayGrantStore) get() *pb.SyncRelayGrantsCommand {
 func (s *relayGrantStore) lookup(role, ownerKind, ownerID string) *pb.RelayGrantAssignment {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	assignment := findRelayAssignment(s.current, role, ownerKind, ownerID)
+	var assignment *pb.RelayGrantAssignment
+	if s.index != nil {
+		assignment = s.index[relaybridge.AssignmentKey{Role: role, OwnerKind: ownerKind, OwnerID: ownerID}]
+	} else {
+		assignment = findRelayAssignment(s.current, role, ownerKind, ownerID)
+	}
 	if assignment == nil {
 		return nil
 	}

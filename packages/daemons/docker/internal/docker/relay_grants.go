@@ -45,6 +45,8 @@ type relayGrantStore struct {
 	writeMu sync.Mutex
 	mu      sync.RWMutex
 	current *pb.SyncRelayGrantsCommand
+	// index maps current's assignments (nil: lookups scan current).
+	index   map[relaybridge.AssignmentKey]*pb.RelayGrantAssignment
 	changed chan struct{}
 	// restoredUntil is set while current came from disk and this process has not
 	// accepted a bundle from Gateway yet.
@@ -61,7 +63,7 @@ func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
 	if !found {
 		return store, nil
 	}
-	store.current = command
+	store.current, store.index = command, relaybridge.IndexAssignments(command)
 	// After a restart announced to the relays (B-13) they hold this daemon's registrations for the next process: it
 	// takes them over at once, with the grants they were made with, instead of leaving them waiting for Gateway.
 	if !consumeRestartMarker(stateDir, time.Now()) {
@@ -113,8 +115,9 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 	runtimeChanged := current.GetDataLanes() != command.GetDataLanes() ||
 		!reflect.DeepEqual(relaybridge.RequiredTargets(current), relaybridge.RequiredTargets(command))
 	next := proto.Clone(command).(*pb.SyncRelayGrantsCommand)
+	index := relaybridge.IndexAssignments(next)
 	s.mu.Lock()
-	s.current = next
+	s.current, s.index = next, index
 	s.restoredUntil = time.Time{}
 	s.mu.Unlock()
 	if runtimeChanged {
@@ -140,7 +143,12 @@ func (s *relayGrantStore) get() *pb.SyncRelayGrantsCommand {
 func (s *relayGrantStore) lookup(role, ownerKind, ownerID string) *pb.RelayGrantAssignment {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	assignment := findRelayAssignment(s.current, role, ownerKind, ownerID)
+	var assignment *pb.RelayGrantAssignment
+	if s.index != nil {
+		assignment = s.index[relaybridge.AssignmentKey{Role: role, OwnerKind: ownerKind, OwnerID: ownerID}]
+	} else {
+		assignment = findRelayAssignment(s.current, role, ownerKind, ownerID)
+	}
 	if assignment == nil {
 		return nil
 	}
