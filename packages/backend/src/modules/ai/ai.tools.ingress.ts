@@ -499,7 +499,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'link_internal_cert',
     description:
-      'Import a PKI certificate as an SSL certificate so it can be used with ingress routes. This links an existing PKI certificate (from the Certificates table) into the SSL certificates pool. You MUST use this before assigning a PKI-issued cert to a route.',
+      'Import a PKI certificate as an SSL certificate so it can be used with ingress routes. This links an existing PKI certificate (from the Certificates table) into the SSL certificates pool. You MUST use this before assigning a PKI-issued cert to a route. Needs ssl:cert:issue on the destination and pki:cert:deploy on the PKI certificate or its issuing CA (pki:cert:export also works); the private key is never returned.',
     parameters: {
       type: 'object',
       properties: {
@@ -512,8 +512,9 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
     destructive: true,
     category: 'SSL Certificates',
     requiredScope: 'ssl:cert:issue',
-    // Linking copies the PKI private key into the TLS store, so the service also requires pki:cert:export.
-    requiredScopes: ['ssl:cert:issue', 'pki:cert:export'],
+    // Linking copies the PKI private key into the TLS store, which hands it only to nginx, so the service also
+    // requires pki:cert:deploy (implied by pki:cert:export) on the certificate or its issuing CA.
+    requiredScopes: ['ssl:cert:issue', 'pki:cert:deploy'],
     invalidateStores: ['ssl'],
   },
   {

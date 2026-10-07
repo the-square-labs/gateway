@@ -145,7 +145,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `pki:cert:issue` | Yes |
 | `pki:cert:revoke` | Yes |
 | `pki:cert:export` | Yes |
-| `pki:cert:deploy` | Yes. Attach a TLS server certificate to a Route: nginx receives the private key, the caller never does. Restrictable to the certificate or its issuing CA. Implied by `pki:cert:export`. |
+| `pki:cert:deploy` | Yes. Attach a TLS server certificate to a Route or link it into the SSL store (with `ssl:cert:issue` on the destination): nginx receives the private key, the caller never does, and the SSL store never returns it. Restrictable to the certificate or its issuing CA. Implied by `pki:cert:export`. |
 | `pki:cert:folders:manage` | Manage PKI certificate folders. Moving a certificate also needs `pki:cert:issue` on its issuing CA. |
 | `pki:templates:view` |  |
 | `pki:templates:create` |  |

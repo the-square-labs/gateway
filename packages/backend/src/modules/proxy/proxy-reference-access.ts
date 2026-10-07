@@ -9,6 +9,7 @@ import {
 } from '@/db/schema/index.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { canDeployInternalCertificate, INTERNAL_CERT_DEPLOY_SCOPE } from '@/modules/ssl/internal-cert-deploy-access.js';
 
 export interface ProxyReferenceInput {
   sslCertificateId?: string | null;
@@ -97,13 +98,10 @@ export async function assertProxyReferenceAccess(
       .where(eq(certificates.id, internalCertificateId))
       .limit(1);
     // Checked before the certificate's existence, so a caller without the scope learns nothing about it.
-    if (
-      !hasScope(scopes, `pki:cert:deploy:${internalCertificateId}`) &&
-      !(certificate && hasScope(scopes, `pki:cert:deploy:${certificate.caId}`))
-    ) {
+    if (!canDeployInternalCertificate(scopes, internalCertificateId, certificate?.caId)) {
       throw forbidden(
         'Deploying a PKI certificate to a proxy route requires pki:cert:deploy on the certificate or its issuing CA',
-        `pki:cert:deploy:${internalCertificateId}`
+        `${INTERNAL_CERT_DEPLOY_SCOPE}:${internalCertificateId}`
       );
     }
     if (!certificate) throw new AppError(400, 'INTERNAL_CERTIFICATE_NOT_FOUND', 'PKI certificate not found');

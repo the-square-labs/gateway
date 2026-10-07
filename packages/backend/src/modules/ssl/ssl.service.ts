@@ -18,7 +18,6 @@ import {
   users,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { hasScopeForResource } from '@/lib/permissions.js';
 import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { buildWhere, escapeLike, sleep } from '@/lib/utils.js';
 import { x509 } from '@/lib/x509.js';
@@ -36,6 +35,7 @@ import {
 import type { PaginatedResponse } from '@/types.js';
 import type { ACMEService } from './acme.service.js';
 import { rethrowCertificateInUse } from './certificate-in-use.js';
+import { canDeployInternalCertificate, INTERNAL_CERT_DEPLOY_SCOPE } from './internal-cert-deploy-access.js';
 import type {
   LinkInternalCertInput,
   RequestACMECertInput,
@@ -51,8 +51,6 @@ const GATEWAY_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
 
 /** Prefix of a renewalError that reports incomplete delivery rather than a failed renewal. */
 export { SSL_DISTRIBUTION_ERROR_PREFIX };
-/** PKI scope that allows a caller to put an internal certificate's private key into service. */
-export const INTERNAL_CERT_KEY_USE_SCOPE = 'pki:cert:export';
 
 type ProxyHostSyncFailure = { hostId: string; error: string };
 
@@ -1019,20 +1017,21 @@ export class SSLService {
   // ---------------------------------------------------------------------------
 
   async linkInternalCert(input: LinkInternalCertInput, userId: string, actorScopes: string[]) {
-    // Linking copies the PKI private key into TLS service, so the caller must
-    // be allowed to take that key out of PKI, not merely to create SSL entries.
-    if (!hasScopeForResource(actorScopes, INTERNAL_CERT_KEY_USE_SCOPE, input.internalCertId)) {
-      throw new AppError(
-        403,
-        'FORBIDDEN',
-        `Missing required scope: ${INTERNAL_CERT_KEY_USE_SCOPE}:${input.internalCertId}`
-      );
-    }
-
     // Look up PKI certificate
     const pkiCert = await this.db.query.certificates.findFirst({
       where: eq(certificates.id, input.internalCertId),
     });
+
+    // Linking copies the PKI private key into the SSL store, which only ever hands it to nginx (no SSL route,
+    // tool or event returns it), so serving the certificate is enough: pki:cert:deploy on it or its issuing CA.
+    // Checked before the certificate's existence, so a caller without the scope learns nothing about it.
+    if (!canDeployInternalCertificate(actorScopes, input.internalCertId, pkiCert?.caId)) {
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        `Missing required scope: ${INTERNAL_CERT_DEPLOY_SCOPE}:${input.internalCertId}`
+      );
+    }
 
     if (!pkiCert) throw new AppError(404, 'PKI_CERT_NOT_FOUND', 'Internal PKI certificate not found');
     const [issuer] = await this.db

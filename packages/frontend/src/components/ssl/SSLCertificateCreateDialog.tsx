@@ -52,6 +52,7 @@ interface SSLCertificateCreateDialogProps {
 
 export type CertificateCreationMethod = "acme" | "upload" | "internal";
 type ACMEChallengeMode = "http-01" | "dns-01-manual" | "dns-01-cloudflare";
+type PkiCertificateOption = { id: string; commonName: string; caId: string };
 
 export interface SSLCertificateCreateDialogDevPreview {
   mode: ACMEChallengeType;
@@ -114,16 +115,20 @@ export function SSLCertificateCreateDialog({
 
   // Internal CA tab state
   // null until the list for this opening arrives; the Internal CA tab waits for it.
-  const [pkiCerts, setPkiCerts] = useState<{ id: string; commonName: string }[] | null>(null);
+  const [pkiCerts, setPkiCerts] = useState<PkiCertificateOption[] | null>(null);
   const [selectedPkiCertId, setSelectedPkiCertId] = useState("");
   const [internalName, setInternalName] = useState("");
   const [isLinking, setIsLinking] = useState(false);
-  // Linking puts the PKI private key into service, so the backend requires key export access.
+  // Linking puts the PKI private key into service on nginx (never back to a user), so the backend
+  // requires pki:cert:deploy on the certificate or its issuing CA; pki:cert:export implies it.
   const hasScope = useAuthStore((state) => state.hasScope);
   const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
-  const canExportAnyPkiCert = hasScopedAccess("pki:cert:export");
-  const canExportPkiCert = (certId: string) => hasScope(`pki:cert:export:${certId}`);
-  const canLinkSelectedPkiCert = !!selectedPkiCertId && canExportPkiCert(selectedPkiCertId);
+  const canDeployAnyPkiCert = hasScopedAccess("pki:cert:deploy");
+  const canDeployPkiCert = (certId: string) => {
+    const caId = pkiCerts?.find((cert) => cert.id === certId)?.caId;
+    return hasScope(`pki:cert:deploy:${certId}`) || (!!caId && hasScope(`pki:cert:deploy:${caId}`));
+  };
+  const canLinkSelectedPkiCert = !!selectedPkiCertId && canDeployPkiCert(selectedPkiCertId);
   const scopes = useAuthStore((state) => state.user?.scopes ?? NO_SCOPES);
   const folders = useResourceFolderStore((state) => state.foldersByType["ssl-certificate"]);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType["ssl-certificate"]);
@@ -156,7 +161,7 @@ export function SSLCertificateCreateDialog({
           status: "active",
           type: "tls-server",
         });
-        setPkiCerts((res.data || []).map((c) => ({ id: c.id, commonName: c.commonName })));
+        setPkiCerts((res.data || []).map(({ id, commonName, caId }) => ({ id, commonName, caId })));
       } catch {
         // non-critical
         setPkiCerts((current) => current ?? []);
@@ -382,8 +387,8 @@ export function SSLCertificateCreateDialog({
       toast.error("Select a PKI certificate");
       return;
     }
-    if (!canExportPkiCert(selectedPkiCertId)) {
-      toast.error("You need permission to export this certificate's private key to link it");
+    if (!canDeployPkiCert(selectedPkiCertId)) {
+      toast.error("You need permission to deploy this certificate to link it");
       return;
     }
     setIsLinking(true);
@@ -668,9 +673,9 @@ export function SSLCertificateCreateDialog({
                       Link an existing PKI certificate from your internal Certificate Authorities
                       for use as an SSL certificate.
                     </p>
-                    {!canExportAnyPkiCert && (
+                    {!canDeployAnyPkiCert && (
                       <p className="text-xs text-muted-foreground">
-                        Linking requires the PKI certificate export permission (pki:cert:export)
+                        Linking requires the PKI certificate deploy permission (pki:cert:deploy)
                         because the certificate's private key is deployed to nginx.
                       </p>
                     )}
@@ -679,7 +684,7 @@ export function SSLCertificateCreateDialog({
                       <Select
                         value={selectedPkiCertId}
                         onValueChange={setSelectedPkiCertId}
-                        disabled={!canExportAnyPkiCert}
+                        disabled={!canDeployAnyPkiCert}
                       >
                         <SelectTrigger aria-label="PKI certificate">
                           <SelectValue placeholder="Select a certificate..." />
@@ -691,11 +696,11 @@ export function SSLCertificateCreateDialog({
                             </SelectItem>
                           ) : (
                             pkiCerts.map((cert) => {
-                              const canExport = canExportPkiCert(cert.id);
+                              const canDeploy = canDeployPkiCert(cert.id);
                               return (
-                                <SelectItem key={cert.id} value={cert.id} disabled={!canExport}>
+                                <SelectItem key={cert.id} value={cert.id} disabled={!canDeploy}>
                                   {cert.commonName}
-                                  {!canExport && " (no export permission)"}
+                                  {!canDeploy && " (no deploy permission)"}
                                 </SelectItem>
                               );
                             })

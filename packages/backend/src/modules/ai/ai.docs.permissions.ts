@@ -23,7 +23,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | pki:cert:issue | Issue certificates from a CA (resource-scopable) |
 | pki:cert:revoke | Revoke certificates |
 | pki:cert:export | Download certificate files and private keys |
-| pki:cert:deploy | Attach a TLS server certificate to a route; nginx uses the private key, the caller never receives it. Resource-scopable by certificate or issuing CA; implied by pki:cert:export |
+| pki:cert:deploy | Attach a TLS server certificate to a route or link it into the SSL store (link_internal_cert, also needs ssl:cert:issue); nginx uses the private key, the caller never receives it. Resource-scopable by certificate or issuing CA; implied by pki:cert:export |
 | pki:cert:folders:manage | Manage internal PKI certificate folders and placement |
 
 ### PKI: Certificate Templates

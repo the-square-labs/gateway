@@ -76,7 +76,7 @@ export const CORE_TOKEN_SCOPES = [
   {
     value: "pki:cert:deploy",
     label: "Deploy Certificates to Routes",
-    desc: "Attach TLS server certificates to routes; nginx uses the key, the caller never sees it",
+    desc: "Attach or link TLS server certificates for routes; nginx uses the key, the caller never sees it",
     group: "PKI: Certificates",
   },
   {
