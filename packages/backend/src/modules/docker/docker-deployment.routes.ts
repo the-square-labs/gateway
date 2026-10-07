@@ -527,7 +527,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     {
       ...getDeploymentImageCleanupRoute,
-      middleware: requireDockerDeploymentScope('docker:containers:edit'),
+      middleware: requireDockerDeploymentScope('docker:containers:view'),
     },
     async (c) => {
       const nodeId = c.req.param('nodeId')!;

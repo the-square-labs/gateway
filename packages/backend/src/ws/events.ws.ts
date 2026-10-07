@@ -262,7 +262,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasScope(scopes, 'nodes:files:read') || !!(nodeId && hasScope(scopes, `nodes:files:read:${nodeId}`));
   }
   if (channel === 'docker.image-cleanup.changed') {
-    return hasDockerEventAccess(scopes, 'docker:containers:edit', payload);
+    return hasDockerEventAccess(scopes, 'docker:containers:view', payload);
   }
   if (channel.startsWith('docker.image')) {
     const event = payload as { nodeId?: string; ref?: string; action?: string } | undefined;

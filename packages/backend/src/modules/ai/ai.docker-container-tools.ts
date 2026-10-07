@@ -173,7 +173,7 @@ export async function manageDockerContainerTool(
   }
 }
 
-/** Container and deployment image-cleanup routes; both require docker:containers:edit on the target. */
+/** Container and deployment image-cleanup routes: reading needs docker:containers:view, saving :edit on the target. */
 async function manageImageCleanup(
   dockerService: DockerManagementService,
   user: User,
@@ -186,22 +186,17 @@ async function manageImageCleanup(
     operation === 'image_cleanup_upsert'
       ? ImageCleanupUpsertSchema.parse(pickDefinedArguments(args, ['enabled', 'retentionCount']))
       : undefined;
+  const scope = input ? 'docker:containers:edit' : 'docker:containers:view';
   if (args.targetType === 'deployment') {
     const deploymentId = requiredToolString(args.deploymentId, 'deploymentId');
-    ensureToolScopeForResource(user, 'docker:containers:edit', `${nodeId}/${deploymentId}`);
+    ensureToolScopeForResource(user, scope, `${nodeId}/${deploymentId}`);
     await container.resolve(DockerDeploymentService).get(nodeId, deploymentId);
     return input
       ? cleanup.upsertForDeployment(nodeId, deploymentId, input)
       : cleanup.getForDeployment(nodeId, deploymentId);
   }
   const reference = requiredToolString(args.containerName ?? args.containerId, 'containerName');
-  const inspected = await ensureDockerContainerScopes(
-    dockerService,
-    user,
-    ['docker:containers:edit'],
-    nodeId,
-    reference
-  );
+  const inspected = await ensureDockerContainerScopes(dockerService, user, [scope], nodeId, reference);
   const containerName = String(inspected?.Name ?? inspected?.name ?? '').replace(/^\//, '') || reference;
   return input
     ? cleanup.upsertForContainer(nodeId, containerName, input)
