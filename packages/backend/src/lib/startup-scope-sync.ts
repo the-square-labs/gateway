@@ -1,6 +1,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { permissionGroups } from '@/db/schema/index.js';
+import { INGRESS_GROUP_SCOPE_SOURCES, withIngressGroupScopes } from './ingress-group-scope-mirror.js';
 import { logger } from './logger.js';
 import { rewritePersistedScopesNaming } from './persisted-scopes.js';
 import {
@@ -13,6 +14,8 @@ import {
   SCOPE_CLEANUP_MIGRATION_ADDITIONS,
   withRetiredScopeReplacements,
 } from './scopes.js';
+
+const INGRESS_GROUP_VIEW_SCOPE = 'ingress:groups:view';
 
 /**
  * Upsert the built-in groups (creates on fresh install, syncs scopes on upgrade) and sanitize every group's scopes.
@@ -31,7 +34,7 @@ export async function syncPermissionGroupsAtStartup(
   const builtinGroups = getBootstrapBuiltinGroups(deploymentMode);
   await db.transaction(async (tx) => {
     const storedBuiltins = await tx
-      .select({ scopes: permissionGroups.scopes })
+      .select({ name: permissionGroups.name, scopes: permissionGroups.scopes })
       .from(permissionGroups)
       .where(
         and(
@@ -46,6 +49,14 @@ export async function syncPermissionGroupsAtStartup(
     const writtenByOlderRelease = storedBuiltins.some(
       (group) => Array.isArray(group.scopes) && group.scopes.some((scope) => isRetiredScope(scope))
     );
+    // A stored built-in group without the ingress group scopes this release gives it was written by a release before
+    // them. After a rollback to such a release, which drops unknown scopes from custom groups, node grants are
+    // mirrored again the way migration 0228 did (on the first start after 0228 this changes nothing).
+    const missingIngressGroupScopes = storedBuiltins.some((stored) => {
+      const scopes = Array.isArray(stored.scopes) ? stored.scopes : [];
+      const current = builtinGroups.find((group) => group.name === stored.name)?.scopes ?? [];
+      return current.includes(INGRESS_GROUP_VIEW_SCOPE) && !scopes.includes(INGRESS_GROUP_VIEW_SCOPE);
+    });
 
     // Before the built-in groups are rewritten, so they end up exactly this release's set.
     if (writtenByOlderRelease) {
@@ -55,6 +66,18 @@ export async function syncPermissionGroupsAtStartup(
         withRetiredScopeReplacements
       );
       logger.info('Converted permissions written by a release before v2.11', {
+        users: changes.userIds.length,
+        groups: changes.groupIds.length,
+      });
+    }
+
+    if (missingIngressGroupScopes) {
+      const changes = await rewritePersistedScopesNaming(
+        tx,
+        Object.keys(INGRESS_GROUP_SCOPE_SOURCES),
+        withIngressGroupScopes
+      );
+      logger.info('Granted ingress group permissions to node permission holders', {
         users: changes.userIds.length,
         groups: changes.groupIds.length,
       });

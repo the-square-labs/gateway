@@ -323,7 +323,8 @@ describe.skipIf(!url)('rollback to v2.10.1 after the v2.11 migrations on disposa
         'pki:ca:export',
       ])
     );
-    expect(reupgraded[id('302')]).toEqual(['nodes:manage']);
+    // nodes:manage also brings the ingress group scopes it covered before they had their own (migration 0228).
+    expect(reupgraded[id('302')]).toEqual(['ingress:groups:manage', 'ingress:groups:view', 'nodes:manage']);
 
     // Built-in groups are exactly this release's again, so later starts leave deliberate v2.11 edits alone.
     await q('update permission_groups set scopes = $1 where id = $2', [

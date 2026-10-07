@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { replaceRetiredScopes } from './scopes-aliases.js';
 import { ALL_SCOPES } from './scopes-base.js';
 import { gitScopeQualifierIssue, isGitScopeBase } from './scopes-git.js';
-import { FOLDER_CREATION_SCOPES, FOLDER_SCOPABLE, RESOURCE_SCOPABLE } from './scopes-resource.js';
+import { FOLDER_CREATION_SCOPES, FOLDER_ONLY_SCOPABLE, FOLDER_SCOPABLE, RESOURCE_SCOPABLE } from './scopes-resource.js';
 
 /** Longest accepted delegated scope string, including its resource, folder, or node qualifier. */
 export const MAX_DELEGATED_SCOPE_LENGTH = 512;
@@ -20,6 +20,7 @@ const ALL_SCOPE_SET = new Set<string>(ALL_SCOPES);
 const RESOURCE_SCOPABLE_SET = new Set<string>(RESOURCE_SCOPABLE);
 const RESOURCE_SCOPABLE_BY_LENGTH = [...RESOURCE_SCOPABLE].sort((a, b) => b.length - a.length);
 const FOLDER_SCOPABLE_SET = new Set<string>(FOLDER_SCOPABLE);
+const FOLDER_ONLY_SCOPABLE_SET = new Set<string>(FOLDER_ONLY_SCOPABLE);
 const CREATION_SCOPE_SET = new Set<string>(FOLDER_CREATION_SCOPES);
 const DOCKER_CHILD_PREFIXES = [
   'docker:containers:',
@@ -69,6 +70,7 @@ function canonicalScopeIssue(scope: string): string | null {
     if (!FOLDER_SCOPABLE_SET.has(base)) return `${base} cannot be restricted to a folder`;
     return segments.length === 2 && UUID.test(segments[1]) ? null : 'Folder targets must be folder/<uuid>';
   }
+  if (FOLDER_ONLY_SCOPABLE_SET.has(base)) return `${base} can only be restricted to a folder`;
   if (target.startsWith('node/')) {
     if (!acceptsNodeTarget(base)) return `${base} cannot be restricted to a node`;
     return segments.length === 2 ? null : 'Node targets must be node/<nodeId>';

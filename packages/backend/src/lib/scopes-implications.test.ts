@@ -74,6 +74,7 @@ describe('generated scope implications', () => {
     expect(scopeFamilyView('docker:containers:files:write')).toBe('docker:containers:view');
     expect(scopeFamilyView('docker:tasks:manage')).toBe('docker:tasks');
     expect(scopeFamilyView('nodes:manage')).toBe('nodes:details');
+    expect(scopeFamilyView('ingress:groups:manage')).toBe('ingress:groups:view');
     expect(scopeFamilyView('pki:ca:create:intermediate')).toBe('pki:ca:view');
     expect(scopeFamilyView('integrations:gitlab:repo:write')).toBe('integrations:gitlab:view');
     expect(scopeFamilyView('storage:objects:admin')).toBe('storage:view');

@@ -86,6 +86,8 @@ export const ADMIN_SCOPES: readonly string[] = [
   'nodes:files:write',
   'nodes:lock',
   'nodes:folders:manage',
+  'ingress:groups:view',
+  'ingress:groups:manage',
   'admin:users',
   'admin:users:folders:manage',
   'admin:groups',

@@ -18,6 +18,7 @@ import {
   updateIngressGroupRoute,
 } from './ingress-group.docs.js';
 import { IngressGroupDomainConversionSchema, IngressGroupRouteConversionSchema } from './ingress-group.schemas.js';
+import { INGRESS_GROUP_MANAGE_SCOPE, INGRESS_GROUP_VIEW_SCOPE } from './ingress-group-access.js';
 import {
   addIngressGroupMemberFor,
   convertDomainToIngressGroupFor,
@@ -36,8 +37,8 @@ export const ingressGroupRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApi
 
 ingressGroupRoutes.use('*', authMiddleware);
 
-const viewMiddleware = requireAnyScopeBase('nodes:details', 'nodes:manage');
-const manageMiddleware = requireAnyScopeBase('nodes:manage');
+const viewMiddleware = requireAnyScopeBase(INGRESS_GROUP_VIEW_SCOPE, INGRESS_GROUP_MANAGE_SCOPE);
+const manageMiddleware = requireAnyScopeBase(INGRESS_GROUP_MANAGE_SCOPE);
 
 function actorOf(c: Context<AppEnv>): IngressGroupActor {
   return { scopes: c.get('effectiveScopes') || [], userId: c.get('user')!.id };

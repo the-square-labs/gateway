@@ -110,6 +110,12 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 | nodes:backups:execute | Use a Storage node as the executor of database backups, restores and storage copy jobs (resource-scopable) |
 | nodes:folders:manage | Manage node folders and folder placement |
 
+### Ingress Groups
+| Scope | Description |
+|-------|-------------|
+| ingress:groups:view | List ingress groups and view their members, routes, domains and delivery (folder-scopable by node folder only) |
+| ingress:groups:manage | Create, change and delete ingress groups, add, remove and reorder members; implies ingress:groups:view (folder-scopable by node folder only). Adding a member also needs nodes:manage on that node |
+
 ### Administration
 | Scope | Description |
 |-------|-------------|

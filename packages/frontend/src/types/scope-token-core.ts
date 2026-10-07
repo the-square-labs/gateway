@@ -381,6 +381,19 @@ export const CORE_TOKEN_SCOPES = [
     desc: "Create, reorder, and remove node folders",
     group: "Nodes",
   },
+  // Ingress Groups
+  {
+    value: "ingress:groups:view",
+    label: "View Ingress Groups",
+    desc: "View ingress groups, their members, and per-member delivery",
+    group: "Ingress Groups",
+  },
+  {
+    value: "ingress:groups:manage",
+    label: "Manage Ingress Groups",
+    desc: "Create, edit, and delete ingress groups and change their members (adding a node also needs Manage Nodes on it)",
+    group: "Ingress Groups",
+  },
   // Administration
   {
     value: "admin:users",

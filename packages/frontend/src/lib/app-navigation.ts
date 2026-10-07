@@ -334,7 +334,7 @@ export function canAccessNavigationItem(
     case "domains":
       return hasScopeBase(scopes, "domains:view");
     case "ingress-groups":
-      return hasScopeBase(scopes, "nodes:details") || hasScopeBase(scopes, "nodes:manage");
+      return hasScopeBase(scopes, "ingress:groups:view");
     case "ssl-certificates":
       return hasScopeBase(scopes, "ssl:cert:view");
     case "authorities":

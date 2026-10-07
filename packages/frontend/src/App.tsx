@@ -655,10 +655,10 @@ function NodeDetailGuard() {
   );
 }
 
-/** Ingress groups use node permissions (broadly or on the group's node folder). */
+/** Ingress groups have their own permission (broadly or on the group's node folder); manage implies view. */
 function IngressGroupsGuard({ children }: { children: React.ReactElement }) {
   const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
-  if (!hasScopedAccess("nodes:details") && !hasScopedAccess("nodes:manage")) {
+  if (!hasScopedAccess("ingress:groups:view")) {
     return <Navigate to="/" replace />;
   }
   return children;

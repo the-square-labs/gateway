@@ -40,8 +40,8 @@ export function RouteIngressPlacementPanel({
   const scopes = useAuthStore((state) => state.user?.scopes ?? NO_SCOPES);
   const hasScope = useAuthStore((state) => state.hasScope);
   const canEdit = hasScope(`proxy:edit:${host.id}`);
-  const canViewGroups =
-    hasScopeBase(scopes, "nodes:details") || hasScopeBase(scopes, "nodes:manage");
+  // The group page needs the group permission; without it the name is shown without a link.
+  const canViewGroups = hasScopeBase(scopes, "ingress:groups:view");
   const label = useNodeLabel();
   const [moving, setMoving] = useState(false);
   const group = host.ingressGroup ?? null;

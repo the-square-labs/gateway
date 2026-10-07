@@ -433,7 +433,8 @@ export function folderFamilyForScope(scope: string): FolderFamily | null {
   if (scope.startsWith("pki:cert:")) return "pki-certificates";
   if (scope.startsWith("pages:")) return "pages";
   if (scope.startsWith("ssl:cert:")) return "ssl";
-  if (scope.startsWith("nodes:")) return "nodes";
+  // Ingress groups live in node folders.
+  if (scope.startsWith("nodes:") || scope.startsWith("ingress:groups:")) return "nodes";
   if (scope.startsWith("docker:containers:") || scope === "docker:availability:manage") {
     return "docker";
   }
@@ -637,6 +638,8 @@ export function getResourceOptions(
     }
     return [];
   }
+  // Ingress group grants name node folders only, never one group or node.
+  if (scope.startsWith("ingress:groups:")) return [];
   if (family && catalog[family]) return catalog[family]!;
   // Template grants name templates, never routes; the list comes from the catalog above.
   if (scope.startsWith("proxy:templates:")) return [];
@@ -777,6 +780,8 @@ export function getResourceLabel(scope: string): string {
       : "Restrict to specific Docker nodes (leave unchecked for all):";
   }
   if (scope.startsWith("nodes:")) return "Restrict to specific nodes (leave unchecked for all):";
+  if (scope.startsWith("ingress:groups:"))
+    return "Restrict to node folders; a folder covers the ingress groups in it and its subfolders (leave unchecked for all):";
   if (scope === "proxy:create")
     return "Restrict to specific Ingress nodes (leave unchecked for all):";
   if (scope.startsWith("proxy:templates:"))

@@ -64,7 +64,7 @@ export function IngressGroupDetail() {
   }
   if (!group) return <DetailPageSkeleton label="Loading ingress group" />;
 
-  const canManage = canCreateInFolder(scopes, "nodes:manage", group.folderId);
+  const canManage = canCreateInFolder(scopes, "ingress:groups:manage", group.folderId);
   const health = groupHealthBadge(group);
 
   const remove = async () => {

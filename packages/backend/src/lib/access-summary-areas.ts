@@ -257,6 +257,16 @@ export const ACCESS_AREAS: readonly AccessAreaDefinition[] = [
     createHint: 'pass folderId to create_node',
   },
   {
+    // Ingress groups live in node folders; their grants are broad or node-folder ones.
+    id: 'ingress_groups',
+    title: 'Ingress groups',
+    action: prefixed('ingress:'),
+    viewScope: 'ingress:groups:view',
+    createScope: 'ingress:groups:manage',
+    folderResourceType: 'nodes',
+    createHint: 'pass folderId to the create operation of manage_ingress_group',
+  },
+  {
     id: 'hosting',
     title: 'Hosting (VMs, snapshots, accounts)',
     action: (base) =>

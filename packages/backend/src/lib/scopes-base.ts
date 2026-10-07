@@ -101,6 +101,10 @@ export const ALL_SCOPES = [
   'nodes:files:write',
   'nodes:lock',
   'nodes:folders:manage',
+  // ── Ingress Groups ───────────────────────────────────────────────
+  // Groups live in node folders: both scopes are broad or limited to a node folder (`folder/<id>`).
+  'ingress:groups:view',
+  'ingress:groups:manage',
   // ── Administration ───────────────────────────────────────────────
   'admin:users',
   'admin:users:impersonate',
