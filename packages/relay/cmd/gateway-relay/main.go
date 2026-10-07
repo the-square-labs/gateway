@@ -48,6 +48,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	configureMemoryLimit()
 	version := relayVersion()
 	runtime, err := retryIdentityStart(
 		func() (*server.Runtime, error) { return server.Start(cfg, version) },

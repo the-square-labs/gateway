@@ -18,7 +18,9 @@ func (Codec) Name() string { return "proto" }
 func (Codec) Marshal(value any) ([]byte, error) {
 	switch message := value.(type) {
 	case *Frame:
-		return append([]byte(nil), (*message)...), nil
+		// No copy: the proxy hands every received frame to SendMsg once and
+		// never touches it again, and a large proxied message was held twice.
+		return *message, nil
 	case proto.Message:
 		return proto.Marshal(message)
 	default:
