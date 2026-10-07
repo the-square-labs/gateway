@@ -72,7 +72,7 @@ export async function updateManagedDatabaseRelayStatus(
     if (!endpoint || endpoint.status === status) return false;
     await tx
       .update(relayEndpoints)
-      .set({ status, generation: endpoint.generation + 1, updatedAt: new Date() })
+      .set({ status, generation: sql`${relayEndpoints.generation} + 1`, updatedAt: new Date() })
       .where(eq(relayEndpoints.id, endpoint.id));
     await bumpRelayPolicyRevision(tx);
     return true;
@@ -217,7 +217,7 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
             subjectId: database.nodeId,
             certificateSha256,
             status,
-            generation: current.generation + 1,
+            generation: sql`${relayEndpoints.generation} + 1`,
             updatedAt: new Date(),
           })
           .where(eq(relayEndpoints.id, current.id));
@@ -269,7 +269,7 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
             sourceId: binding.sourceNodeId,
             sourceCertificateSha256,
             targetEndpointId: endpoint.id,
-            generation: current.generation + 1,
+            generation: sql`${relayRoutes.generation} + 1`,
             updatedAt: new Date(),
           })
           .where(eq(relayRoutes.id, current.id));

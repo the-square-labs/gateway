@@ -1430,7 +1430,7 @@ export class RelayPolicyService {
           .set({
             subjectId: nodeId,
             certificateSha256: node.certificateFingerprint,
-            generation: current.generation + 1,
+            generation: sql`${relayEndpoints.generation} + 1`,
             updatedAt: new Date(),
           })
           .where(eq(relayEndpoints.id, current.id));
@@ -1480,7 +1480,7 @@ export class RelayPolicyService {
           .set({
             subjectId: nodeId,
             certificateSha256: node.certificateFingerprint,
-            generation: current.generation + 1,
+            generation: sql`${relayEndpoints.generation} + 1`,
             updatedAt: new Date(),
           })
           .where(eq(relayEndpoints.id, current.id));
@@ -1725,7 +1725,7 @@ export class RelayPolicyService {
           .set({
             subjectId: targetNodeId,
             certificateSha256: target.certificateFingerprint,
-            generation: current.generation + 1,
+            generation: sql`${relayEndpoints.generation} + 1`,
             status: 'active',
             updatedAt: new Date(),
           })
@@ -2445,12 +2445,16 @@ export class RelayPolicyService {
       for (const endpoint of endpoints)
         await tx
           .update(relayEndpoints)
-          .set({ certificateSha256, generation: endpoint.generation + 1, updatedAt: new Date() })
+          .set({ certificateSha256, generation: sql`${relayEndpoints.generation} + 1`, updatedAt: new Date() })
           .where(eq(relayEndpoints.id, endpoint.id));
       for (const route of routes)
         await tx
           .update(relayRoutes)
-          .set({ sourceCertificateSha256: certificateSha256, generation: route.generation + 1, updatedAt: new Date() })
+          .set({
+            sourceCertificateSha256: certificateSha256,
+            generation: sql`${relayRoutes.generation} + 1`,
+            updatedAt: new Date(),
+          })
           .where(eq(relayRoutes.id, route.id));
       if (endpoints.length || routes.length) await bumpRelayPolicyRevision(tx);
       return endpoints.length > 0 || routes.length > 0;
