@@ -577,7 +577,7 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		_ = relaybridge.BridgeWithChunk(tunnelCtx, connection, tunnel, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
 		return
 	}
-	_ = bridgeRelayConnection(connection, tunnel, int(first.GetReady().MaxFrameBytes), cancel)
+	_ = bridgeRelayConnection(connection, tunnel, int(first.GetReady().MaxFrameBytes), r.plugin.relayReadChunk(), cancel)
 }
 
 // errEndpointNotServed: this daemon does not serve the endpoint kind (no
@@ -863,8 +863,10 @@ func (t *relaySourceTunnel) bridge(connection net.Conn) {
 	defer t.cancel()
 	t.router.active.Add(1)
 	defer t.router.active.Add(-1)
+	readChunk := t.router.plugin.relayReadChunk()
 	if t.session != nil {
-		_ = bridgeRelayConnection(connection, t.session, t.session.MaxFrame(), t.session.Cancel)
+		maxFrame := t.session.MaxFrame()
+		_ = bridgeRelayConnection(connection, t.session, maxFrame, relayresume.ReadChunk(min(readChunk, maxFrame)), t.session.Cancel)
 		t.session.Cancel()
 		return
 	}
@@ -873,7 +875,7 @@ func (t *relaySourceTunnel) bridge(connection net.Conn) {
 		// long drain grace.
 		defer t.router.plugin.relayStreams().sources.TrackLegacy(t.router.targetID)()
 	}
-	_ = bridgeRelayConnection(connection, t.stream, t.maxFrame, t.cancel)
+	_ = bridgeRelayConnection(connection, t.stream, t.maxFrame, readChunk, t.cancel)
 }
 
 // close abandons a tunnel that was never bridged.
@@ -960,13 +962,19 @@ type relayBridgeResult struct {
 	err      error
 }
 
-func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFrame int, cancel context.CancelFunc) error {
+// bridgeRelayConnection carries connection over stream, reading at most readChunk bytes per frame (Gateway's relay
+// read chunk; 0: the frame limit): a 1 MiB buffer per connection and 1 MiB frames on a lane shared with small requests
+// were the old default.
+func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFrame, readChunk int, cancel context.CancelFunc) error {
 	if maxFrame <= 0 || maxFrame > databaseTunnelMaxChunkBytes {
 		maxFrame = databaseTunnelMaxChunkBytes
 	}
+	if readChunk <= 0 || readChunk > maxFrame {
+		readChunk = maxFrame
+	}
 	result := make(chan relayBridgeResult, 2)
 	go func() {
-		buffer := make([]byte, maxFrame)
+		buffer := make([]byte, readChunk)
 		for {
 			n, err := connection.Read(buffer)
 			if n > 0 {

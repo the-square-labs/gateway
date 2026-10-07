@@ -154,6 +154,16 @@ func (s *relayGrantStore) readChunkBytes() uint32 {
 	return s.current.GetReadChunkBytes()
 }
 
+// relayReadChunk is the read size of the node's relay bridges: the bundle's relay read chunk, else the default.
+func (p *DockerPlugin) relayReadChunk() int {
+	if p.relayGrants != nil {
+		if chunk := int(p.relayGrants.readChunkBytes()); chunk > 0 {
+			return chunk
+		}
+	}
+	return relaybridge.DefaultChunkBytes
+}
+
 // withCurrent runs read on the current bundle, which read must not modify or
 // keep.
 func (s *relayGrantStore) withCurrent(read func(*pb.SyncRelayGrantsCommand)) {

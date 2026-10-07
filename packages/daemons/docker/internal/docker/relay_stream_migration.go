@@ -321,7 +321,7 @@ func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, 
 		session.Cancel()
 		return
 	}
-	_ = bridgeRelayConnection(connection, session, session.MaxFrame(), session.Cancel)
+	_ = bridgeRelayConnection(connection, session, session.MaxFrame(), relayresume.ReadChunk(min(p.relayReadChunk(), session.MaxFrame())), session.Cancel)
 	session.Cancel()
 }
 
