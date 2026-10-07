@@ -1324,10 +1324,12 @@ async function canAccessDockerBuild(user: User, build: any, action: 'view' | 'ma
   const compose = build.target.kind === 'compose_project';
   const baseScope = compose ? `docker:compose:${action}` : `docker:containers:${action}`;
   if (hasDockerResourceScope(user.scopes, baseScope, build.target.nodeId, '')) return true;
+  // A pending Git source container exists only as its reservation until its first build creates it.
   const resourceId =
     build.target.kind === 'container'
       ? await container.resolve(DockerAccessResourceService).resolveContainer(build.target.nodeId, {
           name: build.target.containerName,
+          includeReservations: true,
         })
       : build.target.kind === 'deployment'
         ? build.target.deploymentId
