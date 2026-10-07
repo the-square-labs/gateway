@@ -23,9 +23,9 @@ export function containerUpdateChangesImage(config: { tag?: unknown }): boolean 
 
 /**
  * An env-only change of a container, on every route that makes one (PUT .../env, an update with env alone, the AI
- * tools): environment for the values, and manage because the container is recreated with them.
+ * tools). The recreate that applies the values is part of the change, so environment is all it needs.
  */
-export const CONTAINER_ENV_CHANGE_SCOPES = ['docker:containers:environment', 'docker:containers:manage'] as const;
+export const CONTAINER_ENV_CHANGE_SCOPES = ['docker:containers:environment'] as const;
 
 /**
  * Scopes a container update (pull + redeploy) needs on the container. A new tag runs other code with the container's

@@ -15,7 +15,6 @@ import {
 } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
-import { CONTAINER_ENV_CHANGE_SCOPES } from '@/modules/docker/docker-container-scope-requirements.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from '@/modules/docker/docker-deployment-labels.js';
 import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
 import { FILE_UPLOAD_MAX_BYTES } from '@/modules/settings/general-settings.service.js';
@@ -132,10 +131,11 @@ export async function manageDockerContainerConfigTool(
     return context.dockerService.getContainerEnv(nodeId, containerId);
   }
   if (operation === 'update_env') {
-    // As the env route: environment for the values, manage for the recreate that applies them.
-    for (const scope of CONTAINER_ENV_CHANGE_SCOPES) {
-      ensureToolScopeForResource(user, scope, await authorizationResourceId(scope));
-    }
+    ensureToolScopeForResource(
+      user,
+      'docker:containers:environment',
+      await authorizationResourceId('docker:containers:environment')
+    );
     const input = EnvUpdateSchema.parse(args);
     // Same guard as the env route: Compose-managed containers change through their project.
     await assertComposeChildMutationAllowed(nodeId, containerId);

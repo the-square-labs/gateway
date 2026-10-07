@@ -188,7 +188,7 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 | docker:containers:create | Create/deploy containers |
 | docker:containers:edit | Edit container settings (resource-scopable) |
 | docker:containers:manage | Start/stop/restart/kill/update containers (resource-scopable) |
-| docker:containers:environment | View/edit container environment variables and list secret keys (not values). A container env change recreates it, so it also needs docker:containers:manage; saving a deployment's env alone needs only this scope (resource-scopable) |
+| docker:containers:environment | View/edit container environment variables and list secret keys (not values). An env-only change needs only this scope, including the container recreate it causes and saving a deployment's env alone (resource-scopable) |
 | docker:containers:link | Be the target of a container link: other workloads reach one port of this container or deployment privately (resource-scopable). Creating a link also needs docker:containers:edit on the consumer (docker:compose:manage for Compose), plus docker:containers:environment when it sets variables |
 | docker:containers:delete | Remove containers (resource-scopable) |
 | docker:containers:console | Open exec terminal (resource-scopable) |

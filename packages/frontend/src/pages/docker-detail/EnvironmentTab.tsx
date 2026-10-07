@@ -122,14 +122,8 @@ export function EnvironmentTab({
   const envMutationInProgressRef = useRef(false);
 
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
-  // Environment shows the variables and the secret keys. Saving a container's variables recreates
-  // it, which also needs manage (a deployment only stores them).
-  const canReadEnv = canEditOverride ?? hasScope(`docker:containers:environment:${scopeSuffix}`);
-  const canEdit =
-    canReadEnv &&
-    (canEditOverride !== undefined ||
-      !!onSaveServiceEnv ||
-      hasScope(`docker:containers:manage:${scopeSuffix}`));
+  // Environment edits the variables and lists the secret keys; secrets reveals and edits the values.
+  const canEdit = canEditOverride ?? hasScope(`docker:containers:environment:${scopeSuffix}`);
   const canManageSecrets =
     canManageSecretsOverride ?? hasScope(`docker:containers:secrets:${scopeSuffix}`);
   // Any link change on a deployment rolls it out (manage), and saving links here also sends the
@@ -250,7 +244,7 @@ export function EnvironmentTab({
     try {
       if (isServiceEnv) {
         const secretsData =
-          canManageSecrets || canReadEnv
+          canManageSecrets || canEdit
             ? secretApi
               ? await secretApi.list()
               : await api.listDockerDeploymentSecrets(nodeId, targetContainerId)
@@ -280,14 +274,14 @@ export function EnvironmentTab({
       }
 
       const [data, secretsData] = await Promise.all([
-        canReadEnv ? api.getContainerEnv(nodeId, targetContainerId) : Promise.resolve([]),
-        canManageSecrets || canReadEnv
+        canEdit ? api.getContainerEnv(nodeId, targetContainerId) : Promise.resolve([]),
+        canManageSecrets || canEdit
           ? api.listDockerSecrets(nodeId, targetContainerId)
           : Promise.resolve([]),
       ]);
       if (!isCurrentRequest()) return;
 
-      if (canReadEnv) {
+      if (canEdit) {
         const parsed = (data ?? []).map((entry: string) => {
           const idx = entry.indexOf("=");
           return idx >= 0
@@ -303,7 +297,7 @@ export function EnvironmentTab({
         setRawText("");
       }
 
-      if (canManageSecrets || canReadEnv) {
+      if (canManageSecrets || canEdit) {
         const rows: SecretRow[] = (secretsData ?? [])
           .filter((s: DockerSecret) => !s.system)
           .map((s: DockerSecret) => ({
@@ -325,15 +319,7 @@ export function EnvironmentTab({
     } finally {
       if (isCurrentRequest()) setIsLoading(false);
     }
-  }, [
-    canReadEnv,
-    canManageSecrets,
-    nodeId,
-    isServiceEnv,
-    serviceEnvSignature,
-    secretApi,
-    disabled,
-  ]);
+  }, [canEdit, canManageSecrets, nodeId, isServiceEnv, serviceEnvSignature, secretApi, disabled]);
 
   useEffect(() => {
     envContainerIdRef.current = containerId;
@@ -393,7 +379,7 @@ export function EnvironmentTab({
   useEffect(() => {
     if (
       !managedDatabaseLinksEnabled ||
-      !canReadEnv ||
+      !canEdit ||
       !canManageSecrets ||
       !containerName ||
       !resolvedDatabaseTargetResourceId
@@ -428,7 +414,7 @@ export function EnvironmentTab({
       cancelled = true;
     };
   }, [
-    canReadEnv,
+    canEdit,
     canManageSecrets,
     containerName,
     managedDatabaseLinksEnabled,
@@ -571,7 +557,7 @@ export function EnvironmentTab({
             ? recreatesRunningContainer
               ? "Updating environment variables will recreate the container. The container will experience brief downtime. Continue?"
               : "Updating environment variables will save the new container configuration. The container will remain stopped. Continue?"
-            : "Secret changes will be stored, but without permission to recreate the container they will only apply after it is recreated. Continue?",
+            : "Secret changes will be stored, but without environment permission they will only apply after the container is recreated. Continue?",
       confirmLabel: onSaveServiceEnv
         ? resolvedServiceSaveLabel === "Save & Recreate"
           ? "Recreate"
@@ -639,7 +625,7 @@ export function EnvironmentTab({
           ? await secretApi.list()
           : onSaveServiceEnv
             ? await api.listDockerDeploymentSecrets(nodeId, containerId)
-            : canManageSecrets || canReadEnv
+            : canManageSecrets || canEdit
               ? await api.listDockerSecrets(nodeId, containerId)
               : [];
         setSecretRows(
@@ -749,14 +735,14 @@ export function EnvironmentTab({
     isLoading ||
     databaseNodeLoading ||
     (hasDatabaseNode && databaseLinksLoading) ||
-    (managedStorageLinksEnabled && canReadEnv && canManageSecrets && storageLinksLoading);
+    (managedStorageLinksEnabled && canEdit && canManageSecrets && storageLinksLoading);
   // The tab stays hidden until the environment and its link sections have loaded; later
   // refreshes update in place.
   useContentLoading(initialLoading);
 
   // ── Derived state ────────────────────────────────────────────────
 
-  if (!canReadEnv && !canManageSecrets) {
+  if (!canEdit && !canManageSecrets) {
     return (
       <div className="py-12 text-center text-muted-foreground">
         You don't have permission to access environment variables or secrets.
@@ -884,7 +870,7 @@ export function EnvironmentTab({
       }
     >
       {managedDatabaseLinksEnabled &&
-        canReadEnv &&
+        canEdit &&
         canManageSecrets &&
         containerName &&
         hasDatabaseNode && (
@@ -903,7 +889,7 @@ export function EnvironmentTab({
           />
         )}
 
-      {managedStorageLinksEnabled && canReadEnv && canManageSecrets && containerName && (
+      {managedStorageLinksEnabled && canEdit && canManageSecrets && containerName && (
         <ManagedStorageLinksSection
           ref={storageLinksRef}
           nodeId={nodeId}
@@ -928,7 +914,7 @@ export function EnvironmentTab({
           resourceId={resolvedStorageTargetResourceId}
           workloadName={containerName!}
           canManage={canManageContainerLinks}
-          canSetEnvironment={canReadEnv}
+          canSetEnvironment={canEdit}
           disabled={linksDisabled || isSaving}
           onMutationStart={onMutationStart}
           onMutationEnd={onMutationEnd}
@@ -940,7 +926,7 @@ export function EnvironmentTab({
         disabled={disabled || isSaving}
         className={`${rawMode ? "flex min-h-0 flex-1 flex-col" : "space-y-4"} ${disabled || isSaving ? "pointer-events-none opacity-60" : ""}`}
       >
-        {canReadEnv && (
+        {canEdit && (
           <PanelShell
             title="Environment Variables"
             description={
@@ -1032,7 +1018,6 @@ export function EnvironmentTab({
                         <Input
                           value={env.key}
                           onChange={(e) => updateVar(idx, "key", e.target.value)}
-                          readOnly={!canEdit}
                           className={`h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
                             duplicateKeyIndices.has(idx) ||
                             managedEnvCollisionIndices.has(idx) ||
@@ -1046,20 +1031,17 @@ export function EnvironmentTab({
                           <Input
                             value={env.value}
                             onChange={(e) => updateVar(idx, "value", e.target.value)}
-                            readOnly={!canEdit}
                             className="h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring flex-1 min-w-0"
                             placeholder="value"
                           />
-                          {canEdit && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="shrink-0 rounded-none border-l border-border"
-                              onClick={() => removeVar(idx)}
-                            >
-                              <Minus className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="shrink-0 rounded-none border-l border-border"
+                            onClick={() => removeVar(idx)}
+                          >
+                            <Minus className="h-3.5 w-3.5" />
+                          </Button>
                         </div>
                       </div>
                     ))}
@@ -1067,8 +1049,8 @@ export function EnvironmentTab({
                   {visibleEnvRows.length === 0 && (
                     <EmptyState
                       message="No environment variables."
-                      actionLabel={canEdit ? "Add one" : undefined}
-                      onAction={canEdit ? addVar : undefined}
+                      actionLabel="Add one"
+                      onAction={addVar}
                       embedded
                     />
                   )}
@@ -1079,7 +1061,7 @@ export function EnvironmentTab({
         )}
 
         {/* Secrets section — only in table mode */}
-        {!rawMode && (canManageSecrets || canReadEnv) && (
+        {!rawMode && (canManageSecrets || canEdit) && (
           <SecretsSection
             canManageSecrets={canManageSecrets}
             onSave={!canEdit ? handleSave : undefined}

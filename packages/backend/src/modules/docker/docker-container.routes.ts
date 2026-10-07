@@ -96,11 +96,7 @@ import {
   getLatestDockerContainerStats,
   listDockerGpuUsage,
 } from './docker-container-observability.js';
-import {
-  CONTAINER_ENV_CHANGE_SCOPES,
-  containerRecreateRequiredScopes,
-  containerUpdateRequiredScopes,
-} from './docker-container-scope-requirements.js';
+import { containerRecreateRequiredScopes, containerUpdateRequiredScopes } from './docker-container-scope-requirements.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { assertUserContainerAccessible } from './docker-internal-containers.js';
@@ -802,10 +798,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Update container env (recreates the container with it)
   router.openapi(
-    {
-      ...updateContainerEnvRoute,
-      middleware: CONTAINER_ENV_CHANGE_SCOPES.map((scope) => requireDockerContainerScope(scope)),
-    },
+    { ...updateContainerEnvRoute, middleware: requireDockerContainerScope('docker:containers:environment') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;

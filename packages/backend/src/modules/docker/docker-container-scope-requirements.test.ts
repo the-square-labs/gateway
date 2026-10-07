@@ -11,11 +11,8 @@ describe('container update scopes', () => {
     expect(containerUpdateChangesImage({ tag: 'attacker-build' })).toBe(true);
   });
 
-  it('keeps an env-only update on environment and manage, as the env route, and a plain redeploy on edit', () => {
-    expect(containerUpdateRequiredScopes({ env: { MODE: 'debug' } })).toEqual([
-      'docker:containers:environment',
-      'docker:containers:manage',
-    ]);
+  it('keeps an env-only update on environment, as the env route, and a plain redeploy on edit', () => {
+    expect(containerUpdateRequiredScopes({ env: { MODE: 'debug' } })).toEqual(['docker:containers:environment']);
     expect(containerUpdateRequiredScopes({ tag: '' })).toEqual(['docker:containers:edit']);
     expect(containerUpdateChangesImage({ tag: '' })).toBe(false);
   });
