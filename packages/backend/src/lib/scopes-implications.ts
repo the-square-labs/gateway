@@ -78,6 +78,8 @@ const EXPLICIT_IMPLICATIONS: Readonly<Record<string, readonly string[]>> = {
   'inference:providers:view': ['inference:models:manage'],
   // Availability policies act on a container, deployment, or Compose workload.
   'docker:containers:view': ['docker:availability:manage'],
+  // Secret values are delivered to the workload as environment variables, so a secrets holder already reads both.
+  'docker:containers:environment': ['docker:containers:secrets'],
   // Snapshot mutations act on one existing VM and keep implying that VM's snapshot view.
   'hosting:snapshots:view': ['hosting:snapshots:create'],
 };

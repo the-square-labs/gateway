@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { containerUpdateChangesImage, containerUpdateRequiredScopes } from './docker-container-scope-requirements.js';
 
 describe('container update scopes', () => {
-  it('treats a new tag like a recreate with a new image: environment and secrets, plus an image pull', () => {
+  it('treats a new tag like a recreate with a new image: environment and secrets, which also cover the pull', () => {
     expect(containerUpdateRequiredScopes({ tag: 'attacker-build' })).toEqual([
       'docker:containers:environment',
       'docker:containers:secrets',

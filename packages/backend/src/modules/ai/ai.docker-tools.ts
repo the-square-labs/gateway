@@ -1,13 +1,7 @@
 import { z } from 'zod';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import {
-  getResourceScopedIds,
-  hasScope,
-  hasScopeBase,
-  hasScopeForCreation,
-  hasScopeForResource,
-} from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   ComposeAdoptInputSchema,
@@ -68,7 +62,6 @@ import {
   pendingOperationBody,
 } from '@/modules/docker/docker-container-lifecycle-operations.js';
 import {
-  type DeploymentChangeRequirements,
   deploymentDeployRequiredScopes,
   deploymentUpdateRequiredScopes,
 } from '@/modules/docker/docker-container-scope-requirements.js';
@@ -1006,12 +999,9 @@ function ensureDeploymentChangeAccess(
   user: User,
   nodeId: string,
   deploymentId: string,
-  requirements: DeploymentChangeRequirements
+  required: string[]
 ): void {
-  for (const scope of requirements.scopes) ensureDockerDeploymentScope(context, user, scope, nodeId, deploymentId);
-  if (requirements.pullsImage && !hasScopeForCreation(user.scopes, 'docker:images:pull', undefined, nodeId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing docker:images:pull for the destination node or folder');
-  }
+  for (const scope of required) ensureDockerDeploymentScope(context, user, scope, nodeId, deploymentId);
 }
 
 async function manageDockerRegistry(context: DockerToolContext, user: User, args: Record<string, unknown>) {

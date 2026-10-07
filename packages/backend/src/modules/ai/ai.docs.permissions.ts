@@ -188,14 +188,14 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 | docker:containers:create | Create/deploy containers |
 | docker:containers:edit | Edit container settings (resource-scopable) |
 | docker:containers:manage | Start/stop/restart/kill/update containers (resource-scopable) |
-| docker:containers:environment | View/edit container environment variables (resource-scopable) |
+| docker:containers:environment | View/edit container environment variables and list secret keys (not values) (resource-scopable) |
 | docker:containers:link | Be the target of a container link: other workloads reach one port of this container or deployment privately (resource-scopable). Creating a link also needs docker:containers:edit on the consumer (docker:compose:manage for Compose), plus docker:containers:environment when it sets variables |
 | docker:containers:delete | Remove containers (resource-scopable) |
 | docker:containers:console | Open exec terminal (resource-scopable) |
 | docker:containers:files:read | Browse/read container files (resource-scopable) |
 | docker:containers:files:write | Create/edit/move/delete container files (resource-scopable) |
 | docker:containers:export | Export portable container archives (resource-scopable) |
-| docker:containers:secrets | Manage encrypted secrets (resource-scopable) |
+| docker:containers:secrets | Reveal and manage encrypted secrets; implies docker:containers:environment (resource-scopable) |
 | docker:containers:webhooks | Configure CI/CD webhook URLs |
 | docker:containers:migrate | Migrate containers and deployments between Docker nodes (resource-scopable) |
 | docker:availability:manage | Enable, update, scale, heal, and disable multi-node Availability; implies docker:containers:view (resource-scopable; folder grants resolve through the container or Compose folder) |
@@ -214,7 +214,7 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 | Scope | Description |
 |-------|-------------|
 | docker:images:view | List images on a node |
-| docker:images:pull | Pull images from registries |
+| docker:images:pull | Pull images from registries into a node or image folder. Not needed to create or update a container or deployment: the workload's own create, edit or manage authorizes pulling its image |
 | docker:images:delete | Remove/prune images |
 
 ### Docker: Volumes
@@ -394,7 +394,7 @@ Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:ce
 
 Folder grants: scopes of foldered resources accept "<scope>:folder/<folder-id>". The grant covers every resource in that folder and its subfolders, including resources created or moved there later, and stops covering a resource that leaves the folder. Creation scopes accept a destination instead: "proxy:create:folder/<folder-id>" or "proxy:create:node/<node-id>" lets the caller create in that folder or on that node only; pass the folderId (and nodeId) when creating. list_resource_folders shows a folder-scoped caller its granted folders even while they are empty, and list_nodes with a type shows creators the nodes they may create on. Route creators can also use list_route_ingress_nodes, and create_route may omit nodeId when a registered domain pins the ingress node or only one node is eligible.
 
-Implied scopes: any action scope in a family except creation scopes (\`*:create*\`, \`docker:images:pull\`, \`ssl:cert:issue\`, \`pki:cert:issue\`) implies that family's view scope with the same suffix, including delete scopes, so "proxy:edit:<route-id>" also lets the caller view that route and "databases:query:read:<database-id>" lets it view that database.
+Implied scopes: any action scope in a family except creation scopes (\`*:create*\`, \`docker:images:pull\`, \`ssl:cert:issue\`, \`pki:cert:issue\`) implies that family's view scope with the same suffix, including delete scopes, so "proxy:edit:<route-id>" also lets the caller view that route and "databases:query:read:<database-id>" lets it view that database. docker:containers:secrets also implies docker:containers:environment with the same suffix.
 
 ## Limited Access (folders, nodes, resources)
 Access limited to folders, nodes or resources is normal. If you can't see or do something at the root, check get_my_access; folder-limited access is normal, so work inside the granted folders.

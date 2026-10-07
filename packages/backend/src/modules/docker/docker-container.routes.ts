@@ -96,11 +96,7 @@ import {
   getLatestDockerContainerStats,
   listDockerGpuUsage,
 } from './docker-container-observability.js';
-import {
-  containerRecreateRequiredScopes,
-  containerUpdateChangesImage,
-  containerUpdateRequiredScopes,
-} from './docker-container-scope-requirements.js';
+import { containerRecreateRequiredScopes, containerUpdateRequiredScopes } from './docker-container-scope-requirements.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { assertUserContainerAccessible } from './docker-internal-containers.js';
@@ -707,16 +703,6 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const body = await c.req.json();
       const config = ContainerUpdateSchema.parse(body);
       await assertAdditionalContainerScopes(c, containerUpdateRequiredScopes(config));
-      if (containerUpdateChangesImage(config)) {
-        await assertDockerCreationAccess(
-          container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
-          c.get('effectiveScopes') || [],
-          'docker:images:pull',
-          nodeId,
-          undefined,
-          'image'
-        );
-      }
       const data = await service.updateContainer(nodeId, containerId, config, user.id, c.get('effectiveScopes') || []);
       return c.json({ data });
     }
@@ -750,16 +736,6 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const body = await c.req.json();
       const config = ContainerRecreateSchema.parse(body);
       await assertAdditionalContainerScopes(c, containerRecreateRequiredScopes(config));
-      if (typeof config.image === 'string') {
-        await assertDockerCreationAccess(
-          container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
-          c.get('effectiveScopes') || [],
-          'docker:images:pull',
-          nodeId,
-          undefined,
-          'image'
-        );
-      }
       const data = await service.recreateWithConfig(nodeId, containerId, config, user.id, {
         actorScopes: c.get('effectiveScopes') || [],
         backgroundImagePull: true,
@@ -838,16 +814,18 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // ─── Secret routes ────────────────────────────────────────────────────
 
-  // List secrets (values masked unless user has docker:containers:secrets scope)
+  // List secrets: the keys with docker:containers:environment, the values only with docker:containers:secrets
   router.openapi(
-    { ...listContainerSecretsRoute, middleware: requireDockerContainerScope('docker:containers:secrets') },
+    { ...listContainerSecretsRoute, middleware: requireDockerContainerScope('docker:containers:environment') },
     async (c) => {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const containerName = await resolveContainerName(nodeId, containerId);
       // An impersonating administrator sees the keys, never the values.
-      const data = await service.list(nodeId, containerName, !c.get('impersonation'));
+      const reveal =
+        !c.get('impersonation') && (await callerHasContainerScope(c, 'docker:containers:secrets', 'containerId'));
+      const data = await service.list(nodeId, containerName, reveal);
       return c.json({ data });
     }
   );

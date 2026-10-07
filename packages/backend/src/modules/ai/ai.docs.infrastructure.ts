@@ -99,7 +99,7 @@ other stable hint to locate the recreated container and continue with its new ID
 
 ## Environment Variables & Secrets
 - Regular env vars: stored in container config, visible to all users with view access
-- Secrets: encrypted at rest in Gateway DB, injected as env vars on container start/recreate. Only users with docker:containers:secrets scope can view decrypted values. Secrets are keyed by container name so they survive recreates.
+- Secrets: encrypted at rest in Gateway DB, injected as env vars on container start/recreate. Only users with docker:containers:secrets scope can view decrypted values; docker:containers:environment lists the keys. Secrets are keyed by container name so they survive recreates.
 
 ## Image Updates & Webhooks
 - **Manual image tag change**: in container Settings, the Image Tag field allows changing the version. Changing the tag and clicking Recreate will pull the new image and recreate the container.
