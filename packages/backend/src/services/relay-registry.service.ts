@@ -1,50 +1,30 @@
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerBuilds, dockerRegistryNodeBindings } from '@/db/schema/index.js';
-import { createChildLogger } from '@/lib/logger.js';
+import { dockerRegistryNodeBindings } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
 import type { RelayPolicyService } from './relay-policy.service.js';
+import { abandonedBuildBindings, purgeRevokedRegistryBindings } from './relay-registry-bindings.js';
+import { RegistrySyncFailureLog, withinNodeSyncBound } from './relay-registry-sync.js';
 
 const REGISTRY_PROXY_PORT = 5443;
 const TOKEN_REFRESH_MS = 15_000;
-/**
- * One node's registry sync (routes, grants, token issue, the bindings command) ends within this bound. Its steps carry
- * their own command timeouts; this bound keeps a sync stuck anywhere else from holding the node's queue, and so every
- * later binding of that node, for good (stand rc.10, S6: a rollout waited on the target node's binding forever).
- */
-const NODE_SYNC_TIMEOUT_MS = 90_000;
+const REVOKED_BINDING_PURGE_INTERVAL_MS = 60 * 60 * 1000;
 const REPOSITORY_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 
 type RegistryBindingRole = 'builder' | 'runtime' | 'mirror';
 type RegistryBindingContext = 'build' | 'container' | 'deployment' | 'compose_project' | 'availability';
 
-const logger = createChildLogger('RelayRegistryService');
-
-function withinNodeSyncBound(sync: Promise<void>, nodeId: string): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const bound = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      // The daemon answered none of the sync's commands in time (its command loop busy, or the commands lost).
-      logger.warn('Internal registry sync of a node is given up; the next sync starts', {
-        nodeId,
-        boundSeconds: NODE_SYNC_TIMEOUT_MS / 1000,
-      });
-      reject(
-        new Error(`Internal registry sync of node ${nodeId} did not finish within ${NODE_SYNC_TIMEOUT_MS / 1000} s`)
-      );
-    }, NODE_SYNC_TIMEOUT_MS);
-    timer.unref?.();
-  });
-  // A sync given up on still ends on its own; its outcome is no longer awaited.
-  sync.catch(() => undefined);
-  return Promise.race([sync, bound]).finally(() => clearTimeout(timer));
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export class RelayRegistryService {
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private lastRevokedPurgeAt = 0;
+  private readonly failures = new RegistrySyncFailureLog();
   private readonly nodeSyncs = new Map<string, Promise<void>>();
   private readonly queuedNodeSyncs = new Map<string, Promise<void>>();
 
@@ -65,15 +45,20 @@ export class RelayRegistryService {
         this.nodeSyncs.delete(event.id);
         this.queuedNodeSyncs.delete(event.id);
       }
-      void this.syncNode(event.id).catch(() => undefined);
+      const nodeId = event.id;
+      void this.syncNode(nodeId).then(
+        () => this.failures.clear(nodeId),
+        (error) => this.failures.report(nodeId, error, { nodeId })
+      );
     });
   }
 
   start(): void {
     if (this.refreshTimer) return;
-    this.refreshTimer = setInterval(() => void this.refreshAll().catch(() => undefined), TOKEN_REFRESH_MS);
+    const refresh = () => void this.refreshAll().catch((error) => this.failures.report('refresh', error));
+    this.refreshTimer = setInterval(refresh, TOKEN_REFRESH_MS);
     this.refreshTimer.unref?.();
-    void this.refreshAll().catch(() => undefined);
+    refresh();
   }
 
   stop(): void {
@@ -208,11 +193,17 @@ export class RelayRegistryService {
           bindings.map(({ id }) => id)
         )
       );
-    await Promise.allSettled(
+    const revocations = await Promise.allSettled(
       bindings.map((binding) =>
         this.relayPolicy.revokeOwner('registry_secure_link', binding.id, { allowDeferredSnapshot: true })
       )
     );
+    // The route of a revoked binding is removed by the orphan sweep (removeOrphanedRelayState) if this failed.
+    revocations.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        this.failures.report('revoke', result.reason, { bindingId: bindings[index]!.id });
+      }
+    });
     await Promise.allSettled([...new Set(bindings.map(({ nodeId }) => nodeId))].map((nodeId) => this.syncNode(nodeId)));
   }
 
@@ -337,7 +328,21 @@ export class RelayRegistryService {
     }
   }
 
+  /** Every failure of a node's sync is recorded on its active bindings, not only a rejection by the daemon. */
   private async syncNodeLocked(nodeId: string): Promise<void> {
+    try {
+      await this.syncNodeBindings(nodeId);
+    } catch (error) {
+      await this.db
+        .update(dockerRegistryNodeBindings)
+        .set({ lastError: errorMessage(error), updatedAt: new Date() })
+        .where(and(eq(dockerRegistryNodeBindings.nodeId, nodeId), eq(dockerRegistryNodeBindings.status, 'active')))
+        .catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async syncNodeBindings(nodeId: string): Promise<void> {
     const bindings = await this.db
       .select()
       .from(dockerRegistryNodeBindings)
@@ -422,21 +427,7 @@ export class RelayRegistryService {
     }
     const result = await this.dispatch.sendDockerRegistryBindings(nodeId, desired);
     const now = new Date();
-    if (!result.success) {
-      const message = result.error || 'Docker daemon rejected internal registry bindings';
-      if (bindings.length) {
-        await this.db
-          .update(dockerRegistryNodeBindings)
-          .set({ lastError: message, updatedAt: now })
-          .where(
-            inArray(
-              dockerRegistryNodeBindings.id,
-              bindings.map(({ id }) => id)
-            )
-          );
-      }
-      throw new Error(message);
-    }
+    if (!result.success) throw new Error(result.error || 'Docker daemon rejected internal registry bindings');
     // Replace the daemon snapshot before retiring old transport routes. Keep the
     // context grants active so revoking one owner cannot revoke another's access.
     const transportIds = new Set(transportBindings.map(({ id }) => id));
@@ -460,38 +451,33 @@ export class RelayRegistryService {
 
   private async refreshAll(): Promise<void> {
     await this.revokeAbandonedBuildBindings();
+    await this.purgeRevokedBindings();
     const rows = await this.db
       .select({ nodeId: dockerRegistryNodeBindings.nodeId })
       .from(dockerRegistryNodeBindings)
       .where(eq(dockerRegistryNodeBindings.status, 'active'));
-    await Promise.allSettled([...new Set(rows.map(({ nodeId }) => nodeId))].map((nodeId) => this.syncNode(nodeId)));
+    const nodeIds = [...new Set(rows.map(({ nodeId }) => nodeId))];
+    const results = await Promise.allSettled(nodeIds.map((nodeId) => this.syncNode(nodeId)));
+    results.forEach((result, index) => {
+      const nodeId = nodeIds[index]!;
+      if (result.status === 'rejected') this.failures.report(nodeId, result.reason, { nodeId });
+      else this.failures.clear(nodeId);
+    });
+    this.failures.clear('refresh');
+  }
+
+  private async purgeRevokedBindings(now = Date.now()): Promise<void> {
+    if (now - this.lastRevokedPurgeAt < REVOKED_BINDING_PURGE_INTERVAL_MS) return;
+    this.lastRevokedPurgeAt = now;
+    await purgeRevokedRegistryBindings(this.db, now);
   }
 
   private async revokeAbandonedBuildBindings(): Promise<void> {
-    const bindings = await this.db
-      .select({
-        id: dockerRegistryNodeBindings.id,
-        nodeId: dockerRegistryNodeBindings.nodeId,
-        buildId: dockerRegistryNodeBindings.contextId,
-      })
-      .from(dockerRegistryNodeBindings)
-      .where(and(eq(dockerRegistryNodeBindings.contextKind, 'build'), eq(dockerRegistryNodeBindings.status, 'active')));
-    if (!bindings.length) return;
-    const buildIds = bindings.map(({ buildId }) => buildId).filter((id) => /^[0-9a-f-]{36}$/i.test(id));
-    const builds = buildIds.length
-      ? await this.db
-          .select({ id: dockerBuilds.id, status: dockerBuilds.status, builderNodeId: dockerBuilds.builderNodeId })
-          .from(dockerBuilds)
-          .where(inArray(dockerBuilds.id, buildIds))
-      : [];
-    const active = new Map(builds.map((build) => [build.id, build]));
-    const activeStatuses = new Set(['claimed', 'checking_out', 'building', 'scanning', 'pushing']);
-    const abandoned = bindings.filter((binding) => {
-      const build = active.get(binding.buildId);
-      return !build || !activeStatuses.has(build.status) || build.builderNodeId !== binding.nodeId;
-    });
-    for (const binding of abandoned) {
-      await this.revokeBinding(binding.id);
+    // One binding that cannot be revoked (its builder offline) must not hold back the others or the token refresh.
+    for (const binding of await abandonedBuildBindings(this.db)) {
+      await this.revokeBinding(binding.id).catch((error) =>
+        this.failures.report('revoke', error, { bindingId: binding.id, nodeId: binding.nodeId })
+      );
     }
   }
 

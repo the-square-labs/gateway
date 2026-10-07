@@ -131,6 +131,29 @@ const INTERNAL_REGISTRY_ID = 'gateway-internal-registry';
 const INTERNAL_REGISTRY_CERTIFICATE_ID = 'local:gateway-internal-registry';
 const REGISTRY_ROUTE_OWNER_KINDS = ['registry_secure_link', 'registry_ingress'] as const;
 type RegistryRouteOwnerKind = (typeof REGISTRY_ROUTE_OWNER_KINDS)[number];
+type RelayOwnerKind =
+  | 'database_backup_source'
+  | 'database_backup_restore'
+  | 'storage_backup_target'
+  | 'storage_backup_staging'
+  | 'managed_storage'
+  | 'managed_storage_binding'
+  | 'managed_storage_gateway'
+  | 'managed_database_binding'
+  | 'managed_database_gateway'
+  | 'managed_database'
+  | 'proxy_host_secure_link'
+  | 'container_link'
+  | RegistryRouteOwnerKind
+  | 'internal_registry';
+/** Owner kinds that own relay endpoints as well as routes. */
+const ENDPOINT_OWNER_KINDS: ReadonlySet<RelayOwnerKind> = new Set([
+  'managed_database',
+  'managed_storage',
+  'proxy_host_secure_link',
+  'container_link',
+  'internal_registry',
+]);
 
 /**
  * Whether the daemon must open the listener anew: its network, address or port changed. A change of the workloads it
@@ -360,6 +383,8 @@ export class RelayPolicyService {
   >;
   private lastGrantRefreshAt = 0;
   private lastGrantRefreshRevision = 0;
+  /** Daemons whose last grant refresh failed: retried alone until the next full refresh is due. */
+  private failedGrantRefreshNodeIds = new Set<string>();
   private readonly grantIssuer: RelayGrantIssuerService;
   private readonly linkRoutes: RelayLinkRoutes;
   private readonly grantKeys: RelayGrantKeyService;
@@ -369,6 +394,8 @@ export class RelayPolicyService {
   private localRelayInstanceId: string | null = null;
   private relaySettingsSync: Promise<void> = Promise.resolve();
   private snapshotSync: Promise<unknown> = Promise.resolve();
+  /** The snapshot sync queued behind the running one and not started yet; see syncSnapshot. */
+  private queuedSnapshotSync: Promise<number> | null = null;
   private readonly nodeGrantSyncs = new Map<
     string,
     Promise<Awaited<ReturnType<NodeDispatchService['sendRelayGrantBundle']>>>
@@ -891,8 +918,15 @@ export class RelayPolicyService {
 
   syncSnapshot(): Promise<number> {
     // Publish in build order, and always build after earlier callers finish:
-    // coalescing can hand a policy writer an ACK for a pre-write projection.
-    const sync = this.snapshotSync.then(() => this.syncSnapshotOnce());
+    // joining a running build can hand a policy writer an ACK for a pre-write projection.
+    // A build that has not started yet reads the policy when it starts, after every write of
+    // the callers that join it, so a burst of callers shares one queued build.
+    if (this.queuedSnapshotSync) return this.queuedSnapshotSync;
+    const sync: Promise<number> = this.snapshotSync.then(() => {
+      if (this.queuedSnapshotSync === sync) this.queuedSnapshotSync = null;
+      return this.syncSnapshotOnce();
+    });
+    this.queuedSnapshotSync = sync;
     this.snapshotSync = sync.catch(() => undefined);
     return sync;
   }
@@ -1396,7 +1430,7 @@ export class RelayPolicyService {
           .set({
             subjectId: nodeId,
             certificateSha256: node.certificateFingerprint,
-            generation: current.generation + 1,
+            generation: sql`${relayEndpoints.generation} + 1`,
             updatedAt: new Date(),
           })
           .where(eq(relayEndpoints.id, current.id));
@@ -1446,7 +1480,7 @@ export class RelayPolicyService {
           .set({
             subjectId: nodeId,
             certificateSha256: node.certificateFingerprint,
-            generation: current.generation + 1,
+            generation: sql`${relayEndpoints.generation} + 1`,
             updatedAt: new Date(),
           })
           .where(eq(relayEndpoints.id, current.id));
@@ -1691,7 +1725,7 @@ export class RelayPolicyService {
           .set({
             subjectId: targetNodeId,
             certificateSha256: target.certificateFingerprint,
-            generation: current.generation + 1,
+            generation: sql`${relayEndpoints.generation} + 1`,
             status: 'active',
             updatedAt: new Date(),
           })
@@ -2176,14 +2210,10 @@ export class RelayPolicyService {
   }
 
   async revokeBackupRoutes(runId: string): Promise<void> {
-    for (const kind of [
-      'database_backup_source',
-      'database_backup_restore',
-      'storage_backup_target',
-      'storage_backup_staging',
-    ] as const) {
-      await this.revokeOwner(kind, runId);
-    }
+    await this.revokeOwners(
+      ['database_backup_source', 'database_backup_restore', 'storage_backup_target', 'storage_backup_staging'],
+      runId
+    );
   }
 
   /**
@@ -2329,75 +2359,82 @@ export class RelayPolicyService {
   }
 
   async revokeOwner(
-    ownerKind:
-      | 'database_backup_source'
-      | 'database_backup_restore'
-      | 'storage_backup_target'
-      | 'storage_backup_staging'
-      | 'managed_storage'
-      | 'managed_storage_binding'
-      | 'managed_storage_gateway'
-      | 'managed_database_binding'
-      | 'managed_database_gateway'
-      | 'managed_database'
-      | 'proxy_host_secure_link'
-      | 'container_link'
-      | RegistryRouteOwnerKind
-      | 'internal_registry',
+    ownerKind: RelayOwnerKind,
     ownerId: string,
     options: { allowDeferredSnapshot?: boolean } = {}
   ): Promise<void> {
-    const [ownedRoutes, ownedEndpoints] = await Promise.all([
-      this.db
-        .select({ nodeId: relayRoutes.sourceId, sourceKind: relayRoutes.sourceKind })
-        .from(relayRoutes)
-        .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId))),
-      ownerKind === 'managed_database' ||
-      ownerKind === 'managed_storage' ||
-      ownerKind === 'proxy_host_secure_link' ||
-      ownerKind === 'container_link' ||
-      ownerKind === 'internal_registry'
-        ? this.db
-            .select({ nodeId: relayEndpoints.subjectId })
-            .from(relayEndpoints)
-            .where(and(eq(relayEndpoints.ownerKind, ownerKind), eq(relayEndpoints.ownerId, ownerId)))
-        : Promise.resolve([]),
-    ]);
-    await this.db.transaction(async (tx) => {
+    await this.revokeOwners([ownerKind], ownerId, options);
+  }
+
+  /**
+   * Deletes the relay state an owner id holds under any of these kinds and withdraws it. Only daemons whose grants
+   * lose something get a new bundle: the subjects of the owned endpoints, the sources of every deleted route (owned
+   * or cascaded with an owned endpoint) and the subjects of the endpoints the deleted routes led to, whose bundles
+   * carry their inbound routes. Any other change a deletion causes reaches the rest with the routine refresh.
+   */
+  private async revokeOwners(
+    ownerKinds: RelayOwnerKind[],
+    ownerId: string,
+    options: { allowDeferredSnapshot?: boolean } = {}
+  ): Promise<void> {
+    const endpointKinds = ownerKinds.filter((kind) => ENDPOINT_OWNER_KINDS.has(kind));
+    const affectedNodes = await this.db.transaction(async (tx) => {
+      const [ownedRoutes, ownedEndpoints] = await Promise.all([
+        tx
+          .select({
+            sourceKind: relayRoutes.sourceKind,
+            sourceId: relayRoutes.sourceId,
+            subjectKind: relayEndpoints.subjectKind,
+            subjectId: relayEndpoints.subjectId,
+          })
+          .from(relayRoutes)
+          .innerJoin(relayEndpoints, eq(relayRoutes.targetEndpointId, relayEndpoints.id))
+          .where(and(inArray(relayRoutes.ownerKind, ownerKinds), eq(relayRoutes.ownerId, ownerId))),
+        endpointKinds.length
+          ? tx
+              .select({
+                subjectKind: relayEndpoints.subjectKind,
+                subjectId: relayEndpoints.subjectId,
+                sourceKind: relayRoutes.sourceKind,
+                sourceId: relayRoutes.sourceId,
+              })
+              .from(relayEndpoints)
+              .leftJoin(relayRoutes, eq(relayRoutes.targetEndpointId, relayEndpoints.id))
+              .where(and(inArray(relayEndpoints.ownerKind, endpointKinds), eq(relayEndpoints.ownerId, ownerId)))
+          : Promise.resolve([]),
+      ]);
       const routes = await tx
         .delete(relayRoutes)
-        .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId)))
+        .where(and(inArray(relayRoutes.ownerKind, ownerKinds), eq(relayRoutes.ownerId, ownerId)))
         .returning({ id: relayRoutes.id });
-      const endpoints =
-        ownerKind === 'managed_database' ||
-        ownerKind === 'managed_storage' ||
-        ownerKind === 'proxy_host_secure_link' ||
-        ownerKind === 'container_link' ||
-        ownerKind === 'internal_registry'
-          ? await tx
-              .delete(relayEndpoints)
-              .where(and(eq(relayEndpoints.ownerKind, ownerKind), eq(relayEndpoints.ownerId, ownerId)))
-              .returning({ id: relayEndpoints.id })
-          : [];
-      if (routes.length || endpoints.length) await bumpRelayPolicyRevision(tx);
+      const endpoints = endpointKinds.length
+        ? await tx
+            .delete(relayEndpoints)
+            .where(and(inArray(relayEndpoints.ownerKind, endpointKinds), eq(relayEndpoints.ownerId, ownerId)))
+            .returning({ id: relayEndpoints.id })
+        : [];
+      if (!routes.length && !endpoints.length) return [];
+      await bumpRelayPolicyRevision(tx);
+      return [
+        ...new Set(
+          [...ownedRoutes, ...ownedEndpoints].flatMap((row) => [
+            ...(row.subjectKind === 'daemon' ? [row.subjectId] : []),
+            ...(row.sourceKind === 'daemon' && row.sourceId ? [row.sourceId] : []),
+          ])
+        ),
+      ];
     });
+    // Also when nothing was deleted: a retry after a failed snapshot still publishes the earlier deletion.
     try {
       await this.syncSnapshot();
     } catch (error) {
       if (!options.allowDeferredSnapshot) throw error;
       logger.warn('Relay owner revocation persisted; runtime snapshot update deferred', {
-        ownerKind,
+        ownerKind: ownerKinds.join(','),
         ownerId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    const affectedNodes = [
-      ...new Set([
-        ...(await this.grantIssuer.policyNodeIds()),
-        ...ownedEndpoints.map(({ nodeId }) => nodeId),
-        ...ownedRoutes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ nodeId }) => nodeId),
-      ]),
-    ];
     await Promise.allSettled(affectedNodes.map((nodeId) => this.syncNodeGrants(nodeId)));
   }
 
@@ -2408,12 +2445,16 @@ export class RelayPolicyService {
       for (const endpoint of endpoints)
         await tx
           .update(relayEndpoints)
-          .set({ certificateSha256, generation: endpoint.generation + 1, updatedAt: new Date() })
+          .set({ certificateSha256, generation: sql`${relayEndpoints.generation} + 1`, updatedAt: new Date() })
           .where(eq(relayEndpoints.id, endpoint.id));
       for (const route of routes)
         await tx
           .update(relayRoutes)
-          .set({ sourceCertificateSha256: certificateSha256, generation: route.generation + 1, updatedAt: new Date() })
+          .set({
+            sourceCertificateSha256: certificateSha256,
+            generation: sql`${relayRoutes.generation} + 1`,
+            updatedAt: new Date(),
+          })
           .where(eq(relayRoutes.id, route.id));
       if (endpoints.length || routes.length) await bumpRelayPolicyRevision(tx);
       return endpoints.length > 0 || routes.length > 0;
@@ -2483,9 +2524,10 @@ export class RelayPolicyService {
           };
         }
         // A bundle the daemon holds already depends on no new policy: skip it before waiting for remote pushes,
-        // which with a busy pool cost every routine sync the whole grace (stand rc20pre3, N-14).
+        // which with a busy pool cost every routine sync the whole grace (stand rc20pre3, N-14). Compared unsigned:
+        // the fingerprint ignores signatures, so an unchanged bundle costs no signing.
         if (options.skipUnchanged) {
-          const unchanged = await this.getNodeGrantBundle(nodeId);
+          const unchanged = await this.getNodeGrantBundle(nodeId, { unsigned: true });
           if (await this.deliveredRecently(nodeId, relayGrantBundleFingerprint(unchanged))) {
             return { commandId: '', success: true, error: '', detail: 'unchanged', data: Buffer.alloc(0) };
           }
@@ -2608,23 +2650,37 @@ export class RelayPolicyService {
     return true;
   }
 
+  /**
+   * Refreshes every daemon's grants once per revision and interval. The routine refresh skips a daemon that already
+   * holds the same grants (deliveredRecently); a forced one (new signing key, relay certificate or runtime settings)
+   * resends every bundle. A daemon that is not connected gets its bundle when it reconnects; one whose delivery failed
+   * is retried alone by the next pass, so one unreachable daemon no longer makes every pass resend to all of them.
+   */
   async refreshAllNodeGrantsIfDue(force = false): Promise<void> {
     const revision = Number((await this.grantIssuer.requireState()).revision);
     const ttlHours = (await this.settings.getConfig()).relayGrantTtlHours;
     const intervalMs = (ttlHours * 60 * 60 * 1000) / 4;
-    if (!force && revision === this.lastGrantRefreshRevision && Date.now() - this.lastGrantRefreshAt < intervalMs)
-      return;
-    const nodeIds = await this.grantIssuer.policyNodeIds();
-    const results = await Promise.allSettled(nodeIds.map((nodeId) => this.syncNodeGrants(nodeId)));
-    const failures = results.filter((result) => result.status === 'rejected');
-    if (failures.length) throw new Error(`Failed to refresh relay grants for ${failures.length} daemon(s)`);
-    this.lastGrantRefreshAt = Date.now();
-    this.lastGrantRefreshRevision = revision;
+    const due =
+      force || revision !== this.lastGrantRefreshRevision || Date.now() - this.lastGrantRefreshAt >= intervalMs;
+    if (!due && this.failedGrantRefreshNodeIds.size === 0) return;
+    const nodeIds = due ? await this.grantIssuer.policyNodeIds() : [...this.failedGrantRefreshNodeIds];
+    const connected = nodeIds.filter((nodeId) => this.dispatch?.isNodeConnected(nodeId));
+    const options = force ? {} : ROUTINE_GRANT_SYNC;
+    const results = await Promise.allSettled(connected.map((nodeId) => this.syncNodeGrants(nodeId, options)));
+    this.failedGrantRefreshNodeIds = new Set(connected.filter((_, index) => results[index]!.status === 'rejected'));
+    if (due) {
+      this.lastGrantRefreshAt = Date.now();
+      this.lastGrantRefreshRevision = revision;
+    }
+    if (this.failedGrantRefreshNodeIds.size) {
+      throw new Error(`Failed to refresh relay grants for ${this.failedGrantRefreshNodeIds.size} daemon(s)`);
+    }
   }
 
-  async getNodeGrantBundle(nodeId: string): Promise<RelayGrantBundle> {
+  /** `unsigned`: only to compare with a delivered bundle (see RelayGrantIssuerService.getNodeGrantBundle). */
+  async getNodeGrantBundle(nodeId: string, options: { unsigned?: boolean } = {}): Promise<RelayGrantBundle> {
     const [bundle, config] = await Promise.all([
-      this.withAcknowledgedPolicy(() => this.grantIssuer.getNodeGrantBundle(nodeId)),
+      this.withAcknowledgedPolicy(() => this.grantIssuer.getNodeGrantBundle(nodeId, options)),
       this.settings.getConfig(),
     ]);
     return { ...bundle, dataLanes: config.relay.dataLanes, readChunkBytes: config.relay.readChunkBytes };
@@ -3147,18 +3203,26 @@ export class RelayPolicyService {
       if (!poolRevision) throw new Error('Relay pool is unavailable');
       // Under the revision lock, so a revocation is always judged against the snapshots built.
       const endpointGenerations = new Map(endpoints.map((endpoint) => [endpoint.id, endpoint.generation]));
+      const routesByEndpoint = new Map<string, typeof routes>();
+      for (const route of routes) {
+        const group = routesByEndpoint.get(route.targetEndpointId) ?? [];
+        group.push(route);
+        routesByEndpoint.set(route.targetEndpointId, group);
+      }
       await recordBuiltSnapshot(
         tx,
         instance.id,
         previous,
-        selectedAssignments.flatMap(({ endpointId }) =>
-          routes.flatMap((route) => {
-            const endpointGeneration = endpointGenerations.get(endpointId);
-            return route.targetEndpointId !== endpointId || endpointGeneration === undefined
-              ? []
-              : [{ routeId: route.id, endpointId, routeGeneration: route.generation, endpointGeneration }];
-          })
-        ),
+        selectedAssignments.flatMap(({ endpointId }) => {
+          const endpointGeneration = endpointGenerations.get(endpointId);
+          if (endpointGeneration === undefined) return [];
+          return (routesByEndpoint.get(endpointId) ?? []).map((route) => ({
+            routeId: route.id,
+            endpointId,
+            routeGeneration: route.generation,
+            endpointGeneration,
+          }));
+        }),
         { key, revision: poolRevision.revision, issuedAtUnix, expiresAtUnix }
       );
       return {

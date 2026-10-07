@@ -37,6 +37,14 @@ const PRIMARY_LEAVE_MS = 6;
  */
 const SWITCH_COST_RATIO = 0.7;
 const SWITCH_MIN_GAIN_MS = 5;
+/**
+ * Rendezvous scores weigh in each relay's live pressure, which drifts. A relay of the current
+ * placement keeps its slot until a challenger beats its score by a quarter: without this margin
+ * two relays whose scores cross moved the endpoint (a new generation, probes and a drain) and
+ * moved it back once the load turned.
+ */
+const MEMBER_SCORE_NUMERATOR = 5n;
+const MEMBER_SCORE_DENOMINATOR = 4n;
 
 export function rendezvousScore(endpointId: string, instance: RelayInstanceRow): bigint {
   const digest = createHash('sha256').update(`${endpointId}:${instance.id}`).digest();
@@ -45,29 +53,35 @@ export function rendezvousScore(endpointId: string, instance: RelayInstanceRow):
   return raw * (100n - pressure);
 }
 
-function byRendezvous(endpointId: string) {
+function byRendezvous(endpointId: string, memberIds?: ReadonlySet<string>) {
+  const score = (instance: RelayInstanceRow) => {
+    const raw = rendezvousScore(endpointId, instance);
+    return memberIds?.has(instance.id) ? (raw * MEMBER_SCORE_NUMERATOR) / MEMBER_SCORE_DENOMINATOR : raw;
+  };
   return (left: RelayInstanceRow, right: RelayInstanceRow) => {
-    const delta = rendezvousScore(endpointId, right) - rendezvousScore(endpointId, left);
+    const delta = score(right) - score(left);
     return delta > 0n ? 1 : delta < 0n ? -1 : left.id.localeCompare(right.id);
   };
 }
 
 /**
  * Fills the slots left after `taken` from ready relays by rendezvous score, one relay per fault
- * domain, until `desiredCount` relays are placed in total.
+ * domain, until `desiredCount` relays are placed in total. `memberIds`: the relays of the current
+ * placement, which keep their slots within a margin (see MEMBER_SCORE_NUMERATOR).
  */
 export function chooseByRendezvous(
   endpointId: string,
   instances: RelayInstanceRow[],
   desiredCount: number,
-  taken: RelayInstanceRow[] = []
+  taken: RelayInstanceRow[] = [],
+  memberIds?: ReadonlySet<string>
 ): RelayInstanceRow[] {
   const takenIds = new Set(taken.map(({ id }) => id));
   const faultDomains = new Set(taken.map(({ faultDomainId }) => faultDomainId));
   const selected: RelayInstanceRow[] = [];
   const ranked = instances
     .filter(({ state, id }) => state === 'ready' && !takenIds.has(id))
-    .sort(byRendezvous(endpointId));
+    .sort(byRendezvous(endpointId, memberIds));
   for (const instance of ranked) {
     if (taken.length + selected.length >= desiredCount) break;
     if (faultDomains.has(instance.faultDomainId)) continue;
@@ -131,12 +145,16 @@ export function chooseRelayAssignments(
     reference.filter(({ role }) => role === 'primary').map(({ relayInstanceId }) => relayInstanceId)
   );
   const keptPrimaries = ready.filter(({ id }) => referencePrimaryIds.has(id));
+  const referenceIds = new Set(reference.map(({ relayInstanceId }) => relayInstanceId));
   let primaries: RelayInstanceRow[];
   if (!costs.size) {
     // Latency reports lapsed (a daemon restarts, a node goes quiet): keep a latency placement
     // whose primaries all still serve instead of flapping back to hashing and forth again.
     if (!referencePrimaryIds.size || keptPrimaries.length !== referencePrimaryIds.size) {
-      return chooseByRendezvous(endpointId, instances, desiredCount).map((instance) => ({ instance, role: 'active' }));
+      return chooseByRendezvous(endpointId, instances, desiredCount, [], referenceIds).map((instance) => ({
+        instance,
+        role: 'active',
+      }));
     }
     primaries = keptPrimaries;
   } else {
@@ -150,7 +168,7 @@ export function chooseRelayAssignments(
     });
   }
   primaries = primaries.slice(0, desiredCount);
-  const standbys = chooseByRendezvous(endpointId, instances, desiredCount, primaries);
+  const standbys = chooseByRendezvous(endpointId, instances, desiredCount, primaries, referenceIds);
   return [
     ...primaries.map((instance) => ({ instance, role: 'primary' as const })),
     ...standbys.map((instance) => ({ instance, role: 'fallback' as const })),

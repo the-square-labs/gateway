@@ -824,12 +824,16 @@ describe('RelayPolicyService snapshots', () => {
       })
       .mockResolvedValueOnce(12);
     const first = expect(service.syncSnapshot()).rejects.toThrow('RPC failed');
+    await Promise.resolve();
     const second = service.syncSnapshot();
+    // Callers that arrive while a build is queued and not started share it.
+    expect(service.syncSnapshot()).toBe(second);
     await Promise.resolve();
     expect(publish).toHaveBeenCalledTimes(1);
     release();
     await first;
     await expect(second).resolves.toBe(12);
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 
   it('refreshes the durable fence for grant issuance but bounds retries and preserves unrelated errors', async () => {
@@ -1258,6 +1262,33 @@ describe('RelayPolicyService snapshots', () => {
     expect(issuer.policyNodeIds).toHaveBeenCalledOnce();
   });
 
+  it('retries only the daemon whose grant refresh failed and skips disconnected ones', async () => {
+    const service = createService({} as never, { applySnapshot: vi.fn() });
+    const issuer = (service as any).grantIssuer;
+    issuer.requireState = vi.fn().mockResolvedValue({ revision: 7 });
+    issuer.policyNodeIds = vi.fn().mockResolvedValue(['up', 'failing', 'offline']);
+    service.setNodeDispatch({ isNodeConnected: (nodeId: string) => nodeId !== 'offline' } as never);
+    const grants = vi.spyOn(service, 'syncNodeGrants').mockImplementation(async (nodeId) => {
+      if (nodeId === 'failing') throw new Error('down');
+    });
+
+    await expect(service.refreshAllNodeGrantsIfDue()).rejects.toThrow('1 daemon(s)');
+    expect(grants.mock.calls).toEqual([
+      ['up', { skipUnchanged: true }],
+      ['failing', { skipUnchanged: true }],
+    ]);
+
+    grants.mockClear();
+    grants.mockResolvedValue(undefined);
+    await service.refreshAllNodeGrantsIfDue();
+    expect(grants.mock.calls).toEqual([['failing', { skipUnchanged: true }]]);
+
+    grants.mockClear();
+    await service.refreshAllNodeGrantsIfDue();
+    expect(grants).not.toHaveBeenCalled();
+    expect(issuer.policyNodeIds).toHaveBeenCalledOnce();
+  });
+
   it('serializes grant bundle generation and dispatch per node', async () => {
     const service = createService({} as never, { applySnapshot: vi.fn() });
     let releaseFirst!: () => void;
@@ -1439,31 +1470,30 @@ describe('RelayPolicyService snapshots', () => {
   });
 
   it('keeps a persisted owner revocation when the runtime snapshot must be deferred', async () => {
+    const joined = (rows: unknown[]) => ({ where: () => Promise.resolve(rows) });
+    const ownedRoute = {
+      sourceKind: 'daemon',
+      sourceId: 'source-node',
+      subjectKind: 'daemon',
+      subjectId: 'target-node',
+    };
+    const ownedEndpoint = { subjectKind: 'daemon', subjectId: 'target-node', sourceKind: null, sourceId: null };
     const select = vi
       .fn()
-      .mockReturnValueOnce({
-        from: () => ({
-          where: () => Promise.resolve([{ nodeId: 'source-node', sourceKind: 'daemon' }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: () => ({ where: () => Promise.resolve([{ nodeId: 'target-node' }]) }),
-      });
+      .mockReturnValueOnce({ from: () => ({ innerJoin: () => joined([ownedRoute]) }) })
+      .mockReturnValueOnce({ from: () => ({ leftJoin: () => joined([ownedEndpoint]) }) });
     const updateWhere = vi.fn().mockResolvedValue(undefined);
     const tx = {
+      select,
       delete: vi.fn(() => ({
         where: () => ({ returning: () => Promise.resolve([{ id: 'deleted' }]) }),
       })),
       update: vi.fn(() => ({ set: () => ({ where: updateWhere }) })),
     };
-    const db = {
-      select,
-      transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)),
-    };
+    const db = { transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)) };
     const service = createService(db, { applySnapshot: vi.fn() });
     vi.spyOn(service, 'syncSnapshot').mockRejectedValue(new Error('relay unavailable'));
-    vi.spyOn(service as any, 'syncNodeGrants').mockResolvedValue(undefined);
-    (service as any).grantIssuer.policyNodeIds = vi.fn().mockResolvedValue([]);
+    const grants = vi.spyOn(service as any, 'syncNodeGrants').mockResolvedValue(undefined);
 
     await expect(
       service.revokeOwner('proxy_host_secure_link', 'proxy-1', { allowDeferredSnapshot: true })
@@ -1472,6 +1502,8 @@ describe('RelayPolicyService snapshots', () => {
     expect(db.transaction).toHaveBeenCalledOnce();
     expect(tx.delete).toHaveBeenCalledTimes(2);
     expect(updateWhere).toHaveBeenCalledOnce();
+    // Only the daemons that lost something get a new bundle.
+    expect(new Set(grants.mock.calls.map(([nodeId]) => nodeId))).toEqual(new Set(['source-node', 'target-node']));
   });
 });
 

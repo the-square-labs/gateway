@@ -65,6 +65,36 @@ describe('RelayGrantKeyService rotation', () => {
     expect(refreshGrants).toHaveBeenCalledOnce();
   });
 
+  it('publishes a pending key at the pool snapshot revision relays report, not the global one', async () => {
+    const now = new Date('2026-09-24T12:00:00Z');
+    const reads = [
+      [], // no pending key yet
+      [{ activatedAt: new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000) }],
+      [{ revision: '1300' }], // the pool runs ahead of the global revision
+      [{ revision: 1001 }],
+    ];
+    const inserted: Array<Record<string, unknown>> = [];
+    const tx: any = {
+      execute: vi.fn(),
+      select: vi.fn(() => queryable(reads.shift() ?? [])),
+      update: vi.fn(() => ({ set: () => ({ where: async () => [] }) })),
+      insert: vi.fn(() => ({
+        values: (values: Record<string, unknown>) => {
+          inserted.push(values);
+          return { returning: async () => [{ id: 'pending' }] };
+        },
+      })),
+    };
+    const db: any = { transaction: vi.fn((callback: (writer: unknown) => unknown) => callback(tx)) };
+    const crypto = { encryptPrivateKey: () => ({ encryptedPrivateKey: 'k', encryptedDek: 'd' }) };
+    const service = new RelayGrantKeyService(db, crypto as never, { getConfig: vi.fn() } as never);
+
+    await expect(service.rotateIfDue(now, vi.fn().mockResolvedValue(1), vi.fn())).resolves.toBe(false);
+
+    // A relay that applied pool revision 1290 before the key existed must not count as acknowledged.
+    expect(inserted).toEqual([expect.objectContaining({ status: 'pending', publishedAtRevision: 1301 })]);
+  });
+
   it('outlasts the relay policy lease', () => {
     expect(GRANT_KEY_PUBLICATION_MS).toBeGreaterThan(15 * 60 * 1000);
   });

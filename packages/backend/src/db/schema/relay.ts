@@ -163,10 +163,10 @@ export const relayGrantSigningKeys = pgTable(
     verifyUntil: timestamp('verify_until', { withTimezone: true }),
     privateKeyDestroyedAt: timestamp('private_key_destroyed_at', { withTimezone: true }),
     retiredAt: timestamp('retired_at', { withTimezone: true }),
-    // The global policy revision that first published this key (while pending) in a snapshot's
-    // policySigningKeys/grantPublicKeys list. A relay whose applied revision is at least this
-    // holds a snapshot that already named the key. Null on rows created before this column
-    // existed; treated as revision 0 (always satisfied) so an in-flight rotation is not stuck.
+    // The first pool snapshot revision whose policySigningKeys/grantPublicKeys list carries this
+    // key (while pending). A relay whose applied revision is at least this holds a snapshot that
+    // already named the key. Null on rows created before this column existed; treated as
+    // revision 0 (always satisfied) so an in-flight rotation is not stuck.
     publishedAtRevision: bigint('published_at_revision', { mode: 'number' }),
   },
   (table) => ({
