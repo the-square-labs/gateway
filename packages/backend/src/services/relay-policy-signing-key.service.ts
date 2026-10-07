@@ -3,6 +3,11 @@ import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { relayInstances, relayPolicySigningKeys } from '@/db/schema/index.js';
 import type { CryptoService } from './crypto.service.js';
+import {
+  PolicyKeyRotationStallLog,
+  type RotationCandidate,
+  rotationParticipants,
+} from './relay-policy-key-rotation.js';
 
 const KEY_ROTATION_MS = 30 * 24 * 60 * 60 * 1000;
 const KEY_OVERLAP_MS = 30 * 60 * 1000;
@@ -14,8 +19,6 @@ const KEY_OVERLAP_MS = 30 * 60 * 1000;
 const REMOTE_ACKNOWLEDGEMENT_DEADLINE_MS = 24 * 60 * 60 * 1000;
 /** Relays accept `validFrom` with the same leeway they give `issuedAt`. Send it early by that much. */
 export const RELAY_POLICY_KEY_VALID_FROM_SKEW_MS = 5 * 60 * 1000;
-
-type RotationCandidate = { kind: string; state: string; health: { policySigningKeyIds?: string[] } | null };
 
 type TrustCandidate = {
   kind?: string;
@@ -33,18 +36,6 @@ type PolicyKeyRecord = {
   retiredAt: Date | null;
   hasPrivateKey: boolean;
 };
-
-/**
- * Relays that must hold a pending key before it may sign. A remote relay counts while it
- * serves or is coming up. The local relay always counts, whatever its state: it pins its
- * trust on first use and learns a new key only from a snapshot signed by the old one, so
- * promoting without it would leave the local relay depending on a retained old key.
- */
-function rotationParticipants<T extends RotationCandidate>(instances: T[]): T[] {
-  return instances.filter(
-    (instance) => instance.kind === 'local' || ['synchronizing', 'ready', 'draining'].includes(instance.state)
-  );
-}
 
 function allPolicyKeysAcknowledged(
   instances: Array<{ health: { policySigningKeyIds?: string[] } | null }>,
@@ -223,6 +214,7 @@ export interface RelayPublishedPolicyKey extends RelayPolicyTrustAnchor {
 
 export class RelayPolicySigningKeyService {
   private retainedKeyIds?: () => Promise<string[]>;
+  private readonly rotationStalls = new PolicyKeyRotationStallLog();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -366,9 +358,18 @@ export class RelayPolicySigningKeyService {
         .limit(1);
       if (!pending) return false;
       const instances = await tx
-        .select({ kind: relayInstances.kind, state: relayInstances.state, health: relayInstances.health })
+        .select({
+          id: relayInstances.id,
+          nodeId: relayInstances.nodeId,
+          kind: relayInstances.kind,
+          state: relayInstances.state,
+          health: relayInstances.health,
+        })
         .from(relayInstances);
-      if (!mayPromote(instances, pending, now)) return false;
+      if (!mayPromote(instances, pending, now)) {
+        this.rotationStalls.report(instances, pending, now);
+        return false;
+      }
       // The previous key keeps its private half: relays that were away during the rotation can
       // learn the new key only from a snapshot it signs. destroyUnneededPrivateKeys drops it once
       // no enrolled relay still depends on it.
