@@ -1073,16 +1073,10 @@ const (
 	secureLinkFailed
 )
 
-// retryableRelayOpenError reports a relay that is restarting (lane transport not ready, stream broken) or a target
-// that has not registered yet (its daemon is restarting). A closed lease gate, a dormant availability member, a
-// session limit or a grant the relay rejects are final.
+// retryableRelayOpenError reports a relay that is restarting or a target that has not registered yet
+// (relaybridge.RetryableOpenError, shared with the docker daemon's sources).
 func retryableRelayOpenError(err error) bool {
-	current, ok := status.FromError(err)
-	if !ok || current.Code() != codes.Unavailable {
-		return false
-	}
-	message := current.Message()
-	return !strings.Contains(message, "dormant") && !strings.Contains(message, "built-in local service")
+	return relaybridge.RetryableOpenError(err)
 }
 
 // secureLinkAttemptFailure describes a failed relay attempt of one connection.
@@ -1355,8 +1349,7 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 }
 
 func openFailure(err error) secureLinkOpenResult {
-	if current, ok := status.FromError(err); ok && current.Code() == codes.Unavailable &&
-		strings.Contains(current.Message(), "target endpoint is restarting") {
+	if relaybridge.TargetRestarting(err) {
 		return secureLinkRestarting
 	}
 	if retryableRelayOpenError(err) {
