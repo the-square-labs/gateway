@@ -19,7 +19,12 @@ export interface RelayStartupFinalizerOptions {
 export type RelayStartupFinalizerResult =
   | { status: 'disabled'; action: null }
   | { status: 'active'; action: RelayStartupAction | null; buildVersion: string }
-  | { status: 'degraded'; action: RelayStartupAction | null; reason: string };
+  /** error: the last failure seen on the way (a health probe, the policy delivery, a recovery step). */
+  | { status: 'degraded'; action: RelayStartupAction | null; reason: string; error?: string };
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export class RelayStartupFinalizerService {
   private readonly expectedVersion: string;
@@ -27,6 +32,7 @@ export class RelayStartupFinalizerService {
   private readonly readinessWaitMs: number;
   private readonly readinessPollMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private lastError: string | undefined;
 
   constructor(
     private readonly client: Pick<RelayControlClient, 'getHealth' | 'reloadIdentity'> | null,
@@ -49,7 +55,10 @@ export class RelayStartupFinalizerService {
       // while the relay kept its external listener and tunnel sessions alive.
       // Apply those files before readiness is evaluated; a missing relay is
       // handled by the normal start/recreate path below.
-      await this.client.reloadIdentity().catch(() => false);
+      await this.client.reloadIdentity().catch((error) => {
+        this.lastError = errorMessage(error);
+        return false;
+      });
       let initial = await this.probe();
       if (initial && this.isExpected(initial)) {
         return { status: 'active', action: null, buildVersion: initial.buildVersion };
@@ -58,7 +67,9 @@ export class RelayStartupFinalizerService {
       // while Gateway was down, or it refused the last one. Deliver it before judging the
       // container; recreating a live relay for that would only drop its sessions.
       if (!initial && this.options.syncPolicy && (await this.probeLive())) {
-        await this.options.syncPolicy().catch(() => undefined);
+        await this.options.syncPolicy().catch((error) => {
+          this.lastError = errorMessage(error);
+        });
         initial = await this.probe();
         if (initial && this.isExpected(initial)) {
           return { status: 'active', action: null, buildVersion: initial.buildVersion };
@@ -87,7 +98,7 @@ export class RelayStartupFinalizerService {
         action = await this.recovery.recreateExpected();
         ready = await this.waitForReadiness();
       }
-      if (!ready) return { status: 'degraded', action, reason: 'unreachable' };
+      if (!ready) return { status: 'degraded', action, reason: 'unreachable', ...this.errorDetail() };
       if (!this.isExpected(ready)) {
         return { status: 'degraded', action, reason: 'contract_mismatch' };
       }
@@ -97,8 +108,13 @@ export class RelayStartupFinalizerService {
         status: 'degraded',
         action,
         reason: error instanceof RelayRecoverySafetyError ? error.reason : 'unreachable',
+        error: errorMessage(error),
       };
     }
+  }
+
+  private errorDetail(): { error?: string } {
+    return this.lastError ? { error: this.lastError } : {};
   }
 
   private isExpected(response: RelayHealthResponse): boolean {
@@ -127,7 +143,8 @@ export class RelayStartupFinalizerService {
     try {
       const response = await this.client!.getHealth(2_000);
       return response.liveness && response.readiness ? response : null;
-    } catch {
+    } catch (error) {
+      this.lastError = errorMessage(error);
       return null;
     }
   }
