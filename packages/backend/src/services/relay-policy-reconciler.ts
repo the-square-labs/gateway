@@ -80,104 +80,111 @@ export async function updateManagedDatabaseRelayStatus(
 }
 
 export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Promise<void> {
-  const [databases, bindings, bindingPlacements, availabilityPolicies, identities] = await Promise.all([
-    db
-      .select({
-        id: managedDatabaseInstances.id,
-        nodeId: managedDatabaseInstances.nodeId,
-        status: managedDatabaseInstances.status,
-      })
-      .from(managedDatabaseInstances),
-    db
-      .select({
-        id: managedDatabaseBindings.id,
-        managedDatabaseId: managedDatabaseBindings.managedDatabaseId,
-        sourceNodeId: managedDatabaseBindings.targetNodeId,
-        targetType: managedDatabaseBindings.targetType,
-        targetResourceId: managedDatabaseBindings.targetResourceId,
-        desiredState: managedDatabaseBindings.desiredState,
-        status: managedDatabaseBindings.status,
-      })
-      .from(managedDatabaseBindings),
-    db
-      .select({
-        id: managedDatabaseBindingPlacements.id,
-        bindingId: managedDatabaseBindingPlacements.bindingId,
-        availabilityPlacementId: managedDatabaseBindingPlacements.availabilityPlacementId,
-        sourceNodeId: managedDatabaseBindingPlacements.nodeId,
-        desiredState: managedDatabaseBindingPlacements.desiredState,
-        status: managedDatabaseBindingPlacements.status,
-      })
-      .from(managedDatabaseBindingPlacements),
-    db
-      .select({
-        mode: dockerAvailabilityPolicies.mode,
-        status: dockerAvailabilityPolicies.status,
-        resourceKind: dockerAvailabilityPolicies.resourceKind,
-        sourceNodeId: dockerAvailabilityPolicies.sourceNodeId,
-        containerName: dockerAvailabilityPolicies.containerName,
-        deploymentId: dockerAvailabilityPolicies.deploymentId,
-        composeProjectId: dockerAvailabilityPolicies.composeProjectId,
-      })
-      .from(dockerAvailabilityPolicies),
-    db.select({ id: nodes.id, certificateFingerprint: nodes.certificateFingerprint }).from(nodes),
-  ]);
-  const fingerprints = new Map(
-    identities
-      .filter(({ certificateFingerprint }) => Boolean(certificateFingerprint))
-      .map(({ id, certificateFingerprint }) => [id, certificateFingerprint!])
-  );
-  const activeAvailabilityPolicies = availabilityPolicies.filter(
-    ({ mode, status }) => mode !== 'single' && status !== 'disabling'
-  );
-  const availabilityManagedBindingIds = new Set(
-    bindings
-      .filter((binding) =>
-        activeAvailabilityPolicies.some((policy) => {
-          if (binding.targetType === 'container') {
-            return (
-              policy.resourceKind === 'container' &&
-              policy.sourceNodeId === binding.sourceNodeId &&
-              policy.containerName === binding.targetResourceId
-            );
-          }
-          if (binding.targetType === 'deployment') {
-            return policy.resourceKind === 'deployment' && policy.deploymentId === binding.targetResourceId;
-          }
-          return (
-            policy.resourceKind === 'compose' && policy.composeProjectId === binding.targetResourceId.split(':', 1)[0]
-          );
-        })
-      )
-      .map(({ id }) => id)
-  );
-  const parentBindings = new Map(bindings.map((binding) => [binding.id, binding]));
-  const relayBindings = [
-    ...bindings.filter(({ id }) => !availabilityManagedBindingIds.has(id)),
-    ...bindingPlacements.flatMap((placement) => {
-      if (!placement.availabilityPlacementId) return [];
-      const parent = parentBindings.get(placement.bindingId);
-      return parent
-        ? [
-            {
-              id: placement.id,
-              managedDatabaseId: parent.managedDatabaseId,
-              sourceNodeId: placement.sourceNodeId,
-              desiredState: placement.desiredState,
-              status: placement.status,
-            },
-          ]
-        : [];
-    }),
-  ];
-
   await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-policy-reconciliation'))`);
-    let changed = false;
+    // Everything is read under the lock, relay state first: an endpoint or route created while another pass held the
+    // lock must not be judged by data read before it existed (it would be deleted, with every route to it). Every
+    // database and link row is committed before its relay state, so the owner of every row read here is visible below.
     const existingEndpoints = await tx
       .select()
       .from(relayEndpoints)
       .where(eq(relayEndpoints.ownerKind, 'managed_database'));
+    const existingRoutes = await tx
+      .select()
+      .from(relayRoutes)
+      .where(eq(relayRoutes.ownerKind, 'managed_database_binding'));
+    const [databases, bindings, bindingPlacements, availabilityPolicies, identities] = await Promise.all([
+      tx
+        .select({
+          id: managedDatabaseInstances.id,
+          nodeId: managedDatabaseInstances.nodeId,
+          status: managedDatabaseInstances.status,
+        })
+        .from(managedDatabaseInstances),
+      tx
+        .select({
+          id: managedDatabaseBindings.id,
+          managedDatabaseId: managedDatabaseBindings.managedDatabaseId,
+          sourceNodeId: managedDatabaseBindings.targetNodeId,
+          targetType: managedDatabaseBindings.targetType,
+          targetResourceId: managedDatabaseBindings.targetResourceId,
+          desiredState: managedDatabaseBindings.desiredState,
+          status: managedDatabaseBindings.status,
+        })
+        .from(managedDatabaseBindings),
+      tx
+        .select({
+          id: managedDatabaseBindingPlacements.id,
+          bindingId: managedDatabaseBindingPlacements.bindingId,
+          availabilityPlacementId: managedDatabaseBindingPlacements.availabilityPlacementId,
+          sourceNodeId: managedDatabaseBindingPlacements.nodeId,
+          desiredState: managedDatabaseBindingPlacements.desiredState,
+          status: managedDatabaseBindingPlacements.status,
+        })
+        .from(managedDatabaseBindingPlacements),
+      tx
+        .select({
+          mode: dockerAvailabilityPolicies.mode,
+          status: dockerAvailabilityPolicies.status,
+          resourceKind: dockerAvailabilityPolicies.resourceKind,
+          sourceNodeId: dockerAvailabilityPolicies.sourceNodeId,
+          containerName: dockerAvailabilityPolicies.containerName,
+          deploymentId: dockerAvailabilityPolicies.deploymentId,
+          composeProjectId: dockerAvailabilityPolicies.composeProjectId,
+        })
+        .from(dockerAvailabilityPolicies),
+      tx.select({ id: nodes.id, certificateFingerprint: nodes.certificateFingerprint }).from(nodes),
+    ]);
+    const fingerprints = new Map(
+      identities
+        .filter(({ certificateFingerprint }) => Boolean(certificateFingerprint))
+        .map(({ id, certificateFingerprint }) => [id, certificateFingerprint!])
+    );
+    const activeAvailabilityPolicies = availabilityPolicies.filter(
+      ({ mode, status }) => mode !== 'single' && status !== 'disabling'
+    );
+    const availabilityManagedBindingIds = new Set(
+      bindings
+        .filter((binding) =>
+          activeAvailabilityPolicies.some((policy) => {
+            if (binding.targetType === 'container') {
+              return (
+                policy.resourceKind === 'container' &&
+                policy.sourceNodeId === binding.sourceNodeId &&
+                policy.containerName === binding.targetResourceId
+              );
+            }
+            if (binding.targetType === 'deployment') {
+              return policy.resourceKind === 'deployment' && policy.deploymentId === binding.targetResourceId;
+            }
+            return (
+              policy.resourceKind === 'compose' && policy.composeProjectId === binding.targetResourceId.split(':', 1)[0]
+            );
+          })
+        )
+        .map(({ id }) => id)
+    );
+    const parentBindings = new Map(bindings.map((binding) => [binding.id, binding]));
+    const relayBindings = [
+      ...bindings.filter(({ id }) => !availabilityManagedBindingIds.has(id)),
+      ...bindingPlacements.flatMap((placement) => {
+        if (!placement.availabilityPlacementId) return [];
+        const parent = parentBindings.get(placement.bindingId);
+        return parent
+          ? [
+              {
+                id: placement.id,
+                managedDatabaseId: parent.managedDatabaseId,
+                sourceNodeId: placement.sourceNodeId,
+                desiredState: placement.desiredState,
+                status: placement.status,
+              },
+            ]
+          : [];
+      }),
+    ];
+
+    let changed = false;
     const databaseIds = new Set(databases.filter(({ nodeId }) => fingerprints.has(nodeId)).map(({ id }) => id));
     for (const endpoint of existingEndpoints) {
       if (databaseIds.has(endpoint.ownerId)) continue;
@@ -220,10 +227,6 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
 
     const endpoints = await tx.select().from(relayEndpoints).where(eq(relayEndpoints.ownerKind, 'managed_database'));
     const endpointByDatabase = new Map(endpoints.map((endpoint) => [endpoint.ownerId, endpoint]));
-    const existingRoutes = await tx
-      .select()
-      .from(relayRoutes)
-      .where(eq(relayRoutes.ownerKind, 'managed_database_binding'));
     // A link keeps its route from creation until it is deleted. Creation starts the workload with
     // the link before the link is 'ready', and a failed reconcile marks a working link 'error';
     // dropping the route in either state closes the listener the workload connects through.
