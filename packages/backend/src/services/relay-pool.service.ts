@@ -88,6 +88,8 @@ const deferredGeneration = sql`(${relayEndpointAssignmentGenerations.state} = 'r
 const REMOTE_HEARTBEAT_TIMEOUT_MS = 90_000;
 const UPDATE_DRAIN_RELEASE_INTERVAL_MS = 30_000;
 const EVACUATION_RETRY_MS = 30_000;
+/** The same failed lease refresh of a relay is logged as a warning once per interval. */
+const LEASE_REFRESH_REPORT_MS = 30 * 60_000;
 /** Update runs that may still hold a relay drained, and the step states in which they do. */
 const UNFINISHED_UPDATE_RUN_STATES = [
   'preflight',
@@ -199,6 +201,8 @@ export class RelayPoolService {
   private probeRetryDelaysMs = PROBE_RETRY_DELAYS_MS;
   private readonly revocations: Pick<RelayRevocationFenceService, 'evaluate'>;
   private nextUpdateDrainReleaseAt = 0;
+  /** Per remote relay: the lease refresh failure last logged as a warning. */
+  private readonly leaseRefreshFailures = new Map<string, { message: string; at: number }>();
   private certificateRenewal?: Pick<
     RelayCertificateRenewalService,
     'renewDueIfScheduled' | 'describeCertificates' | 'renewInstanceCertificate'
@@ -1206,7 +1210,7 @@ export class RelayPoolService {
 
   async refreshRemotePolicies(): Promise<void> {
     const instances = await this.db
-      .select({ nodeId: relayInstances.nodeId })
+      .select({ nodeId: relayInstances.nodeId, policyExpiresAt: relayInstances.policyExpiresAt })
       .from(relayInstances)
       .where(
         and(
@@ -1215,10 +1219,34 @@ export class RelayPoolService {
           inArray(relayInstances.state, ['synchronizing', 'ready', 'draining'])
         )
       );
-    await Promise.allSettled(
-      instances.flatMap(({ nodeId }) => (nodeId ? [this.policy.syncRemoteInstancePolicy(nodeId)] : []))
+    await Promise.all(
+      instances.map(async ({ nodeId, policyExpiresAt }) => {
+        if (!nodeId) return;
+        try {
+          await this.policy.syncRemoteInstancePolicy(nodeId);
+          this.leaseRefreshFailures.delete(nodeId);
+        } catch (error) {
+          this.reportLeaseRefreshFailure(nodeId, policyExpiresAt, error);
+        }
+      })
     );
     await this.policy.finalizePolicySigningKeyRotation();
+  }
+
+  /**
+   * This refresh renews the policy lease of a relay that missed the pushes of policy changes: one that keeps failing
+   * runs its lease down and then refuses every tunnel. Logged once per failure and interval, with the lease's end.
+   */
+  private reportLeaseRefreshFailure(nodeId: string, policyExpiresAt: Date | null, error: unknown, now = Date.now()) {
+    const message = error instanceof Error ? error.message : String(error);
+    const context = { nodeId, policyExpiresAt: policyExpiresAt?.toISOString() ?? null, error: message };
+    const last = this.leaseRefreshFailures.get(nodeId);
+    if (last?.message === message && now - last.at < LEASE_REFRESH_REPORT_MS) {
+      logger.debug('Remote relay policy lease refresh failed again', context);
+      return;
+    }
+    this.leaseRefreshFailures.set(nodeId, { message, at: now });
+    logger.warn('Remote relay policy lease refresh failed; retried in 5 minutes', context);
   }
 
   async ensureLegacyCompatibleAssignment(endpointId: string): Promise<void> {
