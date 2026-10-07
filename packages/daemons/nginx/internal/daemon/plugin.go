@@ -195,6 +195,8 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		p.cfg.Nginx.Binary,
 		p.mgr.CachedPID,
 	)
+	p.secureLinks.shedLog = p.secureLinkShedLog("proxy secure-link")
+	p.registryLinks.shedLog = p.secureLinkShedLog("registry ingress")
 	p.secureLinkState, err = securelink.NewStateStore(baseCfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("initialize proxy secure-link state: %w", err)

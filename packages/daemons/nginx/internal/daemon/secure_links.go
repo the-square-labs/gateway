@@ -73,9 +73,11 @@ type sourceLinkManager struct {
 	socketOwnerUID    func() (int, error)
 	renameSocket      func(string, string) error
 	// setup bounds the connections accepted but not yet through to their
-	// relay tunnel; shed counts the ones closed because it was full.
-	setup setupLimiter
-	shed  atomic.Uint64
+	// relay tunnel (each binding's share too); shed counts the ones closed
+	// because it was full, and shedLog reports them per link (nil: none).
+	setup   setupLimiter
+	shed    atomic.Uint64
+	shedLog func(linkID string, attrs ...any)
 	// authorizeTimeout and firstByteWait override the defaults when
 	// positive (tests); set before the first listener starts.
 	authorizeTimeout time.Duration
@@ -95,6 +97,9 @@ type sourceLinkBinding struct {
 	activeMu   sync.Mutex
 	active     map[net.Conn]bool
 	socketOnly bool
+	// setup counts the binding's connections not through to their relay
+	// tunnel yet, within secureLinkSetupLinkLimit.
+	setup setupLimiter
 
 	// Availability data-plane lease (D8, A8): a lease-gated binding's Unix
 	// socket listens only while a relay gate view says availabilityCandidateID
@@ -710,9 +715,7 @@ func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listen
 				continue
 			}
 			backoff = 5 * time.Millisecond
-			if !m.setup.tryAcquire() {
-				m.shed.Add(1)
-				_ = connection.Close()
+			if !m.admitSetup(id, binding, connection) {
 				continue
 			}
 			go m.serve(id, binding, connection, authorizePeer)
@@ -724,7 +727,11 @@ func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listen
 // away, and hands it to the opener.
 func (m *sourceLinkManager) serve(id string, binding *sourceLinkBinding, connection net.Conn, authorizePeer bool) {
 	tracked := newTrackedConn(connection).(*trackedConn)
-	releaseSetup := m.setup.releaseOnce()
+	releaseNode, releaseLink := m.setup.releaseOnce(), binding.setup.releaseOnce()
+	releaseSetup := func() {
+		releaseNode()
+		releaseLink()
+	}
 	tracked.established = releaseSetup
 	defer releaseSetup()
 	authorizeTimeout, firstByteWait := secureLinkAuthorizeTimeout, secureLinkFirstByteWait
