@@ -413,36 +413,60 @@ func (m *dockerRegistryProxyManager) openRelayConnection(ctx context.Context, bi
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
 	}
-	for _, candidate := range m.plugin.orderRelayCandidates(candidates) {
+	// The tunnel is open before the dial returns, so a relay that refuses it is
+	// followed by the next candidate instead of failing the request.
+	route := relayRouteKey(registryRelayOwnerKind, binding.id)
+	refusal := errors.New("registry relay lane is unavailable")
+	for _, candidate := range m.plugin.orderRelayCandidates(route, candidates) {
 		router := m.plugin.relayRouter(candidate.GetRelayInstanceId())
 		if router == nil || candidate.GetGrant() == nil {
 			continue
 		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		tunnel, err := router.openSource(candidate.GetGrant())
+		m.plugin.recordRelayOpen(candidate.GetRelayInstanceId(), route, err)
+		if err != nil {
+			refusal = err
+			continue
+		}
+		// Registry streams end at the local relay: never resumable.
+		tunnel.localService = true
 		client, relaySide := net.Pipe()
 		m.trackConnection(binding.id, client, true)
 		go func() {
 			defer relaySide.Close()
-			// Registry streams end at the local relay: never resumable.
-			_ = router.openSourceTunnel(relaySide, candidate.GetGrant(), nil)
+			tunnel.bridge(relaySide)
 		}()
+		connection := &trackedRegistryConnection{Conn: client, closed: make(chan struct{}), close: func() { m.trackConnection(binding.id, client, false) }}
+		// The transport never cancels a dial context once the dial succeeded:
+		// waiting for it alone kept this goroutine for the life of the process.
 		go func() {
-			<-ctx.Done()
-			_ = client.Close()
+			select {
+			case <-ctx.Done():
+				_ = client.Close()
+			case <-connection.closed:
+			}
 		}()
-		return &trackedRegistryConnection{Conn: client, close: func() { m.trackConnection(binding.id, client, false) }}, nil
+		return connection, nil
 	}
-	return nil, errors.New("registry relay lane is unavailable")
+	return nil, refusal
 }
 
 type trackedRegistryConnection struct {
 	net.Conn
-	once  sync.Once
-	close func()
+	once   sync.Once
+	closed chan struct{}
+	close  func()
 }
 
 func (c *trackedRegistryConnection) Close() error {
 	err := c.Conn.Close()
-	c.once.Do(c.close)
+	c.once.Do(func() {
+		close(c.closed)
+		c.close()
+	})
 	return err
 }
 

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	mobyclient "github.com/moby/moby/client"
@@ -52,6 +51,10 @@ const (
 	// memberProbeRestoreEvery bounds the binding restores a probe starts for a
 	// serving member whose link is not bound yet.
 	memberProbeRestoreEvery = 5 * time.Second
+	// memberReadinessFullRecheck is how often a ready member is probed in full;
+	// memberReadinessMisses failed full re-checks in a row make it not ready.
+	memberReadinessFullRecheck = 30 * time.Second
+	memberReadinessMisses      = 2
 	// deploymentRouterUnavailableHeader marks a response the deployment router
 	// generated itself because it could not reach the active slot.
 	deploymentRouterUnavailableHeader = "X-Gateway-Deployment-Router"
@@ -63,133 +66,6 @@ type memberProbeResult struct {
 	ready       bool
 	fingerprint string
 	known       bool
-}
-
-type memberReadinessEntry struct {
-	ready       bool
-	fingerprint string
-	checkedAt   time.Time
-}
-
-// memberReadiness tracks, per availability policy, whether this node's member
-// workload is ready to take traffic.
-type memberReadiness struct {
-	mu      sync.Mutex
-	entries map[string]memberReadinessEntry
-	// states is the serving state each Secure Link target last registered
-	// with (see memberEndpointState).
-	states map[string]relayv1.EndpointServingState
-	wake   chan struct{}
-}
-
-func newMemberReadiness() *memberReadiness {
-	return &memberReadiness{
-		entries: map[string]memberReadinessEntry{},
-		states:  map[string]relayv1.EndpointServingState{},
-		wake:    make(chan struct{}, 1),
-	}
-}
-
-// recordState remembers the state a link registers with and returns it.
-func (m *memberReadiness) recordState(linkID string, state relayv1.EndpointServingState) relayv1.EndpointServingState {
-	if m == nil {
-		return state
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.states == nil {
-		m.states = map[string]relayv1.EndpointServingState{}
-	}
-	m.states[linkID] = state
-	return state
-}
-
-// tookTraffic reports whether a link last registered as one that takes
-// traffic: SERVING, or UNSPECIFIED (a plain link, which serves).
-func (m *memberReadiness) tookTraffic(linkID string) bool {
-	if m == nil {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	state, ok := m.states[linkID]
-	return ok && state != relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT
-}
-
-// keepLinks forgets the states of links this node no longer targets.
-func (m *memberReadiness) keepLinks(linkIDs map[string]bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for linkID := range m.states {
-		if !linkIDs[linkID] {
-			delete(m.states, linkID)
-		}
-	}
-}
-
-func (m *memberReadiness) ready(policyID string) bool {
-	if m == nil {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.entries[policyID].ready
-}
-
-func (m *memberReadiness) entry(policyID string) (memberReadinessEntry, bool) {
-	if m == nil {
-		return memberReadinessEntry{}, false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	entry, ok := m.entries[policyID]
-	return entry, ok
-}
-
-// set records a probe result and reports whether readiness changed.
-func (m *memberReadiness) set(policyID string, ready bool, fingerprint string, now time.Time) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	previous := m.entries[policyID]
-	m.entries[policyID] = memberReadinessEntry{ready: ready, fingerprint: fingerprint, checkedAt: now}
-	return previous.ready != ready
-}
-
-// reset forgets a policy's readiness (it no longer serves here, or serves
-// anew): the next serve is probed from scratch. Reports whether it was ready.
-func (m *memberReadiness) reset(policyID string) bool {
-	if m == nil {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	previous, ok := m.entries[policyID]
-	delete(m.entries, policyID)
-	return ok && previous.ready
-}
-
-// keepOnly drops the policies that have no member link here any more.
-func (m *memberReadiness) keepOnly(policies map[string][]string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	changed := false
-	for policyID, entry := range m.entries {
-		if _, ok := policies[policyID]; !ok {
-			changed = changed || entry.ready
-			delete(m.entries, policyID)
-		}
-	}
-	return changed
-}
-
-func (m *memberReadiness) signal() {
-	if m == nil {
-		return
-	}
-	select {
-	case m.wake <- struct{}{}:
-	default:
-	}
 }
 
 // availabilityLinkPolicy is the availability policy a Secure Link target on
@@ -318,21 +194,35 @@ func (p *DockerPlugin) refreshMemberReadiness(ctx context.Context, now time.Time
 		if probe == nil {
 			probe = p.probeMemberLinks
 		}
-		// A ready member only needs its containers to be the ones probed.
-		result := probe(ctx, links, known && entry.ready)
+		// A ready member only needs its containers to be the ones probed, but is
+		// probed in full every memberReadinessFullRecheck: an application that
+		// hung or lost its listener in a container that still runs, without an
+		// image health check, otherwise kept the member serving.
+		cheap := known && entry.ready && entry.misses == 0 && now.Sub(entry.fullAt) < memberReadinessFullRecheck
+		result := probe(ctx, links, cheap)
 		if !result.known {
 			continue
 		}
-		ready := result.ready
-		if known && entry.ready && ready && result.fingerprint != entry.fingerprint {
+		ready, full := result.ready, !cheap
+		if cheap && ready && result.fingerprint != entry.fingerprint {
 			// Restarted or replaced since it was probed: probe it in full.
 			result = probe(ctx, links, false)
 			if !result.known {
 				continue
 			}
-			ready = result.ready
+			ready, full = result.ready, true
 		}
-		if p.memberReadiness.set(policyID, ready, result.fingerprint, now) {
+		next := memberReadinessEntry{ready: ready, fingerprint: result.fingerprint, checkedAt: now, fullAt: entry.fullAt}
+		if full {
+			next.fullAt = now
+		}
+		if known && entry.ready && full && !ready && result.fingerprint == entry.fingerprint && entry.misses+1 < memberReadinessMisses {
+			// The same containers failed a full re-check: confirmed by the next
+			// one before the member stops taking traffic, so one slow accept
+			// under load does not fail it over.
+			next.ready, next.misses = true, entry.misses+1
+		}
+		if p.memberReadiness.set(policyID, next) {
 			changed = true
 			p.logger.Info("availability member readiness changed", "policy_id", policyID, "ready", ready)
 		}

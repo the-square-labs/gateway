@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
 
@@ -113,16 +114,12 @@ func runStorageConnector(ctx context.Context, config storageConnectorConfig) err
 		<-ctx.Done()
 		_ = listener.Close()
 	}()
-	for {
-		connection, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return fmt.Errorf("accept storage connector connection: %w", err)
-		}
-		go proxyStorageConnectorConnection(ctx, connection, config, tlsConfig)
-	}
+	// A transient accept error (out of file descriptors) backs off and retries: exiting on it cut every storage
+	// session of the binding (B-22). Only the stop closes the listener.
+	netaccept.Serve(listener, ctx.Done(), func(connection net.Conn) {
+		proxyStorageConnectorConnection(ctx, connection, config, tlsConfig)
+	})
+	return nil
 }
 
 func proxyStorageConnectorConnection(ctx context.Context, local net.Conn, config storageConnectorConfig, tlsConfig *tls.Config) {

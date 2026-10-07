@@ -42,8 +42,11 @@ const relayGrantListenerReconcileTimeout = 20 * time.Second
 
 type relayGrantStore struct {
 	file    statecompat.File
+	writeMu sync.Mutex
 	mu      sync.RWMutex
 	current *pb.SyncRelayGrantsCommand
+	// index maps current's assignments (nil: lookups scan current).
+	index   map[relaybridge.AssignmentKey]*pb.RelayGrantAssignment
 	changed chan struct{}
 	// restoredUntil is set while current came from disk and this process has not
 	// accepted a bundle from Gateway yet.
@@ -60,7 +63,7 @@ func newRelayGrantStore(stateDir string) (*relayGrantStore, error) {
 	if !found {
 		return store, nil
 	}
-	store.current = command
+	store.current, store.index = command, relaybridge.IndexAssignments(command)
 	// After a restart announced to the relays (B-13) they hold this daemon's registrations for the next process: it
 	// takes them over at once, with the grants they were made with, instead of leaving them waiting for Gateway.
 	if !consumeRestartMarker(stateDir, time.Now()) {
@@ -87,25 +90,36 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 	if command == nil {
 		return errors.New("relay grant bundle is required")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if command.PolicyRevision < s.current.PolicyRevision {
-		return fmt.Errorf("relay grant revision %d is older than %d", command.PolicyRevision, s.current.PolicyRevision)
+	// writeMu orders the syncs; mu is held only to read and to swap the bundle, so the lookups of new connections
+	// never wait for the state file's fsyncs.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.RLock()
+	current := s.current
+	s.mu.RUnlock()
+	if command.PolicyRevision < current.PolicyRevision {
+		return fmt.Errorf("relay grant revision %d is older than %d", command.PolicyRevision, current.PolicyRevision)
 	}
-	if command.PolicyRevision == s.current.PolicyRevision && command.GeneratedAtUnixMs < s.current.GeneratedAtUnixMs {
-		return fmt.Errorf("relay grant refresh %d is older than %d", command.GeneratedAtUnixMs, s.current.GeneratedAtUnixMs)
+	if command.PolicyRevision == current.PolicyRevision && command.GeneratedAtUnixMs < current.GeneratedAtUnixMs {
+		return fmt.Errorf("relay grant refresh %d is older than %d", command.GeneratedAtUnixMs, current.GeneratedAtUnixMs)
 	}
-	if command.PolicyRevision == s.current.PolicyRevision && proto.Equal(command, s.current) {
+	if command.PolicyRevision == current.PolicyRevision && proto.Equal(command, current) {
+		s.mu.Lock()
 		s.restoredUntil = time.Time{}
+		s.mu.Unlock()
 		return nil
 	}
 	if err := s.file.Write(command); err != nil {
 		return err
 	}
-	runtimeChanged := s.current.GetDataLanes() != command.GetDataLanes() ||
-		!reflect.DeepEqual(relaybridge.RequiredTargets(s.current), relaybridge.RequiredTargets(command))
-	s.current = proto.Clone(command).(*pb.SyncRelayGrantsCommand)
+	runtimeChanged := current.GetDataLanes() != command.GetDataLanes() ||
+		!reflect.DeepEqual(relaybridge.RequiredTargets(current), relaybridge.RequiredTargets(command))
+	next := proto.Clone(command).(*pb.SyncRelayGrantsCommand)
+	index := relaybridge.IndexAssignments(next)
+	s.mu.Lock()
+	s.current, s.index = next, index
 	s.restoredUntil = time.Time{}
+	s.mu.Unlock()
 	if runtimeChanged {
 		select {
 		case s.changed <- struct{}{}:
@@ -129,7 +143,12 @@ func (s *relayGrantStore) get() *pb.SyncRelayGrantsCommand {
 func (s *relayGrantStore) lookup(role, ownerKind, ownerID string) *pb.RelayGrantAssignment {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	assignment := findRelayAssignment(s.current, role, ownerKind, ownerID)
+	var assignment *pb.RelayGrantAssignment
+	if s.index != nil {
+		assignment = s.index[relaybridge.AssignmentKey{Role: role, OwnerKind: ownerKind, OwnerID: ownerID}]
+	} else {
+		assignment = findRelayAssignment(s.current, role, ownerKind, ownerID)
+	}
 	if assignment == nil {
 		return nil
 	}
@@ -141,6 +160,16 @@ func (s *relayGrantStore) readChunkBytes() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.current.GetReadChunkBytes()
+}
+
+// relayReadChunk is the read size of the node's relay bridges: the bundle's relay read chunk, else the default.
+func (p *DockerPlugin) relayReadChunk() int {
+	if p.relayGrants != nil {
+		if chunk := int(p.relayGrants.readChunkBytes()); chunk > 0 {
+			return chunk
+		}
+	}
+	return relaybridge.DefaultChunkBytes
 }
 
 // withCurrent runs read on the current bundle, which read must not modify or

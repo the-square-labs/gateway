@@ -157,7 +157,8 @@ func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer 
 		if len(candidates) == 0 {
 			candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: current.GetGrant()}}
 		}
-		ordered := p.orderRelayCandidates(candidates)
+		route := relayRouteKey(tag.ownerKind, tag.ownerID)
+		ordered := p.orderRelayCandidates(route, candidates)
 		rank := func(candidate *pb.RelayDataCandidate) int {
 			switch {
 			case candidate.GetRelayInstanceId() == avoid:
@@ -178,6 +179,7 @@ func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer 
 				continue
 			}
 			tunnel, openErr := router.openSourceWithin(candidate.GetGrant(), relayresume.OpenTimeout)
+			p.recordRelayOpen(router.targetID, route, openErr)
 			if openErr != nil {
 				err = openErr
 				continue
@@ -319,7 +321,7 @@ func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, 
 		session.Cancel()
 		return
 	}
-	_ = bridgeRelayConnection(connection, session, session.MaxFrame(), session.Cancel)
+	_ = bridgeRelayConnection(connection, session, session.MaxFrame(), relayresume.ReadChunk(min(p.relayReadChunk(), session.MaxFrame())), session.Cancel)
 	session.Cancel()
 }
 

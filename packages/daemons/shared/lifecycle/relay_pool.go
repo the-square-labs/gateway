@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"sync/atomic"
+	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	"google.golang.org/grpc"
@@ -158,35 +159,42 @@ func runRelayPoolTarget(
 	laneCount int,
 	logger *slog.Logger,
 ) {
+	// addressOffset rotates the target's addresses for the next lanes once its
+	// lanes stayed down on the address they were built for.
+	addressOffset := 0
 	for ctx.Err() == nil {
 		target := *currentTarget()
 		targetCtx, cancelTarget := context.WithCancel(ctx)
 		connections := make([]*grpc.ClientConn, 0, laneCount)
 		laneEnded := make(chan struct{}, laneCount)
 		laneDropped := make(chan struct{}, 1)
+		addresses := rotatedRelayAddresses(target.Addresses, addressOffset)
 		// Each lane carries tunnels as soon as it is up: right after a start (a restart or update of the daemon) the
 		// connections the previous process handed over wait for the first lane, not for every lane of the relay.
-		for len(connections) < laneCount && ctx.Err() == nil {
-			var conn *grpc.ClientConn
-			var err error
-			if len(target.Addresses) == 0 {
-				conn, err = connector.ConnectLaneWithRetry(ctx)
-			} else {
-				conn, err = connector.ConnectTargetAttempt(ctx, target.Addresses, target.CertificateIdentity, target.CertificateFingerprint)
+		openLanes := func(connectCtx context.Context) error {
+			for len(connections) < laneCount && connectCtx.Err() == nil {
+				var conn *grpc.ClientConn
+				var err error
+				if len(addresses) == 0 {
+					conn, err = connector.ConnectLaneWithRetry(connectCtx)
+				} else {
+					conn, err = connector.ConnectTargetAttempt(connectCtx, addresses, target.CertificateIdentity, target.CertificateFingerprint)
+				}
+				if err != nil {
+					return err
+				}
+				liveRelayTransports.add(target.ID, conn)
+				connections = append(connections, conn)
+				go keepRelayLaneConnected(targetCtx, conn, laneDropped, laneLeftReady(plugin, target.ID, conn))
+				go func() {
+					plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
+					laneEnded <- struct{}{}
+				}()
 			}
-			if err != nil {
-				logger.Warn("relay target lane connection failed", "relay_instance_id", target.ID, "error", err)
-				break
-			}
-			if len(connections) == 0 {
-				liveRelayTransports.set(target.ID, conn)
-			}
-			connections = append(connections, conn)
-			go keepRelayLaneConnected(targetCtx, conn, laneDropped, laneLeftReady(plugin, target.ID, conn))
-			go func() {
-				plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
-				laneEnded <- struct{}{}
-			}()
+			return nil
+		}
+		if err := openLanes(ctx); err != nil {
+			logger.Warn("relay target lane connection failed", "relay_instance_id", target.ID, "error", err)
 		}
 		if len(connections) == 0 {
 			cancelTarget()
@@ -195,6 +203,19 @@ func runRelayPoolTarget(
 			}
 			continue
 		}
+		// Lanes that failed to open are opened again later: the target otherwise ran with fewer lanes until its
+		// address or certificate changed.
+		var missingLanes *time.Timer
+		retryMissingLanes := func() <-chan time.Time {
+			if len(connections) >= laneCount {
+				return nil
+			}
+			missingLanes = time.NewTimer(relayLaneRetryDelay)
+			return missingLanes.C
+		}
+		missing := retryMissingLanes()
+		// stranded fires once the lanes of a target with several addresses stayed down after a drop.
+		var stranded <-chan time.Time
 	lanesUp:
 		for {
 			dropped := false
@@ -206,17 +227,40 @@ func runRelayPoolTarget(
 			case <-targetChanged:
 			case <-laneDropped:
 				dropped = true
-			}
-			current := *currentTarget()
-			if sameRelayConnection(target, current) || (!dropped && relayLanesReady(connections)) {
+			case <-missing:
+				attemptCtx, cancelAttempt := context.WithTimeout(ctx, relayLaneRetryAttempt)
+				if err := openLanes(attemptCtx); err != nil {
+					logger.Debug("relay target lane connection failed", "relay_instance_id", target.ID, "error", err)
+				}
+				cancelAttempt()
+				missing = retryMissingLanes()
+				continue
+			case <-stranded:
+				stranded = nil
+				if relayLanesDown(connections) {
+					// gRPC reconnects a lane to the address it was built for only: an address that became unreachable
+					// kept the relay out of use although its other address answers. The lanes carry nothing now.
+					addressOffset++
+					logger.Info("relay target lanes stayed down, reconnecting through its next address", "relay_instance_id", target.ID)
+					break lanesUp
+				}
 				continue
 			}
-			logger.Info("relay target address or certificate changed, replacing its lanes",
-				"relay_instance_id", target.ID, "certificate_fingerprint", current.CertificateFingerprint)
-			break lanesUp
+			current := *currentTarget()
+			if !sameRelayConnection(target, current) && (dropped || !relayLanesReady(connections)) {
+				logger.Info("relay target address or certificate changed, replacing its lanes",
+					"relay_instance_id", target.ID, "certificate_fingerprint", current.CertificateFingerprint)
+				break lanesUp
+			}
+			if dropped && len(target.Addresses) > 1 && stranded == nil {
+				stranded = time.After(relayLaneStrandedAfter)
+			}
+		}
+		if missingLanes != nil {
+			missingLanes.Stop()
 		}
 		cancelTarget()
-		liveRelayTransports.clear(target.ID, connections[0])
+		liveRelayTransports.remove(target.ID, connections)
 		for _, conn := range connections {
 			_ = conn.Close()
 		}
@@ -224,6 +268,34 @@ func runRelayPoolTarget(
 			return
 		}
 	}
+}
+
+const (
+	// relayLaneRetryDelay spaces the attempts to open the lanes of a target that failed to open.
+	relayLaneRetryDelay = 15 * time.Second
+	// relayLaneRetryAttempt bounds one such attempt: the lanes that are up wait for it.
+	relayLaneRetryAttempt = 20 * time.Second
+	// relayLaneStrandedAfter is how long every lane of a target with several addresses may stay down after a drop
+	// before they are rebuilt through its next address.
+	relayLaneStrandedAfter = 15 * time.Second
+)
+
+// rotatedRelayAddresses starts the addresses at offset (modulo their count).
+func rotatedRelayAddresses(addresses []string, offset int) []string {
+	if len(addresses) < 2 {
+		return addresses
+	}
+	offset %= len(addresses)
+	return append(append([]string(nil), addresses[offset:]...), addresses[:offset]...)
+}
+
+func relayLanesDown(connections []*grpc.ClientConn) bool {
+	for _, conn := range connections {
+		if conn.GetState() == connectivity.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 // RelayLaneStatePlugin is told when a relay lane leaves the connected state:

@@ -142,7 +142,8 @@ func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
 	}
-	ordered := relayStreamDialOrder(p.orderRelayCandidates(candidates), avoidRelayID, p.relayLaneConnected)
+	route := secureLinkRouteKey(ownerKind, linkID)
+	ordered := relayStreamDialOrder(p.orderRelayCandidates(route, candidates), avoidRelayID, p.relayLaneConnected)
 	lastErr := errors.New("no relay lane is ready")
 	for _, candidate := range ordered {
 		if ctx.Err() != nil {
@@ -159,7 +160,11 @@ func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID
 		}
 		path, err := openRelayStreamPath(ctx, tunnel, grant)
 		if err == nil {
+			p.relayPenalties.Succeeded(tunnel.targetID, route)
 			return path, nil
+		}
+		if relaybridge.PenalizesRelay(err) && ctx.Err() == nil {
+			p.relayPenalties.Failed(tunnel.targetID, route)
 		}
 		lastErr = err
 	}

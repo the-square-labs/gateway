@@ -25,14 +25,17 @@ type TransportLoad struct {
 	// role or distance: a tunnel opened on it waits for the reconnect.
 	Available bool
 	Active    int64
+	// Penalized is a relay that failed this route's tunnel recently
+	// (RelayPenalties): it comes after the others of its role.
+	Penalized bool
 }
 
 // OrderCandidates orders the relays to try for a new source tunnel: relays
 // with a connected transport first, then Gateway's primaries before its
-// standbys, then the nearer path (this node's own measured round trip plus
-// the relay's round trip to the endpoint), then fewer active tunnels, then
-// round-robin from rotation. Candidates without a Gateway role get today's
-// order.
+// standbys, then relays that did not fail the route recently, then the nearer
+// path (this node's own measured round trip plus the relay's round trip to
+// the endpoint), then fewer active tunnels, then round-robin from rotation.
+// Candidates without a Gateway role get today's order.
 func OrderCandidates(
 	candidates []*pb.RelayDataCandidate,
 	transports map[string]TransportLoad,
@@ -63,6 +66,9 @@ func OrderCandidates(
 		}
 		if roleRank(left) != roleRank(right) {
 			return roleRank(left) < roleRank(right)
+		}
+		if transports[leftID].Penalized != transports[rightID].Penalized {
+			return !transports[leftID].Penalized
 		}
 		if tiers[leftID] != tiers[rightID] {
 			return tiers[leftID] < tiers[rightID]

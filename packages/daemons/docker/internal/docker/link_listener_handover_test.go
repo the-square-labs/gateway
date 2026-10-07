@@ -178,8 +178,11 @@ func TestLinkFlowDrainClosesIdleConnectionsAndWaitsForRequests(t *testing.T) {
 }
 
 // Right after a start, a link connection that finds no relay lane waits for one instead of being refused at once;
-// later the refusal is immediate.
+// later it waits only the short transient hold (a relay restarting), not the start's wait.
 func TestRelaySourceWaitsForLanesOnlyAfterTheStart(t *testing.T) {
+	previous := relaySourceTransientWait
+	relaySourceTransientWait = 400 * time.Millisecond
+	t.Cleanup(func() { relaySourceTransientWait = previous })
 	assignment := &pb.RelayGrantAssignment{Role: "connect", OwnerKind: linkKindManagedDatabaseBinding, OwnerId: testListenerBindingA,
 		Grant: &pb.RelaySignedGrant{KeyId: "key-1", Payload: []byte(`{}`)}}
 	plugin := &DockerPlugin{startedAt: time.Now().Add(-relayLaneStartupWait + 300*time.Millisecond)}
@@ -192,9 +195,11 @@ func TestRelaySourceWaitsForLanesOnlyAfterTheStart(t *testing.T) {
 	}
 	plugin.startedAt = time.Now().Add(-relayLaneStartupWait)
 	started = time.Now()
-	_, _ = plugin.openRelaySource(assignment)
-	if waited := time.Since(started); waited > 100*time.Millisecond {
-		t.Fatalf("waited %v for lanes long after the start", waited)
+	if _, err := plugin.openRelaySource(assignment); !errors.Is(err, errRelayLaneUnavailable) {
+		t.Fatalf("open without lanes long after the start: %v", err)
+	}
+	if waited := time.Since(started); waited < 200*time.Millisecond || waited > 2*time.Second {
+		t.Fatalf("waited %v for lanes long after the start, want the transient hold", waited)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	sharedstate "github.com/wiolett-industries/gateway/daemon-shared/state"
@@ -62,6 +63,8 @@ type NginxPlugin struct {
 	registryListenersOnce    sync.Once
 	// secureLinkOutcomes logs Secure Link connection failures and holds per link and state change (L-1).
 	secureLinkOutcomes logepisode.Tracker
+	// relayPenalties orders relays that failed a link's tunnel recently after the others.
+	relayPenalties relaybridge.RelayPenalties
 	// relayStreams is the source side of resumable relay streams (RSv1); relayStreamOutcomes logs their moves
 	// and cuts per link and state change.
 	relayStreams        *relayresume.Manager
@@ -192,6 +195,8 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		p.cfg.Nginx.Binary,
 		p.mgr.CachedPID,
 	)
+	p.secureLinks.shedLog = p.secureLinkShedLog("proxy secure-link")
+	p.registryLinks.shedLog = p.secureLinkShedLog("registry ingress")
 	p.secureLinkState, err = securelink.NewStateStore(baseCfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("initialize proxy secure-link state: %w", err)

@@ -73,9 +73,11 @@ type sourceLinkManager struct {
 	socketOwnerUID    func() (int, error)
 	renameSocket      func(string, string) error
 	// setup bounds the connections accepted but not yet through to their
-	// relay tunnel; shed counts the ones closed because it was full.
-	setup setupLimiter
-	shed  atomic.Uint64
+	// relay tunnel (each binding's share too); shed counts the ones closed
+	// because it was full, and shedLog reports them per link (nil: none).
+	setup   setupLimiter
+	shed    atomic.Uint64
+	shedLog func(linkID string, attrs ...any)
 	// authorizeTimeout and firstByteWait override the defaults when
 	// positive (tests); set before the first listener starts.
 	authorizeTimeout time.Duration
@@ -95,6 +97,9 @@ type sourceLinkBinding struct {
 	activeMu   sync.Mutex
 	active     map[net.Conn]bool
 	socketOnly bool
+	// setup counts the binding's connections not through to their relay
+	// tunnel yet, within secureLinkSetupLinkLimit.
+	setup setupLimiter
 
 	// Availability data-plane lease (D8, A8): a lease-gated binding's Unix
 	// socket listens only while a relay gate view says availabilityCandidateID
@@ -710,9 +715,7 @@ func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listen
 				continue
 			}
 			backoff = 5 * time.Millisecond
-			if !m.setup.tryAcquire() {
-				m.shed.Add(1)
-				_ = connection.Close()
+			if !m.admitSetup(id, binding, connection) {
 				continue
 			}
 			go m.serve(id, binding, connection, authorizePeer)
@@ -724,7 +727,11 @@ func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listen
 // away, and hands it to the opener.
 func (m *sourceLinkManager) serve(id string, binding *sourceLinkBinding, connection net.Conn, authorizePeer bool) {
 	tracked := newTrackedConn(connection).(*trackedConn)
-	releaseSetup := m.setup.releaseOnce()
+	releaseNode, releaseLink := m.setup.releaseOnce(), binding.setup.releaseOnce()
+	releaseSetup := func() {
+		releaseNode()
+		releaseLink()
+	}
 	tracked.established = releaseSetup
 	defer releaseSetup()
 	authorizeTimeout, firstByteWait := secureLinkAuthorizeTimeout, secureLinkFirstByteWait
@@ -1073,16 +1080,10 @@ const (
 	secureLinkFailed
 )
 
-// retryableRelayOpenError reports a relay that is restarting (lane transport not ready, stream broken) or a target
-// that has not registered yet (its daemon is restarting). A closed lease gate, a dormant availability member, a
-// session limit or a grant the relay rejects are final.
+// retryableRelayOpenError reports a relay that is restarting or a target that has not registered yet
+// (relaybridge.RetryableOpenError, shared with the docker daemon's sources).
 func retryableRelayOpenError(err error) bool {
-	current, ok := status.FromError(err)
-	if !ok || current.Code() != codes.Unavailable {
-		return false
-	}
-	message := current.Message()
-	return !strings.Contains(message, "dormant") && !strings.Contains(message, "built-in local service")
+	return relaybridge.RetryableOpenError(err)
 }
 
 // secureLinkAttemptFailure describes a failed relay attempt of one connection.
@@ -1172,7 +1173,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 		// opposed to failing at the transport level or having no lane.
 		memberAnswered := false
 		memberSetupDeadline = time.Time{}
-		ordered := p.orderRelayCandidates(candidates)
+		ordered := p.orderRelayCandidates(secureLinkRouteKey(ownerKind, linkID), candidates)
 		for index, candidate := range ordered {
 			tunnel := p.selectRelayTunnel(candidate.GetRelayInstanceId())
 			if tunnel == nil {
@@ -1219,7 +1220,9 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 					deadline = started.Add(secureLinkRestartHold)
 				}
 			}
-			if index+1 < len(ordered) {
+			// A relay that answered (a refusal, a setup timeout) is remembered (relayPenalties): the next relay is
+			// tried at once. Only a relay failing at the transport level spaces the attempts.
+			if index+1 < len(ordered) && failure != nil && failure.transport {
 				time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
 			}
 		}
@@ -1251,7 +1254,13 @@ func (m *sourceLinkManager) availabilityMember(id string) bool {
 	return binding.availabilityPolicyID != ""
 }
 
-func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
+// secureLinkRouteKey names a link's route for the relay penalties.
+func secureLinkRouteKey(ownerKind, linkID string) string {
+	return ownerKind + "/" + linkID
+}
+
+// orderRelayCandidates orders the candidates of route (secureLinkRouteKey) for a new tunnel.
+func (p *NginxPlugin) orderRelayCandidates(route string, candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
 	if len(candidates) < 2 {
 		return append([]*pb.RelayDataCandidate(nil), candidates...)
 	}
@@ -1261,6 +1270,7 @@ func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) 
 		load := transports[tunnel.targetID]
 		transports[tunnel.targetID] = relaybridge.TransportLoad{
 			Available: load.Available || tunnel.connected(), Active: load.Active + tunnel.active.Load(),
+			Penalized: p.relayPenalties.Penalized(tunnel.targetID, route),
 		}
 	}
 	rotation := p.relaySelection
@@ -1308,7 +1318,12 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 		p.logger.Debug("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", stage, "error", message)
 		return &secureLinkAttemptFailure{relay: tunnel.targetID, stage: stage, err: message}
 	}
+	// A relay that failed the link's tunnel is tried after the others for a while (relaybridge.RelayPenalties).
+	route := secureLinkRouteKey(ownerKind, linkID)
 	failedWith := func(stage string, err error) *secureLinkAttemptFailure {
+		if relaybridge.PenalizesRelay(err) {
+			p.relayPenalties.Failed(tunnel.targetID, route)
+		}
 		failure := failed(stage, err.Error())
 		failure.transport = relayTransportError(err)
 		return failure
@@ -1329,11 +1344,14 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 		if relayError := first.GetError(); relayError != nil {
 			code = relayError.GetCode()
 		}
+		p.relayPenalties.Failed(tunnel.targetID, route)
 		return secureLinkFailed, failed("ready", code)
 	}
 	if !finishSetup() {
+		p.relayPenalties.Failed(tunnel.targetID, route)
 		return secureLinkFailed, failed("deadline", "setup timeout")
 	}
+	p.relayPenalties.Succeeded(tunnel.targetID, route)
 	if opened != nil {
 		opened()
 	}
@@ -1355,8 +1373,7 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 }
 
 func openFailure(err error) secureLinkOpenResult {
-	if current, ok := status.FromError(err); ok && current.Code() == codes.Unavailable &&
-		strings.Contains(current.Message(), "target endpoint is restarting") {
+	if relaybridge.TargetRestarting(err) {
 		return secureLinkRestarting
 	}
 	if retryableRelayOpenError(err) {
