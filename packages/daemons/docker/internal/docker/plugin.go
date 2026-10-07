@@ -16,6 +16,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"github.com/wiolett-industries/gateway/daemon-shared/stream"
@@ -79,6 +80,8 @@ type DockerPlugin struct {
 	registrationChanged      chan struct{}
 	// healthRefresh asks the session for a health report now (container_state_events.go).
 	healthRefresh chan struct{}
+	// relayPenalties orders relays that failed a route's tunnel recently after the others.
+	relayPenalties relaybridge.RelayPenalties
 	// memberReadiness gates availability member endpoints on their workload
 	// (D6); memberProbe replaces its probe in tests.
 	memberReadiness *memberReadiness

@@ -1166,7 +1166,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 		// opposed to failing at the transport level or having no lane.
 		memberAnswered := false
 		memberSetupDeadline = time.Time{}
-		ordered := p.orderRelayCandidates(candidates)
+		ordered := p.orderRelayCandidates(secureLinkRouteKey(ownerKind, linkID), candidates)
 		for index, candidate := range ordered {
 			tunnel := p.selectRelayTunnel(candidate.GetRelayInstanceId())
 			if tunnel == nil {
@@ -1245,7 +1245,13 @@ func (m *sourceLinkManager) availabilityMember(id string) bool {
 	return binding.availabilityPolicyID != ""
 }
 
-func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
+// secureLinkRouteKey names a link's route for the relay penalties.
+func secureLinkRouteKey(ownerKind, linkID string) string {
+	return ownerKind + "/" + linkID
+}
+
+// orderRelayCandidates orders the candidates of route (secureLinkRouteKey) for a new tunnel.
+func (p *NginxPlugin) orderRelayCandidates(route string, candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
 	if len(candidates) < 2 {
 		return append([]*pb.RelayDataCandidate(nil), candidates...)
 	}
@@ -1255,6 +1261,7 @@ func (p *NginxPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) 
 		load := transports[tunnel.targetID]
 		transports[tunnel.targetID] = relaybridge.TransportLoad{
 			Available: load.Available || tunnel.connected(), Active: load.Active + tunnel.active.Load(),
+			Penalized: p.relayPenalties.Penalized(tunnel.targetID, route),
 		}
 	}
 	rotation := p.relaySelection
@@ -1302,7 +1309,12 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 		p.logger.Debug("proxy secure-link relay attempt failed", "link_id", linkID, "relay_instance_id", tunnel.targetID, "stage", stage, "error", message)
 		return &secureLinkAttemptFailure{relay: tunnel.targetID, stage: stage, err: message}
 	}
+	// A relay that failed the link's tunnel is tried after the others for a while (relaybridge.RelayPenalties).
+	route := secureLinkRouteKey(ownerKind, linkID)
 	failedWith := func(stage string, err error) *secureLinkAttemptFailure {
+		if relaybridge.PenalizesRelay(err) {
+			p.relayPenalties.Failed(tunnel.targetID, route)
+		}
 		failure := failed(stage, err.Error())
 		failure.transport = relayTransportError(err)
 		return failure
@@ -1323,11 +1335,14 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 		if relayError := first.GetError(); relayError != nil {
 			code = relayError.GetCode()
 		}
+		p.relayPenalties.Failed(tunnel.targetID, route)
 		return secureLinkFailed, failed("ready", code)
 	}
 	if !finishSetup() {
+		p.relayPenalties.Failed(tunnel.targetID, route)
 		return secureLinkFailed, failed("deadline", "setup timeout")
 	}
+	p.relayPenalties.Succeeded(tunnel.targetID, route)
 	if opened != nil {
 		opened()
 	}

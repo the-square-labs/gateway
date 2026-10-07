@@ -63,8 +63,9 @@ func (p *DockerPlugin) openRelaySourceOnce(assignment *pb.RelayGrantAssignment, 
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.GetGrant()}}
 	}
+	route := relayRouteKey(assignment.GetOwnerKind(), assignment.GetOwnerId())
 	refusal := errRelayLaneUnavailable
-	for _, candidate := range p.orderRelayCandidates(candidates) {
+	for _, candidate := range p.orderRelayCandidates(route, candidates) {
 		router := p.relayRouter(candidate.GetRelayInstanceId())
 		if router == nil {
 			continue
@@ -74,6 +75,7 @@ func (p *DockerPlugin) openRelaySourceOnce(assignment *pb.RelayGrantAssignment, 
 			break
 		}
 		tunnel, err := router.openSourceWithin(candidate.GetGrant(), timeout)
+		p.recordRelayOpen(candidate.GetRelayInstanceId(), route, err)
 		if err == nil {
 			p.makeResumable(tunnel, assignment)
 			return tunnel, nil
@@ -85,14 +87,31 @@ func (p *DockerPlugin) openRelaySourceOnce(assignment *pb.RelayGrantAssignment, 
 	return nil, refusal
 }
 
-func (p *DockerPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
+// relayRouteKey names a route for the relay penalties: one source owner's connect assignment.
+func relayRouteKey(ownerKind, ownerID string) string {
+	return ownerKind + "/" + ownerID
+}
+
+// recordRelayOpen remembers how relayID answered an open of route (relaybridge.RelayPenalties).
+func (p *DockerPlugin) recordRelayOpen(relayID, route string, err error) {
+	switch {
+	case err == nil:
+		p.relayPenalties.Succeeded(relayID, route)
+	case relaybridge.PenalizesRelay(err):
+		p.relayPenalties.Failed(relayID, route)
+	}
+}
+
+// orderRelayCandidates orders the candidates of route (relayRouteKey) for a new source tunnel.
+func (p *DockerPlugin) orderRelayCandidates(route string, candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
 	if len(candidates) < 2 {
 		return append([]*pb.RelayDataCandidate(nil), candidates...)
 	}
 	p.relayTunnelMu.Lock()
 	transports := make(map[string]relaybridge.TransportLoad, len(p.relayTunnels))
 	for targetID, router := range p.relayTunnels {
-		transports[targetID] = relaybridge.TransportLoad{Available: router.connected(), Active: router.active.Load()}
+		transports[targetID] = relaybridge.TransportLoad{Available: router.connected(), Active: router.active.Load(),
+			Penalized: p.relayPenalties.Penalized(targetID, route)}
 	}
 	rotation := p.relaySelection
 	p.relaySelection++

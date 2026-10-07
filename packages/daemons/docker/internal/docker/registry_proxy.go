@@ -413,7 +413,7 @@ func (m *dockerRegistryProxyManager) openRelayConnection(ctx context.Context, bi
 	if len(candidates) == 0 {
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
 	}
-	for _, candidate := range m.plugin.orderRelayCandidates(candidates) {
+	for _, candidate := range m.plugin.orderRelayCandidates(relayRouteKey(registryRelayOwnerKind, binding.id), candidates) {
 		router := m.plugin.relayRouter(candidate.GetRelayInstanceId())
 		if router == nil || candidate.GetGrant() == nil {
 			continue
