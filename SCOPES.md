@@ -9,7 +9,7 @@ All scopes follow `domain:resource:action[:qualifier]`. Resource-scopable scopes
 | `system-admin` | All canonical scopes, including protected `admin:system`. |
 | `admin` | Curated broad access: every scope except `admin:system`, `admin:users:impersonate`, `settings:gateway:edit`, `housekeeping:configure`, `nodes:console`, `ai:skills:manage`, `inference:setup`, the `hosting:*` and `integrations:hosting:*` scopes, and Docker registry create, edit, and delete. |
 | `operator` | Operational access for day-to-day storage (with `storage:credentials:use`, without credential reveal, IAM keys, or bucket admin), database backups (without restore) and backup execution, PKI, proxy, Pages, SSL, ACL, node, database, notification, and logging read/query work. Creates and deploys Docker containers, deployments and Compose projects (image pull, secrets, console, GitLab, GitHub and Git connectors with `use` for build sources), without delete, mounts, export, migration, container file writes, or repository content (`repo:read`/`repo:write`). |
-| `viewer` | Read-only view/discovery access. |
+| `viewer` | Read-only view/discovery access, including GitLab, GitHub, Git, and Cloudflare connectors. Reads that can reveal secrets stay out: Docker volume files, notification webhooks, and logging ingest tokens. |
 | `guest` | Authenticated account access without infrastructure permissions. |
 
 ## Programmatic Access

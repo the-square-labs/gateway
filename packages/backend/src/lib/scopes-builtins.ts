@@ -412,7 +412,10 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'logs:read',
 ];
 
-/** Viewer group: read-only scopes */
+/**
+ * Viewer group: read-only scopes. Volume file reads, webhook configuration and ingest tokens can carry secrets
+ * (see DEMO_ADMIN_EXCLUDED_SCOPES), so they stay out.
+ */
 export const VIEWER_SCOPES: readonly string[] = [
   'storage:view',
   'databases:backups:view',
@@ -430,17 +433,16 @@ export const VIEWER_SCOPES: readonly string[] = [
   'docker:compose:view',
   'docker:images:view',
   'docker:volumes:view',
-  'docker:volumes:files:read',
   'docker:networks:view',
   'docker:registries:view',
   'databases:view',
   'notifications:alerts:view',
-  'notifications:webhooks:view',
   'logs:environments:view',
   'logs:schemas:view',
-  'logs:tokens:view',
   'logs:read',
   'integrations:gitlab:view',
+  'integrations:github:view',
+  'integrations:git:view',
   'integrations:cloudflare:view',
   'ai:workspace:use',
 ];
