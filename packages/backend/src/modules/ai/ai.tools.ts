@@ -1,4 +1,5 @@
 import { BACKUP_AI_TOOLS } from './ai.backup-tools.js';
+import { GIT_SCOPE_TARGET_AI_TOOLS } from './ai.git-scope-target-tools.js';
 import { STORAGE_AI_TOOLS } from './ai.storage-tools.js';
 import { CONTROL_AI_TOOLS } from './ai.tools.control.js';
 import { DATABASE_AI_TOOLS } from './ai.tools.databases.js';
@@ -37,6 +38,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   ...BACKUP_AI_TOOLS,
   ...GITLAB_AI_TOOLS,
   ...INTEGRATION_AI_TOOLS,
+  ...GIT_SCOPE_TARGET_AI_TOOLS,
   ...HOSTING_AI_TOOLS,
   ...INFERENCE_AI_TOOLS,
   ...OPERATION_AI_TOOLS,

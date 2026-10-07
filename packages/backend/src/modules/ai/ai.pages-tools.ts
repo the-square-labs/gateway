@@ -376,7 +376,7 @@ async function manageProjectSource(
     ensureResourceScope(user, 'pages:edit', projectId);
     return container
       .resolve(IntegrationsService)
-      .listDockerBuildSourceRepositories(user, requiredString(args.sourceConnectorId));
+      .findDockerBuildSourceRepositories(user, requiredString(args.sourceConnectorId), optionalString(args.search));
   }
   if (operation === 'source_discover') {
     ensureResourceScope(user, 'pages:edit', projectId);

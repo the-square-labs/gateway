@@ -511,7 +511,11 @@ export function withIntegrationsApi<TBase extends ApiClientBaseConstructor>(Base
           scopeTargetSearchPath("gitlab", connectorId, search, limit)
         )
       );
-      return { groups: payload?.groups ?? [], projects: payload?.projects ?? [] };
+      return {
+        groups: payload?.groups ?? [],
+        projects: payload?.projects ?? [],
+        truncated: payload?.truncated,
+      };
     }
 
     /** Owners and repositories of a GitHub connector that a permission can be limited to. */
@@ -525,7 +529,11 @@ export function withIntegrationsApi<TBase extends ApiClientBaseConstructor>(Base
           scopeTargetSearchPath("github", connectorId, search, limit)
         )
       );
-      return { owners: payload?.owners ?? [], repos: payload?.repos ?? [] };
+      return {
+        owners: payload?.owners ?? [],
+        repos: payload?.repos ?? [],
+        truncated: payload?.truncated,
+      };
     }
 
     /** Labels for stored qualifiers of one connector (`group/123`, `repo/456`, …). */

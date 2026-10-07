@@ -4,6 +4,7 @@ import { hasScope, hasScopeForCreation, privilegeBoundaryScopes } from '@/lib/pe
 import { canonicalizeInboundScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
+import { resolveGitScopePathQualifiers } from '@/modules/integrations/git-scope-paths.js';
 import type { CreateGroupInput, UpdateGroupInput } from './group.schemas.js';
 import { GroupService } from './group.service.js';
 import { PermissionGroupFolderService } from './permission-group-folders.service.js';
@@ -52,9 +53,16 @@ export async function getGroupForActor(actor: GroupActor, groupId: string, servi
   return groupServiceOf(services).getGroup(groupId);
 }
 
-/** Rewrite retired names; a non-empty request whose scopes were all removed is an error, not an empty group. */
-function inboundGroupScopes(requested: readonly string[]): string[] {
-  const scopes = canonicalizeInboundScopes(requested);
+/**
+ * Resolve Git path qualifiers to stable IDs as the actor and rewrite retired names; a non-empty request whose
+ * scopes were all removed is an error, not an empty group.
+ */
+async function inboundGroupScopes(actor: GroupActor, requested: readonly string[]): Promise<string[]> {
+  const resolved = await resolveGitScopePathQualifiers(
+    { id: actor.id, scopes: actor.scopes, accountScopes: actor.accountScopes },
+    requested
+  );
+  const scopes = canonicalizeInboundScopes(resolved);
   if (requested.length > 0 && scopes.length === 0) {
     throw new AppError(400, 'INVALID_SCOPE', 'None of the requested scopes exist any more');
   }
@@ -67,7 +75,7 @@ export async function createGroupForActor(
   services: GroupActionServices = {}
 ) {
   const groupService = groupServiceOf(services);
-  const input = { ...parsedInput, scopes: inboundGroupScopes(parsedInput.scopes) };
+  const input = { ...parsedInput, scopes: await inboundGroupScopes(actor, parsedInput.scopes) };
   if (!hasScopeForCreation(actor.scopes, 'admin:groups', input.folderId))
     throw new AppError(403, 'FORBIDDEN', 'Select an authorized destination group folder');
   if (input.folderId) await container.resolve(PermissionGroupFolderService).assertFolderExists(input.folderId);
@@ -97,7 +105,7 @@ export async function updateGroupForActor(
   const groupService = groupServiceOf(services);
   const input = {
     ...parsedInput,
-    ...(parsedInput.scopes !== undefined && { scopes: inboundGroupScopes(parsedInput.scopes) }),
+    ...(parsedInput.scopes !== undefined && { scopes: await inboundGroupScopes(actor, parsedInput.scopes) }),
   };
   await groupService.assertCanUpdateGroup(
     groupId,

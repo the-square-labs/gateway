@@ -558,6 +558,7 @@ const PLANNING_SAFE_TOOL_NAMES = new Set([
   'find_in_chat',
   'find_resource',
   'finalize_plan_execution',
+  'find_git_scope_target',
   'get_ai_settings',
   'get_alert_rule',
   'get_audit_log',

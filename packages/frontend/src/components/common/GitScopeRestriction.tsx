@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SelectItemCheck, selectItemClassName } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import type { GitScopeTargetTruncation } from "@/types/integrations";
 import {
   GIT_PROVIDER_TARGET_KINDS,
   GIT_PROVIDER_TARGET_NOUNS,
@@ -19,6 +20,7 @@ import {
   gitLabelKey,
   gitQualifier,
   gitQualifierLabel,
+  gitScopeTruncationHint,
   gitTargetCovered,
   parseGitQualifier,
   searchGitScopeTargets,
@@ -264,6 +266,7 @@ function GitScopeTargetPicker({
   const [results, setResults] = useState<{
     query: string;
     options: GitScopeTargetOption[];
+    truncated?: GitScopeTargetTruncation;
     error: string | null;
   } | null>(null);
   const [searching, setSearching] = useState(false);
@@ -278,8 +281,8 @@ function GitScopeTargetPicker({
       () => {
         setSearching(true);
         searchGitScopeTargets(provider, connector.id, query)
-          .then((options) => {
-            if (!cancelled) setResults({ query, options, error: null });
+          .then(({ options, truncated }) => {
+            if (!cancelled) setResults({ query, options, truncated, error: null });
           })
           .catch((error: unknown) => {
             if (cancelled) return;
@@ -316,6 +319,7 @@ function GitScopeTargetPicker({
 
   const options = (results?.options ?? []).filter((option) => stateOf(option).allowed);
   const refreshing = results !== null && (searching || results.query !== query);
+  const truncationHint = results?.error ? null : gitScopeTruncationHint(results?.truncated);
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -340,7 +344,7 @@ function GitScopeTargetPicker({
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder={`Search ${noun} in ${connector.name}`}
+            placeholder={`Search ${noun} by name or path in ${connector.name}`}
             aria-label={`Search ${noun} in ${connector.name}`}
             className="pr-9"
           />
@@ -405,6 +409,11 @@ function GitScopeTargetPicker({
             })
           )}
         </div>
+        {truncationHint && (
+          <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
+            {truncationHint}
+          </p>
+        )}
       </PopoverContent>
     </Popover>
   );

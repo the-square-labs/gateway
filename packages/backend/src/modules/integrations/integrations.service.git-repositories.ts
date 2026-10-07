@@ -5,29 +5,16 @@ import sodium from 'libsodium-wrappers';
 import { integrationConnectors } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { gitGrantsCover, principalGitConnectorGrants, principalHasGitScopeOnConnector } from '@/lib/git-scopes.js';
-import { LookupBudget, LookupBudgetExceededError, TtlCache } from '@/lib/ttl-cache.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
-import {
-  type GitHubScopeTargets,
-  matchesScopeTargetSearch,
-  type ParsedScopeTargetId,
-  parseScopeTargetIds,
-  SCOPE_TARGET_LOOKUP_BUDGET,
-  SCOPE_TARGET_LOOKUP_TTL_MS,
-  SCOPE_TARGET_SEARCH_TTL_MS,
-  type ScopeTargetResolution,
-  type ScopeTargetResolutionItem,
-  type ScopeTargetSearchQuery,
-  unresolvedScopeTarget,
-} from './git-scope-targets.js';
-import { assertConnectorOperationAccess } from './integration-permissions.js';
 import type { GitLabConnectorListQuery } from './integrations.schemas.js';
-import type { ConnectorRow } from './integrations.service.core.js';
 import { GIT_FILE_READ_LIMIT_BYTES, GIT_FILE_WRITE_LIMIT_BYTES, isPlainRecord } from './integrations.service.core.js';
 import { invalidateGitHubRepositoryOwners } from './integrations.service.git-support.js';
-import { IntegrationsSourceService } from './integrations.service.sources.js';
+import {
+  IntegrationsGitHubScopeTargetService,
+  invalidateGitHubScopeTargets,
+} from './integrations.service.github-scope-targets.js';
 
 /**
  * A path inside a GitHub repository for the contents API. The path is joined into the API URL, and URL parsing
@@ -51,36 +38,7 @@ function decodePathOrNull(path: string): string | null {
   }
 }
 
-interface GitHubScopeCatalogEntry {
-  id: string;
-  fullName: string;
-  ownerId: string;
-  ownerLogin: string;
-  ownerType: string;
-}
-
-/** Repositories and organizations a GitHub connector credential sees, per connector (scope picker search). */
-const githubScopeCatalogs = new TtlCache<GitHubScopeCatalogEntry[]>(SCOPE_TARGET_SEARCH_TTL_MS, 200);
-/** Owner logins and repository names by connector and ID (scope picker labels). */
-const githubScopeLabels = new TtlCache<{ label: string; ownerId: string | null } | null>(
-  SCOPE_TARGET_LOOKUP_TTL_MS,
-  5000
-);
-const GITHUB_SCOPE_CATALOG_PAGES = 3;
-
-/** Test hook: forget cached GitHub scope picker data. */
-export function clearGitHubScopeTargetCache(): void {
-  githubScopeCatalogs.clear();
-  githubScopeLabels.clear();
-}
-
-/** Forget a connector's cached picker catalog and labels (on sync). */
-function invalidateGitHubScopeTargets(connectorId: string): void {
-  githubScopeCatalogs.delete(connectorId);
-  githubScopeLabels.deletePrefix(`${connectorId}:`);
-}
-
-export abstract class IntegrationsGitRepositoryService extends IntegrationsSourceService {
+export abstract class IntegrationsGitRepositoryService extends IntegrationsGitHubScopeTargetService {
   async listGitLabConnectors(
     _query?: GitLabConnectorListQuery
   ): Promise<import('./integrations.service.core.js').SafeIntegrationConnector[]> {
@@ -472,186 +430,6 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     } else if (provider === 'gitlab') {
       this.invalidateGitLabScopeCaches(connectorId, repositoryId ?? null);
     }
-  }
-
-  /**
-   * Scope picker search for a GitHub connector: owners and repositories the connector credential sees,
-   * limited to what the caller may view (connector-wide, a granted owner, or a granted repository).
-   */
-  async listGitHubScopeTargets(
-    user: User,
-    connectorId: string,
-    query: ScopeTargetSearchQuery
-  ): Promise<GitHubScopeTargets> {
-    const { connector, token, grants } = await this.githubScopeTargetAccess(user, connectorId);
-    const loaded = await githubScopeCatalogs.getOrLoad(connector.id, () =>
-      this.loadGitHubScopeCatalog(connector, token)
-    );
-    // Only repositories the connector includes: its allowlist unless it takes every visible repository.
-    let catalog = loaded;
-    if (connector.allowlistMode !== 'all_visible') {
-      const allowed = new Set(
-        (await this.listAllowlistRows(connector.id))
-          .filter((entry) => entry.entryType === 'project')
-          .flatMap((entry) => {
-            try {
-              return [this.normalizeRepositoryUrl(entry.fullPath).toLowerCase()];
-            } catch {
-              return [];
-            }
-          })
-      );
-      const included = (fullName: string) =>
-        allowed.has(`${connector.baseUrl.replace(/\/+$/, '')}/${fullName}`.toLowerCase());
-      const includedOwners = new Set(
-        loaded.filter((entry) => entry.id && included(entry.fullName)).map((e) => e.ownerId)
-      );
-      catalog = loaded.filter((entry) => (entry.id ? included(entry.fullName) : includedOwners.has(entry.ownerId)));
-    }
-    const owners = new Map<string, GitHubScopeTargets['owners'][number]>();
-    const repos: GitHubScopeTargets['repos'] = [];
-    for (const entry of catalog) {
-      const ownerVisible = grants.every((grant) => grant.connectorWide || grant.containerIds.has(entry.ownerId));
-      if (ownerVisible && !owners.has(entry.ownerId) && matchesScopeTargetSearch(query.search, entry.ownerLogin)) {
-        owners.set(entry.ownerId, { id: entry.ownerId, login: entry.ownerLogin, type: entry.ownerType });
-      }
-      if (
-        entry.id &&
-        gitGrantsCover(grants, { repositoryId: entry.id, containerIds: [entry.ownerId] }) &&
-        matchesScopeTargetSearch(query.search, entry.fullName)
-      ) {
-        repos.push({ id: entry.id, fullName: entry.fullName });
-      }
-    }
-    return { owners: [...owners.values()].slice(0, query.limit), repos: repos.slice(0, query.limit) };
-  }
-
-  /** Labels for stored GitHub qualifiers (`owner/<id>`, `repo/<id>`); targets the caller may not view stay unlabeled. */
-  async resolveGitHubScopeTargets(user: User, connectorId: string, rawIds: string): Promise<ScopeTargetResolution> {
-    const ids = parseScopeTargetIds('github', rawIds);
-    const { connector, token, grants } = await this.githubScopeTargetAccess(user, connectorId);
-    // Uncached provider lookups per request are capped; targets past the cap stay unlabeled.
-    const budget = new LookupBudget(SCOPE_TARGET_LOOKUP_BUDGET);
-    const resolveOne = async ({ qualifier, kind, id }: ParsedScopeTargetId): Promise<ScopeTargetResolutionItem> => {
-      if (kind === 'owner') {
-        if (!grants.every((grant) => grant.connectorWide || grant.containerIds.has(id))) {
-          return unresolvedScopeTarget(qualifier);
-        }
-        const owner = await githubScopeLabels.load(
-          `${connector.id}:owner:${id}`,
-          () =>
-            this.githubScopeLabel(connector, token, `/user/${id}`, (body) =>
-              typeof body.login === 'string' ? { label: body.login, ownerId: id } : null
-            ),
-          { budget }
-        );
-        return owner
-          ? { qualifier, label: owner.label, missing: false }
-          : { qualifier, label: qualifier, missing: true };
-      }
-      // Without an owner grant, only the exact repository (or the connector) can make it visible: no lookup needed.
-      const couldSee = grants.every(
-        (grant) => grant.connectorWide || grant.repositoryIds.has(id) || grant.containerIds.size > 0
-      );
-      if (!couldSee) return unresolvedScopeTarget(qualifier);
-      const repository = await githubScopeLabels.load(
-        `${connector.id}:repo:${id}`,
-        () =>
-          this.githubScopeLabel(connector, token, `/repositories/${id}`, (body) => {
-            const owner = isPlainRecord(body.owner) ? body.owner : {};
-            return typeof body.full_name === 'string'
-              ? { label: body.full_name, ownerId: typeof owner.id === 'number' ? String(owner.id) : null }
-              : null;
-          }),
-        { budget }
-      );
-      const target = { repositoryId: id, containerIds: repository?.ownerId ? [repository.ownerId] : [] };
-      if (!gitGrantsCover(grants, target)) return unresolvedScopeTarget(qualifier);
-      return repository
-        ? { qualifier, label: repository.label, missing: false }
-        : { qualifier, label: qualifier, missing: true };
-    };
-    const items = await Promise.all(
-      ids.map((target) =>
-        resolveOne(target).catch((error: unknown) => {
-          if (error instanceof LookupBudgetExceededError) return unresolvedScopeTarget(target.qualifier);
-          throw error;
-        })
-      )
-    );
-    return { items };
-  }
-
-  private async githubScopeTargetAccess(user: User, connectorId: string) {
-    const connector = await this.getConnectorRow(connectorId, 'github');
-    assertConnectorOperationAccess({
-      actor: { userId: user.id, scopes: user.scopes, accountScopes: user.accountScopes },
-      provider: 'github',
-      connectorId: connector.id,
-      connectorName: connector.name,
-      operation: 'connector.scope_targets',
-      requiredScope: 'integrations:github:view',
-      scopeTarget: 'within-connector',
-    });
-    const grants = principalGitConnectorGrants(user, 'integrations:github:view', connector.id);
-    return { connector, grants, token: await this.connectorGitHubToken(connector) };
-  }
-
-  private async loadGitHubScopeCatalog(connector: ConnectorRow, token: string): Promise<GitHubScopeCatalogEntry[]> {
-    const entries: GitHubScopeCatalogEntry[] = [];
-    for (let page = 1; page <= GITHUB_SCOPE_CATALOG_PAGES; page += 1) {
-      const response = await this.githubConnectorRequest(
-        connector,
-        token,
-        `/user/repos?per_page=100&page=${page}&sort=updated&affiliation=owner%2Ccollaborator%2Corganization_member`
-      );
-      const body = (await response.json().catch(() => null)) as unknown;
-      if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
-      const rows = Array.isArray(body) ? body : [];
-      for (const row of rows) {
-        const repository = isPlainRecord(row) ? row : {};
-        const owner = isPlainRecord(repository.owner) ? repository.owner : {};
-        if (typeof repository.id !== 'number' || typeof owner.id !== 'number') continue;
-        entries.push({
-          id: String(repository.id),
-          fullName: typeof repository.full_name === 'string' ? repository.full_name : String(repository.id),
-          ownerId: String(owner.id),
-          ownerLogin: typeof owner.login === 'string' ? owner.login : String(owner.id),
-          ownerType: typeof owner.type === 'string' ? owner.type : 'User',
-        });
-      }
-      if (rows.length < 100) break;
-    }
-    // Organizations the credential belongs to, even without a repository it can see.
-    const organizations = await this.githubConnectorRequest(connector, token, '/user/orgs?per_page=100');
-    const organizationBody = (await organizations.json().catch(() => null)) as unknown;
-    if (organizations.ok && Array.isArray(organizationBody)) {
-      for (const row of organizationBody) {
-        const organization = isPlainRecord(row) ? row : {};
-        if (typeof organization.id !== 'number' || typeof organization.login !== 'string') continue;
-        entries.push({
-          id: '',
-          fullName: '',
-          ownerId: String(organization.id),
-          ownerLogin: organization.login,
-          ownerType: 'Organization',
-        });
-      }
-    }
-    return entries;
-  }
-
-  private async githubScopeLabel(
-    connector: ConnectorRow,
-    token: string,
-    path: string,
-    read: (body: Record<string, unknown>) => { label: string; ownerId: string | null } | null
-  ): Promise<{ label: string; ownerId: string | null } | null> {
-    const response = await this.githubConnectorRequest(connector, token, path);
-    const body = (await response.json().catch(() => null)) as unknown;
-    if (response.status === 404) return null;
-    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
-    return isPlainRecord(body) ? read(body) : null;
   }
 
   async gitListRemoteRefs(user: User, input: { connectorId: string; repositoryUrl: string }) {

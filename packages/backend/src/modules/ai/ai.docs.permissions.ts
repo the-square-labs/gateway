@@ -333,9 +333,10 @@ Every Git provider (\`<p>\` = gitlab, github, git) uses the same verbs.
 | integrations:gitlab:sandbox:clone | Clone a GitLab repository into the AI sandbox |
 
 Git scopes can be limited with stable IDs: \`<scope>:<connectorId>\` (every repository of one connector), GitLab \`<connectorId>/group/<groupId>\` (the group, its subgroups and their projects) or \`<connectorId>/project/<projectId>\`, GitHub \`<connectorId>/owner/<ownerId>\` or \`<connectorId>/repo/<repoId>\`. Generic Git and \`:manage\` take the connector only; creating connectors needs unqualified \`:manage\`.
+- To grant by path, call find_git_scope_target (provider, connectorId, kind group/project/owner/repo, path such as \`team/sub\`) for the stable qualifier, or pass \`<connectorId>/<kind>/path/<path>\` to create_group/update_group or additional user permissions: the save stores the resolved ID. A group grant covers its subgroups, so one group qualifier is enough for a subtree.
 - A repository operation is allowed by the unqualified scope, the connector, any containing group/owner, or the exact project/repository; implied view applies per qualifier (\`repo:write:<connectorId>/project/42\` also grants \`view\` there).
 - The connector credential is used when \`:use\` covers the repository the same way, the personal credential otherwise.
-- Connector, project and repository lists only show what the caller's grants cover.
+- Connector, project and repository lists only show what the caller's grants cover; the build source repository list shows what \`:use\` covers.
 - Connecting a Docker or Pages build source, or changing its connector, repository or branch, needs \`integrations:<provider>:use\` on the repository (any covering qualifier), not \`repo:read\` or a personal credential. Saving other source settings, manual builds and automatic builds (poll, webhook) need only the workload's own permissions and never depend on anyone's current Git scopes; builds use the connector credential, limited to the repositories the connector itself reaches.
 - Tokens and MCP grants are bounded per qualifier by the owner's grants; for repository operations both the token and the owner's current scopes must cover the repository (a token limited to a project inside the owner's group works; a token limited to a group whose owner holds one project reaches that project only).
 

@@ -87,6 +87,46 @@ export function parseGitScopeQualifier(qualifier: string): GitScopeQualifier | n
   return { connectorId: segments[0], kind: segments[1] as GitQualifierKind, id: segments[2] };
 }
 
+/**
+ * A path qualifier accepted on save only (`<connectorId>/group/path/team/sub`, `<connectorId>/repo/path/org/app`):
+ * the save looks the path up and stores `<connectorId>/<kind>/<id>` instead. It never appears in stored scopes.
+ */
+export interface GitScopePathQualifier {
+  connectorId: string;
+  kind: 'group' | 'project' | 'owner' | 'repo';
+  path: string;
+}
+
+const PATH_SEGMENT = /^[A-Za-z0-9_.-]+$/;
+
+/** Parse a save-time path qualifier; null for every other qualifier. */
+export function parseGitScopePathQualifier(qualifier: string): GitScopePathQualifier | null {
+  const segments = qualifier.split('/');
+  if (segments.length < 4 || segments[2] !== 'path' || !UUID.test(segments[0] ?? '')) return null;
+  if (!QUALIFIER_KINDS.has(segments[1] ?? '')) return null;
+  const path = segments.slice(3);
+  if (!path.every((segment) => PATH_SEGMENT.test(segment))) return null;
+  return {
+    connectorId: segments[0]!,
+    kind: segments[1] as GitScopePathQualifier['kind'],
+    path: path.join('/'),
+  };
+}
+
+/** Why a save-time path qualifier cannot follow a Git base scope, or null when it can. */
+export function gitScopePathQualifierIssue(base: string, qualifier: string): string | null {
+  const provider = gitScopeProviderOf(base);
+  const parsed = parseGitScopePathQualifier(qualifier);
+  if (!provider || !parsed) return 'Git scope path targets must be <connectorId>/<kind>/path/<path>';
+  const kinds = GIT_TARGET_KINDS[provider];
+  if (GIT_CONNECTOR_SCOPABLE_SET.has(base) || !kinds) return `${base} can only be restricted to a connector`;
+  if (parsed.kind !== kinds.container && parsed.kind !== kinds.repository) {
+    const container = `<connectorId>/${kinds.container}/path/<path>`;
+    return `${base} path targets must be ${container} or <connectorId>/${kinds.repository}/path/<path>`;
+  }
+  return null;
+}
+
 /** Why a qualifier cannot follow a Git base scope, or null when it can. */
 export function gitScopeQualifierIssue(base: string, qualifier: string): string | null {
   const provider = gitScopeProviderOf(base);

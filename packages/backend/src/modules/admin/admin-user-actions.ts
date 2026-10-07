@@ -20,6 +20,7 @@ import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { isDemoVisitor } from '@/modules/demo/demo-mode.js';
 import { GroupService } from '@/modules/groups/group.service.js';
+import { resolveGitScopePathQualifiers } from '@/modules/integrations/git-scope-paths.js';
 import { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
 
@@ -272,11 +273,16 @@ export async function updateAdminUserAdditionalPermissions(
 ): Promise<User> {
   assertAdminUserScope(actor.scopes, userId);
   const authService = authServiceOf(services);
+  // Git path qualifiers (`<connectorId>/group/path/team/sub`) are stored as the stable IDs they resolve to.
+  const resolvedScopes = await resolveGitScopePathQualifiers(
+    { id: actor.user.id, scopes: actor.scopes, accountScopes: actor.accountScopes },
+    requestedScopes.map((scope) => scope.trim())
+  );
   const { targetUser, additionalScopes } = await authService.assertCanUpdateUserAdditionalScopes(
     actor.user.id,
     grantBoundaryScopes(actor),
     userId,
-    requestedScopes
+    resolvedScopes
   );
   const previousAdditionalScopes = targetUser.additionalScopes ?? [];
   const updatedUser = await authService.updateUserAdditionalScopes(userId, additionalScopes);

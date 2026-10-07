@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { useContentLoading } from "@/components/common/reveal-gate";
+import { isPermissionError, pickerLoadError } from "@/lib/picker-load-error";
 import { api } from "@/services/api";
 import type {
   Domain,
@@ -59,13 +60,22 @@ function getProxyHostDomainSuggestions() {
     }));
 }
 
-function loadDomainSuggestions(registeredOnly: boolean) {
-  return api
-    .searchDomains("")
-    .catch(() => [])
-    .then((domains) =>
-      domains.length > 0 || registeredOnly ? domains : getProxyHostDomainSuggestions()
-    );
+/**
+ * Registered domains as suggestions (falling back to the domains of known Routes), and why the
+ * registered list could not be loaded, for example without domains:view.
+ */
+async function loadDomainSuggestions(
+  registeredOnly: boolean
+): Promise<{ domains: DomainSearchResult[]; error: unknown }> {
+  let error: unknown = null;
+  const domains = await api.searchDomains("").catch((reason: unknown) => {
+    error = reason;
+    return [] as DomainSearchResult[];
+  });
+  return {
+    domains: domains.length > 0 || registeredOnly ? domains : getProxyHostDomainSuggestions(),
+    error,
+  };
 }
 
 interface DomainAutocompleteInputProps {
@@ -97,18 +107,34 @@ export function DomainAutocompleteInput({
   const [suggestionsLoading, setSuggestionsLoading] = useState(
     () => !staticSuggestions && domains.length === 0
   );
+  // Why registered domains are not suggested; without domains:view any typed domain is taken.
+  const [suggestionsError, setSuggestionsError] = useState<{
+    message: string;
+    permission: boolean;
+  } | null>(null);
   useContentLoading(suggestionsLoading);
 
   useEffect(() => {
     if (staticSuggestions) {
       setDomains(staticSuggestions);
+      setSuggestionsError(null);
       setSuggestionsLoading(false);
       return;
     }
     let cancelled = false;
-    void loadDomainSuggestions(registeredOnly).then((loadedDomains) => {
+    void loadDomainSuggestions(registeredOnly).then(({ domains: loadedDomains, error }) => {
       if (cancelled) return;
       setDomains(loadedDomains);
+      setSuggestionsError(
+        error
+          ? {
+              message: isPermissionError(error)
+                ? "Registered domains are not listed without domains:view. Type the domain."
+                : pickerLoadError(error, "registered domains"),
+              permission: isPermissionError(error),
+            }
+          : null
+      );
       setSuggestionsLoading(false);
     });
     return () => {
@@ -141,7 +167,7 @@ export function DomainAutocompleteInput({
 
   return (
     <Combobox
-      freeText={!registeredOnly}
+      freeText={!registeredOnly || !!suggestionsError?.permission}
       value={value}
       options={options}
       onValueChange={(nextValue) => {
@@ -150,7 +176,7 @@ export function DomainAutocompleteInput({
       }}
       placeholder={placeholder}
       searchPlaceholder={placeholder}
-      emptyMessage="No matching domains."
+      emptyMessage={suggestionsError?.message ?? "No matching domains."}
       className="flex-1"
       inputClassName={inputClassName}
       contentClassName="max-h-40"

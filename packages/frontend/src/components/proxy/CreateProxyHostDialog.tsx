@@ -44,6 +44,7 @@ import {
   flattenCreationFolders,
 } from "@/lib/creation-folders";
 import { supportsPagesRouteTemplate } from "@/lib/proxy-template-capabilities";
+import { pickerLoadError } from "@/lib/picker-load-error";
 import { canCreateInFolder } from "@/lib/scope-utils";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -184,6 +185,7 @@ export function CreateProxyHostDialog({
   const [nodes, setNodes] = useState<NodeOption[]>(getCachedNodeOptions);
   const [nodesLoading, setNodesLoading] = useState(nodes.length === 0);
   const [sslCerts, setSslCerts] = useState<SSLCertificate[]>([]);
+  const [sslCertsError, setSslCertsError] = useState<string | null>(null);
   const [nginxTemplateList, setNginxTemplateList] = useState<NginxTemplate[]>([]);
   const [supportLoading, setSupportLoading] = useState(true);
   const [dockerContainers, setDockerContainers] = useState<DockerContainer[]>([]);
@@ -291,23 +293,32 @@ export function CreateProxyHostDialog({
         if (!cancelled) setNodesLoading(false);
       });
 
-    const loadSupportingData = async () => {
-      try {
-        const [sslRes, templateRes] = await Promise.all([
-          api.listSSLCertificates({ limit: 100 }),
-          api.listNginxTemplates(),
-        ]);
+    // Certificates and Nginx templates need different permissions: one refused list must not
+    // empty the other.
+    const certificates = api
+      .listSSLCertificates({ limit: 100 })
+      .then((response) => {
         if (cancelled) return;
-        setSslCerts(sslRes.data || []);
-        setNginxTemplateList(templateRes || []);
-      } catch {
-        // non-critical
-      } finally {
-        if (!cancelled) setSupportLoading(false);
-      }
-    };
-
-    void loadSupportingData();
+        setSslCerts(response.data || []);
+        setSslCertsError(null);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setSslCerts([]);
+        setSslCertsError(pickerLoadError(error, "certificates"));
+      });
+    // Without templates the Route uses the default template; the picker is simply not offered.
+    const templates = api
+      .listNginxTemplates()
+      .then((response) => {
+        if (!cancelled) setNginxTemplateList(response || []);
+      })
+      .catch(() => {
+        if (!cancelled) setNginxTemplateList([]);
+      });
+    void Promise.allSettled([certificates, templates]).then(() => {
+      if (!cancelled) setSupportLoading(false);
+    });
     void api
       .listDockerContainerSnapshots()
       .then((containers) => {
@@ -843,7 +854,10 @@ export function CreateProxyHostDialog({
                       />
                     </div>
                   </SettingsControlRow>
-                  <SettingsControlRow title="SSL Certificate">
+                  <SettingsControlRow
+                    title="SSL Certificate"
+                    description={sslCertsError ?? undefined}
+                  >
                     <div className={cn("w-full", !sslEnabled && "pointer-events-none opacity-50")}>
                       <Combobox
                         value={sslCertificateId}
@@ -858,7 +872,7 @@ export function CreateProxyHostDialog({
                         onValueChange={setSslCertificateId}
                         placeholder="Select certificate..."
                         searchPlaceholder="Search certificates..."
-                        emptyMessage="No matching certificates."
+                        emptyMessage={sslCertsError ?? "No matching certificates."}
                         ariaLabel="SSL Certificate"
                         disabled={!sslEnabled}
                       />

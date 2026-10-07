@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { replaceRetiredScopes } from './scopes-aliases.js';
 import { ALL_SCOPES } from './scopes-base.js';
-import { gitScopeQualifierIssue, isGitScopeBase } from './scopes-git.js';
+import {
+  gitScopePathQualifierIssue,
+  gitScopeQualifierIssue,
+  isGitScopeBase,
+  parseGitScopePathQualifier,
+} from './scopes-git.js';
 import { FOLDER_CREATION_SCOPES, FOLDER_ONLY_SCOPABLE, FOLDER_SCOPABLE, RESOURCE_SCOPABLE } from './scopes-resource.js';
 
 /** Longest accepted delegated scope string, including its resource, folder, or node qualifier. */
@@ -54,8 +59,16 @@ function isHostingBase(base: string): boolean {
   return base.startsWith('hosting:') || base.startsWith('integrations:hosting:');
 }
 
+interface ScopeIssueOptions {
+  /**
+   * Accept Git path qualifiers (`<connectorId>/group/path/team/sub`) that the save resolves to stable IDs
+   * before storing (permission groups and additional user permissions).
+   */
+  gitPaths?: boolean;
+}
+
 /** Why a canonical scope string cannot be delegated, or null when it can. */
-function canonicalScopeIssue(scope: string): string | null {
+function canonicalScopeIssue(scope: string, options: ScopeIssueOptions = {}): string | null {
   const base = baseOf(scope);
   if (!ALL_SCOPE_SET.has(base)) return 'Scope is not recognized';
   if (scope === base) return null;
@@ -64,7 +77,10 @@ function canonicalScopeIssue(scope: string): string | null {
   const segments = target.split('/');
   if (segments.some((segment) => !TARGET_SEGMENT.test(segment))) return 'Scope target is malformed';
   // Git scopes take stable connector, group/owner and project/repository IDs, never folders or nodes.
-  if (isGitScopeBase(base)) return gitScopeQualifierIssue(base, target);
+  if (isGitScopeBase(base)) {
+    if (options.gitPaths && parseGitScopePathQualifier(target)) return gitScopePathQualifierIssue(base, target);
+    return gitScopeQualifierIssue(base, target);
+  }
 
   if (target.startsWith('folder/')) {
     if (!FOLDER_SCOPABLE_SET.has(base)) return `${base} cannot be restricted to a folder`;
@@ -92,11 +108,11 @@ function canonicalScopeIssue(scope: string): string | null {
  * Why a client-supplied scope string cannot be delegated, or null when it can. Retired scope
  * names are accepted when their replacements are valid (removed scopes are accepted and dropped).
  */
-export function delegatedScopeIssue(scope: string): string | null {
+export function delegatedScopeIssue(scope: string, options: ScopeIssueOptions = {}): string | null {
   if (scope.length > MAX_DELEGATED_SCOPE_LENGTH) return 'Scope is too long';
   if (!SCOPE_FORMAT.test(scope)) return 'Invalid scope format';
   for (const replacement of replaceRetiredScopes([scope])) {
-    const issue = canonicalScopeIssue(replacement);
+    const issue = canonicalScopeIssue(replacement, options);
     if (issue) return issue;
   }
   return null;
@@ -123,3 +139,17 @@ export const DelegatedScopeStringSchema = z
   });
 
 export const DelegatedScopeArraySchema = z.array(DelegatedScopeStringSchema).max(MAX_DELEGATED_SCOPES);
+
+/**
+ * DelegatedScopeStringSchema that also accepts Git path qualifiers (`<connectorId>/<kind>/path/<path>`), for saves
+ * that resolve them to stable IDs before storing (resolveGitScopePathQualifiers).
+ */
+export const DelegatedScopeStringWithGitPathsSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAX_DELEGATED_SCOPE_LENGTH)
+  .superRefine((scope, context) => {
+    const issue = delegatedScopeIssue(scope, { gitPaths: true });
+    if (issue) context.addIssue({ code: z.ZodIssueCode.custom, message: `${issue}: ${scope}` });
+  });

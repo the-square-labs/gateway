@@ -110,7 +110,8 @@ export abstract class IntegrationsGitLabSupportService extends IntegrationsGitSu
   }
   /**
    * The project's namespace group and every parent group (GitLab API, cached), for group-qualified scopes.
-   * The connector credential reads them; without one, the user's personal credential.
+   * The connector credential reads them; without one, the user's personal credential. When the ancestry cannot be
+   * read completely it throws GITLAB_GROUP_ANCESTRY_UNAVAILABLE (and audits it) instead of returning a partial chain.
    */
   protected async gitLabProjectGroupIds(
     _connector: ConnectorRow,
@@ -134,11 +135,15 @@ export abstract class IntegrationsGitLabSupportService extends IntegrationsGitSu
   protected invalidateGitLabScopeCaches(_connectorId: string, _projectId: string | null): void {
     commercialModuleUnavailable();
   }
-  /** Synced projects a grant covers: connector-wide, exact projects, or projects under a granted group. */
+  /**
+   * Synced projects a grant covers: connector-wide, exact projects, or projects whose group ancestry (by ID, as
+   * the checks read it) holds a granted group. Projects whose ancestry is unavailable are left out and audited.
+   */
   protected async filterGitLabProjectsByGrant<T extends Pick<ProjectRow, 'remoteId' | 'fullPath'>>(
     _connector: ConnectorRow,
     _projects: T[],
-    _grant: GitConnectorGrant
+    _grant: GitConnectorGrant,
+    _user?: User | null
   ): Promise<T[]> {
     return commercialModuleUnavailable();
   }

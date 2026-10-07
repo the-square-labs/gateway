@@ -16,6 +16,7 @@ import { DATABASE_TOOL_NAMES, executeDatabaseTool } from './ai.database-tools.js
 import { DOCKER_TOOL_NAMES, executeDockerTool } from './ai.docker-tools.js';
 import { DOMAIN_TOOL_NAMES, executeDomainTool } from './ai.domain-tools.js';
 import { executeFolderTool, FOLDER_TOOL_NAMES } from './ai.folder-tools.js';
+import { executeGitScopeTargetTool, GIT_SCOPE_TARGET_TOOL_NAMES } from './ai.git-scope-target-tools.js';
 import { executeGitLabTool, GITLAB_TOOL_NAMES } from './ai.gitlab-tools.js';
 import { executeGroupTool, GROUP_TOOL_NAMES } from './ai.group-tools.js';
 import { executeHostingTool, HOSTING_TOOL_NAMES } from './ai.hosting-tools.js';
@@ -469,6 +470,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
     if (INTEGRATION_TOOL_NAMES.has(toolName)) {
       return executeIntegrationTool(user, toolName, args);
     }
+    if (GIT_SCOPE_TARGET_TOOL_NAMES.has(toolName)) return executeGitScopeTargetTool(user, args);
     if (HOSTING_TOOL_NAMES.has(toolName)) {
       return executeHostingTool(user, toolName, args);
     }

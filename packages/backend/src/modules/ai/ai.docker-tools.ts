@@ -1386,7 +1386,9 @@ async function manageDockerSource(
     if (!canPickDockerSource(user.scopes)) {
       throw new Error('PERMISSION_DENIED: Picking a Git source requires create or edit access to its workload');
     }
-    return container.resolve(IntegrationsService).listDockerBuildSourceRepositories(user, String(a.connectorId || ''));
+    return container
+      .resolve(IntegrationsService)
+      .findDockerBuildSourceRepositories(user, String(a.connectorId || ''), optionalNonEmptyString(a.search));
   }
 
   const sourceConfig = () =>
