@@ -394,6 +394,8 @@ export class RelayPolicyService {
   private localRelayInstanceId: string | null = null;
   private relaySettingsSync: Promise<void> = Promise.resolve();
   private snapshotSync: Promise<unknown> = Promise.resolve();
+  /** The snapshot sync queued behind the running one and not started yet; see syncSnapshot. */
+  private queuedSnapshotSync: Promise<number> | null = null;
   private readonly nodeGrantSyncs = new Map<
     string,
     Promise<Awaited<ReturnType<NodeDispatchService['sendRelayGrantBundle']>>>
@@ -916,8 +918,15 @@ export class RelayPolicyService {
 
   syncSnapshot(): Promise<number> {
     // Publish in build order, and always build after earlier callers finish:
-    // coalescing can hand a policy writer an ACK for a pre-write projection.
-    const sync = this.snapshotSync.then(() => this.syncSnapshotOnce());
+    // joining a running build can hand a policy writer an ACK for a pre-write projection.
+    // A build that has not started yet reads the policy when it starts, after every write of
+    // the callers that join it, so a burst of callers shares one queued build.
+    if (this.queuedSnapshotSync) return this.queuedSnapshotSync;
+    const sync: Promise<number> = this.snapshotSync.then(() => {
+      if (this.queuedSnapshotSync === sync) this.queuedSnapshotSync = null;
+      return this.syncSnapshotOnce();
+    });
+    this.queuedSnapshotSync = sync;
     this.snapshotSync = sync.catch(() => undefined);
     return sync;
   }

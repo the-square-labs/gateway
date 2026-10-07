@@ -824,12 +824,16 @@ describe('RelayPolicyService snapshots', () => {
       })
       .mockResolvedValueOnce(12);
     const first = expect(service.syncSnapshot()).rejects.toThrow('RPC failed');
+    await Promise.resolve();
     const second = service.syncSnapshot();
+    // Callers that arrive while a build is queued and not started share it.
+    expect(service.syncSnapshot()).toBe(second);
     await Promise.resolve();
     expect(publish).toHaveBeenCalledTimes(1);
     release();
     await first;
     await expect(second).resolves.toBe(12);
+    expect(publish).toHaveBeenCalledTimes(2);
   });
 
   it('refreshes the durable fence for grant issuance but bounds retries and preserves unrelated errors', async () => {
