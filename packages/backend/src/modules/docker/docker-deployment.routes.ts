@@ -246,7 +246,8 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...updateDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:edit') },
+    // An env-only save needs environment, anything else edit: see deploymentUpdateRequiredScopes.
+    { ...updateDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:view') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -255,12 +256,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const scopes = c.get('effectiveScopes') || [];
       const input = DockerDeploymentUpdateSchema.parse(await c.req.json());
       const saved = await service.get(nodeId, deploymentId);
-      assertDeploymentChangeAccess(
-        scopes,
-        nodeId,
-        deploymentId,
-        deploymentUpdateRequiredScopes(input.desiredConfig, saved.desiredConfig)
-      );
+      assertDeploymentChangeAccess(scopes, nodeId, deploymentId, deploymentUpdateRequiredScopes(input, saved));
       const data = await service.update(nodeId, deploymentId, input, user.id, scopes);
       return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }

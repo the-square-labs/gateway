@@ -122,9 +122,14 @@ export function EnvironmentTab({
   const envMutationInProgressRef = useRef(false);
 
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
-  // Environment shows the variables and the secret keys.
+  // Environment shows the variables and the secret keys. Saving a container's variables recreates
+  // it, which also needs manage (a deployment only stores them).
   const canReadEnv = canEditOverride ?? hasScope(`docker:containers:environment:${scopeSuffix}`);
-  const canEdit = canReadEnv;
+  const canEdit =
+    canReadEnv &&
+    (canEditOverride !== undefined ||
+      !!onSaveServiceEnv ||
+      hasScope(`docker:containers:manage:${scopeSuffix}`));
   const canManageSecrets =
     canManageSecretsOverride ?? hasScope(`docker:containers:secrets:${scopeSuffix}`);
   // Any link change on a deployment rolls it out (manage), and saving links here also sends the
@@ -566,7 +571,7 @@ export function EnvironmentTab({
             ? recreatesRunningContainer
               ? "Updating environment variables will recreate the container. The container will experience brief downtime. Continue?"
               : "Updating environment variables will save the new container configuration. The container will remain stopped. Continue?"
-            : "Secret changes will be stored, but without environment permission they will only apply after the container is recreated. Continue?",
+            : "Secret changes will be stored, but without permission to recreate the container they will only apply after it is recreated. Continue?",
       confirmLabel: onSaveServiceEnv
         ? resolvedServiceSaveLabel === "Save & Recreate"
           ? "Recreate"

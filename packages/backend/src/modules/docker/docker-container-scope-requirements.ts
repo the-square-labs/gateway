@@ -22,13 +22,22 @@ export function containerUpdateChangesImage(config: { tag?: unknown }): boolean 
 }
 
 /**
- * Scopes a container update (pull + redeploy) needs beyond docker:containers:edit. A new tag runs other code with the
- * container's env and secrets, like a recreate with a new image; the container's own edit authorizes pulling it, as
- * creating the container authorizes its first pull.
+ * An env-only change of a container, on every route that makes one (PUT .../env, an update with env alone, the AI
+ * tools): environment for the values, and manage because the container is recreated with them.
+ */
+export const CONTAINER_ENV_CHANGE_SCOPES = ['docker:containers:environment', 'docker:containers:manage'] as const;
+
+/**
+ * Scopes a container update (pull + redeploy) needs on the container. A new tag runs other code with the container's
+ * env and secrets, like a recreate with a new image; the container's own edit authorizes pulling it, as creating the
+ * container authorizes its first pull. An env-only update is an env change; a plain redeploy stays on edit.
  */
 export function containerUpdateRequiredScopes(config: { tag?: unknown; env?: unknown; removeEnv?: unknown }): string[] {
-  if (containerUpdateChangesImage(config)) return ['docker:containers:environment', 'docker:containers:secrets'];
-  return config.env !== undefined || config.removeEnv !== undefined ? ['docker:containers:environment'] : [];
+  if (containerUpdateChangesImage(config)) {
+    return ['docker:containers:edit', 'docker:containers:environment', 'docker:containers:secrets'];
+  }
+  if (config.env !== undefined || config.removeEnv !== undefined) return [...CONTAINER_ENV_CHANGE_SCOPES];
+  return ['docker:containers:edit'];
 }
 
 const DEPLOYMENT_EXECUTION_FIELDS = ['image', 'command', 'entrypoint', 'user', 'runtimeProfile'] as const;
@@ -50,16 +59,28 @@ export function deploymentDeployRequiredScopes(input: { image?: unknown; tag?: u
 }
 
 /**
- * What an update of the saved configuration needs on the deployment beyond docker:containers:edit. The settings page
- * sends the execution fields with every save, so only a value that differs from the saved one counts as a change.
+ * What an update of the saved configuration needs on the deployment. The settings page sends the execution fields
+ * with every save, so only a value that differs from the saved one counts as a change. Saving the environment alone
+ * needs environment, as a container env change does (the slots get it with the next rollout, which needs manage);
+ * any other change needs edit, and changing what the slots execute also needs environment and secrets.
  */
-export function deploymentUpdateRequiredScopes(next: object | undefined, saved: object): string[] {
-  const nextValues = (next ?? {}) as Record<string, unknown>;
-  const savedValues = saved as Record<string, unknown>;
+export function deploymentUpdateRequiredScopes(
+  input: { name?: unknown; desiredConfig?: object; routes?: unknown; health?: unknown; drainSeconds?: unknown },
+  saved: { desiredConfig: object }
+): string[] {
+  const nextValues = (input.desiredConfig ?? {}) as Record<string, unknown>;
+  const savedValues = saved.desiredConfig as Record<string, unknown>;
   const changed = (key: string) =>
     nextValues[key] !== undefined && !sameDesiredValue(key, nextValues[key], savedValues[key]);
   if (DEPLOYMENT_EXECUTION_FIELDS.some(changed)) return [...DEPLOYMENT_EXECUTION_SCOPES];
-  return changed('env') ? ['docker:containers:environment'] : [];
+  if (!changed('env')) return ['docker:containers:edit'];
+  const envOnly =
+    input.name === undefined &&
+    input.routes === undefined &&
+    input.health === undefined &&
+    input.drainSeconds === undefined &&
+    Object.keys(nextValues).every((key) => key === 'env' || !changed(key));
+  return envOnly ? ['docker:containers:environment'] : ['docker:containers:edit', 'docker:containers:environment'];
 }
 
 function sameDesiredValue(key: string, next: unknown, saved: unknown): boolean {

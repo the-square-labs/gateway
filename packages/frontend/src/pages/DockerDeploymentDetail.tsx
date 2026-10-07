@@ -981,7 +981,9 @@ export function DockerDeploymentDetail({
 
   // Saved variables reach the slots only through a rollout, so a serving
   // deployment deploys them; a stopped one picks them up when it starts.
+  // Saving needs only environment; without manage the next deploy rolls them out.
   const environmentRollsOut =
+    canManage &&
     (environmentWorkloadState === "running" || environmentWorkloadState === "restarting") &&
     deployment?.status !== "creating";
   const saveServiceEnv = useCallback(

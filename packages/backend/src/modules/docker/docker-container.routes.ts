@@ -96,7 +96,11 @@ import {
   getLatestDockerContainerStats,
   listDockerGpuUsage,
 } from './docker-container-observability.js';
-import { containerRecreateRequiredScopes, containerUpdateRequiredScopes } from './docker-container-scope-requirements.js';
+import {
+  CONTAINER_ENV_CHANGE_SCOPES,
+  containerRecreateRequiredScopes,
+  containerUpdateRequiredScopes,
+} from './docker-container-scope-requirements.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { assertUserContainerAccessible } from './docker-internal-containers.js';
@@ -691,18 +695,18 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
     }
   );
 
-  // Update container (pull + redeploy)
+  // Update container (pull + redeploy). The scopes depend on the change: see containerUpdateRequiredScopes.
   router.openapi(
-    { ...updateContainerRoute, middleware: requireDockerContainerScope('docker:containers:edit') },
+    { ...updateContainerRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const user = c.get('user')!;
-      await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const config = ContainerUpdateSchema.parse(body);
       await assertAdditionalContainerScopes(c, containerUpdateRequiredScopes(config));
+      await assertComposeChildMutationAllowed(nodeId, containerId);
       const data = await service.updateContainer(nodeId, containerId, config, user.id, c.get('effectiveScopes') || []);
       return c.json({ data });
     }
@@ -796,9 +800,12 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
     }
   );
 
-  // Update container env
+  // Update container env (recreates the container with it)
   router.openapi(
-    { ...updateContainerEnvRoute, middleware: requireDockerContainerScope('docker:containers:environment') },
+    {
+      ...updateContainerEnvRoute,
+      middleware: CONTAINER_ENV_CHANGE_SCOPES.map((scope) => requireDockerContainerScope(scope)),
+    },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;

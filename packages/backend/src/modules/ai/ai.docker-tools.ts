@@ -1615,16 +1615,11 @@ async function manageDockerDeployment(context: DockerToolContext, user: User, ar
     }
     case 'update': {
       const deploymentId = String(a.deploymentId ?? '');
-      ensureDockerDeploymentScope(context, user, 'docker:containers:edit', nodeId, deploymentId);
+      // As the update route: an env-only save needs environment, anything else edit.
+      ensureDockerDeploymentScope(context, user, 'docker:containers:view', nodeId, deploymentId);
       const input = DockerDeploymentUpdateSchema.parse(a.payload ?? {});
       const saved = await service.get(nodeId, deploymentId);
-      ensureDeploymentChangeAccess(
-        context,
-        user,
-        nodeId,
-        deploymentId,
-        deploymentUpdateRequiredScopes(input.desiredConfig, saved.desiredConfig)
-      );
+      ensureDeploymentChangeAccess(context, user, nodeId, deploymentId, deploymentUpdateRequiredScopes(input, saved));
       const data = await service.update(nodeId, deploymentId, input, user.id, user.scopes);
       return presentDeploymentForCaller(data, user.scopes, nodeId, deploymentId);
     }

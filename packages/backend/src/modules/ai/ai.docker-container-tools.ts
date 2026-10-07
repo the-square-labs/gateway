@@ -120,7 +120,7 @@ export async function manageDockerContainerTool(
       await ensureDockerContainerScopes(
         dockerService,
         user,
-        ['docker:containers:edit', ...containerUpdateRequiredScopes(config)],
+        containerUpdateRequiredScopes(config),
         nodeId,
         containerId
       );

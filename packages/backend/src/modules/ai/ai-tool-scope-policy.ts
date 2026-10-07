@@ -171,7 +171,13 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'docker:compose:manage',
     'docker:containers:link',
   ],
-  manage_docker_deployment: ['docker:containers:create', 'docker:containers:edit', 'docker:containers:delete'],
+  // An env-only update needs only docker:containers:environment on the deployment.
+  manage_docker_deployment: [
+    'docker:containers:create',
+    'docker:containers:edit',
+    'docker:containers:environment',
+    'docker:containers:delete',
+  ],
   manage_docker_container_config: [
     'docker:containers:view',
     'docker:containers:environment',
