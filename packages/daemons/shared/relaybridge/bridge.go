@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"net"
 	"sync"
 
@@ -16,10 +17,19 @@ const (
 	DefaultChunkBytes = 32 * 1024
 )
 
-var readBufferPool = sync.Pool{New: func() any {
-	buffer := make([]byte, DefaultChunkBytes)
-	return &buffer
-}}
+// readBufferPools[i] holds read buffers of 1<<i bytes, up to MaxChunkBytes: a
+// configured read chunk other than the default reuses buffers too.
+var readBufferPools [21]sync.Pool
+
+func init() {
+	for class := range readBufferPools {
+		size := 1 << class
+		readBufferPools[class].New = func() any {
+			buffer := make([]byte, size)
+			return &buffer
+		}
+	}
+}
 
 type FrameStream interface {
 	Send(*relayv1.TunnelFrame) error
@@ -92,15 +102,11 @@ func BridgeWithChunk(ctx context.Context, connection net.Conn, stream FrameStrea
 }
 
 func sendLocal(connection net.Conn, stream FrameStream, readChunk int, completed chan<- result) {
-	var buffer []byte
-	var pooled *[]byte
-	if readChunk == DefaultChunkBytes {
-		pooled = readBufferPool.Get().(*[]byte)
-		buffer = *pooled
-		defer readBufferPool.Put(pooled)
-	} else {
-		buffer = make([]byte, readChunk)
-	}
+	// The smallest power of two that holds readChunk (1 to MaxChunkBytes).
+	pool := &readBufferPools[bits.Len(uint(readChunk-1))]
+	pooled := pool.Get().(*[]byte)
+	defer pool.Put(pooled)
+	buffer := (*pooled)[:readChunk]
 	for {
 		n, err := connection.Read(buffer)
 		if n > 0 {
