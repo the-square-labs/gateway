@@ -32,6 +32,12 @@ export function canListSourceConnectors(scopes: string[]): boolean {
   return SOURCE_CONNECTOR_PICKER_SCOPES.some((scope) => hasScopeBase(scopes, scope));
 }
 
+/** The repository picker's optional `search` query: trimmed, at most 200 characters, undefined when empty. */
+export function sourceRepositorySearch(value: string | undefined): string | undefined {
+  const search = value?.trim().slice(0, 200);
+  return search || undefined;
+}
+
 export interface SourceConnectorOption {
   id: string;
   name: string;

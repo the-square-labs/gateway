@@ -10,6 +10,10 @@ interface RepositorySourceFieldsProps {
   loading?: boolean;
   /** Why the integration or repository list could not be loaded (a missing permission, say). */
   loadErrors?: SourcePickerErrors;
+  /** Shown under the repository picker while its list is cut ("refine the search"). */
+  repositoriesHint?: string | null;
+  /** Receives the typed repository search, so a cut list can be searched on the server. */
+  onRepositorySearch?: (query: string) => void;
   connectorId: string;
   connectorOptions: ComboboxOption[];
   repositories: DockerBuildSourceRepository[];
@@ -35,6 +39,8 @@ interface RepositorySourceFieldsProps {
 export function RepositorySourceFields({
   loading = false,
   loadErrors,
+  repositoriesHint,
+  onRepositorySearch,
   connectorId,
   connectorOptions,
   repositories,
@@ -104,11 +110,18 @@ export function RepositorySourceFields({
               "No allowlisted repositories you may connect (needs integrations:<provider>:use on them)."
             }
             disabled={!connectorId}
+            onQueryChange={onRepositorySearch}
           />
-          {loadErrors?.repositories && (
+          {loadErrors?.repositories ? (
             <p className="text-xs text-destructive" role="alert">
               {loadErrors.repositories}
             </p>
+          ) : (
+            repositoriesHint && (
+              <p className="text-xs text-muted-foreground">
+                Only part of this integration's repositories is listed. {repositoriesHint}
+              </p>
+            )
           )}
         </div>
         <div className="space-y-1.5">

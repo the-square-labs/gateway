@@ -30,6 +30,8 @@ interface ComboboxProps {
   id?: string;
   ariaLabel?: string;
   renderOption?: (option: ComboboxOption) => ReactNode;
+  /** Receives the typed search text, for options loaded from the server as the user types. */
+  onQueryChange?: (query: string) => void;
 }
 
 type MultiComboboxProps = Omit<ComboboxProps, "value" | "onValueChange" | "freeText"> & {
@@ -55,6 +57,7 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
     id,
     ariaLabel,
     renderOption,
+    onQueryChange,
   } = props;
   const value = props.multiple ? "" : props.value;
   const [open, setOpen] = useState(false);
@@ -108,6 +111,7 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
 
   const finishClose = () => {
     setQuery("");
+    onQueryChange?.("");
     setActiveValue(null);
     setShowAllOptions(false);
   };
@@ -174,6 +178,7 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
               const nextValue = event.target.value;
               setActiveValue(null);
               setQuery(nextValue);
+              onQueryChange?.(nextValue);
               setShowAllOptions(false);
               setOpen(true);
               if (!props.multiple && freeText) props.onValueChange(nextValue);

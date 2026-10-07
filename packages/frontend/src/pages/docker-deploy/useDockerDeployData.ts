@@ -44,6 +44,8 @@ export function useDockerDeployData({
     connectorOptions: sourceConnectorOptions,
     repositories: sourceRepositories,
     loadErrors: sourceLoadErrors,
+    repositoriesHint: sourceRepositoriesHint,
+    onRepositorySearch: onSourceRepositorySearch,
   } = useDockerSourceRepositories(open && sourceMode === "repository", sourceConnectorId);
 
   const canViewRegistries = hasScope("docker:registries:view");
@@ -175,5 +177,7 @@ export function useDockerDeployData({
     sourceConnectorOptions,
     sourceLoadErrors,
     sourceRepositories,
+    sourceRepositoriesHint,
+    onSourceRepositorySearch,
   };
 }

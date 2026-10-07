@@ -163,6 +163,8 @@ export function ComposeProjectEditor({
     connectorOptions: sourceConnectorOptions,
     repositories: sourceRepositories,
     loadErrors: sourceLoadErrors,
+    repositoriesHint: sourceRepositoriesHint,
+    onRepositorySearch: onSourceRepositorySearch,
   } = useDockerSourceRepositories(repositoryCreation, sourceConnectorId);
 
   useEffect(() => {
@@ -512,6 +514,8 @@ export function ComposeProjectEditor({
                     <div>
                       <RepositorySourceFields
                         loadErrors={sourceLoadErrors}
+                        repositoriesHint={sourceRepositoriesHint}
+                        onRepositorySearch={onSourceRepositorySearch}
                         connectorId={sourceConnectorId}
                         connectorOptions={sourceConnectorOptions}
                         repositories={sourceRepositories}

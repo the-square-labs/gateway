@@ -25,6 +25,7 @@ import type {
   Node,
   PagesBuildDiscovery,
 } from "@/types";
+import type { GitScopeTargetTruncation } from "@/types/integrations";
 import { API_BASE } from "./api-base";
 import type { ApiClientBaseConstructor } from "./api-mixins";
 
@@ -843,15 +844,28 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
       );
     }
 
+    /**
+     * Repositories a source can be built from. `search` finds repositories past the GitHub
+     * listing bound; `truncated` says the list is cut and the search should be refined.
+     */
     async listDockerBuildRepositories(
       connectorId: string,
-      target?: DockerSourceTarget
-    ): Promise<DockerBuildSourceRepository[]> {
-      const path =
+      target?: DockerSourceTarget,
+      search?: string
+    ): Promise<{
+      repositories: DockerBuildSourceRepository[];
+      truncated?: GitScopeTargetTruncation;
+    }> {
+      const base =
         target?.kind === "pages_project"
           ? `/pages/projects/${target.pageProjectId}/source/connectors/${connectorId}/repositories`
           : `/docker/sources/connectors/${connectorId}/repositories`;
-      return this.unwrapData(this.request<{ data: DockerBuildSourceRepository[] }>(path));
+      const query = search?.trim() ? `?${new URLSearchParams({ search: search.trim() })}` : "";
+      const response = await this.request<{
+        data: DockerBuildSourceRepository[];
+        truncated?: GitScopeTargetTruncation;
+      }>(`${base}${query}`);
+      return { repositories: response?.data ?? [], truncated: response?.truncated };
     }
 
     async discoverPagesBuild(

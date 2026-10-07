@@ -68,6 +68,8 @@ interface DockerDeployFormFieldsProps {
   sourceContextPath: string;
   sourceDockerfilePath: string;
   sourceLoadErrors?: SourcePickerErrors;
+  sourceRepositoriesHint?: string | null;
+  onSourceRepositorySearch?: (query: string) => void;
   sourceMode: DockerDeploySourceMode;
   sourceProjectId: string;
   sourceRepositories: DockerBuildSourceRepository[];
@@ -258,6 +260,8 @@ export function DockerDeployFormFields(props: DockerDeployFormFieldsProps) {
             {sourceMode === "repository" ? (
               <RepositorySourceFields
                 loadErrors={sourceLoadErrors}
+                repositoriesHint={props.sourceRepositoriesHint}
+                onRepositorySearch={props.onSourceRepositorySearch}
                 connectorId={sourceConnectorId}
                 connectorOptions={sourceConnectorOptions}
                 repositories={sourceRepositories}

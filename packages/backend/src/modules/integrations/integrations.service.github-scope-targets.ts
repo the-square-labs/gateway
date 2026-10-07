@@ -29,6 +29,19 @@ interface GitHubScopeCatalogEntry {
   ownerId: string;
   ownerLogin: string;
   ownerType: string;
+  /** Repository details the build-source picker stores; absent for organizations. */
+  repository?: { name: string; url: string; defaultBranch: string | null; archived: boolean };
+}
+
+/** A repository as the build-source picker stores it (GitHubRepositorySummary of the source service). */
+interface GitHubSourceRepository {
+  id: number | null;
+  name: string;
+  fullName: string;
+  repositoryUrl: string;
+  ownerId?: string | null;
+  defaultBranch: string | null;
+  archived: boolean;
 }
 
 /** What the connector credential sees; `complete` is false when the page bound cut the repository listing. */
@@ -76,6 +89,12 @@ function catalogEntry(row: unknown): GitHubScopeCatalogEntry | null {
     ownerId: String(owner.id),
     ownerLogin: typeof owner.login === 'string' ? owner.login : String(owner.id),
     ownerType: typeof owner.type === 'string' ? owner.type : 'User',
+    repository: {
+      name: typeof repository.name === 'string' ? repository.name : '',
+      url: typeof repository.html_url === 'string' ? repository.html_url : '',
+      defaultBranch: typeof repository.default_branch === 'string' ? repository.default_branch : null,
+      archived: repository.archived === true,
+    },
   };
 }
 
@@ -137,7 +156,10 @@ export abstract class IntegrationsGitHubScopeTargetService extends IntegrationsS
     };
   }
 
-  /** Labels for stored GitHub qualifiers (`owner/<id>`, `repo/<id>`); targets the caller may not view stay unlabeled. */
+  /**
+   * Labels for stored GitHub qualifiers (`owner/<id>`, `repo/<id>`); targets the caller may not view stay
+   * unlabeled.
+   */
   async resolveGitHubScopeTargets(user: User, connectorId: string, rawIds: string): Promise<ScopeTargetResolution> {
     const ids = parseScopeTargetIds('github', rawIds);
     const { connector, token, grants } = await this.githubScopeTargetAccess(user, connectorId);
@@ -241,6 +263,43 @@ export abstract class IntegrationsGitHubScopeTargetService extends IntegrationsS
       throw scopeTargetPathNotFound(path);
     }
     return { qualifier: `repo/${entry.id}`, kind, id: entry.id, path: entry.fullName };
+  }
+
+  /**
+   * The build-source picker's GitHub repositories: the same bounded catalog and search as the scope picker,
+   * read with the connector credential, limited to what the connector includes (its allowlist, as saving a
+   * source requires). The caller filters by its own integrations:github:use grants.
+   */
+  protected async githubSourceRepositories(
+    connector: ConnectorRow,
+    search: string
+  ): Promise<{ repositories: GitHubSourceRepository[]; complete: boolean }> {
+    const token = await this.connectorGitHubToken(connector);
+    const catalog = await githubScopeCatalogs.getOrLoad(connector.id, () =>
+      this.loadGitHubScopeCatalog(connector, token)
+    );
+    const needle = search.trim();
+    const searched = needle
+      ? await githubScopeSearches.getOrLoad(`${connector.id}:${needle.toLowerCase()}`, () =>
+          this.searchGitHubScopeCatalog(connector, token, catalog, needle)
+        )
+      : { entries: [], complete: catalog.complete };
+    const { repositoryIncluded } = await this.githubScopeInclusion(connector);
+    const repositories = new Map<string, GitHubSourceRepository>();
+    for (const entry of [...catalog.entries, ...searched.entries]) {
+      if (!entry.id || !entry.repository || repositories.has(entry.id)) continue;
+      if (!repositoryIncluded(entry.fullName) || !matchesScopeTargetSearch(needle, entry.fullName)) continue;
+      repositories.set(entry.id, {
+        id: Number(entry.id),
+        name: entry.repository.name,
+        fullName: entry.fullName,
+        repositoryUrl: entry.repository.url,
+        ownerId: entry.ownerId,
+        defaultBranch: entry.repository.defaultBranch,
+        archived: entry.repository.archived,
+      });
+    }
+    return { repositories: [...repositories.values()], complete: needle ? searched.complete : catalog.complete };
   }
 
   private async githubScopeTargetAccess(user: User, connectorId: string) {

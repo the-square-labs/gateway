@@ -15,6 +15,7 @@ import {
 } from '@/lib/git-scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
+import { matchesScopeTargetSearch, type ScopeTargetTruncation, scopeTargetTruncation } from './git-scope-targets.js';
 import type { ResolvedGitLabUserCredential } from './gitlab-user-credentials.service.js';
 import { assertConnectorOperationAccess } from './integration-permissions.js';
 import type { VcsConnectorProvider } from './integration-provider.types.js';
@@ -43,6 +44,14 @@ type SourceProvider = 'gitlab' | 'github' | 'git';
 
 export abstract class IntegrationsSourceService extends IntegrationsGitLabSupportService {
   abstract githubListRepositories(user: User, input: { connectorId: string }): Promise<GitHubRepositorySummary[]>;
+  /**
+   * The connector credential's repositories for the build-source picker (bounded, plus search results past the
+   * bound); `complete` is false when the bound may have left matches out.
+   */
+  protected abstract githubSourceRepositories(
+    connector: ConnectorRow,
+    search: string
+  ): Promise<{ repositories: GitHubRepositorySummary[]; complete: boolean }>;
   abstract githubReadRepositoryFile(
     user: User,
     input: { connectorId: string; repositoryUrl: string; path: string; ref?: string }
@@ -175,6 +184,23 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
    * connector credential, like source resolution and queued builds.
    */
   async listDockerBuildSourceRepositories(user: User, connectorId: string): Promise<DockerBuildSourceRepository[]> {
+    return (await this.findDockerBuildSourceRepositories(user, connectorId)).repositories;
+  }
+
+  /**
+   * listDockerBuildSourceRepositories with an optional search (name or path). GitLab and generic Git list every
+   * synced or allowlisted repository; GitHub reads the credential's repositories up to a page bound and, for a
+   * search past it, GitHub's search API and the exact `owner/name`. `truncated` is present when the listing
+   * was cut, so the caller should refine the search.
+   */
+  async findDockerBuildSourceRepositories(
+    user: User,
+    connectorId: string,
+    search?: string
+  ): Promise<{ repositories: DockerBuildSourceRepository[]; truncated?: ScopeTargetTruncation }> {
+    const needle = search?.trim() ?? '';
+    const matches = (repository: DockerBuildSourceRepository) =>
+      matchesScopeTargetSearch(needle, repository.fullPath, repository.name);
     const connector = await this.getConnectorRow(connectorId);
     if (!['gitlab', 'github', 'git'].includes(connector.provider)) {
       throw new AppError(400, 'UNSUPPORTED_SOURCE_CONNECTOR', 'Connector does not provide a Git repository');
@@ -182,7 +208,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
     const provider = connector.provider as SourceProvider;
     const usable = principalGitConnectorGrants(user, `integrations:${provider}:use`, connector.id);
-    if (!hasGitGrants(usable)) return [];
+    if (!hasGitGrants(usable)) return { repositories: [] };
     // Repository discovery uses the connector credential, never the caller's personal one.
     const sourceActor: User = {
       ...user,
@@ -224,11 +250,13 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
           permitted = await this.filterGitLabProjectsByGrant(connector, permitted, grant, user);
         }
       }
-      return permitted.map((project) => this.toDockerBuildSourceRepository(connector, project));
+      const granted = permitted.map((project) => this.toDockerBuildSourceRepository(connector, project));
+      return { repositories: granted.filter(matches) };
     }
 
     if (provider === 'github') {
-      const repositories = (await this.githubListRepositories(sourceActor, { connectorId })).filter((repository) =>
+      const listed = await this.githubSourceRepositories(connector, needle);
+      const repositories = listed.repositories.filter((repository) =>
         gitGrantsCover(usable, {
           repositoryId: repository.id === null ? null : String(repository.id),
           containerIds: repository.ownerId ? [repository.ownerId] : [],
@@ -252,7 +280,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
         .from(integrationConnectorProjects)
         .where(eq(integrationConnectorProjects.connectorId, connector.id));
       const projectIds = new Map(projectRows.map((project) => [project.remoteId, project.id]));
-      return repositories.flatMap((repository) => {
+      const found = repositories.flatMap((repository) => {
         if (repository.id === null) return [];
         const projectId = projectIds.get(String(repository.id));
         if (!projectId) return [];
@@ -271,6 +299,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
           },
         ];
       });
+      return { repositories: found.filter(matches), ...scopeTargetTruncation(0, listed.complete) };
     }
 
     // Generic Git takes connector qualifiers only, so a grant here covers every repository.
@@ -303,7 +332,8 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
         )
       )
       .orderBy(integrationConnectorProjects.fullPath);
-    return rows.map((project) => this.toDockerBuildSourceRepository(connector, project));
+    const allowlisted = rows.map((project) => this.toDockerBuildSourceRepository(connector, project));
+    return { repositories: allowlisted.filter(matches) };
   }
 
   /**

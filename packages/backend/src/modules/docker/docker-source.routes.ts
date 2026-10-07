@@ -30,6 +30,7 @@ import {
   canPickDockerSource,
   listSourceConnectors,
   SOURCE_CONNECTOR_PICKER_SCOPES,
+  sourceRepositorySearch,
 } from './docker-source-connectors.js';
 import {
   assertDockerSourceTargetOnNode,
@@ -131,11 +132,13 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
     return c.json({ data });
   });
 
+  // `search` finds repositories past the GitHub listing bound; `truncated` asks the caller to refine it.
   router.get('/sources/connectors/:connectorId/repositories', requireSourcePicker(canPickDockerSource), async (c) => {
-    const data = await container
+    const search = sourceRepositorySearch(c.req.query('search'));
+    const { repositories, truncated } = await container
       .resolve(IntegrationsService)
-      .listDockerBuildSourceRepositories(actorFor(c), c.req.param('connectorId'));
-    return c.json({ data });
+      .findDockerBuildSourceRepositories(actorFor(c), c.req.param('connectorId'), search);
+    return c.json({ data: repositories, ...(truncated ? { truncated } : {}) });
   });
 
   router.openapi(
