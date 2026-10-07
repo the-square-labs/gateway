@@ -12,6 +12,8 @@ import {
 import {
   GitHubScopeTargetsSchema,
   GitLabScopeTargetsSchema,
+  ScopeTargetLookupQuerySchema,
+  ScopeTargetLookupSchema,
   ScopeTargetParamsSchema,
   ScopeTargetResolutionSchema,
   ScopeTargetResolveQuerySchema,
@@ -444,10 +446,30 @@ export const listGitScopeTargetsRoute = appRoute({
     'repositories; IDs are the stable provider IDs that qualifiers use (`<connectorId>/group/<id>`, ' +
     '`<connectorId>/project/<id>`, `<connectorId>/owner/<id>`, `<connectorId>/repo/<id>`). Needs ' +
     '`integrations:<provider>:view` on the connector or on anything in it; results only list what the caller ' +
-    'may view. `search` filters by path or name and `limit` (1-100, default 50) caps each list. Provider results ' +
-    'are cached briefly per connector.',
+    'may view. `search` filters by name or by (part of) a full path such as `team/sub` or `owner/repo`, and ' +
+    '`limit` (1-100, default 50) caps each list. A bounded number of provider pages is read per search; ' +
+    '`truncated` is present when matches were left out: `more` counts those past the limit and `exact` is false ' +
+    'when the provider had even more, so refine the search. Provider results are cached briefly per connector.',
   request: { params: ScopeTargetParamsSchema, query: ScopeTargetSearchQuerySchema },
   responses: okJson(z.union([GitLabScopeTargetsSchema, GitHubScopeTargetsSchema])),
+});
+
+export const lookupGitScopeTargetRoute = appRoute({
+  method: 'get',
+  path: '/{provider}/{connectorId}/scope-targets/lookup',
+  tags: ['Integrations'],
+  summary: 'Resolve a Git group, project, owner or repository path to its scope qualifier',
+  description:
+    'Turns a path into the stable qualifier Git scopes store: GitLab `kind=group&path=team/sub` or ' +
+    '`kind=project&path=team/sub/app`, GitHub `kind=owner&path=octo-org` or `kind=repo&path=octo-org/app`. ' +
+    'Returns `qualifier` relative to the connector (`group/123`); the full scope is ' +
+    '`<scope>:<connectorId>/<qualifier>`. Only IDs are stored, so a later rename or move never changes what a ' +
+    'grant covers. Needs `integrations:<provider>:view` on the connector or on anything in it; a path the caller ' +
+    'may not view, or outside the connector allowlist, answers 404 like one that does not exist. Saving a ' +
+    'permission group or additional user permissions also accepts `<connectorId>/<kind>/path/<path>` and stores ' +
+    'the resolved ID.',
+  request: { params: ScopeTargetParamsSchema, query: ScopeTargetLookupQuerySchema },
+  responses: okJson(ScopeTargetLookupSchema),
 });
 
 export const resolveGitScopeTargetsRoute = appRoute({

@@ -1,6 +1,11 @@
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { User } from '@/types.js';
-import type { GitLabScopeTargets, ScopeTargetResolution, ScopeTargetSearchQuery } from './git-scope-targets.js';
+import type {
+  GitLabScopeTargets,
+  ScopeTargetLookup,
+  ScopeTargetResolution,
+  ScopeTargetSearchQuery,
+} from './git-scope-targets.js';
 import type { VcsCommitFileChange } from './integration-provider.types.js';
 import { IntegrationsCloudflareService } from './integrations.service.cloudflare.js';
 
@@ -16,6 +21,15 @@ export class IntegrationsGitLabToolService extends IntegrationsCloudflareService
   }
   /** Labels for stored GitLab qualifiers (`group/<id>`, `project/<id>`). */
   async resolveGitLabScopeTargets(_user: User, _connectorId: string, _rawIds: string): Promise<ScopeTargetResolution> {
+    return commercialModuleUnavailable();
+  }
+  /** The stable qualifier of a GitLab group or project at a full path the caller may view. */
+  async lookupGitLabScopeTargetPath(
+    _user: User,
+    _connectorId: string,
+    _kind: 'group' | 'project',
+    _path: string
+  ): Promise<ScopeTargetLookup> {
     return commercialModuleUnavailable();
   }
   async searchGitLabAllowlist(

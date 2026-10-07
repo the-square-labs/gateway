@@ -324,10 +324,20 @@ export interface GitLabConnectorUpdateRequest {
 /** Providers whose connectors can qualify Git integration scopes. */
 export type GitScopeProvider = "gitlab" | "github" | "git";
 
+/**
+ * Present on a scope-target search that left matches out: `more` past the limit, and `exact`
+ * false when the provider had more than was read.
+ */
+export interface GitScopeTargetTruncation {
+  more: number;
+  exact: boolean;
+}
+
 /** `GET /integrations/gitlab/{connectorId}/scope-targets`: groups and projects the caller may see. */
 export interface GitLabScopeTargets {
   groups: { id: string; fullPath: string; name: string }[];
   projects: { id: string; pathWithNamespace: string; name: string }[];
+  truncated?: GitScopeTargetTruncation;
 }
 
 /** `GET /integrations/github/{connectorId}/scope-targets`: owners and repositories the caller may see. */
@@ -335,6 +345,7 @@ export interface GitHubScopeTargets {
   /** `type` is GitHub's account type: "Organization" or "User". */
   owners: { id: string; login: string; type: string }[];
   repos: { id: string; fullName: string }[];
+  truncated?: GitScopeTargetTruncation;
 }
 
 /** One stored qualifier resolved by `GET /integrations/{provider}/{connectorId}/scope-targets/resolve`. */

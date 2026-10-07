@@ -155,6 +155,7 @@ export function ScopePicker({
           {...listProps}
           search={search}
           selectionFilter={filter}
+          onResourcesChange={onResourcesChange}
           onFolderOptionsChange={(options) => {
             setFolderOptions(options);
             onFolderOptionsChange?.(options);

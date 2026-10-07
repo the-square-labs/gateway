@@ -3,14 +3,8 @@ import type { MiddlewareHandler } from 'hono';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
-import type { AppEnv, User } from '@/types.js';
+import type { AppEnv } from '@/types.js';
 import { ExternalSshService } from './external-ssh.service.js';
-import {
-  ScopeTargetParamsSchema,
-  ScopeTargetResolveQuerySchema,
-  ScopeTargetSearchQuerySchema,
-  scopeTargetRateLimiter,
-} from './git-scope-targets.js';
 import {
   assertConnectorOperationAccess,
   type ConnectorScopeTarget,
@@ -31,12 +25,10 @@ import {
   listCloudflareZonesRoute,
   listGitLabAllowlistOptionsRoute,
   listGitLabConnectorsRoute,
-  listGitScopeTargetsRoute,
   previewCloudflareConnectorTestRoute,
   previewGitLabAllowlistRoute,
   previewGitLabConnectorTestRoute,
   refreshGitLabAllowlistOptionsRoute,
-  resolveGitScopeTargetsRoute,
   rotateCloudflareConnectorTokenRoute,
   rotateGitLabConnectorTokenRoute,
   searchGitLabAllowlistRoute,
@@ -72,6 +64,7 @@ import {
   GitLabUserCredentialAuthorizeSchema,
   GitUserCredentialAuthorizeSchema,
 } from './integrations.schemas.js';
+import { registerGitScopeTargetRoutes, requestScopes } from './integrations.scope-targets.routes.js';
 import { IntegrationsService } from './integrations.service.js';
 
 export const integrationsRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
@@ -111,16 +104,6 @@ function requireGitLabOperation(
   };
 }
 
-/** The request's scopes: the bounded token scopes for bearer tokens, the session's effective scopes otherwise. */
-function requestScopes(c: { get(name: 'user'): User | undefined; get(name: 'effectiveScopes'): string[] | undefined }) {
-  return c.get('effectiveScopes') ?? c.get('user')?.scopes ?? [];
-}
-
-/** The caller as services see it: the account with the request's scopes. */
-function requestActor(c: { get(name: 'user'): User | undefined; get(name: 'effectiveScopes'): string[] | undefined }) {
-  return { ...c.get('user')!, scopes: requestScopes(c) };
-}
-
 function requireCloudflareOperation(
   operation: string,
   requiredScope: string | readonly string[]
@@ -157,29 +140,6 @@ function requireGitOperation(
     await next();
   };
 }
-
-/**
- * Scope picker access: `integrations:<provider>:view` on the connector or anything in it (results are filtered),
- * and a per-account request limit.
- */
-const requireScopeTargetAccess: MiddlewareHandler<AppEnv> = async (c, next) => {
-  const { provider, connectorId } = ScopeTargetParamsSchema.parse({
-    provider: c.req.param('provider'),
-    connectorId: c.req.param('connectorId'),
-  });
-  const user = c.get('user')!;
-  assertConnectorOperationAccess({
-    actor: { userId: user.id, scopes: requestScopes(c), accountScopes: user.accountScopes },
-    provider,
-    connectorId,
-    operation: 'connector.scope_targets',
-    requiredScope: `integrations:${provider}:view`,
-    scopeTarget: 'within-connector',
-  });
-  // Searches and label lookups spend the connector's provider API budget: limit them per account.
-  scopeTargetRateLimiter.consume(user.id);
-  await next();
-};
 
 integrationsRoutes.get(
   '/github/oauth',
@@ -416,35 +376,7 @@ integrationsRoutes.openapi(
   }
 );
 
-integrationsRoutes.openapi({ ...listGitScopeTargetsRoute, middleware: requireScopeTargetAccess }, async (c) => {
-  const { provider, connectorId } = ScopeTargetParamsSchema.parse({
-    provider: c.req.param('provider'),
-    connectorId: c.req.param('connectorId'),
-  });
-  const query = ScopeTargetSearchQuerySchema.parse(c.req.query());
-  const service = container.resolve(IntegrationsService);
-  const actor = requestActor(c);
-  return c.json(
-    provider === 'gitlab'
-      ? await service.listGitLabScopeTargets(actor, connectorId, query)
-      : await service.listGitHubScopeTargets(actor, connectorId, query)
-  );
-});
-
-integrationsRoutes.openapi({ ...resolveGitScopeTargetsRoute, middleware: requireScopeTargetAccess }, async (c) => {
-  const { provider, connectorId } = ScopeTargetParamsSchema.parse({
-    provider: c.req.param('provider'),
-    connectorId: c.req.param('connectorId'),
-  });
-  const { ids } = ScopeTargetResolveQuerySchema.parse(c.req.query());
-  const service = container.resolve(IntegrationsService);
-  const actor = requestActor(c);
-  return c.json(
-    provider === 'gitlab'
-      ? await service.resolveGitLabScopeTargets(actor, connectorId, ids)
-      : await service.resolveGitHubScopeTargets(actor, connectorId, ids)
-  );
-});
+registerGitScopeTargetRoutes(integrationsRoutes);
 
 integrationsRoutes.openapi(
   {

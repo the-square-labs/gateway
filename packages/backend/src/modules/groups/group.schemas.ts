@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { BUILTIN_GROUP_NAMES, extractBaseScope } from '@/lib/scopes.js';
-import { DelegatedScopeStringSchema, MAX_DELEGATED_SCOPES } from '@/lib/scopes-schemas.js';
+import { DelegatedScopeStringWithGitPathsSchema, MAX_DELEGATED_SCOPES } from '@/lib/scopes-schemas.js';
 
-const scopeString = DelegatedScopeStringSchema.refine(
+// Git path qualifiers are resolved to stable IDs by the group actions before anything is stored.
+const scopeString = DelegatedScopeStringWithGitPathsSchema.refine(
   (scope) => extractBaseScope(scope) !== 'admin:system',
   'admin:system cannot be assigned to custom groups'
 ).refine(

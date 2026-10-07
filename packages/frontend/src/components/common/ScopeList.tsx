@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import type { ScopeSelectionFilter } from "@/components/common/ScopeSearchFilter";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,7 @@ import {
   gitScopeTargetKinds,
   loadGitScopeConnectors,
   parseGitQualifier,
+  planGitRestrictionCopy,
   resolveGitTargetLabels,
 } from "./git-scope-targets";
 import {
@@ -82,6 +84,11 @@ interface ScopeListProps {
   /** Receives the folders loaded for the selected scopes' folder families. */
   onFolderOptionsChange?: (options: FolderOption[]) => void;
   /**
+   * Replaces the restrictions of several scopes at once. Enables "Apply to the other Git
+   * scopes in this section" on a restricted Git scope row.
+   */
+  onResourcesChange?: (resources: Record<string, string[]>) => void;
+  /**
    * Called once, when the option lists and labels the first render depends on have loaded.
    * For screens outside a reveal gate (OAuth consent); gated screens use `useContentLoading`.
    */
@@ -110,6 +117,7 @@ export function ScopeList({
   collapsedRestrictions = true,
   onFolderOptionsChange,
   onInitialLoadComplete,
+  onResourcesChange,
 }: ScopeListProps) {
   const actorScopes = useAuthStore((state) => state.user?.scopes);
   const [expandedScopes, setExpandedScopes] = useState<ReadonlySet<string>>(() => new Set());
@@ -256,6 +264,31 @@ export function ScopeList({
         });
     }
   }, [pendingGitLabelsKey, rememberGitLabels]);
+
+  // "Apply to the other Git scopes in this section": a restricted Git row hands its own
+  // connector, group and project qualifiers to the other selected Git scopes of its provider
+  // and section, so use, view and repo:read get the same limit in one step.
+  const gitRestrictionCopy = (scope: ScopeItem) => {
+    if (!onResourcesChange || readOnly) return null;
+    const plan = planGitRestrictionCopy({
+      scope,
+      scopes,
+      selected,
+      resources,
+      restrictableScopes,
+      allowedResourceIds,
+      inheritedResources: inheritedParsed.resources,
+      labels: gitLabels,
+    });
+    if (!plan) return null;
+    return {
+      targetLabels: plan.targetLabels,
+      apply: () => {
+        onResourcesChange({ ...(resources ?? {}), ...plan.changes });
+        toast.success(`Applied to ${plan.targetLabels.join(", ")}`);
+      },
+    };
+  };
 
   const isSelected = (scope: ScopeItem) =>
     selected.includes(scope.value) || inheritedBaseSet.has(scope.value);
@@ -479,6 +512,7 @@ export function ScopeList({
                 gitConnectors={gitConnectors}
                 gitLabels={gitLabels}
                 onRememberGitLabels={rememberGitLabels}
+                gitRestrictionCopy={gitRestrictionCopy(scope)}
               />
             ))}
           </div>
@@ -519,6 +553,7 @@ function ScopeRow({
   gitConnectors,
   gitLabels,
   onRememberGitLabels,
+  gitRestrictionCopy,
 }: {
   scope: ScopeItem;
   isSelected: boolean;
@@ -550,6 +585,8 @@ function ScopeRow({
   gitConnectors: GitScopeConnectorCatalog;
   gitLabels: GitTargetLabels;
   onRememberGitLabels: (labels: Record<string, GitTargetLabel>) => void;
+  /** Copies this Git row's restriction to the other Git scopes of its section. */
+  gitRestrictionCopy?: { targetLabels: string[]; apply: () => void } | null;
 }) {
   const isRestrictable = restrictableScopes?.includes(scope.value) ?? false;
   const gitProvider = isRestrictable ? gitScopeProvider(scope.value) : null;
@@ -765,6 +802,7 @@ function ScopeRow({
   const baseLocked = (!!inheritedExactBase || inheritedSelectedIds.length > 0) && !isOwnSelected;
   const rowDisabled = disabled || baseLocked;
   const showTechnicalValue = !scope.hideValue && scope.value !== scope.label;
+  const copyTargets = gitRestrictionCopy?.targetLabels.join(", ");
   const showDescription = scope.desc !== scope.label && scope.desc !== scope.value;
 
   return (
@@ -816,20 +854,35 @@ function ScopeRow({
         <div className="px-3 pb-2 pl-10">
           <div className="mb-1 flex items-start justify-between gap-2 text-xs">
             <p className="text-muted-foreground">{getResourceLabel(scope.value)}</p>
-            {collapsible && (
-              <Button
-                type="button"
-                variant="quiet"
-                size="inline"
-                onClick={onToggleExpanded}
-                aria-label={
-                  disabled ? `Hide ${scope.label} restrictions` : `Done restricting ${scope.label}`
-                }
-                className="shrink-0"
-              >
-                {disabled ? "Hide" : "Done"}
-              </Button>
-            )}
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-3">
+              {gitRestrictionCopy && !disabled && (
+                <Button
+                  type="button"
+                  variant="quiet"
+                  size="inline"
+                  onClick={gitRestrictionCopy.apply}
+                  title={`Same restriction for ${copyTargets}`}
+                  aria-label={`Apply the ${scope.label} restriction to ${copyTargets}`}
+                >
+                  Apply to the other Git scopes in this section
+                </Button>
+              )}
+              {collapsible && (
+                <Button
+                  type="button"
+                  variant="quiet"
+                  size="inline"
+                  onClick={onToggleExpanded}
+                  aria-label={
+                    disabled
+                      ? `Hide ${scope.label} restrictions`
+                      : `Done restricting ${scope.label}`
+                  }
+                >
+                  {disabled ? "Hide" : "Done"}
+                </Button>
+              )}
+            </div>
           </div>
           {gitProvider && (
             <GitScopeRestriction

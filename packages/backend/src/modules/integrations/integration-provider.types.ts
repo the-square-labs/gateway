@@ -84,6 +84,8 @@ export interface VcsProjectScopeRef {
 export interface VcsScopeTargetSearchResult {
   groups: VcsGroupRef[];
   projects: VcsProjectScopeRef[];
+  /** False when the page bound cut a listing: more groups or projects match than were read. */
+  complete?: boolean;
 }
 
 export interface VcsAllowlistSearchResult {
@@ -319,12 +321,20 @@ export interface VcsConnectorProvider extends ConnectorProvider {
    * read one by one; null when the project is not visible.
    */
   getProjectAncestorGroups?(auth: VcsConnectorAuth, projectId: string): Promise<VcsGroupRef[] | null>;
-  /** One group by ID; null when it does not exist or is not visible. */
+  /** One group by ID or full path; null when it does not exist or is not visible. */
   getGroup?(auth: VcsConnectorAuth, groupId: string): Promise<VcsGroupRef | null>;
-  /** One project by ID for scope labels; null when it does not exist or is not visible. */
+  /** One project by ID or full path for scope labels; null when it does not exist or is not visible. */
   getProjectScopeRef?(auth: VcsConnectorAuth, projectId: string): Promise<VcsProjectScopeRef | null>;
-  /** Groups and projects matching a search, for the scope picker. */
-  searchScopeTargets?(auth: VcsConnectorAuth, query: string, limit: number): Promise<VcsScopeTargetSearchResult>;
+  /**
+   * Groups and projects matching a search (a name, or part of a full path such as `team/sub`), for the scope
+   * picker, reading at most `maxPages` pages of each listing.
+   */
+  searchScopeTargets?(
+    auth: VcsConnectorAuth,
+    query: string,
+    limit: number,
+    maxPages?: number
+  ): Promise<VcsScopeTargetSearchResult>;
   getProjectAccess(auth: VcsConnectorAuth, project: VcsProjectRef): Promise<VcsProjectAccess>;
   getBranchAccess(auth: VcsConnectorAuth, project: VcsProjectRef, branch: string): Promise<VcsBranchAccess>;
   createBranch(auth: VcsConnectorAuth, project: VcsProjectRef, branch: string, ref: string): Promise<void>;

@@ -154,6 +154,8 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'integrations:cloudflare:view',
     'integrations:ssh:view',
   ],
+  // The lookup enforces view on the named connector (any qualifier) for its provider.
+  find_git_scope_target: ['integrations:gitlab:view', 'integrations:github:view'],
   sync_integration_connector: [
     'integrations:gitlab:manage',
     'integrations:cloudflare:sync',

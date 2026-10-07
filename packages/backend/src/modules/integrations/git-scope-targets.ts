@@ -20,6 +20,8 @@ export const SCOPE_TARGET_SEARCH_TTL_MS = 60_000;
 export const SCOPE_TARGET_LOOKUP_TTL_MS = 5 * 60_000;
 /** Uncached provider lookups one picker request may make (labels, group parents); the rest stay unlabeled. */
 export const SCOPE_TARGET_LOOKUP_BUDGET = 60;
+/** Pages of 100 one picker search reads per provider listing; past them the result says it is truncated. */
+export const SCOPE_TARGET_SEARCH_MAX_PAGES = 5;
 /** Picker requests (search and resolve together) per principal and window. */
 export const SCOPE_TARGET_RATE_LIMIT = { windowMs: 60_000, maxRequests: 60 } as const;
 
@@ -74,17 +76,57 @@ export const ScopeTargetResolveQuerySchema = z.object({
   ids: z.string().trim().min(1).max(4096),
 });
 
+/**
+ * Present when a search returned less than everything that matches: `more` targets past the limit were left
+ * out, and `exact` is false when the provider listing itself was cut, so even more may exist.
+ */
+const ScopeTargetTruncationSchema = z.object({ more: z.number().int().min(0), exact: z.boolean() });
+export type ScopeTargetTruncation = z.infer<typeof ScopeTargetTruncationSchema>;
+
 export const GitLabScopeTargetsSchema = z.object({
   groups: z.array(z.object({ id: z.string(), fullPath: z.string(), name: z.string() })),
   projects: z.array(z.object({ id: z.string(), pathWithNamespace: z.string(), name: z.string() })),
+  truncated: ScopeTargetTruncationSchema.optional(),
 });
 export type GitLabScopeTargets = z.infer<typeof GitLabScopeTargetsSchema>;
 
 export const GitHubScopeTargetsSchema = z.object({
   owners: z.array(z.object({ id: z.string(), login: z.string(), type: z.string() })),
   repos: z.array(z.object({ id: z.string(), fullName: z.string() })),
+  truncated: ScopeTargetTruncationSchema.optional(),
 });
 export type GitHubScopeTargets = z.infer<typeof GitHubScopeTargetsSchema>;
+
+/** The truncation note of a search result, or nothing when every match was returned. */
+export function scopeTargetTruncation(more: number, exact: boolean): { truncated?: ScopeTargetTruncation } {
+  return more > 0 || !exact ? { truncated: { more, exact } } : {};
+}
+
+/** `GET .../scope-targets/lookup`: one group, project, owner or repository by its path. */
+export const ScopeTargetLookupQuerySchema = z.object({
+  kind: z.enum(['group', 'project', 'owner', 'repo']),
+  path: z
+    .string()
+    .trim()
+    .min(1)
+    .max(255)
+    .regex(/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/, 'Paths are slash-separated names, for example team/sub'),
+});
+export type ScopeTargetLookupQuery = z.infer<typeof ScopeTargetLookupQuerySchema>;
+
+/** A path resolved to the stable qualifier stored in scopes (relative to the connector, such as `group/123`). */
+export const ScopeTargetLookupSchema = z.object({
+  qualifier: z.string(),
+  kind: z.enum(['group', 'project', 'owner', 'repo']),
+  id: z.string(),
+  path: z.string(),
+});
+export type ScopeTargetLookup = z.infer<typeof ScopeTargetLookupSchema>;
+
+/** The answer for a path that does not exist or that the caller may not view (the same, so nothing leaks). */
+export function scopeTargetPathNotFound(path: string): AppError {
+  return new AppError(404, 'SCOPE_TARGET_NOT_FOUND', `No group, project, owner or repository you may view at ${path}`);
+}
 
 export const ScopeTargetResolutionSchema = z.object({
   items: z.array(

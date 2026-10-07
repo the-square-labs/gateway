@@ -34,7 +34,10 @@ import {
   parseScopeTargetIds,
   SCOPE_TARGET_LOOKUP_BUDGET,
   SCOPE_TARGET_LOOKUP_TTL_MS,
+  SCOPE_TARGET_SEARCH_MAX_PAGES,
   SCOPE_TARGET_SEARCH_TTL_MS,
+  scopeTargetPathNotFound,
+  scopeTargetTruncation,
   unresolvedScopeTarget,
 } from './git-scope-targets.js';
 import {
@@ -87,4 +90,7 @@ export const integrationCommercialRuntime = {
   unresolvedScopeTarget,
   SCOPE_TARGET_LOOKUP_TTL_MS,
   SCOPE_TARGET_SEARCH_TTL_MS,
+  SCOPE_TARGET_SEARCH_MAX_PAGES,
+  scopeTargetTruncation,
+  scopeTargetPathNotFound,
 };
