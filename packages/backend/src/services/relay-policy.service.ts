@@ -2865,7 +2865,7 @@ export class RelayPolicyService {
           tx.select().from(relayRoutes),
         ]);
         if (!state) throw new Error('Relay policy state is not initialized');
-        const sessionLimits = await loadRelaySessionLimits(tx);
+        const sessionLimits = await loadRelaySessionLimits(tx, endpoints);
         keys.sort((left, right) => left.keyId.localeCompare(right.keyId));
         endpoints.sort((left, right) => left.id.localeCompare(right.id));
         routes.sort((left, right) => left.id.localeCompare(right.id));
@@ -3070,7 +3070,7 @@ export class RelayPolicyService {
       const routes = endpointIds.length
         ? await tx.select().from(relayRoutes).where(inArray(relayRoutes.targetEndpointId, endpointIds))
         : [];
-      const sessionLimits = await loadRelaySessionLimits(tx);
+      const sessionLimits = await loadRelaySessionLimits(tx, endpoints);
       // A relay refuses any revision below the one it applied, and Gateway's own sequence can
       // fall behind it (a database restored from a backup). Continue above what the relay
       // reports, or has reported, so it is never locked out until the sequence catches up.

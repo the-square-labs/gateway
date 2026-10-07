@@ -1199,10 +1199,7 @@ describe('RelayPolicyService snapshots', () => {
           if (table === relayGrantSigningKeys) {
             return { where: () => Promise.resolve(selected) };
           }
-          // The session-limit read joins managed databases; this fixture has none.
-          return Object.assign(Promise.resolve(selected), {
-            innerJoin: () => ({ where: () => Promise.resolve([]) }),
-          });
+          return Promise.resolve(selected);
         },
       })),
     };

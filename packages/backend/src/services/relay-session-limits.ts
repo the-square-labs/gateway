@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { managedDatabaseInstances, relayEndpoints } from '@/db/schema/index.js';
 
 interface RelaySessionLimitOwner {
@@ -59,8 +59,16 @@ export function managedDatabaseConnectionLimit(type: string, engineConfig: unkno
   return CLICKHOUSE_DEFAULT_MAX_CONNECTIONS;
 }
 
-/** Takes the client or a transaction (repeatable-read snapshot builds). */
-export async function loadRelaySessionLimits(db: any): Promise<RelaySessionLimits> {
+/**
+ * Reads the limits of the managed databases behind `endpoints` (every endpoint when omitted). Takes the client or a
+ * transaction (repeatable-read snapshot builds); a snapshot without database endpoints reads nothing.
+ */
+export async function loadRelaySessionLimits(
+  db: any,
+  endpoints?: ReadonlyArray<{ id: string; ownerKind: string }>
+): Promise<RelaySessionLimits> {
+  const endpointIds = endpoints?.filter(({ ownerKind }) => ownerKind === 'managed_database').map(({ id }) => id);
+  if (endpointIds && endpointIds.length === 0) return { databaseByEndpoint: new Map() };
   const rows: Array<{ endpointId: string; type: string; engineConfig: unknown }> = await db
     .select({
       endpointId: relayEndpoints.id,
@@ -69,7 +77,11 @@ export async function loadRelaySessionLimits(db: any): Promise<RelaySessionLimit
     })
     .from(relayEndpoints)
     .innerJoin(managedDatabaseInstances, sql`${managedDatabaseInstances.id}::text = ${relayEndpoints.ownerId}`)
-    .where(eq(relayEndpoints.ownerKind, 'managed_database'));
+    .where(
+      endpointIds
+        ? and(eq(relayEndpoints.ownerKind, 'managed_database'), inArray(relayEndpoints.id, endpointIds))
+        : eq(relayEndpoints.ownerKind, 'managed_database')
+    );
   return {
     databaseByEndpoint: new Map(
       rows.map((row) => [row.endpointId, managedDatabaseConnectionLimit(row.type, row.engineConfig)])
