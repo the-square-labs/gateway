@@ -28,7 +28,7 @@ func newTestController(pressure uint32) (*Controller, *fixedSampler) {
 // the time of the last one.
 func warm(controller *Controller) time.Time {
 	now := time.Now()
-	for index := range 8 {
+	for range 8 {
 		now = now.Add(pressureSampleInterval)
 		controller.step(now)
 	}
