@@ -19,6 +19,7 @@ import {
   relayEndpoints,
   relayPolicyState,
   relayRoutes,
+  storageCopyJobs,
 } from '@/db/schema/index.js';
 import { RELAY_MAX_FRAME_BYTES } from '@/grpc/relay-control.client.js';
 
@@ -311,6 +312,8 @@ const PROXY_SECURE_LINK_OWNERS: OwnerTable[] = [
 ];
 const MANAGED_STORAGE_OWNERS: OwnerTable[] = [{ table: managedStorageClusters, id: managedStorageClusters.id }];
 const BACKUP_RUN_OWNERS: OwnerTable[] = [{ table: backupRuns, id: backupRuns.id }];
+// Storage routes are also created per storage copy job, under the job's id.
+const STORAGE_RUN_OWNERS: OwnerTable[] = [...BACKUP_RUN_OWNERS, { table: storageCopyJobs, id: storageCopyJobs.id }];
 const CONTAINER_LINK_OWNERS: OwnerTable[] = [{ table: containerLinks, id: containerLinks.id }];
 
 /**
@@ -330,8 +333,8 @@ const ROUTE_OWNERS: Record<string, OwnerTable[]> = {
   managed_database_gateway: [{ table: managedDatabaseInstances, id: managedDatabaseInstances.id }],
   database_backup_source: BACKUP_RUN_OWNERS,
   database_backup_restore: BACKUP_RUN_OWNERS,
-  storage_backup_target: BACKUP_RUN_OWNERS,
-  storage_backup_staging: BACKUP_RUN_OWNERS,
+  storage_backup_target: STORAGE_RUN_OWNERS,
+  storage_backup_staging: STORAGE_RUN_OWNERS,
   registry_secure_link: [{ table: dockerRegistryNodeBindings, id: dockerRegistryNodeBindings.id }],
 };
 

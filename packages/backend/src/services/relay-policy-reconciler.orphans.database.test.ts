@@ -6,7 +6,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DrizzleClient } from '@/db/client.js';
 import { migrateDatabase, tolerateDatabaseDrop } from '@/db/migration-database.test-helpers.js';
 import * as schema from '@/db/schema/index.js';
-import { dockerRegistryNodeBindings, nodes, relayEndpoints, relayPolicyState, relayRoutes } from '@/db/schema/index.js';
+import {
+  dockerRegistryNodeBindings,
+  nodes,
+  relayEndpoints,
+  relayPolicyState,
+  relayRoutes,
+  storageCopyJobs,
+} from '@/db/schema/index.js';
 import { removeOrphanedRelayState } from './relay-policy-reconciler.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
@@ -82,6 +89,19 @@ describe.skipIf(!url)('relay state whose owner is gone', () => {
     // Fixed owners (the internal registry and its ingress) are not judged by this pass.
     const liveEndpoint = await endpoint('internal_registry', 'gateway-internal-registry', 'gateway');
     const liveRoute = await route('registry_secure_link', binding!.id, node!.id, liveEndpoint.id);
+    // A storage copy job owns its storage routes under its own id, not a backup run's.
+    const [copyJob] = await db
+      .insert(storageCopyJobs)
+      .values({
+        sourceConnectionName: 'minio',
+        destinationConnectionName: 'seaweedfs',
+        mode: 'copy',
+        status: 'running',
+        limits: { timeoutSeconds: 3600, cpuCores: 1, memoryMb: 512, transfers: 4 },
+      })
+      .returning();
+    const copySourceRoute = await route('storage_backup_staging', copyJob!.id, 'copy-runner', liveEndpoint.id);
+    const copyTargetRoute = await route('storage_backup_target', copyJob!.id, 'copy-runner', liveEndpoint.id);
     const fixedOwnerRoute = await route('registry_ingress', 'gateway-registry-ingress', 'nginx-live', liveEndpoint.id);
 
     const deletedRoute = randomUUID();
@@ -100,7 +120,7 @@ describe.skipIf(!url)('relay state whose owner is gone', () => {
     );
     expect((await db.select().from(relayEndpoints)).map(({ id }) => id)).toEqual([liveEndpoint.id]);
     expect(new Set((await db.select().from(relayRoutes)).map(({ id }) => id))).toEqual(
-      new Set([liveRoute.id, fixedOwnerRoute.id])
+      new Set([liveRoute.id, fixedOwnerRoute.id, copySourceRoute.id, copyTargetRoute.id])
     );
     expect(await revision()).toBe(before + 1);
 
