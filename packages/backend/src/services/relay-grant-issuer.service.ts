@@ -20,6 +20,7 @@ import {
   LONG_POLICY_LEASE_CAPABILITY,
 } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
+import { RelayGrantSigningContext, type RelayGrantSigningKey } from './relay-grant-signing.js';
 import { candidateAssignmentState } from './relay-local-takeover.js';
 import type { RelayRevokedRouteFence } from './relay-revocation-fence.js';
 import { loadRevocationFenceState } from './relay-revocation-fence.service.js';
@@ -220,7 +221,12 @@ export class RelayGrantIssuerService {
     ];
   }
 
-  async getNodeGrantBundle(nodeId: string): Promise<RelayGrantBundle> {
+  /**
+   * `unsigned`: the same bundle with unsigned grants, to tell an unchanged bundle apart without signing (see
+   * RelayGrantSigningContext). It is never delivered.
+   */
+  async getNodeGrantBundle(nodeId: string, options: { unsigned?: boolean } = {}): Promise<RelayGrantBundle> {
+    const signing = new RelayGrantSigningContext((unsigned) => this.loadSigningKey(unsigned), options.unsigned);
     const node = await this.requireNodeIdentity(nodeId);
     const [state, endpoints, routes, targetEndpoints, sessionLimits] = await Promise.all([
       this.requireState(),
@@ -256,15 +262,18 @@ export class RelayGrantIssuerService {
         : Promise.resolve([]),
     ]);
     for (const endpoint of activeOwnEndpoints) {
-      const grant = await this.signGrant({
-        kind: 'endpoint',
-        subjectKind: endpoint.subjectKind,
-        subjectId: nodeId,
-        certificateSha256: node.certificateFingerprint,
-        endpointId: endpoint.id,
-        endpointGeneration: endpoint.generation,
-        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits),
-      });
+      const grant = await this.signGrant(
+        {
+          kind: 'endpoint',
+          subjectKind: endpoint.subjectKind,
+          subjectId: nodeId,
+          certificateSha256: node.certificateFingerprint,
+          endpointId: endpoint.id,
+          endpointGeneration: endpoint.generation,
+          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits),
+        },
+        signing
+      );
       const candidates = await this.issueCandidates(
         poolProjection.get(endpoint.id) ?? [],
         'endpoint',
@@ -274,7 +283,8 @@ export class RelayGrantIssuerService {
         undefined,
         true,
         true,
-        sessionLimits
+        sessionLimits,
+        signing
       );
       const resumeRoutes = inboundRoutes
         .filter(({ targetEndpointId }) => targetEndpointId === endpoint.id)
@@ -292,16 +302,19 @@ export class RelayGrantIssuerService {
       });
     }
     for (const route of routes.filter(({ targetEndpointId }) => activeEndpointIds.has(targetEndpointId))) {
-      const grant = await this.signGrant({
-        kind: 'connect',
-        subjectKind: route.sourceKind,
-        subjectId: nodeId,
-        certificateSha256: node.certificateFingerprint,
-        routeId: route.id,
-        routeGeneration: route.generation,
-        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, sessionLimits),
-        maxFrameBytes: route.maxFrameBytes,
-      });
+      const grant = await this.signGrant(
+        {
+          kind: 'connect',
+          subjectKind: route.sourceKind,
+          subjectId: nodeId,
+          certificateSha256: node.certificateFingerprint,
+          routeId: route.id,
+          routeGeneration: route.generation,
+          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, sessionLimits),
+          maxFrameBytes: route.maxFrameBytes,
+        },
+        signing
+      );
       const endpoint = targetEndpoints.find(({ id }) => id === route.targetEndpointId);
       // A relay stale for this route may still admit a revoked tuple of it; never send the
       // source there. The current tuple would not pass that relay's policy anyway.
@@ -318,7 +331,8 @@ export class RelayGrantIssuerService {
             route,
             true,
             true,
-            sessionLimits
+            sessionLimits,
+            signing
           )
         : [];
       grants.push({
@@ -349,6 +363,9 @@ export class RelayGrantIssuerService {
     // Latency only orders relays; it must never hold grants back.
     const relayLatencyTargets = await this.topology.completeGrantBundle(grants, targetEndpoints).catch(() => []);
     const revocationFences = await revocations.fencesForEndpoints(activeOwnEndpoints.map(({ id }) => id));
+    // Each grant used to read the revision it was signed at; every read of this bundle happened before this one, so
+    // an acknowledged revision here covers all of them (a write bumps it in the same transaction).
+    if (signing.loaded) this.assertAcknowledged((await this.requireState()).revision);
     this.lastBundleGeneratedAtMs = Math.max(Date.now(), this.lastBundleGeneratedAtMs + 1);
     return {
       revision: String(state.revision),
@@ -430,43 +447,50 @@ export class RelayGrantIssuerService {
       | undefined,
     includeStaging: boolean,
     requireSubjectNodeCapability = true,
-    sessionLimits?: RelaySessionLimits
+    sessionLimits?: RelaySessionLimits,
+    signing?: RelayGrantSigningContext
   ): Promise<RelayDataCandidate[]> {
+    const nodeSupportsPool = () => this.nodeSupportsPool(subjectId);
+    const pathSupportsPool = () => this.endpointPathSupportsPool(endpoint.id);
     if (
       !assignments.length ||
-      (requireSubjectNodeCapability && !(await this.nodeSupportsPool(subjectId))) ||
-      !(await this.endpointPathSupportsPool(endpoint.id))
+      (requireSubjectNodeCapability &&
+        !(await (signing ? signing.capability(`node:${subjectId}`, nodeSupportsPool) : nodeSupportsPool()))) ||
+      !(await (signing ? signing.capability(`path:${endpoint.id}`, pathSupportsPool) : pathSupportsPool()))
     )
       return [];
     const selected = assignments.filter(({ state }) => includeStaging || state === 'active');
     if (!selected.length || selected.some((assignment) => !this.instanceSupportsPool(assignment))) return [];
     const result: RelayDataCandidate[] = [];
     for (const assignment of selected) {
-      const grant = await this.signGrant({
-        schemaVersion: 2,
-        kind,
-        subjectKind: kind === 'endpoint' ? endpoint.subjectKind : route!.sourceKind,
-        subjectId,
-        certificateSha256,
-        poolId: assignment.poolId,
-        relayInstanceId: assignment.instanceId,
-        assignmentGeneration: assignment.generation,
-        longLeaseCapable: this.instanceCapabilities(assignment).includes(LONG_POLICY_LEASE_CAPABILITY),
-        // The relay enforces the lower of the policy and grant limits, so a candidate grant
-        // must carry the same effective limit as the policy or it caps the route below it.
-        ...(kind === 'endpoint'
-          ? {
-              endpointId: endpoint.id,
-              endpointGeneration: endpoint.generation,
-              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits),
-            }
-          : {
-              routeId: route!.id,
-              routeGeneration: route!.generation,
-              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route!, sessionLimits),
-              maxFrameBytes: route!.maxFrameBytes,
-            }),
-      });
+      const grant = await this.signGrant(
+        {
+          schemaVersion: 2,
+          kind,
+          subjectKind: kind === 'endpoint' ? endpoint.subjectKind : route!.sourceKind,
+          subjectId,
+          certificateSha256,
+          poolId: assignment.poolId,
+          relayInstanceId: assignment.instanceId,
+          assignmentGeneration: assignment.generation,
+          longLeaseCapable: this.instanceCapabilities(assignment).includes(LONG_POLICY_LEASE_CAPABILITY),
+          // The relay enforces the lower of the policy and grant limits, so a candidate grant
+          // must carry the same effective limit as the policy or it caps the route below it.
+          ...(kind === 'endpoint'
+            ? {
+                endpointId: endpoint.id,
+                endpointGeneration: endpoint.generation,
+                maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits),
+              }
+            : {
+                routeId: route!.id,
+                routeGeneration: route!.generation,
+                maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route!, sessionLimits),
+                maxFrameBytes: route!.maxFrameBytes,
+              }),
+        },
+        signing
+      );
       const topology = candidateTopology(assignment.role);
       const assignmentState = candidateAssignmentState(
         { ...assignment, state: assignment.state as 'active' | 'staging' | 'draining' },
@@ -702,24 +726,12 @@ export class RelayGrantIssuerService {
        * target has not upgraded) keeps the 48-hour cap an older relay still enforces.
        */
       longLeaseCapable?: boolean;
-    }
+    },
+    signing?: RelayGrantSigningContext
   ): Promise<SignedRelayGrant> {
     const { longLeaseCapable, ...claimsInput } = input;
-    const [state, settings, active] = await Promise.all([
-      this.requireState(),
-      this.settings.getConfig(),
-      this.db
-        .select()
-        .from(relayGrantSigningKeys)
-        .where(eq(relayGrantSigningKeys.status, 'active'))
-        .limit(1)
-        .then((rows) => rows[0]),
-    ]);
-    if (!active?.encryptedPrivateKey || !active.encryptedDek)
-      throw new Error('Active relay signing key is unavailable');
-    if (state.revision > this.acknowledgedRevision && state.revision > this.fenceBypassRevision) {
-      throw new RelayPolicyNotAcknowledgedError(state.revision);
-    }
+    const { state, settings, keyId, privateKey } = await (signing ? signing.key() : this.loadSigningKey(false));
+    this.assertAcknowledged(state.revision);
     const now = Math.floor(Date.now() / 1000);
     // A grant not scoped to a specific upgraded relay instance keeps the legacy cap: an older
     // relay build rejects any grant lifetime past LEGACY_RELAY_GRANT_TTL_MAX_HOURS outright.
@@ -737,11 +749,39 @@ export class RelayGrantIssuerService {
       expiresAt: now + ttlHours * 60 * 60,
     };
     const payload = Buffer.from(JSON.stringify(claims));
-    const privateKeyPem = this.cryptoService.decryptPrivateKey({
-      encryptedPrivateKey: active.encryptedPrivateKey,
-      encryptedDek: active.encryptedDek,
-      dekIv: '',
-    });
-    return { keyId: active.keyId, payload, signature: signBytes(null, payload, createPrivateKey(privateKeyPem)) };
+    if (!privateKey) return { keyId, payload, signature: Buffer.alloc(0) };
+    return { keyId, payload, signature: signBytes(null, payload, privateKey) };
+  }
+
+  private async loadSigningKey(unsigned: boolean): Promise<RelayGrantSigningKey> {
+    const [state, settings, active] = await Promise.all([
+      this.requireState(),
+      this.settings.getConfig(),
+      this.db
+        .select()
+        .from(relayGrantSigningKeys)
+        .where(eq(relayGrantSigningKeys.status, 'active'))
+        .limit(1)
+        .then((rows) => rows[0]),
+    ]);
+    if (!active?.encryptedPrivateKey || !active.encryptedDek)
+      throw new Error('Active relay signing key is unavailable');
+    const privateKey = unsigned
+      ? null
+      : createPrivateKey(
+          this.cryptoService.decryptPrivateKey({
+            encryptedPrivateKey: active.encryptedPrivateKey,
+            encryptedDek: active.encryptedDek,
+            dekIv: '',
+          })
+        );
+    return { state, settings, keyId: active.keyId, privateKey };
+  }
+
+  /** Grants are never signed for a revision the local relay has not taken (unless bypassed, see above). */
+  private assertAcknowledged(revision: number): void {
+    if (revision > this.acknowledgedRevision && revision > this.fenceBypassRevision) {
+      throw new RelayPolicyNotAcknowledgedError(revision);
+    }
   }
 }

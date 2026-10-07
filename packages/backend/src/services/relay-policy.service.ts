@@ -2511,9 +2511,10 @@ export class RelayPolicyService {
           };
         }
         // A bundle the daemon holds already depends on no new policy: skip it before waiting for remote pushes,
-        // which with a busy pool cost every routine sync the whole grace (stand rc20pre3, N-14).
+        // which with a busy pool cost every routine sync the whole grace (stand rc20pre3, N-14). Compared unsigned:
+        // the fingerprint ignores signatures, so an unchanged bundle costs no signing.
         if (options.skipUnchanged) {
-          const unchanged = await this.getNodeGrantBundle(nodeId);
+          const unchanged = await this.getNodeGrantBundle(nodeId, { unsigned: true });
           if (await this.deliveredRecently(nodeId, relayGrantBundleFingerprint(unchanged))) {
             return { commandId: '', success: true, error: '', detail: 'unchanged', data: Buffer.alloc(0) };
           }
@@ -2663,9 +2664,10 @@ export class RelayPolicyService {
     }
   }
 
-  async getNodeGrantBundle(nodeId: string): Promise<RelayGrantBundle> {
+  /** `unsigned`: only to compare with a delivered bundle (see RelayGrantIssuerService.getNodeGrantBundle). */
+  async getNodeGrantBundle(nodeId: string, options: { unsigned?: boolean } = {}): Promise<RelayGrantBundle> {
     const [bundle, config] = await Promise.all([
-      this.withAcknowledgedPolicy(() => this.grantIssuer.getNodeGrantBundle(nodeId)),
+      this.withAcknowledgedPolicy(() => this.grantIssuer.getNodeGrantBundle(nodeId, options)),
       this.settings.getConfig(),
     ]);
     return { ...bundle, dataLanes: config.relay.dataLanes, readChunkBytes: config.relay.readChunkBytes };
