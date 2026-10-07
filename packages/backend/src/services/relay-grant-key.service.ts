@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { and, eq, lte, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { relayGrantSigningKeys, relayInstances, relayPolicyState } from '@/db/schema/index.js';
+import { relayGrantSigningKeys, relayInstances, relayPolicyState, relayPools } from '@/db/schema/index.js';
 import type { RelayInstanceCapabilities } from '@/db/schema/relay.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -33,7 +33,7 @@ export const GRANT_KEY_PUBLICATION_MS = 20 * 60 * 1000;
 interface PendingKey {
   id: string;
   createdAt: Date;
-  /** The global policy revision that first published this key; null on a pre-migration row. */
+  /** The first pool snapshot revision that carries this key; null on a pre-migration row. */
   publishedAtRevision: number | null;
 }
 
@@ -93,17 +93,16 @@ export class RelayGrantKeyService {
         .limit(1);
       if (!active?.activatedAt || now.getTime() - active.activatedAt.getTime() < KEY_ROTATION_MS) return null;
 
-      // The revision this key's snapshot will carry: the same one bumpRelayPolicyRevision is
-      // about to set, computed here (under the same advisory lock) so it can be stored with the
-      // key in one write instead of a second round trip.
-      const [state] = await tx
-        .select({ revision: relayPolicyState.revision })
-        .from(relayPolicyState)
-        .where(eq(relayPolicyState.id, POLICY_ID))
-        .limit(1);
-      const publishedAtRevision = Number(state?.revision ?? 0) + 1;
-      const [created] = await this.insertKey(tx, 'pending', null, publishedAtRevision);
+      // Relays report the pool snapshot revision they applied, which runs ahead of the global one
+      // (lease refreshes advance only the pool), so the gate needs a pool revision. The bump waits
+      // out every snapshot build still holding the policy state on the previous revision; every
+      // build after this commits carries the key and takes a pool revision above today's highest.
       await bumpRelayPolicyRevision(tx);
+      const [pool] = await tx
+        .select({ revision: sql<string | number | null>`max(${relayPools.desiredPolicyRevision})` })
+        .from(relayPools);
+      const publishedAtRevision = Number(pool?.revision ?? 0) + 1;
+      const [created] = await this.insertKey(tx, 'pending', null, publishedAtRevision);
       return { id: created.id, createdAt: now, publishedAtRevision };
     });
 
