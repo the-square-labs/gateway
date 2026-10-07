@@ -48,11 +48,11 @@ import {
   updateDatabaseMonitoringCache,
 } from "./database-detail/database-detail-state";
 import { ManagedDatabaseSettingsTab } from "./database-detail/ManagedDatabaseSettingsTab";
+import { PostgresConfigDialog } from "./database-detail/PostgresConfigDialog";
 import {
   PostgresExtensionsTab,
   postgresExtensionsCacheKey,
 } from "./database-detail/PostgresExtensionsTab";
-import { PostgresConfigDialog } from "./database-detail/PostgresConfigDialog";
 import { RedisConfigDialog } from "./database-detail/RedisConfigDialog";
 import { ResizeManagedDatabaseDialog } from "./database-detail/ResizeManagedDatabaseDialog";
 import { SqlExplorer } from "./database-detail/SqlExplorer";

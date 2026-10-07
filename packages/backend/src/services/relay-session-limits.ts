@@ -40,11 +40,7 @@ const POSTGRES_DEFAULT_MAX_CONNECTIONS = 100;
 const REDIS_DEFAULT_MAX_CLIENTS = 10_000;
 const CLICKHOUSE_DEFAULT_MAX_CONNECTIONS = 4096;
 
-const UNCAPPED_OWNER_KINDS = new Set([
-  'proxy_host_secure_link',
-  'managed_storage',
-  'managed_storage_binding',
-]);
+const UNCAPPED_OWNER_KINDS = new Set(['proxy_host_secure_link', 'managed_storage', 'managed_storage_binding']);
 
 /** The connections a managed database accepts, from its engine settings. */
 export function managedDatabaseConnectionLimit(type: string, engineConfig: unknown): number {

@@ -182,7 +182,13 @@ describe('relay session limits', () => {
         {
           table: relayEndpoints,
           filtered: true,
-          rows: [{ endpointId: 'endpoint-database', type: 'postgres', engineConfig: { postgresConfig: { maxConnections: 500 } } }],
+          rows: [
+            {
+              endpointId: 'endpoint-database',
+              type: 'postgres',
+              engineConfig: { postgresConfig: { maxConnections: 500 } },
+            },
+          ],
         },
       ]) as never,
       {} as never,
