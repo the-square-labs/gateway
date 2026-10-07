@@ -495,6 +495,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"managed_clickhouse_principals_v1",
 				"managed_postgres_query_principal_v1",
 				"managed_postgres_query_writer_v1",
+				"managed_postgres_config_v1",
 				"managed_database_binding_principals_v2",
 				"managed_storage_v1",
 				"managed_storage_ext4_quota_v1",

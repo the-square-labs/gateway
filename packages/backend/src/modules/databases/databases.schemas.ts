@@ -102,6 +102,15 @@ export const ManagedRedisConfigSchema = z.object({
   activeDefrag: z.boolean(),
 });
 
+/** PostgreSQL server settings. Every connection is a server process; the default is the engine's 100. */
+export const MANAGED_POSTGRES_MIN_CONNECTIONS = 20;
+export const MANAGED_POSTGRES_MAX_CONNECTIONS = 10_000;
+export const DEFAULT_MANAGED_POSTGRES_MAX_CONNECTIONS = 100;
+
+export const ManagedPostgresConfigSchema = z.object({
+  maxConnections: z.number().int().min(MANAGED_POSTGRES_MIN_CONNECTIONS).max(MANAGED_POSTGRES_MAX_CONNECTIONS),
+});
+
 export const ManagedDatabaseListQuerySchema = z.object({
   nodeId: z.string().uuid().optional(),
   type: managedDatabaseTypeSchema.optional(),
@@ -150,6 +159,7 @@ export const CreateManagedDatabaseSchema = z
     ownerUsername: z.string().trim().min(1).max(63).optional(),
     clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
     redisConfig: ManagedRedisConfigSchema.optional(),
+    postgresConfig: ManagedPostgresConfigSchema.optional(),
   })
   .superRefine((value, context) => {
     if (value.type === 'clickhouse' && value.memoryMb < minimumClickHouseMemoryMb) {
@@ -197,6 +207,13 @@ export const CreateManagedDatabaseSchema = z
         message: 'redisConfig is only supported for Redis',
       });
     }
+    if (value.postgresConfig !== undefined && value.type !== 'postgres') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['postgresConfig'],
+        message: 'postgresConfig is only supported for PostgreSQL',
+      });
+    }
     if (value.type === 'redis' && value.ownerUsername !== undefined && value.ownerUsername !== 'default') {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -221,6 +238,7 @@ export const UpdateManagedDatabaseSchema = z
     tlsEnabled: z.boolean().optional(),
     clickhouseConfigXml: z.string().trim().max(32_768).optional(),
     redisConfig: ManagedRedisConfigSchema.optional(),
+    postgresConfig: ManagedPostgresConfigSchema.optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { message: 'At least one field must be provided' });
 

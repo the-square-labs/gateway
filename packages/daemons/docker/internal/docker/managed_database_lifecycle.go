@@ -158,6 +158,23 @@ func clickHouseConfigHash(value string) string {
 	return fmt.Sprintf("%x", digest)
 }
 
+// PostgreSQL max_connections bounds. Every connection is a server process, so a
+// container process limit must leave room for the background processes too.
+const (
+	managedPostgresMinConnections      = 20
+	managedPostgresMaxConnectionsLimit = 10000
+	managedPostgresProcessHeadroom     = 32
+)
+
+// managedPostgresMaxConnections is the max_connections a PostgreSQL container
+// starts with, or 0 for the engine default.
+func managedPostgresMaxConnections(input managedDatabaseCommand) int {
+	if input.Type != "postgres" || input.PostgresConfig == nil {
+		return 0
+	}
+	return input.PostgresConfig.MaxConnections
+}
+
 func defaultManagedRedisConfig() managedRedisConfig {
 	return managedRedisConfig{
 		MaxmemoryPercent: 75, MaxmemoryPolicy: "noeviction", AppendOnly: true, AppendFsync: "everysec",
@@ -322,6 +339,7 @@ func managedDatabaseRequiresRecreate(record managedDatabaseRecord, input managed
 // container creation other than the Redis config file.
 func managedDatabaseContainerSettingsChanged(record managedDatabaseRecord, input managedDatabaseCommand) bool {
 	return input.PublishedPort != record.PublishedPort ||
+		(record.Type == "postgres" && managedPostgresMaxConnections(input) != record.PostgresMaxConnections) ||
 		input.PublishedNativePort != record.PublishedNativePort ||
 		(input.PublishNativeTCP != (record.PublishedNativePort != 0)) ||
 		input.TLSEnabled != record.TLSEnabled ||
@@ -487,6 +505,7 @@ func (m *managedDatabaseManager) recreateContainer(ctx context.Context, record *
 	record.TLSCertificateID = input.TLSCertificateID
 	record.ClickhouseConfigHash = clickHouseConfigHash(input.ClickhouseConfig)
 	record.RedisConfigHash = managedRedisConfigHash(input)
+	record.PostgresMaxConnections = managedPostgresMaxConnections(input)
 	if input.Type == "clickhouse" {
 		record.ClickhouseRuntimeProfileVersion = clickHouseRuntimeProfileVersion
 	}
@@ -672,6 +691,17 @@ func validateManagedDatabaseInput(input managedDatabaseCommand) error {
 	}
 	if input.Type != "redis" && input.RedisConfig != nil {
 		return errors.New("Redis configuration is supported only for Redis")
+	}
+	if input.Type != "postgres" && input.PostgresConfig != nil {
+		return errors.New("PostgreSQL configuration is supported only for PostgreSQL")
+	}
+	if maxConnections := managedPostgresMaxConnections(input); maxConnections != 0 {
+		if maxConnections < managedPostgresMinConnections || maxConnections > managedPostgresMaxConnectionsLimit {
+			return fmt.Errorf("PostgreSQL max_connections must be between %d and %d", managedPostgresMinConnections, managedPostgresMaxConnectionsLimit)
+		}
+		if input.PidsLimit > 0 && input.PidsLimit < int64(maxConnections+managedPostgresProcessHeadroom) {
+			return fmt.Errorf("the process limit must allow max_connections plus %d PostgreSQL background processes", managedPostgresProcessHeadroom)
+		}
 	}
 	if input.Type == "redis" {
 		config := normalizedManagedRedisConfig(input)

@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,13 +82,9 @@ func (m *managedDatabaseManager) createPinnedContainer(ctx context.Context, reco
 		if err := writeManagedPostgresTLSHBA(postgresHBAPath); err != nil {
 			return "", fmt.Errorf("write PostgreSQL TLS authentication config: %w", err)
 		}
-		containerCfg.Cmd = []string{
-			"postgres",
-			"-c", "ssl=on",
-			"-c", "ssl_cert_file=/run/gateway-tls/cert.pem",
-			"-c", "ssl_key_file=/run/gateway-tls/key.pem",
-			"-c", "hba_file=/run/gateway-config/pg_hba.conf",
-		}
+	}
+	if input.Type == "postgres" {
+		containerCfg.Cmd = managedPostgresCommand(input)
 	}
 	if input.Type == "redis" {
 		if err := ensureManagedRedisACLFile(dataSource, input.OwnerPassword); err != nil {
@@ -271,6 +268,27 @@ func writeClickHouseConfig(path, contents string) error {
 	// WriteFile preserves the mode of an existing file. Explicitly converge it
 	// because ClickHouse reads config.d after dropping root privileges.
 	return os.Chmod(path, 0644)
+}
+
+// managedPostgresCommand is the server command line of a managed PostgreSQL
+// container, or nil to keep the image default when no setting needs a flag.
+func managedPostgresCommand(input managedDatabaseCommand) []string {
+	var flags []string
+	if maxConnections := managedPostgresMaxConnections(input); maxConnections > 0 {
+		flags = append(flags, "-c", "max_connections="+strconv.Itoa(maxConnections))
+	}
+	if input.TLSEnabled {
+		flags = append(flags,
+			"-c", "ssl=on",
+			"-c", "ssl_cert_file=/run/gateway-tls/cert.pem",
+			"-c", "ssl_key_file=/run/gateway-tls/key.pem",
+			"-c", "hba_file=/run/gateway-config/pg_hba.conf",
+		)
+	}
+	if len(flags) == 0 {
+		return nil
+	}
+	return append([]string{"postgres"}, flags...)
 }
 
 func writeManagedRedisConfig(path, contents string) error {

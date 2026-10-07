@@ -14,7 +14,12 @@ export type * from "./common";
 export type * from "./container-links";
 export type * from "./dashboard";
 export type * from "./databases";
-export { DEFAULT_MANAGED_REDIS_CONFIG } from "./databases";
+export {
+  DEFAULT_MANAGED_POSTGRES_CONFIG,
+  DEFAULT_MANAGED_REDIS_CONFIG,
+  MANAGED_POSTGRES_MAX_CONNECTIONS,
+  MANAGED_POSTGRES_MIN_CONNECTIONS,
+} from "./databases";
 export type * from "./docker";
 export type * from "./docker-availability";
 export type * from "./docker-builds";

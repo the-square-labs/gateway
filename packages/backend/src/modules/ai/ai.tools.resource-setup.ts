@@ -357,6 +357,11 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         },
         clickhouseConfigXml: { type: 'string' },
         redisConfig: { type: 'object' },
+        postgresConfig: {
+          type: 'object',
+          description:
+            'PostgreSQL only: { maxConnections } from 20 to 10000 (default 100). Changing it recreates the database container.',
+        },
         databaseName: { type: 'string' },
         ownerUsername: { type: 'string' },
         targetNodeId: { type: 'string' },

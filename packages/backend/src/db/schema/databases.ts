@@ -99,6 +99,12 @@ export interface ManagedDatabaseEngineConfig {
   publishNativeTcp?: boolean;
   clickhouseConfigXml?: string;
   redisConfig?: ManagedRedisConfig;
+  postgresConfig?: ManagedPostgresConfig;
+}
+
+/** PostgreSQL server settings; absent means the engine defaults. */
+export interface ManagedPostgresConfig {
+  maxConnections: number;
 }
 
 export interface ManagedRedisConfig {

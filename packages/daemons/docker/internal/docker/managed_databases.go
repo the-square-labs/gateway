@@ -120,29 +120,30 @@ var (
 // managedDatabaseCommand is deliberately private to the database-profile
 // daemon. It must never become a generic Docker container payload.
 type managedDatabaseCommand struct {
-	Type                string              `json:"type"`
-	Image               string              `json:"image"`
-	StorageSizeBytes    int64               `json:"storageSizeBytes"`
-	MemoryBytes         int64               `json:"memoryBytes"`
-	MemorySwapBytes     int64               `json:"memorySwapBytes"`
-	NanoCPUs            int64               `json:"nanoCPUs"`
-	CPUShares           int64               `json:"cpuShares"`
-	PidsLimit           int64               `json:"pidsLimit"`
-	OperationID         string              `json:"operationId"`
-	OwnerUsername       string              `json:"ownerUsername"`
-	OwnerPassword       string              `json:"ownerPassword"`
-	DatabaseName        string              `json:"databaseName"`
-	PublishTCP          bool                `json:"publishTcp"`
-	PublishNativeTCP    bool                `json:"publishNativeTcp"`
-	PublishedPort       uint16              `json:"publishedPort"`
-	PublishedNativePort uint16              `json:"publishedNativePort"`
-	TLSEnabled          bool                `json:"tlsEnabled"`
-	TLSCertificatePEM   string              `json:"tlsCertificatePem"`
-	TLSPrivateKeyPEM    string              `json:"tlsPrivateKeyPem"`
-	TLSCACertificatePEM string              `json:"tlsCaCertificatePem"`
-	TLSCertificateID    string              `json:"tlsCertificateId"`
-	ClickhouseConfig    string              `json:"clickhouseConfigXml"`
-	RedisConfig         *managedRedisConfig `json:"redisConfig,omitempty"`
+	Type                string                 `json:"type"`
+	Image               string                 `json:"image"`
+	StorageSizeBytes    int64                  `json:"storageSizeBytes"`
+	MemoryBytes         int64                  `json:"memoryBytes"`
+	MemorySwapBytes     int64                  `json:"memorySwapBytes"`
+	NanoCPUs            int64                  `json:"nanoCPUs"`
+	CPUShares           int64                  `json:"cpuShares"`
+	PidsLimit           int64                  `json:"pidsLimit"`
+	OperationID         string                 `json:"operationId"`
+	OwnerUsername       string                 `json:"ownerUsername"`
+	OwnerPassword       string                 `json:"ownerPassword"`
+	DatabaseName        string                 `json:"databaseName"`
+	PublishTCP          bool                   `json:"publishTcp"`
+	PublishNativeTCP    bool                   `json:"publishNativeTcp"`
+	PublishedPort       uint16                 `json:"publishedPort"`
+	PublishedNativePort uint16                 `json:"publishedNativePort"`
+	TLSEnabled          bool                   `json:"tlsEnabled"`
+	TLSCertificatePEM   string                 `json:"tlsCertificatePem"`
+	TLSPrivateKeyPEM    string                 `json:"tlsPrivateKeyPem"`
+	TLSCACertificatePEM string                 `json:"tlsCaCertificatePem"`
+	TLSCertificateID    string                 `json:"tlsCertificateId"`
+	ClickhouseConfig    string                 `json:"clickhouseConfigXml"`
+	RedisConfig         *managedRedisConfig    `json:"redisConfig,omitempty"`
+	PostgresConfig      *managedPostgresConfig `json:"postgresConfig,omitempty"`
 	// Internal runtime preparation must not replace the durable lifecycle
 	// operation ID used by controller reconciliation after a lost response.
 	PreserveLifecycleOperationID bool `json:"preserveLifecycleOperationId,omitempty"`
@@ -169,6 +170,12 @@ type managedRedisConfig struct {
 	SlowlogThresholdMicroseconds int64  `json:"slowlogThresholdMicroseconds"`
 	SlowlogMaxLen                int    `json:"slowlogMaxLen"`
 	ActiveDefrag                 bool   `json:"activeDefrag"`
+}
+
+// managedPostgresConfig holds the PostgreSQL server settings Gateway exposes.
+// A zero value keeps the engine default (max_connections 100).
+type managedPostgresConfig struct {
+	MaxConnections int `json:"maxConnections"`
 }
 
 // managedDatabaseBindingCommand is intentionally separate from the instance
@@ -226,22 +233,25 @@ type managedDatabaseOperationCommand struct {
 // database container is started after a daemon or host restart. It contains
 // neither owner credentials nor arbitrary configuration.
 type managedDatabaseRecord struct {
-	ID                              string `json:"id"`
-	Type                            string `json:"type"`
-	ContainerID                     string `json:"containerId"`
-	ContainerName                   string `json:"containerName"`
-	NetworkName                     string `json:"networkName"`
-	ImagePath                       string `json:"imagePath"`
-	MountPath                       string `json:"mountPath"`
-	LoopDevice                      string `json:"loopDevice,omitempty"`
-	StorageSize                     int64  `json:"storageSizeBytes"`
-	DesiredRunning                  bool   `json:"desiredRunning"`
-	PublishedPort                   uint16 `json:"publishedPort,omitempty"`
-	PublishedNativePort             uint16 `json:"publishedNativePort,omitempty"`
-	TLSEnabled                      bool   `json:"tlsEnabled"`
-	TLSCertificateID                string `json:"tlsCertificateId,omitempty"`
-	ClickhouseConfigHash            string `json:"clickhouseConfigHash,omitempty"`
-	RedisConfigHash                 string `json:"redisConfigHash,omitempty"`
+	ID                   string `json:"id"`
+	Type                 string `json:"type"`
+	ContainerID          string `json:"containerId"`
+	ContainerName        string `json:"containerName"`
+	NetworkName          string `json:"networkName"`
+	ImagePath            string `json:"imagePath"`
+	MountPath            string `json:"mountPath"`
+	LoopDevice           string `json:"loopDevice,omitempty"`
+	StorageSize          int64  `json:"storageSizeBytes"`
+	DesiredRunning       bool   `json:"desiredRunning"`
+	PublishedPort        uint16 `json:"publishedPort,omitempty"`
+	PublishedNativePort  uint16 `json:"publishedNativePort,omitempty"`
+	TLSEnabled           bool   `json:"tlsEnabled"`
+	TLSCertificateID     string `json:"tlsCertificateId,omitempty"`
+	ClickhouseConfigHash string `json:"clickhouseConfigHash,omitempty"`
+	RedisConfigHash      string `json:"redisConfigHash,omitempty"`
+	// PostgresMaxConnections is the max_connections the container was started
+	// with; 0 is the engine default.
+	PostgresMaxConnections          int    `json:"postgresMaxConnections,omitempty"`
 	ClickhouseRuntimeProfileVersion int    `json:"clickhouseRuntimeProfileVersion,omitempty"`
 	OperationID                     string `json:"operationId"`
 	// Deleting is set before a delete tears anything down. An instance whose

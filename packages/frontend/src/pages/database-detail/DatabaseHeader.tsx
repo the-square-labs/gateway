@@ -32,6 +32,7 @@ interface DatabaseHeaderProps {
   canRestart: boolean;
   canConfigureClickHouse: boolean;
   canConfigureRedis: boolean;
+  canConfigurePostgres: boolean;
   canReveal: boolean;
   canRotateDirectCredentials: boolean;
   canRotateCertificate: boolean;
@@ -46,6 +47,7 @@ interface DatabaseHeaderProps {
   onRestart: () => void;
   onConfigureClickHouse: () => void;
   onConfigureRedis: () => void;
+  onConfigurePostgres: () => void;
   onRevealCredentials: () => void;
   onRotateDirectCredentials: () => void;
   onRotateCertificate: () => void;
@@ -62,6 +64,7 @@ export function DatabaseHeader({
   canRestart,
   canConfigureClickHouse,
   canConfigureRedis,
+  canConfigurePostgres,
   canReveal,
   canRotateDirectCredentials,
   canRotateCertificate,
@@ -76,6 +79,7 @@ export function DatabaseHeader({
   onRestart,
   onConfigureClickHouse,
   onConfigureRedis,
+  onConfigurePostgres,
   onRevealCredentials,
   onRotateDirectCredentials,
   onRotateCertificate,
@@ -139,6 +143,17 @@ export function DatabaseHeader({
             buttonLabel: "Configure Redis",
             icon: <SlidersHorizontal className="h-4 w-4" />,
             onClick: onConfigureRedis,
+          },
+        ]
+      : []),
+    ...(canConfigurePostgres
+      ? [
+          {
+            id: "database:configure-postgres",
+            label: "Configure PostgreSQL",
+            buttonLabel: "Configure PostgreSQL",
+            icon: <SlidersHorizontal className="h-4 w-4" />,
+            onClick: onConfigurePostgres,
           },
         ]
       : []),

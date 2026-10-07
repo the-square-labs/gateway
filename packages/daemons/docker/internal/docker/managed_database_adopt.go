@@ -14,21 +14,22 @@ import (
 // newRecord is the record a create of id writes once its container serves.
 func (m *managedDatabaseManager) newRecord(id string, input managedDatabaseCommand) managedDatabaseRecord {
 	record := managedDatabaseRecord{
-		ID:                   id,
-		Type:                 input.Type,
-		ContainerName:        "gwdb-" + id,
-		NetworkName:          "gwdb-" + id + "-net",
-		ImagePath:            filepath.Join(m.root, "images", id+".img"),
-		MountPath:            filepath.Join(m.root, "mounts", id),
-		StorageSize:          input.StorageSizeBytes,
-		DesiredRunning:       true,
-		PublishedPort:        input.PublishedPort,
-		PublishedNativePort:  input.PublishedNativePort,
-		TLSEnabled:           input.TLSEnabled,
-		TLSCertificateID:     input.TLSCertificateID,
-		ClickhouseConfigHash: clickHouseConfigHash(input.ClickhouseConfig),
-		RedisConfigHash:      managedRedisConfigHash(input),
-		OperationID:          input.OperationID,
+		ID:                     id,
+		Type:                   input.Type,
+		ContainerName:          "gwdb-" + id,
+		NetworkName:            "gwdb-" + id + "-net",
+		ImagePath:              filepath.Join(m.root, "images", id+".img"),
+		MountPath:              filepath.Join(m.root, "mounts", id),
+		StorageSize:            input.StorageSizeBytes,
+		DesiredRunning:         true,
+		PublishedPort:          input.PublishedPort,
+		PublishedNativePort:    input.PublishedNativePort,
+		TLSEnabled:             input.TLSEnabled,
+		TLSCertificateID:       input.TLSCertificateID,
+		ClickhouseConfigHash:   clickHouseConfigHash(input.ClickhouseConfig),
+		RedisConfigHash:        managedRedisConfigHash(input),
+		PostgresMaxConnections: managedPostgresMaxConnections(input),
+		OperationID:            input.OperationID,
 	}
 	if input.Type == "clickhouse" {
 		record.ClickhouseRuntimeProfileVersion = clickHouseRuntimeProfileVersion

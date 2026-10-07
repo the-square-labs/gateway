@@ -81,6 +81,14 @@ export const DEFAULT_MANAGED_REDIS_CONFIG: ManagedRedisConfig = {
   activeDefrag: false,
 };
 
+export interface ManagedPostgresConfig {
+  maxConnections: number;
+}
+
+export const MANAGED_POSTGRES_MIN_CONNECTIONS = 20;
+export const MANAGED_POSTGRES_MAX_CONNECTIONS = 10_000;
+export const DEFAULT_MANAGED_POSTGRES_CONFIG: ManagedPostgresConfig = { maxConnections: 100 };
+
 export interface ManagedDatabaseCreateInput {
   name: string;
   folderId?: string | null;
@@ -99,6 +107,7 @@ export interface ManagedDatabaseCreateInput {
   tlsEnabled?: boolean;
   clickhouseConfigXml?: string;
   redisConfig?: ManagedRedisConfig;
+  postgresConfig?: ManagedPostgresConfig;
 }
 
 export type ManagedDatabaseBindingTargetType = "container" | "deployment" | "compose_service";
@@ -280,6 +289,7 @@ export interface DatabaseConnection {
     lastError: string | null;
     clickhouseConfigXml?: string;
     redisConfig?: ManagedRedisConfig;
+    postgresConfig?: ManagedPostgresConfig;
   };
   createdById: string;
   updatedById: string | null;

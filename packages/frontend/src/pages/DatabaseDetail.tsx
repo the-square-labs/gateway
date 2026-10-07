@@ -52,6 +52,7 @@ import {
   PostgresExtensionsTab,
   postgresExtensionsCacheKey,
 } from "./database-detail/PostgresExtensionsTab";
+import { PostgresConfigDialog } from "./database-detail/PostgresConfigDialog";
 import { RedisConfigDialog } from "./database-detail/RedisConfigDialog";
 import { ResizeManagedDatabaseDialog } from "./database-detail/ResizeManagedDatabaseDialog";
 import { SqlExplorer } from "./database-detail/SqlExplorer";
@@ -107,6 +108,7 @@ function DatabaseDetailContent({
   const [resizeOpen, setResizeOpen] = useState(false);
   const [clickHouseConfigOpen, setClickHouseConfigOpen] = useState(false);
   const [redisConfigOpen, setRedisConfigOpen] = useState(false);
+  const [postgresConfigOpen, setPostgresConfigOpen] = useState(false);
   const [explorerFocused, setExplorerFocused] = useState(false);
   const [revealedCredentials, setRevealedCredentials] = useState<Record<string, unknown> | null>(
     null
@@ -660,6 +662,9 @@ function DatabaseDetailContent({
               canConfigureRedis={
                 canManageSettings && database.type === "redis" && !!database.managed
               }
+              canConfigurePostgres={
+                canManageSettings && database.type === "postgres" && !!database.managed
+              }
               canReveal={canReveal}
               canRotateDirectCredentials={
                 canManageSettings && database.managed?.publishedPort != null
@@ -676,6 +681,7 @@ function DatabaseDetailContent({
               onRestart={() => void restart()}
               onConfigureClickHouse={() => setClickHouseConfigOpen(true)}
               onConfigureRedis={() => setRedisConfigOpen(true)}
+              onConfigurePostgres={() => setPostgresConfigOpen(true)}
               onRevealCredentials={() => void revealCredentials()}
               onRotateDirectCredentials={() => void rotateDirectCredentials()}
               onRotateCertificate={() => void rotateCertificate()}
@@ -950,6 +956,15 @@ function DatabaseDetailContent({
           database={database}
           open={redisConfigOpen}
           onOpenChange={setRedisConfigOpen}
+          onSaved={() => void load()}
+        />
+      )}
+
+      {canManageSettings && database.type === "postgres" && database.managed && (
+        <PostgresConfigDialog
+          database={database}
+          open={postgresConfigOpen}
+          onOpenChange={setPostgresConfigOpen}
           onSaved={() => void load()}
         />
       )}

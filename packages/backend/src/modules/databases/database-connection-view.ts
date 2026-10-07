@@ -1,4 +1,4 @@
-import type { ManagedRedisConfig } from '@/db/schema/databases.js';
+import type { ManagedPostgresConfig, ManagedRedisConfig } from '@/db/schema/databases.js';
 import type { DatabaseHealthEntry } from '@/db/schema/index.js';
 import type { DatabaseType } from './database-error-mapping.js';
 export type DatabaseHealthStatus = 'online' | 'offline' | 'degraded' | 'unknown';
@@ -85,6 +85,7 @@ export interface ManagedDatabaseConnectionMetadata {
   hostPortConflicts?: Array<{ port: number; owner: string }>;
   clickhouseConfigXml?: string;
   redisConfig?: ManagedRedisConfig;
+  postgresConfig?: ManagedPostgresConfig;
 }
 export interface DatabaseConnectionView {
   id: string;
