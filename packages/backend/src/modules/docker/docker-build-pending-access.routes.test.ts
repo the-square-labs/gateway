@@ -57,7 +57,8 @@ describe('the first build of a pending Git-source container', () => {
 
     const list = await client.request('/builds');
     expect(list.status).toBe(200);
-    expect((await list.json()).data.map((item: { id: string }) => item.id)).toEqual([BUILD]);
+    const listed = (await list.json()) as { data: Array<{ id: string }> };
+    expect(listed.data.map((item) => item.id)).toEqual([BUILD]);
     expect((await client.request(`/builds/${BUILD}`)).status).toBe(200);
     expect((await client.request(`/builds/${BUILD}/logs`)).status).toBe(200);
   });
@@ -76,7 +77,8 @@ describe('the first build of a pending Git-source container', () => {
     const builds = register();
     const client = app([`docker:containers:view:${NODE}/other`, `docker:containers:manage:${NODE}/other`]);
 
-    expect((await (await client.request('/builds')).json()).data).toEqual([]);
+    const listed = (await (await client.request('/builds')).json()) as { data: unknown[] };
+    expect(listed.data).toEqual([]);
     expect((await client.request(`/builds/${BUILD}/logs`)).status).toBe(403);
     expect((await client.request(`/builds/${BUILD}/cancel`, { method: 'POST' })).status).toBe(403);
     expect(builds.requestCancellation).not.toHaveBeenCalled();
