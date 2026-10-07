@@ -740,6 +740,55 @@ func TestResetLocalPolicyTrustRebindsNextSnapshot(t *testing.T) {
 	}
 }
 
+// F12: the rebind a reset grants survives a relay restart before Gateway's
+// next snapshot, here with a persisted snapshot the re-pinned key signed (it
+// is kept), and ends with the snapshot that uses it.
+func TestResetLocalPolicyTrustRebindSurvivesRestart(t *testing.T) {
+	policyPublic, policyPrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_800_000_000, 0)
+	dir := t.TempDir()
+	options := Options{
+		Mode: relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED, PoolID: "system", InstanceID: "relay-1",
+		Now: func() time.Time { return now },
+	}
+	local, err := OpenWithOptions(dir, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.BootstrapPolicyTrust("key", policyPublic, PublicKeyFingerprint(policyPublic)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := local.Apply(signedSnapshotForGateway(t, policyPrivate, "key", policyPublic, grantPublic, 50, now, "gateway-1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.ResetLocalPolicyTrust("key", policyPublic, PublicKeyFingerprint(policyPublic)); err != nil {
+		t.Fatal(err)
+	}
+	local.Close()
+
+	reopened, err := OpenWithOptions(dir, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Current().Revision != 50 {
+		t.Fatalf("persisted snapshot signed by the re-pinned key was dropped: revision=%d", reopened.Current().Revision)
+	}
+	if _, _, err := reopened.Apply(signedSnapshotForGateway(t, policyPrivate, "key", policyPublic, grantPublic, 3, now, "gateway-2")); err != nil {
+		t.Fatalf("the rebind did not survive the restart: %v", err)
+	}
+	reopened.Close()
+
+	again, err := OpenWithOptions(dir, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if _, _, err := again.Apply(signedSnapshotForGateway(t, policyPrivate, "key", policyPublic, grantPublic, 2, now, "gateway-2")); err == nil {
+		t.Fatal("the rebind outlived the snapshot that used it")
+	}
+}
+
 func signedSnapshotForGateway(t *testing.T, privateKey ed25519.PrivateKey, keyID string, policyPublic, grantPublic ed25519.PublicKey, revision uint64, now time.Time, gatewayInstanceID string) *relayv1.ApplySnapshotRequest {
 	t.Helper()
 	payload := &relayv1.PolicyEnvelopePayload{

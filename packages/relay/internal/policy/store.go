@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -89,6 +88,9 @@ type Snapshot struct {
 	LeaseBlocks         []*relayv1.LeaseSignedBlock
 	LeaseKeyRotations   []*relayv1.LeasePolicyKeyRotation
 	Digest              [sha256.Size]byte
+	// LeaseBound reports an endpoint or route bound to an availability lease
+	// gate: without one the broker skips lease gate enforcement.
+	LeaseBound bool
 }
 
 type trustedPolicyKey struct {
@@ -111,7 +113,12 @@ type persistedTrustKey struct {
 }
 
 type Store struct {
-	db          *bolt.DB
+	db *bolt.DB
+	// applyMu serializes every change of current, policyTrust and rebind and
+	// the writes that persist them; it is held across the fsync. mu guards
+	// those fields for readers and is held only to swap them, so readers
+	// never wait for the disk (F4). Holders of applyMu read them without mu.
+	applyMu     sync.Mutex
 	mu          sync.RWMutex
 	current     *Snapshot
 	mode        relayv1.RelayMode
@@ -123,6 +130,7 @@ type Store struct {
 	// replace the serving one even if it names another Gateway instance or an
 	// older revision: both are what a Gateway restored from backup, or one that
 	// was reinstalled over an existing relay volume, sends after re-pinning.
+	// It is persisted until that snapshot applies (keyPolicyRebind).
 	rebind bool
 }
 
@@ -232,124 +240,24 @@ func PublicKeyFingerprint(publicKey ed25519.PublicKey) string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-// BootstrapPolicyTrust is deliberately not a general key-add operation. The
-// first raw key and matching fingerprint arrive over the authenticated
-// enrollment/control channel; subsequent keys require signed rotation.
-func (s *Store) BootstrapPolicyTrust(keyID string, raw []byte, fingerprint string) (bool, error) {
-	if keyID == "" || len(raw) != ed25519.PublicKeySize {
-		return false, fmt.Errorf("policy signing key is invalid")
-	}
-	publicKey := append(ed25519.PublicKey(nil), raw...)
-	if fingerprint == "" || PublicKeyFingerprint(publicKey) != fingerprint {
-		return false, fmt.Errorf("policy signing key fingerprint does not match public key")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if existing, ok := s.policyTrust[keyID]; ok {
-		if existing.Fingerprint != fingerprint || !bytes.Equal(existing.PublicKey, publicKey) {
-			return false, fmt.Errorf("policy signing key conflicts with pinned key")
-		}
-		return true, nil
-	}
-	if len(s.policyTrust) != 0 {
-		return false, fmt.Errorf("new policy signing keys require signed rotation")
-	}
-	s.policyTrust[keyID] = trustedPolicyKey{PublicKey: publicKey, Fingerprint: fingerprint}
-	if err := s.db.Update(func(tx *bolt.Tx) error { return persistTrust(tx.Bucket(bucketState), s.policyTrust) }); err != nil {
-		delete(s.policyTrust, keyID)
-		return false, err
-	}
-	return false, nil
-}
-
-// ResetLocalPolicyTrust replaces pinned policy trust with a single key. It exists
-// for the local combined relay only, whose relay.db can be restored from a
-// backup that predates every key Gateway can still sign with. The caller is the
-// co-located Gateway app over its authenticated admin channel, the same channel
-// that bootstraps trust in the first place. A remote relay learns keys only
-// through signed rotation and never accepts this.
-//
-// A persisted signed snapshot is dropped unless the new key signed it, so a
-// restart before Gateway's next snapshot starts empty instead of refusing to
-// load. The in-memory snapshot keeps serving until that next snapshot arrives,
-// and that snapshot may rebind the relay to Gateway's current instance and
-// revision sequence. Repeating the reset with the same key changes nothing
-// else, so a retried call is safe.
-func (s *Store) ResetLocalPolicyTrust(keyID string, raw []byte, fingerprint string) ([]string, error) {
-	if s.mode != relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
-		return nil, fmt.Errorf("policy trust reset is only available to the local relay")
-	}
-	if keyID == "" || len(raw) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("policy signing key is invalid")
-	}
-	publicKey := append(ed25519.PublicKey(nil), raw...)
-	if fingerprint == "" || PublicKeyFingerprint(publicKey) != fingerprint {
-		return nil, fmt.Errorf("policy signing key fingerprint does not match public key")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	replaced := make([]string, 0, len(s.policyTrust))
-	for id := range s.policyTrust {
-		if id != keyID {
-			replaced = append(replaced, id)
-		}
-	}
-	sort.Strings(replaced)
-	if existing, ok := s.policyTrust[keyID]; ok && (existing.Fingerprint != fingerprint || !bytes.Equal(existing.PublicKey, publicKey)) {
-		return nil, fmt.Errorf("policy signing key conflicts with pinned key")
-	}
-	next := map[string]trustedPolicyKey{keyID: {PublicKey: publicKey, Fingerprint: fingerprint}}
-	if err := s.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(bucketState)
-		for _, key := range [][]byte{keySnapshot, keySnapshotFull} {
-			if signer, signed := persistedSnapshotSigner(bucket, key); signed && signer != keyID {
-				if err := deleteSnapshot(bucket, key); err != nil {
-					return err
-				}
-			}
-		}
-		return persistTrust(bucket, next)
-	}); err != nil {
-		return nil, err
-	}
-	s.policyTrust = next
-	s.rebind = true
-	return replaced, nil
-}
-
-func deleteSnapshot(bucket *bolt.Bucket, key []byte) error {
-	if err := bucket.Delete(key); err != nil {
-		return err
-	}
-	if bytes.Equal(key, keySnapshot) {
-		return bucket.Delete(keyDigest)
-	}
-	return nil
-}
-
-func persistedSnapshotSigner(bucket *bolt.Bucket, key []byte) (string, bool) {
-	value := bucket.Get(key)
-	if len(value) == 0 {
-		return "", false
-	}
-	request := &relayv1.ApplySnapshotRequest{}
-	if err := proto.Unmarshal(value, request); err != nil {
-		return "", true
-	}
-	if request.SignedEnvelope == nil {
-		return "", false
-	}
-	return request.SignedEnvelope.SigningKeyId, true
-}
-
 func (s *Store) Apply(request *relayv1.ApplySnapshotRequest) (*Snapshot, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.ApplyStaged(request, nil)
+}
+
+// ApplyStaged validates and persists a snapshot without blocking readers:
+// Current, the grant verifier and health keep reading the serving snapshot
+// during the fsync (F4). The pinned trust follows the snapshot before publish
+// runs. publish, when set, must call makeCurrent exactly once; it lets the
+// caller hold its own lock across the swap alone (the broker swaps under its
+// admission lock). Without publish the snapshot becomes current at once.
+func (s *Store) ApplyStaged(request *relayv1.ApplySnapshotRequest, publish func(next *Snapshot, makeCurrent func())) (*Snapshot, bool, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	encoded, digest, next, nextTrust, err := s.normalizeLocked(request, false)
 	if err != nil {
 		return nil, false, err
 	}
-	current := s.current
+	current := s.Current()
 	if next.Revision == current.Revision && bytes.Equal(next.Digest[:], current.Digest[:]) {
 		return current, true, nil
 	}
@@ -381,13 +289,27 @@ func (s *Store) Apply(request *relayv1.ApplySnapshotRequest) (*Snapshot, bool, e
 		} else if err := deleteSnapshot(bucket, keySnapshot); err != nil {
 			return err
 		}
+		if err := bucket.Delete(keyPolicyRebind); err != nil {
+			return err
+		}
 		return persistTrust(bucket, nextTrust)
 	}); err != nil {
 		return nil, false, err
 	}
-	s.current = next
+	s.mu.Lock()
 	s.policyTrust = nextTrust
 	s.rebind = false
+	s.mu.Unlock()
+	makeCurrent := func() {
+		s.mu.Lock()
+		s.current = next
+		s.mu.Unlock()
+	}
+	if publish == nil {
+		makeCurrent()
+	} else {
+		publish(next, makeCurrent)
+	}
 	return next, false, nil
 }
 
@@ -403,45 +325,6 @@ func (s *Store) AdmissionError(at time.Time) error {
 }
 
 func (s *Store) Ready(at time.Time) bool { return s.AdmissionError(at) == nil }
-
-func (s *Store) loadTrust() error {
-	return s.db.View(func(tx *bolt.Tx) error {
-		value := tx.Bucket(bucketState).Get(keyPolicyTrust)
-		if len(value) == 0 {
-			return nil
-		}
-		var state persistedTrust
-		if err := json.Unmarshal(value, &state); err != nil {
-			return fmt.Errorf("decode policy trust: %w", err)
-		}
-		for _, record := range state.Keys {
-			if record.KeyID == "" || len(record.PublicKey) != ed25519.PublicKeySize || PublicKeyFingerprint(record.PublicKey) != record.Fingerprint {
-				return fmt.Errorf("persisted policy trust is invalid")
-			}
-			s.policyTrust[record.KeyID] = trustedPolicyKey{
-				PublicKey: append(ed25519.PublicKey(nil), record.PublicKey...), Fingerprint: record.Fingerprint,
-				ValidFrom: unixTime(record.ValidFrom), VerifyUntil: unixTime(record.VerifyUntil),
-			}
-		}
-		return nil
-	})
-}
-
-func persistTrust(bucket *bolt.Bucket, keys map[string]trustedPolicyKey) error {
-	state := persistedTrust{Keys: make([]persistedTrustKey, 0, len(keys))}
-	for keyID, key := range keys {
-		state.Keys = append(state.Keys, persistedTrustKey{
-			KeyID: keyID, PublicKey: key.PublicKey, Fingerprint: key.Fingerprint,
-			ValidFrom: unixValue(key.ValidFrom), VerifyUntil: unixValue(key.VerifyUntil),
-		})
-	}
-	sort.Slice(state.Keys, func(i, j int) bool { return state.Keys[i].KeyID < state.Keys[j].KeyID })
-	encoded, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	return bucket.Put(keyPolicyTrust, encoded)
-}
 
 // legacySnapshotCompatible reports whether relays before policy_long_lease_v1
 // start on this snapshot: an unsigned local snapshot, or a signed one whose
@@ -504,6 +387,8 @@ func (s *Store) load() error {
 	return nil
 }
 
+// normalizeLocked reads the pinned trust: called with applyMu held, or while
+// the store is opened.
 func (s *Store) normalizeLocked(request *relayv1.ApplySnapshotRequest, allowExpired bool) ([]byte, [sha256.Size]byte, *Snapshot, map[string]trustedPolicyKey, error) {
 	if request == nil {
 		return nil, [sha256.Size]byte{}, nil, nil, fmt.Errorf("snapshot is required")
@@ -643,6 +528,7 @@ func buildSnapshot(payload *relayv1.PolicyEnvelopePayload, mode relayv1.RelayMod
 		if payload.SchemaVersion == 2 && (endpoint.PoolId != payload.PoolId || endpoint.RelayInstanceId != payload.RelayInstanceId || endpoint.AssignmentGeneration == 0) {
 			return nil, fmt.Errorf("endpoint policy relay assignment scope is invalid")
 		}
+		next.LeaseBound = next.LeaseBound || endpoint.LeasePolicyId != ""
 		clone := proto.Clone(endpoint).(*relayv1.EndpointPolicy)
 		if payload.SchemaVersion == 2 {
 			key := assignmentKey(endpoint.EndpointId, endpoint.AssignmentGeneration)
@@ -669,6 +555,7 @@ func buildSnapshot(payload *relayv1.PolicyEnvelopePayload, mode relayv1.RelayMod
 		} else if payload.SchemaVersion == 2 && route.AssignmentGeneration != endpoint.AssignmentGeneration {
 			return nil, fmt.Errorf("route %q assignment generation does not match endpoint", route.RouteId)
 		}
+		next.LeaseBound = next.LeaseBound || route.LeasePolicyId != ""
 		clone := proto.Clone(route).(*relayv1.RoutePolicy)
 		if payload.SchemaVersion == 2 {
 			key := assignmentKey(route.RouteId, route.AssignmentGeneration)
@@ -684,25 +571,6 @@ func buildSnapshot(payload *relayv1.PolicyEnvelopePayload, mode relayv1.RelayMod
 		}
 	}
 	return next, nil
-}
-
-func (key trustedPolicyKey) validAt(at time.Time) bool {
-	// Gateway stamps ValidFrom with its own clock when it promotes a key. Allow
-	// the same skew as IssuedAt so a relay running slightly behind does not
-	// refuse the first snapshots the new key signs.
-	if !key.ValidFrom.IsZero() && at.Add(IssuedAtClockSkew).Before(key.ValidFrom) {
-		return false
-	}
-	return key.VerifyUntil.IsZero() || at.Before(key.VerifyUntil)
-}
-
-func cloneTrust(source map[string]trustedPolicyKey) map[string]trustedPolicyKey {
-	next := make(map[string]trustedPolicyKey, len(source))
-	for id, key := range source {
-		key.PublicKey = append(ed25519.PublicKey(nil), key.PublicKey...)
-		next[id] = key
-	}
-	return next
 }
 
 func contains(values []string, wanted string) bool {
