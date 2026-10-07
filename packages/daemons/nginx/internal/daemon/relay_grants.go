@@ -16,6 +16,7 @@ import (
 
 type relayGrantStore struct {
 	file    statecompat.File
+	writeMu sync.Mutex
 	mu      sync.RWMutex
 	current *pb.SyncRelayGrantsCommand
 	changed chan struct{}
@@ -45,21 +46,29 @@ func (s *relayGrantStore) sync(command *pb.SyncRelayGrantsCommand) error {
 	if command == nil {
 		return errors.New("relay grant bundle is required")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if command.PolicyRevision < s.current.PolicyRevision ||
-		(command.PolicyRevision == s.current.PolicyRevision && command.GeneratedAtUnixMs < s.current.GeneratedAtUnixMs) {
+	// writeMu orders the syncs; mu is held only to read and to swap the bundle, so the lookups of new connections
+	// never wait for the state file's fsyncs.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.RLock()
+	current := s.current
+	s.mu.RUnlock()
+	if command.PolicyRevision < current.PolicyRevision ||
+		(command.PolicyRevision == current.PolicyRevision && command.GeneratedAtUnixMs < current.GeneratedAtUnixMs) {
 		return errors.New("stale relay grant bundle")
 	}
-	if proto.Equal(command, s.current) {
+	if proto.Equal(command, current) {
 		return nil
 	}
 	if err := s.file.Write(command); err != nil {
 		return err
 	}
-	runtimeChanged := s.current.GetDataLanes() != command.GetDataLanes() ||
-		!reflect.DeepEqual(relaybridge.RequiredTargets(s.current), relaybridge.RequiredTargets(command))
-	s.current = proto.Clone(command).(*pb.SyncRelayGrantsCommand)
+	runtimeChanged := current.GetDataLanes() != command.GetDataLanes() ||
+		!reflect.DeepEqual(relaybridge.RequiredTargets(current), relaybridge.RequiredTargets(command))
+	next := proto.Clone(command).(*pb.SyncRelayGrantsCommand)
+	s.mu.Lock()
+	s.current = next
+	s.mu.Unlock()
 	if runtimeChanged {
 		select {
 		case s.changed <- struct{}{}:
