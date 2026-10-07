@@ -143,7 +143,6 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'docker:volumes:view',
     'docker:volumes:files:read',
     'docker:volumes:files:write',
-    'docker:containers:mounts',
   ],
   // The handlers enforce the exact per-provider route scope.
   list_integration_connectors: [

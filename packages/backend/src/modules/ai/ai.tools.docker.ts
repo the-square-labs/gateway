@@ -37,7 +37,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         volumes: {
           type: 'array',
           description:
-            'Existing Gateway-managed named-volume mounts. Supplying mounts also requires docker:containers:mounts for the node.',
+            'Existing Gateway-managed named-volume mounts. Each volume needs docker:volumes:view (or edit) on it.',
           items: {
             type: 'object',
             properties: {
@@ -677,7 +677,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_volume',
     description:
-      'Create, inspect, resize, adopt, rename, relabel, delete, and browse files of Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. inspect and metrics read the cached detail and usage; managed_options lists volumes selectable as container mounts (docker:containers:mounts). rename (newName), update_labels (labels), resize and adopt edit one volume and need docker:volumes:edit on it (a node or folder grant covers it). File operations (list_files, read_file, write_file, create_file, create_directory, delete_file, move_file, upload_init/upload_chunk/upload_complete/upload_abort) need docker:volumes:files:read or :write; binary content uses contentBase64 and upload chunks carry at most 1 MiB. Archive export uses the MCP-only download_docker_archive tool. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
+      'Create, inspect, resize, adopt, rename, relabel, delete, and browse files of Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. inspect and metrics read the cached detail and usage; managed_options lists the managed volumes the caller may attach as container mounts (docker:volumes:view on each). rename (newName), update_labels (labels), resize and adopt edit one volume and need docker:volumes:edit on it (a node or folder grant covers it). File operations (list_files, read_file, write_file, create_file, create_directory, delete_file, move_file, upload_init/upload_chunk/upload_complete/upload_abort) need docker:volumes:files:read or :write; binary content uses contentBase64 and upload chunks carry at most 1 MiB. Archive export uses the MCP-only download_docker_archive tool. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
     parameters: {
       type: 'object',
       properties: {
@@ -1218,7 +1218,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         mounts: {
           type: 'array',
           description:
-            'recreate: complete mount list. Use name for a Gateway-managed volume or hostPath for an existing host bind mount; changing mounts requires docker:containers:mounts.',
+            'recreate: complete mount list. Use name for a Gateway-managed volume or hostPath for an existing host bind mount; a newly attached volume needs docker:volumes:view on it, and changing or removing a host bind mount requires docker:containers:mounts.',
           items: {
             type: 'object',
             properties: {

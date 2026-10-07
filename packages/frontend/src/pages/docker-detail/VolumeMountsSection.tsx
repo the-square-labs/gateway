@@ -69,7 +69,10 @@ export async function ensureManagedMountVolumes(
 }
 
 interface VolumeMountsSectionProps {
+  /** Attach and change managed volumes (the workload's edit and view access to volumes). */
   canEdit: boolean;
+  /** Remove a legacy host bind mount (docker:containers:mounts). */
+  canChangeHostBinds: boolean;
   mounts: MountEntry[];
   setMounts: React.Dispatch<React.SetStateAction<MountEntry[]>>;
   mountsChanged: boolean;
@@ -80,6 +83,7 @@ interface VolumeMountsSectionProps {
 
 export function VolumeMountsSection({
   canEdit,
+  canChangeHostBinds,
   mounts,
   setMounts,
   mountsChanged,
@@ -206,6 +210,7 @@ export function VolumeMountsSection({
                         size="icon"
                         className="shrink-0 rounded-none border-l border-border"
                         onClick={() => removeMount(i)}
+                        disabled={m.hostPath.length > 0 && !canChangeHostBinds}
                       >
                         <Minus className="h-3.5 w-3.5" />
                       </Button>

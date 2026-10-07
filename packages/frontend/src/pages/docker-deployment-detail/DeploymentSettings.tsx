@@ -108,6 +108,7 @@ export function DeploymentSettings({
   setWebhook,
   onHealthCheckSaved,
   canEditMounts,
+  canChangeHostBinds,
   availabilityManaged = false,
   canManageWebhooks,
   runAction,
@@ -122,6 +123,7 @@ export function DeploymentSettings({
   setWebhook: (webhook: DockerWebhook | null) => void;
   onHealthCheckSaved: (healthCheck: DockerHealthCheck) => void;
   canEditMounts: boolean;
+  canChangeHostBinds: boolean;
   availabilityManaged?: boolean;
   canManageWebhooks: boolean;
   runAction: (name: string, fn: () => Promise<void>) => Promise<void>;
@@ -856,6 +858,7 @@ export function DeploymentSettings({
         <VolumeMountsSection
           nodeId={nodeId}
           canEdit={canEditMounts}
+          canChangeHostBinds={canChangeHostBinds}
           mounts={mounts}
           setMounts={setMounts}
           mountsChanged={mountsChanged}

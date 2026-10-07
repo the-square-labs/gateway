@@ -199,7 +199,7 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 | docker:containers:webhooks | Configure CI/CD webhook URLs |
 | docker:containers:migrate | Migrate containers and deployments between Docker nodes (resource-scopable) |
 | docker:availability:manage | Enable, update, scale, heal, and disable multi-node Availability; implies docker:containers:view (resource-scopable; folder grants resolve through the container or Compose folder) |
-| docker:containers:mounts | Add, remove, or change container/deployment mounts using Gateway-managed volumes; new host bind mounts are prohibited. Also required to give a workload with legacy host bind mounts a new image, command or runtime; environment, label, network and link changes that keep its image need none. Automatic Git deployments check it on the account that last saved the source, and webhook calls on the account that last saved the webhook (resource-scopable) |
+| docker:containers:mounts | Change or remove legacy host bind mounts of a container/deployment; new host bind mounts are prohibited. Managed volumes need no mounts scope: attaching one needs docker:volumes:view on that volume plus the workload's own create or edit. Also required to give a workload with legacy host bind mounts a new image, command or runtime; environment, label, network and link changes that keep its image need none. Automatic Git deployments check it on the account that last saved the source, and webhook calls on the account that last saved the webhook (resource-scopable) |
 | docker:folders:manage | Manage folders and placement for containers, deployments, Compose projects, networks, volumes, and images |
 
 ### Docker: Compose Projects
@@ -220,7 +220,7 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 ### Docker: Volumes
 | Scope | Description |
 |-------|-------------|
-| docker:volumes:view | List volumes |
+| docker:volumes:view | List volumes; attach a managed volume to a container or deployment the caller may create or edit (resource-scopable) |
 | docker:volumes:create | Create volumes |
 | docker:volumes:edit | Rename, relabel, resize and adopt volumes |
 | docker:volumes:delete | Remove volumes |

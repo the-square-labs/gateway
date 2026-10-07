@@ -1151,9 +1151,9 @@ async function manageDockerVolume(context: DockerToolContext, user: User, args: 
     return { success: true };
   }
   if (operation === 'managed_options') {
-    // GET /nodes/:nodeId/managed-volumes: docker:containers:mounts for the node.
-    context.ensureToolScopeForResource(user, 'docker:containers:mounts', nodeId);
-    return context.dockerService.listManagedVolumeOptions(nodeId);
+    // GET /nodes/:nodeId/managed-volumes: the managed volumes the caller may attach (docker:volumes:view on each).
+    const rows = await context.dockerService.listManagedVolumeOptions(nodeId);
+    return rows.filter((row) => hasDockerResourceScope(user.scopes, 'docker:volumes:view', nodeId, row.name));
   }
   if (operation === 'inspect') {
     // GET /nodes/:nodeId/volumes/:name serves the cached detail with the public visibility applied.

@@ -179,7 +179,10 @@ export function SettingsTab({
   const invalidate = useDockerStore((s) => s.invalidate);
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
   const canEdit = !readOnly && hasScope(`docker:containers:edit:${scopeSuffix}`);
-  const canEditMounts = !readOnly && hasScope(`docker:containers:mounts:${scopeSuffix}`);
+  // Managed volumes are attached with view access to each volume; docker:containers:mounts
+  // covers legacy host binds only.
+  const canEditMounts = !readOnly && hasScopedAccess("docker:volumes:view");
+  const canChangeHostBinds = !readOnly && hasScope(`docker:containers:mounts:${scopeSuffix}`);
   const canManageNetworks = !readOnly && canEdit && hasScopedAccess("docker:networks:edit");
   const canListNetworks = !readOnly && hasScopedAccess("docker:networks:view");
   const recreatesRunningContainer =
@@ -1211,6 +1214,7 @@ export function SettingsTab({
         <VolumeMountsSection
           nodeId={nodeId}
           canEdit={canEdit && canEditMounts}
+          canChangeHostBinds={canChangeHostBinds}
           mounts={mounts}
           setMounts={setMounts}
           mountsChanged={mountsChanged}

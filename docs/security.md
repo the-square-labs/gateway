@@ -130,7 +130,7 @@ Authorization uses granular scopes:
 
 Sensitive operations have dedicated scopes. Examples include Docker mount editing, Docker secret reveal, database credential reveal, certificate export, node console access, container file access, raw nginx validation bypass, and audit log access. Managed databases reuse the database create, edit, delete, and credential-reveal scopes; generated binding secrets are not displayed by default.
 
-Docker mount editing is guarded by `docker:containers:mounts`, but the scope does not bypass the managed-storage policy. New or changed mounts must reference Gateway-managed local volumes, and new host bind mounts are rejected. Existing legacy mounts are preserved by ordinary updates; a legacy local volume can be adopted only when it uses the local driver, local scope, and no driver options.
+Attaching a Gateway-managed volume needs `docker:volumes:view` on that volume as well as the workload's own create or edit, so a workload cannot mount another team's volume. Changing legacy host bind mounts is guarded by `docker:containers:mounts`, but the scope does not bypass the managed-storage policy. New or changed mounts must reference Gateway-managed local volumes, and new host bind mounts are rejected. Existing legacy mounts are preserved by ordinary updates; a legacy local volume can be adopted only when it uses the local driver, local scope, and no driver options.
 
 For the complete scope list and implication rules, see [SCOPES.md](../SCOPES.md).
 

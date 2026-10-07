@@ -151,6 +151,16 @@ function definitionsEqual(current: NormalizedMountDefinition[], next: Normalized
   return current.every((definition, index) => serializeMount(definition) === serializeMount(next[index]));
 }
 
+/** docker:volumes:view on `<nodeId>/<volume>`, as broad, node and folder grants resolve to it. */
+function canViewDockerVolume(actorScopes: readonly string[], nodeId: string, volumeName: string): boolean {
+  const scopes = [...actorScopes];
+  return (
+    hasScope(scopes, 'docker:volumes:view') ||
+    hasScope(scopes, `docker:volumes:view:${nodeId}`) ||
+    hasScope(scopes, `docker:volumes:view:${nodeId}/${volumeName}`)
+  );
+}
+
 function hasConfigMountFields(config: { mounts?: unknown; volumes?: unknown } | undefined) {
   return !!config && (Object.hasOwn(config, 'mounts') || Object.hasOwn(config, 'volumes'));
 }
@@ -183,6 +193,8 @@ export function assertDockerMountChangeAllowed(args: {
    * so it needs no mounts scope from anyone.
    */
   workloadChanged?: boolean;
+  /** Volumes the operation creates itself (an archive import); their creation is authorized on its own. */
+  createdVolumes?: readonly string[];
 }): { mountsChanged: boolean } {
   const currentDefinitions = args.currentDefinitions ?? normalizeMountDefinitionsFromInspect(args.currentInspect);
   const nextDefinitions = args.nextDefinitions
@@ -191,19 +203,40 @@ export function assertDockerMountChangeAllowed(args: {
       ? currentDefinitions
       : normalizeMountDefinitionsFromConfig(args.nextConfig ?? {});
   const mountsChanged = !definitionsEqual(currentDefinitions, nextDefinitions);
+  // docker:containers:mounts guards host bind mounts only: new ones are refused, legacy ones are kept or removed
+  // with it.
+  const isBind = (definition: NormalizedMountDefinition) => definition.type === 'bind';
+  const bindsChanged = !definitionsEqual(currentDefinitions.filter(isBind), nextDefinitions.filter(isBind));
 
   const resourceSuffix = args.resourceId ? `${args.nodeId}/${args.resourceId}` : args.nodeId;
   const hasMountScope = hasScope([...args.actorScopes], `docker:containers:mounts:${resourceSuffix}`);
-  const preservesHostBindCapability =
-    args.workloadChanged !== false && currentDefinitions.some((definition) => definition.type === 'bind');
-  if ((mountsChanged || preservesHostBindCapability) && !hasMountScope) {
+  const preservesHostBindCapability = args.workloadChanged !== false && currentDefinitions.some(isBind);
+  if ((bindsChanged || preservesHostBindCapability) && !hasMountScope) {
     throw new AppError(
       403,
       'MISSING_DOCKER_MOUNTS_SCOPE',
-      preservesHostBindCapability && !mountsChanged
+      preservesHostBindCapability && !bindsChanged
         ? 'Changing the image, command or runtime of a Docker container or deployment with host bind mounts requires docker:containers:mounts'
-        : 'Changing Docker container or deployment mounts requires docker:containers:mounts for this node'
+        : 'Changing Docker container or deployment mounts requires docker:containers:mounts for host binds'
     );
+  }
+
+  // A managed volume is attached with view access to that volume (its edit implies view); the workload's own create
+  // or edit authorizes the rest. Volumes already attached the same way stay without a check.
+  const attached = new Set(currentDefinitions.map(serializeMount));
+  const created = new Set(args.createdVolumes ?? []);
+  for (const definition of nextDefinitions) {
+    if (definition.type !== 'volume' || attached.has(serializeMount(definition)) || created.has(definition.source)) {
+      continue;
+    }
+    if (!canViewDockerVolume(args.actorScopes, args.nodeId, definition.source)) {
+      throw new AppError(
+        403,
+        'MISSING_DOCKER_VOLUME_SCOPE',
+        `Attaching volume "${definition.source}" requires docker:volumes:view on it`,
+        { requiredScope: 'docker:volumes:view' }
+      );
+    }
   }
 
   return { mountsChanged };
