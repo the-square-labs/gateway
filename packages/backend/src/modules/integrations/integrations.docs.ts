@@ -215,7 +215,10 @@ export const getGitLabConnectorRoute = appRoute({
   path: '/gitlab/connectors/{id}',
   tags: ['Integrations'],
   summary: 'Get a GitLab connector',
-  description: 'Returns connector settings, masked token metadata, capabilities, sync status, and allowlist entries.',
+  description:
+    'Returns connector settings, masked token metadata, capabilities, sync status, and allowlist entries. Needs ' +
+    '`integrations:gitlab:view` (or `:manage`) on the connector or on anything in it, like the connector list; ' +
+    'a caller whose grant is limited to groups or projects gets no allowlist entries.',
   request: { params: connectorParams },
   responses: okJson(dataResponseSchema(GitLabConnectorWithAllowlistResponseSchema)),
 });

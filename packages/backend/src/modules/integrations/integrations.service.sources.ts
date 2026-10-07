@@ -169,8 +169,9 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
 
   /**
    * Repositories a Docker or Pages build source can be picked from. The workload scopes authorize the
-   * picker; the list holds only repositories the caller may see through its Git scopes (any qualified
-   * integrations:<provider>:view or :use, through implied view per qualifier). Discovery itself uses the
+   * picker; the list holds only repositories the caller may save as a source: those its
+   * integrations:<provider>:use covers (unqualified, the connector, a containing group or owner, or the exact
+   * repository), the same check assertBuildSourceRepositoryAccess applies on save. Discovery itself uses the
    * connector credential, like source resolution and queued builds.
    */
   async listDockerBuildSourceRepositories(user: User, connectorId: string): Promise<DockerBuildSourceRepository[]> {
@@ -180,8 +181,8 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     }
     if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
     const provider = connector.provider as SourceProvider;
-    const visible = principalGitConnectorGrants(user, `integrations:${provider}:view`, connector.id);
-    if (!hasGitGrants(visible)) return [];
+    const usable = principalGitConnectorGrants(user, `integrations:${provider}:use`, connector.id);
+    if (!hasGitGrants(usable)) return [];
     // Repository discovery uses the connector credential, never the caller's personal one.
     const sourceActor: User = {
       ...user,
@@ -218,8 +219,8 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       const allowlistRows = await this.listAllowlistRows(connector.id);
       const allowed = this.filterAllowedProjects(connector, allowlistRows, projects);
       let permitted = allowed;
-      if (!gitGrantsConnectorWide(visible)) {
-        for (const grant of visible) {
+      if (!gitGrantsConnectorWide(usable)) {
+        for (const grant of usable) {
           permitted = await this.filterGitLabProjectsByGrant(connector, permitted, grant, user);
         }
       }
@@ -228,7 +229,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
 
     if (provider === 'github') {
       const repositories = (await this.githubListRepositories(sourceActor, { connectorId })).filter((repository) =>
-        gitGrantsCover(visible, {
+        gitGrantsCover(usable, {
           repositoryId: repository.id === null ? null : String(repository.id),
           containerIds: repository.ownerId ? [repository.ownerId] : [],
         })

@@ -1,8 +1,8 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { integrationConnectors } from '@/db/schema/index.js';
+import { gitGrantedConnectorIds } from '@/lib/git-scopes.js';
 import { hasScopeBase } from '@/lib/permissions.js';
-import { gitConnectorVisibility } from '@/modules/integrations/integration-permissions.js';
 
 /** Git providers a container, deployment, Compose Project or Pages build can be built from. */
 export const SOURCE_CONNECTOR_PROVIDERS = ['gitlab', 'github', 'git'] as const;
@@ -11,10 +11,10 @@ export type SourceConnectorProvider = (typeof SOURCE_CONNECTOR_PROVIDERS)[number
 /**
  * Picking a Git source is part of creating or editing the workload that builds from it, so the picker is authorized by
  * that workload's scopes. Any node, folder or resource variant counts: the action that saves the source checks the
- * exact target. The connectors and repositories it offers are the ones the caller may see through its Git scopes, and
- * connecting a source or changing its connector, repository or branch needs integrations:<provider>:use on the
- * repository (IntegrationsService.assertBuildSourceRepositoryAccess). Builds and other source settings need only the
- * workload's own permissions.
+ * exact target. Connecting a source or changing its connector, repository or branch needs
+ * integrations:<provider>:use on the repository (IntegrationsService.assertBuildSourceRepositoryAccess), so the
+ * connectors and repositories it offers are the ones the caller's `use` grants cover. Builds and other source
+ * settings need only the workload's own permissions.
  */
 export const DOCKER_SOURCE_PICKER_SCOPES = [
   'docker:containers:create',
@@ -40,7 +40,8 @@ export interface SourceConnectorOption {
 
 /**
  * Enabled Git connectors as picker options: identity only, no URL, credential or allowlist data. Only connectors the
- * caller holds a Git scope on (any qualifier; `use` implies `view`) are listed.
+ * caller holds integrations:<provider>:use on (any qualifier: the connector, a group or owner, or a repository) are
+ * listed, since saving a source needs it.
  */
 export async function listSourceConnectors(
   db: DrizzleClient,
@@ -60,10 +61,16 @@ export async function listSourceConnectors(
       )
     )
     .orderBy(asc(integrationConnectors.name));
-  const visibility = Object.fromEntries(
-    SOURCE_CONNECTOR_PROVIDERS.map((provider) => [provider, gitConnectorVisibility(scopes, provider)])
-  ) as Record<SourceConnectorProvider, ReturnType<typeof gitConnectorVisibility>>;
+  const usable = Object.fromEntries(
+    SOURCE_CONNECTOR_PROVIDERS.map((provider) => [
+      provider,
+      gitGrantedConnectorIds(scopes, `integrations:${provider}:use`),
+    ])
+  ) as Record<SourceConnectorProvider, ReturnType<typeof gitGrantedConnectorIds>>;
   return rows
-    .filter((row) => visibility[row.provider as SourceConnectorProvider]?.(row.id).visible)
+    .filter((row) => {
+      const granted = usable[row.provider as SourceConnectorProvider];
+      return !!granted && (granted.all || granted.connectorIds.has(row.id));
+    })
     .map((row) => ({ id: row.id, name: row.name, provider: row.provider as SourceConnectorProvider }));
 }

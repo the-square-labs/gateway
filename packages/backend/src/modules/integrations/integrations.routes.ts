@@ -632,12 +632,17 @@ integrationsRoutes.openapi(
 integrationsRoutes.openapi(
   {
     ...getGitLabConnectorRoute,
-    middleware: requireGitLabOperation('connector.get', ['integrations:gitlab:view', 'integrations:gitlab:manage']),
+    // Like the list: a group- or project-limited grant opens the connector, without its allowlist.
+    middleware: requireGitLabOperation('connector.get', ['integrations:gitlab:view', 'integrations:gitlab:manage'], {
+      scopeTarget: 'within-connector',
+    }),
   },
   async (c) => {
     const service = container.resolve(IntegrationsService);
-    const data = await service.getGitLabConnector(c.req.param('id')!);
-    return c.json({ data });
+    const id = c.req.param('id')!;
+    const data = await service.getGitLabConnector(id);
+    const access = gitConnectorVisibility(requestScopes(c), 'gitlab')(id);
+    return c.json({ data: access.full ? data : { ...data, allowlistEntries: [] } });
   }
 );
 
@@ -685,10 +690,11 @@ integrationsRoutes.openapi(
 integrationsRoutes.openapi(
   {
     ...getGitLabConnectorCapabilitiesRoute,
-    middleware: requireGitLabOperation('connector.capabilities.get', [
-      'integrations:gitlab:view',
-      'integrations:gitlab:manage',
-    ]),
+    middleware: requireGitLabOperation(
+      'connector.capabilities.get',
+      ['integrations:gitlab:view', 'integrations:gitlab:manage'],
+      { scopeTarget: 'within-connector' }
+    ),
   },
   async (c) => {
     const service = container.resolve(IntegrationsService);

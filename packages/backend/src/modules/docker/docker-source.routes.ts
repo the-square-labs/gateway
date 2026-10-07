@@ -105,9 +105,9 @@ function requireDeploymentSourceScope(scope: string): MiddlewareHandler<AppEnv> 
 }
 
 /**
- * Picking a source needs the create or edit scope of the workload it is for; the connectors and repositories offered
- * are those the caller's Git scopes cover, and connecting the source or changing its connector, repository or branch
- * needs integrations:<provider>:use on the repository.
+ * Picking a source needs the create or edit scope of the workload it is for. Connecting the source or changing its
+ * connector, repository or branch needs integrations:<provider>:use on the repository, so the connectors and
+ * repositories offered are those the caller's `use` grants cover.
  */
 function requireSourcePicker(allowed: (scopes: string[]) => boolean): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
