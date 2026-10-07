@@ -43,7 +43,11 @@ import {
   EnvironmentSettingsService,
 } from '@/modules/settings/environment-settings.service.js';
 import { CreateTokenSchema, UpdateTokenSchema } from '@/modules/tokens/tokens.schemas.js';
-import { resolveRequestedTokenScopes, TokensService } from '@/modules/tokens/tokens.service.js';
+import {
+  authorizeRequestedRegistryAccess,
+  resolveRequestedTokenScopes,
+  TokensService,
+} from '@/modules/tokens/tokens.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import type { User } from '@/types.js';
@@ -225,9 +229,13 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
             return tokensService.listTokens(user.id);
           case 'create': {
             // Validate first (retired names are accepted), then rewrite them like the REST route.
-            const parsed = CreateTokenSchema.parse({ name: a.name, scopes: a.scopes });
+            const parsed = CreateTokenSchema.parse({
+              name: a.name,
+              scopes: a.scopes,
+              registryAccess: a.registryAccess,
+            });
             const input = { ...parsed, scopes: resolveRequestedTokenScopes(parsed.scopes, user.scopes, 'create') };
-            if (!isScopeSubset(input.scopes, user.scopes)) {
+            if (!isScopeSubset(authorizeRequestedRegistryAccess(input, user.scopes), user.scopes)) {
               throw new Error('Cannot create a token with scopes you do not possess');
             }
             return tokensService.createToken(user.id, input);
@@ -235,14 +243,19 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
           case 'update': {
             const tokenId = String(a.tokenId ?? '');
             if (!tokenId) throw new Error('tokenId is required');
-            const parsed = UpdateTokenSchema.parse({ name: a.name, scopes: a.scopes });
+            const parsed = UpdateTokenSchema.parse({
+              name: a.name,
+              scopes: a.scopes,
+              registryAccess: a.registryAccess,
+            });
             const input = {
               ...parsed,
               ...(parsed.scopes !== undefined
                 ? { scopes: resolveRequestedTokenScopes(parsed.scopes, user.scopes, 'update') }
                 : {}),
             };
-            if (input.scopes !== undefined && !isScopeSubset(input.scopes, user.scopes)) {
+            const delegated = authorizeRequestedRegistryAccess(input, user.scopes);
+            if (input.scopes !== undefined && !isScopeSubset(delegated, user.scopes)) {
               throw new Error('Cannot update a token with scopes you do not possess');
             }
             await tokensService.updateToken(user.id, tokenId, input);

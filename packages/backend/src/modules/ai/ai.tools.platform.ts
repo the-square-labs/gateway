@@ -515,6 +515,11 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
           items: { type: 'string' },
           description: 'API token scopes for create or update. Must be a subset of the current user scopes.',
         },
+        registryAccess: {
+          type: 'object',
+          description:
+            'Internal registry access for docker login with the token: pull and push each "all" or a list of exact repository names; omit an action to deny it, {} removes the access. Pull needs view access to a Docker workload or image, push edit or manage on a workload.',
+        },
       },
       required: ['operation'],
     },

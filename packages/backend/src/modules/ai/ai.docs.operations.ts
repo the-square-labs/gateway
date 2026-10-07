@@ -168,11 +168,11 @@ Pending OAuth consent remains browser-only. Do not try to approve a new OAuth cl
 ## Current-User Gateway API Tokens
 The assistant can manage the current browser user's Gateway API tokens with manage_api_token:
 - { operation: "list" }
-- { operation: "create", name, scopes }
-- { operation: "update", tokenId, name?, scopes? }
+- { operation: "create", name, scopes, registryAccess? }
+- { operation: "update", tokenId, name?, scopes?, registryAccess? }
 - { operation: "revoke", tokenId }
 
-Token scopes must be a subset of the current user's scopes. Token secrets are returned only by create and cannot be read later. manage_api_token is browser-session-only and is not exposed through MCP.
+Token scopes must be a subset of the current user's scopes. registryAccess is the token's internal registry access for docker login: { pull?: "all" | [repositories], push?: "all" | [repositories] } (exact repository names; {} removes it). Pull needs view access to a Docker workload or image, push edit or manage on a workload; a token may have registry access and no scopes. Token secrets are returned only by create and cannot be read later. manage_api_token is browser-session-only and is not exposed through MCP.
 
 ## Creating an API Token
 1. Go to **Profile** → **Authorizations** → **API Tokens**

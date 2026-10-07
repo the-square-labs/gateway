@@ -218,4 +218,13 @@ describe('generated scope implications', () => {
     expect(hasScope(['databases:query:admin'], 'databases:query:read')).toBe(true);
     expect(hasScope(['inference:models:manage'], 'inference:providers:view')).toBe(true);
   });
+
+  it('keeps workload links with the scopes that used to gate them, and nothing more', () => {
+    expect(hasScope(['databases:edit:db-1'], 'databases:bind:db-1')).toBe(true);
+    expect(hasScope(['storage:iam:s1'], 'storage:bind:s1')).toBe(true);
+    expect(hasScope(['databases:bind:db-1'], 'databases:view:db-1')).toBe(true);
+    expect(hasScope(['databases:bind:db-1'], 'databases:edit:db-1')).toBe(false);
+    expect(hasScope(['storage:bind:s1'], 'storage:iam:s1')).toBe(false);
+    expect(hasScope(['storage:edit:s1'], 'storage:bind:s1')).toBe(false);
+  });
 });

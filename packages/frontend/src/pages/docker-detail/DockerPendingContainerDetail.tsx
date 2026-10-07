@@ -213,10 +213,10 @@ function PendingContainerLinks({
     hasScope(`docker:containers:environment:${resourceScope}`) &&
     hasScope(`docker:containers:secrets:${resourceScope}`);
   const canViewStorage = hasScopedAccess("storage:view");
-  const canManageStorage = hasScopedAccess("storage:iam");
+  const canManageStorage = hasScopedAccess("storage:bind");
   const canManageStorageCluster = useCallback(
     (connectionId: string | null) =>
-      hasScope("storage:iam") || Boolean(connectionId && hasScope(`storage:iam:${connectionId}`)),
+      hasScope("storage:bind") || Boolean(connectionId && hasScope(`storage:bind:${connectionId}`)),
     [hasScope]
   );
   const [hasDatabaseNode, setHasDatabaseNode] = useState(false);

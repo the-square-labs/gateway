@@ -234,11 +234,15 @@ export interface OAuthAuthorization {
   expiresAt: string | null;
 }
 
+/** Internal registry access of an API token: pull and push each "all" or a list of repositories. */
+export type TokenRegistryAccess = Partial<Record<"pull" | "push", "all" | string[]>>;
+
 export interface ApiToken {
   id: string;
   name: string;
   tokenPrefix: string;
   scopes: string[];
+  registryAccess?: TokenRegistryAccess;
   lastUsedAt: string | null;
   createdAt: string;
 }

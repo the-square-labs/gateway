@@ -1,32 +1,46 @@
 import { z } from 'zod';
 import { API_TOKEN_SCOPES, isApiTokenScope } from '@/lib/scopes.js';
 import { DelegatedScopeArraySchema, everyReplacementScope } from '@/lib/scopes-schemas.js';
+import { hasRegistryAccess, TokenRegistryAccessSchema } from './token-registry-access.js';
 
 export const AVAILABLE_SCOPES = API_TOKEN_SCOPES;
 
 /** Folder, node, and Docker child restrictions are accepted like on the consent screen. */
-const TokenScopeArraySchema = DelegatedScopeArraySchema.min(1, 'At least one scope is required').refine(
+const TokenScopeArraySchema = DelegatedScopeArraySchema.refine(
   (scopes) => scopes.every((scope) => everyReplacementScope(scope, isApiTokenScope)),
   'One or more scopes cannot be granted to API tokens'
 );
 
-export const CreateTokenSchema = z.object({
-  name: z.string().trim().min(1).max(255),
-  scopes: TokenScopeArraySchema,
-});
+/** A token carries at least one scope or internal registry access (a registry-only CI token has no scopes). */
+export const CreateTokenSchema = z
+  .object({
+    name: z.string().trim().min(1).max(255),
+    scopes: TokenScopeArraySchema.default([]),
+    registryAccess: TokenRegistryAccessSchema.optional(),
+  })
+  .refine(
+    (input) => input.scopes.length > 0 || hasRegistryAccess(input.registryAccess),
+    'At least one scope or registry access is required'
+  );
 
+/** registryAccess replaces the token's registry access; `{}` removes it. */
 export const UpdateTokenSchema = z
   .object({
     name: z.string().trim().min(1).max(255).optional(),
     scopes: TokenScopeArraySchema.optional(),
+    registryAccess: TokenRegistryAccessSchema.optional(),
   })
-  .refine((input) => input.name !== undefined || input.scopes !== undefined, 'At least one field is required');
+  .refine(
+    (input) => input.name !== undefined || input.scopes !== undefined || input.registryAccess !== undefined,
+    'At least one field is required'
+  );
 
 export const TokenResponseSchema = z.object({
   id: z.string(),
   name: z.string(),
   tokenPrefix: z.string(),
   scopes: z.array(z.string()),
+  registryAccess: TokenRegistryAccessSchema,
   lastUsedAt: z.string().nullable(),
   createdAt: z.string(),
 });

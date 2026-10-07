@@ -87,6 +87,9 @@ const EXPLICIT_IMPLICATIONS: Readonly<Record<string, readonly string[]>> = {
   'ssl:cert:renew': ['ssl:cert:issue'],
   // Exporting the private key covers letting nginx use it.
   'pki:cert:deploy': ['pki:cert:export'],
+  // Linking a workload used to need these, so their holders keep it.
+  'databases:bind': ['databases:edit'],
+  'storage:bind': ['storage:iam'],
 };
 
 const CATALOG = new Set<string>(ALL_SCOPES);

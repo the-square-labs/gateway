@@ -29,8 +29,22 @@ import {
 import { api } from "@/services/api";
 import { apiTokenChangedChannel } from "@/services/user-resource-events";
 import { useCAStore } from "@/stores/ca";
-import type { DatabaseConnection, LoggingSchema, Node, ProxyHost, User } from "@/types";
+import type {
+  DatabaseConnection,
+  LoggingSchema,
+  Node,
+  ProxyHost,
+  TokenRegistryAccess,
+  User,
+} from "@/types";
 import { API_TOKEN_SCOPES, type ApiToken, RESOURCE_SCOPABLE_SCOPES } from "@/types";
+import {
+  finalRegistryAccess,
+  hasTokenRegistryAccess,
+  LEGACY_REGISTRY_SCOPES,
+  RegistryAccessFields,
+  registryAccessSummary,
+} from "./RegistryAccessFields";
 
 interface ApiTokensSectionProps {
   user: User | null;
@@ -64,6 +78,7 @@ export function ApiTokensSection({
   const [newTokenName, setNewTokenName] = useState("");
   const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [resourceScopes, setResourceScopes] = useState<Record<string, string[]>>({});
+  const [registryAccess, setRegistryAccess] = useState<TokenRegistryAccess>({});
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [createdSecretDialogOpen, setCreatedSecretDialogOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -89,10 +104,18 @@ export function ApiTokensSection({
     if (!editingToken) return false;
     return initialTokenScopes.join("\n") !== finalTokenScopes.join("\n");
   }, [editingToken, finalTokenScopes, initialTokenScopes]);
+  const registryAccessChanged = useMemo(
+    () =>
+      !!editingToken &&
+      JSON.stringify(editingToken.registryAccess ?? {}) !== JSON.stringify(registryAccess),
+    [editingToken, registryAccess]
+  );
   const tokenChanged = useMemo(() => {
     if (!editingToken) return false;
-    return newTokenName.trim() !== editingToken.name || tokenScopesChanged;
-  }, [editingToken, newTokenName, tokenScopesChanged]);
+    return newTokenName.trim() !== editingToken.name || tokenScopesChanged || registryAccessChanged;
+  }, [editingToken, newTokenName, tokenScopesChanged, registryAccessChanged]);
+  // A registry-only token (CI pushing images) needs no scopes.
+  const tokenHasGrants = finalTokenScopes.length > 0 || hasTokenRegistryAccess(registryAccess);
 
   const loadTokens = useCallback(async () => {
     try {
@@ -119,6 +142,7 @@ export function ApiTokensSection({
     const parsed = parseScopesForForm(token.scopes || []);
     setSelectedScopes(parsed.baseScopes);
     setResourceScopes(parsed.resources);
+    setRegistryAccess(token.registryAccess ?? {});
     setInitialResourceLimitedScopes(Object.keys(parsed.resources));
     setCreatedSecret(null);
     setCreateDialogOpen(true);
@@ -134,8 +158,13 @@ export function ApiTokensSection({
         return false;
       }
     }
-    if (finalTokenScopes.length === 0) {
-      toast.error("Select at least one scope");
+    if (!tokenHasGrants) {
+      toast.error("Select at least one scope or registry access");
+      return false;
+    }
+    const registry = finalRegistryAccess(registryAccess);
+    if (registry.error) {
+      toast.error(registry.error);
       return false;
     }
     return true;
@@ -149,6 +178,9 @@ export function ApiTokensSection({
       await api.updateToken(editingToken.id, {
         ...(newTokenName.trim() !== editingToken.name ? { name: newTokenName.trim() } : {}),
         ...(tokenScopesChanged ? { scopes: finalTokenScopes } : {}),
+        ...(registryAccessChanged
+          ? { registryAccess: finalRegistryAccess(registryAccess).access }
+          : {}),
       });
       toast.success("Token updated");
       setCreateDialogOpen(false);
@@ -165,6 +197,7 @@ export function ApiTokensSection({
     setNewTokenName("");
     setSelectedScopes([]);
     setResourceScopes({});
+    setRegistryAccess({});
     setInitialResourceLimitedScopes([]);
     setCreatedSecret(null);
     setCreateDialogOpen(true);
@@ -196,7 +229,11 @@ export function ApiTokensSection({
     if (!validateScopeSelection()) return;
     setIsCreating(true);
     try {
-      const result = await api.createToken({ name: newTokenName, scopes: finalTokenScopes });
+      const result = await api.createToken({
+        name: newTokenName,
+        scopes: finalTokenScopes,
+        registryAccess: finalRegistryAccess(registryAccess).access,
+      });
       setCreatedSecret(result.token);
       setCreateDialogOpen(false);
       setCreatedSecretDialogOpen(true);
@@ -272,6 +309,9 @@ export function ApiTokensSection({
                           " · Never used"
                         )}
                         {` · Scopes: ${(token.scopes || []).length}`}
+                        {registryAccessSummary(token.registryAccess)
+                          ? ` · ${registryAccessSummary(token.registryAccess)}`
+                          : ""}
                       </p>
                     </div>
                   </div>
@@ -334,8 +374,9 @@ export function ApiTokensSection({
               header={<span className="text-sm font-medium">Scopes</span>}
               scopes={API_TOKEN_SCOPES.filter(
                 (scope) =>
-                  selectedScopes.includes(scope.value) ||
-                  hasSelectableScopeBase(userScopes, scope.value)
+                  !LEGACY_REGISTRY_SCOPES.has(scope.value) &&
+                  (selectedScopes.includes(scope.value) ||
+                    hasSelectableScopeBase(userScopes, scope.value))
               )}
               selected={selectedScopes}
               onToggle={toggleScope}
@@ -361,6 +402,11 @@ export function ApiTokensSection({
               viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
               footer={`${finalTokenScopes.length} scope${finalTokenScopes.length !== 1 ? "s" : ""}`}
             />
+            <RegistryAccessFields
+              value={registryAccess}
+              onChange={setRegistryAccess}
+              userScopes={userScopes}
+            />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
@@ -370,7 +416,7 @@ export function ApiTokensSection({
               <Button
                 onClick={handleTokenUpdate}
                 pending={isUpdating}
-                disabled={!newTokenName.trim() || !tokenChanged || finalTokenScopes.length === 0}
+                disabled={!newTokenName.trim() || !tokenChanged || !tokenHasGrants}
               >
                 Save
               </Button>
@@ -378,7 +424,7 @@ export function ApiTokensSection({
               <Button
                 onClick={handleCreateToken}
                 pending={isCreating}
-                disabled={finalTokenScopes.length === 0}
+                disabled={!tokenHasGrants}
               >
                 Create Token
               </Button>

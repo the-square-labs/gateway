@@ -12,6 +12,9 @@ import { createChildLogger } from '@/lib/logger.js';
 import { hasScope } from '@/lib/permissions.js';
 import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
+import { decodeComposeServiceTarget } from '@/modules/docker/compose/compose-managed-bindings.js';
+import { assertDockerResourceScope } from '@/modules/docker/docker-access.middleware.js';
+import { resolveBindingTargetContainerIdentity } from '@/modules/docker/docker-binding-target-identity.js';
 import { isGatewayInternalContainer } from '@/modules/docker/docker-internal-containers.js';
 import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 
@@ -57,4 +60,8 @@ export const managedDatabaseRuntime = {
   loggerManagedDatabaseBindings,
   isGatewayInternalContainer,
   loggerManagedDatabaseBindingIdentityRuntime,
+  // The workload check of links (ManagedDatabaseBindingService.assertTargetAccess).
+  decodeComposeServiceTarget,
+  assertDockerResourceScope,
+  resolveBindingTargetContainerIdentity,
 };

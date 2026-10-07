@@ -18,6 +18,8 @@ export const ALL_SCOPES = [
   'storage:objects:write',
   'storage:objects:admin',
   'storage:folders:manage',
+  // Link a workload to managed storage (a bucket-scoped key of its own); issuing access keys stays storage:iam.
+  'storage:bind',
   'databases:backups:view',
   'databases:backups:manage',
   'databases:backups:run',
@@ -245,6 +247,8 @@ export const ALL_SCOPES = [
   'docker:registries:create',
   'docker:registries:edit',
   'docker:registries:delete',
+  // Legacy: internal registry access belongs to API tokens now (modules/tokens/token-registry-access.ts). A user who
+  // holds these still lets their tokens pull or push the repositories they cover without access to any workload.
   'docker:registries:internal:pull',
   'docker:registries:internal:push',
   // ── Docker: Tasks ────────────────────────────────────────────────
@@ -260,6 +264,8 @@ export const ALL_SCOPES = [
   'databases:query:admin',
   'databases:credentials:reveal',
   'databases:folders:manage',
+  // Link a workload to a managed database (a database identity of its own) without editing the database.
+  'databases:bind',
   // ── Notifications ────────────────────────────────────────────────
   'notifications:alerts:view',
   'notifications:alerts:manage',

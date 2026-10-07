@@ -245,8 +245,8 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 | docker:registries:create | Add registries |
 | docker:registries:edit | Edit/test registries |
 | docker:registries:delete | Remove registries |
-| docker:registries:internal:pull | Pull from repository-scoped internal-registry paths |
-| docker:registries:internal:push | Push to repository-scoped internal-registry paths |
+| docker:registries:internal:pull | Legacy: lets the holder's API tokens pull these repositories without workload access. Registry access is a property of each API token now (manage_api_token registryAccess) |
+| docker:registries:internal:push | Legacy: lets the holder's API tokens push to these repositories without workload access |
 
 ### Docker: Tasks
 | Scope | Description |
@@ -259,7 +259,8 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 |-------|-------------|
 | databases:view | List external connections and managed database instances and view their details (resource-scopable) |
 | databases:create | Create external connections or deploy managed database instances |
-| databases:edit | Edit external connections, managed instances and publication settings; link and unlink workload bindings, which also need docker:containers:environment + docker:containers:secrets on the target (or docker:compose:manage for a Compose service) (resource-scopable) |
+| databases:edit | Edit external connections, managed instances and publication settings (resource-scopable); implies databases:bind |
+| databases:bind | Link and unlink workload bindings of a managed database without changing the database; the target also needs docker:containers:environment + docker:containers:secrets (or docker:compose:manage for a Compose service) (resource-scopable) |
 | databases:delete | Delete external connections or managed instances (resource-scopable) |
 | databases:query:read | Run read-only queries (resource-scopable); implies databases:view for the same database |
 | databases:query:write | Run write queries (resource-scopable); implies databases:query:read |
@@ -286,7 +287,8 @@ Backups, restores, retention and history deletion also need storage:credentials:
 | storage:delete | Delete external or managed storage resources (resource-scopable) |
 | storage:credentials:reveal | Reveal explicitly requested stored storage credentials or managed-storage root credentials (resource-scopable) |
 | storage:credentials:use | Let backups send the saved credentials to the backup runner on an authorized Storage node without revealing them to the caller (resource-scopable); implied by storage:credentials:reveal |
-| storage:iam | Create/remove scoped IAM keys and create/delete managed-storage workload links (resource-scopable); target workload scopes are also required for links |
+| storage:iam | Create/remove scoped IAM keys and move links between clusters (resource-scopable); implies storage:bind |
+| storage:bind | Create/delete managed-storage workload links without issuing access keys (resource-scopable); target workload scopes are also required |
 | storage:objects:read | List buckets/objects, read metadata or objects, and create signed GET URLs (resource-scopable) |
 | storage:objects:write | Upload objects, create prefixes, and delete objects (resource-scopable) |
 | storage:objects:admin | Create or delete buckets (resource-scopable) |
@@ -381,7 +383,7 @@ Git scopes can be limited with stable IDs: \`<scope>:<connectorId>\` (every repo
 | Group | Description |
 |-------|-------------|
 | system-admin | Every scope, including admin:system |
-| admin | Every scope except admin:system, admin:users:impersonate, settings:gateway:edit, housekeeping:configure, nodes:console, ai:skills:manage, inference:setup, the hosting:* and integrations:hosting:* scopes, and Docker registry create/edit/delete |
+| admin | Every scope except admin:system, admin:users:impersonate, settings:gateway:edit, housekeeping:configure, nodes:console, ai:skills:manage, inference:setup, the hosting:* and integrations:hosting:* scopes, Docker registry create/edit/delete, and the legacy docker:registries:internal:* scopes |
 | operator | Day-to-day operations: storage connections and objects (no credential reveal, IAM keys, or bucket admin) with storage:credentials:use for backups, database backup policies and runs (no restore) and backup execution, PKI certificates and templates, domains, routes and Pages without delete, SSL, ACL, node details, config view, logs, and files, Docker containers, deployments and Compose with create, image pull, secrets and console but without delete, mounts, export, migration or file writes, GitLab, GitHub and Git connectors with use for build sources but no repository content, read-only images, volumes, networks, and registries, databases with queries, notifications, log search and ingest tokens, alerts, AI Workspace, and MCP |
 | viewer | Read-only: storage, backups, PKI, domains, routes, nginx templates, Pages, SSL, ACL, Docker without volume file contents, databases, notification alerts without webhooks, logging including log search without ingest tokens, GitLab, GitHub, Git and Cloudflare connectors, plus AI Workspace |
 | guest | Account access only — no infrastructure permissions |

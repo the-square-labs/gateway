@@ -377,11 +377,11 @@ export const ManagedDatabaseLinksSection = forwardRef<
     },
     [databaseNodeById]
   );
-  // Linking and unlinking change the database's consumers: the API requires databases:edit on
+  // Linking and unlinking change the database's consumers: the API requires databases:bind on
   // the database (the target requirement, environment and secrets, is checked by the caller).
-  const canEditDatabase = useCallback(
+  const canBindDatabase = useCallback(
     (database: ManagedDatabase | undefined) =>
-      !!database && hasScope(`databases:edit:${database.databaseConnectionId}`),
+      !!database && hasScope(`databases:bind:${database.databaseConnectionId}`),
     [hasScope]
   );
   // No known services before the first revision: the service name is typed, not picked.
@@ -398,13 +398,13 @@ export const ManagedDatabaseLinksSection = forwardRef<
       databases.filter(
         (database) =>
           databaseIsAvailable(database) &&
-          canEditDatabase(database) &&
+          canBindDatabase(database) &&
           (selectedTargetResourceId
             ? !linkedTargets.has(`${database.id}:${selectedTargetResourceId}`)
             : composeServiceTyped)
       ),
     [
-      canEditDatabase,
+      canBindDatabase,
       composeServiceTyped,
       databaseIsAvailable,
       databases,
@@ -755,7 +755,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
   const openAddDialog = () => {
     if (composeServiceTyped) {
       if (
-        !databases.some((database) => databaseIsAvailable(database) && canEditDatabase(database))
+        !databases.some((database) => databaseIsAvailable(database) && canBindDatabase(database))
       ) {
         setNoAvailableDatabasesOpen(true);
         return;
@@ -770,7 +770,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
         return databases.some(
           (database) =>
             databaseIsAvailable(database) &&
-            canEditDatabase(database) &&
+            canBindDatabase(database) &&
             !linkedTargets.has(`${database.id}:${serviceTarget}`)
         );
       });
@@ -831,8 +831,8 @@ export const ManagedDatabaseLinksSection = forwardRef<
         ) : (
           displayBindings.map((entry) => {
             const database = databaseForBinding(entry.binding);
-            // A staged addition came from the editable list; existing links need databases:edit.
-            const canChangeLink = entry.pending === "add" || canEditDatabase(database);
+            // A staged addition came from the editable list; existing links need databases:bind.
+            const canChangeLink = entry.pending === "add" || canBindDatabase(database);
             const databaseNode = database ? databaseNodeById.get(database.nodeId) : undefined;
             const unavailable = !!database && !!databaseNode && !databaseIsAvailable(database);
             // Saved into the workload's configuration; its next start or rollout runs it.

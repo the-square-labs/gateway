@@ -9,6 +9,12 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     group: "Storage",
   },
   {
+    value: "storage:bind",
+    label: "Link Workloads to Storage",
+    desc: "Link containers and deployments to managed storage; the workload's own permissions are also required",
+    group: "Storage",
+  },
+  {
     value: "storage:credentials:reveal",
     label: "Reveal Storage",
     desc: "storage:credentials:reveal",
@@ -318,14 +324,14 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
   },
   {
     value: "docker:registries:internal:pull",
-    label: "Pull Internal Images",
-    desc: "Pull from all internal registry repositories or selected repository scopes",
+    label: "Pull Internal Images (Legacy)",
+    desc: "Lets the user's API tokens pull these repositories without workload access; tokens set registry access themselves",
     group: "Docker: Registries",
   },
   {
     value: "docker:registries:internal:push",
-    label: "Push Internal Images",
-    desc: "Push to all internal registry repositories or selected repository scopes",
+    label: "Push Internal Images (Legacy)",
+    desc: "Lets the user's API tokens push to these repositories without workload access; tokens set registry access themselves",
     group: "Docker: Registries",
   },
   // Docker: Tasks
@@ -358,6 +364,12 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     value: "databases:edit",
     label: "Edit Databases",
     desc: "Edit saved database connections",
+    group: "Databases",
+  },
+  {
+    value: "databases:bind",
+    label: "Link Workloads to Databases",
+    desc: "Link containers, deployments, and Compose services to managed databases without editing them",
     group: "Databases",
   },
   {

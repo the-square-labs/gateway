@@ -94,6 +94,34 @@ export class ManagedDatabaseBindingService {
   }> {
     return commercialModuleUnavailable();
   }
+  /**
+   * The workload check of a managed database or storage link change (environment and secrets on the target, or
+   * docker:compose:manage; a deployment also needs manage, and edit with targetEnvironment). `rollout: false` for
+   * reads such as a credential reveal.
+   */
+  async assertTargetAccess(
+    _scopes: string[],
+    _target: {
+      targetNodeId: string;
+      targetType: 'container' | 'deployment' | 'compose_service';
+      targetResourceId: string;
+      targetEnvironment?: Record<string, string>;
+    },
+    _options?: { rollout?: boolean }
+  ): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  /** The workload check of reading a link's runtime: view access to the target. */
+  async assertTargetViewAccess(
+    _scopes: string[],
+    _target: {
+      targetNodeId: string;
+      targetType: 'container' | 'deployment' | 'compose_service';
+      targetResourceId: string;
+    }
+  ): Promise<void> {
+    return commercialModuleUnavailable();
+  }
   async getRuntime(
     _managedDatabaseId: string,
     _bindingId: string

@@ -1,12 +1,11 @@
 import { container } from '@/container.js';
 import { hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import {
-  assertWorkloadBindingTargetAccess,
-  assertWorkloadBindingTargetViewAccess,
-} from '@/modules/ai/ai.binding-target-access.js';
 import { directResourceIdsForScopes } from '@/modules/ai/ai.service-helpers.js';
+import { decodeComposeServiceTarget } from '@/modules/docker/compose/compose-managed-bindings.js';
+import { assertDockerResourceScope } from '@/modules/docker/docker-access.middleware.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import { resolveBindingTargetContainerIdentity } from '@/modules/docker/docker-binding-target-identity.js';
 import { BucketQuerySchema } from '@/modules/object-storage/object-storage.docs.js';
 import {
   CreateBucketSchema,
@@ -72,8 +71,10 @@ export const storageToolRuntime = {
   ManagedStorageService,
   ManagedStorageBindingsService,
   directResourceIdsForScopes,
-  assertWorkloadBindingTargetAccess,
-  assertWorkloadBindingTargetViewAccess,
+  // The workload check of links, which the commercial module runs (binding-target-access.ts there).
+  decodeComposeServiceTarget,
+  assertDockerResourceScope,
+  resolveBindingTargetContainerIdentity,
   MoveManagedStorageBindingSchema,
   ImportManagedStorageAccessKeysSchema,
   RehomeManagedStorageBackupHistorySchema,

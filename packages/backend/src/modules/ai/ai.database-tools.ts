@@ -8,10 +8,6 @@ import type { DatabaseConnectionService } from '@/modules/databases/databases.se
 import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
 import type { User } from '@/types.js';
-import {
-  assertWorkloadBindingTargetAccess,
-  assertWorkloadBindingTargetViewAccess,
-} from './ai.binding-target-access.js';
 
 export const DATABASE_TOOL_NAMES = new Set([
   'list_databases',
@@ -114,14 +110,14 @@ export async function manageManagedDatabaseAccess(
   if (operation === 'get_binding_runtime') {
     // GET /databases/managed/{id}/bindings/{bindingId}/runtime
     await ensureManagedDatabaseScopes(user, databaseId, 'databases:view');
-    await assertWorkloadBindingTargetViewAccess(user.scopes, await bindings.getTarget(databaseId, bindingId));
+    await bindings.assertTargetViewAccess(user.scopes, await bindings.getTarget(databaseId, bindingId));
     return bindings.getRuntime(databaseId, bindingId);
   }
   if (operation === 'reveal_binding_credentials') {
     // POST /databases/managed/{id}/bindings/{bindingId}/reveal-credentials
     await ensureManagedDatabaseScopes(user, databaseId, 'databases:credentials:reveal');
     // Revealing changes nothing on the workload: no rollout scope, like the route.
-    await assertWorkloadBindingTargetAccess(user.scopes, await bindings.getTarget(databaseId, bindingId), {
+    await bindings.assertTargetAccess(user.scopes, await bindings.getTarget(databaseId, bindingId), {
       rollout: false,
     });
     return bindings.revealCredentials(databaseId, bindingId);

@@ -158,6 +158,8 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'databases:query:write',
   'databases:query:admin',
   'databases:credentials:reveal',
+  'databases:bind',
+  'storage:bind',
   // Logging
   'logs:environments:view',
   'logs:environments:edit',
@@ -285,6 +287,8 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'databases:query:write',
   'databases:query:admin',
   'databases:credentials:reveal',
+  'databases:bind',
+  'storage:bind',
   // Logging environments and schemas. Ingest tokens and log reading are qualified by the
   // environment ID, so their folder grants resolve through logging environment folders.
   'logs:environments:view',
