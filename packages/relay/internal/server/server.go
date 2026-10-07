@@ -38,7 +38,9 @@ const (
 )
 
 type Runtime struct {
-	GRPC     *grpc.Server
+	// GRPC is the servers of the relay port: clients with and without a
+	// certificate (listener.go).
+	GRPC     serverPair
 	Listener net.Listener
 	State    *policy.Store
 	Proxy    *proxy.Handler
@@ -66,10 +68,12 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 	if cfg.Mode == config.ModeRemoteDataOnly {
 		maxMessageBytes = maxRemoteMessageBytes
 	}
+	// The split listener completes the TLS handshake (see listener.go); both
+	// servers read the identity it established.
 	serverOptions := []grpc.ServerOption{
-		grpc.Creds(credentials.NewTLS(identityStore.ServerTLSConfig())),
+		grpc.Creds(handshakenCredentials{}),
 		grpc.ForceServerCodec(codec.Codec{}),
-		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
+		grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.KeepaliveParams(peerKeepalive()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             clientKeepaliveMinTime,
@@ -99,9 +103,17 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 	}
 	adminService := admin.New(state, tunnelBroker, identityStore, reloadUpstream, buildVersion)
 	coordinator := startLease(cfg, state, identityStore, tunnelBroker, adminService)
-	grpcServer := grpc.NewServer(serverOptions...)
-	relayv1.RegisterTunnelBrokerServer(grpcServer, tunnelBroker)
-	relayv1.RegisterRelayAdminServer(grpcServer, adminService)
+	// The same services on both: a client without a certificate gets the
+	// answers it got before (Unauthenticated, or the enrollment it may
+	// call), within small message and stream limits.
+	shared := serverOptions[:len(serverOptions):len(serverOptions)]
+	grpcServer := grpc.NewServer(append(shared, grpc.MaxRecvMsgSize(maxMessageBytes))...)
+	anonymousServer := grpc.NewServer(append(shared, grpc.MaxRecvMsgSize(anonymousMessageBytes),
+		grpc.MaxConcurrentStreams(anonymousStreamsPerConnection))...)
+	for _, server := range []*grpc.Server{grpcServer, anonymousServer} {
+		relayv1.RegisterTunnelBrokerServer(server, tunnelBroker)
+		relayv1.RegisterRelayAdminServer(server, adminService)
+	}
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", cfg.Port))
 	if err != nil {
 		if app != nil {
@@ -114,8 +126,10 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 		return nil, err
 	}
 	listener = withPeerLiveness(listener)
-	runtime := &Runtime{GRPC: grpcServer, Listener: listener, State: state, Proxy: proxyHandler, Lease: coordinator}
-	go func() { _ = grpcServer.Serve(listener) }()
+	split := newSplitListener(listener, identityStore.ServerTLSConfig())
+	runtime := &Runtime{GRPC: serverPair{grpcServer, anonymousServer}, Listener: listener, State: state, Proxy: proxyHandler, Lease: coordinator}
+	go func() { _ = grpcServer.Serve(split.authenticated) }()
+	go func() { _ = anonymousServer.Serve(split.anonymous) }()
 	return runtime, nil
 }
 
