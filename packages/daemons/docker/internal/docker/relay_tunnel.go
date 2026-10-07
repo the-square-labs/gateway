@@ -701,64 +701,6 @@ func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 
-// openRelaySource opens a source tunnel for assignment on the first of its relay candidates (in load and latency
-// order) that accepts it. When none does, the error is a capacity refusal if any relay gave one (the relay's own
-// reason), else the last refusal. Right after this process started, a connection that finds no relay lane waits for
-// the first lanes (relayLaneStartupWait): the link sockets the previous process handed over are served before the
-// lanes are up.
-func (p *DockerPlugin) openRelaySource(assignment *pb.RelayGrantAssignment) (*relaySourceTunnel, error) {
-	for {
-		tunnel, err := p.openRelaySourceOnce(assignment)
-		if err == nil || !errors.Is(err, errRelayLaneUnavailable) || !p.waitForRelayLanes() {
-			return tunnel, err
-		}
-	}
-}
-
-func (p *DockerPlugin) openRelaySourceOnce(assignment *pb.RelayGrantAssignment) (*relaySourceTunnel, error) {
-	candidates := relaybridge.PoolCandidates(assignment, false)
-	if len(candidates) == 0 {
-		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.GetGrant()}}
-	}
-	refusal := errRelayLaneUnavailable
-	for _, candidate := range p.orderRelayCandidates(candidates) {
-		router := p.relayRouter(candidate.GetRelayInstanceId())
-		if router == nil {
-			continue
-		}
-		tunnel, err := router.openSource(candidate.GetGrant())
-		if err == nil {
-			p.makeResumable(tunnel, assignment)
-			return tunnel, nil
-		}
-		if relayRefusalReason(refusal) != linkRejectedRelayCapacity {
-			refusal = err
-		}
-	}
-	return nil, refusal
-}
-
-func (p *DockerPlugin) orderRelayCandidates(candidates []*pb.RelayDataCandidate) []*pb.RelayDataCandidate {
-	if len(candidates) < 2 {
-		return append([]*pb.RelayDataCandidate(nil), candidates...)
-	}
-	p.relayTunnelMu.Lock()
-	transports := make(map[string]relaybridge.TransportLoad, len(p.relayTunnels))
-	for targetID, router := range p.relayTunnels {
-		transports[targetID] = relaybridge.TransportLoad{Available: router.connected(), Active: router.active.Load()}
-	}
-	rotation := p.relaySelection
-	p.relaySelection++
-	p.relayTunnelMu.Unlock()
-	return relaybridge.OrderCandidates(candidates, transports, rotation, relaybridge.Latency.RTT)
-}
-
-func (p *DockerPlugin) relayRouter(targetID string) *relayTunnelRouter {
-	p.relayTunnelMu.Lock()
-	defer p.relayTunnelMu.Unlock()
-	return p.relayTunnels[targetID]
-}
-
 // OpenBackupRelayRoute resolves a signed per-run connect grant. routeID is the
 // RelayGrantAssignment.ownerId (the backup run UUID); the matching endpoint
 // assignment's routeId selects the owned target runtime server-side.
@@ -865,18 +807,19 @@ type relaySourceTunnel struct {
 	localService bool
 }
 
-// openSource opens a source tunnel with grant and waits until the relay admits it. A refusal (the route's or
-// endpoint's session capacity, a revoked or stale grant) is the relay's status error.
+// openSource opens a source tunnel with grant and waits until the relay admits it, at most relaySourceOpenTimeout.
+// A refusal (the route's or endpoint's session capacity, a revoked or stale grant) is the relay's status error.
 func (r *relayTunnelRouter) openSource(grant *pb.RelaySignedGrant) (*relaySourceTunnel, error) {
-	return r.openSourceWithin(grant, 0)
+	return r.openSourceWithin(grant, relaySourceOpenTimeout)
 }
 
 // openSourceWithin is openSource giving up after timeout (0: the relay's own accept timeout).
 func (r *relayTunnelRouter) openSourceWithin(grant *pb.RelaySignedGrant, timeout time.Duration) (*relaySourceTunnel, error) {
 	tunnelCtx, cancel := context.WithCancel(r.ctx)
+	finishSetup := func() bool { return true }
 	if timeout > 0 {
-		timer := time.AfterFunc(timeout, cancel)
-		defer timer.Stop()
+		// Stopped once the relay answered: a timer that fired already cancelled the tunnel it admitted.
+		finishSetup = time.AfterFunc(timeout, cancel).Stop
 	}
 	stream, err := r.client.OpenTunnel(tunnelCtx)
 	if err == nil {
@@ -892,7 +835,11 @@ func (r *relayTunnelRouter) openSourceWithin(grant *pb.RelaySignedGrant, timeout
 			err = fmt.Errorf("relay tunnel error: %s", relayErr.GetCode())
 		}
 	}
+	if err == nil && !finishSetup() {
+		err = status.Error(codes.DeadlineExceeded, "relay tunnel setup timed out")
+	}
 	if err != nil {
+		finishSetup()
 		cancel()
 		return nil, err
 	}
