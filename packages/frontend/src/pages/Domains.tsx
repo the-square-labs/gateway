@@ -458,7 +458,8 @@ export function Domains() {
       renderCell: (d) => {
         const permissions = getDomainPermissions(hasScope, d.id);
         const canCheckDns = permissions.canEditDomain;
-        const canIssueCert = canCheckDns && canIssueDomainCertificates;
+        // Issuing changes nothing on the domain: viewing it (every listed row) is enough.
+        const canIssueCert = canIssueDomainCertificates;
         const canCreateRoute =
           hasRouteFolderCreationGrant ||
           canCreateInFolder(userScopes, "proxy:create", null, d.nginxNodeId ?? undefined);

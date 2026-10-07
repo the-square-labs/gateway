@@ -38,6 +38,8 @@ export const ALL_SCOPES = [
   'pki:cert:issue',
   'pki:cert:revoke',
   'pki:cert:export',
+  // Lets nginx serve the certificate on a Route; the private key never reaches the caller. Implied by export.
+  'pki:cert:deploy',
   'pki:cert:folders:manage',
   // ── PKI: Certificate Templates ───────────────────────────────────
   'pki:templates:view',
@@ -81,6 +83,8 @@ export const ALL_SCOPES = [
   // ── SSL Certificates ─────────────────────────────────────────────
   'ssl:cert:view',
   'ssl:cert:issue',
+  // Renews, reissues, and completes the ACME challenge of an existing certificate. Implied by issue.
+  'ssl:cert:renew',
   'ssl:cert:folders:manage',
   'ssl:cert:delete',
   // ── Access Control Lists ─────────────────────────────────────────

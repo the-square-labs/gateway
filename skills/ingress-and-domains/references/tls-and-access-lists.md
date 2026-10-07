@@ -12,7 +12,7 @@ Every source produces an **SSL certificate** entity whose ID is a Route's `sslCe
 - **Upload:** `manage_ssl_certificate({ operation: "upload", certificatePem, privateKeyPem, chainPem? })`. Uploaded certificates do not renew; they must be replaced before expiry. A private key is a secret: take it from a local file the user named, never from chat, and never print it.
 - **Internal PKI:** issue a certificate with `internal-pki`, then `link_internal_cert({ internalCertId })` creates the SSL certificate entry. Use that new SSL ID, never the PKI certificate ID.
 
-`list_ssl_certificates` lists them; `manage_ssl_certificate({ operation: "renew", ... })` reissues now (an internally linked certificate also needs `pki:cert:issue` on its CA). `ssl:cert:issue` and `ssl:cert:delete` are OAuth manual-approval scopes.
+`list_ssl_certificates` lists them; `manage_ssl_certificate({ operation: "renew", ... })` reissues now; renew, `verify_dns`, `set_auto_renew` and `cancel_acme` need `ssl:cert:renew` on the certificate, which `ssl:cert:issue` implies (an internally linked certificate also needs `pki:cert:issue` on its CA). `manage_domain` `issue_certificate` needs `domains:view` on the domain plus `ssl:cert:issue` on the destination. `ssl:cert:issue` and `ssl:cert:delete` are OAuth manual-approval scopes.
 
 ## Access Lists
 

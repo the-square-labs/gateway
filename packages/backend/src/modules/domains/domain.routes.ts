@@ -402,9 +402,9 @@ domainRoutes.openapi(
   }
 );
 
-// Issue ACME cert for domain
+// Issue ACME cert for domain. Issuing changes nothing on the domain, so viewing it is enough.
 domainRoutes.openapi(
-  { ...issueDomainCertificateRoute, middleware: requireScopeForResource('domains:edit', 'id') },
+  { ...issueDomainCertificateRoute, middleware: requireScopeForResource('domains:view', 'id') },
   async (c) => {
     const user = c.get('user')!;
     const domainsService = container.resolve(DomainsService);

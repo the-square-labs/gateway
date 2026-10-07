@@ -626,31 +626,34 @@ export function SSLCertificates() {
         const hasPendingDNSVerification =
           (cert.acmePendingOperation === "issue" || cert.acmePendingOperation === "renewal") &&
           (cert.acmePendingChallenges?.length ?? 0) > 0;
-        // Row actions use the per-certificate grant, like /ssl-certificates/:id/* on the backend.
+        // Row actions use the per-certificate grant, like /ssl-certificates/:id/* on the backend:
+        // renewal steps need ssl:cert:renew (implied by ssl:cert:issue), re-delivery needs
+        // ssl:cert:issue.
         const canIssueForCert = hasScope(`ssl:cert:issue:${cert.id}`);
-        const canContinueDNSVerification = canIssueForCert && hasPendingDNSVerification;
+        const canRenewForCert = hasScope(`ssl:cert:renew:${cert.id}`);
+        const canContinueDNSVerification = canRenewForCert && hasPendingDNSVerification;
         const canRenewCert =
-          canIssueForCert &&
+          canRenewForCert &&
           (cert.type === "acme" || (cert.type === "internal" && cert.autoRenew)) &&
           Boolean(cert.notAfter) &&
           (cert.status === "active" || cert.status === "error") &&
           !hasPendingDNSVerification;
         const canEnableCloudflareAutoRenew =
-          canIssueForCert &&
+          canRenewForCert &&
           cert.type === "acme" &&
           cert.acmeChallengeType === "dns-01" &&
           cert.status === "active" &&
           !(cert.autoRenew && cert.autoRenewProvider === "cloudflare") &&
           !hasPendingDNSVerification;
         const canDisableCloudflareAutoRenew =
-          canIssueForCert &&
+          canRenewForCert &&
           ((cert.type === "acme" &&
             cert.acmeChallengeType === "dns-01" &&
             cert.autoRenew &&
             cert.autoRenewProvider === "cloudflare") ||
             (cert.type === "internal" && cert.autoRenew));
         const canEnableInternalAutoRenew =
-          canIssueForCert && cert.type === "internal" && !cert.autoRenew;
+          canRenewForCert && cert.type === "internal" && !cert.autoRenew;
         const canDeleteCert =
           !cert.isSystem && (hasScope("ssl:cert:delete") || hasScope(`ssl:cert:delete:${cert.id}`));
         const canRetryDeployments =

@@ -32,8 +32,8 @@ function changedReference(input: ProxyReferenceInput, existing: ProxyReferenceIn
 
 /**
  * A proxy route may only attach resources its author can see. Attaching a PKI
- * certificate deploys that certificate's private key to an nginx node, so it
- * needs the same scope as exporting the key.
+ * certificate deploys its private key to an nginx node, never to the caller, so it
+ * needs pki:cert:deploy on the certificate or its issuing CA (pki:cert:export implies it).
  */
 export async function assertProxyReferenceAccess(
   db: DrizzleClient,
@@ -82,15 +82,10 @@ export async function assertProxyReferenceAccess(
 
   const internalCertificateId = changedReference(input, existing, 'internalCertificateId');
   if (internalCertificateId) {
-    if (!hasScope(scopes, `pki:cert:export:${internalCertificateId}`)) {
-      throw forbidden(
-        'Deploying a PKI certificate to a proxy route requires permission to export its private key',
-        `pki:cert:export:${internalCertificateId}`
-      );
-    }
     const [certificate] = await db
       .select({
         id: certificates.id,
+        caId: certificates.caId,
         status: certificates.status,
         type: certificates.type,
         notAfter: certificates.notAfter,
@@ -101,6 +96,16 @@ export async function assertProxyReferenceAccess(
       .innerJoin(certificateAuthorities, eq(certificateAuthorities.id, certificates.caId))
       .where(eq(certificates.id, internalCertificateId))
       .limit(1);
+    // Checked before the certificate's existence, so a caller without the scope learns nothing about it.
+    if (
+      !hasScope(scopes, `pki:cert:deploy:${internalCertificateId}`) &&
+      !(certificate && hasScope(scopes, `pki:cert:deploy:${certificate.caId}`))
+    ) {
+      throw forbidden(
+        'Deploying a PKI certificate to a proxy route requires pki:cert:deploy on the certificate or its issuing CA',
+        `pki:cert:deploy:${internalCertificateId}`
+      );
+    }
     if (!certificate) throw new AppError(400, 'INTERNAL_CERTIFICATE_NOT_FOUND', 'PKI certificate not found');
     if (certificate.caIsSystem) {
       throw new AppError(

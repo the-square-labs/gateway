@@ -12,9 +12,10 @@ import { FOLDER_CREATION_SCOPES } from './scopes-resource.js';
  * hold are listed explicitly.
  *
  * Creation scopes (`*:create*`, `docker:images:pull`, `ssl:cert:issue`, `pki:cert:issue`) name a destination, never
- * existing resources, so they imply nothing, whatever their qualifier (broad, `folder/`, `node/`,
+ * existing resources, so they imply no view, whatever their qualifier (broad, `folder/`, `node/`,
  * `account/`, or a legacy bare node ID). Folder trees and node pickers accept creation scopes on
- * their own to show the destinations a creator may use.
+ * their own to show the destinations a creator may use. A creation scope listed in an explicit rule
+ * satisfies only that rule's scope, never what that scope implies in turn.
  *
  * The frontend receives the same closure from `packages/frontend/src/types/scope-implications.ts`,
  * which a backend test regenerates and keeps in sync with this module.
@@ -80,6 +81,10 @@ const EXPLICIT_IMPLICATIONS: Readonly<Record<string, readonly string[]>> = {
   'docker:containers:view': ['docker:availability:manage'],
   // Snapshot mutations act on one existing VM and keep implying that VM's snapshot view.
   'hosting:snapshots:view': ['hosting:snapshots:create'],
+  // Renewal was part of issue before it had its own scope; issue still renews, but never reveals certificates.
+  'ssl:cert:renew': ['ssl:cert:issue'],
+  // Exporting the private key covers letting nginx use it.
+  'pki:cert:deploy': ['pki:cert:export'],
 };
 
 const CATALOG = new Set<string>(ALL_SCOPES);
@@ -140,11 +145,13 @@ function buildTransitiveImplications(): Record<string, readonly string[]> {
   const direct = buildDirectImplications();
   const closure: Record<string, readonly string[]> = {};
   for (const required of [...direct.keys()].sort()) {
+    const directlyImplying = direct.get(required)!;
     const result = new Set<string>();
-    const queue = [...direct.get(required)!];
+    const queue = [...directlyImplying];
     for (let index = 0; index < queue.length; index += 1) {
       const scope = queue[index];
       if (scope === required || result.has(scope)) continue;
+      if (isCreationScope(scope) && !directlyImplying.has(scope)) continue;
       result.add(scope);
       queue.push(...(direct.get(scope) ?? []));
     }

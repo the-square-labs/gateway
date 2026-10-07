@@ -286,22 +286,22 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           return cert;
         }
         if (a.operation === 'renew') {
-          this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
+          this.ensureToolScopeForResource(user, 'ssl:cert:renew', String(a.sslCertificateId));
           return this.sslService.renewCert(a.sslCertificateId, user.id, user.email, { actorScopes: user.scopes });
         }
         if (a.operation === 'cancel_acme') {
-          this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
+          this.ensureToolScopeForResource(user, 'ssl:cert:renew', String(a.sslCertificateId));
           await this.sslService.cancelPendingAcmeIssue(a.sslCertificateId, user.id);
           return { success: true };
         }
         if (a.operation === 'verify_dns') {
-          this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
+          this.ensureToolScopeForResource(user, 'ssl:cert:renew', String(a.sslCertificateId));
           return this.sslService.completeDNS01Verification(a.sslCertificateId, user.id, {
             contactEmail: user.email,
           });
         }
         if (a.operation === 'set_auto_renew') {
-          this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
+          this.ensureToolScopeForResource(user, 'ssl:cert:renew', String(a.sslCertificateId));
           return this.sslService.setAutoRenew(a.sslCertificateId, SetSslAutoRenewSchema.parse(args), user.id);
         }
         if (a.operation === 'delete') {

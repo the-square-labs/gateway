@@ -47,10 +47,10 @@ Gateway evaluates scopes with exact, broad, resource-scoped, and implied-scope r
 - A resource-scoped scope grants access only to that resource. For example, `proxy:edit:<hostA>` grants read/edit access to `hostA`, but not to `hostB` and not to broad `proxy:view`.
 - List APIs and list pages are derived from view/detail permissions. Broad view lists every visible resource of that type; resource-scoped view lists only matching rows.
 - Every scope belongs to a family named by its longest prefix that has a view scope (`proxy:*` → `proxy:view`, `docker:containers:*` → `docker:containers:view`, `nodes:*` → `nodes:details`, `docker:tasks:manage` → `docker:tasks`). Any action scope in a family implies the family's view scope, including delete scopes: `proxy:edit` and `proxy:delete` both satisfy `proxy:view`. The rule is generated from the catalog (`packages/backend/src/lib/scopes-implications.ts`) and shipped unchanged to the web UI.
-- Creation scopes (every `*:create*` scope, `docker:images:pull`, `ssl:cert:issue`, and `pki:cert:issue`) name a destination and never imply any view, whatever their qualifier (broad, `folder/`, `node/`, `account/`, or a bare node ID): `proxy:create` does not satisfy `proxy:view`, and `proxy:create:folder/F` does not satisfy `proxy:view:folder/F`. Folder trees and node pickers accept creation scopes on their own to show the destinations a creator may use. The one kept rule is `hosting:snapshots:create:<vmId>` implying that VM's snapshot view.
+- Creation scopes (every `*:create*` scope, `docker:images:pull`, `ssl:cert:issue`, and `pki:cert:issue`) name a destination and never imply any view, whatever their qualifier (broad, `folder/`, `node/`, `account/`, or a bare node ID): `proxy:create` does not satisfy `proxy:view`, and `proxy:create:folder/F` does not satisfy `proxy:view:folder/F`. Folder trees and node pickers accept creation scopes on their own to show the destinations a creator may use. The one kept rule is `hosting:snapshots:create:<vmId>` implying that VM's snapshot view. `ssl:cert:issue` also implies `ssl:cert:renew` with the same qualifier, but never what renewal implies.
 - `proxy:maintenance:bypass` (a browser maintenance code) and `docker:registries:internal:pull` / `:push` (registry credentials) imply nothing.
 - API tokens and OAuth/MCP grants expand their own folder and node targets before they are bounded by the owner's current (expanded) permissions, and are never expanded afterwards, so a token can never reach a resource its owner cannot.
-- A few explicit rules complete it: access tiers (`storage:objects:admin` ⊇ `write` ⊇ `read`, `databases:query:admin` ⊇ `write` ⊇ `read`, `storage:credentials:reveal` ⊇ `storage:credentials:use`), `logs:read` and `logs:tokens:*` imply `logs:environments:view`, `nodes:manage` implies `nodes:config:view`, which implies `nodes:details`, `inference:models:manage` implies `inference:providers:view`, and `docker:availability:manage` implies `docker:containers:view`. View scopes never imply another family's view otherwise; for example `proxy:templates:view` does not grant `proxy:view`.
+- A few explicit rules complete it: access tiers (`storage:objects:admin` ⊇ `write` ⊇ `read`, `databases:query:admin` ⊇ `write` ⊇ `read`, `storage:credentials:reveal` ⊇ `storage:credentials:use`), `logs:read` and `logs:tokens:*` imply `logs:environments:view`, `nodes:manage` implies `nodes:config:view`, which implies `nodes:details`, `inference:models:manage` implies `inference:providers:view`, `docker:availability:manage` implies `docker:containers:view`, and `pki:cert:export` implies `pki:cert:deploy`. View scopes never imply another family's view otherwise; for example `proxy:templates:view` does not grant `proxy:view`.
 - Implied scopes keep the same resource boundary. For example, `databases:query:read:<databaseId>` makes that database visible in a filtered database list, but does not grant global `databases:view`; `docker:containers:manage:<nodeId>` satisfies `docker:containers:view:<nodeId>/<resourceId>`.
 - `logs:schemas:view:<schemaId>` does not imply global `logs:schemas:view`. Resource-scoped schema view/edit access can list only the matching schema rows.
 - Folder-tree scopes (`proxy:folders:manage`, `docker:folders:manage`, and the other `*:folders:manage` scopes except hosting snapshot folders) grant full folder-tree visibility and folder mutation rights, but not item visibility. Moving or reordering items still requires the matching item edit or manage scope.
@@ -145,13 +145,14 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `pki:cert:issue` | Yes |
 | `pki:cert:revoke` | Yes |
 | `pki:cert:export` | Yes |
+| `pki:cert:deploy` | Yes. Attach a TLS server certificate to a Route: nginx receives the private key, the caller never does. Restrictable to the certificate or its issuing CA. Implied by `pki:cert:export`. |
 | `pki:cert:folders:manage` | Manage PKI certificate folders. Moving a certificate also needs `pki:cert:issue` on its issuing CA. |
 | `pki:templates:view` |  |
 | `pki:templates:create` |  |
 | `pki:templates:edit` |  |
 | `pki:templates:delete` |  |
 | `pki:templates:folders:manage` | Manage certificate template folders. Moving a custom template also needs `pki:templates:edit`; built-in templates never move. |
-| `domains:view` |  |
+| `domains:view` | Yes. With `ssl:cert:issue` on the destination, also issues an ACME certificate for that domain. |
 | `domains:create` |  |
 | `domains:edit` |  |
 | `domains:delete` |  |
@@ -181,7 +182,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `proxy:templates:manage` | Yes. Create, edit, and delete nginx templates, including template content. Replaces `proxy:templates:create`, `:edit`, and `:delete`. |
 | `proxy:templates:folders:manage` | Manage nginx template folders. Moving a custom template also needs `proxy:templates:manage` on it and on the destination; built-in templates never move. `proxy:templates:manage:folder/<id>` also creates templates in that folder. |
 | `ssl:cert:view` | Yes |
-| `ssl:cert:issue` |  |
+| `ssl:cert:issue` | Create certificates (ACME, upload, PKI link) in permitted folders. Also renews existing certificates (implies `ssl:cert:renew`, never `ssl:cert:view`). |
+| `ssl:cert:renew` | Yes. Renew or reissue an existing certificate, complete its DNS-01 verification, cancel a pending ACME order, and set automatic renewal. |
 | `ssl:cert:folders:manage` | Yes |
 | `ssl:cert:delete` | Yes |
 | `acl:view` | Yes |

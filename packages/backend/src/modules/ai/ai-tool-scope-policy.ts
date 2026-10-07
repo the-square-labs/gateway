@@ -126,7 +126,7 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
   manage_certificate: ['pki:cert:view', 'pki:cert:issue', 'pki:cert:export'],
   manage_template: ['pki:templates:view', 'pki:templates:edit'],
   manage_proxy_template: ['proxy:templates:view', 'proxy:templates:manage'],
-  manage_ssl_certificate: ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:delete'],
+  manage_ssl_certificate: ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:renew', 'ssl:cert:delete'],
   manage_domain: ['domains:view', 'domains:edit', 'domains:create'],
   manage_ingress_group: ['ingress:groups:view', 'ingress:groups:manage', 'proxy:edit', 'domains:edit'],
   manage_access_list: ['acl:view', 'acl:edit'],

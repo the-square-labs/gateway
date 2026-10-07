@@ -130,7 +130,8 @@ export const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Readonly<Record<string, readonly 
     "pki:ca:revoke:intermediate",
     "pki:ca:revoke:root",
   ],
-  "pki:cert:view": ["pki:cert:export", "pki:cert:revoke"],
+  "pki:cert:deploy": ["pki:cert:export"],
+  "pki:cert:view": ["pki:cert:deploy", "pki:cert:export", "pki:cert:revoke"],
   "pki:templates:view": ["pki:templates:delete", "pki:templates:edit"],
   "proxy:templates:view": ["proxy:templates:manage"],
   "proxy:view": [
@@ -142,7 +143,8 @@ export const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Readonly<Record<string, readonly 
     "proxy:unrestricted",
   ],
   "settings:gateway:view": ["settings:gateway:edit"],
-  "ssl:cert:view": ["ssl:cert:delete"],
+  "ssl:cert:renew": ["ssl:cert:issue"],
+  "ssl:cert:view": ["ssl:cert:delete", "ssl:cert:renew"],
   "status-page:view": [
     "status-page:incidents:delete",
     "status-page:incidents:resolve",

@@ -35,6 +35,8 @@ PKI certificates and SSL certificates live in separate stores; a Route needs an 
 2. `link_internal_cert({ internalCertId: certificate.id })` creates a separate SSL certificate entry with its own ID.
 3. Use that SSL certificate ID as the Route's `sslCertificateId` (`ingress-and-domains`).
 
+Linking copies the private key into the SSL store, so it needs `pki:cert:export`. Without it, set the PKI certificate directly as the Route's `internalCertificateId`: that needs only `pki:cert:deploy` on the certificate or its issuing CA, and the key goes to nginx, never to the caller.
+
 When Gateway holds the private key, a linked certificate reissues automatically from the same CA and template once two thirds of its lifetime has passed (shown as "Reissue" under auto-renew). A certificate signed from an external CSR only alerts: issue a new one and re-link it.
 
 ## Expiry alerts

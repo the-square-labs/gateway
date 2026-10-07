@@ -223,7 +223,7 @@ export const issueDomainCertificateRoute = appRoute({
   summary: 'Issue an ACME certificate for a domain',
   // The optional body is parsed by the handler so body-less calls keep working.
   description:
-    'Optional JSON body `{ "folderId": "<ssl certificate folder id>" }` creates the certificate in that SSL certificate folder; requires ssl:cert:issue on the destination.',
+    'Requires domains:view on the domain and ssl:cert:issue on the destination. Optional JSON body `{ "folderId": "<ssl certificate folder id>" }` creates the certificate in that SSL certificate folder.',
   request: { params: IdParamSchema },
   responses: createdJson(UnknownDataResponseSchema),
 });

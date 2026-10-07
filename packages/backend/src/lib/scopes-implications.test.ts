@@ -169,8 +169,13 @@ describe('generated scope implications', () => {
       ])
     );
     const implying = new Set(Object.values(IMPLIED_SCOPES_BY_REQUIRED_SCOPE).flat());
-    // Only the per-VM snapshot creation keeps implying that VM's snapshot view (as before rc.9).
-    expect(creationScopes.filter((scope) => implying.has(scope))).toEqual(['hosting:snapshots:create']);
+    // Only the per-VM snapshot creation keeps implying that VM's snapshot view (as before rc.9), and issue keeps
+    // renewing certificates without revealing them.
+    expect(creationScopes.filter((scope) => implying.has(scope))).toEqual([
+      'ssl:cert:issue',
+      'hosting:snapshots:create',
+    ]);
+    expect(IMPLIED_SCOPES_BY_REQUIRED_SCOPE['ssl:cert:view']).not.toContain('ssl:cert:issue');
     expect(hasScope(['proxy:create'], 'proxy:view')).toBe(false);
     expect(hasScope(['docker:containers:create'], 'docker:containers:view:node-1/c1')).toBe(false);
     expect(hasScope([`databases:create:${folder}`], `databases:view:${folder}`)).toBe(false);
@@ -182,6 +187,21 @@ describe('generated scope implications', () => {
     expect(hasScope(['logs:tokens:create:env-1'], 'logs:environments:view:env-1')).toBe(false);
     expect(hasScope(['pki:cert:issue:ca-1'], 'pki:cert:view:ca-1')).toBe(false);
     expect(hasScope(['hosting:snapshots:create:vm-1'], 'hosting:snapshots:view:vm-1')).toBe(true);
+    expect(hasScope(['ssl:cert:issue'], 'ssl:cert:view')).toBe(false);
+    expect(hasScope([`ssl:cert:issue:${folder}`], `ssl:cert:view:${folder}`)).toBe(false);
+  });
+
+  it('keeps certificate renewal and PKI deployment compatible with the older scopes', () => {
+    const folder = 'folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e';
+    expect(hasScope(['ssl:cert:issue'], 'ssl:cert:renew:cert-1')).toBe(true);
+    expect(hasScope(['ssl:cert:issue:cert-1'], 'ssl:cert:renew:cert-1')).toBe(true);
+    expect(hasScope(['ssl:cert:issue:cert-1'], 'ssl:cert:renew:cert-2')).toBe(false);
+    expect(hasScope([`ssl:cert:issue:${folder}`], `ssl:cert:renew:${folder}`)).toBe(true);
+    expect(hasScope(['ssl:cert:renew:cert-1'], 'ssl:cert:view:cert-1')).toBe(true);
+    expect(hasScope(['ssl:cert:renew'], 'ssl:cert:issue')).toBe(false);
+    expect(hasScope(['pki:cert:export:cert-1'], 'pki:cert:deploy:cert-1')).toBe(true);
+    expect(hasScope(['pki:cert:deploy:cert-1'], 'pki:cert:view:cert-1')).toBe(true);
+    expect(hasScope(['pki:cert:deploy'], 'pki:cert:export')).toBe(false);
   });
 
   it('keeps maintenance codes and registry credentials from revealing configuration', () => {

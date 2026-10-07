@@ -23,6 +23,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | pki:cert:issue | Issue certificates from a CA (resource-scopable) |
 | pki:cert:revoke | Revoke certificates |
 | pki:cert:export | Download certificate files and private keys |
+| pki:cert:deploy | Attach a TLS server certificate to a route; nginx uses the private key, the caller never receives it. Resource-scopable by certificate or issuing CA; implied by pki:cert:export |
 | pki:cert:folders:manage | Manage internal PKI certificate folders and placement |
 
 ### PKI: Certificate Templates
@@ -72,14 +73,15 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 | Scope | Description |
 |-------|-------------|
 | ssl:cert:view | List SSL certificates and view their details (resource-scopable) |
-| ssl:cert:issue | Request ACME / upload / link internal certs |
+| ssl:cert:issue | Request ACME / upload / link internal certs in the destination folder; also renews (implies ssl:cert:renew, not ssl:cert:view) |
+| ssl:cert:renew | Renew or reissue a certificate, verify its DNS-01 challenge, cancel a pending ACME order, set auto-renew (resource-scopable) |
 | ssl:cert:folders:manage | Manage SSL certificate folders and placement |
 | ssl:cert:delete | Delete SSL certificates (resource-scopable) |
 
 ### Domains
 | Scope | Description |
 |-------|-------------|
-| domains:view | List and view managed domains |
+| domains:view | List and view managed domains; with ssl:cert:issue on the destination, issue an ACME certificate for the domain (resource-scopable) |
 | domains:create | Register domains |
 | domains:edit | Edit/check managed domains (resource-scopable) |
 | domains:delete | Delete managed domains (resource-scopable) |
@@ -394,7 +396,7 @@ Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:ce
 
 Folder grants: scopes of foldered resources accept "<scope>:folder/<folder-id>". The grant covers every resource in that folder and its subfolders, including resources created or moved there later, and stops covering a resource that leaves the folder. Creation scopes accept a destination instead: "proxy:create:folder/<folder-id>" or "proxy:create:node/<node-id>" lets the caller create in that folder or on that node only; pass the folderId (and nodeId) when creating. list_resource_folders shows a folder-scoped caller its granted folders even while they are empty, and list_nodes with a type shows creators the nodes they may create on. Route creators can also use list_route_ingress_nodes, and create_route may omit nodeId when a registered domain pins the ingress node or only one node is eligible.
 
-Implied scopes: any action scope in a family except creation scopes (\`*:create*\`, \`docker:images:pull\`, \`ssl:cert:issue\`, \`pki:cert:issue\`) implies that family's view scope with the same suffix, including delete scopes, so "proxy:edit:<route-id>" also lets the caller view that route and "databases:query:read:<database-id>" lets it view that database.
+Implied scopes: any action scope in a family except creation scopes (\`*:create*\`, \`docker:images:pull\`, \`ssl:cert:issue\`, \`pki:cert:issue\`) implies that family's view scope with the same suffix, including delete scopes, so "proxy:edit:<route-id>" also lets the caller view that route and "databases:query:read:<database-id>" lets it view that database. ssl:cert:issue implies ssl:cert:renew (not view), and pki:cert:export implies pki:cert:deploy.
 
 ## Limited Access (folders, nodes, resources)
 Access limited to folders, nodes or resources is normal. If you can't see or do something at the root, check get_my_access; folder-limited access is normal, so work inside the granted folders.

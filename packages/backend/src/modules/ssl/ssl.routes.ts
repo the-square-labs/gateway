@@ -68,7 +68,12 @@ sslRoutes.openapi(
     const canManageFolders = hasScope(scopes, 'ssl:cert:folders:manage');
     const hasGlobalView = hasScope(scopes, 'ssl:cert:view');
     const hasGlobalCreate = hasScope(scopes, 'ssl:cert:issue');
-    const allowedFolderIds = getFolderScopedIds(scopes, ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:delete']);
+    const allowedFolderIds = getFolderScopedIds(scopes, [
+      'ssl:cert:view',
+      'ssl:cert:issue',
+      'ssl:cert:renew',
+      'ssl:cert:delete',
+    ]);
     const data = await service.getFolderTree(
       canManageFolders || hasGlobalView || hasGlobalCreate
         ? { includeAllFolders: true }
@@ -236,9 +241,10 @@ sslRoutes.openapi(linkInternalSslCertificateRoute, async (c) => {
   return c.json({ data: cert }, 201);
 });
 
-// Manual renew
+// Manual renew. Renewal and the per-certificate ACME steps below need ssl:cert:renew on the certificate, which
+// ssl:cert:issue still implies.
 sslRoutes.openapi(
-  { ...renewSslCertificateRoute, middleware: requireScopeForResource('ssl:cert:issue', 'id') },
+  { ...renewSslCertificateRoute, middleware: requireScopeForResource('ssl:cert:renew', 'id') },
   async (c) => {
     const sslService = container.resolve(SSLService);
     const user = c.get('user')!;
@@ -251,7 +257,7 @@ sslRoutes.openapi(
 );
 
 sslRoutes.openapi(
-  { ...setSslCertificateAutoRenewRoute, middleware: requireScopeForResource('ssl:cert:issue', 'id') },
+  { ...setSslCertificateAutoRenewRoute, middleware: requireScopeForResource('ssl:cert:renew', 'id') },
   async (c) => {
     const sslService = container.resolve(SSLService);
     const user = c.get('user')!;
@@ -265,7 +271,7 @@ sslRoutes.openapi(
 
 // Complete DNS-01 verification
 sslRoutes.openapi(
-  { ...verifyDnsSslCertificateRoute, middleware: requireScopeForResource('ssl:cert:issue', 'id') },
+  { ...verifyDnsSslCertificateRoute, middleware: requireScopeForResource('ssl:cert:renew', 'id') },
   async (c) => {
     const sslService = container.resolve(SSLService);
     const user = c.get('user')!;
@@ -276,7 +282,7 @@ sslRoutes.openapi(
 );
 
 sslRoutes.openapi(
-  { ...cancelPendingAcmeCertificateRoute, middleware: requireScopeForResource('ssl:cert:issue', 'id') },
+  { ...cancelPendingAcmeCertificateRoute, middleware: requireScopeForResource('ssl:cert:renew', 'id') },
   async (c) => {
     const sslService = container.resolve(SSLService);
     const user = c.get('user')!;

@@ -159,9 +159,9 @@ async function manageDomain(context: DomainToolContext, user: User, a: Record<st
       : context.domainsService.migrateIngress(domainId, input, user.id, user.scopes);
   }
   if (a.operation === 'issue_certificate') {
-    // Mirrors POST /domains/{id}/issue-cert: domain edit plus ssl:cert:issue on the SSL certificate folder
+    // Mirrors POST /domains/{id}/issue-cert: domain view plus ssl:cert:issue on the SSL certificate folder
     // the new certificate lands in (broad for the root).
-    context.ensureToolScopeForResource(user, 'domains:edit', domainId);
+    context.ensureToolScopeForResource(user, 'domains:view', domainId);
     const { folderId } = IssueDomainCertificateSchema.parse({ folderId: a.certificateFolderId });
     if (!hasScopeForCreation(user.scopes, 'ssl:cert:issue', folderId)) {
       throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected certificate folder');

@@ -94,7 +94,10 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         http2Support: { type: 'boolean', description: 'Enable HTTP/2' },
         redirectUrl: { type: 'string', description: 'Redirect target URL (for redirect type)' },
         redirectStatusCode: { type: 'number', enum: [301, 302, 307, 308], description: 'Redirect status code' },
-        internalCertificateId: { type: 'string', description: 'Linked internal PKI certificate UUID' },
+        internalCertificateId: {
+          type: 'string',
+          description: 'Internal PKI TLS server certificate UUID; needs pki:cert:deploy on it or its issuing CA',
+        },
         customHeaders: {
           type: 'array',
           items: {
@@ -231,7 +234,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         sslCertificateId: { type: ['string', 'null'], description: 'SSL certificate UUID; null clears it' },
         internalCertificateId: {
           type: ['string', 'null'],
-          description: 'Internal PKI certificate UUID; null clears it',
+          description: 'Internal PKI certificate UUID (needs pki:cert:deploy on it or its issuing CA); null clears it',
         },
         redirectUrl: { type: ['string', 'null'], description: 'Redirect target URL; null clears it' },
         redirectStatusCode: { type: ['number', 'null'], enum: [301, 302, 307, 308, null] },
@@ -516,7 +519,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_ssl_certificate',
     description:
-      'Manage SSL certificates beyond listing/request/link. Operations: get, upload, renew (ACME renewal, or reissue of a linked internal certificate from its CA; the internal reissue also needs pki:cert:issue on that CA), verify_dns, set_auto_renew (ACME, or automatic reissue of a linked internal certificate), cancel_acme (abandon a pending ACME issue), delete. Operation-specific ssl:cert:* scopes are enforced.',
+      'Manage SSL certificates beyond listing/request/link. Operations: get, upload, renew (ACME renewal, or reissue of a linked internal certificate from its CA; the internal reissue also needs pki:cert:issue on that CA), verify_dns, set_auto_renew (ACME, or automatic reissue of a linked internal certificate), cancel_acme (abandon a pending ACME issue), delete. upload needs ssl:cert:issue on the destination; renew, verify_dns, set_auto_renew and cancel_acme need ssl:cert:renew on the certificate (ssl:cert:issue implies it); get needs ssl:cert:view; delete needs ssl:cert:delete.',
     parameters: {
       type: 'object',
       properties: {
@@ -621,7 +624,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_domain',
     description:
-      'Inspect and manage domains. Operations without domainId (any domains:create grant, broad, on a folder or on a node): list_nginx_nodes (ingress nodes and ingress groups the caller may create domains on), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId or ingressGroupId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying; ingressGroupId moves the domain and all its routes onto an ingress group, members first and DNS last, or null with nginxNodeId, a current member, moves them back to that node, DNS first), check_dns (re-probes DNS and repairs drift towards the approved target; repair false only reads the resolver and provider records), resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain, placed in certificateFolderId; also needs ssl:cert:issue on that SSL certificate folder, or broadly for the root), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
+      'Inspect and manage domains. Operations without domainId (any domains:create grant, broad, on a folder or on a node): list_nginx_nodes (ingress nodes and ingress groups the caller may create domains on), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId or ingressGroupId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying; ingressGroupId moves the domain and all its routes onto an ingress group, members first and DNS last, or null with nginxNodeId, a current member, moves them back to that node, DNS first), check_dns (re-probes DNS and repairs drift towards the approved target; repair false only reads the resolver and provider records), resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain, placed in certificateFolderId; needs domains:view on the domain and ssl:cert:issue on that SSL certificate folder, or broadly for the root), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
     parameters: {
       type: 'object',
       properties: {

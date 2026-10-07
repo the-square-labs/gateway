@@ -50,6 +50,7 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'pki:cert:issue',
   'pki:cert:revoke',
   'pki:cert:export',
+  'pki:cert:deploy',
   // Proxy
   'proxy:view',
   'proxy:edit',
@@ -75,6 +76,7 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'domains:delete',
   // SSL
   'ssl:cert:view',
+  'ssl:cert:renew',
   'ssl:cert:delete',
   // ACL
   'acl:view',
@@ -191,6 +193,7 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'docker:images:view',
   'docker:images:delete',
   'ssl:cert:view',
+  'ssl:cert:renew',
   'ssl:cert:delete',
   // PKI: a CA folder grant covers each root CA in the folder and its intermediates; a certificate
   // folder grant covers the certificates in the folder.
@@ -200,6 +203,7 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'pki:cert:view',
   'pki:cert:revoke',
   'pki:cert:export',
+  'pki:cert:deploy',
   // Nginx templates
   'proxy:templates:view',
   'proxy:templates:manage',

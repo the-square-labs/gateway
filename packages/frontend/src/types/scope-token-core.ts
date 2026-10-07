@@ -74,6 +74,12 @@ export const CORE_TOKEN_SCOPES = [
     group: "PKI: Certificates",
   },
   {
+    value: "pki:cert:deploy",
+    label: "Deploy Certificates to Routes",
+    desc: "Attach TLS server certificates to routes; nginx uses the key, the caller never sees it",
+    group: "PKI: Certificates",
+  },
+  {
     value: "pki:cert:folders:manage",
     label: "Manage Certificate Folders",
     desc: "Organize issued certificates into folders",
@@ -288,7 +294,13 @@ export const CORE_TOKEN_SCOPES = [
   {
     value: "ssl:cert:issue",
     label: "Issue SSL Certificates",
-    desc: "Provision ACME or upload SSL certificates",
+    desc: "Provision ACME or upload SSL certificates; also renews them",
+    group: "SSL Certificates",
+  },
+  {
+    value: "ssl:cert:renew",
+    label: "Renew SSL Certificates",
+    desc: "Renew existing certificates, complete their DNS verification, and set automatic renewal",
     group: "SSL Certificates",
   },
   {

@@ -47,4 +47,4 @@ A workload with Docker Availability is routed through its logical identity; Gate
 
 ## Scopes
 
-`domains:view|create|edit|delete|folders:manage`, `proxy:view|create|edit|delete|raw:read|raw:write|advanced|unrestricted|maintenance:bypass|folders:manage`, `proxy:templates:view|manage`, `ssl:cert:view|issue|delete|folders:manage`, `acl:view|create|edit|delete`. `ssl:cert:issue`, `ssl:cert:delete`, `proxy:raw:write`, `proxy:unrestricted`, and `proxy:templates:manage` need explicit OAuth approval. Full table: [Scopes reference](https://docs.goodgateway.dev/en/identity/scopes-reference/).
+`domains:view|create|edit|delete|folders:manage`, `proxy:view|create|edit|delete|raw:read|raw:write|advanced|unrestricted|maintenance:bypass|folders:manage`, `proxy:templates:view|manage`, `ssl:cert:view|issue|renew|delete|folders:manage`, `pki:cert:deploy`, `acl:view|create|edit|delete`. `ssl:cert:issue`, `ssl:cert:delete`, `proxy:raw:write`, `proxy:unrestricted`, and `proxy:templates:manage` need explicit OAuth approval. Full table: [Scopes reference](https://docs.goodgateway.dev/en/identity/scopes-reference/).

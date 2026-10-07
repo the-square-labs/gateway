@@ -12,8 +12,11 @@ function dbReturning(rows: unknown[]) {
 }
 
 const CERT_ID = '11111111-1111-4111-8111-111111111111';
+const CA_ID = '22222222-2222-4222-8222-222222222222';
+const OTHER_CA_ID = '33333333-3333-4333-8333-333333333333';
 const activeServerCert = {
   id: CERT_ID,
+  caId: CA_ID,
   status: 'active',
   type: 'tls-server',
   notAfter: new Date(Date.now() + 86_400_000),
@@ -58,17 +61,23 @@ describe('proxy route reference access', () => {
     expect(db.select).not.toHaveBeenCalled();
   });
 
-  it('requires the PKI export scope before deploying an internal certificate key', async () => {
-    await expect(
-      assertProxyReferenceAccess(dbReturning([activeServerCert]), ['pki:cert:view'], {
-        internalCertificateId: CERT_ID,
-      })
-    ).rejects.toMatchObject({ statusCode: 403, details: { requiredScope: `pki:cert:export:${CERT_ID}` } });
-    await expect(
-      assertProxyReferenceAccess(dbReturning([activeServerCert]), [`pki:cert:export:${CERT_ID}`], {
-        internalCertificateId: CERT_ID,
-      })
-    ).resolves.toBeUndefined();
+  it('requires pki:cert:deploy on the certificate or its issuing CA, not key export', async () => {
+    const attach = (scopes: string[], rows: unknown[] = [activeServerCert]) =>
+      assertProxyReferenceAccess(dbReturning(rows), scopes, { internalCertificateId: CERT_ID });
+    const denied = { statusCode: 403, details: { requiredScope: `pki:cert:deploy:${CERT_ID}` } };
+    await expect(attach(['pki:cert:view'])).rejects.toMatchObject(denied);
+    await expect(attach([`pki:cert:deploy:${OTHER_CA_ID}`])).rejects.toMatchObject(denied);
+    await expect(attach([`pki:cert:deploy:${CERT_ID}`])).resolves.toBeUndefined();
+    await expect(attach([`pki:cert:deploy:${CA_ID}`])).resolves.toBeUndefined();
+    await expect(attach(['pki:cert:deploy'])).resolves.toBeUndefined();
+    // Export covers deployment, so existing grants keep working.
+    await expect(attach([`pki:cert:export:${CERT_ID}`])).resolves.toBeUndefined();
+    // A caller without the scope cannot tell a missing certificate from a forbidden one.
+    await expect(attach(['pki:cert:view'], [])).rejects.toMatchObject(denied);
+    await expect(attach(['pki:cert:deploy'], [])).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INTERNAL_CERTIFICATE_NOT_FOUND',
+    });
   });
 
   it.each([
