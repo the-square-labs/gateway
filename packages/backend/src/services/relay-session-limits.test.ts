@@ -7,7 +7,9 @@ import {
   effectiveRelayMaxConcurrentSessions,
   MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS,
   managedDatabaseConnectionLimit,
+  RELAY_REGISTRY_FAIR_SHARE_CAPABILITY,
   RELAY_UNCAPPED_SESSIONS,
+  relaySessionLimitTarget,
 } from './relay-session-limits.js';
 
 const listener = {
@@ -230,5 +232,119 @@ describe('relay session limits', () => {
     expect(
       links.find(({ routeId }: { routeId: string }) => routeId === databaseLinkRoute.id).managedDatabaseListener
     ).toEqual({ ...listener, routeGeneration: 4 });
+  });
+
+  it('uncaps container links only for relays with registry fair share, in the snapshot and in their grants', async () => {
+    const containerEndpoint = {
+      ...databaseEndpoint,
+      id: 'endpoint-container',
+      ownerKind: 'container_link',
+      ownerId: 'link-1',
+      maxConcurrentSessions: 16,
+    };
+    const containerLinkRoute = {
+      ...storageLinkRoute,
+      id: 'route-container-link',
+      ownerKind: 'container_link',
+      ownerId: 'link-1',
+      targetEndpointId: 'endpoint-container',
+      maxConcurrentSessions: 16,
+    };
+    const fairShare = relaySessionLimitTarget(['relay_pool_v1', RELAY_REGISTRY_FAIR_SHARE_CAPABILITY]);
+    expect(relaySessionLimitTarget(['relay_pool_v1'])).toEqual({ registryFairShare: false });
+    expect(relaySessionLimitTarget(undefined)).toEqual({ registryFairShare: false });
+    expect(effectiveRelayMaxConcurrentSessions(containerLinkRoute, undefined, fairShare)).toBe(RELAY_UNCAPPED_SESSIONS);
+    expect(effectiveRelayMaxConcurrentSessions(storageLinkRoute, undefined, fairShare)).toBe(RELAY_UNCAPPED_SESSIONS);
+    expect(effectiveRelayMaxConcurrentSessions(databaseLinkRoute, sessionLimits, fairShare)).toBe(500);
+
+    const snapshot = (limitTarget?: { registryFairShare: boolean }) => {
+      const routePolicy = vi.fn((ownerKind: string, target?: { registryFairShare: boolean }) => ({
+        trafficClass: ownerKind === 'container_link' && target?.registryFairShare ? 'registry' : 'database',
+      }));
+      const content = relayPolicySnapshotContent({
+        gatewayInstanceId: 'gateway-1',
+        poolId: 'system',
+        relayInstanceId: 'relay-1',
+        grantKeys: [],
+        assignments: [{ endpointId: 'endpoint-container', assignmentGeneration: 1 }],
+        endpoints: [containerEndpoint] as never,
+        routes: [containerLinkRoute] as never,
+        admission: {
+          adaptiveAdmissionEnabled: true,
+          proxyTargetPressurePercent: 70,
+          databaseReservePercent: 20,
+          hardPressurePercent: 95,
+        },
+        policyKeys: [],
+        routePolicy,
+        leaseGate: null,
+        lease: null,
+        ...(limitTarget ? { limitTarget } : {}),
+      });
+      return content;
+    };
+    const capable = snapshot(fairShare);
+    expect(capable.routes[0]).toMatchObject({
+      generation: '7',
+      trafficClass: 'registry',
+      maxConcurrentSessions: RELAY_UNCAPPED_SESSIONS,
+    });
+    expect(capable.endpoints[0].maxConcurrentSessions).toBe(RELAY_UNCAPPED_SESSIONS);
+    const older = snapshot();
+    expect(older.routes[0]).toMatchObject({
+      generation: '7',
+      trafficClass: 'database',
+      maxConcurrentSessions: CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS,
+    });
+    expect(older.endpoints[0].maxConcurrentSessions).toBe(CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS);
+
+    const service = new RelayGrantIssuerService(
+      database([
+        { table: relayRoutes, filtered: true, rows: [containerLinkRoute] },
+        { table: relayEndpoints, filtered: false, rows: [containerEndpoint] },
+        { table: relayEndpoints, filtered: true, rows: [] },
+      ]) as never,
+      {} as never,
+      {} as never
+    ) as any;
+    service.requireNodeIdentity = vi.fn().mockResolvedValue({ certificateFingerprint: 'sha256:workload' });
+    service.requireState = vi.fn().mockResolvedValue({ revision: 30, gatewayInstanceId: 'gateway-1' });
+    service.getPoolProjection = vi.fn().mockResolvedValue(
+      new Map([
+        [
+          'endpoint-container',
+          [
+            poolRelay('endpoint-container'),
+            {
+              ...poolRelay('endpoint-container'),
+              instanceId: 'relay-2',
+              capabilities: { features: ['relay_pool_v1', RELAY_REGISTRY_FAIR_SHARE_CAPABILITY] },
+            },
+          ],
+        ],
+      ])
+    );
+    service.nodeSupportsPool = vi.fn().mockResolvedValue(true);
+    service.endpointPathSupportsPool = vi.fn().mockResolvedValue(true);
+    service.signGrant = vi.fn(async (claims: unknown) => ({
+      keyId: 'grant',
+      payload: claims,
+      signature: Buffer.alloc(0),
+    }));
+
+    const bundle = await service.getNodeGrantBundle('node-workload');
+    const [link] = bundle.grants.filter(({ role }: { role: string }) => role === 'connect');
+    // The legacy grant is not scoped to one relay: it keeps the cap every relay enforces alike.
+    expect(link.grant.payload).toMatchObject({ maxConcurrentSessions: CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS });
+    expect(
+      link.candidates.map(({ relayInstanceId, grant }: { relayInstanceId: string; grant: { payload: any } }) => [
+        relayInstanceId,
+        grant.payload.maxConcurrentSessions,
+        grant.payload.routeGeneration,
+      ])
+    ).toEqual([
+      ['relay-1', CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS, 7],
+      ['relay-2', RELAY_UNCAPPED_SESSIONS, 7],
+    ]);
   });
 });

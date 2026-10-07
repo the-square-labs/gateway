@@ -72,7 +72,12 @@ import {
   RELAY_POLICY_REVISION_LOCK,
   recordBuiltSnapshot,
 } from './relay-revocation-fence.service.js';
-import { effectiveRelayMaxConcurrentSessions, loadRelaySessionLimits } from './relay-session-limits.js';
+import {
+  effectiveRelayMaxConcurrentSessions,
+  loadRelaySessionLimits,
+  type RelaySessionLimitTarget,
+  relaySessionLimitTarget,
+} from './relay-session-limits.js';
 import {
   candidateDrainDeadline,
   GATEWAY_STREAM_REPORT_SOURCE,
@@ -196,9 +201,14 @@ export function managedDatabaseListenerConfigsEqual(
  * How a relay treats a route's tunnels. HTTP traffic (proxy Secure Links, storage links) shares the proxy class: no
  * fixed cap, fair share between routes under pressure, and it yields to database traffic first. Workload links keep
  * their pooled connections open however long they idle; Gateway's own short-lived routes keep the idle timeout that
- * reaps leaked sessions.
+ * reaps leaked sessions. Container links (any protocol, pooled connections) join the registry class, fair-shared
+ * without a fixed cap, on relays that report RELAY_REGISTRY_FAIR_SHARE_CAPABILITY; elsewhere they stay in the
+ * database class with their cap. Only the class and caps change, never a generation, so open tunnels stay.
  */
-function relayRoutePolicy(ownerKind: string): {
+function relayRoutePolicy(
+  ownerKind: string,
+  target?: RelaySessionLimitTarget
+): {
   disableIdleTimeout: boolean;
   trafficClass: 'proxy' | 'database' | 'registry';
 } {
@@ -207,6 +217,9 @@ function relayRoutePolicy(ownerKind: string): {
   }
   if (ownerKind === 'proxy_host_secure_link' || ownerKind === 'managed_storage_binding') {
     return { disableIdleTimeout: true, trafficClass: 'proxy' };
+  }
+  if (ownerKind === 'container_link' && target?.registryFairShare) {
+    return { disableIdleTimeout: true, trafficClass: 'registry' };
   }
   if (ownerKind === 'managed_database_binding' || ownerKind === 'container_link') {
     return { disableIdleTimeout: true, trafficClass: 'database' };
@@ -3173,6 +3186,8 @@ export class RelayPolicyService {
         policyKeys: policyKeys.keys,
         routePolicy: relayRoutePolicy,
         sessionLimits,
+        // The same rule as the candidate grants for this instance (RelayGrantIssuerService.issueCandidates).
+        limitTarget: relaySessionLimitTarget(instanceFeatures),
         leaseGate,
         lease,
       });

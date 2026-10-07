@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 import type { relayEndpoints, relayGrantSigningKeys, relayRoutes } from '@/db/schema/index.js';
 import type { RelayPublishedPolicyKey } from './relay-policy-signing-key.service.js';
 import { RELAY_POLICY_KEY_VALID_FROM_SKEW_MS } from './relay-policy-signing-key.service.js';
-import { effectiveRelayMaxConcurrentSessions, type RelaySessionLimits } from './relay-session-limits.js';
+import {
+  effectiveRelayMaxConcurrentSessions,
+  type RelaySessionLimits,
+  type RelaySessionLimitTarget,
+} from './relay-session-limits.js';
 
 export interface RelayPolicySnapshotInput {
   gatewayInstanceId: string;
@@ -19,9 +23,11 @@ export interface RelayPolicySnapshotInput {
     hardPressurePercent: number;
   };
   policyKeys: RelayPublishedPolicyKey[];
-  routePolicy: (ownerKind: string) => Record<string, unknown>;
+  routePolicy: (ownerKind: string, target?: RelaySessionLimitTarget) => Record<string, unknown>;
   /** Connection limits of the managed databases behind endpoints; their links take the database's limit. */
   sessionLimits?: RelaySessionLimits;
+  /** What the relay instance supports that changes classes and caps (its reported features). */
+  limitTarget?: RelaySessionLimitTarget;
   /** Availability lease gate ids of lease-mode endpoints and routes. */
   leaseGate: { endpoints: Map<string, string>; routes: Map<string, string> } | null;
   /** Availability lease blocks and key rotations carried by every relay envelope. */
@@ -65,7 +71,7 @@ export function relayPolicySnapshotContent(input: RelayPolicySnapshotInput) {
           subjectKind: endpoint.subjectKind,
           subjectId: endpoint.subjectId,
           certificateSha256: endpoint.certificateSha256,
-          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, input.sessionLimits),
+          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, input.sessionLimits, input.limitTarget),
           poolId: input.poolId,
           relayInstanceId: input.relayInstanceId,
           assignmentGeneration: String(assignment.assignmentGeneration),
@@ -83,9 +89,9 @@ export function relayPolicySnapshotContent(input: RelayPolicySnapshotInput) {
         sourceId: route.sourceId,
         sourceCertificateSha256: route.sourceCertificateSha256,
         targetEndpointId: route.targetEndpointId,
-        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, input.sessionLimits),
+        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, input.sessionLimits, input.limitTarget),
         maxFrameBytes: route.maxFrameBytes,
-        ...input.routePolicy(route.ownerKind),
+        ...input.routePolicy(route.ownerKind, input.limitTarget),
         assignmentGeneration: String(assignment.assignmentGeneration),
         ...(input.leaseGate?.routes.get(route.id) ? { leasePolicyId: input.leaseGate.routes.get(route.id) } : {}),
       }))

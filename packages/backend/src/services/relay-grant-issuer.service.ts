@@ -28,6 +28,7 @@ import {
   effectiveRelayMaxConcurrentSessions,
   loadRelaySessionLimits,
   type RelaySessionLimits,
+  relaySessionLimitTarget,
 } from './relay-session-limits.js';
 import {
   candidateDrainDeadline,
@@ -463,6 +464,8 @@ export class RelayGrantIssuerService {
     if (!selected.length || selected.some((assignment) => !this.instanceSupportsPool(assignment))) return [];
     const result: RelayDataCandidate[] = [];
     for (const assignment of selected) {
+      // The rule this relay instance's policy snapshot uses (RelayPolicyService.buildInstanceSnapshot).
+      const limitTarget = relaySessionLimitTarget(this.instanceCapabilities(assignment));
       const grant = await this.signGrant(
         {
           schemaVersion: 2,
@@ -480,12 +483,12 @@ export class RelayGrantIssuerService {
             ? {
                 endpointId: endpoint.id,
                 endpointGeneration: endpoint.generation,
-                maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits),
+                maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits, limitTarget),
               }
             : {
                 routeId: route!.id,
                 routeGeneration: route!.generation,
-                maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route!, sessionLimits),
+                maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route!, sessionLimits, limitTarget),
                 maxFrameBytes: route!.maxFrameBytes,
               }),
         },

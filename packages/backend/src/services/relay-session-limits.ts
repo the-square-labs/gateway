@@ -24,8 +24,28 @@ export interface RelaySessionLimits {
 export const RELAY_UNCAPPED_SESSIONS = 1_000_000;
 
 // A container link carries every connection of its consumer to one port of its target, whatever the protocol
-// (HTTP clients, connection pools, queues). It keeps a cap because it is not in the proxy admission class.
+// (HTTP clients, connection pools, queues). On a relay without registry fair share it keeps this cap, because it
+// is in the database admission class there.
 export const CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS = 1024;
+
+/**
+ * A relay that reports this shares the registry traffic class fairly between routes under pressure. Container links
+ * move into that class without a fixed cap, in the snapshot of such a relay and in the grants for it only; every other
+ * relay keeps them in the database class with CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS.
+ */
+export const RELAY_REGISTRY_FAIR_SHARE_CAPABILITY = 'relay_registry_fair_share_v1';
+
+/** What a relay instance supports that changes the limits Gateway gives it. */
+export interface RelaySessionLimitTarget {
+  registryFairShare: boolean;
+}
+
+/** The limit target of a relay instance from its reported features (a missing or malformed list supports nothing). */
+export function relaySessionLimitTarget(features: unknown): RelaySessionLimitTarget {
+  return {
+    registryFairShare: Array.isArray(features) && features.includes(RELAY_REGISTRY_FAIR_SHARE_CAPABILITY),
+  };
+}
 
 // A managed database link carries every connection of its workload (both slots of a deployment during a rollout,
 // every container of a Compose service or Availability placement). It may use as many connections as the database
@@ -91,14 +111,18 @@ export async function loadRelaySessionLimits(
 
 /**
  * The session limit Gateway puts into the relay policy and into every grant of a route or endpoint. The relay
- * enforces the lower of the two, and daemons hold a link's whole node-side traffic at the grant's value.
+ * enforces the lower of the two, and daemons hold a link's whole node-side traffic at the grant's value. A policy and
+ * the grants scoped to the same relay instance must use the same `target`; grants not scoped to one relay (legacy
+ * grants) omit it.
  */
 export function effectiveRelayMaxConcurrentSessions(
   owner: RelaySessionLimitOwner,
-  limits?: RelaySessionLimits
+  limits?: RelaySessionLimits,
+  target?: RelaySessionLimitTarget
 ): number {
   if (UNCAPPED_OWNER_KINDS.has(owner.ownerKind)) return RELAY_UNCAPPED_SESSIONS;
   if (owner.ownerKind === 'container_link') {
+    if (target?.registryFairShare) return RELAY_UNCAPPED_SESSIONS;
     return Math.max(owner.maxConcurrentSessions, CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS);
   }
   if (owner.ownerKind === 'managed_database_binding') {
