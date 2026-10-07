@@ -183,9 +183,7 @@ func runRelayPoolTarget(
 				if err != nil {
 					return err
 				}
-				if len(connections) == 0 {
-					liveRelayTransports.set(target.ID, conn)
-				}
+				liveRelayTransports.add(target.ID, conn)
 				connections = append(connections, conn)
 				go keepRelayLaneConnected(targetCtx, conn, laneDropped, laneLeftReady(plugin, target.ID, conn))
 				go func() {
@@ -262,7 +260,7 @@ func runRelayPoolTarget(
 			missingLanes.Stop()
 		}
 		cancelTarget()
-		liveRelayTransports.clear(target.ID, connections[0])
+		liveRelayTransports.remove(target.ID, connections)
 		for _, conn := range connections {
 			_ = conn.Close()
 		}
