@@ -43,18 +43,25 @@ func BridgeWithChunk(ctx context.Context, connection net.Conn, stream FrameStrea
 	if maxFrame <= 0 || maxFrame > MaxChunkBytes {
 		maxFrame = MaxChunkBytes
 	}
-	if readChunk <= 0 || readChunk > maxFrame {
+	if readChunk <= 0 {
 		readChunk = DefaultChunkBytes
 	}
+	// A frame never exceeds the relay's limit, also when the default chunk is
+	// above a route's smaller one: the peer ends the tunnel on a bigger frame.
+	readChunk = min(readChunk, maxFrame)
 	completed := make(chan result, 2)
 	go sendLocal(connection, stream, readChunk, completed)
 	go receiveRemote(connection, stream, maxFrame, completed)
 
 	var localDone, remoteDone, terminated bool
 	var bridgeErr error
+	// done is cleared once it fired: a closed channel stays ready, and the loop
+	// would spin until both copies returned.
+	done := ctx.Done()
 	for !localDone || !remoteDone {
 		select {
-		case <-ctx.Done():
+		case <-done:
+			done = nil
 			if !terminated {
 				terminated = true
 				cancel()
