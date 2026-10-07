@@ -124,11 +124,11 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `storage:credentials:reveal` | Resource-scopable storage or backup permission. |
 | `storage:credentials:use` | Resource-scopable storage or backup permission. Lets backups use the saved credentials without revealing them; implied by `storage:credentials:reveal`. |
 | `storage:iam` | Resource-scopable storage or backup permission. Creates and removes scoped IAM keys and moves workload links between clusters; implies `storage:bind`. |
-| `storage:bind` | Resource-scopable storage permission. Creates and deletes managed-storage workload links without issuing access keys; the target workload also needs its environment and secrets scopes. |
 | `storage:objects:read` | Resource-scopable storage or backup permission. |
 | `storage:objects:write` | Resource-scopable storage or backup permission. |
 | `storage:objects:admin` | Resource-scopable storage or backup permission. |
 | `storage:folders:manage` | Manage storage resource folders. |
+| `storage:bind` | Resource-scopable storage permission. Creates and deletes managed-storage workload links without issuing access keys; the target workload also needs its environment and secrets scopes. |
 | `databases:backups:view` | Resource-scopable storage or backup permission. |
 | `databases:backups:manage` | Resource-scopable storage or backup permission. |
 | `databases:backups:run` | Resource-scopable storage or backup permission. |
@@ -322,13 +322,13 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `databases:view` | Yes |
 | `databases:create` |  |
 | `databases:edit` | Yes |
-| `databases:bind` | Yes. Links and unlinks workloads to a managed database without changing the database; implied by `databases:edit`. The target workload also needs its environment and secrets scopes (`docker:compose:manage` for a Compose service). |
 | `databases:delete` | Yes |
 | `databases:query:read` | Yes |
 | `databases:query:write` | Yes |
 | `databases:query:admin` | Yes |
 | `databases:credentials:reveal` | Yes |
 | `databases:folders:manage` |  |
+| `databases:bind` | Yes. Links and unlinks workloads to a managed database without changing the database; implied by `databases:edit`. The target workload also needs its environment and secrets scopes (`docker:compose:manage` for a Compose service). |
 | `notifications:alerts:view` | View alert rules. |
 | `notifications:alerts:manage` | Create, edit, and delete alert rules. |
 | `notifications:webhooks:view` | View notification webhooks and their delivery history. |
