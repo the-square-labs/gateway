@@ -1,5 +1,5 @@
 import { createHash, X509Certificate } from 'node:crypto';
-import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   backupRuns,
@@ -307,7 +307,8 @@ export async function reconcileManagedStorageRelayPolicy(db: DrizzleClient): Pro
   });
 }
 
-type OwnerTable = { table: any; id: any };
+/** `live`: the condition an owner row must meet to keep its relay state; absent, existing is enough. */
+type OwnerTable = { table: any; id: any; live?: SQL };
 
 const PROXY_SECURE_LINK_OWNERS: OwnerTable[] = [
   { table: proxyHosts, id: proxyHosts.id },
@@ -338,13 +339,21 @@ const ROUTE_OWNERS: Record<string, OwnerTable[]> = {
   database_backup_restore: BACKUP_RUN_OWNERS,
   storage_backup_target: STORAGE_RUN_OWNERS,
   storage_backup_staging: STORAGE_RUN_OWNERS,
-  registry_secure_link: [{ table: dockerRegistryNodeBindings, id: dockerRegistryNodeBindings.id }],
+  // Revoked bindings are kept as history; their routes go with the revocation, or here if that failed.
+  registry_secure_link: [
+    {
+      table: dockerRegistryNodeBindings,
+      id: dockerRegistryNodeBindings.id,
+      live: eq(dockerRegistryNodeBindings.status, 'active'),
+    },
+  ],
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Removes relay endpoints and routes whose owner no longer exists. Every owner revokes its relay state when it is
+ * Removes relay endpoints and routes whose owner no longer exists (or, for a registry binding, is no longer active).
+ * Every owner revokes its relay state when it is
  * deleted, but a revocation that failed, raced the owner's last provisioning step or was skipped by an earlier
  * release left state behind: the daemons it names kept their grants and retried its tunnels forever. Returns the
  * daemons whose grants lost something.
@@ -392,7 +401,7 @@ export async function removeOrphanedRelayState(db: DrizzleClient): Promise<strin
       const rows: Array<{ id: string }> = await tx
         .select({ id: owner.id })
         .from(owner.table)
-        .where(inArray(owner.id, [...ids]));
+        .where(owner.live ? and(inArray(owner.id, [...ids]), owner.live) : inArray(owner.id, [...ids]));
       for (const { id } of rows) existing.add(id);
     }
 
