@@ -131,6 +131,29 @@ const INTERNAL_REGISTRY_ID = 'gateway-internal-registry';
 const INTERNAL_REGISTRY_CERTIFICATE_ID = 'local:gateway-internal-registry';
 const REGISTRY_ROUTE_OWNER_KINDS = ['registry_secure_link', 'registry_ingress'] as const;
 type RegistryRouteOwnerKind = (typeof REGISTRY_ROUTE_OWNER_KINDS)[number];
+type RelayOwnerKind =
+  | 'database_backup_source'
+  | 'database_backup_restore'
+  | 'storage_backup_target'
+  | 'storage_backup_staging'
+  | 'managed_storage'
+  | 'managed_storage_binding'
+  | 'managed_storage_gateway'
+  | 'managed_database_binding'
+  | 'managed_database_gateway'
+  | 'managed_database'
+  | 'proxy_host_secure_link'
+  | 'container_link'
+  | RegistryRouteOwnerKind
+  | 'internal_registry';
+/** Owner kinds that own relay endpoints as well as routes. */
+const ENDPOINT_OWNER_KINDS: ReadonlySet<RelayOwnerKind> = new Set([
+  'managed_database',
+  'managed_storage',
+  'proxy_host_secure_link',
+  'container_link',
+  'internal_registry',
+]);
 
 /**
  * Whether the daemon must open the listener anew: its network, address or port changed. A change of the workloads it
@@ -2178,14 +2201,10 @@ export class RelayPolicyService {
   }
 
   async revokeBackupRoutes(runId: string): Promise<void> {
-    for (const kind of [
-      'database_backup_source',
-      'database_backup_restore',
-      'storage_backup_target',
-      'storage_backup_staging',
-    ] as const) {
-      await this.revokeOwner(kind, runId);
-    }
+    await this.revokeOwners(
+      ['database_backup_source', 'database_backup_restore', 'storage_backup_target', 'storage_backup_staging'],
+      runId
+    );
   }
 
   /**
@@ -2331,75 +2350,82 @@ export class RelayPolicyService {
   }
 
   async revokeOwner(
-    ownerKind:
-      | 'database_backup_source'
-      | 'database_backup_restore'
-      | 'storage_backup_target'
-      | 'storage_backup_staging'
-      | 'managed_storage'
-      | 'managed_storage_binding'
-      | 'managed_storage_gateway'
-      | 'managed_database_binding'
-      | 'managed_database_gateway'
-      | 'managed_database'
-      | 'proxy_host_secure_link'
-      | 'container_link'
-      | RegistryRouteOwnerKind
-      | 'internal_registry',
+    ownerKind: RelayOwnerKind,
     ownerId: string,
     options: { allowDeferredSnapshot?: boolean } = {}
   ): Promise<void> {
-    const [ownedRoutes, ownedEndpoints] = await Promise.all([
-      this.db
-        .select({ nodeId: relayRoutes.sourceId, sourceKind: relayRoutes.sourceKind })
-        .from(relayRoutes)
-        .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId))),
-      ownerKind === 'managed_database' ||
-      ownerKind === 'managed_storage' ||
-      ownerKind === 'proxy_host_secure_link' ||
-      ownerKind === 'container_link' ||
-      ownerKind === 'internal_registry'
-        ? this.db
-            .select({ nodeId: relayEndpoints.subjectId })
-            .from(relayEndpoints)
-            .where(and(eq(relayEndpoints.ownerKind, ownerKind), eq(relayEndpoints.ownerId, ownerId)))
-        : Promise.resolve([]),
-    ]);
-    await this.db.transaction(async (tx) => {
+    await this.revokeOwners([ownerKind], ownerId, options);
+  }
+
+  /**
+   * Deletes the relay state an owner id holds under any of these kinds and withdraws it. Only daemons whose grants
+   * lose something get a new bundle: the subjects of the owned endpoints, the sources of every deleted route (owned
+   * or cascaded with an owned endpoint) and the subjects of the endpoints the deleted routes led to, whose bundles
+   * carry their inbound routes. Any other change a deletion causes reaches the rest with the routine refresh.
+   */
+  private async revokeOwners(
+    ownerKinds: RelayOwnerKind[],
+    ownerId: string,
+    options: { allowDeferredSnapshot?: boolean } = {}
+  ): Promise<void> {
+    const endpointKinds = ownerKinds.filter((kind) => ENDPOINT_OWNER_KINDS.has(kind));
+    const affectedNodes = await this.db.transaction(async (tx) => {
+      const [ownedRoutes, ownedEndpoints] = await Promise.all([
+        tx
+          .select({
+            sourceKind: relayRoutes.sourceKind,
+            sourceId: relayRoutes.sourceId,
+            subjectKind: relayEndpoints.subjectKind,
+            subjectId: relayEndpoints.subjectId,
+          })
+          .from(relayRoutes)
+          .innerJoin(relayEndpoints, eq(relayRoutes.targetEndpointId, relayEndpoints.id))
+          .where(and(inArray(relayRoutes.ownerKind, ownerKinds), eq(relayRoutes.ownerId, ownerId))),
+        endpointKinds.length
+          ? tx
+              .select({
+                subjectKind: relayEndpoints.subjectKind,
+                subjectId: relayEndpoints.subjectId,
+                sourceKind: relayRoutes.sourceKind,
+                sourceId: relayRoutes.sourceId,
+              })
+              .from(relayEndpoints)
+              .leftJoin(relayRoutes, eq(relayRoutes.targetEndpointId, relayEndpoints.id))
+              .where(and(inArray(relayEndpoints.ownerKind, endpointKinds), eq(relayEndpoints.ownerId, ownerId)))
+          : Promise.resolve([]),
+      ]);
       const routes = await tx
         .delete(relayRoutes)
-        .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId)))
+        .where(and(inArray(relayRoutes.ownerKind, ownerKinds), eq(relayRoutes.ownerId, ownerId)))
         .returning({ id: relayRoutes.id });
-      const endpoints =
-        ownerKind === 'managed_database' ||
-        ownerKind === 'managed_storage' ||
-        ownerKind === 'proxy_host_secure_link' ||
-        ownerKind === 'container_link' ||
-        ownerKind === 'internal_registry'
-          ? await tx
-              .delete(relayEndpoints)
-              .where(and(eq(relayEndpoints.ownerKind, ownerKind), eq(relayEndpoints.ownerId, ownerId)))
-              .returning({ id: relayEndpoints.id })
-          : [];
-      if (routes.length || endpoints.length) await bumpRelayPolicyRevision(tx);
+      const endpoints = endpointKinds.length
+        ? await tx
+            .delete(relayEndpoints)
+            .where(and(inArray(relayEndpoints.ownerKind, endpointKinds), eq(relayEndpoints.ownerId, ownerId)))
+            .returning({ id: relayEndpoints.id })
+        : [];
+      if (!routes.length && !endpoints.length) return [];
+      await bumpRelayPolicyRevision(tx);
+      return [
+        ...new Set(
+          [...ownedRoutes, ...ownedEndpoints].flatMap((row) => [
+            ...(row.subjectKind === 'daemon' ? [row.subjectId] : []),
+            ...(row.sourceKind === 'daemon' && row.sourceId ? [row.sourceId] : []),
+          ])
+        ),
+      ];
     });
+    // Also when nothing was deleted: a retry after a failed snapshot still publishes the earlier deletion.
     try {
       await this.syncSnapshot();
     } catch (error) {
       if (!options.allowDeferredSnapshot) throw error;
       logger.warn('Relay owner revocation persisted; runtime snapshot update deferred', {
-        ownerKind,
+        ownerKind: ownerKinds.join(','),
         ownerId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    const affectedNodes = [
-      ...new Set([
-        ...(await this.grantIssuer.policyNodeIds()),
-        ...ownedEndpoints.map(({ nodeId }) => nodeId),
-        ...ownedRoutes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ nodeId }) => nodeId),
-      ]),
-    ];
     await Promise.allSettled(affectedNodes.map((nodeId) => this.syncNodeGrants(nodeId)));
   }
 

@@ -1469,31 +1469,30 @@ describe('RelayPolicyService snapshots', () => {
   });
 
   it('keeps a persisted owner revocation when the runtime snapshot must be deferred', async () => {
+    const joined = (rows: unknown[]) => ({ where: () => Promise.resolve(rows) });
+    const ownedRoute = {
+      sourceKind: 'daemon',
+      sourceId: 'source-node',
+      subjectKind: 'daemon',
+      subjectId: 'target-node',
+    };
+    const ownedEndpoint = { subjectKind: 'daemon', subjectId: 'target-node', sourceKind: null, sourceId: null };
     const select = vi
       .fn()
-      .mockReturnValueOnce({
-        from: () => ({
-          where: () => Promise.resolve([{ nodeId: 'source-node', sourceKind: 'daemon' }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: () => ({ where: () => Promise.resolve([{ nodeId: 'target-node' }]) }),
-      });
+      .mockReturnValueOnce({ from: () => ({ innerJoin: () => joined([ownedRoute]) }) })
+      .mockReturnValueOnce({ from: () => ({ leftJoin: () => joined([ownedEndpoint]) }) });
     const updateWhere = vi.fn().mockResolvedValue(undefined);
     const tx = {
+      select,
       delete: vi.fn(() => ({
         where: () => ({ returning: () => Promise.resolve([{ id: 'deleted' }]) }),
       })),
       update: vi.fn(() => ({ set: () => ({ where: updateWhere }) })),
     };
-    const db = {
-      select,
-      transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)),
-    };
+    const db = { transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)) };
     const service = createService(db, { applySnapshot: vi.fn() });
     vi.spyOn(service, 'syncSnapshot').mockRejectedValue(new Error('relay unavailable'));
-    vi.spyOn(service as any, 'syncNodeGrants').mockResolvedValue(undefined);
-    (service as any).grantIssuer.policyNodeIds = vi.fn().mockResolvedValue([]);
+    const grants = vi.spyOn(service as any, 'syncNodeGrants').mockResolvedValue(undefined);
 
     await expect(
       service.revokeOwner('proxy_host_secure_link', 'proxy-1', { allowDeferredSnapshot: true })
@@ -1502,6 +1501,8 @@ describe('RelayPolicyService snapshots', () => {
     expect(db.transaction).toHaveBeenCalledOnce();
     expect(tx.delete).toHaveBeenCalledTimes(2);
     expect(updateWhere).toHaveBeenCalledOnce();
+    // Only the daemons that lost something get a new bundle.
+    expect(new Set(grants.mock.calls.map(([nodeId]) => nodeId))).toEqual(new Set(['source-node', 'target-node']));
   });
 });
 
