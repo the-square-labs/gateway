@@ -34,11 +34,14 @@ func poolCandidates(assignment *pb.RelayGrantAssignment, includeStaging, include
 	if assignment == nil || assignment.GetSchemaVersion() < 2 || len(assignment.GetCandidates()) == 0 {
 		return nil
 	}
+	// A candidate this daemon cannot use (malformed, a relay without the pool
+	// capability, a state a newer Gateway added) is skipped on its own: the
+	// assignment's other relays keep their lanes and carry its tunnels.
 	result := make([]*pb.RelayDataCandidate, 0, len(assignment.GetCandidates()))
 	for _, candidate := range assignment.GetCandidates() {
 		if candidate == nil || candidate.GetRelayInstanceId() == "" || candidate.GetAssignmentGeneration() == 0 ||
 			!hasCapability(candidate.GetCapabilities(), PoolCapability) || candidate.GetGrant() == nil {
-			return nil
+			continue
 		}
 		if candidate.GetAssignmentState() == "draining" && !includeDraining {
 			continue
@@ -47,7 +50,7 @@ func poolCandidates(assignment *pb.RelayGrantAssignment, includeStaging, include
 			continue
 		}
 		if candidate.GetAssignmentState() != "active" && candidate.GetAssignmentState() != "staging" && candidate.GetAssignmentState() != "draining" {
-			return nil
+			continue
 		}
 		result = append(result, candidate)
 	}
