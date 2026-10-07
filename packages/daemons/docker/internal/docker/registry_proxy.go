@@ -425,24 +425,34 @@ func (m *dockerRegistryProxyManager) openRelayConnection(ctx context.Context, bi
 			// Registry streams end at the local relay: never resumable.
 			_ = router.openSourceTunnel(relaySide, candidate.GetGrant(), nil)
 		}()
+		connection := &trackedRegistryConnection{Conn: client, closed: make(chan struct{}), close: func() { m.trackConnection(binding.id, client, false) }}
+		// The transport never cancels a dial context once the dial succeeded:
+		// waiting for it alone kept this goroutine for the life of the process.
 		go func() {
-			<-ctx.Done()
-			_ = client.Close()
+			select {
+			case <-ctx.Done():
+				_ = client.Close()
+			case <-connection.closed:
+			}
 		}()
-		return &trackedRegistryConnection{Conn: client, close: func() { m.trackConnection(binding.id, client, false) }}, nil
+		return connection, nil
 	}
 	return nil, errors.New("registry relay lane is unavailable")
 }
 
 type trackedRegistryConnection struct {
 	net.Conn
-	once  sync.Once
-	close func()
+	once   sync.Once
+	closed chan struct{}
+	close  func()
 }
 
 func (c *trackedRegistryConnection) Close() error {
 	err := c.Conn.Close()
-	c.once.Do(c.close)
+	c.once.Do(func() {
+		close(c.closed)
+		c.close()
+	})
 	return err
 }
 
