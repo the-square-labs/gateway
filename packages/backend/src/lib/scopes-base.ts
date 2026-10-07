@@ -243,6 +243,8 @@ export const ALL_SCOPES = [
   'docker:registries:create',
   'docker:registries:edit',
   'docker:registries:delete',
+  // Legacy: internal registry access belongs to API tokens now (modules/tokens/token-registry-access.ts). A user who
+  // holds these still lets their tokens pull or push the repositories they cover without access to any workload.
   'docker:registries:internal:pull',
   'docker:registries:internal:push',
   // ── Docker: Tasks ────────────────────────────────────────────────

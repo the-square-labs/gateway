@@ -18,6 +18,7 @@ import type {
   PermissionGroup,
   ResourceSearchResponse,
   SystemConfig,
+  TokenRegistryAccess,
   UIBootstrapShell,
   User,
 } from "@/types";
@@ -434,6 +435,7 @@ class ApiClient extends withIngressGroupsApi(
   async createToken(data: {
     name: string;
     scopes: string[];
+    registryAccess?: TokenRegistryAccess;
   }): Promise<ApiToken & { token: string }> {
     return this.request(`/tokens`, {
       method: "POST",
@@ -445,7 +447,10 @@ class ApiClient extends withIngressGroupsApi(
     return this.updateToken(id, { name });
   }
 
-  async updateToken(id: string, data: { name?: string; scopes?: string[] }): Promise<void> {
+  async updateToken(
+    id: string,
+    data: { name?: string; scopes?: string[]; registryAccess?: TokenRegistryAccess }
+  ): Promise<void> {
     return this.request<void>(`/tokens/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

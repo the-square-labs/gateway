@@ -2,12 +2,12 @@ import { Hono } from 'hono';
 import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { demoRestriction, isDemoMode } from '@/modules/demo/demo-mode.js';
+import { REGISTRY_REPOSITORY_PATTERN, tokenAllowsRegistryAction } from '@/modules/tokens/token-registry-access.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import type { AppEnv } from '@/types.js';
 import { DockerInternalRegistryService } from './docker-registry-internal.service.js';
 
 const REGISTRY_SERVICE = 'gateway-internal-registry';
-const REPOSITORY_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 const MAX_SCOPE_COUNT = 64;
 const MAX_SCOPE_LENGTH = 1024;
 
@@ -39,7 +39,7 @@ function requestedRegistryGrants(url: URL) {
   }
   return rawScopes.map((scope) => {
     const match = /^repository:([^:]+):([^:]+)$/.exec(scope);
-    if (!match || !REPOSITORY_PATTERN.test(match[1]!)) {
+    if (!match || !REGISTRY_REPOSITORY_PATTERN.test(match[1]!)) {
       throw new AppError(400, 'REGISTRY_SCOPE_INVALID', 'Registry repository scope is invalid');
     }
     const actions = [...new Set(match[2]!.split(',').filter(Boolean))];
@@ -68,10 +68,12 @@ dockerRegistryAuthRoutes.get('/token', async (c) => {
   }
 
   const requested = requestedRegistryGrants(new URL(c.req.url));
+  // The token's registry access (not its scopes), bounded by what its owner may do with workloads right now.
+  const ownerScopes = authenticated.user.accountScopes ?? authenticated.user.scopes;
   const allowed = requested.map((grant) => ({
     repository: grant.repository,
     actions: grant.actions.filter((action) =>
-      TokensService.hasScope(authenticated.scopes, `docker:registries:internal:${action}:${grant.repository}`)
+      tokenAllowsRegistryAction(authenticated.registryAccess, ownerScopes, action, grant.repository)
     ),
   }));
   if (allowed.some((grant, index) => grant.actions.length !== requested[index]!.actions.length)) {

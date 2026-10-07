@@ -305,3 +305,79 @@ describe('resolveRequestedTokenScopes', () => {
     ]);
   });
 });
+
+describe('TokensService registry access', () => {
+  const TOKEN_ID = '22222222-2222-4222-8222-222222222222';
+
+  it('stores the legacy registry scopes of a new token as its registry access', async () => {
+    const values = vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue([
+        {
+          id: TOKEN_ID,
+          name: 'CI',
+          tokenPrefix: 'gw_0123456',
+          scopes: ['nodes:details'],
+          registryAccess: { pull: ['team/app'] },
+          lastUsedAt: null,
+          createdAt: new Date('2026-10-07T00:00:00.000Z'),
+        },
+      ]),
+    });
+    const db = { insert: vi.fn().mockReturnValue({ values }) };
+
+    const result = await createService(db).createToken(USER_ID, {
+      name: 'CI',
+      scopes: ['nodes:details', 'docker:registries:internal:pull:team/app'],
+    });
+
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ['nodes:details'], registryAccess: { pull: ['team/app'] } })
+    );
+    expect(result.registryAccess).toEqual({ pull: ['team/app'] });
+  });
+
+  it('keeps the stored legacy registry scopes as registry access when the scopes change', async () => {
+    const set = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+    const db = {
+      update: vi.fn().mockReturnValue({ set }),
+      query: {
+        apiTokens: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: TOKEN_ID,
+            userId: USER_ID,
+            name: 'CI',
+            scopes: ['nodes:details', 'docker:registries:internal:push'],
+            registryAccess: {},
+          }),
+        },
+      },
+    };
+
+    await createService(db).updateToken(USER_ID, TOKEN_ID, { scopes: ['proxy:view'] });
+
+    expect(set).toHaveBeenCalledWith({ scopes: ['proxy:view'], registryAccess: { push: 'all' } });
+  });
+
+  it('refuses to leave a token with neither scopes nor registry access', async () => {
+    const db = {
+      update: vi.fn(),
+      query: {
+        apiTokens: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: TOKEN_ID,
+            userId: USER_ID,
+            name: 'CI',
+            scopes: [],
+            registryAccess: { pull: 'all' },
+          }),
+        },
+      },
+    };
+
+    await expect(createService(db).updateToken(USER_ID, TOKEN_ID, { registryAccess: {} })).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'INVALID_SCOPE',
+    });
+    expect(db.update).not.toHaveBeenCalled();
+  });
+});

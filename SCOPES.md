@@ -7,7 +7,7 @@ All scopes follow `domain:resource:action[:qualifier]`. Resource-scopable scopes
 | Group | Description |
 |-------|-------------|
 | `system-admin` | All canonical scopes, including protected `admin:system`. |
-| `admin` | Curated broad access: every scope except `admin:system`, `admin:users:impersonate`, `settings:gateway:edit`, `housekeeping:configure`, `nodes:console`, `ai:skills:manage`, `inference:setup`, the `hosting:*` and `integrations:hosting:*` scopes, and Docker registry create, edit, and delete. |
+| `admin` | Curated broad access: every scope except `admin:system`, `admin:users:impersonate`, `settings:gateway:edit`, `housekeeping:configure`, `nodes:console`, `ai:skills:manage`, `inference:setup`, the `hosting:*` and `integrations:hosting:*` scopes, Docker registry create, edit, and delete, and the legacy `docker:registries:internal:*` scopes (registry access is set per API token). |
 | `operator` | Operational access for day-to-day storage (with `storage:credentials:use`, without credential reveal, IAM keys, or bucket admin), database backups (without restore) and backup execution, PKI, proxy, Pages, SSL, ACL, node, Docker container and Compose, database, notification, and logging read/query work. |
 | `viewer` | Read-only view/discovery access. |
 | `guest` | Authenticated account access without infrastructure permissions. |
@@ -48,7 +48,7 @@ Gateway evaluates scopes with exact, broad, resource-scoped, and implied-scope r
 - List APIs and list pages are derived from view/detail permissions. Broad view lists every visible resource of that type; resource-scoped view lists only matching rows.
 - Every scope belongs to a family named by its longest prefix that has a view scope (`proxy:*` → `proxy:view`, `docker:containers:*` → `docker:containers:view`, `nodes:*` → `nodes:details`, `docker:tasks:manage` → `docker:tasks`). Any action scope in a family implies the family's view scope, including delete scopes: `proxy:edit` and `proxy:delete` both satisfy `proxy:view`. The rule is generated from the catalog (`packages/backend/src/lib/scopes-implications.ts`) and shipped unchanged to the web UI.
 - Creation scopes (every `*:create*` scope, `docker:images:pull`, `ssl:cert:issue`, and `pki:cert:issue`) name a destination and never imply any view, whatever their qualifier (broad, `folder/`, `node/`, `account/`, or a bare node ID): `proxy:create` does not satisfy `proxy:view`, and `proxy:create:folder/F` does not satisfy `proxy:view:folder/F`. Folder trees and node pickers accept creation scopes on their own to show the destinations a creator may use. The one kept rule is `hosting:snapshots:create:<vmId>` implying that VM's snapshot view.
-- `proxy:maintenance:bypass` (a browser maintenance code) and `docker:registries:internal:pull` / `:push` (registry credentials) imply nothing.
+- `proxy:maintenance:bypass` (a browser maintenance code) and the legacy `docker:registries:internal:pull` / `:push` imply nothing.
 - API tokens and OAuth/MCP grants expand their own folder and node targets before they are bounded by the owner's current (expanded) permissions, and are never expanded afterwards, so a token can never reach a resource its owner cannot.
 - A few explicit rules complete it: access tiers (`storage:objects:admin` ⊇ `write` ⊇ `read`, `databases:query:admin` ⊇ `write` ⊇ `read`, `storage:credentials:reveal` ⊇ `storage:credentials:use`), `logs:read` and `logs:tokens:*` imply `logs:environments:view`, `nodes:manage` implies `nodes:config:view`, which implies `nodes:details`, `inference:models:manage` implies `inference:providers:view`, `docker:availability:manage` implies `docker:containers:view`, and `databases:edit` and `storage:iam` imply `databases:bind` and `storage:bind` (linking workloads used to need them). View scopes never imply another family's view otherwise; for example `proxy:templates:view` does not grant `proxy:view`.
 - Implied scopes keep the same resource boundary. For example, `databases:query:read:<databaseId>` makes that database visible in a filtered database list, but does not grant global `databases:view`; `docker:containers:manage:<nodeId>` satisfies `docker:containers:view:<nodeId>/<resourceId>`.
@@ -315,8 +315,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `docker:registries:create` |  |
 | `docker:registries:edit` |  |
 | `docker:registries:delete` |  |
-| `docker:registries:internal:pull` | Repository-scopable access to pull artifacts from the internal registry. |
-| `docker:registries:internal:push` | Repository-scopable access to push artifacts to the internal registry. |
+| `docker:registries:internal:pull` | Legacy, repository-scopable. Lets the holder's API tokens pull these repositories without workload access; see Internal Registry Access. |
+| `docker:registries:internal:push` | Legacy, repository-scopable. Lets the holder's API tokens push to these repositories without workload access; see Internal Registry Access. |
 | `docker:tasks` |  |
 | `docker:tasks:manage` | Yes |
 | `databases:view` | Yes |
@@ -353,6 +353,17 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `status-page:incidents:update` |  |
 | `status-page:incidents:resolve` |  |
 | `status-page:incidents:delete` |  |
+
+## Internal Registry Access
+
+External Docker clients (`docker login` to the internal registry, Business+ external access) authenticate with a Gateway API token. Registry access is a property of the token, chosen when it is created or edited: none, pull, or pull and push, each for every repository or for listed repository names (exact match, `team/app` does not cover `team/app-two` or `team`). A token may carry registry access without any scope.
+
+- Pull can be given by a user who can view a Docker workload or image anywhere (`docker:containers:view`, `docker:compose:view` or `docker:images:view`, broad or limited to a node, folder or resource).
+- Push can be given by a user who can change a workload (`docker:containers:edit`, `docker:containers:manage` or `docker:compose:manage`).
+- Every token request at `/api/docker/registry/token` checks the token's access and the owner's current permissions, so a demoted owner's tokens lose push (or everything) at once.
+- API: `registryAccess` on `POST /api/tokens` and `PATCH /api/tokens/{id}`, for example `{ "pull": "all", "push": ["team/app"] }`; an absent action is not granted and `{}` removes the access.
+
+Compatibility: tokens created before this carry `docker:registries:internal:pull` / `:push` (with or without a repository) in their scopes; Gateway reads them as the token's registry access and shows them that way. Requests that still send these names in `scopes` get the same registry access. The two scopes remain in the catalog only as legacy user grants: a holder may give tokens access to the repositories the grant covers even without workload access. Built-in groups no longer include them.
 
 ## API Token Delegation
 

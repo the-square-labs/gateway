@@ -2,6 +2,12 @@ import { index, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-o
 import { users } from './users.js';
 
 /**
+ * Internal registry access of the token (`docker login`): pull and push each `all` or a list of repository names;
+ * an absent action is not granted. See modules/tokens/token-registry-access.ts.
+ */
+export type ApiTokenRegistryAccess = Partial<Record<'pull' | 'push', 'all' | string[]>>;
+
+/**
  * Granular API token scopes:
  *   ca:read                    — view all CAs
  *   ca:create:root             — create root CAs
@@ -30,6 +36,7 @@ export const apiTokens = pgTable(
     tokenHash: text('token_hash').notNull(),
     tokenPrefix: varchar('token_prefix', { length: 20 }).notNull(),
     scopes: jsonb('scopes').$type<string[]>().notNull().default([]),
+    registryAccess: jsonb('registry_access').$type<ApiTokenRegistryAccess>().notNull().default({}),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

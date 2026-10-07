@@ -7,7 +7,7 @@ import { authMiddleware, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { createTokenRoute, listTokensRoute, renameTokenRoute, revokeTokenRoute } from './tokens.docs.js';
 import { CreateTokenSchema, UpdateTokenSchema } from './tokens.schemas.js';
-import { resolveRequestedTokenScopes, TokensService } from './tokens.service.js';
+import { authorizeRequestedRegistryAccess, resolveRequestedTokenScopes, TokensService } from './tokens.service.js';
 
 export const tokensRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -42,10 +42,11 @@ tokensRoutes.openapi(createTokenRoute, async (c) => {
   const parsedInput = CreateTokenSchema.parse(body);
   const input = { ...parsedInput, scopes: resolveRequestedTokenScopes(parsedInput.scopes, user.scopes, 'create') };
 
-  // Token scopes must be a subset of the user's group scopes
+  // Registry access comes from the user's workload permissions; every other scope must be one the user holds.
   const userScopes = user.scopes;
-  if (!isScopeSubset(input.scopes, userScopes)) {
-    const disallowed = input.scopes.filter((s) => !TokensService.hasScope(userScopes, s));
+  const delegated = authorizeRequestedRegistryAccess(input, userScopes);
+  if (!isScopeSubset(delegated, userScopes)) {
+    const disallowed = delegated.filter((s) => !TokensService.hasScope(userScopes, s));
     return c.json(
       { code: 'SCOPE_NOT_ALLOWED', message: `Your group cannot grant scopes: ${disallowed.join(', ')}` },
       403
@@ -69,8 +70,9 @@ tokensRoutes.openapi(renameTokenRoute, async (c) => {
       : {}),
   };
 
-  if (input.scopes !== undefined && !isScopeSubset(input.scopes, user.scopes)) {
-    const disallowed = input.scopes.filter((s) => !TokensService.hasScope(user.scopes, s));
+  const delegated = authorizeRequestedRegistryAccess(input, user.scopes);
+  if (input.scopes !== undefined && !isScopeSubset(delegated, user.scopes)) {
+    const disallowed = delegated.filter((s) => !TokensService.hasScope(user.scopes, s));
     return c.json(
       { code: 'SCOPE_NOT_ALLOWED', message: `Your group cannot grant scopes: ${disallowed.join(', ')}` },
       403

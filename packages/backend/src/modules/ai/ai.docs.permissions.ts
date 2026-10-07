@@ -243,8 +243,8 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 | docker:registries:create | Add registries |
 | docker:registries:edit | Edit/test registries |
 | docker:registries:delete | Remove registries |
-| docker:registries:internal:pull | Pull from repository-scoped internal-registry paths |
-| docker:registries:internal:push | Push to repository-scoped internal-registry paths |
+| docker:registries:internal:pull | Legacy: lets the holder's API tokens pull these repositories without workload access. Registry access is a property of each API token now (manage_api_token registryAccess) |
+| docker:registries:internal:push | Legacy: lets the holder's API tokens push to these repositories without workload access |
 
 ### Docker: Tasks
 | Scope | Description |
@@ -381,7 +381,7 @@ Git scopes can be limited with stable IDs: \`<scope>:<connectorId>\` (every repo
 | Group | Description |
 |-------|-------------|
 | system-admin | Every scope, including admin:system |
-| admin | Every scope except admin:system, admin:users:impersonate, settings:gateway:edit, housekeeping:configure, nodes:console, ai:skills:manage, inference:setup, the hosting:* and integrations:hosting:* scopes, and Docker registry create/edit/delete |
+| admin | Every scope except admin:system, admin:users:impersonate, settings:gateway:edit, housekeeping:configure, nodes:console, ai:skills:manage, inference:setup, the hosting:* and integrations:hosting:* scopes, Docker registry create/edit/delete, and the legacy docker:registries:internal:* scopes |
 | operator | Day-to-day operations: storage connections and objects (no credential reveal, IAM keys, or bucket admin) with storage:credentials:use for backups, database backup policies and runs (no restore) and backup execution, PKI certificates and templates, domains, routes and Pages without delete, SSL, ACL, node details, config view, logs, and files, Docker containers and Compose without create or delete, read-only images, volumes, networks, and registries, databases with queries, notifications, log search and ingest tokens, alerts, AI Workspace, and MCP |
 | viewer | Read-only: storage, backups, PKI, domains, routes, nginx templates, Pages, SSL, ACL, Docker, databases, notifications, logging including log search, GitLab and Cloudflare connectors, plus AI Workspace |
 | guest | Account access only — no infrastructure permissions |

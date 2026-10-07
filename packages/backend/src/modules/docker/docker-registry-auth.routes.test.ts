@@ -55,11 +55,12 @@ describe('docker registry external token request parsing', () => {
     expect(() => __testOnly.requestedRegistryGrants(malformed)).toThrow('Registry repository scope is invalid');
   });
 
-  it('maps API-token registry view/edit scopes to pull/push token grants', async () => {
+  it("grants pull and push from the token's registry access, not its scopes", async () => {
     const token = {
       validateToken: vi.fn().mockResolvedValue({
-        user: { id: 'user-1' },
-        scopes: ['docker:registries:internal:pull:tenant/app', 'docker:registries:internal:push:tenant/app'],
+        user: { id: 'user-1', scopes: ['docker:containers:manage:node-1'] },
+        scopes: [],
+        registryAccess: { pull: ['tenant/app'], push: ['tenant/app'] },
         tokenId: 'token-1',
         tokenPrefix: 'gw_test',
       }),
@@ -99,8 +100,9 @@ describe('docker registry external token request parsing', () => {
   it('denies push when the API token is pull-only', async () => {
     container.registerInstance(TokensService, {
       validateToken: vi.fn().mockResolvedValue({
-        user: { id: 'user-1' },
-        scopes: ['docker:registries:internal:pull:tenant/app'],
+        user: { id: 'user-1', scopes: ['docker:containers:manage'] },
+        scopes: [],
+        registryAccess: { pull: ['tenant/app'] },
         tokenId: 'token-1',
         tokenPrefix: 'gw_test',
       }),
@@ -121,6 +123,71 @@ describe('docker registry external token request parsing', () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: 'REGISTRY_SCOPE_DENIED' });
     expect(registry.issueToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'another repository than the narrowed one',
+      { pull: ['tenant/app'] },
+      ['docker:containers:view'],
+      'tenant/app-two',
+    ],
+    ['a prefix of the narrowed repository', { pull: ['tenant/app'] }, ['docker:containers:view'], 'tenant'],
+    ['an owner who can no longer view any workload or image', { pull: 'all' }, ['proxy:view'], 'tenant/app'],
+    ['a token without registry access', {}, ['docker:containers:manage'], 'tenant/app'],
+  ])('denies pull for %s', async (_case, registryAccess, ownerScopes, repository) => {
+    container.registerInstance(TokensService, {
+      validateToken: vi.fn().mockResolvedValue({
+        user: { id: 'user-1', scopes: ownerScopes },
+        scopes: ['docker:containers:view'],
+        registryAccess,
+        tokenId: 'token-1',
+        tokenPrefix: 'gw_test',
+      }),
+    } as never);
+    const registry = {
+      assertExternalAccessEntitled: vi.fn().mockResolvedValue({ externalAccessEnabled: true }),
+      issueToken: vi.fn(),
+    };
+    container.registerInstance(DockerInternalRegistryService, registry as never);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/registry', dockerRegistryAuthRoutes);
+
+    const response = await app.request(`/registry/token?scope=repository:${repository}:pull`, {
+      headers: { Authorization: `Basic ${Buffer.from('gateway:gw_secret').toString('base64')}` },
+    });
+
+    expect(response.status).toBe(403);
+    expect(registry.issueToken).not.toHaveBeenCalled();
+  });
+
+  it('lets a legacy per-repository registry grant of the owner stand in for workload access', async () => {
+    container.registerInstance(TokensService, {
+      validateToken: vi.fn().mockResolvedValue({
+        user: { id: 'user-1', scopes: ['docker:registries:internal:pull:tenant/app'] },
+        scopes: [],
+        registryAccess: { pull: 'all' },
+        tokenId: 'token-1',
+        tokenPrefix: 'gw_test',
+      }),
+    } as never);
+    const registry = {
+      assertExternalAccessEntitled: vi.fn().mockResolvedValue({ externalAccessEnabled: true }),
+      issueToken: vi.fn().mockReturnValue({ token: 'jwt', accessToken: 'jwt', expiresIn: 300, issuedAt: 'now' }),
+    };
+    container.registerInstance(DockerInternalRegistryService, registry as never);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/registry', dockerRegistryAuthRoutes);
+    const pull = (repository: string) =>
+      app.request(`/registry/token?scope=repository:${repository}:pull`, {
+        headers: { Authorization: `Basic ${Buffer.from('gateway:gw_secret').toString('base64')}` },
+      });
+
+    expect((await pull('tenant/app')).status).toBe(200);
+    expect((await pull('tenant/other')).status).toBe(403);
+    expect(registry.issueToken).toHaveBeenCalledTimes(1);
   });
 
   it('rejects external token issuance before API-token validation when Business is unavailable', async () => {

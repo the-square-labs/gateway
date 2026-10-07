@@ -1604,6 +1604,13 @@
       "when": 1791393237000,
       "tag": "0228_ingress_group_scopes",
       "breakpoints": true
+    },
+    {
+      "idx": 229,
+      "version": "7",
+      "when": 1791479637000,
+      "tag": "0229_api_token_registry_access",
+      "breakpoints": true
     }
   ]
 }

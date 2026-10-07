@@ -15,6 +15,15 @@ import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { apiTokenChangedChannel } from '@/modules/auth/user-resource-events.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
+import {
+  assertTokenRegistryAccessAllowed,
+  hasRegistryAccess,
+  isLegacyRegistryScope,
+  mergeRegistryAccess,
+  splitRegistryScopes,
+  type TokenRegistryAccess,
+  tokenRegistryAccess,
+} from './token-registry-access.js';
 import type { CreateTokenInput, UpdateTokenInput } from './tokens.schemas.js';
 
 const logger = createChildLogger('TokensService');
@@ -49,10 +58,31 @@ export function resolveRequestedTokenScopes(
   purpose: 'create' | 'update'
 ): string[] {
   const canonical = canonicalizeInboundScopes(requested);
-  if (canonical.length === 0) {
+  // An empty list is a registry-only token (CreateTokenSchema requires registry access then).
+  if (canonical.length === 0 && requested.length > 0) {
     throw new AppError(400, 'INVALID_SCOPE', 'None of the requested scopes exist any more');
   }
   return purpose === 'create' ? withDelegableCleanupAdditions(canonical, ownerScopes) : canonical;
+}
+
+/**
+ * Check the internal registry access a client asks a token for (its registryAccess and any legacy registry scopes in
+ * its scope list) against the owner's scopes, and return the scopes to bound by the owner's grants: the legacy
+ * registry scopes are a token attribute now, which the owner need not hold.
+ */
+export function authorizeRequestedRegistryAccess(
+  input: { scopes?: readonly string[]; registryAccess?: TokenRegistryAccess },
+  ownerScopes: string[]
+): string[] {
+  const split = splitRegistryScopes(input.scopes ?? []);
+  assertTokenRegistryAccessAllowed(mergeRegistryAccess(input.registryAccess, split.registryAccess), ownerScopes);
+  return split.scopes;
+}
+
+function assertTokenNotEmpty(scopes: readonly string[], registryAccess: TokenRegistryAccess): void {
+  if (scopes.length === 0 && !hasRegistryAccess(registryAccess)) {
+    throw new AppError(400, 'INVALID_SCOPE', 'A token needs at least one scope or registry access');
+  }
 }
 
 @injectable()
@@ -73,7 +103,11 @@ export class TokensService {
     const raw = `gw_${randomBytes(32).toString('hex')}`;
     const tokenHash = hashToken(raw);
     const tokenPrefix = raw.slice(0, 10);
-    const scopes = canonicalizeScopes(input.scopes).filter(isApiTokenScope);
+    // Legacy registry scopes in the request become the token's registry access.
+    const requested = splitRegistryScopes(canonicalizeScopes(input.scopes).filter(isApiTokenScope));
+    const scopes = requested.scopes;
+    const registryAccess = mergeRegistryAccess(input.registryAccess, requested.registryAccess);
+    assertTokenNotEmpty(scopes, registryAccess);
 
     const [token] = await this.db
       .insert(apiTokens)
@@ -83,16 +117,17 @@ export class TokensService {
         tokenHash,
         tokenPrefix,
         scopes,
+        registryAccess,
       })
       .returning();
 
-    logger.info('Created API token', { tokenId: token.id, userId, scopes });
+    logger.info('Created API token', { tokenId: token.id, userId, scopes, registryAccess });
     await this.auditService.log({
       userId,
       action: 'api_token.create',
       resourceType: 'api-token',
       resourceId: token.id,
-      details: { name: token.name, scopes: token.scopes },
+      details: { name: token.name, scopes: token.scopes, registryAccess },
     });
     this.eventBus?.publish(apiTokenChangedChannel(userId), { action: 'create', id: token.id, userId });
 
@@ -101,6 +136,7 @@ export class TokensService {
       name: token.name,
       tokenPrefix: token.tokenPrefix,
       scopes: token.scopes.filter(isApiTokenScope),
+      registryAccess,
       lastUsedAt: token.lastUsedAt?.toISOString() ?? null,
       createdAt: token.createdAt.toISOString(),
       token: raw,
@@ -120,7 +156,11 @@ export class TokensService {
       id: t.id,
       name: t.name,
       tokenPrefix: t.tokenPrefix,
-      scopes: canonicalizeScopes(boundScopes(t.scopes, ownerScopes)).filter(isApiTokenScope),
+      // Legacy registry scopes are shown as the token's registry access.
+      scopes: canonicalizeScopes(boundScopes(t.scopes, ownerScopes)).filter(
+        (scope) => isApiTokenScope(scope) && !isLegacyRegistryScope(scope)
+      ),
+      registryAccess: tokenRegistryAccess(t),
       lastUsedAt: t.lastUsedAt?.toISOString() ?? null,
       createdAt: t.createdAt.toISOString(),
     }));
@@ -138,16 +178,43 @@ export class TokensService {
     if (!token) throw new AppError(404, 'TOKEN_NOT_FOUND', 'Token not found');
     const patch: Partial<typeof apiTokens.$inferInsert> = {};
     if (input.name !== undefined) patch.name = input.name;
-    if (input.scopes !== undefined) patch.scopes = canonicalizeScopes(input.scopes).filter(isApiTokenScope);
+    const storedLegacy = (token.scopes ?? []).some(isLegacyRegistryScope);
+    let requestedRegistryAccess: TokenRegistryAccess = {};
+    if (input.scopes !== undefined) {
+      const requested = splitRegistryScopes(canonicalizeScopes(input.scopes).filter(isApiTokenScope));
+      patch.scopes = requested.scopes;
+      requestedRegistryAccess = requested.registryAccess;
+    } else if (input.registryAccess !== undefined && storedLegacy) {
+      patch.scopes = token.scopes.filter((scope) => !isLegacyRegistryScope(scope));
+    }
+    // registryAccess replaces the token's access. New scopes drop the legacy registry scopes stored with the token,
+    // which keep counting by moving into the attribute.
+    if (
+      input.registryAccess !== undefined ||
+      (input.scopes !== undefined && (storedLegacy || hasRegistryAccess(requestedRegistryAccess)))
+    ) {
+      patch.registryAccess = mergeRegistryAccess(
+        input.registryAccess ?? tokenRegistryAccess(token),
+        requestedRegistryAccess
+      );
+    }
+    assertTokenNotEmpty(
+      (patch.scopes ?? token.scopes ?? []).filter((scope) => !isLegacyRegistryScope(scope)),
+      patch.registryAccess ?? tokenRegistryAccess(token)
+    );
     await this.db.update(apiTokens).set(patch).where(eq(apiTokens.id, tokenId));
+    const changed = input.scopes !== undefined || input.registryAccess !== undefined;
     await this.auditService.log({
       userId,
-      action: input.scopes === undefined ? 'api_token.rename' : 'api_token.update',
+      action: changed ? 'api_token.update' : 'api_token.rename',
       resourceType: 'api-token',
       resourceId: tokenId,
       details: {
         name: input.name ?? token.name,
-        ...(input.scopes !== undefined ? { previousScopes: token.scopes, scopes: patch.scopes } : {}),
+        ...(patch.scopes !== undefined ? { previousScopes: token.scopes, scopes: patch.scopes } : {}),
+        ...(patch.registryAccess !== undefined
+          ? { previousRegistryAccess: tokenRegistryAccess(token), registryAccess: patch.registryAccess }
+          : {}),
       },
     });
     this.eventBus?.publish(apiTokenChangedChannel(userId), { action: 'update', id: tokenId, userId });
@@ -176,7 +243,13 @@ export class TokensService {
 
   async validateToken(
     rawToken: string
-  ): Promise<{ user: User; scopes: string[]; tokenId: string; tokenPrefix: string } | null> {
+  ): Promise<{
+    user: User;
+    scopes: string[];
+    registryAccess: TokenRegistryAccess;
+    tokenId: string;
+    tokenPrefix: string;
+  } | null> {
     const tokenHash = hashToken(rawToken);
 
     const token = await this.db.query.apiTokens.findFirst({
@@ -206,6 +279,8 @@ export class TokensService {
       // The owner's live scopes travel with the caller: Git repository checks require both (User.accountScopes).
       user: { ...user, accountScopes: user.scopes },
       scopes,
+      // Bounded by the owner's live scopes where it is used (docker-registry-auth.routes.ts).
+      registryAccess: tokenRegistryAccess(token),
       tokenId: token.id,
       tokenPrefix: token.tokenPrefix,
     };
