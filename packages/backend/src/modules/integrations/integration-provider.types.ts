@@ -314,6 +314,11 @@ export interface VcsConnectorProvider extends ConnectorProvider {
   revokeToken?(auth: VcsConnectorAuth): Promise<void>;
   /** The project's namespace, used to resolve group-qualified scopes; null when the project is not visible. */
   getProjectNamespace?(auth: VcsConnectorAuth, projectId: string): Promise<VcsProjectNamespace | null>;
+  /**
+   * Every ancestor group of a project (its namespace group and all parents), even those the credential cannot
+   * read one by one; null when the project is not visible.
+   */
+  getProjectAncestorGroups?(auth: VcsConnectorAuth, projectId: string): Promise<VcsGroupRef[] | null>;
   /** One group by ID; null when it does not exist or is not visible. */
   getGroup?(auth: VcsConnectorAuth, groupId: string): Promise<VcsGroupRef | null>;
   /** One project by ID for scope labels; null when it does not exist or is not visible. */

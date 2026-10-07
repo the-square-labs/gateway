@@ -219,7 +219,9 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       const allowed = this.filterAllowedProjects(connector, allowlistRows, projects);
       let permitted = allowed;
       if (!gitGrantsConnectorWide(visible)) {
-        for (const grant of visible) permitted = await this.filterGitLabProjectsByGrant(connector, permitted, grant);
+        for (const grant of visible) {
+          permitted = await this.filterGitLabProjectsByGrant(connector, permitted, grant, user);
+        }
       }
       return permitted.map((project) => this.toDockerBuildSourceRepository(connector, project));
     }

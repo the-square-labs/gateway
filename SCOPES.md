@@ -69,7 +69,7 @@ Git integration scopes can be limited to one connected account and, below it, to
 | Qualifier | Grants |
 |-----------|--------|
 | `<scope>:<connectorId>` | Every repository of that connector. |
-| `<scope>:<connectorId>/group/<groupId>` | GitLab: the group, its subgroups, and every project under them. Group ancestry comes from the GitLab API (the project's namespace and its parent groups, cached for a few minutes), so a moved project follows its new group. |
+| `<scope>:<connectorId>/group/<groupId>` | GitLab: the group, its subgroups, and every project under them. Group ancestry comes from the GitLab API (the project's namespace and its parent groups, cached for a few minutes), so a moved project follows its new group. A parent group the connector credential cannot open is taken from the project's ancestor list; when the ancestry still cannot be read completely, the check fails with 409 `GITLAB_GROUP_ANCESTRY_UNAVAILABLE` (and an audit entry) instead of silently not matching, and lists leave such projects out. |
 | `<scope>:<connectorId>/project/<projectId>` | GitLab: that project. |
 | `<scope>:<connectorId>/owner/<ownerId>` | GitHub: every repository of that organization or user. |
 | `<scope>:<connectorId>/repo/<repoId>` | GitHub: that repository. |

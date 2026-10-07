@@ -29,6 +29,7 @@ export const GITLAB_AUDIT_ACTIONS = {
   registryUse: 'connector.gitlab.registry.use',
   deployTokenCreate: 'connector.gitlab.deploy_token.create',
   repositoryClone: 'connector.gitlab.repository.clone',
+  groupAncestryUnavailable: 'connector.gitlab.group_ancestry.unavailable',
 } as const;
 
 export type GitLabAuditAction = (typeof GITLAB_AUDIT_ACTIONS)[keyof typeof GITLAB_AUDIT_ACTIONS];
