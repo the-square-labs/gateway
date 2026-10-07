@@ -65,6 +65,7 @@ export const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Readonly<Record<string, readonly 
   ],
   "housekeeping:view": ["housekeeping:configure", "housekeeping:run"],
   "inference:providers:view": ["inference:models:manage", "inference:providers:manage"],
+  "ingress:groups:view": ["ingress:groups:manage"],
   "integrations:cloudflare:view": [
     "integrations:cloudflare:manage",
     "integrations:cloudflare:sync",

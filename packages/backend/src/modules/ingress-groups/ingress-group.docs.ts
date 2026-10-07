@@ -24,7 +24,7 @@ import {
 const TAGS = ['Ingress groups'];
 
 const GROUP_DESCRIPTION =
-  'An ingress group is a set of nginx ingress nodes (normally one per site) that serve the same routes and domains: every member gets the same config, certificates, access lists, Pages artifacts and its own Secure Link sources. Groups live in node folders; viewing needs nodes:details, changing needs nodes:manage (broadly or on the group folder), adding a member also needs nodes:manage on that node. Creating, changing and converting require the multi-node availability entitlement (Business and Enterprise); existing groups keep serving without it. DNS failover mode `none`: the Cloudflare records of the group’s domains list every active member (round robin, no health checks).';
+  'An ingress group is a set of nginx ingress nodes (normally one per site) that serve the same routes and domains: every member gets the same config, certificates, access lists, Pages artifacts and its own Secure Link sources. Groups live in node folders; viewing needs ingress:groups:view, changing needs ingress:groups:manage (broadly or on the group folder), adding a member also needs nodes:manage on that node. Creating, changing and converting require the multi-node availability entitlement (Business and Enterprise); existing groups keep serving without it. DNS failover mode `none`: the Cloudflare records of the group’s domains list every active member (round robin, no health checks).';
 
 export const listIngressGroupsRoute = appRoute({
   method: 'get',

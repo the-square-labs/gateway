@@ -23,7 +23,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   proxy: 'proxy:view',
   pages: 'pages:view',
   domains: 'domains:view',
-  'ingress-groups': ['nodes:details', 'nodes:manage', 'proxy:view', 'domains:view'],
+  'ingress-groups': ['ingress:groups:view', 'ingress:groups:manage', 'proxy:view', 'domains:view'],
   'access-lists': 'acl:view',
   templates: 'pki:templates:view',
   acme: 'ssl:cert:view',

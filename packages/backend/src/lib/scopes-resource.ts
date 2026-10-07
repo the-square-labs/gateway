@@ -91,6 +91,9 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'nodes:rename',
   'nodes:delete',
   'nodes:lock',
+  // Ingress groups (node folders only)
+  'ingress:groups:view',
+  'ingress:groups:manage',
   // Docker containers
   'docker:containers:view',
   'docker:containers:edit',
@@ -232,6 +235,9 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'nodes:rename',
   'nodes:delete',
   'nodes:lock',
+  // Ingress groups live in node folders; a folder grant covers the groups in it and its subfolders.
+  'ingress:groups:view',
+  'ingress:groups:manage',
   // Docker containers and deployments
   'docker:containers:view',
   'docker:containers:edit',
@@ -288,3 +294,6 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'logs:schemas:delete',
   'logs:read',
 ];
+
+/** Folder-scopable permissions that accept only a folder qualifier (`folder/<id>`), never one resource or node. */
+export const FOLDER_ONLY_SCOPABLE: readonly string[] = ['ingress:groups:view', 'ingress:groups:manage'];

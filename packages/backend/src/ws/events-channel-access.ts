@@ -74,7 +74,7 @@ export function requiredScopeFor(channel: string): string | null {
   if (channel === 'access-list.changed') return 'acl:view';
   if (channel === 'node.slug.changed') return 'nodes:details';
   if (channel === 'node.changed' || channel === 'node.folder.changed') return 'nodes:details';
-  if (channel === 'ingress_group.changed') return 'nodes:details';
+  if (channel === 'ingress_group.changed') return 'ingress:groups:view';
   if (channel === 'user.changed') return 'admin:users';
   if (channel === 'audit.changed') return 'admin:audit';
   if (channel === 'siem.destination.changed' || channel === 'siem.delivery.changed') return 'audit:siem:view';
@@ -235,7 +235,7 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
   }
   if (channel === 'ingress_group.changed') {
     // Only the group id travels; the list and detail requests apply the folder grants.
-    return hasScopeBase(scopes, 'nodes:details') || hasScopeBase(scopes, 'nodes:manage');
+    return hasScopeBase(scopes, 'ingress:groups:view');
   }
   if (channel === 'node.file.changed') {
     return hasScopeBase(scopes, 'nodes:files:read');

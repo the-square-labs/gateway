@@ -19,6 +19,8 @@ import {
   assertCanManageMemberNode,
   assertCanPlaceOnMembers,
   canViewIngressGroup,
+  INGRESS_GROUP_MANAGE_SCOPE,
+  INGRESS_GROUP_VIEW_SCOPE,
   viewableIngressGroupFolderIds,
 } from './ingress-group-access.js';
 
@@ -55,7 +57,7 @@ async function requireManageableGroup(scopes: readonly string[], id: string) {
 }
 
 export async function listIngressGroupsFor(scopes: readonly string[], rawQuery: unknown) {
-  requireAnyBase(scopes, ['nodes:details', 'nodes:manage']);
+  requireAnyBase(scopes, [INGRESS_GROUP_VIEW_SCOPE, INGRESS_GROUP_MANAGE_SCOPE]);
   const query = IngressGroupListQuerySchema.parse(rawQuery ?? {});
   const folderIds = viewableIngressGroupFolderIds(scopes);
   const groups = await service().list(query);
@@ -63,7 +65,7 @@ export async function listIngressGroupsFor(scopes: readonly string[], rawQuery: 
 }
 
 export async function getIngressGroupFor(scopes: readonly string[], id: string) {
-  requireAnyBase(scopes, ['nodes:details', 'nodes:manage']);
+  requireAnyBase(scopes, [INGRESS_GROUP_VIEW_SCOPE, INGRESS_GROUP_MANAGE_SCOPE]);
   const group = await service().requireGroup(id);
   if (!canViewIngressGroup(scopes, group.folderId)) {
     throw new AppError(404, 'INGRESS_GROUP_NOT_FOUND', 'Ingress group not found');

@@ -2,30 +2,31 @@ import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 
+export const INGRESS_GROUP_VIEW_SCOPE = 'ingress:groups:view';
+export const INGRESS_GROUP_MANAGE_SCOPE = 'ingress:groups:manage';
+
 /**
- * Ingress groups live in node folders and use node scopes: viewing needs nodes:details (broadly or on the group's
- * folder), changing needs nodes:manage (broadly or on the folder), and putting a node into a group also needs
- * nodes:manage on that node.
+ * Ingress groups live in node folders and have their own scopes, broad or limited to a node folder: viewing needs
+ * ingress:groups:view (ingress:groups:manage implies it), changing needs ingress:groups:manage (broadly or on the
+ * group's folder), and putting a node into a group also needs nodes:manage on that node.
  */
 export function canViewIngressGroup(scopes: readonly string[], folderId: string | null): boolean {
   return (
-    hasScope(scopes, 'nodes:details') ||
-    hasScope(scopes, 'nodes:manage') ||
-    (!!folderId &&
-      (hasScope(scopes, `nodes:details:folder/${folderId}`) || hasScope(scopes, `nodes:manage:folder/${folderId}`)))
+    hasScope(scopes, INGRESS_GROUP_VIEW_SCOPE) ||
+    (!!folderId && hasScope(scopes, `${INGRESS_GROUP_VIEW_SCOPE}:folder/${folderId}`))
   );
 }
 
 /** Folder ids whose groups a folder-limited caller may view; null means every group. */
 export function viewableIngressGroupFolderIds(scopes: readonly string[]): string[] | null {
-  if (hasScope(scopes, 'nodes:details') || hasScope(scopes, 'nodes:manage')) return null;
-  return getFolderScopedIds(scopes, ['nodes:details', 'nodes:manage']);
+  if (hasScope(scopes, INGRESS_GROUP_VIEW_SCOPE)) return null;
+  return getFolderScopedIds(scopes, [INGRESS_GROUP_VIEW_SCOPE, INGRESS_GROUP_MANAGE_SCOPE]);
 }
 
 export function assertCanManageIngressGroup(scopes: readonly string[], folderId: string | null): void {
-  if (hasScopeForCreation(scopes, 'nodes:manage', folderId)) return;
-  throw new AppError(403, 'FORBIDDEN', 'Managing this ingress group requires nodes:manage', {
-    requiredScope: folderId ? `nodes:manage:folder/${folderId}` : 'nodes:manage',
+  if (hasScopeForCreation(scopes, INGRESS_GROUP_MANAGE_SCOPE, folderId)) return;
+  throw new AppError(403, 'FORBIDDEN', `Managing this ingress group requires ${INGRESS_GROUP_MANAGE_SCOPE}`, {
+    requiredScope: folderId ? `${INGRESS_GROUP_MANAGE_SCOPE}:folder/${folderId}` : INGRESS_GROUP_MANAGE_SCOPE,
   });
 }
 

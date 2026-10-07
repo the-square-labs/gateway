@@ -30,7 +30,7 @@ const NO_SCOPES: string[] = [];
 export function IngressGroups() {
   const navigate = useNavigate();
   const scopes = useAuthStore((state) => state.user?.scopes ?? NO_SCOPES);
-  const canCreate = hasScopeBase(scopes, "nodes:manage");
+  const canCreate = hasScopeBase(scopes, "ingress:groups:manage");
   const [groups, setGroups] = useState<IngressGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const initialLoading = useInitialLoading(loading);

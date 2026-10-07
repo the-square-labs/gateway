@@ -4,14 +4,14 @@ export const INGRESS_GROUP_DOCS: Record<string, string> = {
 An ingress group is a set of nginx ingress nodes, normally one per site, that serve the same routes and domains. Each member renders every route of the group itself and keeps its own replica of every certificate, so a member keeps serving while the Gateway control plane or another member is down. Use manage_ingress_group (REST: /api/ingress-groups).
 
 ## Model
-- A group has a name, slug, optional description, a node folder (folderId; groups use node permissions) and dnsFailoverMode.
+- A group has a name, slug, optional description, a node folder (folderId; groups use node folders, with their own ingress:groups permissions) and dnsFailoverMode.
 - Members are nginx nodes in site-preference order (reorder changes it). A node may belong to several groups. Only nodes whose nginx daemon reports the ingress_group_v1 capability can be members.
 - Member state: joining (being prepared, not in DNS), active (serving and published in DNS), draining (still serving, withdrawn from DNS, removed once DNS stopped pointing at it).
 - Routes (create_route or update_route ingressGroupId) and domains (create_domain ingressGroupId, manage_domain update) target either one node or one group. A route on a group is served by every member; route nodeId then shows the first active member.
 - A domain name must be unique across every member of every group and node it is served on.
 
 ## Permissions And License
-- list and get need nodes:details or nodes:manage (broadly or on the group folder). Changes need nodes:manage on the folder; putting a node into a group also needs nodes:manage on that node.
+- Ingress groups have their own permissions, granted broadly or on a node folder (\`<scope>:folder/<nodeFolderId>\`, covering its subfolders); node permissions do not reveal them. list and get need ingress:groups:view; create, update, delete, add_member, remove_member and reorder need ingress:groups:manage (which implies view) on the group folder; putting a node into a group also needs nodes:manage on that node.
 - Placing a route or domain on a group needs proxy:create or domains:create covering every member (broad, the destination folder, or a node grant on each member).
 - Creating a group or growing its runtime (create, update, add_member, reorder, placing routes or domains on it) needs the multi-node availability license feature. Existing groups keep serving without it; delete and remove_member are always allowed.
 

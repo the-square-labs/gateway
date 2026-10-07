@@ -269,6 +269,15 @@ async function expandDockerFamily(db: DrizzleClient, grants: FolderScopedGrant[]
   });
 }
 
+/** Ingress groups live in node folders and are granted by folder only: a grant covers the folder's subfolders. */
+async function expandIngressGroupFamily(db: DrizzleClient, grants: FolderScopedGrant[]): Promise<string[]> {
+  if (grants.length === 0) return [];
+  const folderRows = await db.select({ id: nodeFolders.id, parentId: nodeFolders.parentId }).from(nodeFolders);
+  return grants.flatMap((grant) =>
+    [...folderDescendants(folderRows, grant.folderId)].map((folderId) => folderScopedScope(grant.baseScope, folderId))
+  );
+}
+
 /** CA folders hold root CAs; a grant on a folder also covers the intermediates below each root. */
 async function expandPkiCaFamily(db: DrizzleClient, grants: FolderScopedGrant[]): Promise<string[]> {
   const expanded = await expandSimpleFamily(db, grants, pkiCaFolders, certificateAuthorities);
@@ -321,6 +330,7 @@ function familyForBaseScope(baseScope: string) {
   if (baseScope.startsWith('pages:')) return 'pages';
   if (baseScope.startsWith('ssl:cert:')) return 'ssl';
   if (baseScope.startsWith('nodes:')) return 'nodes';
+  if (baseScope.startsWith('ingress:groups:')) return 'ingress-groups';
   if (baseScope.startsWith('docker:containers:')) return 'docker';
   if (baseScope === 'docker:availability:manage') return 'docker';
   if (baseScope.startsWith('docker:compose:')) return 'docker';
@@ -471,6 +481,7 @@ export async function expandFolderScopes(db: DrizzleClient, scopes: readonly str
     expandSimpleFamily(db, byFamily.get('pki-certificates') ?? [], pkiCertificateFolders, certificates),
     expandSimpleFamily(db, byFamily.get('nginx-templates') ?? [], nginxTemplateFolders, nginxTemplates),
     expandSimpleFamily(db, byFamily.get('nodes') ?? [], nodeFolders, nodes),
+    expandIngressGroupFamily(db, byFamily.get('ingress-groups') ?? []),
     expandDockerFamily(db, byFamily.get('docker') ?? []),
     expandSimpleFamily(db, byFamily.get('storage') ?? [], objectStorageFolders, objectStorageConnections),
     expandSimpleFamily(db, byFamily.get('databases') ?? [], databaseConnectionFolders, databaseConnections),
