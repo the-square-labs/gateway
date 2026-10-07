@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
 
@@ -81,6 +82,8 @@ func main() {
 		log.Printf("draining on signal: listeners closed, %d sessions go on", active)
 	})
 
+	// A transient accept error (out of file descriptors) backs off instead of spinning and flooding the log.
+	var backoff netaccept.Backoff
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
@@ -88,8 +91,12 @@ func main() {
 				return
 			}
 			log.Printf("accept control connection: %v", err)
+			if !backoff.Retry(err, ctx.Done()) {
+				return
+			}
 			continue
 		}
+		backoff.Reset()
 		go handleControlConnection(connection, manager, egress)
 	}
 }

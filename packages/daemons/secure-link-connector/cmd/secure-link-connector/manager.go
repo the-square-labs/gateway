@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
 
@@ -208,12 +209,19 @@ func (b *bindingListener) status(id string) securelink.BindingStatus {
 	return securelink.BindingStatus{ID: id, Generation: generation, Port: uint16(address.Port)}
 }
 
+// accept serves the binding until its listener closes. A transient accept error (out of file descriptors) backs off
+// and retries: returning left the listener open but never accepting again (B-22).
 func (b *bindingListener) accept(globalSessions chan struct{}) {
+	var backoff netaccept.Backoff
 	for {
 		connection, err := b.listener.Accept()
 		if err != nil {
+			if backoff.Retry(err, b.done) {
+				continue
+			}
 			return
 		}
+		backoff.Reset()
 		if !b.peer.allows(connection.RemoteAddr()) {
 			connection.Close()
 			continue
