@@ -1,6 +1,5 @@
 import { container } from '@/container.js';
-import { hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
-import { AppError } from '@/middleware/error-handler.js';
+import { hasScopeBase } from '@/lib/permissions.js';
 import { assertComposeChildMutationAllowed } from '@/modules/docker/compose/compose-child.guard.js';
 import {
   ContainerArchivePlanSchema,
@@ -18,7 +17,6 @@ import {
 } from '@/modules/docker/docker-container-observability.js';
 import {
   containerRecreateRequiredScopes,
-  containerUpdateChangesImage,
   containerUpdateRequiredScopes,
 } from '@/modules/docker/docker-container-scope-requirements.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
@@ -67,8 +65,8 @@ const UPDATE_FIELDS = ['tag', 'env', 'removeEnv'] as const;
 
 /**
  * POST /containers/:id/recreate access: docker:containers:manage, the scopes
- * containerRecreateRequiredScopes adds for the changed fields, image pull
- * access on the node when the image changes, and the Compose child guard.
+ * containerRecreateRequiredScopes adds for the changed fields (they also
+ * authorize pulling a new image), and the Compose child guard.
  */
 export async function assertDockerContainerRecreateAccess(
   dockerService: DockerManagementService,
@@ -84,10 +82,6 @@ export async function assertDockerContainerRecreateAccess(
     nodeId,
     containerId
   );
-  // The route's assertDockerCreationAccess(..., 'docker:images:pull', nodeId, undefined, 'image').
-  if (typeof config.image === 'string' && !hasScopeForCreation(user.scopes, 'docker:images:pull', undefined, nodeId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing docker:images:pull for the destination node or folder');
-  }
   await assertComposeChildMutationAllowed(nodeId, containerId);
   return inspected;
 }
@@ -126,17 +120,10 @@ export async function manageDockerContainerTool(
       await ensureDockerContainerScopes(
         dockerService,
         user,
-        ['docker:containers:edit', ...containerUpdateRequiredScopes(config)],
+        containerUpdateRequiredScopes(config),
         nodeId,
         containerId
       );
-      // The route's image pull check for a new tag.
-      if (
-        containerUpdateChangesImage(config) &&
-        !hasScopeForCreation(user.scopes, 'docker:images:pull', undefined, nodeId)
-      ) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing docker:images:pull for the destination node or folder');
-      }
       await assertComposeChildMutationAllowed(nodeId, containerId);
       return dockerService.updateContainer(nodeId, containerId, config, user.id, user.scopes);
     }
@@ -173,7 +160,7 @@ export async function manageDockerContainerTool(
   }
 }
 
-/** Container and deployment image-cleanup routes; both require docker:containers:edit on the target. */
+/** Container and deployment image-cleanup routes: reading needs docker:containers:view, saving :edit on the target. */
 async function manageImageCleanup(
   dockerService: DockerManagementService,
   user: User,
@@ -186,22 +173,17 @@ async function manageImageCleanup(
     operation === 'image_cleanup_upsert'
       ? ImageCleanupUpsertSchema.parse(pickDefinedArguments(args, ['enabled', 'retentionCount']))
       : undefined;
+  const scope = input ? 'docker:containers:edit' : 'docker:containers:view';
   if (args.targetType === 'deployment') {
     const deploymentId = requiredToolString(args.deploymentId, 'deploymentId');
-    ensureToolScopeForResource(user, 'docker:containers:edit', `${nodeId}/${deploymentId}`);
+    ensureToolScopeForResource(user, scope, `${nodeId}/${deploymentId}`);
     await container.resolve(DockerDeploymentService).get(nodeId, deploymentId);
     return input
       ? cleanup.upsertForDeployment(nodeId, deploymentId, input)
       : cleanup.getForDeployment(nodeId, deploymentId);
   }
   const reference = requiredToolString(args.containerName ?? args.containerId, 'containerName');
-  const inspected = await ensureDockerContainerScopes(
-    dockerService,
-    user,
-    ['docker:containers:edit'],
-    nodeId,
-    reference
-  );
+  const inspected = await ensureDockerContainerScopes(dockerService, user, [scope], nodeId, reference);
   const containerName = String(inspected?.Name ?? inspected?.name ?? '').replace(/^\//, '') || reference;
   return input
     ? cleanup.upsertForContainer(nodeId, containerName, input)

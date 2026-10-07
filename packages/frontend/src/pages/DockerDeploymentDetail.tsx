@@ -175,7 +175,7 @@ export function DockerDeploymentDetail({
   const navigate = useStableNavigate();
   const location = useLocation();
   const backTarget = getReturnNavigationTarget(location.state, "/docker");
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const hasDeploymentScope = (baseScope: string) =>
     !!nodeId && !!deploymentId && hasScope(`${baseScope}:${nodeId}/${deploymentId}`);
   const canManage = hasDeploymentScope("docker:containers:manage");
@@ -188,7 +188,10 @@ export function DockerDeploymentDetail({
   const canReadFiles = hasDeploymentScope("docker:containers:files:read");
   const canWriteFiles = hasDeploymentScope("docker:containers:files:write");
   const canUseEnvironment = hasDeploymentScope("docker:containers:environment");
-  const canEditMounts = hasDeploymentScope("docker:containers:mounts");
+  // Managed volumes are attached with view access to each volume; docker:containers:mounts
+  // covers legacy host binds and keeps the editor open to its holders.
+  const canChangeHostBinds = hasDeploymentScope("docker:containers:mounts");
+  const canEditMounts = canChangeHostBinds || (canEdit && hasScopedAccess("docker:volumes:view"));
 
   const [deployment, setDeployment] = useState<DockerDeployment | null>(null);
   const [sourceIdentity, setSourceIdentity] = useState<Pick<
@@ -981,7 +984,9 @@ export function DockerDeploymentDetail({
 
   // Saved variables reach the slots only through a rollout, so a serving
   // deployment deploys them; a stopped one picks them up when it starts.
+  // Saving needs only environment; without manage the next deploy rolls them out.
   const environmentRollsOut =
+    canManage &&
     (environmentWorkloadState === "running" || environmentWorkloadState === "restarting") &&
     deployment?.status !== "creating";
   const saveServiceEnv = useCallback(
@@ -1465,6 +1470,7 @@ export function DockerDeploymentDetail({
                   setDeployment((current) => (current ? { ...current, healthCheck } : current))
                 }
                 canEditMounts={canEditMounts}
+                canChangeHostBinds={canChangeHostBinds}
                 availabilityManaged={Boolean(availabilityManaged)}
                 availabilitySourceImageReference={availabilityPolicy?.sourceImageReference}
                 busyReason={settingsBusyReason}

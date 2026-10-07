@@ -304,6 +304,10 @@ export async function importDockerContainerArchive(args: {
             target: mount.target,
             readOnly: mount.readOnly,
           })),
+          // New volumes need docker:volumes:create (checked below); an existing one is attached with its view.
+          createdVolumes: (archiveContainer.mounts ?? [])
+            .filter((mount) => mount.type === 'volume' && mount.createNew)
+            .map((mount) => mount.source),
         });
         if (
           Object.keys(archiveContainer.environment ?? {}).length > 0 &&

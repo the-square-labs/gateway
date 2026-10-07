@@ -1,13 +1,7 @@
 import { z } from 'zod';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import {
-  getResourceScopedIds,
-  hasScope,
-  hasScopeBase,
-  hasScopeForCreation,
-  hasScopeForResource,
-} from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   ComposeAdoptInputSchema,
@@ -68,7 +62,6 @@ import {
   pendingOperationBody,
 } from '@/modules/docker/docker-container-lifecycle-operations.js';
 import {
-  type DeploymentChangeRequirements,
   deploymentDeployRequiredScopes,
   deploymentUpdateRequiredScopes,
 } from '@/modules/docker/docker-container-scope-requirements.js';
@@ -1006,12 +999,9 @@ function ensureDeploymentChangeAccess(
   user: User,
   nodeId: string,
   deploymentId: string,
-  requirements: DeploymentChangeRequirements
+  required: string[]
 ): void {
-  for (const scope of requirements.scopes) ensureDockerDeploymentScope(context, user, scope, nodeId, deploymentId);
-  if (requirements.pullsImage && !hasScopeForCreation(user.scopes, 'docker:images:pull', undefined, nodeId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing docker:images:pull for the destination node or folder');
-  }
+  for (const scope of required) ensureDockerDeploymentScope(context, user, scope, nodeId, deploymentId);
 }
 
 async function manageDockerRegistry(context: DockerToolContext, user: User, args: Record<string, unknown>) {
@@ -1161,9 +1151,9 @@ async function manageDockerVolume(context: DockerToolContext, user: User, args: 
     return { success: true };
   }
   if (operation === 'managed_options') {
-    // GET /nodes/:nodeId/managed-volumes: docker:containers:mounts for the node.
-    context.ensureToolScopeForResource(user, 'docker:containers:mounts', nodeId);
-    return context.dockerService.listManagedVolumeOptions(nodeId);
+    // GET /nodes/:nodeId/managed-volumes: the managed volumes the caller may attach (docker:volumes:view on each).
+    const rows = await context.dockerService.listManagedVolumeOptions(nodeId);
+    return rows.filter((row) => hasDockerResourceScope(user.scopes, 'docker:volumes:view', nodeId, row.name));
   }
   if (operation === 'inspect') {
     // GET /nodes/:nodeId/volumes/:name serves the cached detail with the public visibility applied.
@@ -1324,10 +1314,12 @@ async function canAccessDockerBuild(user: User, build: any, action: 'view' | 'ma
   const compose = build.target.kind === 'compose_project';
   const baseScope = compose ? `docker:compose:${action}` : `docker:containers:${action}`;
   if (hasDockerResourceScope(user.scopes, baseScope, build.target.nodeId, '')) return true;
+  // A pending Git source container exists only as its reservation until its first build creates it.
   const resourceId =
     build.target.kind === 'container'
       ? await container.resolve(DockerAccessResourceService).resolveContainer(build.target.nodeId, {
           name: build.target.containerName,
+          includeReservations: true,
         })
       : build.target.kind === 'deployment'
         ? build.target.deploymentId
@@ -1623,16 +1615,11 @@ async function manageDockerDeployment(context: DockerToolContext, user: User, ar
     }
     case 'update': {
       const deploymentId = String(a.deploymentId ?? '');
-      ensureDockerDeploymentScope(context, user, 'docker:containers:edit', nodeId, deploymentId);
+      // As the update route: an env-only save needs environment, anything else edit.
+      ensureDockerDeploymentScope(context, user, 'docker:containers:view', nodeId, deploymentId);
       const input = DockerDeploymentUpdateSchema.parse(a.payload ?? {});
       const saved = await service.get(nodeId, deploymentId);
-      ensureDeploymentChangeAccess(
-        context,
-        user,
-        nodeId,
-        deploymentId,
-        deploymentUpdateRequiredScopes(input.desiredConfig, saved.desiredConfig)
-      );
+      ensureDeploymentChangeAccess(context, user, nodeId, deploymentId, deploymentUpdateRequiredScopes(input, saved));
       const data = await service.update(nodeId, deploymentId, input, user.id, user.scopes);
       return presentDeploymentForCaller(data, user.scopes, nodeId, deploymentId);
     }

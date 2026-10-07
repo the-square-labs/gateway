@@ -44,7 +44,7 @@ export function requiredScopeFor(channel: string): string | null {
   if (channel === 'nginx.template.changed' || channel === 'nginx.template.folder.changed')
     return 'proxy:templates:view';
   if (channel === 'docker.folder.changed') return 'docker:containers:view';
-  if (channel === 'docker.image-cleanup.changed') return 'docker:containers:edit';
+  if (channel === 'docker.image-cleanup.changed') return 'docker:containers:view';
   if (channel === 'docker.registry.changed') return 'docker:registries:view';
   if (channel.startsWith('docker.build')) return 'docker:containers:view';
   if (channel === 'docker.file.changed') return 'docker:containers:files:read';
@@ -186,7 +186,7 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
     return hasScopeBase(scopes, 'docker:containers:files:read');
   }
   if (channel === 'docker.image-cleanup.changed') {
-    return hasScopeBase(scopes, 'docker:containers:edit');
+    return hasScopeBase(scopes, 'docker:containers:view');
   }
   if (channel.startsWith('docker.image')) {
     return hasScopeBase(scopes, 'docker:images:view');

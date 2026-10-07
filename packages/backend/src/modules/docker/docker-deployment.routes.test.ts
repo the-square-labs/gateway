@@ -70,14 +70,13 @@ describe('deployment changes that expose env and secrets', () => {
     expect(service.update).toHaveBeenCalledOnce();
   });
 
-  it('accepts an image change with environment, secrets and image pull access', async () => {
+  it('accepts an image change with environment and secrets on the deployment, without docker:images:pull', async () => {
     const service = registerService();
     const router = app([
       `docker:containers:manage:${NODE}/${DEPLOYMENT}`,
       `docker:containers:edit:${NODE}/${DEPLOYMENT}`,
       `docker:containers:environment:${NODE}/${DEPLOYMENT}`,
       `docker:containers:secrets:${NODE}/${DEPLOYMENT}`,
-      `docker:images:pull:${NODE}`,
     ]);
 
     expect((await send(router, 'POST', '/deploy', { image: 'registry.example.com/app:2.0' })).status).toBe(200);

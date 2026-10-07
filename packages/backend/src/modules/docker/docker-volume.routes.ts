@@ -4,7 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { hasScopeBase } from '@/lib/permissions.js';
 import { sanitizeFilename } from '@/lib/utils.js';
-import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { requireAnyScopeBase } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { assertComposeVolumeMutationAllowed } from './compose/compose-child.guard.js';
 import { isComposeOwnedVolume } from './compose/compose-discovery.service.js';
@@ -45,6 +45,7 @@ import {
 } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
 import { assertDockerResourceScope, filterDockerResourcesForScope } from './docker-access.middleware.js';
+import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
 import { DOCKER_VOLUME_EDIT_SCOPE } from './docker-volume-access.js';
 import {
@@ -132,15 +133,21 @@ async function parseFileContentRequest(c: Parameters<Parameters<OpenAPIHono<AppE
 export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
   // ─── Volume routes ───────────────────────────────────────────────────
 
+  // The managed volumes the caller may attach: a volume is attached with docker:volumes:view on it. Holders of
+  // docker:containers:mounts keep the route and get the volumes they can view.
   router.openapi(
     {
       ...listManagedVolumeOptionsRoute,
-      middleware: requireScopeForResource('docker:containers:mounts', 'nodeId'),
+      middleware: requireAnyScopeBase('docker:volumes:view', 'docker:containers:mounts'),
     },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
-      return c.json({ data: await service.listManagedVolumeOptions(nodeId) });
+      const scopes = c.get('effectiveScopes') ?? [];
+      const rows = await service.listManagedVolumeOptions(nodeId);
+      return c.json({
+        data: rows.filter((row) => hasDockerResourceScope(scopes, 'docker:volumes:view', nodeId, row.name)),
+      });
     }
   );
 

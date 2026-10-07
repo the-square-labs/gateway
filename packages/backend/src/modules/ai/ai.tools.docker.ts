@@ -37,7 +37,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         volumes: {
           type: 'array',
           description:
-            'Existing Gateway-managed named-volume mounts. Supplying mounts also requires docker:containers:mounts for the node.',
+            'Existing Gateway-managed named-volume mounts. Each volume needs docker:volumes:view (or edit) on it.',
           items: {
             type: 'object',
             properties: {
@@ -249,7 +249,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'deploy_docker_deployment',
     description:
-      'Deploy a new inactive slot for a blue/green Docker deployment, optionally with a full image reference or a new tag. This is the deployment-safe replacement for updating a managed slot container image. env sets variables over the saved environment of the deployment and removeEnv removes keys; every other saved variable stays, and the result is saved as the deployment environment. An image or tag also needs docker:containers:edit, docker:containers:environment and docker:containers:secrets on the deployment and docker:images:pull on the node (the new slot starts with the env and secrets of the deployment); env or removeEnv alone needs docker:containers:environment. On a deployment with legacy host bind mounts, an image or tag needs docker:containers:mounts (a new image runs new code with that host access); redeploying the saved configuration, as a link change does, needs none.',
+      'Deploy a new inactive slot for a blue/green Docker deployment, optionally with a full image reference or a new tag. This is the deployment-safe replacement for updating a managed slot container image. env sets variables over the saved environment of the deployment and removeEnv removes keys; every other saved variable stays, and the result is saved as the deployment environment. An image or tag also needs docker:containers:edit, docker:containers:environment and docker:containers:secrets on the deployment (the new slot starts with the env and secrets of the deployment); these scopes authorize pulling it, docker:images:pull is not needed. env or removeEnv alone needs docker:containers:environment. On a deployment with legacy host bind mounts, an image or tag needs docker:containers:mounts (a new image runs new code with that host access); redeploying the saved configuration, as a link change does, needs none.',
     parameters: {
       type: 'object',
       properties: {
@@ -677,7 +677,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_volume',
     description:
-      'Create, inspect, resize, adopt, rename, relabel, delete, and browse files of Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. inspect and metrics read the cached detail and usage; managed_options lists volumes selectable as container mounts (docker:containers:mounts). rename (newName), update_labels (labels), resize and adopt edit one volume and need docker:volumes:edit on it (a node or folder grant covers it). File operations (list_files, read_file, write_file, create_file, create_directory, delete_file, move_file, upload_init/upload_chunk/upload_complete/upload_abort) need docker:volumes:files:read or :write; binary content uses contentBase64 and upload chunks carry at most 1 MiB. Archive export uses the MCP-only download_docker_archive tool. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
+      'Create, inspect, resize, adopt, rename, relabel, delete, and browse files of Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. inspect and metrics read the cached detail and usage; managed_options lists the managed volumes the caller may attach as container mounts (docker:volumes:view on each). rename (newName), update_labels (labels), resize and adopt edit one volume and need docker:volumes:edit on it (a node or folder grant covers it). File operations (list_files, read_file, write_file, create_file, create_directory, delete_file, move_file, upload_init/upload_chunk/upload_complete/upload_abort) need docker:volumes:files:read or :write; binary content uses contentBase64 and upload chunks carry at most 1 MiB. Archive export uses the MCP-only download_docker_archive tool. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
     parameters: {
       type: 'object',
       properties: {
@@ -1040,7 +1040,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_container_config',
     description:
-      'Manage container env, files, secrets, webhooks, and HTTP health checks. Container file list/read requires docker:containers:files:read; write_file, create_file, create_directory, delete_file, move_file, and resumable upload_init/upload_chunk/upload_complete/upload_abort require docker:containers:files:write. Binary content uses contentBase64 (upload chunks at most 1 MiB); read_file returns UTF-8 unless encoding is base64. Other operation-specific environment/secrets/webhooks/edit/view scopes are enforced.',
+      'Manage container env, files, secrets, webhooks, and HTTP health checks. Container file list/read requires docker:containers:files:read; write_file, create_file, create_directory, delete_file, move_file, and resumable upload_init/upload_chunk/upload_complete/upload_abort require docker:containers:files:write. Binary content uses contentBase64 (upload chunks at most 1 MiB); read_file returns UTF-8 unless encoding is base64. update_env recreates the container with the new values and needs docker:containers:environment. list_secrets returns the secret keys with docker:containers:environment; reveal (values) and create/update/delete_secret need docker:containers:secrets, which also grants docker:containers:environment. Other operation-specific webhooks/edit/view scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
@@ -1081,7 +1081,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         secretId: { type: 'string' },
         key: { type: 'string' },
         value: { type: 'string' },
-        reveal: { type: 'boolean' },
+        reveal: { type: 'boolean', description: 'list_secrets: include the values (docker:containers:secrets)' },
         env: { type: 'object', description: 'Environment key/value map for update_env' },
         removeEnv: { type: 'array', items: { type: 'string' } },
         path: { type: 'string', description: 'Container file path' },
@@ -1112,7 +1112,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_deployment',
     description:
-      'Create, update, or delete a blue/green Docker deployment. create needs docker:containers:create for the node or folder; update needs docker:containers:edit, plus docker:containers:environment and docker:containers:secrets when it changes image, command, entrypoint, user or runtimeProfile (and docker:images:pull for a new image), and docker:containers:environment when it changes env; delete needs docker:containers:delete and removes both slots and the router. Use deploy_docker_deployment to roll out a new image.',
+      'Create, update, or delete a blue/green Docker deployment. create needs docker:containers:create for the node or folder; update needs docker:containers:edit, plus docker:containers:environment and docker:containers:secrets when it changes image, command, entrypoint, user or runtimeProfile, and docker:containers:environment when it changes env; an update that changes only desiredConfig.env needs docker:containers:environment alone (the slots get it with the next deploy, which needs docker:containers:manage); the deployment's own scopes authorize pulling a new image, docker:images:pull is not needed; delete needs docker:containers:delete and removes both slots and the router. Use deploy_docker_deployment to roll out a new image.',
     parameters: {
       type: 'object',
       properties: {
@@ -1169,7 +1169,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_container',
     description:
-      'Change or inspect an existing standalone Docker container beyond start/stop. recreate applies a new configuration by recreating the container: image, ports, mounts (managed volumes by name; existing host bind mounts must be passed back unchanged), entrypoint, command, workingDir, user, hostname, labels, stopTimeout, restartPolicy, maxRetries, memoryLimit, memorySwap, nanoCPUs, cpuShares, pidsLimit, gpu, and runtimeProfile; omitted fields keep their current value, while ports, mounts, labels, and gpu replace the whole list. recreate needs docker:containers:manage plus edit, and changing image, entrypoint, command, user, or runtimeProfile also needs config, environment, and secrets access; a new image needs docker:images:pull on the node. live_update changes restartPolicy, maxRetries, and resource limits without recreation (docker:containers:edit). update pulls a new tag and/or changes env/removeEnv and redeploys (edit; env changes need environment access; a new tag runs other code with the env and secrets of the container, so it also needs environment and secrets access and docker:images:pull on the node). processes lists running processes, stats_history returns recent resource samples, and gpu_usage lists GPU devices with their visible containers on the node. image_cleanup_get and image_cleanup_upsert read or set old-image retention (enabled, retentionCount 1-50) for a container or, with targetType deployment, a blue/green deployment (docker:containers:edit). archive_plan_import resolves an archive manifest summary (archiveManifest) against the node before upload_docker_container_archive. Compose-owned containers must be changed through their Compose project and blue/green slot containers through deployment tools; a running build rollout owns its container and changes are refused with 409.',
+      'Change or inspect an existing standalone Docker container beyond start/stop. recreate applies a new configuration by recreating the container: image, ports, mounts (managed volumes by name; existing host bind mounts must be passed back unchanged), entrypoint, command, workingDir, user, hostname, labels, stopTimeout, restartPolicy, maxRetries, memoryLimit, memorySwap, nanoCPUs, cpuShares, pidsLimit, gpu, and runtimeProfile; omitted fields keep their current value, while ports, mounts, labels, and gpu replace the whole list. recreate needs docker:containers:manage plus edit, and changing image, entrypoint, command, user, or runtimeProfile also needs environment and secrets access; the container's own scopes authorize pulling a new image (no docker:images:pull). live_update changes restartPolicy, maxRetries, and resource limits without recreation (docker:containers:edit). update pulls a new tag and/or changes env/removeEnv and redeploys: a new tag runs other code with the env and secrets of the container, so it needs edit, environment and secrets (no docker:images:pull); env/removeEnv alone needs environment, as update_env; neither needs edit. processes lists running processes, stats_history returns recent resource samples, and gpu_usage lists GPU devices with their visible containers on the node. image_cleanup_get and image_cleanup_upsert read or set old-image retention (enabled, retentionCount 1-50) for a container or, with targetType deployment, a blue/green deployment (reading needs docker:containers:view, setting docker:containers:edit). archive_plan_import resolves an archive manifest summary (archiveManifest) against the node before upload_docker_container_archive. Compose-owned containers must be changed through their Compose project and blue/green slot containers through deployment tools; a running build rollout owns its container and changes are refused with 409.',
     parameters: {
       type: 'object',
       properties: {
@@ -1218,7 +1218,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         mounts: {
           type: 'array',
           description:
-            'recreate: complete mount list. Use name for a Gateway-managed volume or hostPath for an existing host bind mount; changing mounts requires docker:containers:mounts.',
+            'recreate: complete mount list. Use name for a Gateway-managed volume or hostPath for an existing host bind mount; a newly attached volume needs docker:volumes:view on it, and changing or removing a host bind mount requires docker:containers:mounts.',
           items: {
             type: 'object',
             properties: {

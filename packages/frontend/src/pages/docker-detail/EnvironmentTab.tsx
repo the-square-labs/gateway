@@ -122,6 +122,7 @@ export function EnvironmentTab({
   const envMutationInProgressRef = useRef(false);
 
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
+  // Environment edits the variables and lists the secret keys; secrets reveals and edits the values.
   const canEdit = canEditOverride ?? hasScope(`docker:containers:environment:${scopeSuffix}`);
   const canManageSecrets =
     canManageSecretsOverride ?? hasScope(`docker:containers:secrets:${scopeSuffix}`);
@@ -242,11 +243,12 @@ export function EnvironmentTab({
     setIsLoading((current) => (isServiceEnv ? current : true));
     try {
       if (isServiceEnv) {
-        const secretsData = canManageSecrets
-          ? secretApi
-            ? await secretApi.list()
-            : await api.listDockerDeploymentSecrets(nodeId, targetContainerId)
-          : [];
+        const secretsData =
+          canManageSecrets || canEdit
+            ? secretApi
+              ? await secretApi.list()
+              : await api.listDockerDeploymentSecrets(nodeId, targetContainerId)
+            : [];
         const serviceEnvRecord = JSON.parse(serviceEnvSignature) as Record<string, string>;
         const entries = Object.entries(serviceEnvRecord).map(([key, value]) => `${key}=${value}`);
         const parsed = entries.map((entry) => {
@@ -273,7 +275,9 @@ export function EnvironmentTab({
 
       const [data, secretsData] = await Promise.all([
         canEdit ? api.getContainerEnv(nodeId, targetContainerId) : Promise.resolve([]),
-        canManageSecrets ? api.listDockerSecrets(nodeId, targetContainerId) : Promise.resolve([]),
+        canManageSecrets || canEdit
+          ? api.listDockerSecrets(nodeId, targetContainerId)
+          : Promise.resolve([]),
       ]);
       if (!isCurrentRequest()) return;
 
@@ -293,7 +297,7 @@ export function EnvironmentTab({
         setRawText("");
       }
 
-      if (canManageSecrets) {
+      if (canManageSecrets || canEdit) {
         const rows: SecretRow[] = (secretsData ?? [])
           .filter((s: DockerSecret) => !s.system)
           .map((s: DockerSecret) => ({
@@ -621,7 +625,7 @@ export function EnvironmentTab({
           ? await secretApi.list()
           : onSaveServiceEnv
             ? await api.listDockerDeploymentSecrets(nodeId, containerId)
-            : canManageSecrets
+            : canManageSecrets || canEdit
               ? await api.listDockerSecrets(nodeId, containerId)
               : [];
         setSecretRows(
@@ -1057,7 +1061,7 @@ export function EnvironmentTab({
         )}
 
         {/* Secrets section — only in table mode */}
-        {!rawMode && canManageSecrets && (
+        {!rawMode && (canManageSecrets || canEdit) && (
           <SecretsSection
             canManageSecrets={canManageSecrets}
             onSave={!canEdit ? handleSave : undefined}

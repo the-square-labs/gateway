@@ -149,11 +149,10 @@ export async function manageDockerContainerConfigTool(
     return manageContainerFiles(context.dockerService, user, operation, nodeId, containerId, args);
   }
   if (operation.endsWith('_secret') || operation === 'list_secrets') {
-    ensureToolScopeForResource(
-      user,
-      'docker:containers:secrets',
-      await authorizationResourceId('docker:containers:secrets')
-    );
+    // Listing the keys needs environment, as the secrets list route; values and changes need secrets.
+    const secretScope =
+      operation === 'list_secrets' && !args.reveal ? 'docker:containers:environment' : 'docker:containers:secrets';
+    ensureToolScopeForResource(user, secretScope, await authorizationResourceId(secretScope));
     const { DockerSecretService } = await import('@/modules/docker/docker-secret.service.js');
     const secretService = container.resolve(DockerSecretService);
     if (targetType === 'deployment') {
@@ -328,7 +327,8 @@ function dockerConfigOperationScope(operation: string): string | undefined {
   if (operation === 'get_env' || operation === 'update_env') return 'docker:containers:environment';
   if (CONTAINER_FILE_READ_OPERATIONS.has(operation)) return 'docker:containers:files:read';
   if (CONTAINER_FILE_OPERATIONS.has(operation)) return 'docker:containers:files:write';
-  if (operation.endsWith('_secret') || operation === 'list_secrets') return 'docker:containers:secrets';
+  if (operation === 'list_secrets') return 'docker:containers:environment';
+  if (operation.endsWith('_secret')) return 'docker:containers:secrets';
   if (operation.includes('webhook')) return 'docker:containers:webhooks';
   if (operation === 'get_health_check') return 'docker:containers:view';
   if (operation === 'upsert_health_check' || operation === 'test_health_check') return 'docker:containers:edit';

@@ -38,11 +38,9 @@ import {
 } from './docker-access.middleware.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import {
-  type DeploymentChangeRequirements,
   deploymentDeployRequiredScopes,
   deploymentUpdateRequiredScopes,
 } from './docker-container-scope-requirements.js';
-import { assertDockerCreationAccess } from './docker-creation-access.js';
 import {
   DockerDeploymentCreateSchema,
   DockerDeploymentDeploySchema,
@@ -70,23 +68,8 @@ async function deploymentBuildRollout(deploymentId: string) {
 }
 
 /** The container recreate rule for deployments: see deploymentDeployRequiredScopes / deploymentUpdateRequiredScopes. */
-async function assertDeploymentChangeAccess(
-  scopes: string[],
-  nodeId: string,
-  deploymentId: string,
-  requirements: DeploymentChangeRequirements
-) {
-  for (const scope of requirements.scopes) assertDockerResourceScope(scopes, scope, nodeId, deploymentId);
-  if (requirements.pullsImage) {
-    await assertDockerCreationAccess(
-      container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
-      scopes,
-      'docker:images:pull',
-      nodeId,
-      undefined,
-      'image'
-    );
-  }
+function assertDeploymentChangeAccess(scopes: string[], nodeId: string, deploymentId: string, required: string[]) {
+  for (const scope of required) assertDockerResourceScope(scopes, scope, nodeId, deploymentId);
 }
 
 function deploymentSecretContainerName(deploymentId: string) {
@@ -263,7 +246,8 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...updateDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:edit') },
+    // An env-only save needs environment, anything else edit: see deploymentUpdateRequiredScopes.
+    { ...updateDeploymentRoute, middleware: requireDockerDeploymentScope('docker:containers:view') },
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
@@ -272,12 +256,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const scopes = c.get('effectiveScopes') || [];
       const input = DockerDeploymentUpdateSchema.parse(await c.req.json());
       const saved = await service.get(nodeId, deploymentId);
-      await assertDeploymentChangeAccess(
-        scopes,
-        nodeId,
-        deploymentId,
-        deploymentUpdateRequiredScopes(input.desiredConfig, saved.desiredConfig)
-      );
+      assertDeploymentChangeAccess(scopes, nodeId, deploymentId, deploymentUpdateRequiredScopes(input, saved));
       const data = await service.update(nodeId, deploymentId, input, user.id, scopes);
       return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }
@@ -350,7 +329,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const deploymentId = c.req.param('deploymentId')!;
       const scopes = c.get('effectiveScopes') || [];
       const input = DockerDeploymentDeploySchema.parse(await c.req.json().catch(() => ({})));
-      await assertDeploymentChangeAccess(scopes, nodeId, deploymentId, deploymentDeployRequiredScopes(input));
+      assertDeploymentChangeAccess(scopes, nodeId, deploymentId, deploymentDeployRequiredScopes(input));
       const data = await service.deploy(nodeId, deploymentId, input, user.id, 'manual', scopes);
       return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }
@@ -402,7 +381,8 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...listDeploymentSecretsRoute, middleware: requireDockerDeploymentScope('docker:containers:secrets') },
+    // The keys with docker:containers:environment, the values only with docker:containers:secrets.
+    { ...listDeploymentSecretsRoute, middleware: requireDockerDeploymentScope('docker:containers:environment') },
     async (c) => {
       const deploymentService = container.resolve(DockerDeploymentService);
       const secretService = container.resolve(DockerSecretService);
@@ -527,7 +507,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     {
       ...getDeploymentImageCleanupRoute,
-      middleware: requireDockerDeploymentScope('docker:containers:edit'),
+      middleware: requireDockerDeploymentScope('docker:containers:view'),
     },
     async (c) => {
       const nodeId = c.req.param('nodeId')!;

@@ -94,7 +94,7 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     {
       ...getContainerImageCleanupRoute,
-      middleware: requireDockerContainerScope('docker:containers:edit', 'containerName'),
+      middleware: requireDockerContainerScope('docker:containers:view', 'containerName'),
     },
     async (c) => {
       const service = container.resolve(DockerImageCleanupService);

@@ -18,11 +18,11 @@ describe('Docker mount scope guard', () => {
     ).toThrowError(/docker:containers:mounts/);
   });
 
-  it('allows creating with mounts when the actor has mount scope', () => {
+  it('allows creating with a managed volume with view access to it, without mount scope', () => {
     expect(() =>
       assertDockerMountChangeAllowed({
         nodeId: 'node-1',
-        actorScopes: ['docker:containers:mounts:node-1'],
+        actorScopes: ['docker:volumes:view:node-1/app-data'],
         currentDefinitions: [],
         nextConfig: { volumes: [{ name: 'app-data', containerPath: '/data' }] },
       })
@@ -144,6 +144,61 @@ describe('Docker mount scope guard', () => {
         nextConfig: { mounts: [{ hostPath: '/srv/app/config', containerPath: '/config', readOnly: true }] },
       })
     ).toThrowError(/docker:containers:mounts/);
+  });
+
+  describe('attaching a managed volume', () => {
+    const appData = { volumes: [{ name: 'app-data', containerPath: '/data' }] };
+
+    it('needs view access to that volume, which mount scope does not replace', () => {
+      for (const actorScopes of [
+        ['docker:containers:create:node-1', 'docker:containers:mounts:node-1'],
+        ['docker:volumes:view:node-1/other-team-data'],
+        ['docker:volumes:view:node-2'],
+      ]) {
+        expect(() =>
+          assertDockerMountChangeAllowed({ nodeId: 'node-1', actorScopes, currentDefinitions: [], nextConfig: appData })
+        ).toThrowError(/Attaching volume "app-data" requires docker:volumes:view/);
+      }
+      for (const actorScopes of [
+        ['docker:volumes:view'],
+        ['docker:volumes:view:node-1'],
+        ['docker:volumes:edit:node-1/app-data'],
+      ]) {
+        expect(() =>
+          assertDockerMountChangeAllowed({ nodeId: 'node-1', actorScopes, currentDefinitions: [], nextConfig: appData })
+        ).not.toThrow();
+      }
+    });
+
+    it('checks only newly attached volumes, and not the volumes the operation creates itself', () => {
+      const attached = normalizeMountDefinitionsFromConfig(appData);
+      expect(() =>
+        assertDockerMountChangeAllowed({
+          nodeId: 'node-1',
+          resourceId: 'container-1',
+          actorScopes: ['docker:containers:edit:node-1/container-1'],
+          currentDefinitions: attached,
+          nextConfig: { volumes: [...appData.volumes, { name: 'cache', containerPath: '/cache' }] },
+        })
+      ).toThrowError(/Attaching volume "cache"/);
+      expect(() =>
+        assertDockerMountChangeAllowed({
+          nodeId: 'node-1',
+          actorScopes: [],
+          currentDefinitions: attached,
+          nextConfig: { volumes: [] },
+        })
+      ).not.toThrow();
+      expect(() =>
+        assertDockerMountChangeAllowed({
+          nodeId: 'node-1',
+          actorScopes: [],
+          currentDefinitions: [],
+          nextConfig: appData,
+          createdVolumes: ['app-data'],
+        })
+      ).not.toThrow();
+    });
   });
 
   describe('a recreate that keeps the image and the mounts', () => {

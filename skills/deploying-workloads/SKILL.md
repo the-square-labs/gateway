@@ -59,7 +59,7 @@ Registries, Gateway-managed volumes, networks, folders, cross-node migration (`p
 
 ## Secrets and interactive access
 
-- Secret environment values are encrypted at rest, keyed by Container name so they survive recreate, and visible only with `docker:containers:secrets`. Never ask for a value in chat: let the user enter it in the Gateway Console, or pass it from a local source the user named without echoing it.
+- Secret environment values are encrypted at rest, keyed by Container name so they survive recreate, and visible only with `docker:containers:secrets` (`docker:containers:environment` lists their keys). Never ask for a value in chat: let the user enter it in the Gateway Console, or pass it from a local source the user named without echoing it.
 - `execute_docker_container_console_command` runs a real command in the Container. It needs `docker:containers:console` (an OAuth manual-approval scope); Gateway blocks obviously catastrophic patterns, but treat every command as a mutation that needs user intent.
 
 ## Verify

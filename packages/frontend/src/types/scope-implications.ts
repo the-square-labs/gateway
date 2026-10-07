@@ -22,6 +22,7 @@ export const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Readonly<Record<string, readonly 
   ],
   "diagnostics:view": ["diagnostics:logs"],
   "docker:compose:view": ["docker:compose:delete", "docker:compose:manage"],
+  "docker:containers:environment": ["docker:containers:secrets"],
   "docker:containers:view": [
     "docker:availability:manage",
     "docker:containers:console",
