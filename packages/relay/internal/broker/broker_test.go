@@ -252,7 +252,7 @@ func TestEndpointDisconnectClosesActiveSessions(t *testing.T) {
 	session := &activeTunnel{endpointID: "endpoint-1", stop: make(chan struct{})}
 	b.active["session-1"] = session
 	b.mu.Lock()
-	b.closeEndpointSessionsLocked("endpoint-1")
+	b.closeEndpointSessionsLocked(codes.Unavailable, "target endpoint is dormant", "endpoint-1")
 	b.mu.Unlock()
 	select {
 	case <-session.stop:

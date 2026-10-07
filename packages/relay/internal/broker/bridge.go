@@ -136,7 +136,9 @@ func bridgeWithTimeouts(left, right tunnelStream, maxFrame int, stopped <-chan s
 				return status.Error(codes.DeadlineExceeded, "tunnel half-close timeout reached")
 			}
 		case <-stopped:
-			return status.Error(codes.PermissionDenied, "tunnel policy was revoked")
+			// The caller replaces it with the status the tunnel was closed
+			// with (activeTunnel.bridgeResult).
+			return errTunnelRevoked
 		}
 	}
 }
@@ -148,6 +150,12 @@ type tunnelSender interface {
 	Send(*relayv1.TunnelFrame) error
 }
 
+// localServiceReadChunk bounds the read buffer of a local service stream: the
+// negotiated frame size is an upper bound, and a buffer of up to 1 MiB kept
+// for every registry tunnel's lifetime cost a megabyte per concurrent pull
+// (F10). Reads larger than this only saved syscalls.
+const localServiceReadChunk = 64 * 1024
+
 type connectionTunnelStream struct {
 	connection net.Conn
 	maxFrame   int
@@ -157,8 +165,8 @@ type connectionTunnelStream struct {
 }
 
 func (s *connectionTunnelStream) Recv() (*relayv1.TunnelFrame, error) {
-	if len(s.readBuffer) != s.maxFrame {
-		s.readBuffer = make([]byte, s.maxFrame)
+	if size := min(s.maxFrame, localServiceReadChunk); len(s.readBuffer) != size {
+		s.readBuffer = make([]byte, size)
 	}
 	count, err := s.connection.Read(s.readBuffer)
 	if count > 0 {

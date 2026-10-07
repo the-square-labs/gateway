@@ -4,6 +4,7 @@ import (
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/relay/internal/grant"
 	"github.com/wiolett-industries/gateway/relay/internal/policy"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -50,17 +51,78 @@ func (b *Broker) WatchLeaseGates(request *relayv1.LeaseGateWatchRequest, stream 
 	return b.lease.WatchLeaseGates(request, stream)
 }
 
+type leaseKey [2]string
+
+// leaseVerdicts are lease gate decisions taken before the broker's lock: a
+// gate read waits for the lease node's disk writes, which must not hold up
+// every admission (F4). They stand for a fresh read only while no
+// enforcement run started since they were taken (epoch) and the policy is
+// the one they were taken for: the next run then sees a tunnel admitted on
+// them and closes it if its gate closed since. Otherwise the gate is read
+// again under the lock, as before.
+type leaseVerdicts struct {
+	epoch     uint64
+	snapshot  *policy.Snapshot
+	takenAt   time.Time
+	decisions map[leaseKey]LeaseAdmission
+}
+
+// tunnelLeaseVerdicts reads the gates a connect grant's tunnel depends on
+// from the current policy, without the broker's lock; nil when it depends on
+// none (the common case: no gate is read at all).
+func (b *Broker) tunnelLeaseVerdicts(claims grant.Claims) *leaseVerdicts {
+	if b.lease == nil {
+		return nil
+	}
+	epoch := b.leaseEpoch.Load()
+	snapshot := b.store.Current()
+	if !snapshot.LeaseBound {
+		return nil
+	}
+	route := snapshot.Route(claims.RouteID, claims.AssignmentGeneration)
+	if route == nil {
+		return nil
+	}
+	var keys []leaseKey
+	if endpoint := snapshot.Endpoint(route.TargetEndpointId, claims.AssignmentGeneration); endpoint != nil && endpoint.LeasePolicyId != "" {
+		keys = append(keys, leaseKey{endpoint.LeasePolicyId, endpoint.SubjectId})
+	}
+	if route.LeasePolicyId != "" {
+		keys = append(keys, leaseKey{route.LeasePolicyId, route.SourceId})
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	verdicts := &leaseVerdicts{epoch: epoch, snapshot: snapshot, takenAt: time.Now(), decisions: make(map[leaseKey]LeaseAdmission, len(keys))}
+	for _, key := range keys {
+		verdicts.decisions[key] = b.lease.Admit(key[0], key[1])
+	}
+	return verdicts
+}
+
+// admitLocked is the gate decision for one key: from verdicts while they are
+// valid, otherwise read now.
+func (b *Broker) admitLocked(verdicts *leaseVerdicts, policyID, subjectID string) LeaseAdmission {
+	if verdicts != nil && verdicts.epoch == b.leaseEpoch.Load() && verdicts.snapshot == b.store.Current() {
+		if admission, ok := verdicts.decisions[leaseKey{policyID, subjectID}]; ok &&
+			(!admission.Open || time.Since(verdicts.takenAt) < admission.Remaining) {
+			return admission
+		}
+	}
+	return b.lease.Admit(policyID, subjectID)
+}
+
 // leaseErrorLocked returns nil when policyID is empty (a placement that is not
 // lease-bound keeps today's admission), when the policy is not in lease mode,
 // or when the gate is open for subjectID.
-func (b *Broker) leaseErrorLocked(policyID, subjectID string) error {
+func (b *Broker) leaseErrorLocked(verdicts *leaseVerdicts, policyID, subjectID string) error {
 	if policyID == "" {
 		return nil
 	}
 	if b.lease == nil {
 		return status.Error(codes.FailedPrecondition, "availability lease gate closed: lease coordination is not running")
 	}
-	admission := b.lease.Admit(policyID, subjectID)
+	admission := b.admitLocked(verdicts, policyID, subjectID)
 	if !admission.LeaseMode || admission.Open {
 		return nil
 	}
@@ -71,50 +133,85 @@ func (b *Broker) endpointLeaseErrorLocked(endpoint *relayv1.EndpointPolicy) erro
 	if endpoint == nil {
 		return nil
 	}
-	return b.leaseErrorLocked(endpoint.LeasePolicyId, endpoint.SubjectId)
+	return b.leaseErrorLocked(nil, endpoint.LeasePolicyId, endpoint.SubjectId)
 }
 
 // tunnelLeaseErrorLocked gates a tunnel on its target endpoint's lease (Secure
 // Link traffic to a placement) and on its route source's lease (managed-DB
 // tunnels opened by a placement).
 func (b *Broker) tunnelLeaseErrorLocked(route *relayv1.RoutePolicy, endpoint *relayv1.EndpointPolicy) error {
-	if err := b.endpointLeaseErrorLocked(endpoint); err != nil {
-		return err
+	return b.tunnelLeaseErrorWithLocked(nil, route, endpoint)
+}
+
+func (b *Broker) tunnelLeaseErrorWithLocked(verdicts *leaseVerdicts, route *relayv1.RoutePolicy, endpoint *relayv1.EndpointPolicy) error {
+	if endpoint != nil {
+		if err := b.leaseErrorLocked(verdicts, endpoint.LeasePolicyId, endpoint.SubjectId); err != nil {
+			return err
+		}
 	}
 	if route == nil {
 		return nil
 	}
-	return b.leaseErrorLocked(route.LeasePolicyId, route.SourceId)
+	return b.leaseErrorLocked(verdicts, route.LeasePolicyId, route.SourceId)
 }
 
 // EnforceLeaseGates drops every endpoint registration and closes every tunnel
 // whose lease gate is closed or superseded (A8). It returns how long until
 // the earliest open gate closes unless refreshed, or zero when no admitted
 // registration or tunnel depends on a gate.
+//
+// The gates are read between two short holds of the broker's lock, not under
+// it (F4): the first collects what depends on a gate, the second applies the
+// decisions to what was admitted before the first. Whatever was admitted in
+// between was checked against a gate read after the first (see
+// leaseVerdicts) and is enforced by the next run.
 func (b *Broker) EnforceLeaseGates() time.Duration {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.enforceLeaseGatesLocked()
-}
-
-func (b *Broker) enforceLeaseGatesLocked() time.Duration {
 	if b.lease == nil {
 		return 0
 	}
+	b.mu.Lock()
 	snapshot := b.store.Current()
-	decisions := map[[2]string]LeaseAdmission{}
+	if !snapshot.LeaseBound {
+		b.mu.Unlock()
+		return 0
+	}
+	b.leaseEpoch.Add(1)
+	admittedBefore := b.admissions
+	keys := map[leaseKey]struct{}{}
+	need := func(policyID, subjectID string) {
+		if policyID != "" {
+			keys[leaseKey{policyID, subjectID}] = struct{}{}
+		}
+	}
+	for _, registration := range b.endpoints {
+		if endpoint := snapshot.Endpoint(registration.endpointID, registration.assignmentGeneration); endpoint != nil {
+			need(endpoint.LeasePolicyId, endpoint.SubjectId)
+		}
+	}
+	for _, tunnel := range b.active {
+		if endpoint := snapshot.Endpoint(tunnel.endpointID, tunnel.assignmentGeneration); endpoint != nil {
+			need(endpoint.LeasePolicyId, endpoint.SubjectId)
+		}
+		if route := snapshot.Route(tunnel.routeID, tunnel.assignmentGeneration); route != nil {
+			need(route.LeasePolicyId, route.SourceId)
+		}
+	}
+	b.mu.Unlock()
+	if len(keys) == 0 {
+		return 0
+	}
+
+	decisions := make(map[leaseKey]LeaseAdmission, len(keys))
+	for key := range keys {
+		decisions[key] = b.lease.Admit(key[0], key[1])
+	}
 	var next time.Duration
 	open := func(policyID, subjectID string) (bool, string) {
 		if policyID == "" {
 			return true, ""
 		}
-		id := [2]string{policyID, subjectID}
-		admission, ok := decisions[id]
-		if !ok {
-			admission = b.lease.Admit(policyID, subjectID)
-			decisions[id] = admission
-		}
-		if !admission.LeaseMode {
+		admission, ok := decisions[leaseKey{policyID, subjectID}]
+		if !ok || !admission.LeaseMode {
 			return true, ""
 		}
 		if !admission.Open {
@@ -125,31 +222,49 @@ func (b *Broker) enforceLeaseGatesLocked() time.Duration {
 		}
 		return true, ""
 	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.store.Current() != snapshot {
+		// A policy applied meanwhile; its apply runs enforcement again.
+		return next
+	}
 	for key, registration := range b.endpoints {
+		if registration.admittedSeq > admittedBefore {
+			continue
+		}
 		endpoint := snapshot.Endpoint(registration.endpointID, registration.assignmentGeneration)
 		if endpoint == nil {
 			continue
 		}
 		if ok, reason := open(endpoint.LeasePolicyId, endpoint.SubjectId); !ok {
-			b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
+			message := "availability lease gate closed: " + reason
+			for _, tunnel := range b.active {
+				if tunnel.admittedSeq <= admittedBefore && tunnel.endpointID == registration.endpointID && tunnel.assignmentGeneration == registration.assignmentGeneration {
+					tunnel.closeWith(codes.FailedPrecondition, message)
+				}
+			}
 			if registration.stateful() {
 				// A stateful registration outlives the gate (D7); its tunnels do not.
 				continue
 			}
-			registration.closeWith("availability lease gate closed: " + reason)
+			registration.closeWith(message)
 			delete(b.endpoints, key)
 		}
 	}
 	for _, tunnel := range b.active {
+		if tunnel.admittedSeq > admittedBefore {
+			continue
+		}
 		if endpoint := snapshot.Endpoint(tunnel.endpointID, tunnel.assignmentGeneration); endpoint != nil {
-			if ok, _ := open(endpoint.LeasePolicyId, endpoint.SubjectId); !ok {
-				tunnel.close()
+			if ok, reason := open(endpoint.LeasePolicyId, endpoint.SubjectId); !ok {
+				tunnel.closeWith(codes.FailedPrecondition, "availability lease gate closed: "+reason)
 				continue
 			}
 		}
 		if route := snapshot.Route(tunnel.routeID, tunnel.assignmentGeneration); route != nil {
-			if ok, _ := open(route.LeasePolicyId, route.SourceId); !ok {
-				tunnel.close()
+			if ok, reason := open(route.LeasePolicyId, route.SourceId); !ok {
+				tunnel.closeWith(codes.FailedPrecondition, "availability lease gate closed: "+reason)
 			}
 		}
 	}

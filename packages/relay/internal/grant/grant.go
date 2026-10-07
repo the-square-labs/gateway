@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -46,6 +47,17 @@ type Claims struct {
 	MaxFrameBytes         uint32 `json:"maxFrameBytes,omitempty"`
 }
 
+var (
+	// ErrUnknownKey marks a grant signed by a key this relay's policy does
+	// not list yet: Gateway pushes a new grant key to the daemons and the
+	// relays at the same time, and the daemon's grant may arrive first.
+	ErrUnknownKey = errors.New("grant signing key is not in the relay policy yet")
+	// ErrPolicyUnavailable marks a relay without a current policy (none yet,
+	// or its lease expired while Gateway is away): a relay condition, not a
+	// verdict about the grant.
+	ErrPolicyUnavailable = errors.New("relay policy is unavailable")
+)
+
 type Verifier struct {
 	Store *policy.Store
 	Now   func() time.Time
@@ -76,10 +88,13 @@ func (v Verifier) VerifyEnvelope(envelope *relayv1.SignedGrant, wantKind string,
 		now = v.Now()
 	}
 	if err := v.Store.AdmissionError(now); err != nil {
-		return Claims{}, err
+		return Claims{}, fmt.Errorf("%w: %w", ErrPolicyUnavailable, err)
 	}
 	key, ok := snapshot.PublicKeys[envelope.KeyId]
-	if !ok || !ed25519.Verify(key, envelope.Payload, envelope.Signature) {
+	if !ok {
+		return Claims{}, fmt.Errorf("grant signature is invalid: %w", ErrUnknownKey)
+	}
+	if !ed25519.Verify(key, envelope.Payload, envelope.Signature) {
 		return Claims{}, fmt.Errorf("grant signature is invalid")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(envelope.Payload))

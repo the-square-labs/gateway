@@ -1,24 +1,30 @@
 package broker
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"github.com/wiolett-industries/gateway/relay/internal/admission"
 	"github.com/wiolett-industries/gateway/relay/internal/config"
-	"github.com/wiolett-industries/gateway/relay/internal/grant"
 	"github.com/wiolett-industries/gateway/relay/internal/peer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// TunnelPolicyHold is how long a tunnel whose grant is ahead of this relay's
+// policy waits for it (F9). Shorter than RegistrationPolicyHold: the opener
+// gives up within a few seconds anyway, and a held open costs a session.
+var TunnelPolicyHold = 2 * time.Second
 
 func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resultErr error) {
 	client, err := peer.Require(stream.Context())
 	if err != nil {
 		return status.Error(codes.Unauthenticated, err.Error())
 	}
-	first, err := stream.Recv()
+	first, err := recvFirst(stream.Context(), stream.Recv)
 	if err != nil {
 		return err
 	}
@@ -26,9 +32,10 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	if open == nil {
 		return status.Error(codes.InvalidArgument, "first tunnel frame must open")
 	}
-	claims, err := b.verifier.Verify(open.Grant, "connect", client)
+	claims, err := b.verifyGrant(stream.Context(), open.Grant, "connect", client, TunnelPolicyHold)
 	if err != nil {
-		return status.Error(codes.PermissionDenied, err.Error())
+		b.refusals.note("source", client.SubjectID, grantRefusalReason(err), err)
+		return err
 	}
 	sessionID, err := randomToken()
 	if err != nil {
@@ -38,11 +45,15 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	if err != nil {
 		return status.Error(codes.Internal, "could not create accept token")
 	}
+	// Taken before mu: a lease gate read waits for the lease node's disk
+	// writes, which must not hold up every other admission (F4).
+	verdicts := b.tunnelLeaseVerdicts(claims)
 	b.mu.Lock()
-	snapshot := b.store.Current()
-	if err := grant.ValidatePolicy(claims, "connect", snapshot); err != nil {
+	snapshot, err := b.awaitPolicyLocked(stream.Context(), claims, "connect", TunnelPolicyHold)
+	if err != nil {
 		b.mu.Unlock()
-		return status.Error(codes.PermissionDenied, err.Error())
+		b.refusals.note("route", claims.RouteID, refusalPolicy, err)
+		return err
 	}
 	route := snapshot.Route(claims.RouteID, claims.AssignmentGeneration)
 	if route == nil {
@@ -52,49 +63,65 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	endpoint := snapshot.Endpoint(route.TargetEndpointId, claims.AssignmentGeneration)
 	if endpoint == nil {
 		b.mu.Unlock()
-		return status.Error(codes.PermissionDenied, "connect grant endpoint was revoked")
+		err := status.Error(codes.PermissionDenied, "connect grant endpoint was revoked")
+		b.refusals.note("route", route.RouteId, refusalPolicy, err)
+		return err
 	}
 	// Decided under the lock: a forced drain disconnects the sessions it finds
 	// under this lock, so a tunnel admitted after it must not slip in.
 	if b.draining.Load() && drainRefuses(endpoint) {
 		b.mu.Unlock()
-		return status.Error(codes.Unavailable, "relay is draining")
+		err := status.Error(codes.Unavailable, "relay is draining")
+		b.refusals.note("route", route.RouteId, refusalDraining, err)
+		return err
 	}
 	frameLimit := minNonZero(DefaultMaxFrameBytes, int(route.MaxFrameBytes), int(claims.MaxFrameBytes))
 	trafficClass := routeTrafficClass(route)
 	metrics := b.routeMetricsLocked(route.RouteId)
 	startedAt := time.Now()
-	if err := b.tunnelLeaseErrorLocked(route, endpoint); err != nil {
+	// failOpen and throttle refuse with mu held and release it.
+	failOpen := func(reason string, err error) error {
 		metrics.opened.Add(1)
 		metrics.touch()
 		b.mu.Unlock()
 		metrics.recordFailedOpen(time.Since(startedAt))
+		b.refusals.note("route", route.RouteId, reason, err)
 		return err
+	}
+	throttle := func(reason string, err error) error {
+		metrics.throttled.Add(1)
+		metrics.touch()
+		b.mu.Unlock()
+		b.refusals.note("route", route.RouteId, reason, err)
+		return err
+	}
+	admit := func(grantLimit uint32) error {
+		if err := b.sessionCapacityErrorLocked(route, endpoint, claims.MaxConcurrentSessions, grantLimit); err != nil {
+			return throttle(refusalSessionCap, err)
+		}
+		if err := b.admission.Admit(trafficClass, route.RouteId, b.usageLocked()); err != nil {
+			reason := refusalAdmission
+			if rejected := (*admission.Rejected)(nil); errors.As(err, &rejected) {
+				reason += ":" + rejected.State
+			}
+			return throttle(reason, status.Error(codes.ResourceExhausted, err.Error()))
+		}
+		return nil
+	}
+	if err := b.tunnelLeaseErrorWithLocked(verdicts, route, endpoint); err != nil {
+		return failOpen(refusalLeaseGate, err)
 	}
 	if endpoint.SubjectKind == localServiceSubjectKind {
 		target, targetErr := config.BuiltinLocalServiceTarget(endpoint.SubjectId)
 		if targetErr != nil {
-			metrics.opened.Add(1)
-			metrics.touch()
-			b.mu.Unlock()
-			metrics.recordFailedOpen(time.Since(startedAt))
-			return status.Error(codes.PermissionDenied, targetErr.Error())
+			return failOpen(refusalLocalService, status.Error(codes.PermissionDenied, targetErr.Error()))
 		}
-		if err := b.sessionCapacityErrorLocked(route, endpoint, claims.MaxConcurrentSessions, endpoint.MaxConcurrentSessions); err != nil {
-			metrics.throttled.Add(1)
-			metrics.touch()
-			b.mu.Unlock()
+		if err := admit(endpoint.MaxConcurrentSessions); err != nil {
 			return err
-		}
-		if err := b.admission.Admit(trafficClass, route.RouteId, b.usageLocked()); err != nil {
-			metrics.throttled.Add(1)
-			metrics.touch()
-			b.mu.Unlock()
-			return status.Error(codes.ResourceExhausted, err.Error())
 		}
 		metrics.opened.Add(1)
 		metrics.touch()
-		session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, assignmentGeneration: claims.AssignmentGeneration, trafficClass: trafficClass, metrics: metrics, stop: make(chan struct{})}
+		session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, assignmentGeneration: claims.AssignmentGeneration, trafficClass: trafficClass, metrics: metrics, admittedSeq: b.nextAdmissionLocked(), stop: make(chan struct{})}
 		metrics.active.Add(1)
 		b.active[sessionID] = session
 		b.trackSessionLocked(session, 1)
@@ -112,56 +139,42 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		}()
 		connection, dialErr := b.dialLocalService(stream.Context(), target.Target)
 		if dialErr != nil {
-			return status.Error(codes.Unavailable, "built-in local service is unavailable")
+			err := status.Error(codes.Unavailable, "built-in local service is unavailable")
+			b.refusals.note("route", route.RouteId, refusalLocalService, fmt.Errorf("%w: %v", err, dialErr))
+			return err
 		}
 		defer connection.Close()
 		if err := stream.Send(readyFrame(frameLimit)); err != nil {
 			return err
 		}
-		resultErr = bridge(stream, &connectionTunnelStream{connection: connection, maxFrame: frameLimit}, frameLimit, session.stop, route.DisableIdleTimeout, false, metrics)
+		resultErr = session.bridgeResult(bridge(stream, &connectionTunnelStream{connection: connection, maxFrame: frameLimit}, frameLimit, session.stop, route.DisableIdleTimeout, false, metrics))
 		return resultErr
 	}
 	registration := b.endpoints[policyAssignmentKey(endpoint.EndpointId, claims.AssignmentGeneration)]
 	if registration == nil || time.Now().Unix() > registration.expiresAt.Load() {
-		metrics.opened.Add(1)
-		metrics.touch()
-		b.mu.Unlock()
-		metrics.recordFailedOpen(time.Since(startedAt))
-		return status.Error(codes.Unavailable, "target endpoint is not registered")
+		return failOpen(refusalNotRegistered, status.Error(codes.Unavailable, "target endpoint is not registered"))
 	}
-	if registration.restartingAt(time.Now()) {
+	if registration.restartingSince.Load() != 0 {
 		// Its daemon restarts (B-13): the opener retries until the next
-		// process registered, instead of treating the endpoint as gone.
-		metrics.opened.Add(1)
-		metrics.touch()
-		b.mu.Unlock()
-		metrics.recordFailedOpen(time.Since(startedAt))
-		return status.Error(codes.Unavailable, errEndpointRestarting)
+		// process registered, instead of treating the endpoint as gone. Past
+		// the grace a registration still restarting is about to be closed.
+		return failOpen(refusalRestarting, status.Error(codes.Unavailable, errEndpointRestarting))
 	}
 	if registration.dormant() {
 		// A standby, or a holder whose workload is not ready yet (D6, D7).
-		metrics.opened.Add(1)
-		metrics.touch()
-		b.mu.Unlock()
-		metrics.recordFailedOpen(time.Since(startedAt))
-		return status.Error(codes.Unavailable, "target endpoint is dormant")
+		return failOpen(refusalDormant, status.Error(codes.Unavailable, "target endpoint is dormant"))
 	}
-	if err := b.sessionCapacityErrorLocked(route, endpoint, claims.MaxConcurrentSessions, registration.maxSessions.Load()); err != nil {
-		metrics.throttled.Add(1)
-		metrics.touch()
-		b.mu.Unlock()
+	if err := admit(registration.maxSessions.Load()); err != nil {
 		return err
-	}
-	if err := b.admission.Admit(trafficClass, route.RouteId, b.usageLocked()); err != nil {
-		metrics.throttled.Add(1)
-		metrics.touch()
-		b.mu.Unlock()
-		return status.Error(codes.ResourceExhausted, err.Error())
 	}
 	metrics.opened.Add(1)
 	metrics.touch()
-	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, assignmentGeneration: claims.AssignmentGeneration, trafficClass: trafficClass, metrics: metrics, registration: registration, stop: make(chan struct{})}
+	session := &activeTunnel{routeID: route.RouteId, routeGeneration: route.Generation, sourceKind: route.SourceKind, sourceID: route.SourceId, endpointID: endpoint.EndpointId, endpointGeneration: endpoint.Generation, assignmentGeneration: claims.AssignmentGeneration, trafficClass: trafficClass, metrics: metrics, registration: registration, admittedSeq: b.nextAdmissionLocked(), stop: make(chan struct{})}
 	pending := &pendingTunnel{endpoint: endpoint, session: session, accepted: make(chan acceptedConnection, 1)}
+	// The restart signal of this registration as of now: a restart called
+	// off later replaces it, and a closed one must not refuse the tunnels
+	// admitted after that (F3).
+	restarting := registration.restarting
 	metrics.active.Add(1)
 	b.pending[token] = pending
 	b.active[sessionID] = session
@@ -188,22 +201,30 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	case <-registration.stop:
 		return status.Error(codes.Unavailable, "target endpoint was revoked")
 	case <-session.stop:
-		return status.Error(codes.PermissionDenied, "tunnel policy was revoked")
+		return session.stopError()
 	case <-timer.C:
-		return status.Error(codes.DeadlineExceeded, "target endpoint did not accept tunnel")
+		err := status.Error(codes.DeadlineExceeded, "target endpoint did not accept tunnel")
+		b.refusals.note("route", route.RouteId, refusalAcceptTimeout, err)
+		return err
 	case <-stream.Context().Done():
 		return stream.Context().Err()
 	}
+	// The registration's own end needs no case here: every path that ends a
+	// registration with its daemon gone closes its tunnels with a reason
+	// (session.stop), and a registration a newer generation replaced may
+	// still have its old connection accept what it was sent.
 	var accepted acceptedConnection
 	select {
 	case accepted = <-pending.accepted:
-	case <-registration.restarting:
+	case <-restarting:
 		// The daemon began restarting before it accepted this tunnel.
 		return status.Error(codes.Unavailable, errEndpointRestarting)
 	case <-timer.C:
-		return status.Error(codes.DeadlineExceeded, "target endpoint did not accept tunnel")
+		err := status.Error(codes.DeadlineExceeded, "target endpoint did not accept tunnel")
+		b.refusals.note("route", route.RouteId, refusalAcceptTimeout, err)
+		return err
 	case <-session.stop:
-		return status.Error(codes.PermissionDenied, "tunnel policy was revoked")
+		return session.stopError()
 	case <-stream.Context().Done():
 		return stream.Context().Err()
 	}
@@ -216,9 +237,18 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		return err
 	}
 	metrics.recordSetup(time.Since(startedAt))
-	bridgeErr := bridge(stream, accepted.stream, frameLimit, session.stop, route.DisableIdleTimeout, trafficClass == admission.TrafficClassProxy, metrics)
+	bridgeErr := session.bridgeResult(bridge(stream, accepted.stream, frameLimit, session.stop, route.DisableIdleTimeout, trafficClass == admission.TrafficClassProxy, metrics))
 	accepted.result <- bridgeErr
 	return bridgeErr
+}
+
+// bridgeResult gives a bridge that ended because the tunnel was closed the
+// status the tunnel was closed with.
+func (t *activeTunnel) bridgeResult(err error) error {
+	if errors.Is(err, errTunnelRevoked) && channelClosed(t.stop) {
+		return t.stopError()
+	}
+	return err
 }
 
 // errEndpointRestarting answers tunnels to an endpoint whose daemon restarts.
@@ -325,91 +355,31 @@ func adjustSessionCount(counts map[string]uint64, id string, delta int) {
 	counts[id]--
 }
 
-func (b *Broker) AcceptTunnel(stream relayv1.TunnelBroker_AcceptTunnelServer) error {
-	client, err := peer.Require(stream.Context())
-	if err != nil {
-		return status.Error(codes.Unauthenticated, err.Error())
+// FirstFrameTimeout bounds how long a tunnel or registration stream may stay
+// open before its first frame (F7): daemons send it right after opening.
+var FirstFrameTimeout = 10 * time.Second
+
+// recvFirst receives a stream's first frame within FirstFrameTimeout. On a
+// timeout the handler returns, which ends the stream and the receive.
+func recvFirst[T any](ctx context.Context, recv func() (T, error)) (T, error) {
+	type result struct {
+		frame T
+		err   error
 	}
-	first, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	accept := first.GetAccept()
-	if accept == nil || accept.AcceptToken == "" {
-		return status.Error(codes.InvalidArgument, "first tunnel frame must accept")
-	}
-	b.mu.Lock()
-	pending := b.pending[accept.AcceptToken]
-	if pending != nil {
-		delete(b.pending, accept.AcceptToken)
-	}
-	b.mu.Unlock()
-	if pending == nil {
-		return status.Error(codes.NotFound, "accept token is unknown or already used")
-	}
-	if pending.endpoint.SubjectId != client.SubjectID || pending.endpoint.CertificateSha256 != client.CertificateFingerprint {
-		return status.Error(codes.PermissionDenied, "accept token does not match client certificate")
-	}
-	connection := acceptedConnection{stream: stream, result: make(chan error, 1)}
+	done := make(chan result, 1)
+	go func() {
+		frame, err := recv()
+		done <- result{frame: frame, err: err}
+	}()
+	timer := time.NewTimer(FirstFrameTimeout)
+	defer timer.Stop()
+	var zero T
 	select {
-	case pending.accepted <- connection:
-	case <-pending.session.stop:
-		return status.Error(codes.PermissionDenied, "tunnel policy was revoked")
-	case <-stream.Context().Done():
-		return stream.Context().Err()
+	case received := <-done:
+		return received.frame, received.err
+	case <-timer.C:
+		return zero, status.Error(codes.DeadlineExceeded, "first frame was not received in time")
+	case <-ctx.Done():
+		return zero, ctx.Err()
 	}
-	select {
-	case result := <-connection.result:
-		return result
-	case <-pending.session.stop:
-		// The opener writes its result before it closes the session. Without a
-		// result it left (timeout, cancel or revocation) before the tunnel was
-		// bridged, and nothing would ever end this stream.
-		select {
-		case result := <-connection.result:
-			return result
-		default:
-			return status.Error(codes.Aborted, "tunnel was closed before it was established")
-		}
-	case <-stream.Context().Done():
-		return stream.Context().Err()
-	}
-}
-
-func policyAssignmentKey(id string, generation uint64) string {
-	if generation == 0 {
-		return id
-	}
-	return fmt.Sprintf("%s:%d", id, generation)
-}
-
-// closeRegistrationSessionsLocked closes the tunnels bridged through one
-// registration: those of another registration of the same endpoint (a newer
-// generation that registered before this one ended) keep running.
-func (b *Broker) closeRegistrationSessionsLocked(registration *endpointRegistration) {
-	for _, tunnel := range b.active {
-		unbound := tunnel.registration == nil && tunnel.endpointID == registration.endpointID &&
-			tunnel.assignmentGeneration == registration.assignmentGeneration
-		if tunnel.registration == registration || unbound {
-			tunnel.close()
-		}
-	}
-}
-
-func (b *Broker) closeEndpointSessionsLocked(endpointID string, assignmentGenerations ...uint64) {
-	for _, tunnel := range b.active {
-		if tunnel.endpointID != endpointID ||
-			(len(assignmentGenerations) > 0 && tunnel.assignmentGeneration != assignmentGenerations[0]) {
-			continue
-		}
-		tunnel.close()
-	}
-}
-
-// drainRefuses tells whether a draining relay refuses new tunnels to the
-// endpoint. A drain moves workload endpoints to other relays; a built-in local
-// service (the Gateway internal registry) is served only by the local relay,
-// so it keeps admitting tunnels to it. See DrainKeepsLocalServicesCapability.
-func drainRefuses(endpoint *relayv1.EndpointPolicy) bool {
-	return endpoint.GetSubjectKind() != localServiceSubjectKind
 }

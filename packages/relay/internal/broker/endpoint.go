@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
@@ -23,7 +24,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 	if err != nil {
 		return status.Error(codes.Unauthenticated, err.Error())
 	}
-	first, err := stream.Recv()
+	first, err := recvFirst(stream.Context(), stream.Recv)
 	if err != nil {
 		return err
 	}
@@ -32,18 +33,20 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 		return status.Error(codes.InvalidArgument, "first endpoint frame must register")
 	}
 	// Bound to the policy below, where a grant ahead of the policy may wait for it.
-	claims, err := b.verifier.VerifyEnvelope(register.Grant, "endpoint", client)
+	claims, err := b.verifyGrant(stream.Context(), register.Grant, "endpoint", client, RegistrationPolicyHold)
 	if err != nil {
-		return status.Error(codes.PermissionDenied, err.Error())
+		b.refusals.note("source", client.SubjectID, grantRefusalReason(err), err)
+		return err
 	}
-	registration := &endpointRegistration{endpointID: claims.EndpointID, subjectID: claims.SubjectID, generation: claims.EndpointGeneration, assignmentGeneration: claims.AssignmentGeneration, incoming: make(chan *relayv1.IncomingTunnel, 32), stop: make(chan struct{}), restarting: make(chan struct{}), recheck: make(chan struct{}, 1)}
+	registration := &endpointRegistration{endpointID: claims.EndpointID, subjectID: claims.SubjectID, generation: claims.EndpointGeneration, assignmentGeneration: claims.AssignmentGeneration, clientSubjectID: client.SubjectID, clientCertificate: client.CertificateFingerprint, incoming: make(chan *relayv1.IncomingTunnel, 32), stop: make(chan struct{}), restarting: make(chan struct{}), recheck: make(chan struct{}, 1)}
 	registration.state.Store(int32(servingState(register.GetState())))
 	registration.expiresAt.Store(claims.ExpiresAt)
 	registration.maxSessions.Store(claims.MaxConcurrentSessions)
 	b.mu.Lock()
-	snapshot, err := b.awaitPolicyLocked(stream.Context(), claims)
+	snapshot, err := b.awaitPolicyLocked(stream.Context(), claims, "endpoint", RegistrationPolicyHold)
 	if err != nil {
 		b.mu.Unlock()
+		b.refusals.note("endpoint", claims.EndpointID, refusalPolicy, err)
 		return err
 	}
 	// An endpoint that does not state whether it serves registers a
@@ -54,6 +57,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 	if !registration.stateful() {
 		if err := b.endpointLeaseErrorLocked(snapshot.Endpoint(claims.EndpointID, claims.AssignmentGeneration)); err != nil {
 			b.mu.Unlock()
+			b.refusals.note("endpoint", claims.EndpointID, refusalLeaseGate, err)
 			return err
 		}
 	}
@@ -63,11 +67,12 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 		if previous.generation >= registration.generation {
 			// The same generation registers again (a reconnect): the tunnels
 			// of the previous registration ran over the connection that ended.
-			b.closeRegistrationSessionsLocked(previous)
+			b.closeRegistrationSessionsLocked(previous, "target endpoint reconnected")
 		}
 		// A previous generation's tunnels keep running over its connection
 		// until they end (make-before-break).
 	}
+	registration.admittedSeq = b.nextAdmissionLocked()
 	b.endpoints[registrationKey] = registration
 	b.mu.Unlock()
 	defer func() {
@@ -82,7 +87,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 				b.forgetRestartedLater(key, registration)
 			} else {
 				delete(b.endpoints, key)
-				b.closeRegistrationSessionsLocked(registration)
+				b.closeRegistrationSessionsLocked(registration, "target endpoint disconnected")
 			}
 		}
 		b.mu.Unlock()
@@ -111,7 +116,9 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 		var renew *relayv1.RenewEndpoint
 		select {
 		case <-registration.stop:
-			return status.Error(codes.Aborted, registration.revokedMessage())
+			err := status.Error(codes.Aborted, registration.revokedMessage())
+			b.refusals.note("endpoint", registration.endpointID, refusalRegistration, err)
+			return err
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		case err := <-receiveErr:
@@ -135,6 +142,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 		}
 		applied, err := b.applyRenewal(registration, registrationKey, client, renew)
 		if err != nil {
+			b.refusals.note("endpoint", registration.endpointID, refusalRegistration, err)
 			return err
 		}
 		if applied {
@@ -145,33 +153,86 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 	}
 }
 
-// awaitPolicyLocked validates a registration's grant against this relay's
-// policy. A grant ahead of the policy waits for it, up to
-// RegistrationPolicyHold, and passes the moment the policy arrives instead of
-// being refused and retried later (a gap of one retry on every change).
-// Called with mu held; returns with mu held.
-func (b *Broker) awaitPolicyLocked(ctx context.Context, claims grant.Claims) (*policy.Snapshot, error) {
-	holdUntil := time.Now().Add(RegistrationPolicyHold)
+// verifyGrant authenticates a grant envelope. One signed by a grant key this
+// relay's policy does not list yet waits up to hold for a policy that does
+// (F9). A relay without a current policy answers Unavailable, a relay
+// condition daemons retry; any other refusal is PermissionDenied.
+func (b *Broker) verifyGrant(ctx context.Context, envelope *relayv1.SignedGrant, kind string, client peer.Identity, hold time.Duration) (grant.Claims, error) {
+	claims, err := b.verifier.VerifyEnvelope(envelope, kind, client)
+	until := time.Now().Add(hold)
+	for err != nil && errors.Is(err, grant.ErrUnknownKey) {
+		b.mu.Lock()
+		changed := b.policyChanged
+		b.mu.Unlock()
+		// Verified again after taking the signal, so a policy that arrived
+		// in between is not waited for.
+		if claims, err = b.verifier.VerifyEnvelope(envelope, kind, client); err == nil || !errors.Is(err, grant.ErrUnknownKey) {
+			break
+		}
+		if !waitForPolicy(ctx, changed, until) {
+			break
+		}
+		claims, err = b.verifier.VerifyEnvelope(envelope, kind, client)
+	}
+	switch {
+	case err == nil:
+		return claims, nil
+	case errors.Is(err, grant.ErrPolicyUnavailable):
+		return grant.Claims{}, status.Error(codes.Unavailable, err.Error())
+	case ctx.Err() != nil:
+		return grant.Claims{}, ctx.Err()
+	}
+	return grant.Claims{}, status.Error(codes.PermissionDenied, err.Error())
+}
+
+func grantRefusalReason(err error) string {
+	if status.Code(err) == codes.Unavailable {
+		return refusalPolicyMissing
+	}
+	return refusalGrant
+}
+
+// waitForPolicy waits for the next policy, at most half a second (should a
+// change arrive through a path that does not signal it) and never past until.
+// It returns false when until passed or ctx ended.
+func waitForPolicy(ctx context.Context, changed <-chan struct{}, until time.Time) bool {
+	wait := time.Until(until)
+	if wait <= 0 {
+		return false
+	}
+	timer := time.NewTimer(min(wait, 500*time.Millisecond))
+	defer timer.Stop()
+	select {
+	case <-changed:
+	case <-timer.C:
+	case <-ctx.Done():
+		return false
+	}
+	return true
+}
+
+// awaitPolicyLocked validates a grant against this relay's policy. A grant
+// ahead of the policy waits for it, up to hold, and passes the moment the
+// policy arrives instead of being refused and retried later (a gap of one
+// retry on every change). Called with mu held; returns with mu held.
+func (b *Broker) awaitPolicyLocked(ctx context.Context, claims grant.Claims, kind string, hold time.Duration) (*policy.Snapshot, error) {
+	ahead := policyAhead
+	if kind == "connect" {
+		ahead = routePolicyAhead
+	}
+	holdUntil := time.Now().Add(hold)
 	for {
 		snapshot := b.store.Current()
-		err := grant.ValidatePolicy(claims, "endpoint", snapshot)
+		err := grant.ValidatePolicy(claims, kind, snapshot)
 		if err == nil {
 			return snapshot, nil
 		}
-		if !policyAhead(claims, snapshot) || !time.Now().Before(holdUntil) {
+		if !ahead(claims, snapshot) || !time.Now().Before(holdUntil) {
 			return nil, status.Error(codes.PermissionDenied, err.Error())
 		}
 		changed := b.policyChanged
 		b.mu.Unlock()
-		// Re-checked every half second too, should a policy change arrive
-		// through a path that does not signal it.
-		timer := time.NewTimer(min(time.Until(holdUntil), 500*time.Millisecond))
-		select {
-		case <-changed:
-		case <-timer.C:
-		case <-ctx.Done():
-		}
-		timer.Stop()
+		waitForPolicy(ctx, changed, holdUntil)
 		b.mu.Lock()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -194,6 +255,9 @@ func (b *Broker) applyRenewal(registration *endpointRegistration, registrationKe
 			// registration serves on until the daemon registers the new
 			// generation over a connection with its new certificate.
 			return false, nil
+		}
+		if errors.Is(verifyErr, grant.ErrPolicyUnavailable) {
+			return false, status.Error(codes.Unavailable, verifyErr.Error())
 		}
 		return false, status.Error(codes.PermissionDenied, verifyErr.Error())
 	}
@@ -233,13 +297,15 @@ func (b *Broker) applyRenewal(registration *endpointRegistration, registrationKe
 		// The daemon restarts (service restart, update): keep the
 		// registration and its serving state, refuse new tunnels with a
 		// retryable answer until the next process registers (B-13).
-		registration.announceRestart(time.Now())
+		if registration.announceRestart(time.Now()) {
+			b.expireRestartLater(registrationKey, registration)
+		}
 		registration.expiresAt.Store(next.ExpiresAt)
 		return true, nil
 	}
 	// Any other renewal means the daemon serves on (or stops serving)
 	// without restarting after all.
-	registration.restartingSince.Store(0)
+	registration.callOffRestart()
 	state := servingState(renew.GetState())
 	if state == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_UNSPECIFIED && registration.stateful() {
 		// The endpoint's policy left lease mode (its link is plain again)
@@ -258,7 +324,7 @@ func (b *Broker) applyRenewal(registration *endpointRegistration, registrationKe
 		if state == relayv1.EndpointServingState_ENDPOINT_SERVING_STATE_DORMANT {
 			// The endpoint stopped serving (released, fenced or no longer
 			// ready): no tunnel admitted before stays open.
-			b.closeEndpointSessionsLocked(registration.endpointID, registration.assignmentGeneration)
+			b.closeEndpointSessionsLocked(codes.Unavailable, "target endpoint is dormant", registration.endpointID, registration.assignmentGeneration)
 		}
 	}
 	registration.expiresAt.Store(next.ExpiresAt)
@@ -275,8 +341,25 @@ func (b *Broker) forgetRestartedLater(key string, registration *endpointRegistra
 		defer b.mu.Unlock()
 		if b.endpoints[key] == registration {
 			delete(b.endpoints, key)
-			b.closeRegistrationSessionsLocked(registration)
+			b.closeRegistrationSessionsLocked(registration, "target endpoint did not come back from its restart")
 		}
+	})
+}
+
+// expireRestartLater closes a registration whose daemon announced a restart
+// but still holds its stream after the grace: the restart stalled, or was
+// abandoned without a renewal saying so. Closed, it stops answering every
+// tunnel "restarting" and its daemon registers again (F3). A registration
+// whose stream ended is left to forgetRestartedLater.
+func (b *Broker) expireRestartLater(key string, registration *endpointRegistration) {
+	since := registration.restartingSince.Load()
+	time.AfterFunc(time.Until(time.Unix(0, since).Add(EndpointRestartGrace)), func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.endpoints[key] != registration || registration.restartingSince.Load() != since || channelClosed(registration.stop) {
+			return
+		}
+		registration.closeWith("target endpoint did not finish its restart")
 	})
 }
 

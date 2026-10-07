@@ -11,7 +11,10 @@ import (
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"github.com/wiolett-industries/gateway/relay/internal/admission"
 	"github.com/wiolett-industries/gateway/relay/internal/grant"
+	"github.com/wiolett-industries/gateway/relay/internal/peer"
 	"github.com/wiolett-industries/gateway/relay/internal/policy"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -27,13 +30,23 @@ const (
 	// built-in local services (the internal registry), which no other relay
 	// serves. Gateway drains the local relay for an update only then.
 	DrainKeepsLocalServicesCapability = "drain_keeps_local_services_v1"
-	localServiceSubjectKind           = "local_service"
+	// RegistryFairShareCapability tells Gateway that this relay shares the
+	// registry traffic class fairly between its routes under pressure, as it
+	// does the proxy class. Gateway moves container links into that class,
+	// without a fixed session cap, only on relays that advertise it.
+	RegistryFairShareCapability = "relay_registry_fair_share_v1"
+	localServiceSubjectKind     = "local_service"
+	// localServiceDialTimeout bounds the dial of a built-in local service: a
+	// tunnel to a stopped registry fails at once instead of holding a session
+	// for the operating system's connect timeout.
+	localServiceDialTimeout = 5 * time.Second
 )
 
 // EndpointRestartGrace is how long a registration whose daemon announced a
 // restart is kept after its stream ended, waiting for the daemon's next
 // process to register again (B-13). A daemon that does not come back by then
-// is treated as gone.
+// is treated as gone; one whose stream is still up by then is closed, so it
+// registers again (F3).
 var EndpointRestartGrace = 15 * time.Second
 
 type endpointRegistration struct {
@@ -44,9 +57,18 @@ type endpointRegistration struct {
 	subjectID            string
 	generation           uint64
 	assignmentGeneration uint64
-	expiresAt            atomic.Int64
-	maxSessions          atomic.Uint32
-	incoming             chan *relayv1.IncomingTunnel
+	// clientSubjectID and clientCertificate identify the connection that
+	// registered (its verified certificate): the daemon accepts the
+	// registration's tunnels with it, also while the endpoint's policy
+	// already names a rotated certificate (F2).
+	clientSubjectID   string
+	clientCertificate string
+	// admittedSeq orders the registration among admissions for lease gate
+	// enforcement; guarded by the broker's mu.
+	admittedSeq uint64
+	expiresAt   atomic.Int64
+	maxSessions atomic.Uint32
+	incoming    chan *relayv1.IncomingTunnel
 	// state is the relayv1.EndpointServingState the endpoint last sent (D6,
 	// D7): UNSPECIFIED from endpoints built before serving states.
 	state    atomic.Int32
@@ -55,10 +77,10 @@ type endpointRegistration struct {
 	// restartingSince is when a serving endpoint announced that its daemon
 	// restarts (B-13), in Unix nanoseconds; 0 while it does not. restarting
 	// closes at that moment, so tunnels waiting for the old process to accept
-	// are answered at once.
+	// are answered at once; a restart called off replaces it (F3). The
+	// channel is guarded by the broker's mu.
 	restartingSince atomic.Int64
 	restarting      chan struct{}
-	restartOnce     sync.Once
 	// supersededAt is when the policy moved the endpoint to a newer
 	// generation (certificate rotation, new target node) while this
 	// registration of the previous one serves, in Unix nanoseconds; 0 while it
@@ -103,19 +125,26 @@ func (r *endpointRegistration) nudge() {
 	}
 }
 
-// announceRestart marks a registration whose daemon restarts. A dormant
-// registration takes no traffic either way and is left as it is.
+// announceRestart marks a registration whose daemon restarts and reports
+// whether this announcement started the restart. A dormant registration
+// takes no traffic either way and is left as it is. Called with the broker's
+// mu held.
 func (r *endpointRegistration) announceRestart(now time.Time) bool {
-	if r.dormant() {
+	if r.dormant() || !r.restartingSince.CompareAndSwap(0, now.UnixNano()) {
 		return false
 	}
-	r.restartingSince.CompareAndSwap(0, now.UnixNano())
-	r.restartOnce.Do(func() {
-		if r.restarting != nil {
-			close(r.restarting)
-		}
-	})
+	if r.restarting != nil {
+		close(r.restarting)
+	}
 	return true
+}
+
+// callOffRestart ends an announced restart: the daemon serves on. Tunnels
+// admitted from now wait on a fresh channel. Called with the broker's mu held.
+func (r *endpointRegistration) callOffRestart() {
+	if r.restartingSince.Swap(0) != 0 && r.restarting != nil {
+		r.restarting = make(chan struct{})
+	}
 }
 
 // restartingAt reports a registration whose daemon announced a restart less
@@ -150,6 +179,25 @@ type pendingTunnel struct {
 	accepted chan acceptedConnection
 }
 
+// acceptedBy reports whether client may accept the tunnel: it holds the
+// certificate the tunnel's registration was verified with, or the one the
+// endpoint's policy names. While the endpoint's certificate rotates, the
+// previous registration serves on its connection's old certificate
+// (make-before-break) and its daemon accepts with that one (F2).
+func (p *pendingTunnel) acceptedBy(client peer.Identity) bool {
+	if registration := p.session.registration; registration != nil && registration.clientCertificate != "" &&
+		registration.clientSubjectID == client.SubjectID && registration.clientCertificate == client.CertificateFingerprint {
+		return true
+	}
+	return p.endpoint.SubjectId == client.SubjectID && p.endpoint.CertificateSha256 == client.CertificateFingerprint
+}
+
+// tunnelRevokedMessage ends a tunnel whose route or endpoint policy was
+// revoked: the one refusal openers must not retry.
+const tunnelRevokedMessage = "tunnel policy was revoked"
+
+var errTunnelRevoked = status.Error(codes.PermissionDenied, tunnelRevokedMessage)
+
 type activeTunnel struct {
 	routeID              string
 	routeGeneration      uint64
@@ -163,11 +211,39 @@ type activeTunnel struct {
 	// registration is the endpoint registration the tunnel was bridged
 	// through (nil for built-in local services).
 	registration *endpointRegistration
-	stop         chan struct{}
-	stopOnce     sync.Once
+	// admittedSeq orders the tunnel among admissions for lease gate
+	// enforcement; guarded by the broker's mu.
+	admittedSeq uint64
+	stop        chan struct{}
+	stopOnce    sync.Once
+	// stopCode and stopMessage are what the tunnel's opener and acceptor get
+	// when it is closed; written before stop closes, read after.
+	stopCode    codes.Code
+	stopMessage string
 }
 
-func (t *activeTunnel) close() { t.stopOnce.Do(func() { close(t.stop) }) }
+// close ends a tunnel whose policy was revoked.
+func (t *activeTunnel) close() { t.closeWith(codes.PermissionDenied, tunnelRevokedMessage) }
+
+// closeWith ends the tunnel with the status its opener and acceptor get. A
+// tunnel whose path went away (its target disconnected, reconnected or did
+// not come back from a restart, the relay drains) ends Unavailable, which
+// daemons retry and fail over on; a closed lease gate FailedPrecondition; a
+// revoked policy PermissionDenied, which they do not retry (F1).
+func (t *activeTunnel) closeWith(code codes.Code, message string) {
+	t.stopOnce.Do(func() {
+		t.stopCode, t.stopMessage = code, message
+		close(t.stop)
+	})
+}
+
+// stopError is the status of a closed tunnel.
+func (t *activeTunnel) stopError() error {
+	if t.stopMessage == "" || (t.stopCode == codes.PermissionDenied && t.stopMessage == tunnelRevokedMessage) {
+		return errTunnelRevoked
+	}
+	return status.Error(t.stopCode, t.stopMessage)
+}
 
 type Broker struct {
 	relayv1.UnimplementedTunnelBrokerServer
@@ -190,6 +266,12 @@ type Broker struct {
 	draining         atomic.Bool
 	dialLocalService func(context.Context, string) (net.Conn, error)
 	lease            LeaseGate
+	// admissions numbers registrations and tunnels as they are admitted;
+	// guarded by mu. leaseEpoch counts lease gate enforcement runs; written
+	// under mu, read without it by lease checks taken before mu (F4).
+	admissions uint64
+	leaseEpoch atomic.Uint64
+	refusals   *refusalLog
 	// policyChanged closes, and is replaced, whenever a new policy snapshot
 	// applies: registrations waiting for the policy their grant needs retry.
 	policyChanged chan struct{}
@@ -198,8 +280,8 @@ type Broker struct {
 func New(store *policy.Store) *Broker {
 	controller := admission.New()
 	controller.UpdatePolicy(store.Current().Admission)
-	dialer := net.Dialer{}
-	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, registryByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now(), policyChanged: make(chan struct{}), dialLocalService: func(ctx context.Context, target string) (net.Conn, error) {
+	dialer := net.Dialer{Timeout: localServiceDialTimeout}
+	return &Broker{store: store, verifier: grant.Verifier{Store: store}, endpoints: map[string]*endpointRegistration{}, pending: map[string]*pendingTunnel{}, active: map[string]*activeTunnel{}, admission: controller, proxyByRoute: map[string]uint64{}, registryByRoute: map[string]uint64{}, activeByRoute: map[string]uint64{}, activeByTarget: map[string]uint64{}, routeMetrics: map[string]*routeMetrics{}, metricsSince: time.Now(), refusals: newRefusalLog(), policyChanged: make(chan struct{}), dialLocalService: func(ctx context.Context, target string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "tcp", target)
 	}}
 }
@@ -210,131 +292,10 @@ func (b *Broker) SetLocalServiceDialer(dial func(context.Context, string) (net.C
 	}
 }
 
-const routeSetupLatencyWindow = 256
-
-type routeMetrics struct {
-	active              atomic.Uint64
-	opened              atomic.Uint64
-	completed           atomic.Uint64
-	failed              atomic.Uint64
-	throttled           atomic.Uint64
-	sourceToTargetBytes atomic.Uint64
-	targetToSourceBytes atomic.Uint64
-	durationMillis      atomic.Uint64
-	durationCount       atomic.Uint64
-	lastActivityMillis  atomic.Int64
-	setupMu             sync.Mutex
-	setupLatencies      [routeSetupLatencyWindow]uint64
-	setupCount          uint64
-}
-
-func (m *routeMetrics) touch() {
-	m.lastActivityMillis.Store(time.Now().UnixMilli())
-}
-
-func (m *routeMetrics) recordSetup(duration time.Duration) {
-	m.setupMu.Lock()
-	m.setupLatencies[m.setupCount%routeSetupLatencyWindow] = uint64(max(0, duration.Microseconds()))
-	m.setupCount++
-	m.setupMu.Unlock()
-	m.touch()
-}
-
-func (m *routeMetrics) recordCompletion(duration time.Duration, err error) {
-	m.active.Add(^uint64(0))
-	m.completed.Add(1)
-	m.durationMillis.Add(uint64(max(0, duration.Milliseconds())))
-	m.durationCount.Add(1)
-	if err != nil {
-		m.failed.Add(1)
-	}
-	m.touch()
-}
-
-func (m *routeMetrics) recordFailedOpen(duration time.Duration) {
-	m.completed.Add(1)
-	m.failed.Add(1)
-	m.durationMillis.Add(uint64(max(0, duration.Milliseconds())))
-	m.durationCount.Add(1)
-	m.touch()
-}
-
-func (m *routeMetrics) setupP95Micros() uint64 {
-	m.setupMu.Lock()
-	count := min(m.setupCount, uint64(routeSetupLatencyWindow))
-	values := append([]uint64(nil), m.setupLatencies[:count]...)
-	m.setupMu.Unlock()
-	if len(values) == 0 {
-		return 0
-	}
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
-	index := (len(values)*95 + 99) / 100
-	return values[max(0, index-1)]
-}
-
-type RouteRuntimeSnapshot struct {
-	RouteID                string
-	ActiveTunnels          uint64
-	OpenedTotal            uint64
-	CompletedTotal         uint64
-	FailedTotal            uint64
-	ThrottledTotal         uint64
-	SourceToTargetBytes    uint64
-	TargetToSourceBytes    uint64
-	SetupLatencyP95Micros  uint64
-	AverageDurationMillis  uint64
-	LastActivityUnixMillis int64
-	MetricsSinceUnixMillis int64
-}
-
-func (b *Broker) RouteRuntimeSnapshot(routeID string) (RouteRuntimeSnapshot, bool) {
-	b.mu.Lock()
-	if b.store.Current().Routes[routeID] == nil {
-		b.mu.Unlock()
-		return RouteRuntimeSnapshot{}, false
-	}
-	metrics := b.routeMetrics[routeID]
-	metricsSince := b.metricsSince.UnixMilli()
-	b.mu.Unlock()
-
-	snapshot := RouteRuntimeSnapshot{RouteID: routeID, MetricsSinceUnixMillis: metricsSince}
-	if metrics == nil {
-		return snapshot, true
-	}
-	durationCount := metrics.durationCount.Load()
-	snapshot.ActiveTunnels = metrics.active.Load()
-	snapshot.OpenedTotal = metrics.opened.Load()
-	snapshot.CompletedTotal = metrics.completed.Load()
-	snapshot.FailedTotal = metrics.failed.Load()
-	snapshot.ThrottledTotal = metrics.throttled.Load()
-	snapshot.SourceToTargetBytes = metrics.sourceToTargetBytes.Load()
-	snapshot.TargetToSourceBytes = metrics.targetToSourceBytes.Load()
-	snapshot.SetupLatencyP95Micros = metrics.setupP95Micros()
-	if durationCount > 0 {
-		snapshot.AverageDurationMillis = metrics.durationMillis.Load() / durationCount
-	}
-	snapshot.LastActivityUnixMillis = metrics.lastActivityMillis.Load()
-	return snapshot, true
-}
-
-func (b *Broker) routeMetricsLocked(routeID string) *routeMetrics {
-	metrics := b.routeMetrics[routeID]
-	if metrics == nil {
-		metrics = &routeMetrics{}
-		b.routeMetrics[routeID] = metrics
-	}
-	return metrics
-}
-
-func (b *Broker) pruneRouteMetrics(routeID string, metrics *routeMetrics) {
-	if metrics.active.Load() != 0 {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.store.Current().Routes[routeID] == nil && b.routeMetrics[routeID] == metrics {
-		delete(b.routeMetrics, routeID)
-	}
+// nextAdmissionLocked numbers an admitted registration or tunnel.
+func (b *Broker) nextAdmissionLocked() uint64 {
+	b.admissions++
+	return b.admissions
 }
 
 func (b *Broker) Counts() (uint64, uint64) {
@@ -401,7 +362,8 @@ func (b *Broker) Draining() bool { return b.draining.Load() }
 
 // ForceDisconnect closes established streams only after the control plane has
 // explicitly placed the worker in drain mode. It never changes policy or
-// resumes admission by itself.
+// resumes admission by itself. The tunnels end Unavailable "relay is
+// draining", which daemons fail over on.
 func (b *Broker) ForceDisconnect() uint64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -410,7 +372,7 @@ func (b *Broker) ForceDisconnect() uint64 {
 	}
 	count := uint64(len(b.active))
 	for _, tunnel := range b.active {
-		tunnel.close()
+		tunnel.closeWith(codes.Unavailable, "relay is draining")
 	}
 	return count
 }
@@ -421,24 +383,31 @@ func (b *Broker) Reconcile(previous, next *policy.Snapshot) {
 	b.reconcileLocked(next)
 }
 
-// ApplySnapshot serializes the durable policy swap with endpoint and tunnel
-// admission. A grant can therefore never pass against one revision and be
-// admitted after a newer revision has become current.
+// ApplySnapshot serializes the policy swap with endpoint and tunnel
+// admission: the snapshot becomes current under mu, where every admission
+// validates its grant. A grant can therefore never pass against one revision
+// and be admitted after a newer revision has become current. Validation and
+// the fsync run before, without mu, so admission does not wait for the disk
+// (F4); concurrent applies are serialized by the store.
 func (b *Broker) ApplySnapshot(request *relayv1.ApplySnapshotRequest) (*policy.Snapshot, bool, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	next, unchanged, err := b.store.Apply(request)
+	next, unchanged, err := b.store.ApplyStaged(request, func(next *policy.Snapshot, makeCurrent func()) {
+		if b.lease != nil {
+			// Adopt the snapshot's lease blocks before the new policy admits
+			// anything. Outside mu: the lease node persists what it adopts.
+			// The store already trusts the snapshot's policy keys.
+			b.lease.ApplyPolicy(next)
+		}
+		b.mu.Lock()
+		makeCurrent()
+		b.reconcileLocked(next)
+		b.mu.Unlock()
+	})
 	if err != nil {
 		return nil, false, err
 	}
-	if !unchanged {
-		b.reconcileLocked(next)
-		if b.lease != nil {
-			// Adopt the snapshot's lease blocks before the new policy admits
-			// anything, then drop registrations the new view no longer admits.
-			b.lease.ApplyPolicy(next)
-			b.enforceLeaseGatesLocked()
-		}
+	if !unchanged && b.lease != nil {
+		// Drop registrations and tunnels the new view no longer admits.
+		b.EnforceLeaseGates()
 	}
 	return next, unchanged, nil
 }
@@ -492,4 +461,12 @@ func policyAhead(claims grant.Claims, snapshot *policy.Snapshot) bool {
 	endpoint := snapshot.Endpoint(claims.EndpointID, claims.AssignmentGeneration)
 	return endpoint == nil || endpoint.Generation < claims.EndpointGeneration ||
 		(claims.AssignmentGeneration > 0 && endpoint.AssignmentGeneration < claims.AssignmentGeneration)
+}
+
+// routePolicyAhead is policyAhead for a connect grant: its route, or the
+// route's generation or assignment, is not in this relay's policy yet.
+func routePolicyAhead(claims grant.Claims, snapshot *policy.Snapshot) bool {
+	route := snapshot.Route(claims.RouteID, claims.AssignmentGeneration)
+	return route == nil || route.Generation < claims.RouteGeneration ||
+		(claims.AssignmentGeneration > 0 && route.AssignmentGeneration < claims.AssignmentGeneration)
 }

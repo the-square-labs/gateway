@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
@@ -22,6 +23,27 @@ type Service struct {
 	reloadApp    func() error
 	buildVersion string
 	lease        LeaseReporter
+	// snapshotRefusals rate-limits the log of refused snapshots.
+	snapshotRefusals logLimiter
+}
+
+// logLimiter allows one log line per key and minute.
+type logLimiter struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func (l *logLimiter) allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last == nil || len(l.last) > 256 {
+		l.last = map[string]time.Time{}
+	}
+	if last, ok := l.last[key]; ok && now.Sub(last) < time.Minute {
+		return false
+	}
+	l.last[key] = now
+	return true
 }
 
 // LeaseReporter is the relay's availability lease coordinator.
@@ -112,6 +134,7 @@ func healthCapabilities(mode relayv1.RelayMode, availabilityLease bool) []string
 	capabilities := []string{
 		policy.PoolCapability, "signed_policy_envelope_v1", identity.ServerCertificateRolloverCapability,
 		policy.LongLeaseCapability, broker.EndpointRestartCapability, broker.DrainKeepsLocalServicesCapability,
+		broker.RegistryFairShareCapability,
 	}
 	if mode == relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
 		capabilities = append(capabilities, policy.TrustResetCapability)
@@ -168,7 +191,15 @@ func (s *Service) ApplySnapshot(ctx context.Context, request *relayv1.ApplySnaps
 	}
 	next, unchanged, err := s.broker.ApplySnapshot(request)
 	if err != nil {
+		// Gateway retries every few seconds: one line per reason a minute (F8).
+		if s.snapshotRefusals.allow(err.Error(), time.Now()) {
+			slog.Warn("relay refused a policy snapshot", "applied_revision", s.store.Current().Revision, "error", err)
+		}
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if !unchanged {
+		slog.Info("relay applied a policy snapshot", "revision", next.Revision, "endpoints", len(next.Endpoints),
+			"routes", len(next.Routes), "policy_expires_at", next.ExpiresAt)
 	}
 	var policyExpiresAtUnix int64
 	if !next.ExpiresAt.IsZero() {
