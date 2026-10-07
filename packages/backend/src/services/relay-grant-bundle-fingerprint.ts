@@ -27,11 +27,11 @@ function grantContent(grant: SignedRelayGrant | undefined): unknown {
 /**
  * What a grant bundle allows, without the signatures and lifetimes that differ on every build.
  * Two bundles with the same fingerprint carry the same assignments, candidates, fences and runtime
- * settings; only the freshness of their grants can differ.
+ * settings; only the freshness of their grants can differ. The policy revision is left out: it only
+ * orders bundles on the daemon, and a change elsewhere in the policy must not resend every daemon.
  */
 export function relayGrantBundleFingerprint(bundle: RelayGrantBundle): string {
   const content = {
-    revision: bundle.revision,
     dataLanes: bundle.dataLanes ?? null,
     readChunkBytes: bundle.readChunkBytes ?? null,
     revocationFences: bundle.revocationFences ?? [],

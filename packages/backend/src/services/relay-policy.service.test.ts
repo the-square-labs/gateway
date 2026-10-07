@@ -1261,6 +1261,33 @@ describe('RelayPolicyService snapshots', () => {
     expect(issuer.policyNodeIds).toHaveBeenCalledOnce();
   });
 
+  it('retries only the daemon whose grant refresh failed and skips disconnected ones', async () => {
+    const service = createService({} as never, { applySnapshot: vi.fn() });
+    const issuer = (service as any).grantIssuer;
+    issuer.requireState = vi.fn().mockResolvedValue({ revision: 7 });
+    issuer.policyNodeIds = vi.fn().mockResolvedValue(['up', 'failing', 'offline']);
+    service.setNodeDispatch({ isNodeConnected: (nodeId: string) => nodeId !== 'offline' } as never);
+    const grants = vi.spyOn(service, 'syncNodeGrants').mockImplementation(async (nodeId) => {
+      if (nodeId === 'failing') throw new Error('down');
+    });
+
+    await expect(service.refreshAllNodeGrantsIfDue()).rejects.toThrow('1 daemon(s)');
+    expect(grants.mock.calls).toEqual([
+      ['up', { skipUnchanged: true }],
+      ['failing', { skipUnchanged: true }],
+    ]);
+
+    grants.mockClear();
+    grants.mockResolvedValue(undefined);
+    await service.refreshAllNodeGrantsIfDue();
+    expect(grants.mock.calls).toEqual([['failing', { skipUnchanged: true }]]);
+
+    grants.mockClear();
+    await service.refreshAllNodeGrantsIfDue();
+    expect(grants).not.toHaveBeenCalled();
+    expect(issuer.policyNodeIds).toHaveBeenCalledOnce();
+  });
+
   it('serializes grant bundle generation and dispatch per node', async () => {
     const service = createService({} as never, { applySnapshot: vi.fn() });
     let releaseFirst!: () => void;

@@ -360,6 +360,8 @@ export class RelayPolicyService {
   >;
   private lastGrantRefreshAt = 0;
   private lastGrantRefreshRevision = 0;
+  /** Daemons whose last grant refresh failed: retried alone until the next full refresh is due. */
+  private failedGrantRefreshNodeIds = new Set<string>();
   private readonly grantIssuer: RelayGrantIssuerService;
   private readonly linkRoutes: RelayLinkRoutes;
   private readonly grantKeys: RelayGrantKeyService;
@@ -2608,18 +2610,31 @@ export class RelayPolicyService {
     return true;
   }
 
+  /**
+   * Refreshes every daemon's grants once per revision and interval. The routine refresh skips a daemon that already
+   * holds the same grants (deliveredRecently); a forced one (new signing key, relay certificate or runtime settings)
+   * resends every bundle. A daemon that is not connected gets its bundle when it reconnects; one whose delivery failed
+   * is retried alone by the next pass, so one unreachable daemon no longer makes every pass resend to all of them.
+   */
   async refreshAllNodeGrantsIfDue(force = false): Promise<void> {
     const revision = Number((await this.grantIssuer.requireState()).revision);
     const ttlHours = (await this.settings.getConfig()).relayGrantTtlHours;
     const intervalMs = (ttlHours * 60 * 60 * 1000) / 4;
-    if (!force && revision === this.lastGrantRefreshRevision && Date.now() - this.lastGrantRefreshAt < intervalMs)
-      return;
-    const nodeIds = await this.grantIssuer.policyNodeIds();
-    const results = await Promise.allSettled(nodeIds.map((nodeId) => this.syncNodeGrants(nodeId)));
-    const failures = results.filter((result) => result.status === 'rejected');
-    if (failures.length) throw new Error(`Failed to refresh relay grants for ${failures.length} daemon(s)`);
-    this.lastGrantRefreshAt = Date.now();
-    this.lastGrantRefreshRevision = revision;
+    const due =
+      force || revision !== this.lastGrantRefreshRevision || Date.now() - this.lastGrantRefreshAt >= intervalMs;
+    if (!due && this.failedGrantRefreshNodeIds.size === 0) return;
+    const nodeIds = due ? await this.grantIssuer.policyNodeIds() : [...this.failedGrantRefreshNodeIds];
+    const connected = nodeIds.filter((nodeId) => this.dispatch?.isNodeConnected(nodeId));
+    const options = force ? {} : ROUTINE_GRANT_SYNC;
+    const results = await Promise.allSettled(connected.map((nodeId) => this.syncNodeGrants(nodeId, options)));
+    this.failedGrantRefreshNodeIds = new Set(connected.filter((_, index) => results[index]!.status === 'rejected'));
+    if (due) {
+      this.lastGrantRefreshAt = Date.now();
+      this.lastGrantRefreshRevision = revision;
+    }
+    if (this.failedGrantRefreshNodeIds.size) {
+      throw new Error(`Failed to refresh relay grants for ${this.failedGrantRefreshNodeIds.size} daemon(s)`);
+    }
   }
 
   async getNodeGrantBundle(nodeId: string): Promise<RelayGrantBundle> {
