@@ -14,6 +14,7 @@ import {
 import { decodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { logger } from '@/lib/logger.js';
 import { RelayPolicyNotAcknowledgedError } from './relay-grant-issuer.service.js';
+import { RELAY_UNCAPPED_SESSIONS } from './relay-session-limits.js';
 import {
   LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE,
   managedDatabaseListenerConfigsEqual,
@@ -1198,7 +1199,10 @@ describe('RelayPolicyService snapshots', () => {
           if (table === relayGrantSigningKeys) {
             return { where: () => Promise.resolve(selected) };
           }
-          return Promise.resolve(selected);
+          // The session-limit read joins managed databases; this fixture has none.
+          return Object.assign(Promise.resolve(selected), {
+            innerJoin: () => ({ where: () => Promise.resolve([]) }),
+          });
         },
       })),
     };
@@ -1230,13 +1234,13 @@ describe('RelayPolicyService snapshots', () => {
             routeId: 'route-1',
             generation: '4',
             maxConcurrentSessions: 64,
-            disableIdleTimeout: false,
+            disableIdleTimeout: true,
             trafficClass: 'database',
           }),
           expect.objectContaining({
             routeId: 'route-2',
             generation: '1',
-            maxConcurrentSessions: 1024,
+            maxConcurrentSessions: RELAY_UNCAPPED_SESSIONS,
             disableIdleTimeout: true,
             trafficClass: 'proxy',
           }),

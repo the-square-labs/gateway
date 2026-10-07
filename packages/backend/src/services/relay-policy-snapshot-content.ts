@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { relayEndpoints, relayGrantSigningKeys, relayRoutes } from '@/db/schema/index.js';
 import type { RelayPublishedPolicyKey } from './relay-policy-signing-key.service.js';
 import { RELAY_POLICY_KEY_VALID_FROM_SKEW_MS } from './relay-policy-signing-key.service.js';
-import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
+import { effectiveRelayMaxConcurrentSessions, type RelaySessionLimits } from './relay-session-limits.js';
 
 export interface RelayPolicySnapshotInput {
   gatewayInstanceId: string;
@@ -20,6 +20,8 @@ export interface RelayPolicySnapshotInput {
   };
   policyKeys: RelayPublishedPolicyKey[];
   routePolicy: (ownerKind: string) => Record<string, unknown>;
+  /** Connection limits of the managed databases behind endpoints; their links take the database's limit. */
+  sessionLimits?: RelaySessionLimits;
   /** Availability lease gate ids of lease-mode endpoints and routes. */
   leaseGate: { endpoints: Map<string, string>; routes: Map<string, string> } | null;
   /** Availability lease blocks and key rotations carried by every relay envelope. */
@@ -56,7 +58,7 @@ export function relayPolicySnapshotContent(input: RelayPolicySnapshotInput) {
           subjectKind: endpoint.subjectKind,
           subjectId: endpoint.subjectId,
           certificateSha256: endpoint.certificateSha256,
-          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
+          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, input.sessionLimits),
           poolId: input.poolId,
           relayInstanceId: input.relayInstanceId,
           assignmentGeneration: String(assignment.assignmentGeneration),
@@ -76,7 +78,7 @@ export function relayPolicySnapshotContent(input: RelayPolicySnapshotInput) {
           sourceId: route.sourceId,
           sourceCertificateSha256: route.sourceCertificateSha256,
           targetEndpointId: route.targetEndpointId,
-          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
+          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, input.sessionLimits),
           maxFrameBytes: route.maxFrameBytes,
           ...input.routePolicy(route.ownerKind),
           assignmentGeneration: String(assignment.assignmentGeneration),

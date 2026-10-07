@@ -111,6 +111,9 @@ function duration(milliseconds: number) {
   return `${(milliseconds / 60_000).toFixed(1)} min`;
 }
 
+// Gateway names this limit for links without a fixed cap (relay admission bounds them by load).
+const UNCAPPED_LINK_CONNECTIONS = 1_000_000;
+
 /** Why the node or a relay refused a link's latest refused connection (the daemon's reasons). */
 const REJECTION_REASONS: Record<string, string> = {
   link_limit: "link at its connection limit",
@@ -164,9 +167,11 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
         history={activeHistory}
         color="#3b82f6"
         subtitle={
-          connections && connections.limit > 0
-            ? `Open connections, limit ${connections.limit.toLocaleString()}`
-            : "Current streams on this link"
+          !connections || connections.limit <= 0
+            ? "Current streams on this link"
+            : connections.limit >= UNCAPPED_LINK_CONNECTIONS
+              ? "Open connections, no fixed limit"
+              : `Open connections, limit ${connections.limit.toLocaleString()}`
         }
       />
       <StatCard

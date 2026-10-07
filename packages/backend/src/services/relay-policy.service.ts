@@ -72,7 +72,7 @@ import {
   RELAY_POLICY_REVISION_LOCK,
   recordBuiltSnapshot,
 } from './relay-revocation-fence.service.js';
-import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
+import { effectiveRelayMaxConcurrentSessions, loadRelaySessionLimits } from './relay-session-limits.js';
 import {
   candidateDrainDeadline,
   GATEWAY_STREAM_REPORT_SOURCE,
@@ -169,6 +169,12 @@ export function managedDatabaseListenerConfigsEqual(
   return currentSources.every((source, index) => source === desiredSources[index]);
 }
 
+/**
+ * How a relay treats a route's tunnels. HTTP traffic (proxy Secure Links, storage links) shares the proxy class: no
+ * fixed cap, fair share between routes under pressure, and it yields to database traffic first. Workload links keep
+ * their pooled connections open however long they idle; Gateway's own short-lived routes keep the idle timeout that
+ * reaps leaked sessions.
+ */
 function relayRoutePolicy(ownerKind: string): {
   disableIdleTimeout: boolean;
   trafficClass: 'proxy' | 'database' | 'registry';
@@ -176,8 +182,11 @@ function relayRoutePolicy(ownerKind: string): {
   if ((REGISTRY_ROUTE_OWNER_KINDS as readonly string[]).includes(ownerKind)) {
     return { disableIdleTimeout: true, trafficClass: 'registry' };
   }
-  if (ownerKind === 'proxy_host_secure_link') {
+  if (ownerKind === 'proxy_host_secure_link' || ownerKind === 'managed_storage_binding') {
     return { disableIdleTimeout: true, trafficClass: 'proxy' };
+  }
+  if (ownerKind === 'managed_database_binding' || ownerKind === 'container_link') {
+    return { disableIdleTimeout: true, trafficClass: 'database' };
   }
   return { disableIdleTimeout: false, trafficClass: 'database' };
 }
@@ -526,6 +535,35 @@ export class RelayPolicyService {
     this.policyKeys.setRetainedKeyIds(() => source.retainedSigningKeyIds());
   }
 
+  /**
+   * A managed database accepts a different number of connections: its links and endpoint take the new limit from the
+   * next snapshot and grants (relay-session-limits.ts). No route or endpoint row changes, so no generation moves and
+   * no open connection is dropped; the database node and the nodes of its links get fresh grants now.
+   */
+  async publishManagedDatabaseLimits(managedDatabaseId: string): Promise<void> {
+    const endpoints = await this.db
+      .select({ id: relayEndpoints.id, subjectKind: relayEndpoints.subjectKind, subjectId: relayEndpoints.subjectId })
+      .from(relayEndpoints)
+      .where(and(eq(relayEndpoints.ownerKind, 'managed_database'), eq(relayEndpoints.ownerId, managedDatabaseId)));
+    if (!endpoints.length) return;
+    const routes = await this.db
+      .select({ sourceKind: relayRoutes.sourceKind, sourceId: relayRoutes.sourceId })
+      .from(relayRoutes)
+      .where(
+        inArray(
+          relayRoutes.targetEndpointId,
+          endpoints.map(({ id }) => id)
+        )
+      );
+    await this.db.transaction((tx) => bumpRelayPolicyRevision(tx));
+    await this.syncSnapshot();
+    const nodeIds = new Set([
+      ...endpoints.filter(({ subjectKind }) => subjectKind === 'daemon').map(({ subjectId }) => subjectId),
+      ...routes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ sourceId }) => sourceId),
+    ]);
+    await Promise.allSettled([...nodeIds].map((nodeId) => this.syncNodeGrants(nodeId, ROUTINE_GRANT_SYNC)));
+  }
+
   /** A lease block changed: publish a new revision to the local relay and push it to remote relays. */
   async publishAvailabilityLeaseChange(): Promise<void> {
     await this.db.transaction((tx) => bumpRelayPolicyRevision(tx));
@@ -575,6 +613,15 @@ export class RelayPolicyService {
         status?: unknown;
       } | null;
       if (event?.resourceKind !== 'managed_database' || typeof event.managedDatabaseId !== 'string') return;
+      if (event.action === 'connection_limit.changed') {
+        void this.publishManagedDatabaseLimits(event.managedDatabaseId).catch((error) => {
+          logger.warn('Managed database link limits will reach relays and daemons with the next policy sync', {
+            managedDatabaseId: event.managedDatabaseId,
+            error: errorMessage(error),
+          });
+        });
+        return;
+      }
       const operation =
         event.action === 'deleted'
           ? this.revokeOwner('managed_database', event.managedDatabaseId)
@@ -2818,6 +2865,7 @@ export class RelayPolicyService {
           tx.select().from(relayRoutes),
         ]);
         if (!state) throw new Error('Relay policy state is not initialized');
+        const sessionLimits = await loadRelaySessionLimits(tx);
         keys.sort((left, right) => left.keyId.localeCompare(right.keyId));
         endpoints.sort((left, right) => left.id.localeCompare(right.id));
         routes.sort((left, right) => left.id.localeCompare(right.id));
@@ -2839,7 +2887,7 @@ export class RelayPolicyService {
             subjectKind: endpoint.subjectKind,
             subjectId: endpoint.subjectId,
             certificateSha256: endpoint.certificateSha256,
-            maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
+            maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits),
           })),
           routes: routes
             .filter(({ targetEndpointId }) => activeEndpointIds.has(targetEndpointId))
@@ -2850,7 +2898,7 @@ export class RelayPolicyService {
               sourceId: route.sourceId,
               sourceCertificateSha256: route.sourceCertificateSha256,
               targetEndpointId: route.targetEndpointId,
-              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
+              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, sessionLimits),
               maxFrameBytes: route.maxFrameBytes,
               ...relayRoutePolicy(route.ownerKind),
             })),
@@ -3022,6 +3070,7 @@ export class RelayPolicyService {
       const routes = endpointIds.length
         ? await tx.select().from(relayRoutes).where(inArray(relayRoutes.targetEndpointId, endpointIds))
         : [];
+      const sessionLimits = await loadRelaySessionLimits(tx);
       // A relay refuses any revision below the one it applied, and Gateway's own sequence can
       // fall behind it (a database restored from a backup). Continue above what the relay
       // reports, or has reported, so it is never locked out until the sequence catches up.
@@ -3067,6 +3116,7 @@ export class RelayPolicyService {
         admission: relaySettings,
         policyKeys: policyKeys.keys,
         routePolicy: relayRoutePolicy,
+        sessionLimits,
         leaseGate,
         lease,
       });

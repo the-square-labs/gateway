@@ -23,7 +23,11 @@ import type { CryptoService } from './crypto.service.js';
 import { candidateAssignmentState } from './relay-local-takeover.js';
 import type { RelayRevokedRouteFence } from './relay-revocation-fence.js';
 import { loadRevocationFenceState } from './relay-revocation-fence.service.js';
-import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
+import {
+  effectiveRelayMaxConcurrentSessions,
+  loadRelaySessionLimits,
+  type RelaySessionLimits,
+} from './relay-session-limits.js';
 import {
   candidateDrainDeadline,
   type RelayRouteResumeAssignment,
@@ -218,11 +222,12 @@ export class RelayGrantIssuerService {
 
   async getNodeGrantBundle(nodeId: string): Promise<RelayGrantBundle> {
     const node = await this.requireNodeIdentity(nodeId);
-    const [state, endpoints, routes, targetEndpoints] = await Promise.all([
+    const [state, endpoints, routes, targetEndpoints, sessionLimits] = await Promise.all([
       this.requireState(),
       this.db.select().from(relayEndpoints).where(eq(relayEndpoints.subjectId, nodeId)),
       this.db.select().from(relayRoutes).where(eq(relayRoutes.sourceId, nodeId)),
       this.db.select().from(relayEndpoints),
+      loadRelaySessionLimits(this.db),
     ]);
     const activeEndpointIds = new Set(targetEndpoints.filter(({ status }) => status === 'active').map(({ id }) => id));
     const grants: RelayGrantAssignment[] = [];
@@ -258,7 +263,7 @@ export class RelayGrantIssuerService {
         certificateSha256: node.certificateFingerprint,
         endpointId: endpoint.id,
         endpointGeneration: endpoint.generation,
-        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
+        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits),
       });
       const candidates = await this.issueCandidates(
         poolProjection.get(endpoint.id) ?? [],
@@ -267,7 +272,9 @@ export class RelayGrantIssuerService {
         node.certificateFingerprint,
         endpoint,
         undefined,
-        true
+        true,
+        true,
+        sessionLimits
       );
       const resumeRoutes = inboundRoutes
         .filter(({ targetEndpointId }) => targetEndpointId === endpoint.id)
@@ -292,7 +299,7 @@ export class RelayGrantIssuerService {
         certificateSha256: node.certificateFingerprint,
         routeId: route.id,
         routeGeneration: route.generation,
-        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
+        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, sessionLimits),
         maxFrameBytes: route.maxFrameBytes,
       });
       const endpoint = targetEndpoints.find(({ id }) => id === route.targetEndpointId);
@@ -309,7 +316,9 @@ export class RelayGrantIssuerService {
             node.certificateFingerprint,
             endpoint,
             route,
-            true
+            true,
+            true,
+            sessionLimits
           )
         : [];
       grants.push({
@@ -410,11 +419,18 @@ export class RelayGrantIssuerService {
     route:
       | Pick<
           typeof relayRoutes.$inferSelect,
-          'id' | 'generation' | 'sourceKind' | 'ownerKind' | 'maxConcurrentSessions' | 'maxFrameBytes'
+          | 'id'
+          | 'generation'
+          | 'sourceKind'
+          | 'ownerKind'
+          | 'targetEndpointId'
+          | 'maxConcurrentSessions'
+          | 'maxFrameBytes'
         >
       | undefined,
     includeStaging: boolean,
-    requireSubjectNodeCapability = true
+    requireSubjectNodeCapability = true,
+    sessionLimits?: RelaySessionLimits
   ): Promise<RelayDataCandidate[]> {
     if (
       !assignments.length ||
@@ -442,12 +458,12 @@ export class RelayGrantIssuerService {
           ? {
               endpointId: endpoint.id,
               endpointGeneration: endpoint.generation,
-              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
+              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint, sessionLimits),
             }
           : {
               routeId: route!.id,
               routeGeneration: route!.generation,
-              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route!),
+              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route!, sessionLimits),
               maxFrameBytes: route!.maxFrameBytes,
             }),
       });

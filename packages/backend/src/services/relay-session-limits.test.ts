@@ -3,9 +3,11 @@ import { relayEndpoints, relayRoutes } from '@/db/schema/index.js';
 import { RelayGrantIssuerService } from './relay-grant-issuer.service.js';
 import { relayPolicySnapshotContent } from './relay-policy-snapshot-content.js';
 import {
+  CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS,
   effectiveRelayMaxConcurrentSessions,
   MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS,
-  PROXY_RELAY_MAX_CONCURRENT_SESSIONS,
+  managedDatabaseConnectionLimit,
+  RELAY_UNCAPPED_SESSIONS,
 } from './relay-session-limits.js';
 
 const listener = {
@@ -102,23 +104,38 @@ function poolRelay(endpointId: string) {
   };
 }
 
-describe('managed link relay session capacity', () => {
-  it('raises managed database and storage link routes to the link capacity and leaves other routes alone', () => {
-    expect(MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS).toBe(64);
-    expect(effectiveRelayMaxConcurrentSessions(databaseLinkRoute)).toBe(64);
-    expect(effectiveRelayMaxConcurrentSessions(storageLinkRoute)).toBe(64);
-    // A larger stored value is never lowered.
-    expect(effectiveRelayMaxConcurrentSessions({ ...databaseLinkRoute, maxConcurrentSessions: 80 })).toBe(80);
+// The database behind endpoint-database accepts 500 connections.
+const sessionLimits = { databaseByEndpoint: new Map([['endpoint-database', 500]]) };
+
+describe('relay session limits', () => {
+  it('reads the connection limit from the managed database engine settings', () => {
+    expect(managedDatabaseConnectionLimit('postgres', {})).toBe(100);
+    expect(managedDatabaseConnectionLimit('postgres', { postgresConfig: { maxConnections: 500 } })).toBe(500);
+    expect(managedDatabaseConnectionLimit('redis', { redisConfig: { maxclients: 2000 } })).toBe(2000);
+    expect(managedDatabaseConnectionLimit('redis', null)).toBe(10_000);
+    expect(managedDatabaseConnectionLimit('clickhouse', {})).toBe(4096);
+  });
+
+  it('gives a database link its database limit and leaves HTTP links uncapped', () => {
+    expect(effectiveRelayMaxConcurrentSessions(databaseLinkRoute, sessionLimits)).toBe(500);
+    // A database Gateway does not know (no limits loaded) keeps the link capacity.
+    expect(effectiveRelayMaxConcurrentSessions(databaseLinkRoute)).toBe(MANAGED_LINK_RELAY_MAX_CONCURRENT_SESSIONS);
+    expect(effectiveRelayMaxConcurrentSessions(databaseEndpoint, sessionLimits)).toBe(564);
+    expect(effectiveRelayMaxConcurrentSessions(databaseEndpoint)).toBe(256);
+    expect(effectiveRelayMaxConcurrentSessions(storageLinkRoute, sessionLimits)).toBe(RELAY_UNCAPPED_SESSIONS);
+    expect(effectiveRelayMaxConcurrentSessions(storageEndpoint, sessionLimits)).toBe(RELAY_UNCAPPED_SESSIONS);
     expect(
       effectiveRelayMaxConcurrentSessions({ ownerKind: 'proxy_host_secure_link', maxConcurrentSessions: 16 })
-    ).toBe(PROXY_RELAY_MAX_CONCURRENT_SESSIONS);
+    ).toBe(RELAY_UNCAPPED_SESSIONS);
+    expect(effectiveRelayMaxConcurrentSessions({ ownerKind: 'container_link', maxConcurrentSessions: 16 })).toBe(
+      CONTAINER_LINK_RELAY_MAX_CONCURRENT_SESSIONS
+    );
     expect(
       effectiveRelayMaxConcurrentSessions({ ownerKind: 'managed_database_gateway', maxConcurrentSessions: 16 })
     ).toBe(16);
-    expect(effectiveRelayMaxConcurrentSessions(databaseEndpoint)).toBe(256);
   });
 
-  it('carries the link capacity in the relay snapshot without moving the route generation', () => {
+  it('carries the limits in the relay snapshot without moving the route generation', () => {
     const content = relayPolicySnapshotContent({
       gatewayInstanceId: 'gateway-1',
       poolId: 'system',
@@ -138,21 +155,35 @@ describe('managed link relay session capacity', () => {
       },
       policyKeys: [],
       routePolicy: () => ({}),
+      sessionLimits,
       leaseGate: null,
       lease: null,
     });
     expect(content.routes).toEqual([
-      expect.objectContaining({ routeId: 'route-database-link', generation: '4', maxConcurrentSessions: 64 }),
-      expect.objectContaining({ routeId: 'route-storage-link', generation: '7', maxConcurrentSessions: 64 }),
+      expect.objectContaining({ routeId: 'route-database-link', generation: '4', maxConcurrentSessions: 500 }),
+      expect.objectContaining({
+        routeId: 'route-storage-link',
+        generation: '7',
+        maxConcurrentSessions: RELAY_UNCAPPED_SESSIONS,
+      }),
     ]);
-    expect(content.endpoints.map(({ maxConcurrentSessions }) => maxConcurrentSessions)).toEqual([256, 256]);
+    expect(content.endpoints.map(({ maxConcurrentSessions }) => maxConcurrentSessions)).toEqual([
+      564,
+      RELAY_UNCAPPED_SESSIONS,
+    ]);
   });
 
-  it('signs the link capacity into the source daemon grants without moving the route generation', async () => {
+  it('signs the limits into the source daemon grants without moving the route generation', async () => {
     const service = new RelayGrantIssuerService(
       database([
         { table: relayRoutes, filtered: true, rows: [databaseLinkRoute, storageLinkRoute] },
         { table: relayEndpoints, filtered: false, rows: [databaseEndpoint, storageEndpoint] },
+        // The session-limit read; the node's own endpoint read gets these rows too and finds no active endpoint.
+        {
+          table: relayEndpoints,
+          filtered: true,
+          rows: [{ endpointId: 'endpoint-database', type: 'postgres', engineConfig: { postgresConfig: { maxConnections: 500 } } }],
+        },
       ]) as never,
       {} as never,
       {} as never
@@ -177,8 +208,13 @@ describe('managed link relay session capacity', () => {
     const links = bundle.grants.filter(({ role }: { role: string }) => role === 'connect');
     expect(links).toHaveLength(2);
     for (const link of links) {
-      const route = link.routeId === databaseLinkRoute.id ? databaseLinkRoute : storageLinkRoute;
-      const expected = { routeId: route.id, routeGeneration: route.generation, maxConcurrentSessions: 64 };
+      const database = link.routeId === databaseLinkRoute.id;
+      const route = database ? databaseLinkRoute : storageLinkRoute;
+      const expected = {
+        routeId: route.id,
+        routeGeneration: route.generation,
+        maxConcurrentSessions: database ? 500 : RELAY_UNCAPPED_SESSIONS,
+      };
       // The legacy grant and every pool candidate grant: the relay enforces the lower of grant and policy.
       expect(link.grant.payload).toMatchObject(expected);
       expect(link.candidates).toHaveLength(1);

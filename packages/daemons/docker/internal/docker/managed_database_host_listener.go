@@ -25,8 +25,9 @@ import (
 
 const (
 	// managedDatabaseHostListenerGlobalConnections bounds the connections of every binding's host listener on the
-	// node together (file descriptors).
-	managedDatabaseHostListenerGlobalConnections = 1024
+	// node together (file descriptors and per-connection buffers). A binding may carry as many connections as its
+	// database accepts, so this only stops a runaway node, never one binding's ordinary pool.
+	managedDatabaseHostListenerGlobalConnections = 8192
 	managedDatabaseHostListenerInspectTimeout    = 5 * time.Second
 )
 
