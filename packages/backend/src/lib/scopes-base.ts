@@ -18,6 +18,8 @@ export const ALL_SCOPES = [
   'storage:objects:write',
   'storage:objects:admin',
   'storage:folders:manage',
+  // Link a workload to managed storage (a bucket-scoped key of its own); issuing access keys stays storage:iam.
+  'storage:bind',
   'databases:backups:view',
   'databases:backups:manage',
   'databases:backups:run',
@@ -256,6 +258,8 @@ export const ALL_SCOPES = [
   'databases:query:admin',
   'databases:credentials:reveal',
   'databases:folders:manage',
+  // Link a workload to a managed database (a database identity of its own) without editing the database.
+  'databases:bind',
   // ── Notifications ────────────────────────────────────────────────
   'notifications:alerts:view',
   'notifications:alerts:manage',

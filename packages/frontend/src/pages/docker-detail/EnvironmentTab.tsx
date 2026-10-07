@@ -147,10 +147,10 @@ export function EnvironmentTab({
   const resolvedStorageTargetResourceId =
     storageTargetType === "deployment" ? (databaseTargetResourceId ?? "") : (containerName ?? "");
   const canViewManagedStorage = hasScopedAccess("storage:view");
-  const canManageManagedStorage = hasScopedAccess("storage:iam");
+  const canManageManagedStorage = hasScopedAccess("storage:bind");
   const canManageStorageCluster = useCallback(
     (connectionId: string | null) =>
-      hasScope("storage:iam") || Boolean(connectionId && hasScope(`storage:iam:${connectionId}`)),
+      hasScope("storage:bind") || Boolean(connectionId && hasScope(`storage:bind:${connectionId}`)),
     [hasScope]
   );
   const managedStorageLinksEnabled =

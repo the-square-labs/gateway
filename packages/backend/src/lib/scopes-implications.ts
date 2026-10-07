@@ -80,6 +80,9 @@ const EXPLICIT_IMPLICATIONS: Readonly<Record<string, readonly string[]>> = {
   'docker:containers:view': ['docker:availability:manage'],
   // Snapshot mutations act on one existing VM and keep implying that VM's snapshot view.
   'hosting:snapshots:view': ['hosting:snapshots:create'],
+  // Linking a workload used to need these, so their holders keep it.
+  'databases:bind': ['databases:edit'],
+  'storage:bind': ['storage:iam'],
 };
 
 const CATALOG = new Set<string>(ALL_SCOPES);

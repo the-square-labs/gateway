@@ -50,7 +50,7 @@ Gateway evaluates scopes with exact, broad, resource-scoped, and implied-scope r
 - Creation scopes (every `*:create*` scope, `docker:images:pull`, `ssl:cert:issue`, and `pki:cert:issue`) name a destination and never imply any view, whatever their qualifier (broad, `folder/`, `node/`, `account/`, or a bare node ID): `proxy:create` does not satisfy `proxy:view`, and `proxy:create:folder/F` does not satisfy `proxy:view:folder/F`. Folder trees and node pickers accept creation scopes on their own to show the destinations a creator may use. The one kept rule is `hosting:snapshots:create:<vmId>` implying that VM's snapshot view.
 - `proxy:maintenance:bypass` (a browser maintenance code) and `docker:registries:internal:pull` / `:push` (registry credentials) imply nothing.
 - API tokens and OAuth/MCP grants expand their own folder and node targets before they are bounded by the owner's current (expanded) permissions, and are never expanded afterwards, so a token can never reach a resource its owner cannot.
-- A few explicit rules complete it: access tiers (`storage:objects:admin` ⊇ `write` ⊇ `read`, `databases:query:admin` ⊇ `write` ⊇ `read`, `storage:credentials:reveal` ⊇ `storage:credentials:use`), `logs:read` and `logs:tokens:*` imply `logs:environments:view`, `nodes:manage` implies `nodes:config:view`, which implies `nodes:details`, `inference:models:manage` implies `inference:providers:view`, and `docker:availability:manage` implies `docker:containers:view`. View scopes never imply another family's view otherwise; for example `proxy:templates:view` does not grant `proxy:view`.
+- A few explicit rules complete it: access tiers (`storage:objects:admin` ⊇ `write` ⊇ `read`, `databases:query:admin` ⊇ `write` ⊇ `read`, `storage:credentials:reveal` ⊇ `storage:credentials:use`), `logs:read` and `logs:tokens:*` imply `logs:environments:view`, `nodes:manage` implies `nodes:config:view`, which implies `nodes:details`, `inference:models:manage` implies `inference:providers:view`, `docker:availability:manage` implies `docker:containers:view`, and `databases:edit` and `storage:iam` imply `databases:bind` and `storage:bind` (linking workloads used to need them). View scopes never imply another family's view otherwise; for example `proxy:templates:view` does not grant `proxy:view`.
 - Implied scopes keep the same resource boundary. For example, `databases:query:read:<databaseId>` makes that database visible in a filtered database list, but does not grant global `databases:view`; `docker:containers:manage:<nodeId>` satisfies `docker:containers:view:<nodeId>/<resourceId>`.
 - `logs:schemas:view:<schemaId>` does not imply global `logs:schemas:view`. Resource-scoped schema view/edit access can list only the matching schema rows.
 - Folder-tree scopes (`proxy:folders:manage`, `docker:folders:manage`, and the other `*:folders:manage` scopes except hosting snapshot folders) grant full folder-tree visibility and folder mutation rights, but not item visibility. Moving or reordering items still requires the matching item edit or manage scope.
@@ -123,7 +123,8 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `storage:delete` | Resource-scopable storage or backup permission. |
 | `storage:credentials:reveal` | Resource-scopable storage or backup permission. |
 | `storage:credentials:use` | Resource-scopable storage or backup permission. Lets backups use the saved credentials without revealing them; implied by `storage:credentials:reveal`. |
-| `storage:iam` | Resource-scopable storage or backup permission. Creates and removes scoped IAM keys and managed-storage workload links. |
+| `storage:iam` | Resource-scopable storage or backup permission. Creates and removes scoped IAM keys and moves workload links between clusters; implies `storage:bind`. |
+| `storage:bind` | Resource-scopable storage permission. Creates and deletes managed-storage workload links without issuing access keys; the target workload also needs its environment and secrets scopes. |
 | `storage:objects:read` | Resource-scopable storage or backup permission. |
 | `storage:objects:write` | Resource-scopable storage or backup permission. |
 | `storage:objects:admin` | Resource-scopable storage or backup permission. |
@@ -321,6 +322,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `databases:view` | Yes |
 | `databases:create` |  |
 | `databases:edit` | Yes |
+| `databases:bind` | Yes. Links and unlinks workloads to a managed database without changing the database; implied by `databases:edit`. The target workload also needs its environment and secrets scopes (`docker:compose:manage` for a Compose service). |
 | `databases:delete` | Yes |
 | `databases:query:read` | Yes |
 | `databases:query:write` | Yes |
@@ -444,3 +446,4 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `admin:users` | Can create, reconfigure, block, and delete users and revoke their sessions. |
 | `admin:groups` | Can create and change permission groups and their scopes. |
 | `settings:gateway:edit` | Can change authentication and control-plane settings. |
+| `storage:bind` | Gives a workload its own key to the managed storage cluster. |

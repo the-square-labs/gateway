@@ -615,6 +615,7 @@ describe('canonical scope definitions', () => {
       'admin:users',
       'admin:groups',
       'settings:gateway:edit',
+      'storage:bind',
     ]);
     for (const scope of MANUAL_APPROVAL_SCOPES) {
       if (scope === 'integrations:gitlab:sandbox:clone') continue;

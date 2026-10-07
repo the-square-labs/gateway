@@ -264,14 +264,14 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
     return bindings.list(databaseId);
   }
   if (operation === 'create_binding') {
-    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:bind');
     const input = CreateManagedDatabaseBindingSchema.parse(args);
     await assertWorkloadBindingTargetAccess(user.scopes, input);
     return bindings.create(databaseId, input, user.id);
   }
   if (operation === 'delete_binding') {
-    // Same as DELETE /databases/managed/{id}/bindings/{bindingId}: unbinding needs edit, not delete.
-    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
+    // Same as DELETE /databases/managed/{id}/bindings/{bindingId}: unbinding needs bind, not edit or delete.
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:bind');
     const bindingId = requiredString(args.bindingId);
     const options = DeleteManagedDatabaseBindingSchema.parse(args);
     await assertWorkloadBindingTargetAccess(user.scopes, {

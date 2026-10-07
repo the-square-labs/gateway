@@ -9,6 +9,12 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     group: "Storage",
   },
   {
+    value: "storage:bind",
+    label: "Link Workloads to Storage",
+    desc: "Link containers and deployments to managed storage; the workload's own permissions are also required",
+    group: "Storage",
+  },
+  {
     value: "storage:credentials:reveal",
     label: "Reveal Storage",
     desc: "storage:credentials:reveal",
@@ -358,6 +364,12 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     value: "databases:edit",
     label: "Edit Databases",
     desc: "Edit saved database connections",
+    group: "Databases",
+  },
+  {
+    value: "databases:bind",
+    label: "Link Workloads to Databases",
+    desc: "Link containers, deployments, and Compose services to managed databases without editing them",
     group: "Databases",
   },
   {

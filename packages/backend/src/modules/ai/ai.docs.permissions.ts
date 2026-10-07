@@ -257,7 +257,8 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 |-------|-------------|
 | databases:view | List external connections and managed database instances and view their details (resource-scopable) |
 | databases:create | Create external connections or deploy managed database instances |
-| databases:edit | Edit external connections, managed instances and publication settings; link and unlink workload bindings, which also need docker:containers:environment + docker:containers:secrets on the target (or docker:compose:manage for a Compose service) (resource-scopable) |
+| databases:edit | Edit external connections, managed instances and publication settings (resource-scopable); implies databases:bind |
+| databases:bind | Link and unlink workload bindings of a managed database without changing the database; the target also needs docker:containers:environment + docker:containers:secrets (or docker:compose:manage for a Compose service) (resource-scopable) |
 | databases:delete | Delete external connections or managed instances (resource-scopable) |
 | databases:query:read | Run read-only queries (resource-scopable); implies databases:view for the same database |
 | databases:query:write | Run write queries (resource-scopable); implies databases:query:read |
@@ -284,7 +285,8 @@ Backups, restores, retention and history deletion also need storage:credentials:
 | storage:delete | Delete external or managed storage resources (resource-scopable) |
 | storage:credentials:reveal | Reveal explicitly requested stored storage credentials or managed-storage root credentials (resource-scopable) |
 | storage:credentials:use | Let backups send the saved credentials to the backup runner on an authorized Storage node without revealing them to the caller (resource-scopable); implied by storage:credentials:reveal |
-| storage:iam | Create/remove scoped IAM keys and create/delete managed-storage workload links (resource-scopable); target workload scopes are also required for links |
+| storage:iam | Create/remove scoped IAM keys and move links between clusters (resource-scopable); implies storage:bind |
+| storage:bind | Create/delete managed-storage workload links without issuing access keys (resource-scopable); target workload scopes are also required |
 | storage:objects:read | List buckets/objects, read metadata or objects, and create signed GET URLs (resource-scopable) |
 | storage:objects:write | Upload objects, create prefixes, and delete objects (resource-scopable) |
 | storage:objects:admin | Create or delete buckets (resource-scopable) |
