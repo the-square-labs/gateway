@@ -1,13 +1,10 @@
 package admission
 
 import (
+	"log/slog"
 	"math"
-	"os"
-	"runtime"
-	"strconv"
-	"strings"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
@@ -22,6 +19,12 @@ const (
 	defaultDatabaseReserve     = 20
 	defaultHardPressurePercent = 95
 	pressureSampleInterval     = 250 * time.Millisecond
+	// pressureTimeConstant is the EWMA time constant: a step in load moves the
+	// smoothed pressure by 1-1/e within it, however often tunnels open.
+	pressureTimeConstant = time.Second
+	// samplerIdleExit stops the sampling loop of a controller nobody asked for
+	// a decision or a snapshot for that long; the next request restarts it.
+	samplerIdleExit = time.Minute
 )
 
 type ResourcePressure struct {
@@ -60,33 +63,55 @@ type Snapshot struct {
 	FileDescriptorLimit    uint64
 	ThrottledProxyTotal    uint64
 	ThrottledDatabaseTotal uint64
+	// ThrottledRegistryTotal counts refused registry tunnels; HealthResponse
+	// has no field for it yet, so it reaches only the relay log.
+	ThrottledRegistryTotal uint64
 }
 
 type sampler interface {
 	Sample() ResourcePressure
 }
 
+// measurement is what one sampling step publishes. Admit and GetSnapshot read
+// it without a lock: admission runs under the broker's global lock and must
+// neither measure nor wait for a measurement.
+type measurement struct {
+	state    string
+	pressure float64
+	cpu      float64
+	memory   float64
+	fd       float64
+	last     ResourcePressure
+}
+
 type Controller struct {
-	mu                     sync.Mutex
-	policy                 *relayv1.AdmissionPolicy
-	sampler                sampler
-	state                  string
-	ewmaPressure           float64
-	ewmaCPU                float64
-	ewmaMemory             float64
-	ewmaFD                 float64
-	ewmaInitialized        bool
-	last                   ResourcePressure
-	throttledProxyTotal    uint64
-	throttledDatabaseTotal uint64
+	// mu serializes sampling steps and policy updates; readers never take it.
+	mu       sync.Mutex
+	policy   atomic.Pointer[relayv1.AdmissionPolicy]
+	current  atomic.Pointer[measurement]
+	sampler  sampler
+	sampled  bool
+	sampleAt time.Time
+	// autoSample runs the sampling loop on demand (New); a controller built
+	// with NewWithSampler is stepped by its caller.
+	autoSample bool
+	running    atomic.Bool
+	lastUsed   atomic.Int64
+
+	throttledProxyTotal    atomic.Uint64
+	throttledDatabaseTotal atomic.Uint64
+	throttledRegistryTotal atomic.Uint64
 }
 
 func New() *Controller {
-	return NewWithSampler(&systemSampler{})
+	controller := NewWithSampler(&systemSampler{})
+	controller.autoSample = true
+	return controller
 }
 
 func NewWithSampler(source sampler) *Controller {
-	controller := &Controller{sampler: source, state: "normal"}
+	controller := &Controller{sampler: source}
+	controller.current.Store(&measurement{state: "normal"})
 	controller.UpdatePolicy(nil)
 	return controller
 }
@@ -94,30 +119,29 @@ func NewWithSampler(source sampler) *Controller {
 func (c *Controller) UpdatePolicy(next *relayv1.AdmissionPolicy) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.policy = normalizedPolicy(next)
-	if !c.policy.Enabled {
-		c.state = "disabled"
-	} else if c.state == "disabled" {
-		c.state = "normal"
-	}
+	c.policy.Store(normalizedPolicy(next))
+	current := *c.current.Load()
+	current.state = nextState(c.policy.Load(), current.state, current.pressure)
+	c.current.Store(&current)
 }
 
+// Admit decides one tunnel from the latest published measurement. It takes no
+// lock and never samples.
 func (c *Controller) Admit(trafficClass, routeID string, usage Usage) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.refreshLocked()
-	if !c.policy.Enabled {
+	c.ensureSampling()
+	policy := c.policy.Load()
+	if !policy.Enabled {
 		return nil
 	}
-
-	pressure := uint32(math.Round(c.ewmaPressure))
-	proxyTarget := c.policy.ProxyTargetPressurePercent
-	hardCutoff := c.policy.HardPressurePercent
-	proxyCutoff := hardCutoff - c.policy.DatabaseReservePercent
+	current := c.current.Load()
+	pressure := uint32(math.Round(current.pressure))
+	proxyTarget := policy.ProxyTargetPressurePercent
+	hardCutoff := policy.HardPressurePercent
+	proxyCutoff := hardCutoff - policy.DatabaseReservePercent
 
 	if trafficClass == TrafficClassDatabase {
 		if pressure >= hardCutoff {
-			c.throttledDatabaseTotal++
+			c.throttledDatabaseTotal.Add(1)
 			return &Rejected{TrafficClass: trafficClass, State: "hard_pressure"}
 		}
 		return nil
@@ -127,72 +151,150 @@ func (c *Controller) Admit(trafficClass, routeID string, usage Usage) error {
 		return &Rejected{TrafficClass: trafficClass, State: "unknown_traffic_class"}
 	}
 	if pressure >= proxyCutoff {
-		c.throttledProxyTotal++
-		return &Rejected{TrafficClass: TrafficClassProxy, State: "database_reserve"}
+		c.countThrottled(trafficClass)
+		return &Rejected{TrafficClass: trafficClass, State: "database_reserve"}
 	}
-	if pressure < proxyTarget || c.state == "normal" {
+	if pressure < proxyTarget || current.state == "normal" {
 		return nil
 	}
-	if routeGetsFairAdmission(routeID, usage) {
+	if routeGetsFairAdmission(trafficClass, routeID, usage) {
 		return nil
 	}
-	c.throttledProxyTotal++
-	return &Rejected{TrafficClass: TrafficClassProxy, State: "fair_share"}
+	c.countThrottled(trafficClass)
+	return &Rejected{TrafficClass: trafficClass, State: "fair_share"}
+}
+
+func (c *Controller) countThrottled(trafficClass string) {
+	if trafficClass == TrafficClassRegistry {
+		c.throttledRegistryTotal.Add(1)
+		return
+	}
+	c.throttledProxyTotal.Add(1)
 }
 
 func (c *Controller) GetSnapshot() Snapshot {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.refreshLocked()
+	c.ensureSampling()
+	current := c.current.Load()
 	return Snapshot{
-		State:                  c.state,
-		PressurePercent:        uint32(math.Round(c.ewmaPressure)),
-		CPUPressurePercent:     uint32(math.Round(c.ewmaCPU)),
-		MemoryPressurePercent:  uint32(math.Round(c.ewmaMemory)),
-		FDPressurePercent:      uint32(math.Round(c.ewmaFD)),
-		MemoryRSSBytes:         c.last.MemoryRSSBytes,
-		HeapInUseBytes:         c.last.HeapInUseBytes,
-		MemoryLimitBytes:       c.last.MemoryLimitBytes,
-		OpenFileDescriptors:    c.last.OpenFileDescriptors,
-		FileDescriptorLimit:    c.last.FileDescriptorLimit,
-		ThrottledProxyTotal:    c.throttledProxyTotal,
-		ThrottledDatabaseTotal: c.throttledDatabaseTotal,
+		State:                  current.state,
+		PressurePercent:        uint32(math.Round(current.pressure)),
+		CPUPressurePercent:     uint32(math.Round(current.cpu)),
+		MemoryPressurePercent:  uint32(math.Round(current.memory)),
+		FDPressurePercent:      uint32(math.Round(current.fd)),
+		MemoryRSSBytes:         current.last.MemoryRSSBytes,
+		HeapInUseBytes:         current.last.HeapInUseBytes,
+		MemoryLimitBytes:       current.last.MemoryLimitBytes,
+		OpenFileDescriptors:    current.last.OpenFileDescriptors,
+		FileDescriptorLimit:    current.last.FileDescriptorLimit,
+		ThrottledProxyTotal:    c.throttledProxyTotal.Load(),
+		ThrottledDatabaseTotal: c.throttledDatabaseTotal.Load(),
+		ThrottledRegistryTotal: c.throttledRegistryTotal.Load(),
 	}
 }
 
-func (c *Controller) refreshLocked() {
-	c.last = c.sampler.Sample()
-	instant := float64(c.last.Maximum())
-	if !c.ewmaInitialized {
-		c.ewmaPressure = instant
-		c.ewmaCPU = float64(c.last.CPUPercent)
-		c.ewmaMemory = float64(c.last.MemoryPercent)
-		c.ewmaFD = float64(c.last.FDPercent)
-		c.ewmaInitialized = true
-	} else {
-		c.ewmaPressure = c.ewmaPressure*0.75 + instant*0.25
-		c.ewmaCPU = c.ewmaCPU*0.75 + float64(c.last.CPUPercent)*0.25
-		c.ewmaMemory = c.ewmaMemory*0.75 + float64(c.last.MemoryPercent)*0.25
-		c.ewmaFD = c.ewmaFD*0.75 + float64(c.last.FDPercent)*0.25
-	}
-	if !c.policy.Enabled {
-		c.state = "disabled"
+// ensureSampling starts the sampling loop of an automatic controller. The
+// first measurement is taken inline so the very first decision has one; the
+// loop measures every pressureSampleInterval after that and stops once nobody
+// asked for samplerIdleExit.
+func (c *Controller) ensureSampling() {
+	if !c.autoSample {
 		return
 	}
-	pressure := uint32(math.Round(c.ewmaPressure))
-	proxyTarget := c.policy.ProxyTargetPressurePercent
-	proxyCutoff := c.policy.HardPressurePercent - c.policy.DatabaseReservePercent
+	c.lastUsed.Store(time.Now().UnixNano())
+	if c.running.Load() || !c.running.CompareAndSwap(false, true) {
+		return
+	}
+	c.mu.Lock()
+	stale := !c.sampled || time.Since(c.sampleAt) > 2*pressureSampleInterval
+	c.mu.Unlock()
+	if stale {
+		// The first decision, or the first after an idle stop: the relay is
+		// idle then, so one inline measurement is cheap.
+		c.step(time.Now())
+	}
+	go c.sampleLoop()
+}
+
+func (c *Controller) idle() bool {
+	return time.Since(time.Unix(0, c.lastUsed.Load())) > samplerIdleExit
+}
+
+func (c *Controller) sampleLoop() {
+	ticker := time.NewTicker(pressureSampleInterval)
+	defer ticker.Stop()
+	for now := range ticker.C {
+		if c.idle() {
+			c.running.Store(false)
+			// A request between the check and the store saw the loop running
+			// and started none: keep sampling for it unless one did start.
+			if c.idle() || !c.running.CompareAndSwap(false, true) {
+				return
+			}
+		}
+		c.step(now)
+	}
+}
+
+// step takes one measurement and advances the smoothed pressure by the time
+// since the previous one (alpha = 1-exp(-dt/tau)), so a burst of tunnel opens
+// cannot skip the smoothing and a long pause does not freeze a stale sample.
+func (c *Controller) step(now time.Time) {
+	sample := c.sampler.Sample()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	previous := c.current.Load()
+	next := measurement{state: previous.state, last: sample}
+	instant := float64(sample.Maximum())
+	if !c.sampled {
+		next.pressure, next.cpu = instant, float64(sample.CPUPercent)
+		next.memory, next.fd = float64(sample.MemoryPercent), float64(sample.FDPercent)
+		c.sampled = true
+	} else {
+		elapsed := now.Sub(c.sampleAt)
+		if elapsed <= 0 {
+			elapsed = pressureSampleInterval
+		}
+		alpha := 1 - math.Exp(-float64(elapsed)/float64(pressureTimeConstant))
+		smooth := func(from, value float64) float64 { return from + (value-from)*alpha }
+		next.pressure = smooth(previous.pressure, instant)
+		next.cpu = smooth(previous.cpu, float64(sample.CPUPercent))
+		next.memory = smooth(previous.memory, float64(sample.MemoryPercent))
+		next.fd = smooth(previous.fd, float64(sample.FDPercent))
+	}
+	c.sampleAt = now
+	next.state = nextState(c.policy.Load(), previous.state, next.pressure)
+	if next.state != previous.state {
+		slog.Info("relay admission state changed", "from", previous.state, "to", next.state,
+			"pressure_percent", uint32(math.Round(next.pressure)), "cpu_percent", sample.CPUPercent,
+			"memory_percent", sample.MemoryPercent, "fd_percent", sample.FDPercent,
+			"throttled_proxy_total", c.throttledProxyTotal.Load(), "throttled_database_total", c.throttledDatabaseTotal.Load(),
+			"throttled_registry_total", c.throttledRegistryTotal.Load())
+	}
+	c.current.Store(&next)
+}
+
+func nextState(policy *relayv1.AdmissionPolicy, state string, smoothed float64) string {
+	if !policy.Enabled {
+		return "disabled"
+	}
+	if state == "disabled" || state == "" {
+		state = "normal"
+	}
+	pressure := uint32(math.Round(smoothed))
+	proxyTarget := policy.ProxyTargetPressurePercent
+	proxyCutoff := policy.HardPressurePercent - policy.DatabaseReservePercent
 	recovery := proxyTarget - 10
 	switch {
-	case pressure >= c.policy.HardPressurePercent:
-		c.state = "hard_pressure"
+	case pressure >= policy.HardPressurePercent:
+		return "hard_pressure"
 	case pressure >= proxyCutoff:
-		c.state = "database_reserved"
+		return "database_reserved"
 	case pressure >= proxyTarget:
-		c.state = "proxy_throttled"
+		return "proxy_throttled"
 	case pressure <= recovery:
-		c.state = "normal"
+		return "normal"
 	}
+	return state
 }
 
 func normalizedPolicy(value *relayv1.AdmissionPolicy) *relayv1.AdmissionPolicy {
@@ -212,13 +314,19 @@ func normalizedPolicy(value *relayv1.AdmissionPolicy) *relayv1.AdmissionPolicy {
 	}
 }
 
-func routeGetsFairAdmission(routeID string, usage Usage) bool {
-	current := usage.ProxyByRoute[routeID]
+// routeGetsFairAdmission shares a class between its routes under pressure:
+// proxy routes among proxy routes, registry routes among registry routes.
+func routeGetsFairAdmission(trafficClass, routeID string, usage Usage) bool {
+	byRoute, total := usage.ProxyByRoute, usage.ActiveProxy
+	if trafficClass == TrafficClassRegistry {
+		byRoute, total = usage.RegistryByRoute, usage.ActiveRegistry
+	}
+	current := byRoute[routeID]
 	if current == 0 {
 		return true
 	}
 	activeRoutes := uint64(0)
-	for _, count := range usage.ProxyByRoute {
+	for _, count := range byRoute {
 		if count > 0 {
 			activeRoutes++
 		}
@@ -226,7 +334,7 @@ func routeGetsFairAdmission(routeID string, usage Usage) bool {
 	if activeRoutes <= 1 {
 		return false
 	}
-	fairShare := (usage.ActiveProxy + activeRoutes - 1) / activeRoutes
+	fairShare := (total + activeRoutes - 1) / activeRoutes
 	return current < fairShare
 }
 
@@ -237,202 +345,4 @@ type Rejected struct {
 
 func (e *Rejected) Error() string {
 	return "relay adaptive admission rejected " + e.TrafficClass + " tunnel: " + e.State
-}
-
-type systemSampler struct {
-	mu         sync.Mutex
-	cachedAt   time.Time
-	cached     ResourcePressure
-	refreshing bool
-	// probeMu guards the CPU baseline; probes can overlap only at start-up.
-	probeMu   sync.Mutex
-	lastCPUAt time.Time
-	lastCPUNs uint64
-	// measure is the expensive probe; it reads /proc and stops the world for
-	// memory statistics. Tests replace it.
-	measure func(now time.Time) ResourcePressure
-}
-
-// Sample returns the latest measurement without measuring on the caller's
-// path. Admission runs under the broker's global lock, and a probe that walks
-// every open file descriptor would serialize tunnel opens, teardown and
-// policy applies behind it. A stale sample starts one background refresh; only
-// the very first sample is taken inline.
-func (s *systemSampler) Sample() ResourcePressure {
-	s.mu.Lock()
-	now := time.Now()
-	if s.cachedAt.IsZero() {
-		s.mu.Unlock()
-		sample := s.probe(now)
-		s.mu.Lock()
-		if s.cachedAt.IsZero() {
-			s.cached, s.cachedAt = sample, now
-		}
-		cached := s.cached
-		s.mu.Unlock()
-		return cached
-	}
-	if now.Sub(s.cachedAt) >= pressureSampleInterval && !s.refreshing {
-		s.refreshing = true
-		go func() {
-			sample := s.probe(time.Now())
-			s.mu.Lock()
-			s.cached, s.cachedAt, s.refreshing = sample, time.Now(), false
-			s.mu.Unlock()
-		}()
-	}
-	cached := s.cached
-	s.mu.Unlock()
-	return cached
-}
-
-func (s *systemSampler) probe(now time.Time) ResourcePressure {
-	if s.measure != nil {
-		return s.measure(now)
-	}
-	s.probeMu.Lock()
-	defer s.probeMu.Unlock()
-	sample := ResourcePressure{CPUPercent: s.cpuPressure(now)}
-	sample.MemoryPercent, sample.MemoryRSSBytes, sample.HeapInUseBytes, sample.MemoryLimitBytes = memoryPressure()
-	sample.FDPercent, sample.OpenFileDescriptors, sample.FileDescriptorLimit = fdPressure()
-	return sample
-}
-
-func (s *systemSampler) cpuPressure(now time.Time) uint32 {
-	current, ok := processCPUNanoseconds()
-	if !ok {
-		return 0
-	}
-	if s.lastCPUAt.IsZero() || current < s.lastCPUNs {
-		s.lastCPUAt, s.lastCPUNs = now, current
-		return 0
-	}
-	elapsed := now.Sub(s.lastCPUAt)
-	used := current - s.lastCPUNs
-	s.lastCPUAt, s.lastCPUNs = now, current
-	if elapsed <= 0 {
-		return 0
-	}
-	ratio := float64(used) / float64(elapsed.Nanoseconds()) / float64(effectiveCPUCount())
-	return percent(ratio)
-}
-
-func processCPUNanoseconds() (uint64, bool) {
-	threads, err := os.ReadDir("/proc/self/task")
-	if err != nil {
-		return 0, false
-	}
-	var total uint64
-	var sampled bool
-	for _, thread := range threads {
-		used, ok := readFirstUint("/proc/self/task/" + thread.Name() + "/schedstat")
-		if !ok {
-			continue
-		}
-		total += used
-		sampled = true
-	}
-	return total, sampled
-}
-
-func effectiveCPUCount() int {
-	data, err := os.ReadFile("/proc/self/status")
-	if err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "Cpus_allowed_list:") {
-				if count := countCPUList(strings.TrimSpace(strings.TrimPrefix(line, "Cpus_allowed_list:"))); count > 0 {
-					return count
-				}
-			}
-		}
-	}
-	return max(1, runtime.GOMAXPROCS(0))
-}
-
-func countCPUList(value string) int {
-	count := 0
-	for _, group := range strings.Split(value, ",") {
-		bounds := strings.SplitN(strings.TrimSpace(group), "-", 2)
-		first, err := strconv.Atoi(bounds[0])
-		if err != nil {
-			return 0
-		}
-		last := first
-		if len(bounds) == 2 {
-			last, err = strconv.Atoi(bounds[1])
-			if err != nil || last < first {
-				return 0
-			}
-		}
-		count += last - first + 1
-	}
-	return count
-}
-
-func memoryPressure() (uint32, uint64, uint64, uint64) {
-	rss := processRSSBytes()
-	var stats runtime.MemStats
-	runtime.ReadMemStats(&stats)
-	maximumRaw, maximumErr := os.ReadFile("/sys/fs/cgroup/memory.max")
-	if maximumErr != nil {
-		maximumRaw = nil
-	}
-	return memoryPressureForLimit(rss, stats.HeapInuse, maximumRaw)
-}
-
-func memoryPressureForLimit(rss, heap uint64, maximumRaw []byte) (uint32, uint64, uint64, uint64) {
-	maximum, err := strconv.ParseUint(strings.TrimSpace(string(maximumRaw)), 10, 64)
-	if err == nil && maximum > 0 {
-		return percent(float64(rss) / float64(maximum)), rss, heap, maximum
-	}
-	// A container without a finite cgroup limit has no meaningful memory
-	// denominator. In particular, /proc/meminfo can describe the outer LXC or
-	// physical host. Report the relay's real RSS/heap, but do not turn unrelated
-	// host memory usage into relay admission pressure.
-	return 0, rss, heap, 0
-}
-
-func processRSSBytes() uint64 {
-	data, err := os.ReadFile("/proc/self/statm")
-	if err != nil {
-		return 0
-	}
-	fields := strings.Fields(string(data))
-	if len(fields) < 2 {
-		return 0
-	}
-	residentPages, err := strconv.ParseUint(fields[1], 10, 64)
-	if err != nil {
-		return 0
-	}
-	return residentPages * uint64(os.Getpagesize())
-}
-
-func fdPressure() (uint32, uint64, uint64) {
-	entries, err := os.ReadDir("/proc/self/fd")
-	if err != nil {
-		return 0, 0, 0
-	}
-	var limit syscall.Rlimit
-	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &limit); err != nil || limit.Cur == 0 {
-		return 0, uint64(len(entries)), 0
-	}
-	return percent(float64(len(entries)) / float64(limit.Cur)), uint64(len(entries)), limit.Cur
-}
-
-func readFirstUint(path string) (uint64, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	fields := strings.Fields(string(data))
-	if len(fields) == 0 {
-		return 0, false
-	}
-	value, err := strconv.ParseUint(fields[0], 10, 64)
-	return value, err == nil
-}
-
-func percent(ratio float64) uint32 {
-	return uint32(math.Round(math.Max(0, math.Min(1, ratio)) * 100))
 }

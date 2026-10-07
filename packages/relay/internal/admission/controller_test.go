@@ -24,6 +24,17 @@ func newTestController(pressure uint32) (*Controller, *fixedSampler) {
 	return controller, sampler
 }
 
+// warm runs the sampling steps the controller's loop takes in 2 s and returns
+// the time of the last one.
+func warm(controller *Controller) time.Time {
+	now := time.Now()
+	for index := range 8 {
+		now = now.Add(pressureSampleInterval)
+		controller.step(now)
+	}
+	return now
+}
+
 func TestHealthyRelayDoesNotLimitApplicationSize(t *testing.T) {
 	controller, _ := newTestController(20)
 	usage := Usage{ActiveProxy: 100_000, ProxyByRoute: map[string]uint64{"large": 100_000}}
@@ -35,9 +46,7 @@ func TestHealthyRelayDoesNotLimitApplicationSize(t *testing.T) {
 func TestPressureThrottlesDominantProxyButAdmitsNewRoute(t *testing.T) {
 	controller, _ := newTestController(72)
 	// Warm the EWMA to the fixed pressure.
-	for range 8 {
-		_ = controller.Admit(TrafficClassDatabase, "database", Usage{})
-	}
+	warm(controller)
 	usage := Usage{ActiveProxy: 10_000, ProxyByRoute: map[string]uint64{"large": 10_000}}
 	if err := controller.Admit(TrafficClassProxy, "large", usage); err == nil {
 		t.Fatal("dominant proxy route was admitted under pressure")
@@ -49,9 +58,7 @@ func TestPressureThrottlesDominantProxyButAdmitsNewRoute(t *testing.T) {
 
 func TestDatabaseReserveRejectsProxyBeforeDatabase(t *testing.T) {
 	controller, sampler := newTestController(92)
-	for range 8 {
-		_ = controller.Admit(TrafficClassDatabase, "database", Usage{})
-	}
+	warm(controller)
 	if err := controller.Admit(TrafficClassProxy, "proxy", Usage{}); err == nil {
 		t.Fatal("proxy was admitted inside database reserve")
 	}
@@ -59,9 +66,7 @@ func TestDatabaseReserveRejectsProxyBeforeDatabase(t *testing.T) {
 		t.Fatalf("database did not receive reserved admission: %v", err)
 	}
 	sampler.pressure = ResourcePressure{CPUPercent: 100}
-	for range 8 {
-		_ = controller.Admit(TrafficClassProxy, "proxy", Usage{})
-	}
+	warm(controller)
 	if err := controller.Admit(TrafficClassDatabase, "database", Usage{}); err == nil {
 		t.Fatal("database bypassed the absolute hard-pressure cutoff")
 	}
@@ -69,9 +74,7 @@ func TestDatabaseReserveRejectsProxyBeforeDatabase(t *testing.T) {
 
 func TestRegistryUsesAnExplicitNonDatabaseTrafficClass(t *testing.T) {
 	controller, _ := newTestController(92)
-	for range 8 {
-		_ = controller.Admit(TrafficClassDatabase, "database", Usage{})
-	}
+	warm(controller)
 	if err := controller.Admit(TrafficClassRegistry, "registry", Usage{}); err == nil {
 		t.Fatal("registry traffic bypassed the non-database pressure cutoff")
 	}
@@ -128,59 +131,82 @@ func TestProcessCPUNanosecondsSamplesAllRuntimeThreads(t *testing.T) {
 
 func TestSnapshotReportsSmoothedProcessPressure(t *testing.T) {
 	controller, sampler := newTestController(40)
-	for range 8 {
-		_ = controller.Admit(TrafficClassDatabase, "database", Usage{})
-	}
+	last := warm(controller)
 	sampler.pressure = ResourcePressure{CPUPercent: 0}
+	controller.step(last.Add(pressureSampleInterval))
 	snapshot := controller.GetSnapshot()
 	if snapshot.CPUPressurePercent == 0 || snapshot.CPUPressurePercent >= 40 {
 		t.Fatalf("smoothed cpu pressure = %d", snapshot.CPUPressurePercent)
 	}
 }
 
-// Admission runs under the broker's global lock: a stale sample must be
-// refreshed in the background, never measured on the caller's path.
-func TestSystemSamplerNeverMeasuresOnTheCallersPathAfterStartup(t *testing.T) {
-	release := make(chan struct{})
-	probes := make(chan struct{}, 8)
-	sampler := &systemSampler{}
-	calls := 0
-	sampler.measure = func(time.Time) ResourcePressure {
-		calls++
-		probes <- struct{}{}
-		if calls > 1 {
-			<-release
-		}
-		return ResourcePressure{CPUPercent: uint32(calls * 10)}
+// Admission runs under the broker's global lock: a decision reads the
+// published measurement and never samples, and a burst of decisions does not
+// move the smoothed pressure (F5).
+func TestAdmitNeverSamples(t *testing.T) {
+	sampler := &countingSampler{pressure: ResourcePressure{CPUPercent: 40}}
+	controller := NewWithSampler(sampler)
+	controller.step(time.Now())
+	before := controller.GetSnapshot().PressurePercent
+	sampler.pressure = ResourcePressure{CPUPercent: 100}
+	for range 100 {
+		_ = controller.Admit(TrafficClassProxy, "proxy", Usage{})
 	}
-	if got := sampler.Sample(); got.CPUPercent != 10 {
-		t.Fatalf("first sample = %d, want the inline measurement", got.CPUPercent)
+	if sampler.calls != 1 {
+		t.Fatalf("sampler calls = %d, want only the explicit step", sampler.calls)
 	}
-	<-probes
-	sampler.mu.Lock()
-	sampler.cachedAt = time.Now().Add(-time.Second)
-	sampler.mu.Unlock()
+	if after := controller.GetSnapshot().PressurePercent; after != before {
+		t.Fatalf("pressure moved from %d to %d without a sampling step", before, after)
+	}
+}
 
-	done := make(chan ResourcePressure, 1)
-	go func() { done <- sampler.Sample() }()
-	select {
-	case got := <-done:
-		if got.CPUPercent != 10 {
-			t.Fatalf("stale sample = %d, want the cached value", got.CPUPercent)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Sample blocked on a slow measurement")
+// The smoothing follows time, not the number of steps: one step 10 ms after
+// the last barely moves it, one after a long pause takes the new sample.
+func TestSmoothingIsTimeBased(t *testing.T) {
+	controller, sampler := newTestController(0)
+	now := time.Now()
+	controller.step(now)
+	sampler.pressure = ResourcePressure{CPUPercent: 100}
+	controller.step(now.Add(10 * time.Millisecond))
+	if got := controller.GetSnapshot().PressurePercent; got > 2 {
+		t.Fatalf("pressure after 10 ms = %d", got)
 	}
-	<-probes // the background refresh started
-	if got := sampler.Sample(); got.CPUPercent != 10 {
-		t.Fatalf("sample during refresh = %d", got.CPUPercent)
+	controller.step(now.Add(10 * time.Second))
+	if got := controller.GetSnapshot().PressurePercent; got < 99 {
+		t.Fatalf("pressure after 10 s = %d", got)
 	}
-	close(release)
-	deadline := time.Now().Add(time.Second)
-	for sampler.Sample().CPUPercent != 20 {
-		if time.Now().After(deadline) {
-			t.Fatal("background refresh never landed")
-		}
-		time.Sleep(5 * time.Millisecond)
+}
+
+// F6: registry routes share the registry class fairly under pressure, apart
+// from proxy routes, and their refusals are counted as registry.
+func TestRegistryRoutesGetFairShare(t *testing.T) {
+	controller, _ := newTestController(72)
+	warm(controller)
+	usage := Usage{
+		ActiveProxy: 10, ProxyByRoute: map[string]uint64{"proxy": 10},
+		ActiveRegistry: 10_002, RegistryByRoute: map[string]uint64{"pulls": 10_000, "pushes": 2},
 	}
+	if err := controller.Admit(TrafficClassRegistry, "pulls", usage); err == nil {
+		t.Fatal("dominant registry route was admitted under pressure")
+	}
+	if err := controller.Admit(TrafficClassRegistry, "pushes", usage); err != nil {
+		t.Fatalf("small registry route did not receive fair admission: %v", err)
+	}
+	if err := controller.Admit(TrafficClassRegistry, "new", usage); err != nil {
+		t.Fatalf("new registry route did not receive fair admission: %v", err)
+	}
+	snapshot := controller.GetSnapshot()
+	if snapshot.ThrottledRegistryTotal != 1 || snapshot.ThrottledProxyTotal != 0 {
+		t.Fatalf("throttled registry=%d proxy=%d", snapshot.ThrottledRegistryTotal, snapshot.ThrottledProxyTotal)
+	}
+}
+
+type countingSampler struct {
+	pressure ResourcePressure
+	calls    int
+}
+
+func (s *countingSampler) Sample() ResourcePressure {
+	s.calls++
+	return s.pressure
 }
