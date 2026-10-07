@@ -1071,7 +1071,7 @@ describe('MCP resources and prompts', () => {
   });
 
   it('lists prompts filtered by token scopes', async () => {
-    registerToken(['docker:containers:manage']);
+    registerToken(['docker:containers:manage', 'docker:images:pull']);
 
     const { body } = await mcpRequest('prompts/list');
     const names = body.result.prompts.map((prompt: { name: string }) => prompt.name);

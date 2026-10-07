@@ -180,9 +180,9 @@ export function SettingsTab({
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
   const canEdit = !readOnly && hasScope(`docker:containers:edit:${scopeSuffix}`);
   // Managed volumes are attached with view access to each volume; docker:containers:mounts
-  // covers legacy host binds only.
-  const canEditMounts = !readOnly && hasScopedAccess("docker:volumes:view");
+  // covers legacy host binds and keeps the editor open to its holders.
   const canChangeHostBinds = !readOnly && hasScope(`docker:containers:mounts:${scopeSuffix}`);
+  const canEditMounts = canChangeHostBinds || (!readOnly && hasScopedAccess("docker:volumes:view"));
   const canManageNetworks = !readOnly && canEdit && hasScopedAccess("docker:networks:edit");
   const canListNetworks = !readOnly && hasScopedAccess("docker:networks:view");
   const recreatesRunningContainer =

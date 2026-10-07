@@ -189,9 +189,9 @@ export function DockerDeploymentDetail({
   const canWriteFiles = hasDeploymentScope("docker:containers:files:write");
   const canUseEnvironment = hasDeploymentScope("docker:containers:environment");
   // Managed volumes are attached with view access to each volume; docker:containers:mounts
-  // covers legacy host binds only.
-  const canEditMounts = canEdit && hasScopedAccess("docker:volumes:view");
+  // covers legacy host binds and keeps the editor open to its holders.
   const canChangeHostBinds = hasDeploymentScope("docker:containers:mounts");
+  const canEditMounts = canChangeHostBinds || (canEdit && hasScopedAccess("docker:volumes:view"));
 
   const [deployment, setDeployment] = useState<DockerDeployment | null>(null);
   const [sourceIdentity, setSourceIdentity] = useState<Pick<

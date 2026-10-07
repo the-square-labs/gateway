@@ -4,7 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { hasScopeBase } from '@/lib/permissions.js';
 import { sanitizeFilename } from '@/lib/utils.js';
-import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
+import { requireAnyScopeBase } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { assertComposeVolumeMutationAllowed } from './compose/compose-child.guard.js';
 import { isComposeOwnedVolume } from './compose/compose-discovery.service.js';
@@ -133,9 +133,13 @@ async function parseFileContentRequest(c: Parameters<Parameters<OpenAPIHono<AppE
 export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
   // ─── Volume routes ───────────────────────────────────────────────────
 
-  // The managed volumes the caller may attach: a volume is attached with docker:volumes:view on it.
+  // The managed volumes the caller may attach: a volume is attached with docker:volumes:view on it. Holders of
+  // docker:containers:mounts keep the route and get the volumes they can view.
   router.openapi(
-    { ...listManagedVolumeOptionsRoute, middleware: requireScopeBase('docker:volumes:view') },
+    {
+      ...listManagedVolumeOptionsRoute,
+      middleware: requireAnyScopeBase('docker:volumes:view', 'docker:containers:mounts'),
+    },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
