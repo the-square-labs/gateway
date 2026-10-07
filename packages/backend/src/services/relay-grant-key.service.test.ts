@@ -70,7 +70,8 @@ describe('RelayGrantKeyService rotation', () => {
     const reads = [
       [], // no pending key yet
       [{ activatedAt: new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000) }],
-      [{ revision: '1300' }], // the pool runs ahead of the global revision (1000)
+      [{ revision: '1300' }], // the pool runs ahead of the global revision
+      [{ revision: 1001 }],
     ];
     const inserted: Array<Record<string, unknown>> = [];
     const tx: any = {

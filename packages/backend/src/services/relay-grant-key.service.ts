@@ -96,12 +96,18 @@ export class RelayGrantKeyService {
       // Relays report the pool snapshot revision they applied, which runs ahead of the global one
       // (lease refreshes advance only the pool), so the gate needs a pool revision. The bump waits
       // out every snapshot build still holding the policy state on the previous revision; every
-      // build after this commits carries the key and takes a pool revision above today's highest.
+      // build after this commits carries the key and takes a pool revision above today's highest
+      // and above the new global one (which a legacy snapshot reports as its own).
       await bumpRelayPolicyRevision(tx);
-      const [pool] = await tx
-        .select({ revision: sql<string | number | null>`max(${relayPools.desiredPolicyRevision})` })
-        .from(relayPools);
-      const publishedAtRevision = Number(pool?.revision ?? 0) + 1;
+      const [[pool], [state]] = await Promise.all([
+        tx.select({ revision: sql<string | number | null>`max(${relayPools.desiredPolicyRevision})` }).from(relayPools),
+        tx
+          .select({ revision: relayPolicyState.revision })
+          .from(relayPolicyState)
+          .where(eq(relayPolicyState.id, POLICY_ID))
+          .limit(1),
+      ]);
+      const publishedAtRevision = Math.max(Number(pool?.revision ?? 0) + 1, Number(state?.revision ?? 0));
       const [created] = await this.insertKey(tx, 'pending', null, publishedAtRevision);
       return { id: created.id, createdAt: now, publishedAtRevision };
     });
