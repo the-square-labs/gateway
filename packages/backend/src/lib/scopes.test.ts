@@ -305,8 +305,9 @@ describe('canonical scope definitions', () => {
       expect(RESOURCE_SCOPABLE).toContain(scope);
       expect(isApiTokenScope(`${scope}:node-1/project-1`)).toBe(true);
     }
-    expect(OPERATOR_SCOPES).toEqual(expect.arrayContaining(['docker:compose:view', 'docker:compose:manage']));
-    expect(OPERATOR_SCOPES).not.toContain('docker:compose:create');
+    expect(OPERATOR_SCOPES).toEqual(
+      expect.arrayContaining(['docker:compose:view', 'docker:compose:create', 'docker:compose:manage'])
+    );
     expect(OPERATOR_SCOPES).not.toContain('docker:compose:delete');
     expect(VIEWER_SCOPES).toContain('docker:compose:view');
     expect(VIEWER_SCOPES).not.toContain('docker:compose:manage');

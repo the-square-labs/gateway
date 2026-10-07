@@ -358,19 +358,32 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'mcp:use',
   'admin:alerts',
   'license:view',
-  // Connector metadata and synced projects only: repository files, job logs, and variable keys stay with admins.
+  // Connectors and their credential for build sources (`use`): repository files, job logs, and variable keys
+  // (`repo:*`) stay with admins.
   'integrations:gitlab:view',
+  'integrations:gitlab:use',
+  'integrations:github:view',
+  'integrations:github:use',
+  'integrations:git:view',
+  'integrations:git:use',
   'integrations:cloudflare:view',
+  // Creates and deploys workloads, reads their secrets and opens their console; delete, mounts, export,
+  // migration, and container file writes stay with admins.
   'docker:containers:view',
+  'docker:containers:create',
   'docker:containers:edit',
   'docker:containers:manage',
   'docker:containers:environment',
+  'docker:containers:secrets',
+  'docker:containers:console',
   'docker:containers:link',
   'docker:containers:webhooks',
   'docker:folders:manage',
   'docker:compose:view',
+  'docker:compose:create',
   'docker:compose:manage',
   'docker:images:view',
+  'docker:images:pull',
   'docker:volumes:view',
   'docker:volumes:files:read',
   'docker:networks:view',
@@ -446,7 +459,7 @@ export const BUILTIN_GROUPS = [
   {
     name: 'operator',
     description:
-      'Operational access — storage, backups, PKI, routes, Pages, nodes, Docker, databases, notifications and logging',
+      'Operational access — create and deploy Docker workloads (from images or Git), storage, backups, PKI, routes, Pages, nodes, databases, notifications and logging',
     scopes: OPERATOR_SCOPES,
   },
   { name: 'viewer', description: 'Read-only access to most resources', scopes: VIEWER_SCOPES },
