@@ -14,12 +14,12 @@ import {
 import { decodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { logger } from '@/lib/logger.js';
 import { RelayPolicyNotAcknowledgedError } from './relay-grant-issuer.service.js';
-import { RELAY_UNCAPPED_SESSIONS } from './relay-session-limits.js';
 import {
   LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE,
   managedDatabaseListenerConfigsEqual,
   RelayPolicyService,
 } from './relay-policy.service.js';
+import { RELAY_UNCAPPED_SESSIONS } from './relay-session-limits.js';
 
 function createService(
   db: unknown,
