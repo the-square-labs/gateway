@@ -32,7 +32,6 @@ import { redactAdditionalRouteForScopes } from '@/modules/proxy/page-target-visi
 import { CreateAdditionalSecureLinkSchema, parseRetargetAdditionalSecureLink } from '@/modules/proxy/proxy.schemas.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { User } from '@/types.js';
-import { assertWorkloadBindingTargetAccess } from './ai.binding-target-access.js';
 import {
   ensureManagedDatabaseScopes,
   MANAGED_DATABASE_ACCESS_OPERATIONS,
@@ -266,7 +265,7 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
   if (operation === 'create_binding') {
     await ensureManagedDatabaseScopes(user, databaseId, 'databases:bind');
     const input = CreateManagedDatabaseBindingSchema.parse(args);
-    await assertWorkloadBindingTargetAccess(user.scopes, input);
+    await bindings.assertTargetAccess(user.scopes, input);
     return bindings.create(databaseId, input, user.id);
   }
   if (operation === 'delete_binding') {
@@ -274,7 +273,7 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
     await ensureManagedDatabaseScopes(user, databaseId, 'databases:bind');
     const bindingId = requiredString(args.bindingId);
     const options = DeleteManagedDatabaseBindingSchema.parse(args);
-    await assertWorkloadBindingTargetAccess(user.scopes, {
+    await bindings.assertTargetAccess(user.scopes, {
       ...(await bindings.getTarget(databaseId, bindingId)),
       targetEnvironment: options.targetEnvironment,
     });
