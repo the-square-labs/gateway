@@ -14,7 +14,6 @@ import {
   principalGitGrantNeedsLookup,
 } from '@/lib/git-scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import type { User } from '@/types.js';
 import type { ResolvedGitLabUserCredential } from './gitlab-user-credentials.service.js';
 import { assertConnectorOperationAccess } from './integration-permissions.js';
@@ -305,10 +304,11 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
   }
 
   /**
-   * Configuring a Docker or Pages build source needs integrations:<provider>:use on the repository
-   * (unqualified, the connector, a GitLab group or GitHub owner containing it, or the exact project or
-   * repository), next to the workload's own permissions. Neither repo:read, an unqualified view nor a
-   * personal credential is needed: the build runs with the connector's own credential.
+   * Approving a repository for a Docker or Pages build source (creating the source, or changing its connector,
+   * repository or branch) needs integrations:<provider>:use on the repository (unqualified, the connector, a
+   * GitLab group or GitHub owner containing it, or the exact project or repository), next to the workload's own
+   * permissions. Neither repo:read, an unqualified view nor a personal credential is needed: the build runs with
+   * the connector's own credential. Builds and saves that keep the approved repository do not check it again.
    */
   async assertBuildSourceRepositoryAccess(
     user: User,
@@ -369,35 +369,6 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       project.remoteId,
       { fresh: true }
     );
-  }
-
-  /**
-   * Automatic builds (polling, webhooks, deferred builds) of a source saved under the rc.11 rules keep running
-   * only while the account that saved it still holds integrations:<provider>:use on the repository. Refusals
-   * read "Build paused: <user> no longer has use on <repo>" for the source's build history.
-   */
-  async assertBuildSourceOwnerAccess(
-    ownerUserId: string,
-    input: { connectorId: string; projectId: string; repositoryFullPath?: string | null }
-  ): Promise<void> {
-    const owner = await resolveLiveUser(this.db, ownerUserId);
-    const paused = (who: string, repository: string | null | undefined) =>
-      new AppError(
-        403,
-        'SOURCE_OWNER_ACCESS_REVOKED',
-        `Build paused: ${who} no longer has use on ${repository || 'the repository'}`,
-        { ownerUserId, repository: repository ?? null }
-      );
-    if (!owner || owner.isBlocked) throw paused('the account that saved this source', input.repositoryFullPath);
-    try {
-      await this.assertBuildSourceRepositoryAccess(owner, input);
-    } catch (error) {
-      if (error instanceof AppError && error.code === 'CONNECTOR_SCOPE_DENIED') {
-        const details = error.details as { repository?: string } | undefined;
-        throw paused(owner.name || owner.email, details?.repository ?? input.repositoryFullPath);
-      }
-      throw error;
-    }
   }
 
   async resolveDockerBuildSource(

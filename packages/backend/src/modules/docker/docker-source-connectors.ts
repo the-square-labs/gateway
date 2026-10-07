@@ -12,7 +12,9 @@ export type SourceConnectorProvider = (typeof SOURCE_CONNECTOR_PROVIDERS)[number
  * Picking a Git source is part of creating or editing the workload that builds from it, so the picker is authorized by
  * that workload's scopes. Any node, folder or resource variant counts: the action that saves the source checks the
  * exact target. The connectors and repositories it offers are the ones the caller may see through its Git scopes, and
- * saving a source needs integrations:<provider>:use on the repository (IntegrationsService.assertBuildSourceRepositoryAccess).
+ * connecting a source or changing its connector, repository or branch needs integrations:<provider>:use on the
+ * repository (IntegrationsService.assertBuildSourceRepositoryAccess). Builds and other source settings need only the
+ * workload's own permissions.
  */
 export const DOCKER_SOURCE_PICKER_SCOPES = [
   'docker:containers:create',

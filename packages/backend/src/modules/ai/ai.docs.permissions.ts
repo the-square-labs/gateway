@@ -332,7 +332,7 @@ Git scopes can be limited with stable IDs: \`<scope>:<connectorId>\` (every repo
 - A repository operation is allowed by the unqualified scope, the connector, any containing group/owner, or the exact project/repository; implied view applies per qualifier (\`repo:write:<connectorId>/project/42\` also grants \`view\` there).
 - The connector credential is used when \`:use\` covers the repository the same way, the personal credential otherwise.
 - Connector, project and repository lists only show what the caller's grants cover.
-- Configuring a Docker or Pages build source needs \`integrations:<provider>:use\` on the repository (any covering qualifier), not \`repo:read\` or a personal credential. Manual builds check it again. Sources saved before 2.11 keep auto-building; for sources saved since, automatic builds pause ("Build paused: <user> no longer has use on <repo>" in the build history) once the saver loses it.
+- Connecting a Docker or Pages build source, or changing its connector, repository or branch, needs \`integrations:<provider>:use\` on the repository (any covering qualifier), not \`repo:read\` or a personal credential. Saving other source settings, manual builds and automatic builds (poll, webhook) need only the workload's own permissions and never depend on anyone's current Git scopes; builds use the connector credential, limited to the repositories the connector itself reaches.
 - Tokens and MCP grants are bounded per qualifier by the owner's grants; for repository operations both the token and the owner's current scopes must cover the repository (a token limited to a project inside the owner's group works; a token limited to a group whose owner holds one project reaches that project only).
 
 ### Other Integrations
