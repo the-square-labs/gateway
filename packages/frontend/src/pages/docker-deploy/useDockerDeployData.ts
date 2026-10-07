@@ -40,8 +40,11 @@ export function useDockerDeployData({
   const [deployPullableImages, setDeployPullableImages] = useState<string[]>([]);
   const [sourceAdmission, setSourceAdmission] = useState<DockerBuildAdmissionStatus | null>(null);
   const [checkingSourceAdmission, setCheckingSourceAdmission] = useState(false);
-  const { connectorOptions: sourceConnectorOptions, repositories: sourceRepositories } =
-    useDockerSourceRepositories(open && sourceMode === "repository", sourceConnectorId);
+  const {
+    connectorOptions: sourceConnectorOptions,
+    repositories: sourceRepositories,
+    loadErrors: sourceLoadErrors,
+  } = useDockerSourceRepositories(open && sourceMode === "repository", sourceConnectorId);
 
   const canViewRegistries = hasScope("docker:registries:view");
   useEffect(() => {
@@ -170,6 +173,7 @@ export function useDockerDeployData({
     registries,
     sourceAdmission,
     sourceConnectorOptions,
+    sourceLoadErrors,
     sourceRepositories,
   };
 }

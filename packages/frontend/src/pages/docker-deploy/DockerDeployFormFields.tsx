@@ -25,6 +25,7 @@ import type {
 import { ImageSourceFields } from "./ImageSourceFields";
 import { RepositorySourceFields } from "./RepositorySourceFields";
 import type { DockerDeployMode, DockerDeploySourceMode, DockerRestartPolicy } from "./types";
+import type { SourcePickerErrors } from "./useDockerSourceRepositories";
 
 const FORM_ANIMATION = {
   initial: { opacity: 0, y: 8 },
@@ -66,6 +67,7 @@ interface DockerDeployFormFieldsProps {
   sourceConnectorOptions: ComboboxOption[];
   sourceContextPath: string;
   sourceDockerfilePath: string;
+  sourceLoadErrors?: SourcePickerErrors;
   sourceMode: DockerDeploySourceMode;
   sourceProjectId: string;
   sourceRepositories: DockerBuildSourceRepository[];
@@ -121,6 +123,7 @@ export function DockerDeployFormFields(props: DockerDeployFormFieldsProps) {
     sourceConnectorOptions,
     sourceContextPath,
     sourceDockerfilePath,
+    sourceLoadErrors,
     sourceMode,
     sourceProjectId,
     sourceRepositories,
@@ -254,6 +257,7 @@ export function DockerDeployFormFields(props: DockerDeployFormFieldsProps) {
 
             {sourceMode === "repository" ? (
               <RepositorySourceFields
+                loadErrors={sourceLoadErrors}
                 connectorId={sourceConnectorId}
                 connectorOptions={sourceConnectorOptions}
                 repositories={sourceRepositories}

@@ -3,10 +3,13 @@ import { useContentLoading } from "@/components/common/reveal-gate";
 import { SwitchCard } from "@/components/common/SwitchCard";
 import { Input } from "@/components/ui/input";
 import type { DockerBuildSourceRepository } from "@/types";
+import type { SourcePickerErrors } from "./useDockerSourceRepositories";
 
 interface RepositorySourceFieldsProps {
   /** The Git integration options are still loading; the enclosing dialog waits for them. */
   loading?: boolean;
+  /** Why the integration or repository list could not be loaded (a missing permission, say). */
+  loadErrors?: SourcePickerErrors;
   connectorId: string;
   connectorOptions: ComboboxOption[];
   repositories: DockerBuildSourceRepository[];
@@ -31,6 +34,7 @@ interface RepositorySourceFieldsProps {
 
 export function RepositorySourceFields({
   loading = false,
+  loadErrors,
   connectorId,
   connectorOptions,
   repositories,
@@ -65,8 +69,16 @@ export function RepositorySourceFields({
           onValueChange={onConnectorChange}
           placeholder="Select Git integration"
           searchPlaceholder="Search integrations..."
-          emptyMessage="No enabled Git integrations."
+          emptyMessage={
+            loadErrors?.connectors ??
+            "No enabled Git integrations you may connect (needs integrations:<provider>:use)."
+          }
         />
+        {loadErrors?.connectors && (
+          <p className="text-xs text-destructive" role="alert">
+            {loadErrors.connectors}
+          </p>
+        )}
       </div>
       <div
         className={
@@ -87,9 +99,17 @@ export function RepositorySourceFields({
             }}
             placeholder={connectorId ? "Select allowlisted repository" : "Select integration first"}
             searchPlaceholder="Search repositories..."
-            emptyMessage="No allowlisted repositories."
+            emptyMessage={
+              loadErrors?.repositories ??
+              "No allowlisted repositories you may connect (needs integrations:<provider>:use on them)."
+            }
             disabled={!connectorId}
           />
+          {loadErrors?.repositories && (
+            <p className="text-xs text-destructive" role="alert">
+              {loadErrors.repositories}
+            </p>
+          )}
         </div>
         <div className="space-y-1.5">
           <label className="text-sm font-medium">

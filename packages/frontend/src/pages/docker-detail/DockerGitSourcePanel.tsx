@@ -249,11 +249,8 @@ export function DockerGitSourcePanel({
           : target?.pageProjectId;
   const composeTarget = target?.kind === "compose_project";
   const pagesTarget = target?.kind === "pages_project";
-  const { connectorOptions, connectorsLoading, repositories } = useDockerSourceRepositories(
-    connectOpen,
-    connectorId,
-    target
-  );
+  const { connectorOptions, connectorsLoading, repositories, loadErrors } =
+    useDockerSourceRepositories(connectOpen, connectorId, target);
   const sourceId = source?.id;
   const listedSourceId = (suppliedSource === undefined ? source : suppliedSource)?.id;
   useContentLoading(
@@ -731,6 +728,7 @@ export function DockerGitSourcePanel({
     const repositorySourceFields = (
       <RepositorySourceFields
         loading={connectorsLoading}
+        loadErrors={loadErrors}
         connectorId={connectorId}
         connectorOptions={connectorOptions}
         repositories={repositories}

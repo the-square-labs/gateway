@@ -159,8 +159,11 @@ export function ComposeProjectEditor({
     }
   }, [destinationFolders, folderId, foldersLoaded, nodeId, projectId, user?.scopes]);
   const repositoryCreation = !projectId && sourceMode === "repository";
-  const { connectorOptions: sourceConnectorOptions, repositories: sourceRepositories } =
-    useDockerSourceRepositories(repositoryCreation, sourceConnectorId);
+  const {
+    connectorOptions: sourceConnectorOptions,
+    repositories: sourceRepositories,
+    loadErrors: sourceLoadErrors,
+  } = useDockerSourceRepositories(repositoryCreation, sourceConnectorId);
 
   useEffect(() => {
     loadVisibleDockerNodes(
@@ -508,6 +511,7 @@ export function ComposeProjectEditor({
                   ) : (
                     <div>
                       <RepositorySourceFields
+                        loadErrors={sourceLoadErrors}
                         connectorId={sourceConnectorId}
                         connectorOptions={sourceConnectorOptions}
                         repositories={sourceRepositories}

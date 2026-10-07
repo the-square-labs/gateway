@@ -166,6 +166,7 @@ export function DockerDeployDialog({
     registries,
     sourceAdmission,
     sourceConnectorOptions,
+    sourceLoadErrors,
     sourceRepositories,
   } = useDockerDeployData({
     allNodes,
@@ -432,6 +433,7 @@ export function DockerDeployDialog({
           sourceConnectorOptions={sourceConnectorOptions}
           sourceContextPath={sourceContextPath}
           sourceDockerfilePath={sourceDockerfilePath}
+          sourceLoadErrors={sourceLoadErrors}
           sourceMode={sourceMode}
           sourceProjectId={sourceProjectId}
           sourceRepositories={sourceRepositories}
