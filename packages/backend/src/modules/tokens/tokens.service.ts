@@ -241,9 +241,7 @@ export class TokensService {
     this.eventBus?.publish(apiTokenChangedChannel(userId), { action: 'revoke', id: tokenId, userId });
   }
 
-  async validateToken(
-    rawToken: string
-  ): Promise<{
+  async validateToken(rawToken: string): Promise<{
     user: User;
     scopes: string[];
     registryAccess: TokenRegistryAccess;

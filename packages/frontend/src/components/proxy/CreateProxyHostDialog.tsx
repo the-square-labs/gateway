@@ -43,8 +43,8 @@ import {
   creationFolderChoices,
   flattenCreationFolders,
 } from "@/lib/creation-folders";
-import { supportsPagesRouteTemplate } from "@/lib/proxy-template-capabilities";
 import { pickerLoadError } from "@/lib/picker-load-error";
+import { supportsPagesRouteTemplate } from "@/lib/proxy-template-capabilities";
 import { canCreateInFolder } from "@/lib/scope-utils";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";

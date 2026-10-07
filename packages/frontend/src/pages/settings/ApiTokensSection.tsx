@@ -421,11 +421,7 @@ export function ApiTokensSection({
                 Save
               </Button>
             ) : (
-              <Button
-                onClick={handleCreateToken}
-                pending={isCreating}
-                disabled={!tokenHasGrants}
-              >
+              <Button onClick={handleCreateToken} pending={isCreating} disabled={!tokenHasGrants}>
                 Create Token
               </Button>
             )}

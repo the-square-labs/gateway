@@ -96,7 +96,10 @@ import {
   getLatestDockerContainerStats,
   listDockerGpuUsage,
 } from './docker-container-observability.js';
-import { containerRecreateRequiredScopes, containerUpdateRequiredScopes } from './docker-container-scope-requirements.js';
+import {
+  containerRecreateRequiredScopes,
+  containerUpdateRequiredScopes,
+} from './docker-container-scope-requirements.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { assertUserContainerAccessible } from './docker-internal-containers.js';
