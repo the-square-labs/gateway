@@ -63,6 +63,11 @@ type relayTunnelRouter struct {
 	// transportReady closes (and is replaced) whenever the relay transport
 	// connects again, so registrations waiting out their backoff retry at once.
 	transportReady chan struct{}
+	// The relay's lanes for source tunnels (relay_lanes.go): conn, which also
+	// carries the registrations, and the other lanes the pool opened.
+	lanesMu     sync.Mutex
+	primaryLane *relaySourceLane
+	extraLanes  []*relaySourceLane
 }
 
 type relayEndpointRegistration struct {
@@ -116,19 +121,24 @@ func (p *DockerPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientCon
 }
 
 func (p *DockerPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.ClientConn, _ string, relayInstanceID string) {
-	router := &relayTunnelRouter{plugin: p, ctx: ctx, conn: conn, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID, registrations: map[string]*relayEndpointRegistration{}, transportReady: make(chan struct{})}
-	go router.watchTransport(ctx, conn)
 	p.relayTunnelMu.Lock()
 	if p.relayTunnels == nil {
 		p.relayTunnels = map[string]*relayTunnelRouter{}
 	}
-	if p.relayTunnels[relayInstanceID] != nil {
+	if existing := p.relayTunnels[relayInstanceID]; existing != nil && existing.ctx.Err() == nil {
+		// Another lane of the relay's pool: it carries source tunnels, the
+		// first lane keeps the endpoint registrations.
+		lane := existing.addLane(conn)
 		p.relayTunnelMu.Unlock()
 		<-ctx.Done()
+		existing.removeLane(lane)
 		return
 	}
+	// A router whose lanes ended is replaced; its own cleanup leaves the new one in place.
+	router := &relayTunnelRouter{plugin: p, ctx: ctx, conn: conn, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID, registrations: map[string]*relayEndpointRegistration{}, transportReady: make(chan struct{})}
 	p.relayTunnels[relayInstanceID] = router
 	p.relayTunnelMu.Unlock()
+	go router.watchTransport(ctx, conn)
 	defer func() {
 		router.stop()
 		p.relayTunnelMu.Lock()
@@ -323,11 +333,12 @@ func (r *relayTunnelRouter) watchTransport(ctx context.Context, conn *grpc.Clien
 	}
 }
 
-// connected reports a relay whose transport is up. A source tunnel opened on
-// a relay whose connection dropped waits for the reconnect, which against a
-// relay that stopped answering ends only with the connect timeout.
+// connected reports a relay with a transport that is up (any of its lanes). A
+// source tunnel opened on a relay whose connections dropped waits for the
+// reconnect, which against a relay that stopped answering ends only with the
+// connect timeout.
 func (r *relayTunnelRouter) connected() bool {
-	return r.conn == nil || r.conn.GetState() == connectivity.Ready
+	return r.conn == nil || r.conn.GetState() == connectivity.Ready || r.extraLaneConnected()
 }
 
 func (r *relayTunnelRouter) transportReadySignal() <-chan struct{} {
@@ -815,13 +826,14 @@ func (r *relayTunnelRouter) openSource(grant *pb.RelaySignedGrant) (*relaySource
 
 // openSourceWithin is openSource giving up after timeout (0: the relay's own accept timeout).
 func (r *relayTunnelRouter) openSourceWithin(grant *pb.RelaySignedGrant, timeout time.Duration) (*relaySourceTunnel, error) {
-	tunnelCtx, cancel := context.WithCancel(r.ctx)
+	lane := r.sourceLane()
+	tunnelCtx, cancel := lane.tunnelContext(r.ctx)
 	finishSetup := func() bool { return true }
 	if timeout > 0 {
 		// Stopped once the relay answered: a timer that fired already cancelled the tunnel it admitted.
 		finishSetup = time.AfterFunc(timeout, cancel).Stop
 	}
-	stream, err := r.client.OpenTunnel(tunnelCtx)
+	stream, err := lane.client.OpenTunnel(tunnelCtx)
 	if err == nil {
 		err = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Open{Open: &relayv1.OpenTunnel{Grant: relayGrant(grant)}}})
 	}
