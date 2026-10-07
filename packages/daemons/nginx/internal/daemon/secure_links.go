@@ -1213,7 +1213,9 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 					deadline = started.Add(secureLinkRestartHold)
 				}
 			}
-			if index+1 < len(ordered) {
+			// A relay that answered (a refusal, a setup timeout) is remembered (relayPenalties): the next relay is
+			// tried at once. Only a relay failing at the transport level spaces the attempts.
+			if index+1 < len(ordered) && failure != nil && failure.transport {
 				time.Sleep(time.Duration(index+1) * 50 * time.Millisecond)
 			}
 		}
