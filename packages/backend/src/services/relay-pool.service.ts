@@ -26,6 +26,7 @@ import { relayRemovableAfter } from '@/modules/nodes/relay-removal.js';
 import type { GeneralSettingsService, RelayAssignmentSpread } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
+import { pruneEndedAssignmentGenerations } from './relay-assignment-history.js';
 import { localRelayTakeoverBlocker, setLocalRelayUpdateDrain } from './relay-local-takeover.js';
 import type { RelayPolicyService, RelayPolicyTrustStatus } from './relay-policy.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
@@ -88,6 +89,7 @@ const deferredGeneration = sql`(${relayEndpointAssignmentGenerations.state} = 'r
 const REMOTE_HEARTBEAT_TIMEOUT_MS = 90_000;
 const UPDATE_DRAIN_RELEASE_INTERVAL_MS = 30_000;
 const EVACUATION_RETRY_MS = 30_000;
+const ASSIGNMENT_HISTORY_PRUNE_INTERVAL_MS = 60 * 60_000;
 /** The same failed lease refresh of a relay is logged as a warning once per interval. */
 const LEASE_REFRESH_REPORT_MS = 30 * 60_000;
 /** Update runs that may still hold a relay drained, and the step states in which they do. */
@@ -201,6 +203,7 @@ export class RelayPoolService {
   private probeRetryDelaysMs = PROBE_RETRY_DELAYS_MS;
   private readonly revocations: Pick<RelayRevocationFenceService, 'evaluate'>;
   private nextUpdateDrainReleaseAt = 0;
+  private nextAssignmentHistoryPruneAt = 0;
   /** Per remote relay: the lease refresh failure last logged as a warning. */
   private readonly leaseRefreshFailures = new Map<string, { message: string; at: number }>();
   private certificateRenewal?: Pick<
@@ -426,6 +429,9 @@ export class RelayPoolService {
       logger.warn('Relay update drain release deferred', { error: String(error) })
     );
     await this.retireDrainedGenerations();
+    await this.pruneAssignmentHistoryIfDue().catch((error) =>
+      logger.warn('Relay placement history cleanup deferred', { error: String(error) })
+    );
     if (this.rebalanceFlight) return;
     const snapshot = await this.getSnapshot();
     const now = Date.now();
@@ -794,6 +800,12 @@ export class RelayPoolService {
     }
   }
 
+  private async pruneAssignmentHistoryIfDue(now = Date.now()): Promise<void> {
+    if (now < this.nextAssignmentHistoryPruneAt) return;
+    this.nextAssignmentHistoryPruneAt = now + ASSIGNMENT_HISTORY_PRUNE_INTERVAL_MS;
+    await pruneEndedAssignmentGenerations(this.db, now);
+  }
+
   async retireDrainedGenerations(): Promise<number> {
     const generations = await this.db
       .select()
@@ -907,7 +919,19 @@ export class RelayPoolService {
           .select()
           .from(relayEndpointAssignmentGenerations)
           .where(inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining'])),
-        this.db.select().from(relayEndpointAssignments),
+        // Only assignments of live generations are looked up below; ended ones are history.
+        this.db
+          .select()
+          .from(relayEndpointAssignments)
+          .where(
+            inArray(
+              relayEndpointAssignments.assignmentGenerationId,
+              this.db
+                .select({ id: relayEndpointAssignmentGenerations.id })
+                .from(relayEndpointAssignmentGenerations)
+                .where(inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining']))
+            )
+          ),
         this.settings.getConfig(),
         // The latest attempt per endpoint, deferred ones aside: a transient condition proves nothing about the
         // placement, so it neither clears a failure before it nor counts as one (see deferStaging).
