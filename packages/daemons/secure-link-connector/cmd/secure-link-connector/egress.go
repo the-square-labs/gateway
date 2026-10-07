@@ -246,19 +246,23 @@ func peerAllowed(prefix netip.Prefix, remote net.Addr) bool {
 	return prefix.Contains(address) && address != prefix.Addr() && address != prefix.Addr().Next()
 }
 
-// acquire admits a new connection of a workload: from the link network, within the session limit.
-func (l *egressListener) acquire(connection net.Conn) (securelink.EgressConfig, *tls.Config, bool) {
+// acquire admits a new connection of a workload: from the link network, within the session limit. A refusal names
+// its reason (none for a closed listener).
+func (l *egressListener) acquire(connection net.Conn) (securelink.EgressConfig, *tls.Config, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || !peerAllowed(l.prefix, connection.RemoteAddr()) {
-		return securelink.EgressConfig{}, nil, false
+	if l.closed {
+		return securelink.EgressConfig{}, nil, false, nil
+	}
+	if !peerAllowed(l.prefix, connection.RemoteAddr()) {
+		return securelink.EgressConfig{}, nil, false, fmt.Errorf("link %s: a peer outside the link network was refused", l.config.ID)
 	}
 	if l.config.MaxSessions > 0 && l.sessions >= l.config.MaxSessions {
-		return securelink.EgressConfig{}, nil, false
+		return securelink.EgressConfig{}, nil, false, fmt.Errorf("link %s: the listener carries its %d concurrent connections", l.config.ID, l.config.MaxSessions)
 	}
 	l.sessions++
 	l.active[connection] = struct{}{}
-	return l.config, l.tls, true
+	return l.config, l.tls, true, nil
 }
 
 func (l *egressListener) release(connection net.Conn) {
@@ -287,8 +291,12 @@ func (l *egressListener) track(connection net.Conn, add bool) bool {
 
 func (l *egressListener) serve(local net.Conn) {
 	defer local.Close()
-	config, tlsConfig, admitted := l.acquire(local)
+	config, tlsConfig, admitted, refusal := l.acquire(local)
 	if !admitted {
+		// Logged like a relay refusal, once per reason and interval: the connection never reaches the daemon.
+		if refusal != nil {
+			l.manager.failures.record(refusal)
+		}
 		return
 	}
 	defer l.release(local)
