@@ -3203,18 +3203,26 @@ export class RelayPolicyService {
       if (!poolRevision) throw new Error('Relay pool is unavailable');
       // Under the revision lock, so a revocation is always judged against the snapshots built.
       const endpointGenerations = new Map(endpoints.map((endpoint) => [endpoint.id, endpoint.generation]));
+      const routesByEndpoint = new Map<string, typeof routes>();
+      for (const route of routes) {
+        const group = routesByEndpoint.get(route.targetEndpointId) ?? [];
+        group.push(route);
+        routesByEndpoint.set(route.targetEndpointId, group);
+      }
       await recordBuiltSnapshot(
         tx,
         instance.id,
         previous,
-        selectedAssignments.flatMap(({ endpointId }) =>
-          routes.flatMap((route) => {
-            const endpointGeneration = endpointGenerations.get(endpointId);
-            return route.targetEndpointId !== endpointId || endpointGeneration === undefined
-              ? []
-              : [{ routeId: route.id, endpointId, routeGeneration: route.generation, endpointGeneration }];
-          })
-        ),
+        selectedAssignments.flatMap(({ endpointId }) => {
+          const endpointGeneration = endpointGenerations.get(endpointId);
+          if (endpointGeneration === undefined) return [];
+          return (routesByEndpoint.get(endpointId) ?? []).map((route) => ({
+            routeId: route.id,
+            endpointId,
+            routeGeneration: route.generation,
+            endpointGeneration,
+          }));
+        }),
         { key, revision: poolRevision.revision, issuedAtUnix, expiresAtUnix }
       );
       return {

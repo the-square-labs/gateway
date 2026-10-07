@@ -40,6 +40,13 @@ export function relayPolicySnapshotContent(input: RelayPolicySnapshotInput) {
     (left, right) => byText(left.endpointId, right.endpointId) || left.assignmentGeneration - right.assignmentGeneration
   );
   const routes = [...input.routes].sort((left, right) => byText(left.id, right.id));
+  // Grouped once (in id order): filtering every route per assignment cost assignments x routes per build.
+  const routesByEndpoint = new Map<string, typeof routes>();
+  for (const route of routes) {
+    const group = routesByEndpoint.get(route.targetEndpointId) ?? [];
+    group.push(route);
+    routesByEndpoint.set(route.targetEndpointId, group);
+  }
   return {
     schemaVersion: 2,
     gatewayInstanceId: input.gatewayInstanceId,
@@ -69,21 +76,19 @@ export function relayPolicySnapshotContent(input: RelayPolicySnapshotInput) {
       ];
     }),
     routes: assignments.flatMap((assignment) =>
-      routes
-        .filter(({ targetEndpointId }) => targetEndpointId === assignment.endpointId)
-        .map((route) => ({
-          routeId: route.id,
-          generation: String(route.generation),
-          sourceKind: route.sourceKind,
-          sourceId: route.sourceId,
-          sourceCertificateSha256: route.sourceCertificateSha256,
-          targetEndpointId: route.targetEndpointId,
-          maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, input.sessionLimits),
-          maxFrameBytes: route.maxFrameBytes,
-          ...input.routePolicy(route.ownerKind),
-          assignmentGeneration: String(assignment.assignmentGeneration),
-          ...(input.leaseGate?.routes.get(route.id) ? { leasePolicyId: input.leaseGate.routes.get(route.id) } : {}),
-        }))
+      (routesByEndpoint.get(assignment.endpointId) ?? []).map((route) => ({
+        routeId: route.id,
+        generation: String(route.generation),
+        sourceKind: route.sourceKind,
+        sourceId: route.sourceId,
+        sourceCertificateSha256: route.sourceCertificateSha256,
+        targetEndpointId: route.targetEndpointId,
+        maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route, input.sessionLimits),
+        maxFrameBytes: route.maxFrameBytes,
+        ...input.routePolicy(route.ownerKind),
+        assignmentGeneration: String(assignment.assignmentGeneration),
+        ...(input.leaseGate?.routes.get(route.id) ? { leasePolicyId: input.leaseGate.routes.get(route.id) } : {}),
+      }))
     ),
     admissionPolicy: {
       enabled: input.admission.adaptiveAdmissionEnabled,
