@@ -8,7 +8,7 @@ import {
   isGatewayInternalImage,
 } from './docker-internal-images.js';
 import type { DockerRegistryService } from './docker-registry.service.js';
-import type { DockerTaskService } from './docker-task.service.js';
+import { type DockerTaskService, detachDockerTask, trackDockerTask } from './docker-task.service.js';
 import { isLostTrackError } from './docker-task-reconciler.js';
 
 type DockerDispatchResult = { success: boolean; error?: string; detail?: string };
@@ -56,23 +56,20 @@ export async function pullImage(
   // (Gateway restarted, or the node's control stream dropped while the pull ran on): the task is then settled with
   // the node instead of failing while the node still pulls (DockerTaskReconciler).
   const commandId = randomUUID();
-  if (task?.id && context.taskService) {
-    await context.taskService
-      .track(
-        task.id,
-        {
-          kind: 'pull',
-          imageRef,
-          deadlineAt: new Date(Date.now() + context.longDockerOperationTimeoutMs).toISOString(),
-          registryId: registryId ?? null,
-          folderId: folderId ?? null,
-          userId: userId ?? null,
-          ...(userId && context.existingImageIds ? { preexistingImageIds: [...context.existingImageIds] } : {}),
-        },
-        commandId
-      )
-      .catch(() => undefined);
-  }
+  await trackDockerTask(
+    context.taskService,
+    task?.id,
+    {
+      kind: 'pull',
+      imageRef,
+      deadlineAt: new Date(Date.now() + context.longDockerOperationTimeoutMs).toISOString(),
+      registryId: registryId ?? null,
+      folderId: folderId ?? null,
+      userId: userId ?? null,
+      ...(userId && context.existingImageIds ? { preexistingImageIds: [...context.existingImageIds] } : {}),
+    },
+    commandId
+  );
   if (userId) {
     await context.auditService.log({
       action: 'docker.image.pull',
@@ -131,10 +128,8 @@ export async function pullImage(
       if (task?.id && context.taskService) {
         const error = err instanceof Error ? err.message : 'Pull failed';
         // The node may still pull: the task stays active until the node tells how the pull ended.
-        const settled = isLostTrackError(err)
-          ? context.taskService.detach(task.id, error)
-          : context.taskService.update(task.id, { status: 'failed', error, completedAt: new Date() });
-        settled.catch(() => {});
+        if (isLostTrackError(err)) void detachDockerTask(context.taskService, task.id, error);
+        else context.taskService.update(task.id, { status: 'failed', error, completedAt: new Date() }).catch(() => {});
       }
     });
 

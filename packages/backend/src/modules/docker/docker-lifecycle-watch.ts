@@ -2,7 +2,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { getReplacementContainerFailureMessage } from './docker-recreate-watch.js';
-import type { DockerTaskService } from './docker-task.service.js';
+import { type DockerTaskService, detachDockerTask, trackDockerTask } from './docker-task.service.js';
 
 const LEGACY_TASK_STATUS_UNSUPPORTED_ERROR = 'unknown container action: task_status';
 const NODE_DISCONNECTED_RE = /node (?:.* )?(?:is not connected|disconnected)/i;
@@ -62,10 +62,7 @@ async function detachWatchedTask(
   nodeId: string,
   name: string
 ) {
-  const kept =
-    taskId && context.taskService && (await tracked)
-      ? await context.taskService.detach(taskId, DISCONNECTED_ERROR).catch(() => false)
-      : false;
+  const kept = (await tracked) ? await detachDockerTask(context.taskService, taskId, DISCONNECTED_ERROR) : false;
   await context.failTask(kept ? undefined : taskId, DISCONNECTED_ERROR, nodeId, name);
 }
 
@@ -92,22 +89,16 @@ export function watchDockerTransition(
     let settled = false;
     // A stop, kill or restart goes on on the node without this watch: its task records how to tell its end.
     const expect = expectedState === 'exited' ? 'exited' : completedAction === 'restarted' ? 'restarted' : null;
-    const tracked: Promise<boolean> =
-      taskId && context.taskService && expect
-        ? context.taskService
-            .track(taskId, {
-              kind: 'state',
-              containerId,
-              expect,
-              previousStartedAt: trackingHint?.previousStartedAt ?? null,
-              progress,
-              deadlineAt: new Date(start + timeoutMs).toISOString(),
-            })
-            .then(
-              () => true,
-              () => false
-            )
-        : Promise.resolve(false);
+    const tracked: Promise<boolean> = expect
+      ? trackDockerTask(context.taskService, taskId, {
+          kind: 'state',
+          containerId,
+          expect,
+          previousStartedAt: trackingHint?.previousStartedAt ?? null,
+          progress,
+          deadlineAt: new Date(start + timeoutMs).toISOString(),
+        })
+      : Promise.resolve(false);
     const complete = async () => {
       settled = true;
       clearInterval(poll);
@@ -172,23 +163,15 @@ export function watchDockerRecreateByName(
 ) {
   const start = Date.now();
   // The replacement goes on on the node without this watch: its task records how to tell its end.
-  const tracked: Promise<boolean> =
-    taskId && context.taskService
-      ? context.taskService
-          .track(taskId, {
-            kind: 'replace',
-            containerName,
-            oldContainerId,
-            expectedState,
-            daemonTaskId: daemonTaskId ?? null,
-            progress,
-            deadlineAt: new Date(start + timeoutMs).toISOString(),
-          })
-          .then(
-            () => true,
-            () => false
-          )
-      : Promise.resolve(false);
+  const tracked = trackDockerTask(context.taskService, taskId, {
+    kind: 'replace',
+    containerName,
+    oldContainerId,
+    expectedState,
+    daemonTaskId: daemonTaskId ?? null,
+    progress,
+    deadlineAt: new Date(start + timeoutMs).toISOString(),
+  });
   const poll = setInterval(async () => {
     try {
       const result = await context.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');

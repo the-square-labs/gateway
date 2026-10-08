@@ -48,7 +48,7 @@ import {
   normalizeMountDefinitionsFromConfig,
   normalizeMountDefinitionsFromInspect,
 } from './docker-socket-mount.guard.js';
-import type { DockerTaskService } from './docker-task.service.js';
+import { type DockerTaskService, trackDockerTask } from './docker-task.service.js';
 import { resolveNetworkIdentity } from './docker-volume-network-operations.js';
 
 const logger = createChildLogger('DockerContainerMutationOperations');
@@ -707,7 +707,7 @@ export async function removeContainer(
   if (stopping) {
     const task = await ctx.createTask(nodeId, containerId, name, 'remove');
     // Gateway runs this removal itself: after a Gateway restart its task is settled by whether the container is gone.
-    if (task?.id) await ctx.taskService?.track(task.id, { kind: 'remove', containerId }).catch(() => undefined);
+    await trackDockerTask(ctx.taskService, task?.id, { kind: 'remove', containerId });
     void removeWhenStopped(ctx, nodeId, containerId, name, force, userId, task?.id, afterRemove);
     return { taskId: task?.id, containerId, name, pending: stopping };
   }

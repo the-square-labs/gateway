@@ -18,6 +18,40 @@ export type DockerTaskRow = typeof dockerTasks.$inferSelect;
 /** A task as the API shows it: without what Gateway keeps to settle it with its node. */
 export type PublicDockerTask = Omit<DockerTaskRow, 'tracking' | 'commandId'>;
 
+/**
+ * Records a task's tracking without ever failing the operation it belongs to: tracking only lets Gateway settle the
+ * task later, should it lose track of it. Resolves whether it was recorded.
+ */
+export function trackDockerTask(
+  taskService: Pick<DockerTaskService, 'track'> | undefined,
+  id: string | undefined,
+  tracking: DockerTaskTracking,
+  commandId?: string
+): Promise<boolean> {
+  if (!taskService || !id) return Promise.resolve(false);
+  return Promise.resolve()
+    .then(() => taskService.track(id, tracking, commandId))
+    .then(
+      () => true,
+      () => false
+    );
+}
+
+/** Detaches a task (see DockerTaskService.detach) without ever throwing; resolves whether it was kept. */
+export function detachDockerTask(
+  taskService: Pick<DockerTaskService, 'detach'> | undefined,
+  id: string | undefined,
+  error: string
+): Promise<boolean> {
+  if (!taskService || !id) return Promise.resolve(false);
+  return Promise.resolve()
+    .then(() => taskService.detach(id, error))
+    .then(
+      (kept) => kept === true,
+      () => false
+    );
+}
+
 export function publicDockerTask(row: DockerTaskRow): PublicDockerTask {
   const { tracking: _tracking, commandId: _commandId, ...task } = row;
   return task;
