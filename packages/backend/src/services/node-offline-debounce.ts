@@ -7,7 +7,7 @@
  */
 export const NODE_OFFLINE_DEBOUNCE_MS = 5_000;
 
-/** One pending offline transition per node; a reconnect cancels it. */
+/** One pending offline transition per node; a reconnect cancels it, a local relay outage extends it. */
 export class NodeOfflineDebounce {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -17,13 +17,22 @@ export class NodeOfflineDebounce {
     return this.delayMs > 0;
   }
 
-  schedule(nodeId: string, markOffline: () => Promise<void>, onError: (error: unknown) => void): void {
+  schedule(
+    nodeId: string,
+    markOffline: () => Promise<void>,
+    onError: (error: unknown) => void,
+    delayMs = this.delayMs
+  ): void {
     this.cancel(nodeId);
     const timer = setTimeout(() => {
       if (this.timers.get(nodeId) !== timer) return;
-      this.timers.delete(nodeId);
-      void markOffline().catch(onError);
-    }, this.delayMs);
+      // Still pending while the decision runs: it may wait longer (schedule again) or mark the node offline.
+      void markOffline()
+        .catch(onError)
+        .finally(() => {
+          if (this.timers.get(nodeId) === timer) this.timers.delete(nodeId);
+        });
+    }, delayMs);
     timer.unref?.();
     this.timers.set(nodeId, timer);
   }

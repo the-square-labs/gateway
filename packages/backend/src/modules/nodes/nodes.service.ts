@@ -255,6 +255,7 @@ export class NodesService {
         status:
           row.status === 'online' && !isConnected && !this.registry.isReconnecting(row.id) ? 'offline' : row.status,
         isConnected,
+        reconnecting: this.awaitsLocalRelay(row.status, row.id),
       };
     });
 
@@ -265,6 +266,11 @@ export class NodesService {
       limit: query.limit,
       totalPages: Math.ceil(total / query.limit),
     };
+  }
+
+  /** An online node away only because the local relay restarts, or restarted moments ago (local-relay-outage). */
+  private awaitsLocalRelay(status: string, nodeId: string): boolean {
+    return status === 'online' && this.registry.isAwaitingLocalRelay(nodeId);
   }
 
   async get(id: string) {
@@ -293,6 +299,7 @@ export class NodesService {
       status:
         node.status === 'online' && !isConnected && !this.registry.isReconnecting(node.id) ? 'offline' : node.status,
       isConnected,
+      reconnecting: this.awaitsLocalRelay(node.status, node.id),
       liveHealthReport: connectedNode?.lastHealthReport ?? null,
       liveStatsReport: connectedNode?.lastStatsReport ?? null,
     };
@@ -324,6 +331,7 @@ export class NodesService {
       status:
         node.status === 'online' && !isConnected && !this.registry.isReconnecting(node.id) ? 'offline' : node.status,
       isConnected,
+      reconnecting: this.awaitsLocalRelay(node.status, node.id),
       liveHealthReport: connectedNode?.lastHealthReport ?? null,
       liveStatsReport: connectedNode?.lastStatsReport ?? null,
     };

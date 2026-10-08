@@ -408,7 +408,8 @@ export class HealthCheckJob {
 
   /**
    * Whether a probe failed only because its node is expected to be away: within the startup grace (nodes reconnect
-   * after a Gateway restart) or while the node's daemon is being updated (it restarts on its own).
+   * after a Gateway restart), while it reconnects (its stream just closed, or the local relay restarts) or while the
+   * node's daemon is being updated (it restarts on its own).
    */
   private async awaitingNodeReconnect(nodeId: string, errors: string[]): Promise<boolean> {
     if (!failedOnlyBecauseNodeIsNotConnected(nodeId, errors)) return false;
@@ -437,11 +438,12 @@ export class HealthCheckJob {
       const outcomes = await Promise.all(
         servingNodeIds.map(async (nodeId) => {
           if (this.nodeDispatch && !this.nodeDispatch.isNodeConnected(nodeId)) {
+            // Expected back (a Gateway start, a stream that just closed, a local relay restart): no sample yet.
+            const expectedBack =
+              Date.now() - this.startedAt < NODE_RECONNECT_GRACE_MS || this.nodeDispatch.isNodeReconnecting?.(nodeId);
             return {
               nodeId,
-              status: (Date.now() - this.startedAt < NODE_RECONNECT_GRACE_MS
-                ? 'deferred'
-                : 'offline') as MemberProbeStatus,
+              status: (expectedBack ? 'deferred' : 'offline') as MemberProbeStatus,
               error: 'The ingress node is not connected',
             };
           }
@@ -462,6 +464,7 @@ export class HealthCheckJob {
       servingNodeIds.map((nodeId) => ({
         nodeId,
         connected: this.nodeDispatch ? this.nodeDispatch.isNodeConnected(nodeId) : true,
+        reconnecting: this.nodeDispatch?.isNodeReconnecting?.(nodeId) ?? false,
         serving: ingressHealthOf(nodeRows.find((row) => row.id === nodeId)?.lastHealthReport)?.serving ?? null,
       }))
     );

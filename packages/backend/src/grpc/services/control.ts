@@ -1429,6 +1429,8 @@ export function createControlHandlers(deps: GrpcServerDeps) {
         lastRecordedTs.delete(nodeId);
         await deps.registry.deregister(nodeId, stream as any);
         await markRelayInstanceOffline(deps, nodeId);
+        // Every node drops when the local relay restarts: recorded only for a node that does not come back.
+        if (await deps.registry.holdDisconnectAudit(nodeId, details)) return;
         await deps.auditService.log({
           userId: null,
           action: 'node.disconnected',

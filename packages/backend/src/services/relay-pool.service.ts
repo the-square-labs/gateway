@@ -25,6 +25,8 @@ import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from '@/modul
 import { relayRemovableAfter } from '@/modules/nodes/relay-removal.js';
 import type { GeneralSettingsService, RelayAssignmentSpread } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from './event-bus.service.js';
+import { type LocalRelayOutageSignal, localRelayOutagePhase, upWhenLocalRelayWentDown } from './local-relay-outage.js';
+import type { NodeRegistryService } from './node-registry.service.js';
 import { pruneEndedAssignmentGenerations } from './relay-assignment-history.js';
 import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
 import { localRelayTakeoverBlocker, setLocalRelayUpdateDrain } from './relay-local-takeover.js';
@@ -224,6 +226,8 @@ export class RelayPoolService {
   /** The relays last judged failing on their data plane, and when each one last entered or left that judgement. */
   private dataPlaneFailing = new Set<string>();
   private readonly dataPlaneChangedAt = new Map<string, number>();
+  private localRelayOutage?: Pick<LocalRelayOutageSignal, 'latestOutage'>;
+  private nodesAwaitingLocalRelay?: Pick<NodeRegistryService, 'isAwaitingLocalRelay'>;
   constructor(
     private readonly db: DrizzleClient,
     private readonly policy: RelayPolicyService,
@@ -272,6 +276,18 @@ export class RelayPoolService {
     >
   ): void {
     this.certificateRenewal = renewal;
+  }
+
+  /**
+   * The local relay's outages. Remote relays reach Gateway through it, so their control streams end with it: that
+   * time does not count toward their disconnect grace, and the pool reads as one restarting local relay meanwhile.
+   */
+  setLocalRelayOutage(
+    signal: Pick<LocalRelayOutageSignal, 'latestOutage'>,
+    nodes?: Pick<NodeRegistryService, 'isAwaitingLocalRelay'>
+  ): void {
+    this.localRelayOutage = signal;
+    this.nodesAwaitingLocalRelay = nodes;
   }
 
   /** Enables placement by measured network distance; without it relays are placed by hash. */
@@ -375,10 +391,12 @@ export class RelayPoolService {
    * control stream that drops and comes back then changes no plan and starts no generation. A relay whose data
    * plane fails is out of placement whatever its control state. A relay serving again after it was not (offline
    * past its grace, or failing on its data plane) is held back for RELAY_RETURN_HOLD_MS: it fills free slots only.
+   * The time the local relay does not serve does not count toward the grace (disconnectGraceStart).
    */
   private placementView(instances: RelayInstanceRow[], failing: ReadonlySet<string>, now = Date.now()) {
+    const outage = this.localRelayOutage?.latestOutage() ?? null;
     const grace = new Set(
-      instances.filter((instance) => inDisconnectGrace(instance, now, failing)).map(({ id }) => id)
+      instances.filter((instance) => inDisconnectGrace(instance, now, failing, outage)).map(({ id }) => id)
     );
     const known = new Set(instances.map(({ id }) => id));
     for (const [id, at] of this.notServingAt) {
@@ -1243,19 +1261,23 @@ export class RelayPoolService {
       (instances.some(({ state }) => ['offline', 'error'].includes(state)) ||
         [...revocations.values()].some((revocation) => revocation?.state === 'stale'));
     const warnings = await this.gatewayHostOnlyWarnings(gatewayHostOnly, instances, latencyPaths).catch(() => []);
+    const outage = await this.describeLocalRelayOutage(instances);
     return {
       poolId: 'system',
-      state: unavailable
-        ? 'unavailable'
-        : generations.some(({ state }) => state === 'staging')
-          ? 'rebalancing'
-          : degraded ||
-              failures.some(({ endpointId }) => rebalancePlan.some((entry) => entry.endpointId === endpointId)) ||
-              blockers.length > 0
-            ? 'degraded'
-            : rebalanceAvailable
-              ? 'rebalance_available'
-              : 'healthy',
+      // One state while the local relay restarts: every remote relay and node drops with it, none of them failed.
+      state: outage
+        ? 'local_relay_restarting'
+        : unavailable
+          ? 'unavailable'
+          : generations.some(({ state }) => state === 'staging')
+            ? 'rebalancing'
+            : degraded ||
+                failures.some(({ endpointId }) => rebalancePlan.some((entry) => entry.endpointId === endpointId)) ||
+                blockers.length > 0
+              ? 'degraded'
+              : rebalanceAvailable
+                ? 'rebalance_available'
+                : 'healthy',
       rebalanceAvailable,
       /** Advisory: the pool stays healthy, but these links depend on the Gateway host. */
       warnings,
@@ -1270,6 +1292,17 @@ export class RelayPoolService {
       registeredEndpoints,
       worstPressurePercent: worstPressure,
       endpointCount: endpoints.length,
+      /** The local relay does not serve, or nodes and relays are still coming back after it; null otherwise. */
+      localRelayOutage: outage
+        ? {
+            phase: outage.phase,
+            since: outage.since,
+            servingAgainAt: outage.servingAgainAt,
+            planned: outage.planned,
+            reconnectingNodes: outage.reconnectingNodes,
+            reconnectingRelays: outage.reconnectingRelayIds.size,
+          }
+        : null,
       instances: instances.map((instance) => {
         let activeAssignments = 0;
         for (const generation of activeByEndpoint.values()) {
@@ -1298,12 +1331,52 @@ export class RelayPoolService {
           certificate: certificates.get(instance.id) ?? null,
           /** Revoked routes this relay has not applied; `stale` once past the deadline. */
           revocation: revocations.get(instance.id) ?? null,
+          /** A remote relay whose control stream ended with the local relay and has not come back yet. */
+          reconnecting: outage?.reconnectingRelayIds.has(instance.id) ?? false,
         };
       }),
       staging: [...stagingByEndpoint.values()],
       update: updateRun
         ? { state: updateRun.state, targetVersion: updateRun.targetArtifact.version, error: updateRun.terminalError }
         : null,
+    };
+  }
+
+  /**
+   * The local relay outage the pool shows instead of its own state: while the local relay does not serve, and
+   * afterwards while a remote relay or node that dropped with it has not come back within the reconnect grace.
+   */
+  private async describeLocalRelayOutage(instances: RelayInstanceRow[], now = Date.now()) {
+    const outage = this.localRelayOutage?.latestOutage() ?? null;
+    const phase = localRelayOutagePhase(outage, now);
+    if (!outage || !phase) return null;
+    const reconnectingRelayIds = new Set(
+      instances
+        .filter(
+          (instance) =>
+            instance.kind === 'remote' &&
+            instance.state === 'offline' &&
+            Boolean(instance.lastSeenAt) &&
+            upWhenLocalRelayWentDown(instance.lastSeenAt!.getTime(), outage)
+        )
+        .map(({ id }) => id)
+    );
+    let reconnectingNodes = 0;
+    if (this.nodesAwaitingLocalRelay) {
+      const online = await this.db
+        .select({ id: nodes.id })
+        .from(nodes)
+        .where(and(eq(nodes.status, 'online'), ne(nodes.type, 'relay')));
+      reconnectingNodes = online.filter(({ id }) => this.nodesAwaitingLocalRelay!.isAwaitingLocalRelay(id, now)).length;
+    }
+    if (phase === 'reconnecting' && !reconnectingRelayIds.size && !reconnectingNodes) return null;
+    return {
+      phase,
+      since: new Date(outage.since),
+      servingAgainAt: outage.servingAgainAt === null ? null : new Date(outage.servingAgainAt),
+      planned: outage.planned,
+      reconnectingNodes,
+      reconnectingRelayIds,
     };
   }
 

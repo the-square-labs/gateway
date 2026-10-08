@@ -8,6 +8,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from './cache.service.js';
 import type { EventBusService } from './event-bus.service.js';
+import { type LocalRelayOutage, type LocalRelayOutageSignal, localRelayOutagePhase } from './local-relay-outage.js';
 import {
   type RelayContainerObservation,
   type RelayDockerRecoveryService,
@@ -90,6 +91,8 @@ export interface RelaySupervisorState {
   memoryLimitBytes: number;
   openFileDescriptors: number;
   fileDescriptorLimit: number;
+  /** The last time the local relay stopped serving (see local-relay-outage); kept after it ended. */
+  outage?: { since: string; servingAgainAt: string | null; planned: boolean } | null;
 }
 
 export interface RelaySupervisorOptions {
@@ -145,16 +148,19 @@ function defaultState(): RelaySupervisorState {
     memoryLimitBytes: 0,
     openFileDescriptors: 0,
     fileDescriptorLimit: 0,
+    outage: null,
   };
 }
 
-export class RelaySupervisorService {
+export class RelaySupervisorService implements LocalRelayOutageSignal {
   private state = defaultState();
   private failureCount = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private probing = false;
   private recoveryCycle: Promise<void> | null = null;
   private manualRetryStarting = false;
+  /** The on-demand check of confirmLocalRelay in flight. */
+  private confirming: Promise<void> | null = null;
   private stopping = false;
   /** Resolves when stop() is called, so recovery waits end at once instead of holding a stopping Gateway. */
   private stopped: Promise<void>;
@@ -239,6 +245,7 @@ export class RelaySupervisorService {
       attempt: this.state.attempt,
       maxAttempts: this.state.maxAttempts,
       lastHealthyAt: this.state.lastHealthyAt,
+      outage: this.describeOutage(),
     };
     if (!admin) return generic;
     return {
@@ -319,6 +326,8 @@ export class RelaySupervisorService {
         });
         if (this.state.state === 'healthy') {
           this.state = { ...this.state, ...healthyUpdate };
+          // A relay found down by an on-demand check while this probe saw it healthy throughout.
+          await this.recordServing(true);
           return;
         }
         await this.transition({
@@ -332,6 +341,8 @@ export class RelaySupervisorService {
         return;
       }
       this.failureCount += 1;
+      // From the first failed probe: the nodes' control streams end with the relay, whatever recovery does.
+      if (OFFLINE_REASONS.includes(result.reason)) await this.recordServing(false);
       if (this.failureCount === 1) {
         if (this.state.state !== 'critical' && this.state.state !== 'recovering') {
           await this.transition({ state: 'suspect', reason: result.reason });
@@ -444,7 +455,84 @@ export class RelaySupervisorService {
 
   async setMaintenance(enabled: boolean): Promise<void> {
     if (!this.options.required) return;
-    await this.transition({ state: enabled ? 'maintenance' : 'migration_pending', reason: null });
+    // The update recreates the relay: every control stream through it ends now. The probe after it ends the outage.
+    await this.transition({
+      state: enabled ? 'maintenance' : 'migration_pending',
+      reason: null,
+      ...(enabled ? this.outageChange(false, true) : {}),
+    });
+  }
+
+  latestOutage(): LocalRelayOutage | null {
+    const outage = this.state.outage;
+    if (!this.options.required || !outage) return null;
+    const since = Date.parse(outage.since);
+    if (!Number.isFinite(since)) return null;
+    const servingAgainAt = outage.servingAgainAt === null ? null : Date.parse(outage.servingAgainAt);
+    return {
+      since,
+      servingAgainAt: servingAgainAt === null || Number.isFinite(servingAgainAt) ? servingAgainAt : since,
+      planned: outage.planned,
+    };
+  }
+
+  /**
+   * Checks the local relay at once, between probes: a node whose control stream just ended asks, so an outage is
+   * known before the node's offline grace ends. Records only whether the relay serves; supervision and recovery keep
+   * their own probes.
+   */
+  confirmLocalRelay(): Promise<void> {
+    if (!this.options.required || !this.relayClient || this.stopping || this.inMaintenance()) return Promise.resolve();
+    const confirming =
+      this.confirming ??
+      this.checkRelay()
+        .then(async (result) => {
+          if (this.stopping || this.inMaintenance()) return;
+          if (result.healthy) await this.recordServing(true);
+          else if (OFFLINE_REASONS.includes(result.reason)) await this.recordServing(false);
+        })
+        .catch((error) => {
+          logger.debug('Local relay check failed', { error: error instanceof Error ? error.message : String(error) });
+        })
+        .finally(() => {
+          this.confirming = null;
+        });
+    this.confirming = confirming;
+    return confirming;
+  }
+
+  private describeOutage() {
+    const outage = this.latestOutage();
+    const phase = localRelayOutagePhase(outage, this.now());
+    if (!outage || !phase) return null;
+    return {
+      phase,
+      since: new Date(outage.since).toISOString(),
+      servingAgainAt: outage.servingAgainAt === null ? null : new Date(outage.servingAgainAt).toISOString(),
+      planned: outage.planned,
+    };
+  }
+
+  /**
+   * The outage record after the relay was seen serving or not: a relay that stops serving opens an outage unless one
+   * is open already (a new one starts when the last one had ended), and the first time it serves again closes it.
+   */
+  private outageChange(serving: boolean, planned = false): Partial<Pick<RelaySupervisorState, 'outage'>> {
+    const outage = this.state.outage ?? null;
+    const now = new Date(this.now()).toISOString();
+    if (serving) {
+      return outage && outage.servingAgainAt === null ? { outage: { ...outage, servingAgainAt: now } } : {};
+    }
+    return !outage || outage.servingAgainAt !== null ? { outage: { since: now, servingAgainAt: null, planned } } : {};
+  }
+
+  private async recordServing(serving: boolean): Promise<void> {
+    const change = this.outageChange(serving);
+    if (change.outage === undefined) return;
+    this.state = { ...this.state, ...change };
+    await this.persistAndPublish();
+    if (serving) logger.info('Gateway relay serves again; nodes and relays get a reconnect grace');
+    else logger.warn('Gateway relay does not serve; node and relay control streams through it are reconnecting');
   }
 
   setExpectedArtifact(imageRef: string, buildVersion: string, protocolMajor: number): void {
@@ -813,6 +901,7 @@ export class RelaySupervisorService {
   }
 
   private async transition(update: Partial<RelaySupervisorState>): Promise<void> {
+    if (update.state === 'healthy') update = { ...update, ...this.outageChange(true) };
     const changed = Object.entries(update).some(
       ([key, value]) => this.state[key as keyof RelaySupervisorState] !== value
     );

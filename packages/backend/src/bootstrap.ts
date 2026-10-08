@@ -1958,6 +1958,18 @@ export async function initializeContainer(): Promise<void> {
   );
   relaySupervisor.setAvailabilityLeaseSink(availabilityLeaseService);
   container.registerInstance(RelaySupervisorService, relaySupervisor);
+  // Node and remote relay control streams run through the local relay: its outages are not theirs.
+  nodeRegistry.setLocalRelayOutage(relaySupervisor);
+  nodeRegistry.setDisconnectAudit(async (nodeId, details) => {
+    await auditService.log({
+      userId: null,
+      action: 'node.disconnected',
+      resourceType: 'node',
+      resourceId: nodeId,
+      details,
+    });
+  });
+  relayPoolService?.setLocalRelayOutage(relaySupervisor, nodeRegistry);
 
   // Update service
   const updateService = new UpdateService(

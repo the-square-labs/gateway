@@ -507,6 +507,7 @@ If Dashboard shows the red **Gateway relay is unavailable** state:
 - Allow the bounded automatic recovery attempts to finish or use **View details** to inspect the safe diagnostic reason.
 - If recovery remains critical, verify the `relay` Compose service, its identity volume, PostgreSQL reachability, and the independently pinned relay image. Do not bypass the relay by publishing another port or moving `9443/tcp` back to `app`.
 - The red state means managed-node and private managed-database tunnel traffic is unavailable. Existing database sessions survive a PostgreSQL outage after establishment, but new opens fail closed until authorization can be checked.
+- Nodes and remote relays reach Gateway through this relay, so while it restarts (a crash, automatic recovery, an update, a manual restart) they show as reconnecting, not offline, and Gateway sends no offline alerts for them. **Settings > Relay** shows the pool as `local relay restarting`, then `nodes reconnecting` until they are back. A node still away 2 minutes after the relay serves again is marked offline then and alerts as usual.
 
 If OAuth or OIDC fails:
 

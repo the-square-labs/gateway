@@ -32,11 +32,20 @@ export function nodeCapacityWarnings(health: NodeCapacityHealth | null | undefin
 
 const NODE_FLAP_WINDOW_MS = 5 * 60 * 1000;
 
-/** An online node that went offline or degraded in the last five minutes shows as degraded. */
+/**
+ * An online node that went offline or degraded in the last five minutes shows as degraded. One
+ * away only because the local relay restarts (`reconnecting`) shows as reconnecting, which is not
+ * a failure of its own.
+ */
 export function effectiveNodeStatus(
-  node: { status: string; healthHistory?: ReadonlyArray<{ ts: string; status: string }> | null },
+  node: {
+    status: string;
+    healthHistory?: ReadonlyArray<{ ts: string; status: string }> | null;
+    reconnecting?: boolean;
+  },
   now = Date.now()
 ): string {
+  if (node.status === "online" && node.reconnecting) return "reconnecting";
   if (node.status !== "online" || !node.healthHistory?.length) return node.status;
   const since = now - NODE_FLAP_WINDOW_MS;
   const recent = node.healthHistory.filter(

@@ -15,6 +15,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import type { DockerRuntimeStatus } from '@/modules/docker/docker.schemas.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import { type LocalRelayOutageSignal, localRelayOutageWaitMs } from '@/services/local-relay-outage.js';
 import { NodeOfflineDebounce } from '@/services/node-offline-debounce.js';
 
 const logger = createChildLogger('NodeRegistry');
@@ -109,6 +110,12 @@ export class NodeRegistryService {
   private readonly offlineDebounce: NodeOfflineDebounce;
   /** When the control server started taking node connections; null until it does. */
   private acceptingConnectionsSince: number | null = null;
+  private localRelayOutage?: LocalRelayOutageSignal;
+  private disconnectAudit?: (nodeId: string, details: Record<string, unknown>) => Promise<void>;
+  /** `node.disconnected` audit rows held back while the local relay restarts; see holdDisconnectAudit. */
+  private readonly heldDisconnectAudits = new Map<string, Record<string, unknown>>();
+  /** Nodes whose offline decision waits for the local relay, so the wait is logged once. */
+  private readonly awaitingLocalRelay = new Set<string>();
 
   constructor(
     private db: DrizzleClient,
@@ -125,6 +132,16 @@ export class NodeRegistryService {
 
   setEvaluator(evaluator: NotificationEvaluatorService) {
     this.evaluator = evaluator;
+  }
+
+  /** The local relay's outages: a node that dropped with it is reconnecting, not offline (local-relay-outage). */
+  setLocalRelayOutage(signal: LocalRelayOutageSignal) {
+    this.localRelayOutage = signal;
+  }
+
+  /** Writes a held-back `node.disconnected` audit row; see holdDisconnectAudit. */
+  setDisconnectAudit(write: (nodeId: string, details: Record<string, unknown>) => Promise<void>) {
+    this.disconnectAudit = write;
   }
 
   setNodeUpdateInProgress(nodeId: string, updating: boolean): void {
@@ -349,6 +366,9 @@ export class NodeRegistryService {
     if (this.offlineDebounce.cancel(nodeId)) {
       logger.info('Node reconnected before its offline grace elapsed', { nodeId, hostname });
     }
+    // Back while the local relay restarted or right after: its drop is not recorded at all.
+    this.heldDisconnectAudits.delete(nodeId);
+    this.awaitingLocalRelay.delete(nodeId);
     logger.info('Node registered', { nodeId, type, hostname });
     this.observeNodeState(nodeId, 'online', hostname);
   }
@@ -371,24 +391,99 @@ export class NodeRegistryService {
         nodeId,
         graceMs: this.offlineDebounce.delayMs,
       });
+      // Every control stream runs through the local relay: whether it went down is known before this grace ends.
+      void this.localRelayOutage?.confirmLocalRelay();
       this.offlineDebounce.schedule(
         nodeId,
-        () => this.markDisconnectedOffline(nodeId, node.hostname),
-        (error) =>
-          logger.warn('Failed to mark disconnected node offline', {
-            nodeId,
-            error: error instanceof Error ? error.message : String(error),
-          })
+        () => this.settleDisconnect(nodeId, node.hostname),
+        this.offlineFailureLogger(nodeId)
       );
       return;
     }
     this.offlineDebounce.cancel(nodeId);
+    this.awaitingLocalRelay.delete(nodeId);
     await this.markDisconnectedOffline(nodeId, node.hostname);
+  }
+
+  private offlineFailureLogger(nodeId: string) {
+    return (error: unknown) =>
+      logger.warn('Failed to mark disconnected node offline', {
+        nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+  }
+
+  /** How long a node that dropped stays reconnecting because of the local relay; null when no outage covers it. */
+  private localRelayWaitMs(now = Date.now()): number | null {
+    return localRelayOutageWaitMs(this.localRelayOutage?.latestOutage(), now);
+  }
+
+  /**
+   * Ends a node's offline grace. A node still away while the local relay does not serve, or within the reconnect grace
+   * after it serves again, keeps waiting: its stream ended with the relay, not with the node. One still away after
+   * that is marked offline like any other, its alerts only later.
+   */
+  private async settleDisconnect(nodeId: string, hostname: string): Promise<void> {
+    if (this.nodes.has(nodeId)) return;
+    let waitMs = this.localRelayWaitMs();
+    if (waitMs === null && this.localRelayOutage) {
+      // The supervisor probes every few seconds: look at the relay itself before calling the node offline.
+      await this.localRelayOutage.confirmLocalRelay();
+      waitMs = this.localRelayWaitMs();
+    }
+    if (waitMs !== null && !this.nodes.has(nodeId)) {
+      if (!this.awaitingLocalRelay.has(nodeId)) {
+        this.awaitingLocalRelay.add(nodeId);
+        logger.info('Node is away while the local relay restarts; it counts as reconnecting', { nodeId, hostname });
+      }
+      this.offlineDebounce.schedule(
+        nodeId,
+        () => this.settleDisconnect(nodeId, hostname),
+        this.offlineFailureLogger(nodeId),
+        waitMs
+      );
+      return;
+    }
+    if (this.awaitingLocalRelay.delete(nodeId)) {
+      logger.warn('Node did not come back after the local relay restarted; marking it offline', { nodeId, hostname });
+    }
+    await this.markDisconnectedOffline(nodeId, hostname);
+  }
+
+  /**
+   * Whether the `node.disconnected` audit row of a stream that just ended is held back: while the local relay does not
+   * serve (or nodes are within the reconnect grace after it), every node drops at once, and a row per node would read
+   * as the whole fleet failing. A held row is written once the node is judged offline, never when it comes back. The
+   * relay is checked first, since its probe may not have seen the outage yet.
+   */
+  async holdDisconnectAudit(nodeId: string, details: Record<string, unknown>): Promise<boolean> {
+    if (!this.localRelayOutage || !this.disconnectAudit) return false;
+    if (this.localRelayWaitMs() === null) {
+      await this.localRelayOutage.confirmLocalRelay();
+      if (this.localRelayWaitMs() === null) return false;
+    }
+    if (this.nodes.has(nodeId)) return true;
+    this.heldDisconnectAudits.set(nodeId, { ...details, disconnectedAt: new Date().toISOString() });
+    return true;
+  }
+
+  /** Writes the audit row held back for a node that did not come back; see holdDisconnectAudit. */
+  private async releaseHeldDisconnectAudit(nodeId: string): Promise<void> {
+    const details = this.heldDisconnectAudits.get(nodeId);
+    if (!details) return;
+    this.heldDisconnectAudits.delete(nodeId);
+    await this.disconnectAudit?.(nodeId, details).catch((error) =>
+      logger.warn('Failed to record a node stream disconnect', {
+        nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
   }
 
   private async markDisconnectedOffline(nodeId: string, hostname: string): Promise<void> {
     // A replacement stream registered meanwhile: the node never went offline.
     if (this.nodes.has(nodeId)) return;
+    await this.releaseHeldDisconnectAudit(nodeId);
     const [dbNode] = await this.db
       .select({ metadata: nodes.metadata })
       .from(nodes)
@@ -433,25 +528,37 @@ export class NodeRegistryService {
 
   /**
    * The node is not connected but is expected back: its stream closed moments ago and it is still inside the
-   * reconnect grace, or Gateway itself started moments ago and the node has not reconnected to it yet.
+   * reconnect grace, the local relay every stream runs through restarts (or restarted moments ago), or Gateway itself
+   * started moments ago and the node has not reconnected to it yet.
    */
   isReconnecting(nodeId: string, now = Date.now()): boolean {
     if (this.nodes.has(nodeId)) return false;
     if (this.offlineDebounce.isPending(nodeId)) return true;
+    // While the local relay restarts every node is expected back, also one that never reached this process yet.
+    if (this.localRelayWaitMs(now) !== null) return true;
     return (
       this.acceptingConnectionsSince === null || now - this.acceptingConnectionsSince < NODE_STARTUP_RECONNECT_GRACE_MS
     );
   }
 
   /**
+   * The node is not connected while the local relay does not serve, or served again moments ago. Callers ask this of
+   * nodes still online in the database: their offline transition waits for the relay, so one offline there was gone
+   * before it.
+   */
+  isAwaitingLocalRelay(nodeId: string, now = Date.now()): boolean {
+    return !this.nodes.has(nodeId) && this.localRelayWaitMs(now) !== null;
+  }
+
+  /**
    * Marks a node that is still disconnected offline once its daemon update stopped covering it, with the health
-   * history entry, event and alert of an ordinary disconnect.
+   * history entry, event and alert of an ordinary disconnect. While the local relay restarts it waits like any drop.
    */
   async markOfflineAfterUpdate(nodeId: string): Promise<void> {
     if (this.nodes.has(nodeId)) return;
     const [row] = await this.db.select({ hostname: nodes.hostname }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!row) return;
-    await this.markDisconnectedOffline(nodeId, row.hostname);
+    await this.settleDisconnect(nodeId, row.hostname);
   }
 
   hasCapability(nodeId: string, capability: string): boolean {
@@ -747,6 +854,8 @@ export class NodeRegistryService {
   /** Mark nodes as offline if they haven't been seen recently */
   async markStaleNodesOffline(staleThresholdMs = 90000): Promise<void> {
     const now = Date.now();
+    // Nodes stop reporting while the local relay does not serve; they are judged once its reconnect grace is over.
+    if (this.localRelayWaitMs(now) !== null) return;
     const connectedIds = this.getConnectedNodeIds();
 
     // For nodes that are in the DB as 'online' but not in our connected set
@@ -758,6 +867,8 @@ export class NodeRegistryService {
 
     for (const dbNode of dbOnlineNodes) {
       if (this.isNodeUpdateProtected(dbNode.id, dbNode.metadata)) continue;
+      // Its own offline grace settles a node whose stream ended in this process.
+      if (this.offlineDebounce.isPending(dbNode.id)) continue;
       if (!connectedIds.includes(dbNode.id)) {
         const lastSeen = dbNode.lastSeenAt?.getTime() ?? 0;
         if (now - lastSeen > staleThresholdMs) {

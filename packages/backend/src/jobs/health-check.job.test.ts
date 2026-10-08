@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { withMemberIngressHealth } from '@/modules/proxy/proxy-group-health.js';
 import { HealthCheckJob } from './health-check.job.js';
 
 function setup() {
@@ -98,5 +99,40 @@ describe('route health job: absorbed failures', () => {
     expect((t.job as any).relayUnavailable).toBe(true);
     emit({ state: 'healthy' });
     expect((t.job as any).relayUnavailable).toBe(false);
+  });
+});
+
+// A local relay restart drops every node's control stream at once (O-b): a route must not go offline or degraded
+// because its ingress members are reconnecting.
+describe('route health job: ingress members that reconnect', () => {
+  it('records no sample while every member is expected back, and still judges one that is gone', async () => {
+    const reconnecting = new Set(['ingress-1']);
+    const dispatch = { isNodeConnected: () => false, isNodeReconnecting: (id: string) => reconnecting.has(id) };
+    const job = new HealthCheckJob({} as never, dispatch as never);
+    // Past the startup grace, which defers every probe of a node that is not connected.
+    (job as any).startedAt = Date.now() - 10 * 60_000;
+    const host = { id: 'route-1', upstreamKind: 'pages', ingressGroupId: 'group-1', nodeId: null };
+    const check = (members: string[]) => (job as any).checkHost(host, undefined, members);
+
+    expect((await check(['ingress-1'])).status).toBe('deferred');
+    expect((await check(['ingress-1', 'ingress-2'])).status).toBe('offline');
+  });
+
+  it('keeps a route probed from Gateway online while its members reconnect', () => {
+    const member = (nodeId: string, extra: { connected: boolean; reconnecting?: boolean }) => ({
+      nodeId,
+      serving: null,
+      ...extra,
+    });
+    expect(withMemberIngressHealth('online', [member('ingress-1', { connected: false, reconnecting: true })])).toEqual(
+      expect.objectContaining({ status: 'deferred' })
+    );
+    expect(
+      withMemberIngressHealth('online', [
+        member('ingress-1', { connected: false, reconnecting: true }),
+        member('ingress-2', { connected: true }),
+      ]).status
+    ).toBe('online');
+    expect(withMemberIngressHealth('online', [member('ingress-1', { connected: false })]).status).toBe('offline');
   });
 });

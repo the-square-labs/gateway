@@ -300,8 +300,10 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
     {
       category: 'gateway',
       eventId: 'relay.unavailable',
-      // A revocation report concerns one relay instance, not the Gateway relay's availability.
-      match: (p) => p.action !== 'revocation_fence',
+      // Only the relay supervisor's own reports carry its state. A revocation report concerns one relay instance, and
+      // pool and relay runtime events say nothing of the Gateway relay: read as healthy, they resolved its alert
+      // during a local relay outage.
+      match: (p) => p.action !== 'revocation_fence' && typeof p.state === 'string',
       extractResource: () => ({ type: 'gateway', id: 'gateway-relay', name: 'Gateway relay' }),
       extractData: (p) => ({ failure_code: p.reason ?? null, attempt: p.attempt ?? 0 }),
       stateful: {

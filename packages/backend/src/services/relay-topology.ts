@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { relayInstances } from '@/db/schema/index.js';
+import { type LocalRelayOutage, upWhenLocalRelayWentDown } from './local-relay-outage.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
 
@@ -286,7 +287,8 @@ export function samePlannedAssignments(
 /**
  * A remote relay whose control stream ended stays in placement this long, where it already serves:
  * otherwise a control stream that drops and comes back moves every endpoint twice, through two
- * generations. Its data plane is judged apart (relayDataPlaneFailures).
+ * generations. Its data plane is judged apart (relayDataPlaneFailures). The time the local relay
+ * does not serve does not count (disconnectGraceStart).
  */
 export const RELAY_DISCONNECT_GRACE_MS = 3 * 60_000;
 /** A daemon that failed to reach a relay this long (failingMs) reports its data plane failing. */
@@ -339,14 +341,29 @@ export function parseNodeRelayReachability(value: unknown): NodeRelayReachabilit
 }
 
 /**
+ * When a remote relay's disconnect grace starts: when it was last seen, or, for a relay that was up
+ * when the local relay went down, once the local relay serves again. Every remote relay reaches
+ * Gateway through the local relay, so its control stream ends with it; that time is not its own.
+ */
+export function disconnectGraceStart(
+  lastSeenAt: number,
+  outage: LocalRelayOutage | null | undefined,
+  now: number
+): number {
+  if (!outage || !upWhenLocalRelayWentDown(lastSeenAt, outage)) return lastSeenAt;
+  return Math.max(lastSeenAt, outage.servingAgainAt ?? now);
+}
+
+/**
  * Whether a relay counts as serving for placement although its control stream ended: a remote
- * relay last seen ready (not drained by an operator) within RELAY_DISCONNECT_GRACE_MS whose data
- * plane is not known to fail.
+ * relay last seen ready (not drained by an operator) within RELAY_DISCONNECT_GRACE_MS, not
+ * counting a local relay outage (`outage`), whose data plane is not known to fail.
  */
 export function inDisconnectGrace(
   instance: Pick<RelayInstanceRow, 'id' | 'kind' | 'state' | 'manualDrainStartedAt' | 'lastSeenAt' | 'health'>,
   now: number,
-  failing: ReadonlySet<string>
+  failing: ReadonlySet<string>,
+  outage?: LocalRelayOutage | null
 ): boolean {
   return (
     instance.kind === 'remote' &&
@@ -354,7 +371,7 @@ export function inDisconnectGrace(
     !instance.manualDrainStartedAt &&
     instance.health?.admissionState === 'ready' &&
     Boolean(instance.lastSeenAt) &&
-    now - instance.lastSeenAt!.getTime() < RELAY_DISCONNECT_GRACE_MS &&
+    now - disconnectGraceStart(instance.lastSeenAt!.getTime(), outage, now) < RELAY_DISCONNECT_GRACE_MS &&
     !failing.has(instance.id)
   );
 }

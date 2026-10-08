@@ -170,6 +170,8 @@ export interface Node {
   healthHistory?: Array<{ ts: string; status: string }>;
   metadata: Record<string, unknown>;
   isConnected: boolean;
+  /** Away only because the local relay restarts, or restarted moments ago; not its own failure. */
+  reconnecting?: boolean;
   folderId?: string | null;
   sortOrder?: number;
   createdAt: string;

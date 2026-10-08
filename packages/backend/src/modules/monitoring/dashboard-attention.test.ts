@@ -85,8 +85,16 @@ describe('dashboard attention parity with the Dashboard', () => {
     expect(frontend.nodeCapacityWarnings(report)).toEqual(nodeCapacityWarnings(report));
   });
 
-  const NODE_CASES: Array<[string, { status: string; healthHistory?: Array<{ ts: string; status: string }> }]> = [
+  const NODE_CASES: Array<
+    [string, { status: string; healthHistory?: Array<{ ts: string; status: string }>; reconnecting?: boolean }]
+  > = [
     ['online', { status: 'online' }],
+    // Away while the local relay restarts: shown, but neither a warning nor the dot.
+    ['online, reconnecting', { status: 'online', reconnecting: true }],
+    [
+      'online, reconnecting after a flap',
+      { status: 'online', reconnecting: true, healthHistory: [{ ts: minutesAgo(4), status: 'offline' }] },
+    ],
     ['online, clean history', { status: 'online', healthHistory: [{ ts: minutesAgo(1), status: 'online' }] }],
     ['online, flapped 4 min ago', { status: 'online', healthHistory: [{ ts: minutesAgo(4), status: 'offline' }] }],
     ['online, degraded 2 min ago', { status: 'online', healthHistory: [{ ts: minutesAgo(2), status: 'degraded' }] }],

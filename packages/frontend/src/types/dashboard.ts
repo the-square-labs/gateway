@@ -54,7 +54,22 @@ export type RelayLifecycleState =
   | "critical"
   | "unavailable"
   | "rebalancing"
-  | "rebalance_available";
+  | "rebalance_available"
+  | "local_relay_restarting";
+
+/**
+ * The local relay does not serve (`restarting`), or serves again while nodes and relays that
+ * dropped with it are still coming back (`reconnecting`). Their control streams run through it,
+ * so none of them failed.
+ */
+export interface RelayLocalOutage {
+  phase: "restarting" | "reconnecting";
+  since: string;
+  servingAgainAt: string | null;
+  planned: boolean;
+  reconnectingNodes?: number;
+  reconnectingRelays?: number;
+}
 
 export interface DashboardRelaySnapshot {
   state: RelayLifecycleState;
@@ -92,6 +107,10 @@ export interface DashboardRelaySnapshot {
   expectedImage?: string | null;
   expectedVersion?: string | null;
   canRetry?: boolean;
+  /** The local relay's own view of its last outage, while it lasts. */
+  outage?: RelayLocalOutage | null;
+  /** The pool's view: the outage with the nodes and relays still coming back. */
+  localRelayOutage?: RelayLocalOutage | null;
   poolId?: string;
   rebalanceAvailable?: boolean;
   worstPressurePercent?: number;
@@ -170,6 +189,8 @@ export interface DashboardRelayInstance {
   certificate?: RelayCertificateStatus | null;
   /** Route revocations this relay has not applied; null when it holds none. */
   revocation?: RelayRevocationStatus | null;
+  /** Its control stream ended with the local relay and has not come back yet. */
+  reconnecting?: boolean;
 }
 
 /**

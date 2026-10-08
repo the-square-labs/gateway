@@ -49,15 +49,21 @@ export function aggregateMemberOutcomes(outcomes: readonly MemberProbeOutcome[])
 
 /**
  * A direct upstream is probed once from Gateway; the route still depends on every member serving it. A member that
- * is disconnected or whose ingress health endpoint reports it is not serving makes an `online` route `degraded`.
+ * is disconnected or whose ingress health endpoint reports it is not serving makes an `online` route `degraded`. A
+ * disconnected member expected back (`reconnecting`: its stream just closed, or the local relay restarts) is not
+ * judged yet.
  */
 export function withMemberIngressHealth(
   status: 'online' | 'offline',
-  members: ReadonlyArray<{ nodeId: string; connected: boolean; serving: boolean | null }>
+  members: ReadonlyArray<{ nodeId: string; connected: boolean; serving: boolean | null; reconnecting?: boolean }>
 ): GroupRouteHealth {
   const outcomes = members.map((member) => ({
     nodeId: member.nodeId,
-    status: (member.connected && member.serving !== false ? status : 'offline') as MemberProbeStatus,
+    status: (!member.connected && member.reconnecting
+      ? 'deferred'
+      : member.connected && member.serving !== false
+        ? status
+        : 'offline') as MemberProbeStatus,
     ...(!member.connected
       ? { error: 'The ingress node is not connected' }
       : member.serving === false

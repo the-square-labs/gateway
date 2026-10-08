@@ -177,7 +177,7 @@ export function classifyDockerLeaseNode(input: {
 /** Relays, docker and nginx daemons with what the lease needs to know about each. */
 export async function loadLeaseParticipants(
   db: DrizzleClient,
-  registry: Pick<NodeRegistryService, 'getNode'>,
+  registry: Pick<NodeRegistryService, 'getNode'> & Partial<Pick<NodeRegistryService, 'isAwaitingLocalRelay'>>,
   members: Map<string, LeaseMemberRow>,
   now = Date.now()
 ): Promise<LeaseParticipants> {
@@ -204,6 +204,7 @@ export async function loadLeaseParticipants(
         capabilities: nodes.capabilities,
         lastHealthReport: nodes.lastHealthReport,
         lastSeenAt: nodes.lastSeenAt,
+        status: nodes.status,
       })
       .from(nodes)
       .where(inArray(nodes.type, ['docker', 'nginx'])),
@@ -250,8 +251,12 @@ export async function loadLeaseParticipants(
     const protocol = leaseProtocolOf(has);
     const kind = node.type === 'nginx' ? ('nginx' as const) : ('docker' as const);
     latencies.set(node.id, relayLatencies(connected?.lastHealthReport ?? node.lastHealthReport));
+    // Online, and away only because the local relay does not serve: not offline, however long that lasts.
+    const awaitingLocalRelay = node.status === 'online' && Boolean(registry.isAwaitingLocalRelay?.(node.id, now));
     const offlineLong =
-      !connected && (node.lastSeenAt === null || now - node.lastSeenAt.getTime() >= VOTER_OFFLINE_REPLACE_MS);
+      !connected &&
+      !awaitingLocalRelay &&
+      (node.lastSeenAt === null || now - node.lastSeenAt.getTime() >= VOTER_OFFLINE_REPLACE_MS);
     const voterCapable = kind === 'docker' && protocol === 'v2' && Boolean(member?.identityPublicKey) && !offlineLong;
     const exclusion =
       kind === 'docker' ? classifyDockerLeaseNode({ connected: Boolean(connected), has, member, now }) : null;

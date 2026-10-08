@@ -52,6 +52,7 @@ import type {
   AuthProvisioningSettings,
   DashboardRelayInstance,
   DashboardRelaySnapshot,
+  RelayLocalOutage,
   RelayReenrollment,
   RelayRevocationStatus,
 } from "@/types";
@@ -112,15 +113,32 @@ function activeUpdateStep(instance: DashboardRelayInstance): string | null {
     : null;
 }
 
-/** Remote relays that need, or may need, a fresh enrollment to recover. */
+/**
+ * Remote relays that need, or may need, a fresh enrollment to recover. Not one that only waits for
+ * the local relay to come back.
+ */
 function canReenroll(instance: DashboardRelayInstance): boolean {
   return (
     instance.kind === "remote" &&
     Boolean(instance.nodeId) &&
     (instance.policyTrust?.state === "reenrollment_required" ||
       instance.certificate?.state === "expired" ||
-      ["synchronizing", "offline", "error"].includes(instance.state))
+      (["synchronizing", "offline", "error"].includes(instance.state) && !instance.reconnecting))
   );
+}
+
+/** The pool state while the local relay restarts: what is still going on, in plain words. */
+function localRelayOutageLabel(outage: RelayLocalOutage | null | undefined): string {
+  return outage?.phase === "reconnecting" ? "nodes reconnecting" : "local relay restarting";
+}
+
+/** How many nodes and relays are still coming back after the local relay restarted. */
+function localRelayOutageDetail(outage: RelayLocalOutage | null | undefined): string | undefined {
+  if (!outage) return undefined;
+  const count = (value: number | undefined, noun: string) =>
+    `${value ?? 0} ${noun}${value === 1 ? "" : "s"}`;
+  const nodes = count(outage.reconnectingNodes, "node");
+  return `Reconnecting: ${nodes}, ${count(outage.reconnectingRelays, "relay")}`;
 }
 
 /** Which revoked routes a relay still holds, from the counts the pool status reports. */
@@ -564,12 +582,12 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 variant={
                   row.state === "ready" && !policyExpired
                     ? "success"
-                    : row.state === "draining" || row.state === "synchronizing"
+                    : row.state === "draining" || row.state === "synchronizing" || row.reconnecting
                       ? "warning"
                       : "destructive"
                 }
               >
-                {policyExpired ? "policy expired" : row.state}
+                {policyExpired ? "policy expired" : row.reconnecting ? "reconnecting" : row.state}
               </Badge>
             )}
             {row.updateStep?.state === "draining" && row.updateStep.drainDeadlineAt && (
@@ -750,14 +768,23 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
               ? "warning"
               : healthy
                 ? "success"
-                : status?.state === "recovering" || status?.state === "degraded"
+                : status?.state === "recovering" ||
+                    status?.state === "degraded" ||
+                    status?.state === "local_relay_restarting"
                   ? "warning"
                   : "destructive"
+          }
+          title={
+            status?.state === "local_relay_restarting"
+              ? localRelayOutageDetail(status.localRelayOutage)
+              : undefined
           }
         >
           {status?.update?.state === "updating"
             ? `updating to ${status.update.targetVersion}`
-            : (status?.state ?? "unavailable")}
+            : status?.state === "local_relay_restarting"
+              ? localRelayOutageLabel(status.localRelayOutage)
+              : (status?.state ?? "unavailable")}
         </Badge>
         <Badge variant="secondary">build {status?.relayBuildVersion ?? "unknown"}</Badge>
         <Badge variant="secondary">protocol v{status?.protocolMajor ?? "-"}</Badge>
