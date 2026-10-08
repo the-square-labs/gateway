@@ -75,6 +75,8 @@ describe("Add Access", () => {
       ],
     });
     expect(screen.getByText("Works as Deployer: you are Deployer in billing")).toBeInTheDocument();
+    // The count is what the token keeps: the owner's two scopes, not the line as entered.
+    expect(screen.getByRole("button", { name: "Review 2 scopes" })).toBeInTheDocument();
   });
 });
 

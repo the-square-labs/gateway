@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { canonicalizeScopeSelection } from "@/lib/scope-utils";
 import { type AccessCatalog, useAccessCatalog } from "./access-catalog";
 import {
   type AccessLine,
   describeLine,
+  linesAddingNothing,
   linesToScopes,
   narrowedNote,
   scopesToLines,
+  tokenStoredScopes,
 } from "./access-model";
 
 /** Scopes a subject gets from elsewhere (a parent group, the user's groups): shown, not edited. */
@@ -22,7 +25,7 @@ export interface AccessLineView {
   detail: string;
   /** The group the line comes from; such lines have no buttons. */
   from?: string;
-  /** What a line wider than the token owner's access really does. */
+  /** What a line wider than the token owner's access really does, or that it adds nothing. */
   note?: string;
   /** Index in the own lines, for Edit and Remove. */
   index?: number;
@@ -32,7 +35,7 @@ export interface AccessEditor {
   catalog: AccessCatalog;
   /** The own lines, once the catalog is ready. */
   lines: AccessLine[];
-  /** The own lines' scopes: what saving stores. */
+  /** The own lines' scopes as Gateway stores them (for a token, bounded by its owner). */
   scopes: string[];
   /** The scopes differ from the ones the dialog opened with. */
   changed: boolean;
@@ -51,8 +54,13 @@ interface AccessEditorOptions {
   /** The subject's own stored scopes when the dialog opened. */
   scopes: readonly string[];
   inherited?: readonly InheritedAccess[];
-  /** A token's owner: lines wider than these scopes get a note on what they really do. */
+  /**
+   * A token's owner: lines wider than these scopes get a note on what they really do, and the
+   * token saves only the owner's part of them.
+   */
   ownerScopes?: readonly string[];
+  /** A token being created: Gateway adds the grants older scripts expect (`tokenStoredScopes`). */
+  newToken?: boolean;
 }
 
 /**
@@ -60,12 +68,14 @@ interface AccessEditorOptions {
  * names they need are loaded, edited as lines, and saved as the scopes they build.
  */
 const NO_INHERITED: readonly InheritedAccess[] = [];
+const ADDS_NOTHING = "Adds nothing: the other lines already give this access";
 
 export function useAccessEditor({
   open,
   scopes: initialScopes,
   inherited = NO_INHERITED,
   ownerScopes,
+  newToken = false,
 }: AccessEditorOptions): AccessEditor {
   const catalog = useAccessCatalog(open, [
     ...initialScopes,
@@ -73,7 +83,7 @@ export function useAccessEditor({
   ]);
   const { ctx, labels, ready } = catalog;
   const [lines, setLines] = useState<AccessLine[] | null>(null);
-  const initialKey = [...new Set(initialScopes)].sort().join("\n");
+  const initialKey = canonicalizeScopeSelection(initialScopes).join("\n");
 
   // Parse the stored scopes once per opening, when the folders they name are known.
   useEffect(() => {
@@ -86,19 +96,23 @@ export function useAccessEditor({
   }, [open, ready, ctx, initialKey]);
 
   const ownLines = useMemo(() => lines ?? [], [lines]);
-  const scopes = useMemo(
-    () => (lines ? linesToScopes(lines, ctx) : initialKey ? initialKey.split("\n") : []),
-    [ctx, initialKey, lines]
-  );
+  const scopes = useMemo(() => {
+    if (!lines) return initialKey ? initialKey.split("\n") : [];
+    const own = linesToScopes(lines, ctx);
+    return ownerScopes ? tokenStoredScopes(own, ownerScopes, ctx, { newToken }) : own;
+  }, [ctx, initialKey, lines, newToken, ownerScopes]);
   const changed = scopes.join("\n") !== initialKey;
 
   const views = useMemo<AccessLineView[]>(() => {
+    const addingNothing = linesAddingNothing(ownLines, ctx);
     const own = ownLines.map((line, index) => ({
       key: `own-${index}`,
       line,
       index,
       ...describeLine(line, labels),
-      note: ownerScopes ? (narrowedNote(line, ownerScopes, ctx, labels) ?? undefined) : undefined,
+      note:
+        (ownerScopes ? narrowedNote(line, ownerScopes, ctx, labels) : null) ??
+        (addingNothing[index] ? ADDS_NOTHING : undefined),
     }));
     const fromElsewhere = inherited.flatMap((item, itemIndex) =>
       (ready ? scopesToLines(item.scopes, ctx) : []).map((line, index) => ({

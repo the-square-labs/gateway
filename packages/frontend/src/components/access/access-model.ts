@@ -1,5 +1,5 @@
 import type { FolderFamily, FolderOption } from "@/components/common/scope-list-helpers";
-import { extractBaseScope, scopeMatches } from "@/lib/scope-utils";
+import { canonicalizeScopeSelection, extractBaseScope, scopeMatches } from "@/lib/scope-utils";
 import { TOKEN_SCOPES } from "@/types";
 import type { GitScopeProvider } from "@/types/integrations";
 import { IMPLIED_SCOPES_BY_REQUIRED_SCOPE } from "@/types/scope-implications";
@@ -439,9 +439,26 @@ export function lineScopes(line: AccessLine, ctx: AccessContext): string[] {
   );
 }
 
-/** Every line's scopes, each once, sorted. */
+/**
+ * The scopes the lines save as, sorted: Gateway keeps a broad scope and drops its folder- and
+ * resource-qualified forms ("Viewer everywhere" covers the view scopes of "Developer in folder
+ * orders"), so the count is what is stored.
+ */
 export function linesToScopes(lines: readonly AccessLine[], ctx: AccessContext): string[] {
-  return [...new Set(lines.flatMap((line) => lineScopes(line, ctx)))].sort();
+  return canonicalizeScopeSelection(lines.flatMap((line) => lineScopes(line, ctx)));
+}
+
+/** Per line: whether the other lines already give all of its access (saving drops it). */
+export function linesAddingNothing(lines: readonly AccessLine[], ctx: AccessContext): boolean[] {
+  const all = linesToScopes(lines, ctx).join("\n");
+  return lines.map(
+    (_, index) =>
+      lines.length > 1 &&
+      linesToScopes(
+        lines.filter((__, other) => other !== index),
+        ctx
+      ).join("\n") === all
+  );
 }
 
 /** A Docker qualifier without `/` is a whole node, never one resource. */
@@ -453,9 +470,18 @@ function isResourceQualifier(type: AccessType, qualifier: string) {
 
 interface TypeMatch {
   type: AccessType;
-  /** Roles whose scopes are exactly the largest set held here (several when their sets are equal). */
+  /**
+   * Roles whose scopes are exactly the largest set held here (several when their sets are equal);
+   * for a covered match, every role held here.
+   */
   roles: AccessRole[];
+  /** Delete is held here; for a covered match, whether it is held at all. */
   mayDelete: boolean;
+  /**
+   * Every scope of the type here comes through a broad stored scope: the type joins a line of
+   * this place, but never makes one of its own.
+   */
+  covered: boolean;
   /** For resource places: the resource. */
   id?: string;
 }
@@ -464,21 +490,37 @@ function sameScopes(a: readonly string[], b: readonly string[]) {
   return a.length === b.length && a.every((scope) => b.includes(scope));
 }
 
+/**
+ * The role a type holds in a place. A scope is held as stored, or, in a folder or on a resource,
+ * through its broad form: Gateway keeps `docker:containers:view` and drops
+ * `docker:containers:view:folder/<id>` and `docker:containers:view:<node>/<id>` (backend
+ * `canonicalizeScopes`; nothing else counts). A role matches only if it holds a scope as stored,
+ * so a line is never read out of broad scopes alone.
+ */
 function matchType(
   type: AccessType,
   place: Place,
   remaining: ReadonlySet<string>,
+  broad: ReadonlySet<string>,
   ctx: AccessContext
 ): TypeMatch | null {
-  const holds = (scope: string) => {
+  const stored = (scope: string) => {
     const qualified = qualify(scope, type, place, ctx);
     return qualified !== null && remaining.has(qualified);
   };
+  const holds = (scope: string) =>
+    stored(scope) ||
+    (place.kind !== "everywhere" && broad.has(scope) && qualify(scope, type, place, ctx) !== null);
+  const deleteHeld = type.delete.every(holds);
+  const deleteAdds = deleteHeld && type.delete.some(stored);
   let best: readonly string[] | null = null;
   let roles: AccessRole[] = [];
+  const held: AccessRole[] = [];
   for (const role of ROLE_IDS) {
     const scopes = roleScopesAt(type, role, place.kind);
     if (!scopes.every(holds)) continue;
+    held.push(role);
+    if (!scopes.some(stored) && !(roleCanDelete(role) && deleteAdds)) continue;
     if (!best || scopes.length > best.length) {
       best = scopes;
       roles = [role];
@@ -486,23 +528,30 @@ function matchType(
       roles.push(role);
     }
   }
-  if (!best) return null;
-  const deleting = roles.filter(roleCanDelete);
-  if (deleting.length > 0 && type.delete.every(holds)) {
-    return { type, roles: deleting, mayDelete: true };
+  if (!best) {
+    return held.length > 0 ? { type, roles: held, mayDelete: deleteHeld, covered: true } : null;
   }
-  return { type, roles, mayDelete: false };
+  const deleting = roles.filter(roleCanDelete);
+  if (deleting.length > 0 && deleteAdds) {
+    return { type, roles: deleting, mayDelete: true, covered: false };
+  }
+  return { type, roles, mayDelete: false, covered: false };
 }
 
 /**
  * Group matches into as few lines as possible: the role (and delete) shared by most matches goes
  * first; ties take the lower role, so equal scope sets read as the smallest role that grants them.
+ * Covered matches join a line whose role (and delete) they hold when that makes it cover all
+ * `available` types of the place, the way such a line is usually added; a line on some types
+ * stays as it is.
  */
 function groupMatches(
-  matches: TypeMatch[]
+  matches: TypeMatch[],
+  available = 0
 ): { role: AccessRole; mayDelete: boolean; matches: TypeMatch[] }[] {
   const groups: { role: AccessRole; mayDelete: boolean; matches: TypeMatch[] }[] = [];
-  let left = matches;
+  let left = matches.filter((match) => !match.covered);
+  let spare = matches.filter((match) => match.covered);
   while (left.length > 0) {
     let pick: { role: AccessRole; mayDelete: boolean; matches: TypeMatch[] } | null = null;
     for (const role of ROLE_IDS) {
@@ -516,7 +565,12 @@ function groupMatches(
     }
     if (!pick) break;
     const chosen = pick;
-    groups.push(chosen);
+    const holding = spare.filter(
+      (match) => match.roles.includes(chosen.role) && (!chosen.mayDelete || match.mayDelete)
+    );
+    const joining = chosen.matches.length + holding.length === available ? holding : [];
+    spare = spare.filter((match) => !joining.includes(match));
+    groups.push({ ...chosen, matches: [...chosen.matches, ...joining] });
     left = left.filter((match) => !chosen.matches.includes(match));
   }
   return groups;
@@ -529,10 +583,14 @@ function typeOrder(a: AccessTypeId, b: AccessTypeId) {
 /**
  * Stored scopes as lines, best effort and deterministic: roles everywhere, then per folder path,
  * then on single resources; Git levels per connector, group or repositories; whatever is left is
- * one "Custom scopes" line. `linesToScopes` of the result gives the same scopes back.
+ * one "Custom scopes" line. A folder or resource line counts the scopes a broad stored scope
+ * covers (see `matchType`). `linesToScopes` of the result gives the same scopes back, in the
+ * form Gateway stores them.
  */
 export function scopesToLines(scopes: readonly string[], ctx: AccessContext): AccessLine[] {
-  const remaining = new Set(scopes);
+  const canonical = canonicalizeScopeSelection(scopes);
+  const remaining = new Set(canonical);
+  const broad = new Set(canonical.filter((scope) => extractBaseScope(scope) === scope));
   const lines: AccessLine[] = [];
   const consume = (line: AccessLine) => {
     for (const scope of lineScopes(line, ctx)) remaining.delete(scope);
@@ -570,25 +628,30 @@ export function scopesToLines(scopes: readonly string[], ctx: AccessContext): Ac
   ];
   for (const place of places) {
     const matches = ACCESS_TYPES.flatMap((type) => {
-      const match = matchType(type, place, remaining, ctx);
+      const match = matchType(type, place, remaining, broad, ctx);
       return match ? [match] : [];
     });
-    for (const group of groupMatches(matches)) {
+    const available =
+      place.kind === "folder"
+        ? ACCESS_TYPE_IDS.length - typesWithoutFolder(ctx, place.path, ACCESS_TYPE_IDS).length
+        : ACCESS_TYPE_IDS.length;
+    for (const group of groupMatches(matches, available)) {
       consume({
         kind: "resources",
         role: group.role,
         mayDelete: group.mayDelete,
-        types: group.matches.map((match) => match.type.id),
+        types: group.matches.map((match) => match.type.id).sort(typeOrder),
         where:
           place.kind === "folder" ? { kind: "folder", path: place.path } : { kind: "everywhere" },
       });
     }
   }
 
+  // A resource joins a line only through a scope stored for it.
   const resourceMatches = resourcePlaces.flatMap((place) => {
     if (place.kind !== "resource") return [];
-    const match = matchType(accessType(place.type), place, remaining, ctx);
-    return match ? [{ ...match, id: place.id }] : [];
+    const match = matchType(accessType(place.type), place, remaining, broad, ctx);
+    return match && !match.covered ? [{ ...match, id: place.id }] : [];
   });
   for (const group of groupMatches(resourceMatches)) {
     const ids: Partial<Record<AccessTypeId, string[]>> = {};
@@ -866,6 +929,60 @@ export function boundAccessScopes(
     }
   }
   return [...bounded].sort();
+}
+
+/**
+ * What a new token gains for older scripts (backend `withDelegableCleanupAdditions`: migration
+ * 0200's `SCOPE_CLEANUP_MIGRATION_ADDITIONS` without the manual-approval scopes), when its owner
+ * holds them. A test keeps this table equal to the backend's.
+ */
+const NEW_TOKEN_ADDITIONS: Readonly<Record<string, readonly string[]>> = {
+  "pki:ca:create:root": ["pki:ca:edit"],
+  "integrations:github:view": ["integrations:github:repo:read"],
+  "integrations:github:manage": ["integrations:github:repo:read"],
+  "integrations:git:view": ["integrations:git:repo:read"],
+  "integrations:git:manage": ["integrations:git:repo:read"],
+  "docker:volumes:create": ["docker:volumes:edit"],
+};
+
+/** Backend `scopeCleanupAdditions` over NEW_TOKEN_ADDITIONS. */
+function newTokenAdditions(scope: string): string[] {
+  for (const [trigger, additions] of Object.entries(NEW_TOKEN_ADDITIONS)) {
+    if (scope === trigger) return [...additions];
+    if (!scope.startsWith(`${trigger}:`)) continue;
+    const qualifier = scope.slice(trigger.length + 1);
+    if (!qualifier || qualifier.startsWith("folder/") || qualifier.startsWith("node/")) return [];
+    return additions.map((addition) => `${addition}:${qualifier}`);
+  }
+  return [];
+}
+
+/**
+ * The scopes a token saves as: its lines' scopes the owner holds, a wider line narrowed to the
+ * owner's part (the backend refuses scopes the owner lacks), in stored form, and for a new token
+ * with the grants Gateway adds for older scripts.
+ */
+export function tokenStoredScopes(
+  scopes: readonly string[],
+  ownerScopes: readonly string[],
+  ctx: AccessContext,
+  { newToken = false }: { newToken?: boolean } = {}
+): string[] {
+  const holds = (scope: string) => principalHolds(ownerScopes, scope, ctx);
+  const held = scopes.filter(holds);
+  const heldSet = new Set(held);
+  const narrowed =
+    held.length === scopes.length
+      ? []
+      : boundAccessScopes(
+          scopes.filter((scope) => !heldSet.has(scope)),
+          ownerScopes,
+          ctx
+        ).filter(holds);
+  const kept = canonicalizeScopeSelection([...held, ...narrowed]);
+  if (!newToken) return kept;
+  const additions = kept.flatMap(newTokenAdditions).filter(holds);
+  return additions.length === 0 ? kept : canonicalizeScopeSelection([...kept, ...additions]);
 }
 
 function shortWhere(where: AccessWhere) {

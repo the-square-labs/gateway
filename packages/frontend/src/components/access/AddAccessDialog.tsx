@@ -44,6 +44,7 @@ import {
   narrowedNote,
   principalHolds,
   roleCanDelete,
+  tokenStoredScopes,
   typesText,
   typesWithoutFolder,
 } from "./access-model";
@@ -268,7 +269,7 @@ export type AccessGrantMode =
   /** A group or a user: the actor can only give what it holds; the backend refuses the rest. */
   | { kind: "grant"; actorScopes: readonly string[] }
   /** A token: a line wider than its owner works as the owner's access. */
-  | { kind: "token"; ownerScopes: readonly string[] };
+  | { kind: "token"; ownerScopes: readonly string[]; newToken?: boolean };
 
 interface AddAccessDialogProps {
   open: boolean;
@@ -363,6 +364,11 @@ export function AddAccessDialog({
     sortTypes(types.filter((type) => !missingFolderTypes.includes(type)))
   );
   const scopes = result ? lineScopes(result, ctx) : [];
+  // What the line saves as: on a token, the owner's part of it.
+  const savedScopes =
+    mode.kind === "token"
+      ? tokenStoredScopes(scopes, mode.ownerScopes, ctx, { newToken: mode.newToken })
+      : scopes;
   const note = (() => {
     if (!result) return null;
     if (mode.kind === "token") return narrowedNote(result, mode.ownerScopes, ctx, labels);
@@ -664,8 +670,8 @@ export function AddAccessDialog({
           {note ? <p className="text-xs text-warning-foreground">{note}</p> : null}
         </div>
         <AccessDialogFooter
-          scopeCount={scopes.length}
-          onReviewScopes={() => onReviewScopes(scopes)}
+          scopeCount={savedScopes.length}
+          onReviewScopes={() => onReviewScopes(savedScopes)}
         >
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel

@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AccessDialogFooter } from "@/components/access/AccessDialogFooter";
 import { AccessSection } from "@/components/access/AccessSection";
-import { boundAccessScopes, principalHolds } from "@/components/access/access-model";
 import { useAccessEditor } from "@/components/access/use-access-editor";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -85,24 +84,14 @@ export function ApiTokensSection({
     () => deriveAllowedResourceIdsByScope(userScopes),
     [userScopes]
   );
+  // A line wider than the owner's access saves as what it really does (its note says so), and
+  // the Review count is what the token keeps.
   const access = useAccessEditor({
     open: createDialogOpen,
     scopes: editingToken?.scopes ?? NO_SCOPES,
     ownerScopes: userScopes,
+    newToken: !editingToken,
   });
-  // A line wider than the owner's access is saved as what it really does (its note says so);
-  // the backend refuses token scopes its owner does not hold.
-  const finalTokenScopes = useMemo(() => {
-    const { ctx } = access.catalog;
-    const held = access.scopes.filter((scope) => principalHolds(userScopes, scope, ctx));
-    if (held.length === access.scopes.length) return access.scopes;
-    const narrowed = boundAccessScopes(
-      access.scopes.filter((scope) => !held.includes(scope)),
-      userScopes,
-      ctx
-    ).filter((scope) => principalHolds(userScopes, scope, ctx));
-    return [...new Set([...held, ...narrowed])].sort();
-  }, [access.catalog, access.scopes, userScopes]);
   const tokenScopesChanged = !!editingToken && access.changed;
   const registryAccessChanged = useMemo(
     () =>
@@ -116,7 +105,7 @@ export function ApiTokensSection({
   }, [editingToken, newTokenName, tokenScopesChanged, registryAccessChanged]);
   const selectedBaseScopes = new Set(parseScopesForForm(access.scopes).baseScopes);
   // A registry-only token (CI pushing images) needs no scopes.
-  const tokenHasGrants = finalTokenScopes.length > 0 || hasTokenRegistryAccess(registryAccess);
+  const tokenHasGrants = access.scopes.length > 0 || hasTokenRegistryAccess(registryAccess);
 
   const loadTokens = useCallback(async () => {
     try {
@@ -165,7 +154,7 @@ export function ApiTokensSection({
     try {
       await api.updateToken(editingToken.id, {
         ...(newTokenName.trim() !== editingToken.name ? { name: newTokenName.trim() } : {}),
-        ...(tokenScopesChanged ? { scopes: finalTokenScopes } : {}),
+        ...(tokenScopesChanged ? { scopes: access.scopes } : {}),
         ...(registryAccessChanged
           ? { registryAccess: finalRegistryAccess(registryAccess).access }
           : {}),
@@ -198,7 +187,7 @@ export function ApiTokensSection({
     try {
       const result = await api.createToken({
         name: newTokenName,
-        scopes: finalTokenScopes,
+        scopes: access.scopes,
         registryAccess: finalRegistryAccess(registryAccess).access,
       });
       setCreatedSecret(result.token);
@@ -336,7 +325,7 @@ export function ApiTokensSection({
               editor={access}
               subject={newTokenName.trim() || "this token"}
               description="Never more than you can do."
-              mode={{ kind: "token", ownerScopes: userScopes }}
+              mode={{ kind: "token", ownerScopes: userScopes, newToken: !editingToken }}
               scopesOpen={scopesOpen}
               onScopesOpenChange={setScopesOpen}
               picker={{

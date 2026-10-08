@@ -9,6 +9,14 @@ import {
 } from "@/types";
 import { FOLDER_CREATION_SCOPES, GIT_TARGET_SCOPES } from "@/types/scope-resource-restrictions";
 import {
+  extractBaseScope as backendBaseScope,
+  canonicalizeInboundScopes,
+  canonicalizeScopes,
+  MANUAL_APPROVAL_SCOPE_SET,
+  SCOPE_CLEANUP_MIGRATION_ADDITIONS,
+  scopeCleanupAdditions,
+} from "../../../../backend/src/lib/scopes";
+import {
   BUILTIN_GROUPS,
   OPERATOR_SCOPES,
   VIEWER_SCOPES,
@@ -24,9 +32,13 @@ import {
   GIT_LEVELS,
   gitLevelScopes,
   lineScopes,
+  linesAddingNothing,
   linesToScopes,
   narrowedNote,
+  principalHolds,
+  type ResourceAccessLine,
   scopesToLines,
+  tokenStoredScopes,
 } from "./access-model";
 
 const CONNECTOR = "0b8f2a8e-6f1c-4a57-9a51-3f9d7f1b2c01";
@@ -235,7 +247,8 @@ describe("lines and scopes", () => {
     for (let round = 0; round < 200; round += 1) {
       const scopes = pool.filter(() => random() < 0.3);
       const lines = scopesToLines(scopes, ctx);
-      expect(linesToScopes(lines, ctx)).toEqual(sorted(scopes));
+      // The scopes as Gateway stores them: a broad scope drops its qualified forms.
+      expect(linesToScopes(lines, ctx)).toEqual(canonicalizeScopes(scopes));
       expect(scopesToLines([...scopes].reverse(), ctx)).toEqual(lines);
     }
   });
@@ -285,6 +298,106 @@ describe("lines and scopes", () => {
   });
 });
 
+describe("overlapping lines after a save", () => {
+  const viewerEverywhere: ResourceAccessLine = {
+    kind: "resources",
+    role: "viewer",
+    types: ALL_TYPES,
+    where: { kind: "everywhere" },
+    mayDelete: false,
+  };
+  const deployerInBilling: ResourceAccessLine = {
+    kind: "resources",
+    role: "deployer",
+    types: ALL_TYPES.filter((type) => type !== "domains"),
+    where: { kind: "folder", path: "billing" },
+    mayDelete: false,
+  };
+  const overlapping: AccessLine[] = [
+    viewerEverywhere,
+    deployerInBilling,
+    {
+      kind: "resources",
+      role: "developer",
+      types: ALL_TYPES,
+      where: { kind: "folder", path: "orders" },
+      mayDelete: false,
+    },
+    {
+      kind: "resources",
+      role: "operator",
+      types: ["containers", "routes"],
+      where: { kind: "resources", ids: { containers: ["node-1/web"], routes: ["route-1"] } },
+      mayDelete: false,
+    },
+    {
+      kind: "git",
+      provider: "github",
+      connectorId: CONNECTOR,
+      repositories: { kind: "some", ids: ["1345854252"] },
+      level: "write",
+    },
+  ];
+  const entered = sorted(overlapping.flatMap((line) => lineScopes(line, ctx)));
+
+  it.each([
+    ["groups", canonicalizeScopes],
+    ["user additional permissions", canonicalizeInboundScopes],
+  ] as const)("keeps the lines of %s as the backend stores them", (_, store) => {
+    const stored = store(entered);
+    // The qualified view scopes go: "Viewer everywhere" covers them.
+    expect(stored.length).toBeLessThan(entered.length);
+    expect(stored).not.toContain("docker:containers:view:folder/docker-orders");
+    expect(stored).not.toContain("docker:containers:view:node-1/web");
+    expect(stored).not.toContain("proxy:view:route-1");
+    // The Review count is what is stored, and the stored scopes read back as the same lines.
+    expect(linesToScopes(overlapping, ctx)).toEqual(stored);
+    expect(scopesToLines(stored, ctx)).toEqual(overlapping);
+  });
+
+  it("reads a line on some types as it was added", () => {
+    const lines: AccessLine[] = [
+      viewerEverywhere,
+      { ...deployerInBilling, types: ["containers"] },
+      {
+        kind: "resources",
+        role: "developer",
+        types: ["routes", "databases"],
+        where: { kind: "folder", path: "orders" },
+        mayDelete: true,
+      },
+    ];
+    const stored = canonicalizeScopes(lines.flatMap((line) => lineScopes(line, ctx)));
+    expect(scopesToLines(stored, ctx)).toEqual(lines);
+  });
+
+  it("never reads a line out of broad scopes alone", () => {
+    expect(scopesToLines(["docker:containers:view", "proxy:view"], ctx)).toEqual([
+      { ...viewerEverywhere, types: ["containers", "routes"] },
+    ]);
+    // A qualified scope the broad one covers adds nothing: it is not stored, so it is no line.
+    expect(
+      scopesToLines(["docker:containers:view", "docker:containers:view:folder/docker-billing"], ctx)
+    ).toEqual([{ ...viewerEverywhere, types: ["containers"] }]);
+  });
+
+  it("marks a line the other lines already cover", () => {
+    const covered: AccessLine = {
+      kind: "resources",
+      role: "viewer",
+      types: ["containers"],
+      where: { kind: "folder", path: "billing" },
+      mayDelete: false,
+    };
+    expect(linesAddingNothing([viewerEverywhere, covered], ctx)).toEqual([false, true]);
+    expect(linesAddingNothing(overlapping, ctx)).toEqual(overlapping.map(() => false));
+    expect(linesAddingNothing([covered], ctx)).toEqual([false]);
+    expect(scopesToLines(linesToScopes([viewerEverywhere, covered], ctx), ctx)).toEqual([
+      viewerEverywhere,
+    ]);
+  });
+});
+
 describe("token narrowing", () => {
   const developerInBilling: AccessLine = {
     kind: "resources",
@@ -317,5 +430,91 @@ describe("token narrowing", () => {
     expect(boundAccessScopes(["proxy:view"], ["proxy:edit:route-1"])).toEqual([
       "proxy:view:route-1",
     ]);
+  });
+
+  /** The owner of stand check P4: Viewer everywhere, Developer in a folder, Operator on one container. */
+  const owner = linesToScopes(
+    [
+      {
+        kind: "resources",
+        role: "viewer",
+        types: ALL_TYPES,
+        where: { kind: "everywhere" },
+        mayDelete: false,
+      },
+      { ...developerInBilling },
+      {
+        kind: "resources",
+        role: "operator",
+        types: ["containers"],
+        where: { kind: "resources", ids: { containers: ["node-1/web"] } },
+        mayDelete: false,
+      },
+    ],
+    ctx
+  );
+  const operatorEverywhere: ResourceAccessLine = {
+    kind: "resources",
+    role: "operator",
+    types: ["containers"],
+    where: { kind: "everywhere" },
+    mayDelete: false,
+  };
+
+  /** Backend token create: canonicalizeInboundScopes, withDelegableCleanupAdditions, canonicalizeScopes. */
+  function backendStoredTokenScopes(sent: readonly string[], ownerScopes: readonly string[]) {
+    const canonical = canonicalizeInboundScopes(sent);
+    const additions = canonical
+      .flatMap(scopeCleanupAdditions)
+      .filter(
+        (scope) =>
+          !MANUAL_APPROVAL_SCOPE_SET.has(backendBaseScope(scope)) &&
+          principalHolds(ownerScopes, scope, ctx)
+      );
+    return canonicalizeScopes([...canonical, ...additions]);
+  }
+
+  it("counts the owner's part a token keeps of a wider line", () => {
+    const entered = lineScopes(operatorEverywhere, ctx);
+    expect(entered).toHaveLength(9);
+    const kept = tokenStoredScopes(linesToScopes([operatorEverywhere], ctx), owner, ctx, {
+      newToken: true,
+    });
+    // docker:containers:view, the Developer set in billing and the Operator set on node-1/web.
+    expect(kept).toHaveLength(13);
+    expect(backendStoredTokenScopes(kept, owner)).toEqual(kept);
+    expect(scopesToLines(kept, ctx)).toEqual([
+      { ...operatorEverywhere, role: "viewer" },
+      developerInBilling,
+      {
+        kind: "resources",
+        role: "operator",
+        types: ["containers"],
+        where: { kind: "resources", ids: { containers: ["node-1/web"] } },
+        mayDelete: false,
+      },
+    ]);
+  });
+
+  it("keeps overlapping token lines as the backend stores them", () => {
+    const lines: AccessLine[] = [{ ...operatorEverywhere, role: "viewer" }, developerInBilling];
+    const kept = tokenStoredScopes(linesToScopes(lines, ctx), owner, ctx);
+    expect(kept).not.toContain("docker:containers:view:folder/docker-billing");
+    expect(backendStoredTokenScopes(kept, owner)).toEqual(kept);
+    expect(scopesToLines(kept, ctx)).toEqual(lines);
+  });
+
+  it("adds what Gateway adds to a new token, as the backend does", () => {
+    const everything = TOKEN_SCOPES.map((scope) => scope.value);
+    for (const trigger of Object.keys(SCOPE_CLEANUP_MIGRATION_ADDITIONS)) {
+      for (const scope of [trigger, `${trigger}:res-1`, `${trigger}:folder/docker-billing`]) {
+        expect(tokenStoredScopes([scope], everything, ctx, { newToken: true }), scope).toEqual(
+          backendStoredTokenScopes([scope], everything)
+        );
+        expect(tokenStoredScopes([scope], everything, ctx), scope).toEqual(
+          canonicalizeScopes([scope])
+        );
+      }
+    }
   });
 });
