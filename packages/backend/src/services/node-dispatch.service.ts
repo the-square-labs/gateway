@@ -1183,15 +1183,18 @@ export class NodeDispatchService {
       registryAuthJson?: string;
       force?: boolean;
     } = {},
-    timeoutMs?: number
+    timeoutMs?: number,
+    /** The command ID to send under (a pull's task records it to learn the pull's outcome later). */
+    commandId?: string
   ): Promise<CommandResult> {
     await this.assertGenericDockerNode(nodeId);
-    if (action !== 'list') {
+    if (action !== 'list' && action !== 'pull_status') {
       await this.assertNodeMutable(nodeId);
     }
     return this.registry.sendCommand(
       nodeId,
       {
+        ...(commandId ? { commandId } : {}),
         dockerImage: { action, ...options } as any,
       },
       timeoutMs

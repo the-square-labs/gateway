@@ -730,11 +730,12 @@ export class NodeRegistryService {
       throw new Error(`Node ${nodeId} is not connected`);
     }
 
-    const commandId = randomUUID();
+    // A caller may name the command (a pull's task records the ID to ask the daemon for its outcome later).
+    const commandId = command.commandId || randomUUID();
     const sentAt = Date.now();
     const fullCommand: GatewayCommand = {
-      commandId,
       ...command,
+      commandId,
       // The daemon drops a command that is already past the point where the
       // gateway stops waiting for it. It judges the deadline against sentAt,
       // on the gateway clock, so clock skew between hosts cannot expire it.

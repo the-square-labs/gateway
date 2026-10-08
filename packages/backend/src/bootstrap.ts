@@ -1069,7 +1069,8 @@ export async function initializeContainer(): Promise<void> {
   dockerManagementService.setDeploymentService(dockerDeploymentService);
   dockerFolderService.setEventBus(eventBus);
   dockerTaskService.setEventBus(eventBus);
-  void dockerTaskService.markActiveTasksLostOnStartup().catch((error) => {
+  // Tasks the nodes may still run stay active until they are settled with their node (DockerTaskReconciler).
+  void dockerTaskService.detachActiveTasksOnStartup().catch((error) => {
     logger.warn('Failed to mark interrupted Docker tasks during bootstrap', { error });
   });
   void dockerComposeService

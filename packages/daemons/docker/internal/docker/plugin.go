@@ -37,6 +37,7 @@ type DockerPlugin struct {
 	allowlist       *AllowlistChecker
 	envStore        *EnvStore
 	taskMgr         *TaskManager
+	imagePulls      imagePullTracker // pulls of this process, for Gateway's pull_status (image_pull_tracker.go)
 	deploymentOpMu  sync.Mutex
 	deploymentOps   map[string]map[uint64]deploymentOperation
 	deploymentLocks map[string]*deploymentLock

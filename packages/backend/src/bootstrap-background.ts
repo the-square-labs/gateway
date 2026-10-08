@@ -33,6 +33,7 @@ import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.
 import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-reconciler.service.js';
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { OrphanedSourceBindingRepair } from '@/modules/docker/docker-source-orphan-repair.js';
+import { DockerTaskReconciler } from '@/modules/docker/docker-task-reconciler.js';
 import { detectPublicIP, initDnsResolver } from '@/modules/domains/dns.utils.js';
 import { DomainsService } from '@/modules/domains/domain.service.js';
 import { HostingConnectorsService } from '@/modules/hosting/hosting-connectors.service.js';
@@ -401,6 +402,22 @@ export async function initializeBackgroundServices(): Promise<void> {
   });
 
   // Stale node detection (every 60 seconds) + missed health report detection (every 30 seconds)
+  // Docker tasks Gateway lost track of (it restarted, or a node's control stream dropped while they ran) are settled
+  // with their nodes once these are connected; until then they stay active, so a daemon update waiting for a node's
+  // tasks keeps waiting for them (F-1).
+  const dockerTaskReconciler = new DockerTaskReconciler(
+    () => dockerManagementService.taskReconcileContext(),
+    (nodeId) => !!nodeRegistry.getNode(nodeId)
+  );
+  scheduler.registerInterval('docker-task-reconcile', 5_000, () => dockerTaskReconciler.sweep());
+  eventBus.subscribe('node.changed', (payload) => {
+    const event = payload as { id?: string; status?: string } | undefined;
+    if (event?.status === 'online' && event.id) {
+      void dockerTaskReconciler
+        .sweep(event.id)
+        .catch((error) => logger.warn('Settling Docker tasks after a node reconnect failed', { error }));
+    }
+  });
   scheduler.registerInterval('stale-node-check', 60000, () => nodeRegistry.markStaleNodesOffline());
   scheduler.registerInterval('node-health-record', 30000, () => nodeRegistry.recordHealthChecks());
 

@@ -2,6 +2,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import type { OperationLeaseStore } from '@/db/operation-lease.js';
 import {
+  type DockerTaskTracking,
   dockerDeployments,
   dockerManagedVolumes,
   managedDatabaseBindings,
@@ -84,6 +85,7 @@ import {
   type ContainerAction,
   type DockerLifecycleWatchContext,
   type DockerTransitionOutcome,
+  type DockerTransitionTrackingHint,
   watchDockerRecreateByName,
   watchDockerTransition,
 } from './docker-lifecycle-watch.js';
@@ -118,6 +120,7 @@ import type { DockerSecretService } from './docker-secret.service.js';
 import { type DockerSecretEnvOwner, dockerSecretEnvMatcher, dockerSecretEnvOwners } from './docker-secret-env.js';
 import { assertNotPendingSourceContainer, readPendingDockerSourceContainers } from './docker-source.service.js';
 import type { DockerTaskService } from './docker-task.service.js';
+import type { DockerTaskReconcileContext } from './docker-task-reconciler.js';
 import {
   abortVolumeFileUpload as abortDockerVolumeFileUpload,
   adoptVolume as adoptDockerVolume,
@@ -485,6 +488,7 @@ export class DockerManagementService {
 
   private imageOperationContext(existingImageIds?: ReadonlySet<string>) {
     return {
+      existingImageIds,
       nodeDispatch: this.nodeDispatch,
       auditService: this.auditService,
       taskService: this.taskService,
@@ -610,6 +614,26 @@ export class DockerManagementService {
       runtimeSettingsService: this.runtimeSettingsService,
       parseResult: (result: { success: boolean; error?: string; detail?: string }) => this.parseResult(result),
     };
+  }
+
+  /** What DockerTaskReconciler needs to settle the tasks Gateway lost track of with their nodes. */
+  taskReconcileContext(): DockerTaskReconcileContext | null {
+    if (!this.taskService) return null;
+    return {
+      ...this.lifecycleWatchContext(),
+      taskService: this.taskService,
+      finishPull: (nodeId, tracking) => this.finishReconciledPull(nodeId, tracking),
+    };
+  }
+
+  /** What a pull settled after Gateway lost its answer still owes: the placement for its user, its registry. */
+  private async finishReconciledPull(nodeId: string, tracking: Extract<DockerTaskTracking, { kind: 'pull' }>) {
+    const context = this.imageOperationContext(
+      tracking.preexistingImageIds ? new Set(tracking.preexistingImageIds) : undefined
+    );
+    if (tracking.userId) await context.onImagePulled(nodeId, tracking.imageRef, tracking.folderId, tracking.userId);
+    await this.registryService?.rememberImageRegistry?.(nodeId, tracking.imageRef, tracking.registryId ?? undefined);
+    this.eventBus?.publish('docker.image.changed', { nodeId, ref: tracking.imageRef, action: 'pulled' });
   }
 
   private lifecycleWatchContext(): DockerLifecycleWatchContext {
@@ -826,7 +850,8 @@ export class DockerManagementService {
     progress: string,
     completedAction: ContainerAction,
     timeoutMs = 60000,
-    isComplete?: (inspectData: Record<string, any>) => boolean
+    isComplete?: (inspectData: Record<string, any>) => boolean,
+    trackingHint?: DockerTransitionTrackingHint
   ): Promise<DockerTransitionOutcome> {
     return watchDockerTransition(
       this.lifecycleWatchContext(),
@@ -838,7 +863,8 @@ export class DockerManagementService {
       progress,
       completedAction,
       timeoutMs,
-      isComplete
+      isComplete,
+      trackingHint
     );
   }
 
@@ -1386,7 +1412,8 @@ export class DockerManagementService {
         progress,
         completedAction,
         timeoutMs,
-        isComplete
+        isComplete,
+        trackingHint
       ) =>
         this.watchTransition(
           nodeId,
@@ -1397,7 +1424,8 @@ export class DockerManagementService {
           progress,
           completedAction,
           timeoutMs,
-          isComplete
+          isComplete,
+          trackingHint
         ),
       watchRecreateByName: (
         nodeId,

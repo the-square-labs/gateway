@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -8,6 +9,7 @@ import {
 } from './docker-internal-images.js';
 import type { DockerRegistryService } from './docker-registry.service.js';
 import type { DockerTaskService } from './docker-task.service.js';
+import { isLostTrackError } from './docker-task-reconciler.js';
 
 type DockerDispatchResult = { success: boolean; error?: string; detail?: string };
 
@@ -18,6 +20,8 @@ export interface DockerImageOperationContext {
   registryService?: DockerRegistryService;
   eventBus?: EventBusService;
   onImagePulled?(nodeId: string, imageRef: string, folderId: string | null | undefined, userId: string): Promise<void>;
+  /** The images the node had before a pull by a user: only an image the pull created is placed for the user. */
+  existingImageIds?: ReadonlySet<string>;
   parseResult(result: DockerDispatchResult): unknown;
   createTask(
     nodeId: string,
@@ -48,6 +52,27 @@ export async function pullImage(
   folderId?: string | null
 ) {
   const task = await context.createTask(nodeId, '', imageRef, 'pull');
+  // The pull runs as a command Gateway names, so the daemon can tell how it ended should Gateway lose its answer
+  // (Gateway restarted, or the node's control stream dropped while the pull ran on): the task is then settled with
+  // the node instead of failing while the node still pulls (DockerTaskReconciler).
+  const commandId = randomUUID();
+  if (task?.id && context.taskService) {
+    await context.taskService
+      .track(
+        task.id,
+        {
+          kind: 'pull',
+          imageRef,
+          deadlineAt: new Date(Date.now() + context.longDockerOperationTimeoutMs).toISOString(),
+          registryId: registryId ?? null,
+          folderId: folderId ?? null,
+          userId: userId ?? null,
+          ...(userId && context.existingImageIds ? { preexistingImageIds: [...context.existingImageIds] } : {}),
+        },
+        commandId
+      )
+      .catch(() => undefined);
+  }
   if (userId) {
     await context.auditService.log({
       action: 'docker.image.pull',
@@ -62,7 +87,8 @@ export async function pullImage(
       nodeId,
       'pull',
       { imageRef, registryAuthJson: registryAuth },
-      context.longDockerOperationTimeoutMs
+      context.longDockerOperationTimeoutMs,
+      commandId
     )
     .then(async (result) => {
       try {
@@ -103,13 +129,12 @@ export async function pullImage(
     })
     .catch((err) => {
       if (task?.id && context.taskService) {
-        context.taskService
-          .update(task.id, {
-            status: 'failed',
-            error: err instanceof Error ? err.message : 'Pull failed',
-            completedAt: new Date(),
-          })
-          .catch(() => {});
+        const error = err instanceof Error ? err.message : 'Pull failed';
+        // The node may still pull: the task stays active until the node tells how the pull ended.
+        const settled = isLostTrackError(err)
+          ? context.taskService.detach(task.id, error)
+          : context.taskService.update(task.id, { status: 'failed', error, completedAt: new Date() });
+        settled.catch(() => {});
       }
     });
 

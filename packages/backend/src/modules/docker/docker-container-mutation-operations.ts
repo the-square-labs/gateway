@@ -22,7 +22,11 @@ import { placeCreatedDockerResource } from './docker-creation-access.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
-import type { ContainerAction, DockerTransitionOutcome } from './docker-lifecycle-watch.js';
+import type {
+  ContainerAction,
+  DockerTransitionOutcome,
+  DockerTransitionTrackingHint,
+} from './docker-lifecycle-watch.js';
 import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
@@ -222,7 +226,8 @@ export interface DockerContainerMutationContext {
     progress: string,
     completedAction: ContainerAction,
     timeoutMs?: number,
-    isComplete?: (inspectData: Record<string, any>) => boolean
+    isComplete?: (inspectData: Record<string, any>) => boolean,
+    trackingHint?: DockerTransitionTrackingHint
   ): Promise<DockerTransitionOutcome>;
   /**
    * Waits for the container named `containerName` to run under a runtime other than `oldContainerId`, which must be
@@ -701,6 +706,8 @@ export async function removeContainer(
   const stopping = await waitForStopInFlight(ctx, nodeId, name);
   if (stopping) {
     const task = await ctx.createTask(nodeId, containerId, name, 'remove');
+    // Gateway runs this removal itself: after a Gateway restart its task is settled by whether the container is gone.
+    if (task?.id) await ctx.taskService?.track(task.id, { kind: 'remove', containerId }).catch(() => undefined);
     void removeWhenStopped(ctx, nodeId, containerId, name, force, userId, task?.id, afterRemove);
     return { taskId: task?.id, containerId, name, pending: stopping };
   }

@@ -47,7 +47,10 @@ func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb
 		if cmd.Action == "ensure" {
 			err = p.client.EnsureImage(ctx, imageRef, registryAuth)
 		} else {
+			// The pull goes on when the session that asked for it drops; pull_status tells Gateway how it ended.
+			finish := p.imagePulls.begin(result.CommandId, imageRef)
 			err = p.client.PullImage(ctx, imageRef, registryAuth)
+			finish(err)
 		}
 		if err != nil {
 			result.Success = false
@@ -55,6 +58,22 @@ func (p *DockerPlugin) handleImageCommand(cmd *pb.DockerImageCommand, result *pb
 			return
 		}
 		result.Detail = imageRef
+
+	case "pull_status":
+		// The pulls of image_ref this daemon process ran or runs, by the command that asked for each: Gateway asks
+		// when it lost a pull's answer (it restarted, or the session dropped while the pull ran on).
+		if cmd.ImageRef == "" {
+			result.Success = false
+			result.Error = "image_ref is required for pull_status"
+			return
+		}
+		detail, err := p.imagePulls.statusDetail(cmd.ImageRef)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		result.Detail = detail
 
 	case "mirror":
 		if cmd.ImageRef == "" || cmd.TargetImageRef == "" {

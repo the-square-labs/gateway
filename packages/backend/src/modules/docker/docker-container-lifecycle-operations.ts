@@ -304,7 +304,8 @@ export async function restartContainer(
       // when the process exits at once.
       if (!previousStartedAt) return state?.Status === 'running';
       return typeof state?.StartedAt === 'string' && state.StartedAt !== previousStartedAt;
-    }
+    },
+    { previousStartedAt: previousStartedAt ?? null }
   );
   await ctx.auditService.log({
     action: 'docker.container.restart',

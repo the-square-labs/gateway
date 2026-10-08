@@ -5,7 +5,8 @@ import { getReplacementContainerFailureMessage } from './docker-recreate-watch.j
 import type { DockerTaskService } from './docker-task.service.js';
 
 const LEGACY_TASK_STATUS_UNSUPPORTED_ERROR = 'unknown container action: task_status';
-const NODE_DISCONNECTED_RE = /node .* (?:is not connected|disconnected)/i;
+const NODE_DISCONNECTED_RE = /node (?:.* )?(?:is not connected|disconnected)/i;
+const DISCONNECTED_ERROR = 'Docker node disconnected during container operation';
 
 function isNodeDisconnectedError(error: unknown): boolean {
   return NODE_DISCONNECTED_RE.test(error instanceof Error ? error.message : String(error));
@@ -43,6 +44,31 @@ export interface DockerLifecycleWatchContext {
 /** How a watched lifecycle operation ended; its task records the same outcome. */
 export type DockerTransitionOutcome = { completed: true } | { completed: false; reason: 'timeout' | 'disconnected' };
 
+/** What a watch knows beyond its arguments that settles its task with the node should Gateway lose track of it. */
+export interface DockerTransitionTrackingHint {
+  /** The container's State.StartedAt before a restart: the restart is done once it changed. */
+  previousStartedAt?: string | null;
+}
+
+/**
+ * The node disconnected while a watched operation ran: the node may still run it. A task with tracking stays active
+ * and is settled with the node once it is connected again (DockerTaskReconciler); one without fails as before. The
+ * container's transition ends either way.
+ */
+async function detachWatchedTask(
+  context: DockerLifecycleWatchContext,
+  tracked: Promise<boolean>,
+  taskId: string | undefined,
+  nodeId: string,
+  name: string
+) {
+  const kept =
+    taskId && context.taskService && (await tracked)
+      ? await context.taskService.detach(taskId, DISCONNECTED_ERROR).catch(() => false)
+      : false;
+  await context.failTask(kept ? undefined : taskId, DISCONNECTED_ERROR, nodeId, name);
+}
+
 /**
  * Polls the container until the operation reached its state, then completes its task and ends its transition.
  * The returned promise settles once the task did; it never rejects. A container that no longer exists has no
@@ -58,11 +84,30 @@ export function watchDockerTransition(
   progress: string,
   completedAction: ContainerAction,
   timeoutMs = 60000,
-  isComplete?: (inspectData: Record<string, any>) => boolean
+  isComplete?: (inspectData: Record<string, any>) => boolean,
+  trackingHint?: DockerTransitionTrackingHint
 ): Promise<DockerTransitionOutcome> {
   return new Promise((resolve) => {
     const start = Date.now();
     let settled = false;
+    // A stop, kill or restart goes on on the node without this watch: its task records how to tell its end.
+    const expect = expectedState === 'exited' ? 'exited' : completedAction === 'restarted' ? 'restarted' : null;
+    const tracked: Promise<boolean> =
+      taskId && context.taskService && expect
+        ? context.taskService
+            .track(taskId, {
+              kind: 'state',
+              containerId,
+              expect,
+              previousStartedAt: trackingHint?.previousStartedAt ?? null,
+              progress,
+              deadlineAt: new Date(start + timeoutMs).toISOString(),
+            })
+            .then(
+              () => true,
+              () => false
+            )
+        : Promise.resolve(false);
     const complete = async () => {
       settled = true;
       clearInterval(poll);
@@ -78,12 +123,8 @@ export function watchDockerTransition(
     const fail = async (reason: 'timeout' | 'disconnected') => {
       settled = true;
       clearInterval(poll);
-      await context.failTask(
-        taskId,
-        reason === 'timeout' ? 'Timed out' : 'Docker node disconnected during container operation',
-        nodeId,
-        name
-      );
+      if (reason === 'disconnected') await detachWatchedTask(context, tracked, taskId, nodeId, name);
+      else await context.failTask(taskId, 'Timed out', nodeId, name);
       resolve({ completed: false, reason });
     };
     const poll = setInterval(async () => {
@@ -130,6 +171,24 @@ export function watchDockerRecreateByName(
   onDaemonTaskFailed?: () => Promise<void>
 ) {
   const start = Date.now();
+  // The replacement goes on on the node without this watch: its task records how to tell its end.
+  const tracked: Promise<boolean> =
+    taskId && context.taskService
+      ? context.taskService
+          .track(taskId, {
+            kind: 'replace',
+            containerName,
+            oldContainerId,
+            expectedState,
+            daemonTaskId: daemonTaskId ?? null,
+            progress,
+            deadlineAt: new Date(start + timeoutMs).toISOString(),
+          })
+          .then(
+            () => true,
+            () => false
+          )
+      : Promise.resolve(false);
   const poll = setInterval(async () => {
     try {
       const result = await context.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
@@ -218,7 +277,7 @@ export function watchDockerRecreateByName(
     } catch (error) {
       if (isNodeDisconnectedError(error)) {
         clearInterval(poll);
-        await context.failTask(taskId, 'Docker node disconnected during container operation', nodeId, containerName);
+        await detachWatchedTask(context, tracked, taskId, nodeId, containerName);
         return;
       }
       if (Date.now() - start > timeoutMs) {
