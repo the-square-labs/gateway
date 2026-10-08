@@ -497,7 +497,9 @@ proxyRoutes.openapi(
     const scopes = c.get('effectiveScopes') || [];
     const proxyService = container.resolve(ProxyService);
     const existing = await proxyService.getProxyHost(id);
-    if (input.ingressGroupId) {
+    const existingGroupId = (existing as { ingressGroupId?: string | null }).ingressGroupId ?? null;
+    // Keeping the group the route is on changes nothing and needs no check.
+    if (input.ingressGroupId && input.ingressGroupId !== existingGroupId) {
       await assertRoutePlacementOnGroup(
         scopes,
         input.ingressGroupId,

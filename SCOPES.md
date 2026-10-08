@@ -205,7 +205,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `nodes:files:write` | Yes |
 | `nodes:lock` | Yes |
 | `nodes:folders:manage` |  |
-| `ingress:groups:view` | Node folders only (`folder/<nodeFolderId>`). View ingress groups; node permissions do not reveal them. |
+| `ingress:groups:view` | Node folders only (`folder/<nodeFolderId>`). View ingress groups and place routes and domains on them; node permissions do not reveal them. |
 | `ingress:groups:manage` | Node folders only (`folder/<nodeFolderId>`). Create, change, and delete ingress groups and their members; implies `ingress:groups:view`. Adding a member also needs `nodes:manage` on that node. |
 | `admin:users` |  |
 | `admin:users:impersonate` |  |

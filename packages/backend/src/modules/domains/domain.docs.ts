@@ -121,7 +121,7 @@ export const listDomainNginxNodesRoute = appRoute({
   tags: ['Domains'],
   summary: 'List eligible Nginx ingress nodes for domains',
   description:
-    'Needs any domains:create grant (broad, folder or node). eligibleNodes are nginx nodes with a public ingress address the caller may create domains on, unconfiguredNodes those without one. ingressGroups lists the ingress groups a new domain may use: every member is an eligible node open to the caller, and at least one member is active; members are listed in site order with their state. Create the domain with ingressGroupId to serve it (and its routes) from every member; Cloudflare DNS then lists every active member address (round robin, no health checks in DNS failover mode none).',
+    'Needs any domains:create grant (broad, folder or node). eligibleNodes are nginx nodes with a public ingress address the caller may create domains on, unconfiguredNodes those without one. ingressGroups lists the ingress groups a new domain may use: the caller holds ingress:groups:view on the group, every member is an eligible node open to the caller, and at least one member is active; members are listed in site order with their state. Create the domain with ingressGroupId to serve it (and its routes) from every member; Cloudflare DNS then lists every active member address (round robin, no health checks in DNS failover mode none).',
   responses: okJson(UnknownDataResponseSchema),
 });
 

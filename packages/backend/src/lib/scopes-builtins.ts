@@ -354,6 +354,8 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'nodes:files:write',
   'nodes:rename',
   'nodes:folders:manage',
+  // Lets operators place routes and domains on ingress groups; changing groups stays with admins.
+  'ingress:groups:view',
   'ai:workspace:use',
   'feat:ai:use',
   'ai:sandbox:use',

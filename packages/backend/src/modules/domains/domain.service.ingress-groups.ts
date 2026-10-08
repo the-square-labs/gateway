@@ -49,8 +49,9 @@ export interface IngressGroupDnsPlan {
  */
 export abstract class DomainsServiceIngressGroups extends DomainsServiceRuntime {
   /**
-   * Ingress groups a new domain may be placed on: every member has a public ingress address and is open to the
-   * caller's domains:create grant, and some member is active. Members in site order, with their state.
+   * Ingress groups a new domain may be placed on: the caller may view the group (ingress:groups:view), every member
+   * has a public ingress address and is open to the caller's domains:create grant, and some member is active. Members
+   * in site order, with their state.
    */
   async getIngressGroupOptions(
     scopes: readonly string[],
@@ -65,7 +66,7 @@ export abstract class DomainsServiceIngressGroups extends DomainsServiceRuntime 
         displayName: node.displayName,
         effectiveAddress: node.effectiveAddress,
       }));
-    return loadIngressGroupDestinations(this.db, usable);
+    return loadIngressGroupDestinations(this.db, usable, scopes);
   }
 
   async ingressGroupDnsPlan(groupId: string): Promise<IngressGroupDnsPlan> {

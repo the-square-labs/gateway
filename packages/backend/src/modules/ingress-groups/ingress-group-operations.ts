@@ -17,6 +17,7 @@ import { IngressGroupService } from './ingress-group.service.js';
 import {
   assertCanManageIngressGroup,
   assertCanManageMemberNode,
+  assertCanPlaceOnGroup,
   assertCanPlaceOnMembers,
   canViewIngressGroup,
   INGRESS_GROUP_MANAGE_SCOPE,
@@ -54,6 +55,12 @@ async function requireManageableGroup(scopes: readonly string[], id: string) {
   const group = await service().requireGroup(id);
   assertCanManageIngressGroup(scopes, group.folderId);
   return group;
+}
+
+/** A group a route or domain is placed on: the caller must be able to view it (assertCanPlaceOnGroup). */
+async function requirePlaceableGroup(scopes: readonly string[], id: string): Promise<void> {
+  const group = await service().requireGroup(id);
+  assertCanPlaceOnGroup(scopes, group.folderId);
 }
 
 export async function listIngressGroupsFor(scopes: readonly string[], rawQuery: unknown) {
@@ -115,13 +122,17 @@ export async function reorderIngressGroupFor(actor: IngressGroupActor, id: strin
   return service().reorder(id, input.nodeIds, actor.userId);
 }
 
-/** Places an existing route on the group: proxy:edit on the route and proxy:create covering every member. */
+/**
+ * Places an existing route on the group: proxy:edit on the route, view of the group and proxy:create covering every
+ * member.
+ */
 export async function convertRouteToIngressGroupFor(actor: IngressGroupActor, id: string, proxyHostId: string) {
   if (!hasScope(actor.scopes, `proxy:edit:${proxyHostId}`)) {
     throw new AppError(403, 'FORBIDDEN', 'Moving a route requires proxy:edit on it', {
       requiredScope: `proxy:edit:${proxyHostId}`,
     });
   }
+  await requirePlaceableGroup(actor.scopes, id);
   const group = await service().getSummary(id);
   const host = await container.resolve(ProxyService).getProxyHost(proxyHostId);
   assertCanPlaceOnMembers(
@@ -134,13 +145,17 @@ export async function convertRouteToIngressGroupFor(actor: IngressGroupActor, id
   return service().convertRoute(proxyHostId, { ingressGroupId: id }, actor.userId);
 }
 
-/** Places an existing domain (and its routes) on the group: domains:edit on it and domains:create on every member. */
+/**
+ * Places an existing domain (and its routes) on the group: domains:edit on it, view of the group and domains:create
+ * on every member.
+ */
 export async function convertDomainToIngressGroupFor(actor: IngressGroupActor, id: string, domainId: string) {
   if (!hasScope(actor.scopes, `domains:edit:${domainId}`)) {
     throw new AppError(403, 'FORBIDDEN', 'Moving a domain requires domains:edit on it', {
       requiredScope: `domains:edit:${domainId}`,
     });
   }
+  await requirePlaceableGroup(actor.scopes, id);
   const group = await service().getSummary(id);
   const domain = await container.resolve(DomainsService).getDomain(domainId);
   assertCanPlaceOnMembers(
@@ -154,9 +169,9 @@ export async function convertDomainToIngressGroupFor(actor: IngressGroupActor, i
 }
 
 /**
- * Moving a domain onto an ingress group places it (and its routes) on every member: domains:create must cover each
- * member, and the entitlement is required. Moving it back to one member node only shrinks the runtime and needs
- * neither.
+ * Moving a domain onto an ingress group places it (and its routes) on every member: the caller must be able to view
+ * the group, domains:create must cover each member, and the entitlement is required. Moving it back to one member
+ * node only shrinks the runtime, and keeping the group it is on changes nothing: neither needs any of it.
  */
 export async function assertDomainPlacementAccess(
   scopes: readonly string[],
@@ -165,28 +180,38 @@ export async function assertDomainPlacementAccess(
 ): Promise<void> {
   if (!input.ingressGroupId) return;
   const domain = await container.resolve(DomainsService).getDomain(domainId);
+  if (domain.ingressGroupId === input.ingressGroupId) return;
+  await requirePlaceableGroup(scopes, input.ingressGroupId);
   const members = await service().memberNodeIds(input.ingressGroupId);
   assertCanPlaceOnMembers(scopes, 'domains:create', domain.folderId ?? null, members);
   await requireGroupEntitlement();
 }
 
-/** A new domain on an ingress group is served by every member: domains:create must cover each of them. */
+/**
+ * A new domain on an ingress group is served by every member: the caller must be able to view the group, and
+ * domains:create must cover each member.
+ */
 export async function assertDomainCreationOnGroup(
   scopes: readonly string[],
   ingressGroupId: string,
   folderId: string | null | undefined
 ): Promise<void> {
+  await requirePlaceableGroup(scopes, ingressGroupId);
   const members = await service().memberNodeIds(ingressGroupId);
   assertCanPlaceOnMembers(scopes, 'domains:create', folderId, members);
   await requireGroupEntitlement();
 }
 
-/** Moving a route onto an ingress group creates it on every member (entitlement required). */
+/**
+ * Moving a route onto an ingress group creates it on every member: the caller must be able to view the group,
+ * proxy:create must cover each member, and the entitlement is required.
+ */
 export async function assertRoutePlacementOnGroup(
   scopes: readonly string[],
   ingressGroupId: string,
   folderId: string | null | undefined
 ): Promise<string[]> {
+  await requirePlaceableGroup(scopes, ingressGroupId);
   const members = await service().memberNodeIds(ingressGroupId);
   assertCanPlaceOnMembers(scopes, 'proxy:create', folderId, members);
   await requireGroupEntitlement();
@@ -195,12 +220,14 @@ export async function assertRoutePlacementOnGroup(
 
 /**
  * Who may preview (or be offered) a new domain's DNS: the preview returns node hostnames and addresses, so a caller
- * limited to nodes may use only nodes of its grant; for an ingress group every member must be one.
+ * limited to nodes may use only nodes of its grant; for an ingress group the caller must be able to view it and
+ * every member must be one.
  */
 export async function assertCanPreviewDomainDestination(
   scopes: readonly string[],
   input: { nginxNodeId?: string; ingressGroupId?: string }
 ): Promise<void> {
+  if (input.ingressGroupId) await requirePlaceableGroup(scopes, input.ingressGroupId);
   const nodeIds = input.ingressGroupId ? await service().memberNodeIds(input.ingressGroupId) : [input.nginxNodeId];
   const refused = nodeIds.findIndex((nodeId) => !canPickDomainNginxNode([...scopes], nodeId));
   if (refused === -1 && nodeIds.length > 0) return;

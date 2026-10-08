@@ -65,7 +65,10 @@ interface IngressTargetSelectProps {
   lockedGroupName?: string | null;
 }
 
-/** The ingress node or ingress group of a route: nginx nodes, then the groups whose members the caller may use. */
+/**
+ * The ingress node or ingress group of a route: nginx nodes, then the groups the caller may view whose members the
+ * caller may use.
+ */
 export function IngressTargetSelect({
   target,
   onChange,
@@ -99,6 +102,9 @@ export function IngressTargetSelect({
                 {selectedGroup.members.length} members
               </Badge>
             </div>
+          ) : target.ingressGroupId ? (
+            // A registered domain's group the caller may not view (or the list is still loading).
+            <span className="min-w-0 flex-1 truncate">Ingress group</span>
           ) : selectedNode ? (
             <div className="flex min-w-0 items-center gap-3 pr-2">
               <span className="min-w-0 flex-1 truncate">{selectedNode.hostname}</span>

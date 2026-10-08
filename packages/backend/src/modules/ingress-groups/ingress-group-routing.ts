@@ -3,6 +3,7 @@ import type { DrizzleExecutor } from '@/db/client.js';
 import { ingressGroups } from '@/db/schema/ingress-groups.js';
 import { nodes } from '@/db/schema/nodes.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { assertCanPlaceOnGroup } from './ingress-group-access.js';
 import { ingressGroupMemberRows } from './ingress-nodes.js';
 
 /** Advertised by nginx daemons with the ingress health responder and per-member rendering (decisions S10). */
@@ -26,11 +27,17 @@ export interface RoutableIngressGroup {
 /**
  * The group a route or domain is placed on. Refuses an unknown or empty group and a group with a member that is not
  * an nginx node advertising `ingress_group_v1` (an old daemon cannot answer the health endpoint and was never meant
- * to join; see the member add checks).
+ * to join; see the member add checks). With `scopes`, a group the caller may not view is refused before anything
+ * else about it is told.
  */
-export async function requireRoutableIngressGroup(db: DrizzleExecutor, groupId: string): Promise<RoutableIngressGroup> {
+export async function requireRoutableIngressGroup(
+  db: DrizzleExecutor,
+  groupId: string,
+  scopes?: readonly string[]
+): Promise<RoutableIngressGroup> {
   const group = await db.query.ingressGroups.findFirst({ where: eq(ingressGroups.id, groupId) });
   if (!group) throw new AppError(404, 'INGRESS_GROUP_NOT_FOUND', 'Ingress group not found');
+  if (scopes) assertCanPlaceOnGroup(scopes, group.folderId);
   const members = await ingressGroupMemberRows(db, groupId);
   const active = members.filter((member) => member.state === 'active');
   if (active.length === 0) {

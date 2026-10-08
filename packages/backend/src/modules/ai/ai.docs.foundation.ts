@@ -156,7 +156,7 @@ Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled
 - A registered Gateway domain pins its ingress node. Omit nodeId on create_route and the route uses the node its registered domains are assigned to; registered domains on different nodes cannot share one route.
 - With no registered domain, an omitted nodeId resolves to the only nginx node the caller may create routes on. When several qualify, create_route fails with ROUTE_INGRESS_NODE_REQUIRED and lists them (id, name, hostname, status); retry with one of them as nodeId.
 - A registered domain on an ingress group places the route on that group.
-- list_route_ingress_nodes (REST: GET /api/proxy-hosts/ingress-nodes) lists those nodes, and in groups the ingress groups whose members are all such nodes, up front. It needs any proxy:create grant and no node permission, and returns only id, displayName, hostname, and availability status. Pass folderId to see the nodes allowed for a route in that folder. Nodes locked for new services are omitted.
+- list_route_ingress_nodes (REST: GET /api/proxy-hosts/ingress-nodes) lists those nodes, and in groups the ingress groups the caller may view (ingress:groups:view) whose members are all such nodes, up front. It needs any proxy:create grant and no node permission, and returns only id, displayName, hostname, and availability status. Pass folderId to see the nodes allowed for a route in that folder. Nodes locked for new services are omitted.
 - The node still has to be allowed: proxy:create broadly, on the route folder (pass folderId), or on the node (proxy:create:node/<nodeId>). Folder grants may place routes on every nginx node; folders do not pin nodes.
 
 ## Maintenance Mode

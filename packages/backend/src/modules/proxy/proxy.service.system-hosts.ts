@@ -93,14 +93,14 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
 
   /**
    * The status page route is placed for the caller who configures it, so its node, or every member of its ingress
-   * group, needs proxy:create as a route of the caller's own would.
+   * group (which the caller must be able to view), needs proxy:create as a route of the caller's own would.
    */
   async assertSystemHostPlacementAccess(
     scopes: readonly string[],
     placement: { nodeId: string | null; ingressGroupId: string | null }
   ): Promise<void> {
     if (placement.ingressGroupId) {
-      const group = await requireRoutableIngressGroup(this.db, placement.ingressGroupId);
+      const group = await requireRoutableIngressGroup(this.db, placement.ingressGroupId, scopes);
       assertCanPlaceOnMembers(scopes, 'proxy:create', null, group.memberNodeIds);
       return;
     }

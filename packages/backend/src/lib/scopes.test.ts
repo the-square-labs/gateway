@@ -212,11 +212,11 @@ describe('canonical scope definitions', () => {
     expect(DEMO_ADMIN_SCOPES).not.toContain('integrations:gitlab:repo:read');
     expect(OPERATOR_SCOPES).not.toContain('proxy:templates:manage');
     expect(ADMIN_SCOPES).toEqual(expect.arrayContaining(['pki:ca:edit', 'pki:ca:export', 'nodes:manage']));
-    // Ingress groups have their own scopes: admins hold them, node permissions of the other groups do not.
+    // Ingress groups have their own scopes: admins hold them, operators view them to place routes and domains on
+    // them, and node permissions of the other groups do not reveal them.
     expect(ADMIN_SCOPES).toEqual(expect.arrayContaining(['ingress:groups:view', 'ingress:groups:manage']));
-    for (const scopes of [OPERATOR_SCOPES, VIEWER_SCOPES]) {
-      expect(scopes.filter((scope) => scope.startsWith('ingress:'))).toEqual([]);
-    }
+    expect(OPERATOR_SCOPES.filter((scope) => scope.startsWith('ingress:'))).toEqual(['ingress:groups:view']);
+    expect(VIEWER_SCOPES.filter((scope) => scope.startsWith('ingress:'))).toEqual([]);
   });
 
   it('keeps system-admin on every canonical scope', () => {

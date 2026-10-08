@@ -12,7 +12,7 @@ An ingress group is a set of nginx ingress nodes, normally one per site, that se
 
 ## Permissions And License
 - Ingress groups have their own permissions, granted broadly or on a node folder (\`<scope>:folder/<nodeFolderId>\`, covering its subfolders); node permissions do not reveal them. list and get need ingress:groups:view; create, update, delete, add_member, remove_member and reorder need ingress:groups:manage (which implies view) on the group folder; putting a node into a group also needs nodes:manage on that node.
-- Placing a route or domain on a group needs proxy:create or domains:create covering every member (broad, the destination folder, or a node grant on each member).
+- Placing a route or domain on a group needs ingress:groups:view on the group (broadly or on its folder) and proxy:create or domains:create covering every member (broad, the destination folder, or a node grant on each member). Route and domain node lists (list_route_ingress_nodes, manage_domain list_nginx_nodes) offer only groups the caller may view. Saving a route or domain that stays on its group needs no ingress scope; the built-in operator group has ingress:groups:view.
 - Creating a group or growing its runtime (create, update, add_member, reorder, placing routes or domains on it) needs the multi-node availability license feature. Existing groups keep serving without it; delete and remove_member are always allowed.
 
 ## Zero-Downtime Operations

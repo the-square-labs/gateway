@@ -115,7 +115,7 @@ Every resource-qualified Pages scope uses the Page Project ID, including Deploym
 ### Ingress Groups
 | Scope | Description |
 |-------|-------------|
-| ingress:groups:view | List ingress groups and view their members, routes, domains and delivery (folder-scopable by node folder only) |
+| ingress:groups:view | List ingress groups and view their members, routes, domains and delivery; place routes and domains on them (folder-scopable by node folder only) |
 | ingress:groups:manage | Create, change and delete ingress groups, add, remove and reorder members; implies ingress:groups:view (folder-scopable by node folder only). Adding a member also needs nodes:manage on that node |
 
 ### Administration

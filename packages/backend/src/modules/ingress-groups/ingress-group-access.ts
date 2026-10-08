@@ -23,6 +23,17 @@ export function viewableIngressGroupFolderIds(scopes: readonly string[]): string
   return getFolderScopedIds(scopes, [INGRESS_GROUP_VIEW_SCOPE, INGRESS_GROUP_MANAGE_SCOPE]);
 }
 
+/**
+ * Placing a route or domain on a group needs view of the group: the route and domain pickers offer only the groups
+ * the caller may view, and every other way to place something on a group is held to the same rule.
+ */
+export function assertCanPlaceOnGroup(scopes: readonly string[], folderId: string | null): void {
+  if (canViewIngressGroup(scopes, folderId)) return;
+  throw new AppError(403, 'FORBIDDEN', `Placing on this ingress group requires ${INGRESS_GROUP_VIEW_SCOPE}`, {
+    requiredScope: INGRESS_GROUP_VIEW_SCOPE,
+  });
+}
+
 export function assertCanManageIngressGroup(scopes: readonly string[], folderId: string | null): void {
   if (hasScopeForCreation(scopes, INGRESS_GROUP_MANAGE_SCOPE, folderId)) return;
   throw new AppError(403, 'FORBIDDEN', `Managing this ingress group requires ${INGRESS_GROUP_MANAGE_SCOPE}`, {

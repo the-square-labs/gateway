@@ -1,6 +1,7 @@
 import { asc } from 'drizzle-orm';
 import type { DrizzleExecutor } from '@/db/client.js';
 import { ingressGroupMembers, ingressGroups } from '@/db/schema/ingress-groups.js';
+import { canViewIngressGroup } from './ingress-group-access.js';
 import { orderIngressMembers } from './ingress-nodes.js';
 
 type MemberState = 'joining' | 'active' | 'draining';
@@ -15,13 +16,15 @@ export interface IngressGroupDestination<TNode> {
 }
 
 /**
- * Every ingress group that can take a new route or domain: each member must be one of `usableNodes` (the nodes the
- * caller may use and that can serve it) and at least one member must be active. A group with any other member is not
- * offered, because placing something on a group places it on every member.
+ * Every ingress group that can take a new route or domain from the caller: the caller may view the group
+ * (ingress:groups:view, broadly or on its folder), each member must be one of `usableNodes` (the nodes the caller may
+ * use and that can serve it) and at least one member must be active. A group with any other member is not offered,
+ * because placing something on a group places it on every member.
  */
 export async function loadIngressGroupDestinations<TNode extends { id: string }>(
   db: DrizzleExecutor,
-  usableNodes: readonly TNode[]
+  usableNodes: readonly TNode[],
+  scopes: readonly string[]
 ): Promise<IngressGroupDestination<TNode>[]> {
   const [groups, members] = await Promise.all([
     db
@@ -30,13 +33,15 @@ export async function loadIngressGroupDestinations<TNode extends { id: string }>
         name: ingressGroups.name,
         slug: ingressGroups.slug,
         dnsFailoverMode: ingressGroups.dnsFailoverMode,
+        folderId: ingressGroups.folderId,
       })
       .from(ingressGroups)
       .orderBy(asc(ingressGroups.name), asc(ingressGroups.id)),
     db.select().from(ingressGroupMembers),
   ]);
   const byId = new Map(usableNodes.map((node) => [node.id, node]));
-  return groups.flatMap((group) => {
+  return groups.flatMap(({ folderId, ...group }) => {
+    if (!canViewIngressGroup(scopes, folderId)) return [];
     const ordered = orderIngressMembers(members.filter((member) => member.groupId === group.id));
     const resolved = ordered.map((member) => ({ member, node: byId.get(member.nodeId) }));
     if (resolved.length === 0 || resolved.some(({ node }) => !node)) return [];

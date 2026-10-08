@@ -94,12 +94,13 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
   }
 
   /**
-   * Ingress groups the caller may place a new route on: every member must be a node the caller may create routes
-   * on (see listRouteIngressNodes) and the group must have an active member. Members are listed in site order.
+   * Ingress groups the caller may place a new route on: the caller may view the group (ingress:groups:view), every
+   * member must be a node the caller may create routes on (see listRouteIngressNodes) and the group must have an
+   * active member. Members are listed in site order.
    */
   async listRouteIngressGroups(scopes: readonly string[], folderId?: string | null): Promise<RouteIngressGroup[]> {
     const candidates = await this.loadRouteIngressNodeCandidates();
-    return loadRouteIngressGroups(this.db, routeIngressNodesForScopes(candidates, scopes, folderId));
+    return loadRouteIngressGroups(this.db, routeIngressNodesForScopes(candidates, scopes, folderId), scopes);
   }
 
   /**
@@ -112,15 +113,15 @@ export abstract class ProxyServiceMutations extends ProxyServicePlacement {
     input: Pick<CreateProxyHostRequest, 'nodeId' | 'domainNames' | 'folderId' | 'ingressGroupId'>
   ): Promise<{ nodeId: string; ingressGroupId: string | null; source: RouteIngressNodeSource }> {
     if (input.ingressGroupId) {
-      const group = await requireRoutableIngressGroup(this.db, input.ingressGroupId);
+      const group = await requireRoutableIngressGroup(this.db, input.ingressGroupId, scopes);
       return { nodeId: group.primaryNodeId, ingressGroupId: group.group.id, source: 'request' };
     }
     if (input.nodeId) return { nodeId: input.nodeId, ingressGroupId: null, source: 'request' };
     const registered = await findRegisteredDomainNodes(this.db, input.domainNames);
     const pinned = registeredDomainsIngressPlacement(registered);
     if (pinned?.ingressGroupId) {
-      // A registered domain on an ingress group places the route on that group.
-      const group = await requireRoutableIngressGroup(this.db, pinned.ingressGroupId);
+      // A registered domain on an ingress group places the route on that group (the caller must be able to view it).
+      const group = await requireRoutableIngressGroup(this.db, pinned.ingressGroupId, scopes);
       return { nodeId: group.primaryNodeId, ingressGroupId: group.group.id, source: 'domain' };
     }
     const resolved = resolveRouteIngressNode({

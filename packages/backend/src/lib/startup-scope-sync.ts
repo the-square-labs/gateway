@@ -15,7 +15,8 @@ import {
   withRetiredScopeReplacements,
 } from './scopes.js';
 
-const INGRESS_GROUP_VIEW_SCOPE = 'ingress:groups:view';
+// Given to the built-in admin groups together with migration 0228; a release before it rewrites them without it.
+const INGRESS_GROUP_MANAGE_SCOPE = 'ingress:groups:manage';
 
 /**
  * Upsert the built-in groups (creates on fresh install, syncs scopes on upgrade) and sanitize every group's scopes.
@@ -51,11 +52,13 @@ export async function syncPermissionGroupsAtStartup(
     );
     // A stored built-in group without the ingress group scopes this release gives it was written by a release before
     // them. After a rollback to such a release, which drops unknown scopes from custom groups, node grants are
-    // mirrored again the way migration 0228 did (on the first start after 0228 this changes nothing).
+    // mirrored again the way migration 0228 did (on the first start after 0228 this changes nothing). Only the scope
+    // the built-in groups got with 0228 tells: the operator group got ingress:groups:view later, and its first start
+    // with it must not mirror node grants again over what admins changed since.
     const missingIngressGroupScopes = storedBuiltins.some((stored) => {
       const scopes = Array.isArray(stored.scopes) ? stored.scopes : [];
       const current = builtinGroups.find((group) => group.name === stored.name)?.scopes ?? [];
-      return current.includes(INGRESS_GROUP_VIEW_SCOPE) && !scopes.includes(INGRESS_GROUP_VIEW_SCOPE);
+      return current.includes(INGRESS_GROUP_MANAGE_SCOPE) && !scopes.includes(INGRESS_GROUP_MANAGE_SCOPE);
     });
 
     // Before the built-in groups are rewritten, so they end up exactly this release's set.

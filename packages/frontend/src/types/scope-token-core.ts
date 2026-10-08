@@ -397,7 +397,7 @@ export const CORE_TOKEN_SCOPES = [
   {
     value: "ingress:groups:view",
     label: "View Ingress Groups",
-    desc: "View ingress groups, their members, and per-member delivery",
+    desc: "View ingress groups, their members, and per-member delivery; place routes and domains on them",
     group: "Ingress Groups",
   },
   {
