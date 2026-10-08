@@ -490,7 +490,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 				result.Success = false
 				result.Error = err.Error()
 			} else if serviceRestart = planUpdateRestart(); serviceRestart != nil {
-				// A launcher that predates self-update: the update restarts the
+				// A launcher that does not update itself: the update restarts the
 				// whole service once, or says why it cannot.
 				result.Detail = serviceRestart.detail
 				d.logger.Info(serviceRestart.detail, "target_version", updateCmd.TargetVersion)

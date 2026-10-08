@@ -124,6 +124,35 @@ func TestUpdateUnderOldLauncherRestartsTheService(t *testing.T) {
 			t.Fatalf("a launcher that updates itself got a service restart: %+v", plan)
 		}
 	})
+	// A launcher of 2.11.4-rc.6 has self-update but took OpenRC for manual
+	// mode: under OpenRC it never execs in place, so the update restarts the
+	// service into a launcher that recognizes OpenRC.
+	rc6 := LauncherInfo{Managed: true, Version: "v1", Features: []string{LauncherFeatureListenerKeep, LauncherFeatureSelfUpdate}}
+	openRC := launcherServiceManager{kind: launcherManagerOpenRC}
+	t.Run("self-updating launcher that took OpenRC for manual mode", func(t *testing.T) {
+		f := newServiceRestartFixture(t)
+		f.stageNext(t, launcherBinaryFeatures)
+		useServiceManager(t, openRC)
+		plan := planLauncherServiceRestart(f.stateDir, f.binary, rc6, f.launcherPID, 1000)
+		if plan == nil || plan.method != launcherRestartSignal || !strings.Contains(plan.detail, "cannot update itself in place under OpenRC") || !strings.Contains(plan.detail, "restarts the whole service") {
+			t.Fatalf("plan = %+v", plan)
+		}
+		// Only a launcher that recognizes OpenRC is worth the restart.
+		f.stageNext(t, rc6.Features)
+		if plan := planLauncherServiceRestart(f.stateDir, f.binary, rc6, f.launcherPID, 1000); plan == nil || plan.method != "" || !strings.Contains(plan.detail, "no newer launcher is staged") {
+			t.Fatalf("plan = %+v", plan)
+		}
+	})
+	t.Run("self-updating launcher under systemd or in manual mode", func(t *testing.T) {
+		for _, manager := range []launcherServiceManager{systemdAlways, {}} {
+			f := newServiceRestartFixture(t)
+			f.stageNext(t, launcherBinaryFeatures)
+			useServiceManager(t, manager)
+			if plan := planLauncherServiceRestart(f.stateDir, f.binary, rc6, f.launcherPID, 0); plan != nil {
+				t.Fatalf("%s: plan = %+v", manager, plan)
+			}
+		}
+	})
 	t.Run("update to a version that predates self-update", func(t *testing.T) {
 		f := newServiceRestartFixture(t)
 		f.stageNext(t, launcherBinaryFeatures)
@@ -226,8 +255,63 @@ func TestLauncherFeaturesFollowTheRunningLauncher(t *testing.T) {
 	if !info.Managed || info.Version != "v2" || !info.Has(LauncherFeatureSelfUpdate) || !info.Has(LauncherFeatureListenerKeep) {
 		t.Fatalf("launcher = %+v", info)
 	}
-	if capabilities := strings.Join(info.Capabilities(), ","); capabilities != "launcher_listener_keep_v1,launcher_self_update_v1" {
+	if capabilities := strings.Join(info.Capabilities(), ","); capabilities != "launcher_listener_keep_v1,launcher_self_update_v1,launcher_openrc_v1" {
 		t.Fatalf("capabilities = %s", capabilities)
+	}
+}
+
+// OpenRC's supervisor is told by its executable, else its command line, else
+// its comm, which the kernel cuts to "supervise-daemo" (seen on Alpine with
+// every daemon type, root and run users alike).
+func TestDetectLauncherServiceManagerRecognizesOpenRC(t *testing.T) {
+	oldUnit, oldRoot := launcherSystemdUnit, launcherProcRoot
+	t.Cleanup(func() { launcherSystemdUnit, launcherProcRoot = oldUnit, oldRoot })
+	launcherSystemdUnit = func() (string, error) { return "", nil }
+	const launcherPID = 342863
+	for _, test := range []struct {
+		name   string
+		parent int
+		files  map[string]string // "exe" is the link's target
+		openRC bool
+	}{
+		{name: "run user: command line", parent: 342862, files: map[string]string{"comm": "supervise-daemo\n", "cmdline": "supervise-daemon\x00docker-daemon\x00--start\x00--pidfile\x00/run/docker-daemon.pid\x00"}, openRC: true},
+		{name: "root: executable", parent: 342862, files: map[string]string{"comm": "supervise-daemo\n", "cmdline": "supervise-daemon\x00nginx-daemon\x00", "exe": "/sbin/supervise-daemon"}, openRC: true},
+		{name: "command line with a path", parent: 342862, files: map[string]string{"comm": "supervise-daemo\n", "cmdline": "/sbin/supervise-daemon\x00monitoring-daemon\x00"}, openRC: true},
+		{name: "comm alone", parent: 342862, files: map[string]string{"comm": "supervise-daemo\n", "cmdline": ""}, openRC: true},
+		{name: "shell", parent: 342862, files: map[string]string{"comm": "bash\n", "cmdline": "-bash\x00", "exe": "/usr/bin/bash"}},
+		{name: "another program with the same 15 characters", parent: 342862, files: map[string]string{"comm": "supervise-daemo\n", "cmdline": "supervise-daemonized\x00"}},
+		{name: "reparented to init", parent: 1, files: map[string]string{"comm": "supervise-daemo\n", "cmdline": "supervise-daemon\x00"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			launcherProcRoot = t.TempDir()
+			write := func(pid int, name, contents string) {
+				t.Helper()
+				dir := filepath.Join(launcherProcRoot, strconv.Itoa(pid))
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if name == "exe" {
+					if err := os.Symlink(contents, filepath.Join(dir, name)); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(launcherPID, "stat", strconv.Itoa(launcherPID)+" (docker-daemon-l) S "+strconv.Itoa(test.parent)+" 342862 342862 0 -1 4194560")
+			for name, contents := range test.files {
+				write(test.parent, name, contents)
+			}
+			manager := detectLauncherServiceManager(launcherPID)
+			if got := manager.kind == launcherManagerOpenRC; got != test.openRC {
+				t.Fatalf("service manager = %s, want OpenRC %v", manager, test.openRC)
+			}
+			if test.openRC && !manager.respawns() {
+				t.Fatal("OpenRC does not start the launcher again")
+			}
+		})
 	}
 }
 

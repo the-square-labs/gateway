@@ -84,7 +84,7 @@ func launcherRunningFeatures(keeper bool) []string {
 	if keeper {
 		return append([]string(nil), launcherBinaryFeatures...)
 	}
-	return []string{LauncherFeatureSelfUpdate}
+	return []string{LauncherFeatureSelfUpdate, LauncherFeatureOpenRC}
 }
 
 // takeLauncherResume takes over what the previous image handed this one, or
@@ -317,9 +317,18 @@ func (m launcherServiceManager) String() string {
 	}
 }
 
+// The systemd unit of this process and the process information the service
+// manager is told from (replaceable in tests). Systemd is told by the unit's
+// main PID (or its INVOCATION_ID and PID 1 as the parent), never by a process
+// name.
+var (
+	launcherSystemdUnit = listenerkeep.SystemdUnit
+	launcherProcRoot    = "/proc"
+)
+
 func detectLauncherServiceManager(launcherPID int) launcherServiceManager {
 	parent, parentErr := parentProcessID(launcherPID)
-	if unit, err := listenerkeep.SystemdUnit(); err == nil && unit != "" {
+	if unit, err := launcherSystemdUnit(); err == nil && unit != "" {
 		properties, err := systemctlShow(unit, "MainPID", "Restart")
 		if err == nil {
 			if properties["MainPID"] == strconv.Itoa(launcherPID) {
@@ -334,13 +343,41 @@ func detectLauncherServiceManager(launcherPID int) launcherServiceManager {
 			}
 		}
 	}
-	if parentErr == nil && parent > 1 {
-		if name, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", parent)); err == nil && strings.TrimSpace(string(name)) == "supervise-daemon" {
-			return launcherServiceManager{kind: launcherManagerOpenRC}
-		}
+	if parentErr == nil && parent > 1 && isOpenRCSupervisor(parent) {
+		return launcherServiceManager{kind: launcherManagerOpenRC}
 	}
 	return launcherServiceManager{}
 }
+
+// openRCSupervisor is the program OpenRC supervises a service with.
+const openRCSupervisor = "supervise-daemon"
+
+// isOpenRCSupervisor reports whether process pid runs OpenRC's
+// supervise-daemon. Its comm reads "supervise-daemo": the kernel keeps 15
+// characters of a process name (TASK_COMM_LEN). So the executable decides
+// where it is readable (the process's owner and root), then the command line
+// (readable by every user), and comm, also in its truncated form, only when
+// neither is.
+func isOpenRCSupervisor(pid int) bool {
+	dir := filepath.Join(launcherProcRoot, strconv.Itoa(pid))
+	if executable, err := os.Readlink(filepath.Join(dir, "exe")); err == nil {
+		return filepath.Base(strings.TrimSuffix(executable, " (deleted)")) == openRCSupervisor
+	}
+	if commandLine, err := os.ReadFile(filepath.Join(dir, "cmdline")); err == nil && len(commandLine) > 0 {
+		program, _, _ := strings.Cut(string(commandLine), "\x00")
+		return filepath.Base(program) == openRCSupervisor
+	}
+	name, err := os.ReadFile(filepath.Join(dir, "comm"))
+	if err != nil {
+		return false
+	}
+	comm := strings.TrimSpace(string(name))
+	return comm == openRCSupervisor || comm == openRCSupervisor[:launcherCommLength]
+}
+
+// launcherCommLength is how much of a process name /proc/<pid>/comm keeps
+// (TASK_COMM_LEN less the terminating NUL).
+const launcherCommLength = 15
 
 // systemdUnitDirectories are where systemd loads units from, highest priority
 // first.
@@ -422,7 +459,7 @@ func systemctlShow(unit string, properties ...string) (map[string]string, error)
 }
 
 func parentProcessID(pid int) (int, error) {
-	contents, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	contents, err := os.ReadFile(filepath.Join(launcherProcRoot, strconv.Itoa(pid), "stat"))
 	if err != nil {
 		return 0, err
 	}

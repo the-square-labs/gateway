@@ -1196,7 +1196,7 @@
       ],
       "expect": [
         "All packages pass; a candidate that does not stay ready is rolled back to the preserved binary.",
-        "A launcher with a daemon and a kept listener execs into the staged launcher with the same PID, the daemon and the listener survive; an update under a launcher without self-update plans one service restart under systemd and OpenRC and none in manual mode."
+        "A launcher with a daemon and a kept listener execs into the staged launcher with the same PID, the daemon and the listener survive; an update under a launcher without self-update plans one service restart under systemd and OpenRC and none in manual mode; under OpenRC so does an update under a launcher with launcher_self_update_v1 but without launcher_openrc_v1 (2.11.4-rc.6); OpenRC's supervise-daemon is recognized although its comm reads supervise-daemo."
       ]
     },
     {
@@ -2355,7 +2355,7 @@
       ],
       "expect": [
         "The update to <candidate> restarts the daemon under its launcher, as before; the node details show the launcher version Unknown.",
-        "The update to <newer> restarts the whole service once: under systemd as root at once, as gwsvc after RestartSec, under OpenRC after respawn_delay; the update result (Gateway log: Daemon update staged) and the daemon log say so; the probes count one cut, as for any update. The node comes back on <newer> with the capabilities launcher_listener_keep_v1 and launcher_self_update_v1.",
+        "The update to <newer> restarts the whole service once: under systemd as root at once, as gwsvc after RestartSec, under OpenRC after respawn_delay; the update result (Gateway log: Daemon update staged) and the daemon log say so; the probes count one cut, as for any update. The node comes back on <newer> with the capabilities launcher_listener_keep_v1, launcher_self_update_v1 and launcher_openrc_v1.",
         "Within 2 minutes after the <newer> daemon connected, the launcher execs into the launcher of <newer>: launcher and daemon PIDs unchanged, /proc/<launcher pid>/exe names <launcher>.next and launcher-refresh.json shows attempts 1, no probe counts a drop or a refused connection, the daemon reconnects its control session once and the node details show the launcher version <newer>.",
         "The last update restarts only the daemon under the launcher (launcher PID unchanged, no service restart in the journal or the OpenRC log); that daemon confirms the launcher (the launcher copy replaced, launcher-refresh.json gone until the new daemon stages itself), then the launcher updates itself in place again."
       ]

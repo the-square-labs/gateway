@@ -1,6 +1,6 @@
 package lifecycle
 
-// Service restart for launchers that predate self-update.
+// Service restart for launchers that do not update themselves.
 //
 // A launcher process started before launchers updated themselves in place
 // (launcher_selfupdate.go) runs the launcher code it started with until its
@@ -8,7 +8,10 @@ package lifecycle
 // one restart of the whole service instead of a restart under the launcher:
 // the start that follows runs the refreshed launcher together with the
 // updated daemon, and later updates go through that launcher. The update cuts
-// the daemon's connections as every update does under the old launcher.
+// the daemon's connections as every update does under the old launcher. The
+// same goes for a launcher of 2.11.4-rc.6 under OpenRC: it has self-update but
+// took OpenRC for manual mode (LauncherFeatureOpenRC), so it never execs in
+// place there.
 //
 // The daemon asks the service manager for the restart only when it is safe:
 //
@@ -81,7 +84,7 @@ type serviceRestartExpectation struct {
 }
 
 func (e *serviceRestartExpectation) refresh(launcher LauncherInfo) {
-	if !launcher.Managed || launcher.Has(LauncherFeatureSelfUpdate) {
+	if !launcher.Managed || launcherUpdatesItself(launcher) {
 		serviceRestartExpected.Store(false)
 		e.key = ""
 		return
@@ -116,29 +119,40 @@ type launcherServiceRestart struct {
 // planLauncherServiceRestart decides how a staged update restarts this daemon.
 // It returns nil when the launcher updates itself (every such launcher has the
 // keeper too, unless the keeper failed to open) and restarts the daemon as
-// always.
+// always. A launcher with self-update that took OpenRC for manual mode
+// (2.11.4-rc.6) never updates itself under OpenRC, so there it is handled
+// like a launcher that predates self-update.
 func planLauncherServiceRestart(stateDir, binaryPath string, launcher LauncherInfo, launcherPID, euid int) *launcherServiceRestart {
-	if !launcher.Managed || launcher.Has(LauncherFeatureSelfUpdate) {
+	if !launcher.Managed || launcherUpdatesItself(launcher) {
 		return nil
 	}
-	plan := &launcherServiceRestart{stateDir: stateDir, launcherPID: launcherPID}
+	plan := &launcherServiceRestart{stateDir: stateDir, launcherPID: launcherPID, manager: launcherServiceManagerOf(launcherPID)}
+	running := "The running launcher predates launcher self-update"
+	if launcher.Has(LauncherFeatureSelfUpdate) {
+		if plan.manager.kind != launcherManagerOpenRC {
+			return nil
+		}
+		running = "The running launcher cannot update itself in place under OpenRC"
+	}
 	stays := func(reason string) *launcherServiceRestart {
-		plan.detail = "The running launcher predates launcher self-update and stays until the service restarts: " + reason + "."
+		plan.method = ""
+		plan.detail = running + " and stays until the service restarts: " + reason + "."
 		return plan
 	}
 	if owner, err := readLauncherOwner(stateDir); err != nil || owner.PID != plan.launcherPID {
 		return stays("its process could not be identified")
 	}
 	// The start after the restart runs the new binary's bootstrap, which must
-	// know the journal's ServiceRestart, and the launcher it selects.
+	// know the journal's ServiceRestart, and the launcher it selects, which
+	// must update itself under this service manager.
 	if probe, err := probeLauncherFeatures(binaryPath); err != nil || !probe.has(LauncherFeatureSelfUpdate) {
 		return stays("the new daemon version predates launcher self-update")
 	}
 	if probe, err := probeLauncherFeatures(launcherForNextStart(stateDir, binaryPath)); err != nil ||
-		!probe.has(LauncherFeatureSelfUpdate) || !probe.has(LauncherFeatureListenerKeep) {
+		!probe.has(LauncherFeatureSelfUpdate) || !probe.has(LauncherFeatureListenerKeep) ||
+		(plan.manager.kind == launcherManagerOpenRC && !probe.has(LauncherFeatureOpenRC)) {
 		return stays("no newer launcher is staged yet")
 	}
-	plan.manager = launcherServiceManagerOf(plan.launcherPID)
 	switch plan.manager.kind {
 	case launcherManagerSystemd:
 		if euid == 0 {
@@ -153,7 +167,7 @@ func planLauncherServiceRestart(stateDir, binaryPath string, launcher LauncherIn
 	default:
 		return stays("in manual mode nothing would start it again")
 	}
-	plan.detail = "The running launcher predates launcher self-update: this update restarts the whole service once, so the refreshed launcher starts with it."
+	plan.detail = running + ": this update restarts the whole service once, so the refreshed launcher starts with it."
 	return plan
 }
 

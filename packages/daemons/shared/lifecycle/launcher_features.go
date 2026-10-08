@@ -23,6 +23,11 @@ const (
 	// launcher in place, keeping its process, its daemon child and everything
 	// it keeps (launcher_selfupdate.go).
 	LauncherFeatureSelfUpdate = "self_update_v1"
+	// LauncherFeatureOpenRC: the launcher recognizes OpenRC's supervise-daemon
+	// as the service manager that starts it again, so it updates itself in
+	// place under OpenRC too. Launchers with self_update_v1 alone (2.11.4-rc.6)
+	// took OpenRC for manual mode and never did.
+	LauncherFeatureOpenRC = "openrc_v1"
 
 	// launcherCapabilityPrefix names a launcher feature among the node
 	// capabilities a daemon reports (launcher_listener_keep_v1, ...).
@@ -35,7 +40,14 @@ const (
 
 // launcherBinaryFeatures are the features the launcher of this binary has
 // when everything it needs is available.
-var launcherBinaryFeatures = []string{LauncherFeatureListenerKeep, LauncherFeatureSelfUpdate}
+var launcherBinaryFeatures = []string{LauncherFeatureListenerKeep, LauncherFeatureSelfUpdate, LauncherFeatureOpenRC}
+
+// launcherUpdatesItself reports whether a launcher with these features execs
+// into a refreshed launcher in place under every service manager that starts
+// it again.
+func launcherUpdatesItself(launcher LauncherInfo) bool {
+	return launcher.Has(LauncherFeatureSelfUpdate) && launcher.Has(LauncherFeatureOpenRC)
+}
 
 // LauncherInfo describes the launcher process a daemon runs under.
 type LauncherInfo struct {

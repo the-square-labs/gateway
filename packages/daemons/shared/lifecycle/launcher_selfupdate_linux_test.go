@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -372,7 +373,7 @@ func TestLauncherUpdatesItselfInPlaceKeepingDaemonAndKeeper(t *testing.T) {
 	h.waitFor("the launcher execed into the staged launcher", func() bool { return h.launcherExecutable() == h.next })
 	h.waitFor("the new image wrote its owner record", func() bool { return h.owner().Version == "v2" })
 	owner := h.owner()
-	if owner.PID != launcherPID || len(owner.Features) != 2 {
+	if owner.PID != launcherPID || !slices.Equal(owner.Features, launcherBinaryFeatures) {
 		t.Fatalf("owner after exec = %+v", owner)
 	}
 	if state, err := readLauncherRefreshState(h.stateDir); err != nil || state == nil || state.Phase != launcherRefreshPhaseTrial || state.Attempts != 1 {
