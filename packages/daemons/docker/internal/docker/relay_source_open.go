@@ -77,6 +77,7 @@ func (p *DockerPlugin) openRelaySourceOnce(assignment *pb.RelayGrantAssignment, 
 		tunnel, err := router.openSourceWithin(candidate.GetGrant(), timeout)
 		p.recordRelayOpen(candidate.GetRelayInstanceId(), route, err)
 		if err == nil {
+			tunnel.idle = relaySourceIdleLimit(assignment.GetOwnerKind())
 			p.makeResumable(tunnel, assignment)
 			return tunnel, nil
 		}

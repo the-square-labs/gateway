@@ -261,6 +261,7 @@ func miniPump(destination, source miniStream) error {
 // streamPair is a source daemon and a target daemon joined by mini relays.
 type streamPair struct {
 	t       *testing.T
+	kinds   routeKinds
 	relays  map[string]*miniRelay
 	source  *DockerPlugin
 	target  *DockerPlugin
@@ -268,6 +269,11 @@ type streamPair struct {
 	backend net.Listener
 	cancels map[*DockerPlugin]map[string]context.CancelFunc
 }
+
+// routeKinds are the owner kinds of the test route's connect and endpoint assignments.
+type routeKinds struct{ connect, endpoint string }
+
+var containerLinkRoute = routeKinds{connect: containerLinkOwnerKind, endpoint: containerLinkOwnerKind}
 
 const (
 	testRouteID    = "3b9d6a6e-8c51-4a51-9b0e-6b2f1c7e9d10"
@@ -282,8 +288,13 @@ func candidateFor(relay, state string, deadline int64, grantKey string) *pb.Rela
 		Grant: &pb.RelaySignedGrant{KeyId: grantKey, Payload: []byte("{}"), Signature: []byte("s")}, AssignmentState: state, DrainDeadlineUnixMs: deadline}
 }
 
-// bundles builds the source and target bundles. states: relay -> candidate state.
+// bundles builds the source and target bundles of a container link. states: relay -> candidate state.
 func testBundles(revision uint64, states map[string]string, sourceResumable, targetResumable bool) (*pb.SyncRelayGrantsCommand, *pb.SyncRelayGrantsCommand) {
+	return testBundlesFor(containerLinkRoute, revision, states, sourceResumable, targetResumable)
+}
+
+// testBundlesFor is testBundles for a route of kinds.
+func testBundlesFor(kinds routeKinds, revision uint64, states map[string]string, sourceResumable, targetResumable bool) (*pb.SyncRelayGrantsCommand, *pb.SyncRelayGrantsCommand) {
 	var connectCandidates, endpointCandidates []*pb.RelayDataCandidate
 	for _, relay := range []string{"relay-a", "relay-b"} {
 		state, ok := states[relay]
@@ -293,13 +304,13 @@ func testBundles(revision uint64, states map[string]string, sourceResumable, tar
 		connectCandidates = append(connectCandidates, candidateFor(relay, state, 0, "route:"+testRouteID))
 		endpointCandidates = append(endpointCandidates, candidateFor(relay, state, 0, testEndpointID))
 	}
-	connect := &pb.RelayGrantAssignment{Role: "connect", OwnerKind: containerLinkOwnerKind, OwnerId: testLinkID, RouteId: testRouteID,
+	connect := &pb.RelayGrantAssignment{Role: "connect", OwnerKind: kinds.connect, OwnerId: testLinkID, RouteId: testRouteID,
 		TargetEndpointId: testEndpointID, SchemaVersion: 2, Candidates: connectCandidates,
 		Grant: &pb.RelaySignedGrant{KeyId: "route:" + testRouteID, Payload: []byte("{}"), Signature: []byte("s")}}
 	if sourceResumable {
 		connect.StreamResume = &pb.RelayStreamResume{Version: 1, KeyId: "v1", Key: testResumeKey}
 	}
-	endpoint := &pb.RelayGrantAssignment{Role: "endpoint", OwnerKind: containerLinkOwnerKind, OwnerId: testLinkID, EndpointId: testEndpointID,
+	endpoint := &pb.RelayGrantAssignment{Role: "endpoint", OwnerKind: kinds.endpoint, OwnerId: testLinkID, EndpointId: testEndpointID,
 		SchemaVersion: 2, Candidates: endpointCandidates, Grant: &pb.RelaySignedGrant{KeyId: testEndpointID, Payload: []byte("{}"), Signature: []byte("s")}}
 	if targetResumable {
 		endpoint.ResumeRoutes = []*pb.RelayRouteResume{{RouteId: testRouteID, Version: 1, KeyId: "v1", Key: testResumeKey}}
@@ -311,7 +322,14 @@ func testBundles(revision uint64, states map[string]string, sourceResumable, tar
 
 func newStreamPair(t *testing.T, sourceResumable, targetResumable bool) *streamPair {
 	t.Helper()
-	pair := &streamPair{t: t, relays: map[string]*miniRelay{}, cancels: map[*DockerPlugin]map[string]context.CancelFunc{}}
+	return newStreamPairFor(t, containerLinkRoute, sourceResumable, targetResumable)
+}
+
+// newStreamPairFor is newStreamPair for a route of kinds. A target that is not a connector ingress serves on a
+// storage node, as managed databases and storage do.
+func newStreamPairFor(t *testing.T, kinds routeKinds, sourceResumable, targetResumable bool) *streamPair {
+	t.Helper()
+	pair := &streamPair{t: t, kinds: kinds, relays: map[string]*miniRelay{}, cancels: map[*DockerPlugin]map[string]context.CancelFunc{}}
 	routes := map[string]string{testRouteID: testEndpointID}
 	for _, id := range []string{"relay-a", "relay-b"} {
 		pair.relays[id] = startMiniRelay(t, id, routes)
@@ -335,9 +353,12 @@ func newStreamPair(t *testing.T, sourceResumable, targetResumable bool) *streamP
 			}()
 		}
 	}()
-	sourceBundle, targetBundle := testBundles(1, map[string]string{"relay-a": "active", "relay-b": "active"}, sourceResumable, targetResumable)
+	sourceBundle, targetBundle := testBundlesFor(kinds, 1, map[string]string{"relay-a": "active", "relay-b": "active"}, sourceResumable, targetResumable)
 	pair.source = pair.newDaemon(sourceBundle)
 	pair.target = pair.newDaemon(targetBundle)
+	if !isConnectorIngressOwnerKind(kinds.endpoint) {
+		pair.target.cfg.Docker.Mode = "storage"
+	}
 	pair.target.endpointDialer = func(ctx context.Context, _ *pb.RelayGrantAssignment) (dialedEndpoint, error) {
 		pair.dials.Add(1)
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", backend.Addr().String())
@@ -418,7 +439,7 @@ func (pair *streamPair) waitRegistered() {
 // open opens a source stream like the egress socket does and returns the
 // application's end.
 func (pair *streamPair) open() (net.Conn, *relaySourceTunnel) {
-	assignment := pair.source.relayGrants.lookup("connect", containerLinkOwnerKind, testLinkID)
+	assignment := pair.source.relayGrants.lookup("connect", pair.kinds.connect, testLinkID)
 	tunnel, err := pair.source.openRelaySource(assignment)
 	if err != nil {
 		pair.t.Fatal(err)
