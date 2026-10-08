@@ -112,9 +112,8 @@ describe('relay supervisor: a local relay that comes back', () => {
     // The return check replaces the failed channel and finds the relay serving: at serving-again no channel is down.
     await t.supervisor.watchReturn();
     expect(t.supervisor.getSnapshot(true)?.state).toBe('healthy');
-    const lines = info.mock.calls.filter(
-      ([message]) => message === 'Gateway reconnected its channels to the local relay'
-    );
+    const calls = info.mock.calls as unknown as Array<[unknown, Record<string, unknown>?]>;
+    const lines = calls.filter(([message]) => message === 'Gateway reconnected its channels to the local relay');
     expect(lines).toHaveLength(1);
     expect(lines[0]?.[1]).toMatchObject({ replacedNow: false });
   });
