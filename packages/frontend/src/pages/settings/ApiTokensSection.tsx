@@ -1,30 +1,24 @@
 import { Key, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { AccessDialogFooter } from "@/components/access/AccessDialogFooter";
+import { AccessSection } from "@/components/access/AccessSection";
+import { boundAccessScopes, principalHolds } from "@/components/access/access-model";
+import { useAccessEditor } from "@/components/access/use-access-editor";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { OneTimeSecretDialog } from "@/components/common/OneTimeSecretDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { RelativeTime } from "@/components/common/RelativeTime";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { ScopePicker } from "@/components/common/ScopePicker";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
-  buildFinalScopes,
   deriveAllowedResourceIdsByScope,
   hasSelectableScopeBase,
   parseScopesForForm,
-  requiresResourceSelection,
 } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { apiTokenChangedChannel } from "@/services/user-resource-events";
@@ -45,6 +39,8 @@ import {
   RegistryAccessFields,
   registryAccessSummary,
 } from "./RegistryAccessFields";
+
+const NO_SCOPES: string[] = [];
 
 interface ApiTokensSectionProps {
   user: User | null;
@@ -76,8 +72,7 @@ export function ApiTokensSection({
   const [loading, setLoading] = useState(() => cachedTokens === undefined);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newTokenName, setNewTokenName] = useState("");
-  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
-  const [resourceScopes, setResourceScopes] = useState<Record<string, string[]>>({});
+  const [scopesOpen, setScopesOpen] = useState(false);
   const [registryAccess, setRegistryAccess] = useState<TokenRegistryAccess>({});
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [createdSecretDialogOpen, setCreatedSecretDialogOpen] = useState(false);
@@ -85,25 +80,30 @@ export function ApiTokensSection({
   const [isUpdating, setIsUpdating] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [editingToken, setEditingToken] = useState<ApiToken | null>(null);
-  const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
   const userScopes = useMemo(() => user?.scopes ?? [], [user?.scopes]);
   const allowedResourceIdsByScope = useMemo(
     () => deriveAllowedResourceIdsByScope(userScopes),
     [userScopes]
   );
-  const finalTokenScopes = useMemo(
-    () => buildFinalScopes(selectedScopes, resourceScopes),
-    [resourceScopes, selectedScopes]
-  );
-  const initialTokenScopes = useMemo(() => {
-    if (!editingToken) return [];
-    const parsedInitialScopes = parseScopesForForm(editingToken.scopes);
-    return buildFinalScopes(parsedInitialScopes.baseScopes, parsedInitialScopes.resources);
-  }, [editingToken]);
-  const tokenScopesChanged = useMemo(() => {
-    if (!editingToken) return false;
-    return initialTokenScopes.join("\n") !== finalTokenScopes.join("\n");
-  }, [editingToken, finalTokenScopes, initialTokenScopes]);
+  const access = useAccessEditor({
+    open: createDialogOpen,
+    scopes: editingToken?.scopes ?? NO_SCOPES,
+    ownerScopes: userScopes,
+  });
+  // A line wider than the owner's access is saved as what it really does (its note says so);
+  // the backend refuses token scopes its owner does not hold.
+  const finalTokenScopes = useMemo(() => {
+    const { ctx } = access.catalog;
+    const held = access.scopes.filter((scope) => principalHolds(userScopes, scope, ctx));
+    if (held.length === access.scopes.length) return access.scopes;
+    const narrowed = boundAccessScopes(
+      access.scopes.filter((scope) => !held.includes(scope)),
+      userScopes,
+      ctx
+    ).filter((scope) => principalHolds(userScopes, scope, ctx));
+    return [...new Set([...held, ...narrowed])].sort();
+  }, [access.catalog, access.scopes, userScopes]);
+  const tokenScopesChanged = !!editingToken && access.changed;
   const registryAccessChanged = useMemo(
     () =>
       !!editingToken &&
@@ -114,6 +114,7 @@ export function ApiTokensSection({
     if (!editingToken) return false;
     return newTokenName.trim() !== editingToken.name || tokenScopesChanged || registryAccessChanged;
   }, [editingToken, newTokenName, tokenScopesChanged, registryAccessChanged]);
+  const selectedBaseScopes = new Set(parseScopesForForm(access.scopes).baseScopes);
   // A registry-only token (CI pushing images) needs no scopes.
   const tokenHasGrants = finalTokenScopes.length > 0 || hasTokenRegistryAccess(registryAccess);
 
@@ -139,25 +140,12 @@ export function ApiTokensSection({
   const openTokenEdit = (token: ApiToken) => {
     setEditingToken(token);
     setNewTokenName(token.name);
-    const parsed = parseScopesForForm(token.scopes || []);
-    setSelectedScopes(parsed.baseScopes);
-    setResourceScopes(parsed.resources);
     setRegistryAccess(token.registryAccess ?? {});
-    setInitialResourceLimitedScopes(Object.keys(parsed.resources));
     setCreatedSecret(null);
     setCreateDialogOpen(true);
   };
 
   const validateScopeSelection = () => {
-    for (const scope of selectedScopes) {
-      if (
-        requiresResourceSelection(scope, allowedResourceIdsByScope, initialResourceLimitedScopes) &&
-        (resourceScopes[scope]?.length ?? 0) === 0
-      ) {
-        toast.error(`Select at least one resource for ${scope}`);
-        return false;
-      }
-    }
     if (!tokenHasGrants) {
       toast.error("Select at least one scope or registry access");
       return false;
@@ -195,30 +183,9 @@ export function ApiTokensSection({
   const openTokenCreate = () => {
     setEditingToken(null);
     setNewTokenName("");
-    setSelectedScopes([]);
-    setResourceScopes({});
     setRegistryAccess({});
-    setInitialResourceLimitedScopes([]);
     setCreatedSecret(null);
     setCreateDialogOpen(true);
-  };
-
-  const toggleScope = (scope: string) => {
-    setSelectedScopes((prev) => {
-      if (prev.includes(scope)) {
-        setResourceScopes((resources) => {
-          const next = { ...resources };
-          delete next[scope];
-          return next;
-        });
-        return prev.filter((s) => s !== scope);
-      }
-      const allowedResourceIds = allowedResourceIdsByScope[scope];
-      if (allowedResourceIds?.length) {
-        setResourceScopes((resources) => ({ ...resources, [scope]: allowedResourceIds }));
-      }
-      return [...prev, scope];
-    });
   };
 
   const handleCreateToken = async () => {
@@ -348,14 +315,9 @@ export function ApiTokensSection({
           setCreateDialogOpen(open);
         }}
       >
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingToken ? "API Token" : "Create API Token"}</DialogTitle>
-            <DialogDescription>
-              {editingToken
-                ? "Rename this token or edit its granted scopes"
-                : "Select granular permissions for this token"}
-            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -370,37 +332,28 @@ export function ApiTokensSection({
               />
             </div>
 
-            <ScopePicker
-              header={<span className="text-sm font-medium">Scopes</span>}
-              scopes={API_TOKEN_SCOPES.filter(
-                (scope) =>
-                  !LEGACY_REGISTRY_SCOPES.has(scope.value) &&
-                  (selectedScopes.includes(scope.value) ||
-                    hasSelectableScopeBase(userScopes, scope.value))
-              )}
-              selected={selectedScopes}
-              onToggle={toggleScope}
-              resources={resourceScopes}
-              onResourcesChange={setResourceScopes}
-              onToggleResource={(scope, caId) => {
-                setResourceScopes((prev) => {
-                  const current = prev[scope] || [];
-                  const has = current.includes(caId);
-                  return {
-                    ...prev,
-                    [scope]: has ? current.filter((id) => id !== caId) : [...current, caId],
-                  };
-                });
+            <AccessSection
+              editor={access}
+              subject={newTokenName.trim() || "this token"}
+              description="Never more than you can do."
+              mode={{ kind: "token", ownerScopes: userScopes }}
+              scopesOpen={scopesOpen}
+              onScopesOpenChange={setScopesOpen}
+              picker={{
+                scopes: API_TOKEN_SCOPES.filter(
+                  (scope) =>
+                    !LEGACY_REGISTRY_SCOPES.has(scope.value) &&
+                    (selectedBaseScopes.has(scope.value) ||
+                      hasSelectableScopeBase(userScopes, scope.value))
+                ),
+                cas,
+                nodes: nodesList,
+                proxyHosts: proxyHostsList,
+                databases: databasesList,
+                loggingSchemas: loggingSchemasList,
+                restrictableScopes: RESOURCE_SCOPABLE_SCOPES,
+                allowedResourceIds: allowedResourceIdsByScope,
               }}
-              cas={cas}
-              nodes={nodesList}
-              proxyHosts={proxyHostsList}
-              databases={databasesList}
-              loggingSchemas={loggingSchemasList}
-              restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-              allowedResourceIds={allowedResourceIdsByScope}
-              viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
-              footer={`${finalTokenScopes.length} scope${finalTokenScopes.length !== 1 ? "s" : ""}`}
             />
             <RegistryAccessFields
               value={registryAccess}
@@ -408,7 +361,10 @@ export function ApiTokensSection({
               userScopes={userScopes}
             />
           </div>
-          <DialogFooter>
+          <AccessDialogFooter
+            scopeCount={access.scopes.length}
+            onReviewScopes={() => setScopesOpen(true)}
+          >
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
               {editingToken ? "Close" : "Cancel"}
             </Button>
@@ -425,7 +381,7 @@ export function ApiTokensSection({
                 Create Token
               </Button>
             )}
-          </DialogFooter>
+          </AccessDialogFooter>
         </DialogContent>
       </Dialog>
 

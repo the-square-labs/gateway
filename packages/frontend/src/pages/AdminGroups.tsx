@@ -11,6 +11,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { AccessDialogFooter } from "@/components/access/AccessDialogFooter";
+import { AccessSection } from "@/components/access/AccessSection";
+import { useAccessEditor } from "@/components/access/use-access-editor";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -21,7 +24,6 @@ import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { useContentLoading } from "@/components/common/reveal-gate";
-import { ScopePicker } from "@/components/common/ScopePicker";
 import { SwitchCard } from "@/components/common/SwitchCard";
 import {
   allResourcePages,
@@ -33,13 +35,7 @@ import {
 } from "@/components/common/scope-list-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,7 +53,6 @@ import {
 } from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
-  buildFinalScopes,
   canCreateInFolder,
   deriveAllowedResourceIdsByScope,
   hasSelectableScopeBase,
@@ -73,12 +68,13 @@ import type { DatabaseConnection, LoggingSchema, Node, PermissionGroup, ProxyHos
 import { GROUP_ASSIGNABLE_SCOPES, RESOURCE_SCOPABLE_SCOPES } from "@/types";
 import {
   builtinGroupSortOrder,
-  findMissingRequiredResourceSelection,
   formatGroupName,
   formatGroupNameInput,
   getGroupEffectiveScopes,
   isScopeSubset,
 } from "./admin-groups-helpers";
+
+const NO_SCOPES: string[] = [];
 
 interface AdminGroupsProps {
   embedded?: boolean;
@@ -150,10 +146,8 @@ function AdminGroupsContent({
   }, [dialogOpen, editingGroup]);
   const [formDescription, setFormDescription] = useState("");
   const [formParentId, setFormParentId] = useState<string | null>(null);
-  const [formBaseScopes, setFormBaseScopes] = useState<string[]>([]);
-  const [formResources, setFormResources] = useState<Record<string, string[]>>({});
   const [formRequireGateway2fa, setFormRequireGateway2fa] = useState(false);
-  const [initialResourceLimitedScopes, setInitialResourceLimitedScopes] = useState<string[]>([]);
+  const [scopesOpen, setScopesOpen] = useState(false);
   const [listSearch, setListSearch] = useState("");
   const [groupDialogMode, setGroupDialogMode] = useState<"edit" | "readonly">("edit");
   const [saving, setSaving] = useState(false);
@@ -332,10 +326,7 @@ function AdminGroupsContent({
     setFormName("");
     setFormDescription("");
     setFormParentId(null);
-    setFormBaseScopes([]);
-    setFormResources({});
     setFormRequireGateway2fa(false);
-    setInitialResourceLimitedScopes([]);
     setDestinationFolders(null);
     setDialogOpen(true);
   }, []);
@@ -352,11 +343,7 @@ function AdminGroupsContent({
     setFormName(group.name);
     setFormDescription(group.description ?? "");
     setFormParentId(group.parentId);
-    const { baseScopes, resources } = parseScopesForForm(group.scopes);
-    setFormBaseScopes(baseScopes);
-    setFormResources(resources);
     setFormRequireGateway2fa(group.requireGateway2fa ?? false);
-    setInitialResourceLimitedScopes(Object.keys(resources));
     setDialogOpen(true);
   };
 
@@ -376,18 +363,7 @@ function AdminGroupsContent({
       }
       return;
     }
-    const missingResourceScope = findMissingRequiredResourceSelection(
-      formBaseScopes,
-      formResources,
-      allowedResourceIdsByScope,
-      initialResourceLimitedScopes
-    );
-    if (missingResourceScope) {
-      toast.error(`Select at least one resource for ${missingResourceScope}`);
-      return;
-    }
-
-    const finalScopes = buildFinalScopes(formBaseScopes, formResources);
+    const finalScopes = access.scopes;
     const normalizedName = formatGroupName(formName);
     setFormName(normalizedName);
     if (!normalizedName) {
@@ -446,60 +422,37 @@ function AdminGroupsContent({
     }
   };
 
-  const toggleScope = (scope: string) => {
-    setFormBaseScopes((prev) => {
-      if (prev.includes(scope)) {
-        // Removing scope — also clear any resource restrictions
-        setFormResources((r) => {
-          const next = { ...r };
-          delete next[scope];
-          return next;
-        });
-        return prev.filter((s) => s !== scope);
-      }
-      const allowedResourceIds = allowedResourceIdsByScope[scope];
-      if (allowedResourceIds?.length) {
-        setFormResources((resources) => ({ ...resources, [scope]: allowedResourceIds }));
-      }
-      return [...prev, scope];
-    });
-  };
-
-  const toggleResource = (scope: string, caId: string) => {
-    setFormResources((prev) => {
-      const current = prev[scope] || [];
-      const next = current.includes(caId)
-        ? current.filter((id) => id !== caId)
-        : [...current, caId];
-      return { ...prev, [scope]: next };
-    });
-  };
-
-  const ownCount = buildFinalScopes(formBaseScopes, formResources).length;
   const groupDialogReadOnly = groupDialogMode === "readonly";
   const securityOnly = Boolean(editingGroup?.isBuiltin);
-  const inheritedScopes = formParentId
-    ? [
-        ...new Set([
-          ...(groups.find((g) => g.id === formParentId)?.scopes ?? []),
-          ...(groups.find((g) => g.id === formParentId)?.inheritedScopes ?? []),
-        ]),
-      ]
-    : [];
-  const inheritedCount = inheritedScopes.length;
-  const selectedCount = new Set([
-    ...buildFinalScopes(formBaseScopes, formResources),
-    ...inheritedScopes,
-  ]).size;
+  const parentGroup = formParentId ? groups.find((g) => g.id === formParentId) : undefined;
+  const inheritedScopes = useMemo(
+    () =>
+      parentGroup
+        ? [...new Set([...parentGroup.scopes, ...(parentGroup.inheritedScopes ?? [])])]
+        : [],
+    [parentGroup]
+  );
+  const inheritedAccess = useMemo(
+    () => (parentGroup ? [{ from: parentGroup.name, scopes: inheritedScopes }] : []),
+    [inheritedScopes, parentGroup]
+  );
+  const access = useAccessEditor({
+    open: dialogOpen,
+    scopes: editingGroup?.scopes ?? NO_SCOPES,
+    inherited: inheritedAccess,
+  });
   const visibleAssignableScopes = useMemo(() => {
     if (!groupDialogReadOnly) return assignableScopes;
-    const selectedBases = new Set([...formBaseScopes, ...inheritedScopes]);
+    const selectedBases = new Set([
+      ...parseScopesForForm(access.scopes).baseScopes,
+      ...parseScopesForForm(inheritedScopes).baseScopes,
+    ]);
     const assignableValues = new Set(assignableScopes.map((scope) => scope.value));
     const selectedScopes = GROUP_ASSIGNABLE_SCOPES.filter(
       (scope) => selectedBases.has(scope.value) && !assignableValues.has(scope.value)
     );
     return [...assignableScopes, ...selectedScopes];
-  }, [assignableScopes, formBaseScopes, groupDialogReadOnly, inheritedScopes]);
+  }, [access.scopes, assignableScopes, groupDialogReadOnly, inheritedScopes]);
   const canManageFolders = hasAnyScope("admin:groups:folders:manage", "admin:system");
   const hasActiveFilters = listSearch.trim() !== "";
   const filteredGroups = useMemo(() => {
@@ -737,7 +690,7 @@ function AdminGroupsContent({
 
       {/* Create / Edit Group Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
               {editingGroup ? (groupDialogReadOnly ? "View Group" : "Edit Group") : "Create Group"}
@@ -795,58 +748,48 @@ function AdminGroupsContent({
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Inherit From</label>
-              {
-                <>
-                  <Select
-                    value={formParentId ?? "__none__"}
-                    onValueChange={(v) => setFormParentId(v === "__none__" ? null : v)}
-                    disabled={groupDialogReadOnly || securityOnly}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="None" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">None</SelectItem>
-                      {availableParentGroups.map((g) => (
-                        <SelectItem key={g.id} value={g.id}>
-                          {g.name}
-                          {g.isBuiltin ? " (built-in)" : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Inherited permissions stay inline in their normal categories and cannot be
-                    removed here
-                  </p>
-                </>
-              }
+              <Select
+                value={formParentId ?? "__none__"}
+                onValueChange={(v) => setFormParentId(v === "__none__" ? null : v)}
+                disabled={groupDialogReadOnly || securityOnly}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {availableParentGroups.map((g) => (
+                    <SelectItem key={g.id} value={g.id}>
+                      {g.name}
+                      {g.isBuiltin ? " (built-in)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Its access shows in the list below and changes in that group.
+              </p>
             </div>
-            <ScopePicker
-              header={<span className="text-sm font-medium">Scopes</span>}
-              scopes={visibleAssignableScopes}
-              selected={formBaseScopes}
-              onToggle={toggleScope}
-              resources={formResources}
-              onResourcesChange={groupDialogReadOnly || securityOnly ? undefined : setFormResources}
-              onToggleResource={toggleResource}
-              cas={cas}
-              nodes={nodesList}
-              proxyHosts={proxyHostsList}
-              databases={databasesList}
-              loggingSchemas={loggingSchemasList}
-              restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-              allowedResourceIds={allowedResourceIdsByScope}
-              inheritedScopes={inheritedScopes}
-              inheritedFromName={groups.find((g) => g.id === formParentId)?.name}
+            <AccessSection
+              editor={access}
+              subject={formatGroupName(formName) || "the new group"}
+              description="Every member gets this access."
+              mode={{ kind: "grant", actorScopes: userScopes }}
               readOnly={groupDialogReadOnly || securityOnly}
-              viewportClassName="max-h-[min(20rem,40dvh)] overflow-y-auto overscroll-contain"
-              footer={
-                <>
-                  {selectedCount} scope{selectedCount !== 1 ? "s" : ""} selected
-                  {inheritedCount > 0 && ` (${ownCount} own + ${inheritedCount} inherited)`}
-                </>
-              }
+              scopesOpen={scopesOpen}
+              onScopesOpenChange={setScopesOpen}
+              picker={{
+                scopes: visibleAssignableScopes,
+                cas,
+                nodes: nodesList,
+                proxyHosts: proxyHostsList,
+                databases: databasesList,
+                loggingSchemas: loggingSchemasList,
+                restrictableScopes: RESOURCE_SCOPABLE_SCOPES,
+                allowedResourceIds: allowedResourceIdsByScope,
+                inheritedScopes,
+                inheritedFromName: parentGroup?.name,
+              }}
             />
             <SwitchCard
               label="Require two-factor authentication"
@@ -856,7 +799,10 @@ function AdminGroupsContent({
               onCheckedChange={setFormRequireGateway2fa}
             />
           </div>
-          <DialogFooter>
+          <AccessDialogFooter
+            scopeCount={access.scopes.length}
+            onReviewScopes={() => setScopesOpen(true)}
+          >
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
               {groupDialogReadOnly ? "Close" : "Cancel"}
             </Button>
@@ -865,7 +811,7 @@ function AdminGroupsContent({
                 {editingGroup ? "Save Changes" : "Create Group"}
               </Button>
             )}
-          </DialogFooter>
+          </AccessDialogFooter>
         </DialogContent>
       </Dialog>
     </>

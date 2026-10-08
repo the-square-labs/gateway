@@ -45,6 +45,11 @@ export const ALLOWLIST = [
     file: "src/components/terminal/TerminalConsole.tsx",
     reason: "pop-out button floating over the terminal output",
   },
+  {
+    rule: "dialog-footer-right",
+    file: "src/components/access/AccessDialogFooter.tsx",
+    reason: "the Review N scopes link sits on the left of the access dialogs' footer (permissions rework)",
+  },
   { rule: "shared-date-format", file: "src/pages/DockerLogsPopout.tsx", reason: LOG_TIMESTAMP },
   {
     rule: "shared-date-format",

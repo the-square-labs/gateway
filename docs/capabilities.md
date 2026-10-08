@@ -410,6 +410,7 @@ Administration features:
 - OIDC, local password, and email one-time-code authentication; users can add passkeys after setup.
 - Built-in and custom permission groups.
 - Per-user additional scope grants, bounded by the permissions of the administrator assigning them.
+- Groups, user permissions, API tokens, and OAuth consent show access as lines: a role (Viewer, Deployer, Developer, Operator) everywhere, in a project folder, or on specific resources, and a Git level on repositories. Lines save ordinary scopes; the raw scope picker stays one click away (see [SCOPES.md](../SCOPES.md#access-lines)).
 - Granular scopes for users, groups, API tokens, OAuth grants, and MCP access.
 - Write-capable scopes imply matching read/view checks while preserving resource boundaries.
 - Audit log for user, token, OAuth, and AI-initiated actions.

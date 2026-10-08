@@ -1,23 +1,20 @@
-import { Check, Shield, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { AccessPanel } from "@/components/access/AccessPanel";
+import { AccessScopesDialog } from "@/components/access/AccessScopesDialog";
+import { useAccessEditor } from "@/components/access/use-access-editor";
 import { AuthWindowLoader } from "@/components/auth/AuthShell";
 import { Notice } from "@/components/common/Notice";
-import { ScopePicker } from "@/components/common/ScopePicker";
 import {
   allResourcePages,
   canLoadScopeResource,
-  type FolderOption,
   loadScopeResourceList,
   reportScopeLoadError,
 } from "@/components/common/scope-list-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  buildFinalScopes,
-  deriveAllowedResourceIdsByScope,
-  parseScopesForForm,
-} from "@/lib/scope-utils";
+import { deriveAllowedResourceIdsByScope, parseScopesForForm } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
@@ -81,8 +78,9 @@ export function OAuthConsent() {
   const [searchParams] = useSearchParams();
   const requestId = searchParams.get("request") ?? "";
   const [preview, setPreview] = useState<OAuthConsentPreview | null>(null);
-  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
-  const [resourceScopes, setResourceScopes] = useState<Record<string, string[]>>({});
+  // What the request grants unless narrowed: everything grantable but the high-risk scopes.
+  const [defaultScopes, setDefaultScopes] = useState<string[]>([]);
+  const [scopesOpen, setScopesOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<"approve" | "deny" | null>(null);
   const isSubmitting = submitting !== null;
@@ -92,11 +90,6 @@ export function OAuthConsent() {
   const [databases, setDatabases] = useState<DatabaseConnection[]>([]);
   const [loggingSchemas, setLoggingSchemas] = useState<LoggingSchema[]>([]);
   const [resourceListsReady, setResourceListsReady] = useState(false);
-  // null until the scope list reports the folders it offers for restrictions.
-  const [folderOptions, setFolderOptions] = useState<FolderOption[] | null>(null);
-  // The scope list's own option lists and restriction labels (Git connectors, groups, …).
-  const [scopeListLoaded, setScopeListLoaded] = useState(false);
-  const markScopeListLoaded = useCallback(() => setScopeListLoaded(true), []);
   const { cas, fetchCAs } = useCAStore();
   // Consent is outside the dashboard shell, so the signed-in account is loaded here: the
   // restriction pickers only offer folders and resources that account can see.
@@ -132,11 +125,9 @@ export function OAuthConsent() {
     try {
       const data = await api.getOAuthConsent(requestId);
       setPreview(data);
-      const defaults = parseScopesForForm(
+      setDefaultScopes(
         data.grantableScopes.filter((scope) => !data.manualApprovalScopes.includes(scope))
       );
-      setSelectedScopes(defaults.baseScopes);
-      setResourceScopes(defaults.resources);
     } catch (err) {
       setError(err instanceof Error ? err.message : "OAuth request could not be loaded");
     }
@@ -202,15 +193,12 @@ export function OAuthConsent() {
     () => deriveAllowedResourceIdsByScope(preview?.grantableScopes ?? []),
     [preview?.grantableScopes]
   );
-  const finalSelectedScopes = useMemo(
-    () => buildFinalScopes(selectedScopes, resourceScopes),
-    [resourceScopes, selectedScopes]
-  );
-  const hasMissingResourceSelection = selectedScopes.some(
-    (scope) =>
-      (allowedResourceIdsByScope[scope]?.length ?? 0) > 0 &&
-      (resourceScopes[scope]?.length ?? 0) === 0
-  );
+  // The request as access lines; the scope picker narrows it.
+  const access = useAccessEditor({
+    open: preview !== null && accountResolved,
+    scopes: defaultScopes,
+  });
+  const finalSelectedScopes = access.scopes;
   const hasManualApprovalScopes = (preview?.manualApprovalScopes.length ?? 0) > 0;
 
   const resourceLabel = preview?.resourceInfo.name ?? "Gateway API";
@@ -223,26 +211,8 @@ export function OAuthConsent() {
     }
   }, [preview?.redirect.uri]);
 
-  const toggleScope = (scope: string) => {
-    setSelectedScopes((current) => {
-      if (current.includes(scope)) {
-        setResourceScopes((resources) => {
-          const next = { ...resources };
-          delete next[scope];
-          return next;
-        });
-        return current.filter((item) => item !== scope);
-      }
-      const allowedIds = allowedResourceIdsByScope[scope];
-      if (allowedIds?.length) {
-        setResourceScopes((resources) => ({ ...resources, [scope]: allowedIds }));
-      }
-      return [...current, scope];
-    });
-  };
-
   const approve = async () => {
-    if (!requestId || finalSelectedScopes.length === 0 || hasMissingResourceSelection) return;
+    if (!requestId || finalSelectedScopes.length === 0) return;
     setSubmitting("approve");
     try {
       const result = await api.approveOAuthConsent(requestId, finalSelectedScopes);
@@ -340,8 +310,7 @@ export function OAuthConsent() {
 
   // Resource and folder pickers change the card's size, so it stays hidden behind the loader
   // until their first load ends.
-  const cardReady =
-    (!accountScopes || resourceListsReady) && folderOptions !== null && scopeListLoaded;
+  const cardReady = (!accountScopes || resourceListsReady) && access.catalog.ready;
 
   return (
     <>
@@ -415,59 +384,33 @@ export function OAuthConsent() {
                 {hasManualApprovalScopes && (
                   <Notice tone="destructive" title="Some requested scopes are high-risk">
                     They can reveal sensitive data, export private key material, or perform
-                    high-risk operations, and stay unchecked until you explicitly approve them.
+                    high-risk operations, and stay out of the access below until you approve them
+                    under Review scopes.
                   </Notice>
                 )}
               </section>
 
               <section className="p-5">
-                <ScopePicker
-                  className="space-y-3"
-                  header={
-                    <div className="flex items-center gap-2">
-                      <Shield className="h-4 w-4 text-muted-foreground" />
-                      <h2 className="text-sm font-semibold text-foreground">Requested scopes</h2>
-                    </div>
-                  }
-                  scopes={grantableScopeItems}
-                  selected={selectedScopes}
-                  onToggle={toggleScope}
-                  resources={resourceScopes}
-                  onResourcesChange={setResourceScopes}
-                  onToggleResource={(scope, resourceId) => {
-                    setResourceScopes((current) => {
-                      const selected = current[scope] ?? [];
-                      return {
-                        ...current,
-                        [scope]: selected.includes(resourceId)
-                          ? selected.filter((id) => id !== resourceId)
-                          : [...selected, resourceId],
-                      };
-                    });
-                    setSelectedScopes((current) => [...new Set([...current, scope])]);
-                  }}
-                  cas={cas}
-                  nodes={nodes}
-                  proxyHosts={proxyHosts}
-                  databases={databases}
-                  loggingSchemas={loggingSchemas}
-                  restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
-                  allowedResourceIds={allowedResourceIdsByScope}
-                  readOnly={isSubmitting}
-                  viewportClassName="max-h-[24rem] overflow-y-auto overscroll-contain"
-                  onFolderOptionsChange={setFolderOptions}
-                  onInitialLoadComplete={markScopeListLoaded}
-                  footer={
-                    <span data-oauth-consent-scope-count="">
-                      {finalSelectedScopes.length} scope
-                      {finalSelectedScopes.length === 1 ? "" : "s"} will be granted
-                    </span>
-                  }
+                <AccessPanel
+                  views={access.views}
+                  description={`What ${preview.client.name} asks for.`}
                 />
               </section>
             </div>
 
             <div className="flex shrink-0 flex-col-reverse gap-3 border-t border-border p-5 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="link"
+                className="mr-auto h-auto p-0"
+                onClick={() => setScopesOpen(true)}
+                disabled={isSubmitting}
+              >
+                <span data-oauth-consent-scope-count="">
+                  Review {finalSelectedScopes.length} scope
+                  {finalSelectedScopes.length === 1 ? "" : "s"}
+                </span>
+              </Button>
               <Button
                 variant="outline"
                 onClick={deny}
@@ -480,9 +423,7 @@ export function OAuthConsent() {
               <Button
                 onClick={approve}
                 pending={submitting === "approve"}
-                disabled={
-                  isSubmitting || finalSelectedScopes.length === 0 || hasMissingResourceSelection
-                }
+                disabled={isSubmitting || finalSelectedScopes.length === 0}
               >
                 <Check className="h-4 w-4" />
                 Authorize
@@ -491,6 +432,23 @@ export function OAuthConsent() {
           </div>
         </div>
       </div>
+      <AccessScopesDialog
+        open={scopesOpen}
+        onOpenChange={setScopesOpen}
+        title={`Scopes for ${preview.client.name}`}
+        scopes={finalSelectedScopes}
+        onApply={access.replaceScopes}
+        picker={{
+          scopes: grantableScopeItems,
+          cas,
+          nodes,
+          proxyHosts,
+          databases,
+          loggingSchemas,
+          restrictableScopes: RESOURCE_SCOPABLE_SCOPES,
+          allowedResourceIds: allowedResourceIdsByScope,
+        }}
+      />
     </>
   );
 }

@@ -12,6 +12,30 @@ All scopes follow `domain:resource:action[:qualifier]`. Resource-scopable scopes
 | `viewer` | Read-only view/discovery access, including GitLab, GitHub, Git, and Cloudflare connectors. Reads that can reveal secrets stay out: Docker volume files, notification webhooks, and logging ingest tokens. |
 | `guest` | Authenticated account access without infrastructure permissions. |
 
+## Access Lines
+
+The Console shows the scopes of a permission group, a user, an API token, and an OAuth request as access lines. A line is a view over ordinary scopes: saving stores plain scopes, and the API and MCP stay scope-based.
+
+- A resource line is a role in a place: everywhere (unqualified scopes), in a project folder (`<scope>:folder/<folderId>` in each covered type's own folder tree, picked by the same folder path), or on specific resources (`<scope>:<resourceId>`; creation scopes are left out, since they name a destination). A type whose tree has no folder with that path is left out of the line.
+- "May delete resources" adds the type's delete scope. Only Developer and Operator can delete.
+- A Git line is a level on one connector (or on every connector of a provider), for every repository, one GitLab group or GitHub owner (with the repositories added later), or some repositories. Use is `view` and `use`; Read code adds `repo:read`; Edit code and CI adds `repo:write`.
+- Scopes no line covers show as one Custom scopes line. Review scopes opens the scope picker over the raw scopes; applying it rebuilds the lines.
+- A user's own lines are their additional permissions; lines from their groups show with the group name and change in the group. A group shows its parent group's lines the same way.
+- An API token line wider than its owner's access shows what it really does, and saving keeps only that part, since a token never holds more than its owner.
+
+| Type | Viewer | Deployer | Developer | Operator | May delete |
+|------|--------|----------|-----------|----------|------------|
+| Containers and deployments | `docker:containers:view` | + `manage` | + `create`, `edit`, `environment`, `link` | + `secrets`, `console`, `webhooks` | `docker:containers:delete` |
+| Compose projects | `docker:compose:view` | + `manage` | + `create` | same as Developer | `docker:compose:delete` |
+| Routes | `proxy:view` | same as Viewer | + `create`, `edit` | + `maintenance:bypass` | `proxy:delete` |
+| Domains | `domains:view` | same as Viewer | same as Viewer | + `create`, `edit` | `domains:delete` |
+| SSL certificates | `ssl:cert:view` | same as Viewer | + `issue` | + `renew` | `ssl:cert:delete` |
+| Databases | `databases:view` | same as Viewer | + `bind`, `query:read` | `view`, `create`, `edit`, `query:read`, `query:write`, `query:admin` | `databases:delete` |
+| Object storage | `storage:view` | same as Viewer | + `objects:read` | + `create`, `edit`, `credentials:use`, `objects:write` | `storage:delete` |
+| Pages | `pages:view` | + `deploy` | + `create`, `deployments:manage`, `tags:manage` | + `edit` | `pages:delete` |
+
+Viewer and Operator match the built-in `viewer` and `operator` groups type by type. Stored scopes become lines in a fixed order: roles everywhere, then per folder path, then on resources, then Git, then custom scopes; equal scope sets take the smaller role.
+
 ## Programmatic Access
 
 Gateway has four token families:

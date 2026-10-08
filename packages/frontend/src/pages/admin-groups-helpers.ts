@@ -1,4 +1,4 @@
-import { requiresResourceSelection, scopeMatches } from "@/lib/scope-utils";
+import { scopeMatches } from "@/lib/scope-utils";
 import type { PermissionGroup } from "@/types";
 
 const BUILTIN_GROUP_ORDER = ["system-admin", "admin", "operator", "viewer", "guest"];
@@ -26,21 +26,4 @@ export function formatGroupNameInput(value: string): string {
 
 export function formatGroupName(value: string): string {
   return formatGroupNameInput(value).replace(/-+$/g, "");
-}
-
-export function findMissingRequiredResourceSelection(
-  baseScopes: string[],
-  resources: Record<string, string[]>,
-  allowedResourceIdsByScope: Record<string, string[]>,
-  initialResourceLimitedScopes: readonly string[]
-): string | null {
-  for (const scope of baseScopes) {
-    if (
-      requiresResourceSelection(scope, allowedResourceIdsByScope, initialResourceLimitedScopes) &&
-      (resources[scope]?.length ?? 0) === 0
-    ) {
-      return scope;
-    }
-  }
-  return null;
 }

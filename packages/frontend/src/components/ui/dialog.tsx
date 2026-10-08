@@ -130,18 +130,20 @@ type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.
   hideCloseButton?: boolean;
   unstyled?: boolean;
   clipOverflow?: boolean;
+  /**
+   * For a long list (the scope picker): the dialog grows with its body up to min(95dvh, 900px),
+   * stays centered, and its body scrolls between the header and the footer.
+   */
+  fitViewport?: boolean;
 };
 
 // Rendered inside the portal, which mounts it only while the dialog is open,
 // so each opening waits for its own data.
 const DialogContentPanel = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
-    hideCloseButton?: boolean;
-    unstyled?: boolean;
-    clipOverflow?: boolean;
-  }
->(({ className, children, hideCloseButton, unstyled, clipOverflow, ...props }, ref) => {
+  DialogContentProps
+>(({ className, children, hideCloseButton, unstyled, clipOverflow, ...rest }, ref) => {
+  const { fitViewport, ...props } = rest;
   const [bodyScrolled, setBodyScrolled] = React.useState(false);
   // With an opener its spinner shows from the click, so there is no screen
   // indicator to delay or hold; the dialog opens as soon as the data is in.
@@ -243,7 +245,8 @@ const DialogContentPanel = React.forwardRef<
         className={cn(
           "dialog-content relative z-50 flex w-full max-w-none flex-col border bg-background p-0 shadow-lg outline-none",
           "max-h-[85dvh]",
-          "sm:mx-auto sm:my-auto sm:max-h-none sm:max-w-lg",
+          "sm:mx-auto sm:my-auto sm:max-w-lg",
+          fitViewport ? "sm:max-h-[min(95dvh,900px)]" : "sm:max-h-none",
           contentClassName,
           clipOverflow && "sm:overflow-clip",
           "max-sm:flex max-sm:max-h-[85dvh] max-sm:flex-col max-sm:gap-0 max-sm:overflow-hidden max-sm:p-0"
@@ -278,6 +281,7 @@ const DialogContentPanel = React.forwardRef<
                 data-dialog-body=""
                 className={cn(
                   "relative min-h-0 min-w-0 px-4 max-sm:flex-1 max-sm:overflow-y-auto max-sm:overscroll-contain sm:px-6",
+                  fitViewport && "sm:overflow-y-auto sm:overscroll-contain",
                   bodyChildren.length > 1 && "grid gap-4",
                   hasHeader ? "pt-0" : "pt-4 sm:pt-6",
                   hasFooter ? "pb-0" : "pb-4 sm:pb-6"
@@ -309,7 +313,8 @@ const DialogContent = React.forwardRef<
   DialogContentProps
 >((props, ref) => (
   <DialogPortal>
-    <DialogOverlay>
+    {/* A dialog fitted to the viewport is centered in it, without the overlay's page padding. */}
+    <DialogOverlay className={props.fitViewport ? "sm:items-center sm:py-0" : undefined}>
       <DialogContentPanel ref={ref} {...props} />
     </DialogOverlay>
   </DialogPortal>
