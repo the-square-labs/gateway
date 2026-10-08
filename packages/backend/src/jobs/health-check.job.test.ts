@@ -136,3 +136,70 @@ describe('route health job: ingress members that reconnect', () => {
     expect(withMemberIngressHealth('online', [member('ingress-1', { connected: false })]).status).toBe('offline');
   });
 });
+
+// After a local relay outage, relayed routes' streams move back between relays and their endpoints register again:
+// a probe through them is slow or fails for a moment (stand rc.6 O-7: a route went degraded on one slow probe 6 s
+// after the relay served again, and its alert stayed two minutes).
+describe('route health job: relayed routes while the local relay settles', () => {
+  const relayed = (t: ReturnType<typeof setup>) => {
+    // No availability members: the route's own Secure Link is probed.
+    (t.job as any).db.query.proxyAdditionalSecureLinks = { findMany: async () => [] };
+    Object.assign(t.host, {
+      upstreamKind: 'docker_deployment',
+      secureLinkMigratedAt: new Date(Date.now() - 86_400_000),
+      nodeId: 'ingress-1',
+      healthHistory: Array.from({ length: 6 }, (_, index) => ({
+        ts: new Date(Date.now() - (index + 1) * 60_000).toISOString(),
+        status: 'online',
+        responseMs: 10,
+      })),
+    });
+  };
+
+  it('does not judge a relayed route slow within the reconnect grace, and does after it', async () => {
+    const t = setup();
+    relayed(t);
+    const outage = { since: Date.now() - 30_000, servingAgainAt: Date.now() - 6_000, planned: false };
+    t.job.setLocalRelayOutage({ latestOutage: () => outage });
+    t.checkHost.mockResolvedValue({ status: 'online', responseMs: 300 });
+    await t.job.run();
+    expect(t.host.healthStatus).toBe('online');
+    expect(t.host.healthHistory.at(-1)).not.toHaveProperty('slow');
+    expect(t.evaluator.observeStatefulEvent).not.toHaveBeenCalledWith(
+      'proxy',
+      'health.degraded',
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      expect.any(Number)
+    );
+    // The grace is over: a slow answer is the route's own again.
+    outage.servingAgainAt = Date.now() - 3 * 60_000;
+    await t.job.run();
+    expect(t.host.healthStatus).toBe('degraded');
+  });
+
+  it('defers a relayed probe that fails within the reconnect grace and judges it after', async () => {
+    let outage = { since: Date.now() - 30_000, servingAgainAt: (Date.now() - 6_000) as number | null, planned: false };
+    const dispatch = {
+      isNodeConnected: () => true,
+      probeProxySecureLink: vi.fn(async () => ({ ok: false, error: 'relay tunnel error: endpoint_unavailable' })),
+    };
+    const job = new HealthCheckJob({} as never, dispatch as never);
+    (job as any).startedAt = Date.now() - 10 * 60_000;
+    job.setLocalRelayOutage({ latestOutage: () => outage });
+    const host = {
+      id: 'route-1',
+      upstreamKind: 'docker_deployment',
+      secureLinkMigratedAt: new Date(),
+      nodeId: 'ingress-1',
+      domainNames: ['orders.test'],
+    };
+    expect((await (job as any).checkHostOnNode(host, 'ingress-1')).status).toBe('deferred');
+    // Still restarting: deferred as well.
+    outage = { ...outage, servingAgainAt: null };
+    expect((await (job as any).checkHostOnNode(host, 'ingress-1')).status).toBe('deferred');
+    outage = { ...outage, servingAgainAt: Date.now() - 3 * 60_000 };
+    expect((await (job as any).checkHostOnNode(host, 'ingress-1')).status).toBe('offline');
+  });
+});

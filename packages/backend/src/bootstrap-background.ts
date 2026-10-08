@@ -80,6 +80,7 @@ import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
+import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
@@ -289,6 +290,9 @@ export async function initializeBackgroundServices(): Promise<void> {
   const healthCheckJob = new HealthCheckJob(db, nodeDispatch);
   healthCheckJob.setEventBus(eventBus);
   healthCheckJob.setEvaluator(notifEvaluatorService);
+  if (container.isRegistered(RelaySupervisorService)) {
+    healthCheckJob.setLocalRelayOutage(container.resolve(RelaySupervisorService));
+  }
   const expiryAlertJob = new ExpiryAlertJob(db, alertService);
   expiryAlertJob.setEventBus(eventBus);
   // Rotate GitLab tokens that can rotate themselves before alerting on the rest.

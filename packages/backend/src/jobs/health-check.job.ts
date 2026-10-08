@@ -25,6 +25,7 @@ import {
   SECURE_LINK_PROBE_BUSY_ERROR,
 } from '@/modules/proxy/proxy-secure-link-health-probe.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import { type LocalRelayOutageSignal, localRelayOutagePhase } from '@/services/local-relay-outage.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
 const logger = createChildLogger('HealthCheckJob');
@@ -102,6 +103,7 @@ export class HealthCheckJob {
   private readonly startedAt = Date.now();
   /** Routes whose last probe failed but were kept up as a transient failure; the next failure takes them down. */
   private readonly pendingFailures = new Set<string>();
+  private localRelay?: Pick<LocalRelayOutageSignal, 'latestOutage'>;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -120,6 +122,21 @@ export class HealthCheckJob {
 
   setEvaluator(evaluator: NotificationEvaluatorService) {
     this.evaluator = evaluator;
+  }
+
+  /** The local relay's outages (its supervisor), see relayPathsSettling. */
+  setLocalRelayOutage(signal: Pick<LocalRelayOutageSignal, 'latestOutage'>) {
+    this.localRelay = signal;
+  }
+
+  /**
+   * The local relay does not serve, or serves again within its reconnect grace: relayed routes' streams are moving
+   * between relays and their endpoints registering again, so a relayed probe that fails or answers slowly says
+   * nothing about the route yet (stand rc.6 O-7: a route went degraded on one slow probe 6 s after the relay served
+   * again). Such samples are deferred, as for a node that reconnects.
+   */
+  private relayPathsSettling(): boolean {
+    return localRelayOutagePhase(this.localRelay?.latestOutage() ?? null) !== null;
   }
 
   async run(): Promise<void> {
@@ -179,9 +196,10 @@ export class HealthCheckJob {
       const now = Date.now();
       const existingHistory: HealthEntry[] = (host.healthHistory as HealthEntry[]) ?? [];
 
-      // Compute slow flag: compare response time against baseline average
+      // Compute slow flag: compare response time against baseline average. A relayed route is not judged slow while
+      // its relay paths settle after a local relay outage.
       let slow = false;
-      if (checkStatus === 'online' && responseMs != null) {
+      if (checkStatus === 'online' && responseMs != null && !(relayBacked && this.relayPathsSettling())) {
         const threshold = host.healthCheckSlowThreshold ?? 3;
         if (threshold > 0) {
           const baselineCutoff = now - SLOW_BASELINE_WINDOW_MS;
@@ -563,6 +581,15 @@ export class HealthCheckJob {
           hostId: host.id,
           nodeId: nodeId,
           domain: host.domainNames?.[0],
+        });
+        return { status: 'deferred' };
+      }
+      if (!result.ok && this.relayPathsSettling()) {
+        logger.debug('Secure Link health probe waits for the relay paths to settle after a local relay outage', {
+          hostId: host.id,
+          nodeId: nodeId,
+          domain: host.domainNames?.[0],
+          error: result.failures.map((failure) => failure.error).join('; '),
         });
         return { status: 'deferred' };
       }
