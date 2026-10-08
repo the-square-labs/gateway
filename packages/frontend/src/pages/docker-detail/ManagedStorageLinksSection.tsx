@@ -419,7 +419,9 @@ export const ManagedStorageLinksSection = forwardRef<
                 : entry.pending === "add" || awaitingWorkload
                   ? "secondary"
                   : entry.binding.status === "ready"
-                    ? "success"
+                    ? entry.binding.lastError
+                      ? "warning"
+                      : "success"
                     : entry.binding.status === "error"
                       ? "destructive"
                       : "secondary";
