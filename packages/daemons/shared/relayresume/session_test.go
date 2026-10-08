@@ -571,7 +571,10 @@ func TestSessionWithoutRecv(t *testing.T) {
 // RESUME_REJ unauthorized (its tombstone keeps the reason).
 func TestTombstoneKeepsRevocation(t *testing.T) {
 	h := newHarness(t, "relay-a")
-	_, session := h.stream()
+	// Held until the end: a connection nothing refers to is closed by its finalizer, which can end the stream before
+	// it opens (about 1 run in 20 under GOGC=1).
+	app, session := h.stream()
+	defer app.Close()
 	waitOpen(t, session)
 	target := h.table.Sessions()[0]
 	key := TargetKey{RouteID: "route-1", SourceKind: "daemon", SourceID: "node-1", SessionID: target.core.SessionID()}
