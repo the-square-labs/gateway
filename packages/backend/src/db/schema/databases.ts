@@ -150,6 +150,12 @@ export interface ManagedDatabasePendingOperation {
    * the update fails.
    */
   previousPorts?: { publishedPort: number | null; publishedNativePort: number | null };
+  /**
+   * An update: the disk size and resources before it. A failed update puts
+   * them back, so the database shows what its node applied and a retry is
+   * checked against that.
+   */
+  previousSettings?: { storageSizeBytes: number; runtimeConfig: ManagedDatabaseRuntimeConfig };
 }
 
 export type ManagedDatabaseOwnerSeparationState = 'legacy' | 'preparing' | 'active' | 'error';

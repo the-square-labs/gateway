@@ -70,6 +70,12 @@ export interface ManagedStoragePendingOperation {
    * restored when the update fails.
    */
   previousPorts?: { publishS3: boolean; publishedPort: number };
+  /**
+   * An update: the disk size and resources before it. A failed update puts
+   * them back, so the cluster shows what its node applied and a retry is
+   * checked against that.
+   */
+  previousSettings?: { storageSizeBytes: number; runtimeConfig: ManagedStorageRuntimeConfig };
 }
 
 export interface ManagedStorageErasureConfig {

@@ -53,6 +53,8 @@ type managedStorageManager struct {
 	engineRuns   map[string]engineRun
 	// probeReady overrides the engine readiness check (tests).
 	probeReady func(ctx context.Context, record managedStorageRecord) error
+	// runHostCommand overrides the host tools a disk grow runs (tests).
+	runHostCommand func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
 func (m *managedStorageManager) loopHost() *loopHost {
@@ -185,6 +187,10 @@ func (m *managedStorageManager) ensureMounted(ctx context.Context, record *manag
 	return nil
 }
 
+// ensureStorageSize grows the image, the loop device and the filesystem to
+// target. The record keeps the size last applied in full (the caller stores
+// target only after this succeeds), so a grow that failed after the image was
+// extended is finished by the next grow to at least that size.
 func (m *managedStorageManager) ensureStorageSize(ctx context.Context, record *managedStorageRecord, target int64) error {
 	if err := m.ensureMounted(ctx, record); err != nil {
 		return err
@@ -194,24 +200,38 @@ func (m *managedStorageManager) ensureStorageSize(ctx context.Context, record *m
 		return err
 	}
 	if target < info.Size() {
+		if info.Size() > record.StorageBytes {
+			return fmt.Errorf("managed storage cannot be reduced: an earlier grow that did not finish left its disk image at %d bytes; grow it to at least that size", info.Size())
+		}
 		return errors.New("managed storage cannot be reduced")
 	}
-	if target == info.Size() {
+	if target == info.Size() && target <= record.StorageBytes {
 		return nil
 	}
-	if err := m.ensureCapacity(target - info.Size()); err != nil {
-		return err
+	if target > info.Size() {
+		if err := m.ensureCapacity(target - info.Size()); err != nil {
+			return err
+		}
+		if output, err := m.hostCommand(ctx, "fallocate", "-l", fmt.Sprintf("%d", target), record.ImagePath); err != nil {
+			return fmt.Errorf("grow managed storage image: %w: %s", err, strings.TrimSpace(string(output)))
+		}
 	}
-	if output, err := exec.CommandContext(ctx, "fallocate", "-l", fmt.Sprintf("%d", target), record.ImagePath).CombinedOutput(); err != nil {
-		return fmt.Errorf("grow managed storage image: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	if output, err := exec.CommandContext(ctx, "losetup", "-c", record.LoopDevice).CombinedOutput(); err != nil {
+	if output, err := m.hostCommand(ctx, "losetup", "-c", record.LoopDevice); err != nil {
 		return fmt.Errorf("refresh managed storage loop device: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	if output, err := exec.CommandContext(ctx, "resize2fs", record.LoopDevice).CombinedOutput(); err != nil {
+	if output, err := m.hostCommand(ctx, "resize2fs", record.LoopDevice); err != nil {
 		return fmt.Errorf("resize managed storage filesystem: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+// hostCommand runs a host tool (fallocate, losetup, resize2fs) and returns
+// what it printed.
+func (m *managedStorageManager) hostCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if m.runHostCommand != nil {
+		return m.runHostCommand(ctx, name, args...)
+	}
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 func (m *managedStorageManager) startContainer(ctx context.Context, id string) error {
