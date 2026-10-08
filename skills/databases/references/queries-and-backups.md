@@ -17,7 +17,7 @@ Diagnosis and inventory requests stay read-only: use read queries and never run 
 - `run` starts a backup now; `cancel` stops one (`config.force` ends a run whose executor cannot confirm); `list_runs`.
 - `delete_run`: when files remain, `config.artifacts: "delete"` removes them first (the entry stays if that fails) and `"forget"` removes only the history entry, leaving files in storage. Ask the user which before calling.
 
-Native PostgreSQL, Redis, and ClickHouse backups use the immutable runner bundled with the Gateway release. The executor Node needs `nodes:backups:execute`.
+Native PostgreSQL, Redis, and ClickHouse backups use the immutable runner bundled with the Gateway release. The executor must be a Storage node that runs backup jobs (`list_nodes` with type `storage`; its capabilities include `database_backups_v1`); Gateway refuses any other node. It needs `nodes:backups:execute`.
 
 ## Restore
 

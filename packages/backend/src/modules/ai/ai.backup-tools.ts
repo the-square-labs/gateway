@@ -43,7 +43,11 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
             prefix: { type: 'string' },
             stagingStorageConnectionId: { type: ['string', 'null'] },
             stagingBucket: { type: ['string', 'null'] },
-            executorNodeId: { type: 'string' },
+            executorNodeId: {
+              type: 'string',
+              description:
+                'A Storage node that runs backup jobs: list_nodes with type storage, whose capabilities include database_backups_v1. Any other node is refused.',
+            },
             schedule: { type: ['string', 'null'], description: 'Cron expression; null for manual runs only.' },
             timezone: {
               type: 'string',
