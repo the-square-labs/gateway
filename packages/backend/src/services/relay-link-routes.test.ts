@@ -13,7 +13,7 @@ const egress: {
   listenPort: number;
   maxSessions: number;
   consumersUseAlias?: boolean;
-} = { networkName: 'gateway-db-a', alias: 'db-a', listenPort: 5432, maxSessions: 16 };
+} = { networkName: 'gateway-db-a', alias: 'db-a', listenPort: 5432, maxSessions: 0 };
 const transport = (managedDatabaseListener: typeof listener | null, secureLinkEgress: typeof egress | null) => ({
   managedDatabaseListener,
   secureLinkEgress,
@@ -41,6 +41,14 @@ describe('link route transport changes (D8, D9)', () => {
     // The route is still written: the flag is part of the stored egress.
     expect(secureLinkEgressEqual(egress, aliased)).toBe(false);
     expect(secureLinkEgressEqual(egress, { ...egress, consumersUseAlias: false })).toBe(true);
+  });
+
+  it('writes a new session limit without moving the generation: the connector applies it in place (F1)', () => {
+    // A database link route of an earlier release capped its connector listener at 16.
+    const capped = { ...egress, maxSessions: 16 };
+    expect(routeTransportRestartRequired(transport(null, capped), transport(null, egress))).toBe(false);
+    expect(routeTransportRestartRequired(transport(listener, capped), transport(listener, egress))).toBe(false);
+    expect(secureLinkEgressEqual(capped, egress)).toBe(false);
   });
 
   it('restarts the route when a serving entry point changes or the only listener comes or goes', () => {

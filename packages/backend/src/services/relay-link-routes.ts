@@ -14,8 +14,8 @@ export interface RelayRouteTransport {
 }
 
 /**
- * The stored egress equals the desired one, `consumersUseAlias`, `aliasDisabled` and `connectorAddress` included (whether
- * the route must be written).
+ * The stored egress equals the desired one, `maxSessions`, `consumersUseAlias`, `aliasDisabled` and `connectorAddress`
+ * included (whether the route must be written).
  */
 export function secureLinkEgressEqual(
   current: RelaySecureLinkEgressConfig | null | undefined,
@@ -24,6 +24,7 @@ export function secureLinkEgressEqual(
   if (!current || !desired) return current == null && desired == null;
   return (
     secureLinkEgressServesEqual(current, desired) &&
+    (current.maxSessions ?? 0) === (desired.maxSessions ?? 0) &&
     (current.consumersUseAlias ?? false) === (desired.consumersUseAlias ?? false) &&
     (current.aliasDisabled ?? false) === (desired.aliasDisabled ?? false) &&
     (current.connectorAddress ?? '') === (desired.connectorAddress ?? '')
@@ -31,9 +32,9 @@ export function secureLinkEgressEqual(
 }
 
 /**
- * The egress listens the same way (network, alias, port, sessions, TLS). `consumersUseAlias` (how the daemon recreates
- * consumers), `aliasDisabled` and `connectorAddress` (how the connector sits on the network) never move the route's
- * generation (routeTransportRestartRequired).
+ * The egress listens the same way (network, alias, port, TLS). `maxSessions` (the connector applies it to the running
+ * listener), `consumersUseAlias` (how the daemon recreates consumers), `aliasDisabled` and `connectorAddress` (how the
+ * connector sits on the network) never move the route's generation (routeTransportRestartRequired).
  */
 export function secureLinkEgressServesEqual(
   current: RelaySecureLinkEgressConfig,
@@ -43,7 +44,6 @@ export function secureLinkEgressServesEqual(
     current.networkName === desired.networkName &&
     current.alias === desired.alias &&
     current.listenPort === desired.listenPort &&
-    (current.maxSessions ?? 0) === (desired.maxSessions ?? 0) &&
     (current.tlsCaPem ?? '') === (desired.tlsCaPem ?? '') &&
     (current.tlsServerName ?? '') === (desired.tlsServerName ?? '')
   );
