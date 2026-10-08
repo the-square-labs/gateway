@@ -157,11 +157,18 @@ export function watchDockerRecreateByName(
   timeoutMs = 60000,
   onComplete?: (newContainerId: string) => Promise<void>,
   daemonTaskId?: string,
-  // Runs when the async daemon task reports that the change was not applied,
-  // before the task is failed and the container transition is released.
+  // Runs when the async daemon task did not apply the change, before the task is failed and the container transition
+  // is released: the daemon task reports it failed, or the watch timed out (beyond the daemon task's own limit) with
+  // the replaced container still running.
   onDaemonTaskFailed?: () => Promise<void>
 ) {
   const start = Date.now();
+  // The ID of the container the name last showed: the replaced one at the timeout means the change did not apply.
+  let lastSeenId: string | undefined;
+  const timeOut = async () => {
+    if (daemonTaskId && lastSeenId === oldContainerId) await onDaemonTaskFailed?.().catch(() => undefined);
+    await context.failTask(taskId, 'Timed out', nodeId, containerName);
+  };
   // The replacement goes on on the node without this watch: its task records how to tell its end.
   const tracked = trackDockerTask(context.taskService, taskId, {
     kind: 'replace',
@@ -177,6 +184,11 @@ export function watchDockerRecreateByName(
       const result = await context.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
       const containers = context.parseResult(result);
       if (!Array.isArray(containers)) throw new Error('Docker container list returned an invalid response');
+      const match = containers.find((c: any) => {
+        const cName = (c.name ?? c.Name ?? '').replace(/^\//, '');
+        return cName === containerName;
+      });
+      lastSeenId = match ? String(match.id ?? match.Id ?? '') : undefined;
 
       let daemonTaskStatus: string | undefined;
       if (daemonTaskId) {
@@ -201,11 +213,6 @@ export function watchDockerRecreateByName(
           }
         }
       }
-
-      const match = containers.find((c: any) => {
-        const cName = (c.name ?? c.Name ?? '').replace(/^\//, '');
-        return cName === containerName;
-      });
 
       const canEvaluateReplacement =
         !daemonTaskId ||
@@ -255,7 +262,7 @@ export function watchDockerRecreateByName(
 
       if (Date.now() - start > timeoutMs) {
         clearInterval(poll);
-        await context.failTask(taskId, 'Timed out', nodeId, containerName);
+        await timeOut();
       }
     } catch (error) {
       if (isNodeDisconnectedError(error)) {
@@ -265,7 +272,7 @@ export function watchDockerRecreateByName(
       }
       if (Date.now() - start > timeoutMs) {
         clearInterval(poll);
-        await context.failTask(taskId, 'Timed out', nodeId, containerName);
+        await timeOut();
       }
     }
   }, 2000);

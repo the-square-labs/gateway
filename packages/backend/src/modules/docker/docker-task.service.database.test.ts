@@ -127,6 +127,15 @@ const STORED = { APP_MODE: 'mode-one', API_KEY: SECRET };
 const OLD_ENV = ['APP_MODE=mode-one', `API_KEY=${SECRET}`];
 const NEW_IMAGE_ENV = ['APP_MODE=mode-two', `API_KEY=${SECRET}`];
 
+const replaceTracking: schema.DockerTaskTracking = {
+  kind: 'replace',
+  containerName: 'api',
+  oldContainerId: 'c1',
+  expectedState: 'running',
+  progress: 'Container updated',
+  deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+};
+
 const sealed = {
   containerName: 'api',
   restoreEnvAfterFailedUpdate: true,
@@ -227,16 +236,60 @@ describe.skipIf(!url)('Env follow-ups of Docker tasks across a Gateway restart',
     expect(stored).toEqual(STORED);
   });
 
-  it('gives what a task owes to one taker only, and only while the task is active', async () => {
+  it.each([
+    ['the node got the update and failed it', 'lost', 'failed', 'pull access denied for app:2'],
+    [
+      'the update never reached the node',
+      'never-sent',
+      undefined,
+      'The update did not run on the node: its daemon restarted or never received it',
+    ],
+  ] as const)('puts back the stored env when Gateway restarted before the daemon answered and %s', async (_case, answer, outcome, error) => {
+    const environment = new DockerEnvironmentService(db, crypto);
+    await environment.replace(nodeId, 'api', STORED);
+    const node = fakeDockerNode(OLD_ENV, NEW_IMAGE_ENV, { answer });
+    const first = gatewayProcess(node, new DockerTaskService(db), environment, nodeId);
+    void updateContainerEnv(first.ctx, nodeId, 'api', { API_KEY: NEW_SECRET }, undefined, 'user-1');
+    // Gateway dies while it waits for the daemon's answer, after it saved the env.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((await environment.getDecryptedMap(nodeId, 'api')).API_KEY === NEW_SECRET) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const taskId = (await pool.query('select id from docker_tasks where node_id = $1', [nodeId])).rows[0].id as string;
+
+    const restarted = new DockerTaskService(db);
+    await restarted.detachActiveTasksOnStartup();
+    const kept = (
+      await pool.query('select command_id, tracking, follow_ups::text as sealed from docker_tasks where id = $1', [
+        taskId,
+      ])
+    ).rows[0];
+    expect(kept.command_id).toBeTruthy();
+    expect(kept.tracking).toMatchObject({ kind: 'replace', beforeAnswer: true });
+    for (const plain of [SECRET, NEW_SECRET, 'API_KEY', 'APP_MODE', 'mode-one'])
+      expect(kept.sealed).not.toContain(plain);
+
+    if (outcome) node.finish(outcome);
+    const next = gatewayProcess(node, restarted, new DockerEnvironmentService(db, crypto), nodeId);
+    await new DockerTaskReconciler(
+      () => next.reconcileContext,
+      () => true
+    ).sweep();
+    expect(await restarted.get(taskId)).toMatchObject({ status: 'failed', error });
+    expect(await followUpsText(taskId)).toBeNull();
+    expect(await environment.getDecryptedMap(nodeId, 'api')).toEqual(STORED);
+  });
+
+  it('gives what a task owes to one taker only, and nothing once the task ended', async () => {
     const service = new DockerTaskService(db);
     const task = await service.create({ nodeId, containerName: 'api', type: 'update' });
-    expect(await service.recordFollowUps(task.id, sealed)).toBe(true);
+    await service.track(task.id, replaceTracking, 'cmd-1', sealed);
     const takers = await Promise.all([1, 2, 3, 4].map(() => new DockerTaskService(db).takeFollowUps(task.id)));
     expect(takers.filter((taken) => taken !== null)).toEqual([sealed]);
     expect(await service.takeFollowUps(task.id)).toBeNull();
 
     await service.update(task.id, { status: 'succeeded', completedAt: new Date() });
-    expect(await service.recordFollowUps(task.id, sealed)).toBe(false);
+    expect(await service.takeFollowUps(task.id)).toBeNull();
     expect(await followUpsText(task.id)).toBeNull();
   });
 
@@ -244,17 +297,8 @@ describe.skipIf(!url)('Env follow-ups of Docker tasks across a Gateway restart',
     const service = new DockerTaskService(db);
     const owing = async (type: string, tracked = true) => {
       const task = await service.create({ nodeId, containerName: 'api', type });
-      if (tracked) {
-        await service.track(task.id, {
-          kind: 'replace',
-          containerName: 'api',
-          oldContainerId: 'c1',
-          expectedState: 'running',
-          progress: 'Container updated',
-          deadlineAt: new Date(Date.now() + 60_000).toISOString(),
-        });
-      }
-      expect(await service.recordFollowUps(task.id, sealed)).toBe(true);
+      if (tracked) await service.track(task.id, replaceTracking, undefined, sealed);
+      else await pool.query('update docker_tasks set follow_ups = $2 where id = $1', [task.id, sealed]);
       return task.id;
     };
 
@@ -336,7 +380,7 @@ describe.skipIf(!url)('migration 0232 and a rollback to the release before it', 
     const db = drizzle(pool, { schema }) as unknown as DrizzleClient;
     const current = new DockerTaskService(db);
     expect((await current.get(before!.id)).status).toBe('running');
-    expect(await current.recordFollowUps(before!.id, sealed)).toBe(true);
+    await current.track(before!.id, replaceTracking, 'cmd-1', sealed);
 
     // The previous release starts on the migrated schema (rollback): it ends the task and creates and cleans up others.
     await previous

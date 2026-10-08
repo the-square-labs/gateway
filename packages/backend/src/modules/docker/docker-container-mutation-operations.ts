@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
@@ -21,10 +22,12 @@ import { detachRemovedContainerSource } from './docker-container-source-detach.j
 import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
 import { placeCreatedDockerResource } from './docker-creation-access.js';
 import {
+  type DockerEnvFollowUpGate,
   type DockerEnvFollowUpPayload,
-  keepEnvFollowUps,
+  type DockerReplacementAhead,
   MASKED_ENV_VALUE,
   reconcileStoredEnvAfterImageChange,
+  trackReplacementAhead,
 } from './docker-env-follow-ups.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
@@ -55,7 +58,8 @@ import {
   normalizeMountDefinitionsFromConfig,
   normalizeMountDefinitionsFromInspect,
 } from './docker-socket-mount.guard.js';
-import { type DockerTaskService, trackDockerTask } from './docker-task.service.js';
+import { type DockerTaskService, detachDockerTask, trackDockerTask } from './docker-task.service.js';
+import { isLostTrackError } from './docker-task-reconciler.js';
 import { resolveNetworkIdentity } from './docker-volume-network-operations.js';
 
 const logger = createChildLogger('DockerContainerMutationOperations');
@@ -129,7 +133,7 @@ export interface DockerContainerMutationContext {
     rename(nodeId: string, oldName: string, newName: string): Promise<unknown>;
     copy(nodeId: string, sourceName: string, targetName: string): Promise<unknown>;
     getDecryptedMap(nodeId: string, containerName: string): Promise<Record<string, string>>;
-    /** Seals what an operation's follow-ups need (see keepEnvFollowUps) like stored env. */
+    /** Seals what an operation's follow-ups need (see trackReplacementAhead) like stored env. */
     sealFollowUpPayload(payload: DockerEnvFollowUpPayload): DockerTaskFollowUps['sealed'];
     openFollowUpPayload(sealed: DockerTaskFollowUps['sealed']): DockerEnvFollowUpPayload;
   };
@@ -486,6 +490,54 @@ function asyncDaemonTaskId(data: any, expectedType: string): string | undefined 
   return data?.type === expectedType && ['pending', 'running', 'succeeded', 'failed'].includes(status)
     ? String(data.id ?? '') || undefined
     : undefined;
+}
+
+/**
+ * What tells an update's or recreate's end before it is dispatched under a command Gateway names: the daemon finds its
+ * task by that command, so the task can be settled with the node also when its answer is lost. `timeoutMs` is the
+ * longest its watch may wait (an asynchronous daemon task's).
+ */
+function replacementAhead(
+  name: string,
+  oldContainerId: string,
+  expectedState: string,
+  progress: string,
+  timeoutMs: number
+): DockerReplacementAhead {
+  return {
+    commandId: randomUUID(),
+    tracking: {
+      kind: 'replace',
+      containerName: name,
+      oldContainerId,
+      expectedState,
+      daemonTaskId: null,
+      beforeAnswer: true,
+      progress,
+      deadlineAt: new Date(Date.now() + timeoutMs).toISOString(),
+    },
+  };
+}
+
+/**
+ * The dispatch of an update or recreate tracked ahead lost its answer (the node's control stream dropped, or the
+ * answer did not come in time): the node may still run it. Its task stays active, detached, and is settled with the
+ * node, which also runs what it owes (DockerTaskReconciler); the env it saved stays until then. The container's
+ * transition ends. Returns whether the task was left to the node.
+ */
+async function leaveToTheNode(
+  ctx: DockerContainerMutationContext,
+  ahead: DockerEnvFollowUpGate | undefined,
+  taskId: string | undefined,
+  error: unknown,
+  nodeId: string,
+  name: string
+): Promise<boolean> {
+  if (!ahead?.tracked || !taskId || !isLostTrackError(error)) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(await detachDockerTask(ctx.taskService, taskId, message))) return false;
+  await ctx.failTask(undefined, message, nodeId, name);
+  return true;
 }
 
 export async function createContainer(
@@ -1107,6 +1159,20 @@ export async function updateContainer(
     await ctx.failTask(task?.id, error instanceof Error ? error.message : 'Failed to update container', nodeId, name);
     throw error;
   }
+  // Written ahead, so a lost answer (even before the daemon answered) leaves the task to be settled with the node,
+  // follow-ups included; the watch below runs them otherwise.
+  const ahead = replacementAhead(
+    name,
+    containerRuntimeId(inspect, containerId),
+    expectedState,
+    'Container updated',
+    Math.max(ctx.longDockerOperationTimeoutMs + 30000, updateTimeoutMs)
+  );
+  const followUps = await trackReplacementAhead(ctx, task?.id, name, ahead, {
+    expectedEnv: hasEnvChange ? desiredUserEnv : storedEnv,
+    ...(hasImageChange ? { previousRuntimeEnv } : {}),
+    ...(hasEnvChange ? { restoreEnv: storedEnv } : {}),
+  });
   let data: any;
   try {
     // Persist the user-set env with the mutation itself, not from the in-memory
@@ -1116,7 +1182,8 @@ export async function updateContainer(
       nodeId,
       'update',
       { containerId, configJson: JSON.stringify(config) },
-      updateTimeoutMs
+      updateTimeoutMs,
+      ahead.commandId
     );
     data = ctx.parseResult(result);
     const daemonTaskId = asyncDaemonTaskId(data, 'update');
@@ -1125,17 +1192,12 @@ export async function updateContainer(
       await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
     }
   } catch (err) {
+    if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) throw err;
     if (hasEnvChange) await ctx.environmentService?.replace(nodeId, name, storedEnv).catch(() => undefined);
     await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to update container', nodeId, name);
     throw err;
   }
   const daemonTaskId = asyncDaemonTaskId(data, 'update');
-  // Kept with the task, so they still run should Gateway lose track of it; the watch below runs them otherwise.
-  const followUps = await keepEnvFollowUps(ctx, task?.id, name, {
-    expectedEnv: hasEnvChange ? desiredUserEnv : storedEnv,
-    ...(hasImageChange ? { previousRuntimeEnv } : {}),
-    ...(hasEnvChange && daemonTaskId ? { restoreEnv: storedEnv } : {}),
-  });
   ctx.watchRecreateByName(
     nodeId,
     name,
@@ -1313,6 +1375,7 @@ export async function recreateWithConfig(
   const executeRecreate = async () => {
     // The stored env the recreate finds; it does not change it.
     let storedEnv: Record<string, string> = {};
+    let followUps: DockerEnvFollowUpGate | undefined;
     try {
       // Inject decrypted values in the task so image-changing requests can return immediately.
       if (ctx.environmentService) {
@@ -1346,11 +1409,29 @@ export async function recreateWithConfig(
         await ctx.taskService.update(task.id, { status: 'running', progress: 'Recreating container' }).catch(() => {});
       }
 
+      // Written ahead, so a lost answer (even before the daemon answered) leaves the task to be settled with the node,
+      // its follow-up included; the watch below runs it otherwise.
+      const ahead = replacementAhead(
+        name,
+        containerRuntimeId(inspect, containerId),
+        expectedState,
+        'Container recreated',
+        Math.max(ctx.longDockerOperationTimeoutMs + 30000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60))
+      );
+      followUps = await trackReplacementAhead(
+        ctx,
+        task?.id,
+        name,
+        ahead,
+        hasRequestedImage ? { expectedEnv: storedEnv, previousRuntimeEnv } : { expectedEnv: storedEnv }
+      );
+      const gate = followUps;
       const result = await ctx.nodeDispatch.sendDockerContainerCommand(
         nodeId,
         'recreate',
         { containerId, configJson: JSON.stringify({ ...config, expectedState }) },
-        Math.max(120000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60))
+        Math.max(120000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60)),
+        ahead.commandId
       );
       const data = ctx.parseResult(result);
       const daemonTaskId = asyncDaemonTaskId(data, 'recreate');
@@ -1369,10 +1450,6 @@ export async function recreateWithConfig(
         ctx.imageCleanupService?.scheduleCleanupForContainer(nodeId, name, config.image).catch(() => {});
       }
 
-      // Kept with the task, so it still runs should Gateway lose track of it; the watch below runs it otherwise.
-      const followUps = hasRequestedImage
-        ? await keepEnvFollowUps(ctx, task?.id, name, { expectedEnv: storedEnv, previousRuntimeEnv })
-        : undefined;
       ctx.watchRecreateByName(
         nodeId,
         name,
@@ -1382,9 +1459,9 @@ export async function recreateWithConfig(
         'Container recreated',
         expectedState,
         daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60),
-        followUps
+        hasRequestedImage
           ? async (newContainerId) => {
-              await followUps
+              await gate
                 .take()
                 .then((mayRun) =>
                   mayRun
@@ -1403,6 +1480,7 @@ export async function recreateWithConfig(
         ? { ...data, taskId: task?.id, containerId, name }
         : { taskId: task?.id, containerId, name };
     } catch (err) {
+      if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) throw err;
       ctx.clearTransition(nodeId, name);
       if (task && ctx.taskService) {
         await ctx.taskService
@@ -1586,6 +1664,19 @@ export async function updateContainerEnv(
   ctx.emitTransition(nodeId, name, containerId, 'updating');
   // The task records the runtime it replaces: the replacement keeps the container's access identity from it.
   const task = await ctx.createTask(nodeId, containerRuntimeId(runtimeInspect, containerId), name, 'update');
+  // Written ahead, so a lost answer (even before the daemon answered) leaves the task to be settled with the node,
+  // its follow-up included; the watch below runs it otherwise.
+  const ahead = replacementAhead(
+    name,
+    containerRuntimeId(runtimeInspect, containerId),
+    expectedState,
+    'Container env updated',
+    Math.max(ctx.longDockerOperationTimeoutMs + 30000, ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60))
+  );
+  const followUps = await trackReplacementAhead(ctx, task?.id, name, ahead, {
+    expectedEnv: desiredUserEnv,
+    restoreEnv: storedEnv,
+  });
   let data: any;
   try {
     // Persist with the mutation itself; a completion watcher is lost on restart.
@@ -1594,10 +1685,12 @@ export async function updateContainerEnv(
       nodeId,
       'update',
       { containerId, configJson: JSON.stringify({ env: mergedEnv, removeEnv, expectedState }) },
-      Math.max(60000, ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60))
+      Math.max(60000, ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60)),
+      ahead.commandId
     );
     data = ctx.parseResult(result);
   } catch (err) {
+    if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) throw err;
     await ctx.environmentService?.replace(nodeId, name, storedEnv).catch(() => undefined);
     ctx.clearTransition(nodeId, name);
     if (task && ctx.taskService) {
@@ -1612,11 +1705,6 @@ export async function updateContainerEnv(
     throw err;
   }
   const daemonTaskId = asyncDaemonTaskId(data, 'update');
-  // Kept with the task, so it still runs should Gateway lose track of it; the watch below runs it otherwise.
-  const followUps = await keepEnvFollowUps(ctx, task?.id, name, {
-    expectedEnv: desiredUserEnv,
-    ...(daemonTaskId ? { restoreEnv: storedEnv } : {}),
-  });
   ctx.watchRecreateByName(
     nodeId,
     name,

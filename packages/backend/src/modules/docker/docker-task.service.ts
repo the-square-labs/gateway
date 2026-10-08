@@ -235,11 +235,15 @@ export class DockerTaskService {
     return { detached: detached.length, failed: rows.length };
   }
 
-  /** Records what settles the task with its node should Gateway lose track of it (and the command a pull runs as). */
-  async track(id: string, tracking: DockerTaskTracking, commandId?: string) {
+  /**
+   * Records what settles the task with its node should Gateway lose track of it, the command the task runs as (a pull,
+   * update or recreate: the daemon tells by it how it ended), and what it owes once settled (an update's or recreate's
+   * env follow-ups, kept until they ran or the task ended).
+   */
+  async track(id: string, tracking: DockerTaskTracking, commandId?: string, followUps?: DockerTaskFollowUps) {
     await this.db
       .update(dockerTasks)
-      .set({ tracking, ...(commandId ? { commandId } : {}) })
+      .set({ tracking, ...(commandId ? { commandId } : {}), ...(followUps ? { followUps } : {}) })
       .where(eq(dockerTasks.id, id));
   }
 
@@ -321,19 +325,6 @@ export class DockerTaskService {
     this.emit(row);
     await this.handleContainerTaskTerminal(row);
     return true;
-  }
-
-  /**
-   * Keeps what an active task still owes once it is settled (an update's or recreate's env follow-ups), until it ran
-   * or the task ended. Returns whether it was kept: a task that already ended owes nothing.
-   */
-  async recordFollowUps(id: string, followUps: DockerTaskFollowUps): Promise<boolean> {
-    const rows = await this.db
-      .update(dockerTasks)
-      .set({ followUps })
-      .where(and(eq(dockerTasks.id, id), inArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES])))
-      .returning({ id: dockerTasks.id });
-    return rows.length > 0;
   }
 
   /**

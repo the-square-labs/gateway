@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recreateWithConfig, updateContainer, updateContainerEnv } from './docker-container-mutation-operations.js';
 import {
   DAEMON_ERROR,
+  type FakeDockerNodeOptions,
   fakeDockerNode,
   gatewayProcess,
   memoryEnvironmentStore,
@@ -17,7 +18,7 @@ const STORED = { APP_MODE: 'mode-one', API_KEY: SECRET };
 const OLD_ENV = ['APP_MODE=mode-one', `API_KEY=${SECRET}`, 'PATH=/usr/bin'];
 const NEW_IMAGE_ENV = ['APP_MODE=mode-two', `API_KEY=${SECRET}`, 'PATH=/usr/bin'];
 
-function setup(options: { syncAnswer?: boolean } = {}) {
+function setup(options: FakeDockerNodeOptions = {}) {
   const node = fakeDockerNode(OLD_ENV, NEW_IMAGE_ENV, options);
   const tasks = memoryTaskStore();
   const environment = memoryEnvironmentStore({ api: STORED });
@@ -43,6 +44,12 @@ function setup(options: { syncAnswer?: boolean } = {}) {
     task(id: string | undefined) {
       const row = tasks.rows.get(String(id));
       if (!row) throw new Error(`no task ${id}`);
+      return row;
+    },
+    /** The one task, for an operation that never returned. */
+    only() {
+      const [row] = [...tasks.rows.values()];
+      if (!row || tasks.rows.size !== 1) throw new Error('expected one task');
       return row;
     },
   };
@@ -100,7 +107,7 @@ describe('env follow-ups of an update or recreate Gateway restarted during', () 
     ],
     [
       'an image update a daemon before 2.10 answered once done',
-      { syncAnswer: true },
+      { syncAnswer: true, commandLookup: false },
       (ctx: Parameters<typeof recreateWithConfig>[0]) => updateContainer(ctx, NODE, 'api', { tag: '2' }, 'user-1'),
     ],
   ])('reconciles the stored env after %s once the node finished it', async (_case, options, run) => {
@@ -142,6 +149,156 @@ describe('env follow-ups of an update or recreate Gateway restarted during', () 
     t.node.finish('failed');
     await next.reconciler.sweep();
     expect(t.task(result.taskId)).toMatchObject({ status: 'failed', error: DAEMON_ERROR, followUps: null });
+    expect(t.environment.stored.get('api')).toEqual(STORED);
+  });
+});
+
+describe('env follow-ups of an update or recreate Gateway restarted during before the daemon answered', () => {
+  it('restores the stored env after an env update the node got and failed', async () => {
+    const t = setup({ answer: 'lost' });
+    void updateContainerEnv(t.first.ctx, NODE, 'api', { API_KEY: NEW_SECRET }, undefined, 'user-1');
+    await settleWrites();
+    expect(t.environment.stored.get('api')).toEqual({ APP_MODE: 'mode-one', API_KEY: NEW_SECRET });
+
+    const next = t.restart();
+    const task = t.only();
+    expect(task).toMatchObject({ status: 'running', followUps: { restoreEnvAfterFailedUpdate: true } });
+    expect(task.commandId).toBeTruthy();
+    await next.reconciler.sweep();
+    expect(task.status).toBe('running');
+
+    t.node.finish('failed');
+    await next.reconciler.sweep();
+    expect(task).toMatchObject({ status: 'failed', error: DAEMON_ERROR, followUps: null });
+    expect(t.environment.stored.get('api')).toEqual(STORED);
+  });
+
+  it('reconciles the stored env after an image update the node got and finished', async () => {
+    const t = setup({ answer: 'lost' });
+    void updateContainer(t.first.ctx, NODE, 'api', { tag: '2' }, 'user-1');
+    await settleWrites();
+
+    const next = t.restart();
+    t.node.finish('succeeded');
+    await next.reconciler.sweep();
+    expect(t.only()).toMatchObject({ status: 'succeeded', followUps: null });
+    expect(t.environment.stored.get('api')).toEqual({ APP_MODE: 'mode-two', API_KEY: SECRET });
+  });
+
+  it('reconciles the stored env after a recreate the node got and finished', async () => {
+    const t = setup({ answer: 'lost' });
+    void recreateWithConfig(t.first.ctx, NODE, 'api', { image: 'registry.local/app:2' }, 'user-1', {
+      skipImagePull: true,
+    });
+    await settleWrites();
+
+    const next = t.restart();
+    t.node.finish('succeeded');
+    await next.reconciler.sweep();
+    expect(t.only()).toMatchObject({ status: 'succeeded', followUps: null });
+    expect(t.environment.stored.get('api')).toEqual({ APP_MODE: 'mode-two', API_KEY: SECRET });
+  });
+
+  it('runs nothing for an update that never reached the node, and puts back the env it saved', async () => {
+    const t = setup({ answer: 'never-sent' });
+    void updateContainer(t.first.ctx, NODE, 'api', { tag: '2', env: { API_KEY: NEW_SECRET } }, 'user-1');
+    await settleWrites();
+    expect(t.environment.stored.get('api')).toEqual({ APP_MODE: 'mode-one', API_KEY: NEW_SECRET });
+
+    const next = t.restart();
+    await next.reconciler.sweep();
+    expect(t.only()).toMatchObject({
+      status: 'failed',
+      error: 'The update did not run on the node: its daemon restarted or never received it',
+      followUps: null,
+    });
+    // No reconciliation: the old image still runs. The env saved for the update is put back.
+    expect(t.environment.stored.get('api')).toEqual(STORED);
+    expect(t.environment.writes.map((write) => write.env)).toEqual([
+      { APP_MODE: 'mode-one', API_KEY: NEW_SECRET },
+      STORED,
+    ]);
+  });
+
+  it('runs nothing for an image update that never reached the node', async () => {
+    const t = setup({ answer: 'never-sent' });
+    void updateContainer(t.first.ctx, NODE, 'api', { tag: '2' }, 'user-1');
+    await settleWrites();
+
+    const next = t.restart();
+    await next.reconciler.sweep();
+    expect(t.only()).toMatchObject({ status: 'failed', followUps: null });
+    expect(t.environment.writes).toEqual([]);
+  });
+
+  it('settles with a daemon that cannot find tasks by command by its containers, and by the deadline otherwise', async () => {
+    const replaced = setup({ answer: 'lost', commandLookup: false });
+    void updateContainer(replaced.first.ctx, NODE, 'api', { tag: '2' }, 'user-1');
+    await settleWrites();
+    const next = replaced.restart();
+    await next.reconciler.sweep();
+    expect(replaced.only().status).toBe('running');
+    replaced.node.finish('succeeded');
+    await next.reconciler.sweep();
+    expect(replaced.environment.stored.get('api')).toEqual({ APP_MODE: 'mode-two', API_KEY: SECRET });
+
+    const stays = setup({ answer: 'never-sent', commandLookup: false });
+    void updateContainerEnv(stays.first.ctx, NODE, 'api', { API_KEY: NEW_SECRET }, undefined, 'user-1');
+    await settleWrites();
+    const later = stays.restart();
+    await later.reconciler.sweep();
+    expect(stays.only().status).toBe('running');
+    // Past the deadline (beyond the daemon's own limit) the old container still runs: the update did not apply.
+    vi.setSystemTime(Date.now() + 700_000);
+    await later.reconciler.sweep();
+    expect(stays.only()).toMatchObject({ status: 'failed', error: 'Timed out', followUps: null });
+    expect(stays.environment.stored.get('api')).toEqual(STORED);
+  });
+
+  it('leaves an update whose node dropped before it answered to the node, and settles it with the node', async () => {
+    const t = setup({ answer: 'disconnected' });
+    await expect(
+      updateContainerEnv(t.first.ctx, NODE, 'api', { API_KEY: NEW_SECRET }, undefined, 'user-1')
+    ).rejects.toThrow('Node disconnected');
+    const task = t.only();
+    // Not failed, and the saved env stays until the node tells how the update ended.
+    expect(task.status).toBe('running');
+    expect(task.detachedAt).toBeInstanceOf(Date);
+    expect(t.first.transitions.get(NODE, 'api')).toBeUndefined();
+    expect(t.environment.stored.get('api')).toEqual({ APP_MODE: 'mode-one', API_KEY: NEW_SECRET });
+
+    t.node.finish('failed');
+    await new DockerTaskReconciler(
+      () => t.first.reconcileContext,
+      () => true
+    ).sweep();
+    expect(task).toMatchObject({ status: 'failed', error: DAEMON_ERROR, followUps: null });
+    expect(t.environment.stored.get('api')).toEqual(STORED);
+  });
+});
+
+describe('an update whose daemon restarted and forgot it', () => {
+  it('puts back the saved env once the reconciler finds the old container and no task', async () => {
+    const t = setup();
+    const result = await updateContainerEnv(t.first.ctx, NODE, 'api', { API_KEY: NEW_SECRET }, undefined, 'user-1');
+    await settleWrites();
+    const next = t.restart();
+    t.node.forgetTasks();
+    await next.reconciler.sweep();
+    expect(t.task(result.taskId)).toMatchObject({
+      status: 'failed',
+      error: 'The update did not run on the node: its daemon restarted or never received it',
+      followUps: null,
+    });
+    expect(t.environment.stored.get('api')).toEqual(STORED);
+  });
+
+  it('puts back the saved env when its watch times out with the old container still running', async () => {
+    const t = setup();
+    const result = await updateContainerEnv(t.first.ctx, NODE, 'api', { API_KEY: NEW_SECRET }, undefined, 'user-1');
+    t.node.forgetTasks();
+    await vi.advanceTimersByTimeAsync(640_000);
+    expect(t.task(result.taskId)).toMatchObject({ status: 'failed', error: 'Timed out', followUps: null });
     expect(t.environment.stored.get('api')).toEqual(STORED);
   });
 });

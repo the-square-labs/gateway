@@ -29,12 +29,18 @@ export type DockerTaskTracking =
       deadlineAt: string;
     }
   | {
-      /** An update or recreate: done once a container of the name with another ID reached `expectedState`. */
+      /**
+       * An update or recreate: done once a container of the name with another ID reached `expectedState`. Recorded
+       * before it is dispatched, without `daemonTaskId` until the daemon answered; the daemon also finds its task by
+       * the task's `commandId`.
+       */
       kind: 'replace';
       containerName: string;
       oldContainerId: string;
       expectedState: string;
       daemonTaskId?: string | null;
+      /** Recorded before the dispatch: the daemon has not answered yet (an asynchronous daemon task may follow). */
+      beforeAnswer?: boolean;
       progress: string;
       deadlineAt: string;
     }
@@ -73,7 +79,7 @@ export const dockerTasks = pgTable('docker_tasks', {
   error: text('error'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
-  /** The daemon command a pull runs as; the daemon reports the pull's outcome by it. */
+  /** The daemon command a pull, update or recreate runs as; the daemon tells how it ended by it. */
   commandId: text('command_id'),
   tracking: jsonb('tracking').$type<DockerTaskTracking>(),
   /** Since when Gateway has lost track of the active task; it is settled with the node once that is connected. */

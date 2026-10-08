@@ -18,12 +18,19 @@ const (
 	TaskFailed    TaskStatus = "failed"
 )
 
+// TaskCommandLookupCapability tells Gateway that task_status also finds a task by the Gateway command that started it,
+// and that a command this daemon process has no task of did not run here (it never arrived, or the daemon restarted).
+const TaskCommandLookupCapability = "docker_task_command_lookup_v1"
+
 // Task holds the state of a single async operation (image pull, container update, etc.).
 type Task struct {
-	ID         string     `json:"id"`
-	Status     TaskStatus `json:"status"`
-	Container  string     `json:"container"`
-	Type       string     `json:"type"`
+	ID        string     `json:"id"`
+	Status    TaskStatus `json:"status"`
+	Container string     `json:"container"`
+	Type      string     `json:"type"`
+	// CommandID is the Gateway command that started the task: Gateway asks for the task by it when it lost the answer
+	// that named the task (it restarted, or the control stream dropped before the answer arrived).
+	CommandID  string     `json:"commandId,omitempty"`
 	Error      string     `json:"error,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
@@ -33,20 +40,22 @@ type Task struct {
 // TaskManager queues and tracks async tasks. It enforces at-most-one
 // in-flight task per container to prevent concurrent conflicting operations.
 type TaskManager struct {
-	mu       sync.Mutex
-	tasks    map[string]*Task
-	inFlight map[string]bool // keyed by container identifier
-	cancels  map[string]context.CancelFunc
-	done     map[string]chan struct{}
+	mu        sync.Mutex
+	tasks     map[string]*Task
+	byCommand map[string]string // Gateway command ID to task ID
+	inFlight  map[string]bool   // keyed by container identifier
+	cancels   map[string]context.CancelFunc
+	done      map[string]chan struct{}
 }
 
 // NewTaskManager creates a TaskManager and starts its background cleanup goroutine.
 func NewTaskManager() *TaskManager {
 	m := &TaskManager{
-		tasks:    make(map[string]*Task),
-		inFlight: make(map[string]bool),
-		cancels:  make(map[string]context.CancelFunc),
-		done:     make(map[string]chan struct{}),
+		tasks:     make(map[string]*Task),
+		byCommand: make(map[string]string),
+		inFlight:  make(map[string]bool),
+		cancels:   make(map[string]context.CancelFunc),
+		done:      make(map[string]chan struct{}),
 	}
 	go m.cleanup()
 	return m
@@ -56,6 +65,12 @@ func NewTaskManager() *TaskManager {
 // that is cancelled when timeout elapses. Returns the newly created Task or an
 // error if a task is already running for that container.
 func (m *TaskManager) Submit(containerID, taskType string, timeout time.Duration, fn func(ctx context.Context) error) (*Task, error) {
+	return m.SubmitForCommand("", containerID, taskType, timeout, fn)
+}
+
+// SubmitForCommand is Submit for the Gateway command commandID: Get then also finds the task by that ID. An empty
+// commandID records none.
+func (m *TaskManager) SubmitForCommand(commandID, containerID, taskType string, timeout time.Duration, fn func(ctx context.Context) error) (*Task, error) {
 	m.mu.Lock()
 	if m.inFlight[containerID] {
 		m.mu.Unlock()
@@ -67,9 +82,13 @@ func (m *TaskManager) Submit(containerID, taskType string, timeout time.Duration
 		Status:    TaskPending,
 		Container: containerID,
 		Type:      taskType,
+		CommandID: commandID,
 		CreatedAt: time.Now(),
 	}
 	m.tasks[id] = t
+	if commandID != "" {
+		m.byCommand[commandID] = id
+	}
 	m.inFlight[containerID] = true
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	done := make(chan struct{})
@@ -129,11 +148,16 @@ func (m *TaskManager) CancelAndWait(containerID string, timeout time.Duration) b
 	}
 }
 
-// Get returns a snapshot of the task with the given ID.
+// Get returns a snapshot of the task with the given ID, or of the task the Gateway command with that ID started.
 func (m *TaskManager) Get(id string) (Task, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t, ok := m.tasks[id]
+	if !ok {
+		if taskID, byCommand := m.byCommand[id]; byCommand {
+			t, ok = m.tasks[taskID]
+		}
+	}
 	if !ok {
 		return Task{}, false
 	}
@@ -156,14 +180,21 @@ func (m *TaskManager) cleanup() {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		cutoff := time.Now().Add(-1 * time.Hour)
-		m.mu.Lock()
-		for id, t := range m.tasks {
-			if t.FinishedAt != nil && t.FinishedAt.Before(cutoff) {
-				delete(m.tasks, id)
+		m.prune(time.Now().Add(-1 * time.Hour))
+	}
+}
+
+// prune drops the tasks that finished before cutoff, with their command IDs.
+func (m *TaskManager) prune(cutoff time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, t := range m.tasks {
+		if t.FinishedAt != nil && t.FinishedAt.Before(cutoff) {
+			delete(m.tasks, id)
+			if t.CommandID != "" && m.byCommand[t.CommandID] == id {
+				delete(m.byCommand, t.CommandID)
 			}
 		}
-		m.mu.Unlock()
 	}
 }
 

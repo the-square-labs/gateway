@@ -4,7 +4,12 @@ import { AppError } from '@/middleware/error-handler.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import type { DockerContainerMutationContext } from './docker-container-mutation-operations.js';
 import { DockerContainerTransitions } from './docker-container-transitions.js';
-import { openEnvFollowUpPayload, runKeptEnvFollowUps, sealEnvFollowUpPayload } from './docker-env-follow-ups.js';
+import {
+  openEnvFollowUpPayload,
+  runKeptEnvFollowUps,
+  sealEnvFollowUpPayload,
+  TASK_COMMAND_LOOKUP_CAPABILITY,
+} from './docker-env-follow-ups.js';
 import { type DockerLifecycleWatchContext, watchDockerRecreateByName } from './docker-lifecycle-watch.js';
 import type { DockerTaskRow } from './docker-task.service.js';
 import type { DockerTaskReconcileContext } from './docker-task-reconciler.js';
@@ -23,38 +28,60 @@ export function parseResult(result: { success: boolean; error?: string; detail?:
 
 const ok = (detail: unknown) => ({ success: true, error: '', detail: JSON.stringify(detail) });
 
+export interface FakeDockerNodeOptions {
+  /** A daemon before 2.10: it replaces the container at once and answers with the new one. */
+  syncAnswer?: boolean;
+  /** The daemon finds a task by the Gateway command that started it (TASK_COMMAND_LOOKUP_CAPABILITY); default on. */
+  commandLookup?: boolean;
+  /**
+   * How an update's or recreate's command goes: `lost`: the daemon runs it, its answer never reaches Gateway;
+   * `never-sent`: it never reaches the daemon; `disconnected`: the daemon runs it, the node's stream drops before the
+   * answer.
+   */
+  answer?: 'normal' | 'lost' | 'never-sent' | 'disconnected';
+}
+
 /**
  * A Docker node whose daemon runs updates and recreates as asynchronous tasks: `api` runs as OLD_RUNTIME with
- * `oldEnv` until `finish` replaces it with NEW_RUNTIME running `newEnv`, or fails the daemon task. With `syncAnswer`
- * the daemon replaces it at once and answers with the new container instead.
+ * `oldEnv` until `finish` replaces it with NEW_RUNTIME running `newEnv`, or fails the daemon task.
  */
-export function fakeDockerNode(oldEnv: string[], newEnv: string[], options: { syncAnswer?: boolean } = {}) {
+export function fakeDockerNode(oldEnv: string[], newEnv: string[], options: FakeDockerNodeOptions = {}) {
+  const commandLookup = options.commandLookup ?? true;
   let containers = [{ id: OLD_RUNTIME, name: 'api', state: 'running', env: oldEnv }];
-  let daemonTask: Record<string, string> = { id: 'daemon-task-1', type: 'update', status: 'running' };
-  const actions: string[] = [];
+  let daemonTask: Record<string, string> | null = null;
+  const replace = () => {
+    containers = [{ id: NEW_RUNTIME, name: 'api', state: 'running', env: newEnv }];
+  };
   const sendDockerContainerCommand = async (
     _nodeId: string,
     action: string,
-    options: Record<string, unknown> = {}
+    command: Record<string, unknown> = {},
+    _timeoutMs?: number,
+    commandId?: string
   ): Promise<{ success: boolean; error?: string; detail?: string }> => {
-    actions.push(action);
     switch (action) {
       case 'update':
-      case 'recreate':
-        // A daemon before 2.10 answers once it replaced the container.
+      case 'recreate': {
+        if (options.answer === 'never-sent') return new Promise(() => undefined);
         if (options.syncAnswer) {
-          containers = [{ id: NEW_RUNTIME, name: 'api', state: 'running', env: newEnv }];
+          replace();
           return ok({ Id: NEW_RUNTIME });
         }
-        daemonTask = { id: 'daemon-task-1', type: action, status: 'running' };
+        daemonTask = { id: 'daemon-task-1', type: action, status: 'running', commandId: commandId ?? '' };
+        if (options.answer === 'lost') return new Promise(() => undefined);
+        if (options.answer === 'disconnected') throw new Error('Node disconnected');
         return ok(daemonTask);
-      case 'task_status':
-        return ok(daemonTask);
+      }
+      case 'task_status': {
+        const id = String(command.containerId ?? '');
+        const known = daemonTask && (daemonTask.id === id || (commandLookup && !!id && daemonTask.commandId === id));
+        return known ? ok(daemonTask) : { success: false, error: 'docker task not found' };
+      }
       case 'list':
         return ok(containers.map(({ id, name, state }) => ({ id, name, state })));
       case 'inspect': {
         const container = containers.find(
-          (entry) => entry.id === options.containerId || entry.name === options.containerId
+          (entry) => entry.id === command.containerId || entry.name === command.containerId
         );
         if (!container) return { success: false, error: 'No such container' };
         return ok({
@@ -70,13 +97,18 @@ export function fakeDockerNode(oldEnv: string[], newEnv: string[], options: { sy
     }
   };
   return {
-    actions,
+    commandLookup,
     dispatch: { sendDockerContainerCommand, sendDockerImageCommand: async () => ok({}) },
+    /** The daemon restarts: it no longer knows its tasks, and the old container stays. */
+    forgetTasks() {
+      daemonTask = null;
+    },
+    /** The daemon's task ends: the container is replaced, or the task fails and the old container stays. */
     finish(outcome: 'succeeded' | 'failed') {
       if (outcome === 'succeeded') {
-        containers = [{ id: NEW_RUNTIME, name: 'api', state: 'running', env: newEnv }];
-        daemonTask = { ...daemonTask, status: 'succeeded' };
-      } else {
+        replace();
+        if (daemonTask) daemonTask = { ...daemonTask, status: 'succeeded' };
+      } else if (daemonTask) {
         daemonTask = { ...daemonTask, status: 'failed', error: DAEMON_ERROR };
       }
     },
@@ -157,6 +189,8 @@ export function gatewayProcess(
     ...lifecycle,
     taskService: tasks,
     finishPull: nothing,
+    nodeHasCapability: (_nodeId: string, capability: string) =>
+      capability === TASK_COMMAND_LOOKUP_CAPABILITY && node.commandLookup,
     runFollowUps: (task: DockerTaskRow, trigger: Parameters<typeof runKeptEnvFollowUps>[2]) =>
       runKeptEnvFollowUps(ctx, task, trigger),
   } as unknown as DockerTaskReconcileContext;
@@ -200,15 +234,12 @@ export function memoryTaskStore() {
       rows.set(id, row);
       return row;
     },
-    async track(id: string, tracking: DockerTaskTracking) {
+    async track(id: string, tracking: DockerTaskTracking, commandId?: string, followUps?: DockerTaskFollowUps) {
       const row = rows.get(id);
-      if (row) row.tracking = tracking;
-    },
-    async recordFollowUps(id: string, followUps: DockerTaskFollowUps) {
-      const row = rows.get(id);
-      if (!row || !isActive(row)) return false;
-      row.followUps = followUps;
-      return true;
+      if (!row) return;
+      row.tracking = tracking;
+      if (commandId) row.commandId = commandId;
+      if (followUps) row.followUps = followUps;
     },
     async takeFollowUps(id: string) {
       const row = rows.get(id);

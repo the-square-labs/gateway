@@ -1,7 +1,7 @@
 import type { DockerTaskTracking } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
-import type { DockerTaskFollowUpTrigger } from './docker-env-follow-ups.js';
+import { type DockerTaskFollowUpTrigger, TASK_COMMAND_LOOKUP_CAPABILITY } from './docker-env-follow-ups.js';
 import { resolveDockerImageByIdentifier } from './docker-internal-images.js';
 import type { ContainerAction, DockerLifecycleWatchContext } from './docker-lifecycle-watch.js';
 import { getReplacementContainerFailureMessage } from './docker-recreate-watch.js';
@@ -36,6 +36,8 @@ export interface DockerTaskReconcileContext extends DockerLifecycleWatchContext 
    * settled at a later pass.
    */
   runFollowUps?(task: DockerTaskRow, trigger: DockerTaskFollowUpTrigger): Promise<void>;
+  /** Whether the connected node's daemon advertised `capability`. */
+  nodeHasCapability?(nodeId: string, capability: string): boolean;
 }
 
 type Outcome =
@@ -230,18 +232,25 @@ export class DockerTaskReconciler {
       : { status: 'running', progress: 'Still running on the node' };
   }
 
-  /** An update or recreate is done once a container of its name with another ID reached the expected state. */
+  /**
+   * An update or recreate is done once a container of its name with another ID reached the expected state. Its daemon
+   * task is asked for by its ID, or, when Gateway lost the answer that named it, by the command it was sent under. A
+   * daemon that has no task of it (one that finds tasks by command, or knew its ID) no longer runs it: the command never
+   * reached it, or the daemon restarted. With the replaced container still in place the change then did not apply.
+   */
   private async replaceOutcome(
     ctx: DockerTaskReconcileContext,
     task: DockerTaskRow,
     tracking: Extract<DockerTaskTracking, { kind: 'replace' }>
   ): Promise<Outcome> {
     let daemonTaskRunning = false;
-    if (tracking.daemonTaskId) {
+    let notOnNode = false;
+    const lookupId = tracking.daemonTaskId || task.commandId;
+    if (lookupId) {
       const result = await ctx.nodeDispatch.sendDockerContainerCommand(
         task.nodeId,
         'task_status',
-        { containerId: tracking.daemonTaskId },
+        { containerId: lookupId },
         QUERY_TIMEOUT_MS
       );
       if (result.success) {
@@ -260,6 +269,9 @@ export class DockerTaskReconciler {
         if (error !== LEGACY_TASK_STATUS_ERROR && error !== DAEMON_TASK_NOT_FOUND_ERROR) {
           throw new Error(error || 'task_status failed');
         }
+        notOnNode =
+          error === DAEMON_TASK_NOT_FOUND_ERROR &&
+          (!!tracking.daemonTaskId || !!ctx.nodeHasCapability?.(task.nodeId, TASK_COMMAND_LOOKUP_CAPABILITY));
       }
     }
     const containers = ctx.parseResult(
@@ -288,11 +300,26 @@ export class DockerTaskReconciler {
       }
       const failure = getReplacementContainerFailureMessage(match, tracking.oldContainerId, tracking.expectedState);
       if (failure) return { status: 'failed', error: failure };
+      if (notOnNode && String(match.id ?? match.Id ?? '') === tracking.oldContainerId) {
+        // What the operation saved beforehand is put back, as when its dispatch fails.
+        await this.runFollowUps(ctx, task, { kind: 'not-applied' });
+        return {
+          status: 'failed',
+          error: `The ${task.type === 'recreate' ? 'recreate' : 'update'} did not run on the node: its daemon restarted or never received it`,
+        };
+      }
     }
     if (daemonTaskRunning) return { status: 'running', progress: 'Replacing the container on the node' };
-    return this.pastDeadline(tracking.deadlineAt)
-      ? { status: 'failed', error: 'Timed out' }
-      : { status: 'running', progress: 'Replacing the container on the node' };
+    if (!this.pastDeadline(tracking.deadlineAt)) {
+      return { status: 'running', progress: 'Replacing the container on the node' };
+    }
+    // Past the deadline, which outlasts an asynchronous daemon task's own limit, the replaced container still running
+    // means the change did not apply.
+    const asynchronous = !!tracking.daemonTaskId || tracking.beforeAnswer === true;
+    if (asynchronous && match && String(match.id ?? match.Id ?? '') === tracking.oldContainerId) {
+      await this.runFollowUps(ctx, task, { kind: 'not-applied' });
+    }
+    return { status: 'failed', error: 'Timed out' };
   }
 
   /** Gateway runs this removal itself after a stop; without Gateway it did not run. */

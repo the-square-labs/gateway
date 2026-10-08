@@ -625,6 +625,7 @@ export class DockerManagementService {
       taskService: this.taskService,
       finishPull: (nodeId, tracking) => this.finishReconciledPull(nodeId, tracking),
       runFollowUps: (task, trigger) => runKeptEnvFollowUps(this.containerMutationContext(), task, trigger),
+      nodeHasCapability: (nodeId, capability) => this.nodeRegistry.hasCapability(nodeId, capability),
     };
   }
 

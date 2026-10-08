@@ -215,7 +215,7 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 		if containerName != "" {
 			taskKey = containerName
 		}
-		task, err := p.taskMgr.Submit(taskKey, "update", 10*time.Minute, func(taskCtx context.Context) error {
+		task, err := p.taskMgr.SubmitForCommand(result.CommandId, taskKey, "update", 10*time.Minute, func(taskCtx context.Context) error {
 			// Compute env changes via envstore
 			var envOverrides map[string]string
 			var envRemovals []string
@@ -352,7 +352,7 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 		if containerName != "" {
 			taskKey = containerName
 		}
-		task, err := p.taskMgr.Submit(taskKey, "recreate", 10*time.Minute, func(taskCtx context.Context) error {
+		task, err := p.taskMgr.SubmitForCommand(result.CommandId, taskKey, "recreate", 10*time.Minute, func(taskCtx context.Context) error {
 			return p.client.RecreateWithConfig(taskCtx, containerID, cmd.ConfigJson)
 		})
 		if err != nil {
@@ -369,6 +369,7 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 			result.Error = "container_id is required for task_status"
 			return
 		}
+		// The ID is the task's, or that of the Gateway command that started it (TaskCommandLookupCapability).
 		task, ok := p.taskMgr.Get(cmd.ContainerId)
 		if !ok {
 			result.Success = false

@@ -1,4 +1,4 @@
-import type { DockerTaskFollowUps } from '@/db/schema/index.js';
+import type { DockerTaskFollowUps, DockerTaskTracking } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
@@ -19,6 +19,9 @@ export interface DockerEnvFollowUpPayload {
   /** The stored env before the update (restoreEnvAfterFailedUpdate). */
   restoreEnv?: Record<string, string>;
 }
+
+/** Tells Gateway that a docker daemon's task_status also finds a task by the Gateway command that started it. */
+export const TASK_COMMAND_LOOKUP_CAPABILITY = 'docker_task_command_lookup_v1';
 
 type SealedEnv = DockerTaskFollowUps['sealed'];
 
@@ -48,7 +51,7 @@ export interface DockerEnvFollowUpContext {
     sealFollowUpPayload(payload: DockerEnvFollowUpPayload): SealedEnv;
     openFollowUpPayload(sealed: SealedEnv): DockerEnvFollowUpPayload;
   };
-  taskService?: Pick<DockerTaskService, 'recordFollowUps' | 'takeFollowUps'>;
+  taskService?: Pick<DockerTaskService, 'track' | 'takeFollowUps'>;
   inspectContainer(nodeId: string, containerId: string): Promise<any>;
   claimTransitions(
     nodeId: string,
@@ -90,21 +93,30 @@ export async function reconcileStoredEnvAfterImageChange(
 
 /** What an update or recreate owes once the node settled it, with the env it needs. */
 export interface DockerEnvFollowUpPlan {
-  /** The stored env the operation leaves (written before dispatch, or the one it found). */
+  /** The stored env the operation leaves (written right before dispatch, or the one it found). */
   expectedEnv: Record<string, string>;
   /** Set for an image change: the replaced runtime's env (stored entries mirroring it are reconciled). */
   previousRuntimeEnv?: Record<string, string>;
-  /** Set when a failed asynchronous update must put back the stored env it saved before it ran. */
+  /** Set when the update saves the env before it runs: put back should the update not apply. */
   restoreEnv?: Record<string, string>;
 }
 
-/** The gate the operation's own watch passes before it runs a follow-up itself. */
+/** What tells the end of an update or recreate before it is dispatched: no daemon task is known yet. */
+export interface DockerReplacementAhead {
+  tracking: Extract<DockerTaskTracking, { kind: 'replace' }>;
+  /** The command the update or recreate is sent under: the daemon finds its task by it. */
+  commandId: string;
+}
+
+/** What the operation recorded ahead of its dispatch, and the gate its own watch passes before a follow-up. */
 export interface DockerEnvFollowUpGate {
+  /** The task's tracking was written ahead: a lost answer leaves the task to DockerTaskReconciler. */
+  readonly tracked: boolean;
   /** Whether the watch may run its follow-ups now: they were not kept with the task, or the watch took them first. */
   take(): Promise<boolean>;
 }
 
-const RUN_IN_PROCESS: DockerEnvFollowUpGate = { take: async () => true };
+const untracked = (): DockerEnvFollowUpGate => ({ tracked: false, take: async () => true });
 
 function sameEnv(left: Record<string, string>, right: Record<string, string>): boolean {
   const keys = Object.keys(left);
@@ -123,20 +135,12 @@ function errorSummary(error: unknown) {
   };
 }
 
-/**
- * Keeps what an update or recreate owes once settled with its task, the env sealed, so that it still runs when Gateway
- * loses track of the task (a restart, or the node's control stream dropped): DockerTaskReconciler then runs it through
- * runKeptEnvFollowUps. Recorded right before the task's watch starts. Never fails the operation: follow-ups that could
- * not be kept run only from the watch, as before. Nothing is kept for a follow-up that would change nothing.
- */
-export async function keepEnvFollowUps(
-  ctx: Pick<DockerEnvFollowUpContext, 'environmentService' | 'taskService'>,
-  taskId: string | undefined,
+/** The follow-ups record for `plan`, the env sealed; undefined when no follow-up would change anything. */
+function followUpsRecord(
+  environmentService: NonNullable<DockerEnvFollowUpContext['environmentService']>,
   name: string,
   plan: DockerEnvFollowUpPlan
-): Promise<DockerEnvFollowUpGate> {
-  const { environmentService, taskService } = ctx;
-  if (!taskId || !environmentService || !taskService) return RUN_IN_PROCESS;
+): DockerTaskFollowUps | undefined {
   const previous = plan.previousRuntimeEnv;
   const mirroredKeys = previous
     ? Object.keys(plan.expectedEnv).filter(
@@ -145,19 +149,39 @@ export async function keepEnvFollowUps(
     : [];
   const reconcile = mirroredKeys.length > 0;
   const restore = plan.restoreEnv !== undefined && !sameEnv(plan.restoreEnv, plan.expectedEnv);
-  if (!reconcile && !restore) return RUN_IN_PROCESS;
-  let kept = false;
+  if (!reconcile && !restore) return undefined;
+  return {
+    containerName: name,
+    ...(reconcile ? { reconcileEnvAfterImageChange: true } : {}),
+    ...(restore ? { restoreEnvAfterFailedUpdate: true } : {}),
+    sealed: environmentService.sealFollowUpPayload({
+      expectedEnv: plan.expectedEnv,
+      ...(reconcile ? { mirroredKeys } : {}),
+      ...(restore ? { restoreEnv: plan.restoreEnv } : {}),
+    }),
+  };
+}
+
+/**
+ * Writes ahead, before an update or recreate is dispatched (and before an update saves the env): the task's tracking,
+ * the command it is sent under, and what it owes once settled (its env follow-ups, the env sealed). However Gateway
+ * then loses track of it, even before the daemon answered, DockerTaskReconciler settles it with the node and runs
+ * what it owes through runKeptEnvFollowUps; a command that never ran there gets nothing run but the env put back.
+ * Never fails the operation: what could not be written runs only from the watch, as before. Nothing is kept for a
+ * follow-up that would change nothing.
+ */
+export async function trackReplacementAhead(
+  ctx: Pick<DockerEnvFollowUpContext, 'environmentService' | 'taskService'>,
+  taskId: string | undefined,
+  name: string,
+  ahead: DockerReplacementAhead,
+  plan: DockerEnvFollowUpPlan
+): Promise<DockerEnvFollowUpGate> {
+  const { environmentService, taskService } = ctx;
+  if (!taskId || !taskService) return untracked();
+  let followUps: DockerTaskFollowUps | undefined;
   try {
-    kept = await taskService.recordFollowUps(taskId, {
-      containerName: name,
-      ...(reconcile ? { reconcileEnvAfterImageChange: true } : {}),
-      ...(restore ? { restoreEnvAfterFailedUpdate: true } : {}),
-      sealed: environmentService.sealFollowUpPayload({
-        expectedEnv: plan.expectedEnv,
-        ...(reconcile ? { mirroredKeys } : {}),
-        ...(restore ? { restoreEnv: plan.restoreEnv } : {}),
-      }),
-    });
+    followUps = environmentService ? followUpsRecord(environmentService, name, plan) : undefined;
   } catch (error) {
     logger.warn('Env follow-ups not kept with their task; only its watch in this process runs them', {
       taskId,
@@ -165,17 +189,35 @@ export async function keepEnvFollowUps(
       ...errorSummary(error),
     });
   }
-  if (!kept) return RUN_IN_PROCESS;
-  return { take: async () => (await taskService.takeFollowUps(taskId)) !== null };
+  try {
+    await taskService.track(taskId, ahead.tracking, ahead.commandId, followUps);
+  } catch (error) {
+    logger.warn('Replacement not tracked ahead of its dispatch; only its watch in this process settles it', {
+      taskId,
+      name,
+      ...errorSummary(error),
+    });
+    return untracked();
+  }
+  if (!followUps) return { tracked: true, take: async () => true };
+  return { tracked: true, take: async () => (await taskService.takeFollowUps(taskId)) !== null };
 }
 
-/** How DockerTaskReconciler settled a replacement whose task keeps follow-ups. */
-export type DockerTaskFollowUpTrigger = { kind: 'replaced'; newContainerId: string } | { kind: 'daemon-task-failed' };
+/**
+ * How DockerTaskReconciler settled a replacement whose task keeps follow-ups: replaced; failed by the daemon; or not
+ * applied, as the daemon has no task of its command and the replaced container still runs (the command never reached
+ * the node, or its daemon restarted).
+ */
+export type DockerTaskFollowUpTrigger =
+  | { kind: 'replaced'; newContainerId: string }
+  | { kind: 'daemon-task-failed' }
+  | { kind: 'not-applied' };
 
 /**
  * Runs what an update or recreate Gateway lost track of still owes, once DockerTaskReconciler settled it with the
  * node: the stored env reconciliation after an image change once the replacement succeeded, or the stored env restore
- * once the daemon reported that the update failed. It is taken from the task first, so it runs once. Like the
+ * once the update did not apply (the daemon reported it failed, or it never ran there). It is taken from the task
+ * first, so it runs once. Like the
  * operation, it holds the container meanwhile: a container another operation holds right now throws 409
  * CONTAINER_BUSY, and the reconciler asks again at its next pass. It runs only while the stored env is still the one the
  * operation left; otherwise a later operation changed it, and the follow-up is dropped. A follow-up that fails once it

@@ -1159,7 +1159,9 @@ export class NodeDispatchService {
       newName?: string;
       force?: boolean;
     } = {},
-    timeoutMs?: number
+    timeoutMs?: number,
+    /** The command ID to send under (an update's or recreate's task records it to ask the daemon for it later). */
+    commandId?: string
   ): Promise<CommandResult> {
     await this.assertGenericDockerNode(nodeId);
     if (!['list', 'inspect', 'stats', 'top', 'http_probe', 'task_status'].includes(action)) {
@@ -1168,6 +1170,7 @@ export class NodeDispatchService {
     return this.registry.sendCommand(
       nodeId,
       {
+        ...(commandId ? { commandId } : {}),
         dockerContainer: { action, ...options } as any,
       },
       timeoutMs
