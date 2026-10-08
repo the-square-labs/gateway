@@ -107,7 +107,8 @@ describe("Access list", () => {
         ]}
       />
     );
-    expect(screen.getByText("All 8 resource types · from orders-team")).toBeInTheDocument();
+    expect(screen.getByText("All 8 resource types")).toBeInTheDocument();
+    expect(screen.getByText("· from orders-team")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit Viewer everywhere" })).toBeNull();
     await userEvent.click(
       screen.getByRole("button", { name: "Edit Operator in folder orders / staging" })

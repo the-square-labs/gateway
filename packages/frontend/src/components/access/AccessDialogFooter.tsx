@@ -5,6 +5,7 @@ import { DialogFooter } from "@/components/ui/dialog";
 /**
  * The footer of every dialog with an access list: "Review N scopes" on the left opens the scope
  * picker with the raw scopes the lines stand for; Cancel and the primary action on the right.
+ * DialogContent places it in its footer slot, outside the body.
  */
 export function AccessDialogFooter({
   scopeCount,
@@ -24,3 +25,5 @@ export function AccessDialogFooter({
     </DialogFooter>
   );
 }
+// DialogContent finds its slots by display name.
+AccessDialogFooter.displayName = "DialogFooter";

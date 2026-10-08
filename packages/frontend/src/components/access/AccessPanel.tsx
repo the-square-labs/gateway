@@ -54,15 +54,23 @@ export function AccessPanel({
                   ? ListChecks
                   : Shield;
             const editable = view.index !== undefined && !view.from;
+            const from = view.from ? `· from ${view.from}` : null;
+            // Long titles and details end in an ellipsis (full text on hover), the group a line
+            // comes from stays in view; a row never widens the panel or the dialog around it.
             return (
               <div key={view.key} className="flex items-center justify-between gap-3 p-3">
-                <div className="flex min-w-0 items-center gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-3">
                   <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{view.title}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {view.detail}
-                      {view.from ? ` · from ${view.from}` : ""}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium" title={view.title}>
+                      {view.title}
+                    </p>
+                    <p
+                      className="flex min-w-0 gap-1 text-xs text-muted-foreground"
+                      title={from ? `${view.detail} ${from}` : view.detail}
+                    >
+                      <span className="truncate">{view.detail}</span>
+                      {from ? <span className="max-w-[50%] shrink-0 truncate">{from}</span> : null}
                     </p>
                     {view.note ? (
                       <p className="mt-1 text-xs text-warning-foreground">{view.note}</p>

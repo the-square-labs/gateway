@@ -282,7 +282,8 @@ const DialogContentPanel = React.forwardRef<
                 className={cn(
                   "relative min-h-0 min-w-0 px-4 max-sm:flex-1 max-sm:overflow-y-auto max-sm:overscroll-contain sm:px-6",
                   fitViewport && "sm:overflow-y-auto sm:overscroll-contain",
-                  bodyChildren.length > 1 && "grid gap-4",
+                  // One column the body's width: no child can widen the dialog.
+                  bodyChildren.length > 1 && "grid grid-cols-1 gap-4",
                   hasHeader ? "pt-0" : "pt-4 sm:pt-6",
                   hasFooter ? "pb-0" : "pb-4 sm:pb-6"
                 )}
