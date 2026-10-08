@@ -542,6 +542,49 @@ test('managed nginx.conf names the pid file of the distribution service', { skip
   }
 });
 
+// A re-run on an ingress node with Pages hostnames rewrote nginx.conf without the bucket size the daemon had added;
+// nginx -t failed and the broken file stayed for the next reload. The template carries the directive, and a failed
+// test puts every nginx file the run changed back as it was before the run.
+test('the nginx installer keeps Pages hostnames valid and restores its files when nginx -t fails', { skip: !linux }, async () => {
+  const source = readFileSync(path.join(scriptsDir, 'setup-node.sh'), 'utf8');
+  const template = /cat > \/etc\/nginx\/nginx\.conf << 'EOF'\n([\s\S]*?)\nEOF/.exec(source);
+  assert.ok(template, 'the managed nginx.conf template is found');
+  assert.match(template[1], /^ {4}server_names_hash_bucket_size 128;$/m);
+  assert.match(source, /restore_nginx_config\n\s+die "nginx config test failed/);
+  const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-rollback-'));
+  try {
+    const conf = path.join(dir, 'nginx.conf');
+    const site = path.join(dir, 'default.conf');
+    await writeFile(conf, 'original conf\n');
+    await writeFile(site, 'original site\n');
+    const run = runShell(
+      [
+        "IFS=$'\\n\\t'",
+        'log() { :; }',
+        'warn() { echo "$*" >&2; }',
+        'prune_older_backups() { :; }',
+        shellFunction(source, 'backup_if_exists'),
+        'NGINX_CONFIG_ROLLBACK=()',
+        shellFunction(source, 'backup_nginx_config'),
+        shellFunction(source, 'restore_nginx_config'),
+        `backup_nginx_config '${conf}'`,
+        `echo managed > '${conf}'`,
+        `backup_nginx_config '${path.join(dir, 'missing.conf')}'`,
+        `backup_nginx_config '${site}'`,
+        `echo broken > '${site}'`,
+        `backup_nginx_config '${conf}'`,
+        `echo limits > '${conf}'`,
+        'restore_nginx_config',
+      ].join('\n')
+    );
+    assert.equal(run.status, 0, run.output);
+    assert.equal(readFileSync(conf, 'utf8'), 'original conf\n');
+    assert.equal(readFileSync(site, 'utf8'), 'original site\n');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // The installer secures the pid directory of Alpine's nginx service for a root nginx (the stock service gives it to the
 // unprivileged nginx user on every start and reload). The service must still give the directory to the user nginx runs
 // as when /etc/conf.d/nginx sets command_user, which is how docs/nodes.md prepares a non-root nginx.

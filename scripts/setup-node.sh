@@ -463,12 +463,40 @@ nginx_service_pid_file() {
 
 backup_if_exists() {
     local file="$1"
+    BACKUP_PATH=""
     if [[ -f "$file" ]]; then
         local backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
         cp "$file" "$backup"
         log "Backed up ${file} to ${backup}"
         prune_older_backups "$file" "$backup"
+        BACKUP_PATH="$backup"
     fi
+}
+
+# nginx files this run changed, each followed by the copy taken before the change, so a failed nginx -t puts the
+# previous configuration back instead of leaving a broken one for the next reload.
+NGINX_CONFIG_ROLLBACK=()
+
+# Only the first copy of a file counts: a second one in the same second would overwrite it with the changed file.
+backup_nginx_config() {
+    local index
+    for ((index = 0; index < ${#NGINX_CONFIG_ROLLBACK[@]}; index += 2)); do
+        [[ "${NGINX_CONFIG_ROLLBACK[index]}" == "$1" ]] && return 0
+    done
+    backup_if_exists "$1"
+    [[ -n "$BACKUP_PATH" ]] && NGINX_CONFIG_ROLLBACK+=("$1" "$BACKUP_PATH")
+    return 0
+}
+
+restore_nginx_config() {
+    local index
+    for ((index = 0; index < ${#NGINX_CONFIG_ROLLBACK[@]}; index += 2)); do
+        if cp "${NGINX_CONFIG_ROLLBACK[index + 1]}" "${NGINX_CONFIG_ROLLBACK[index]}"; then
+            log "Restored ${NGINX_CONFIG_ROLLBACK[index]} from ${NGINX_CONFIG_ROLLBACK[index + 1]}"
+        else
+            warn "Could not restore ${NGINX_CONFIG_ROLLBACK[index]} from ${NGINX_CONFIG_ROLLBACK[index + 1]}"
+        fi
+    done
 }
 
 # A root nginx must not leave its pid directory to the unprivileged nginx user that Alpine's service assigns it to on
@@ -1950,7 +1978,7 @@ remove_legacy_gateway_sites_include() {
     effective_content=$(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$legacy_file")
     [[ "$effective_content" == "$expected_line" ]] || return 0
 
-    backup_if_exists "$legacy_file"
+    backup_nginx_config "$legacy_file"
     rm -f "$legacy_file"
     log "Removed legacy duplicate Gateway sites include"
 }
@@ -1964,7 +1992,7 @@ remove_direct_gateway_sites_include() {
     local tmp_file
 
     nginx_conf_has_line "$global_conf" "$line" || return 0
-    backup_if_exists "$global_conf"
+    backup_nginx_config "$global_conf"
     tmp_file=$(mktemp /tmp/nginx-conf-XXXXXX)
     if ! awk -v line="$line" '
         { trimmed = $0; sub(/^[[:space:]]+/, "", trimmed); sub(/[[:space:]]+$/, "", trimmed) }
@@ -2068,7 +2096,7 @@ ensure_nginx_worker_limits() {
     fi
 
     if ! cmp -s "$tmp_file" "$global_conf"; then
-        backup_if_exists "$global_conf"
+        backup_nginx_config "$global_conf"
         cat "$tmp_file" > "$global_conf"
         log "Applied nginx worker limits and disabled version tokens"
     fi
@@ -2211,9 +2239,9 @@ configure_nginx_managed() {
     log "Configuring nginx in managed mode..."
     # nginx.conf below includes the Gateway sites directory itself.
     remove_legacy_gateway_sites_include
-    backup_if_exists "/etc/nginx/nginx.conf"
-    backup_if_exists "/etc/nginx/conf.d/default.conf"
-    backup_if_exists "/etc/nginx/http.d/default.conf"
+    backup_nginx_config "/etc/nginx/nginx.conf"
+    backup_nginx_config "/etc/nginx/conf.d/default.conf"
+    backup_nginx_config "/etc/nginx/http.d/default.conf"
 
     cat > /etc/nginx/nginx.conf << 'EOF'
 worker_processes auto;
@@ -2231,6 +2259,8 @@ http {
     tcp_nodelay on;
     keepalive_timeout 65;
     types_hash_max_size 2048;
+    # Gateway Pages generated hostnames are longer than the default bucket fits.
+    server_names_hash_bucket_size 128;
     client_max_body_size 50m;
 
     include /etc/nginx/mime.types;
@@ -2399,7 +2429,8 @@ configure_nginx() {
         verify_nginx_fd_limits
         ok "nginx configuration updated (${NGINX_MODE} mode)"
     else
-        die "nginx config test failed after configuration changes — check $LOG_FILE"
+        restore_nginx_config
+        die "nginx config test failed after configuration changes; the previous configuration is restored — check $LOG_FILE"
     fi
     # A root nginx -t (and -T) gives nginx's temp directories to the user nginx.conf names; an nginx running as the run
     # user then cannot buffer a response (13: Permission denied).
