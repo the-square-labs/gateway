@@ -304,6 +304,13 @@ describe('resolveRequestedTokenScopes', () => {
       'integrations:github:manage',
     ]);
   });
+
+  it('adds nothing to a new token that asks for exactly its scopes', () => {
+    const owner = ['integrations:github:view', 'integrations:github:use', 'integrations:github:repo:read'];
+    const use = ['integrations:github:use', 'integrations:github:view'];
+    expect(resolveRequestedTokenScopes(use, owner, 'create', { exact: true })).toEqual(use);
+    expect(resolveRequestedTokenScopes(use, owner, 'create')).toEqual(['integrations:github:repo:read', ...use]);
+  });
 });
 
 describe('TokensService registry access', () => {

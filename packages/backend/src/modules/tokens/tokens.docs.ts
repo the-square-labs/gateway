@@ -20,6 +20,8 @@ export const createTokenRoute = appRoute({
   path: '/',
   tags: ['Tokens'],
   summary: 'Create an API token',
+  description:
+    'The scopes are bounded by your own. A new token also gets the grants older scripts expect from the scopes they name (for example repository reads with integrations:github:view) where you hold them; send `exactScopes: true` to store exactly the requested scopes, as the token dialog does.',
   request: jsonBody(CreateTokenSchema),
   responses: createdJson(CreateTokenResponseSchema),
 });

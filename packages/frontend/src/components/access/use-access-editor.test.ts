@@ -93,9 +93,7 @@ describe("access editor", () => {
 
   it("counts what a token keeps of a line wider than its owner", async () => {
     const ownerScopes = linesToScopes([viewerEverywhere, developerInBilling, operatorOnWeb], ctx);
-    const { result } = renderHook(() =>
-      useAccessEditor({ open: true, scopes: [], ownerScopes, newToken: true })
-    );
+    const { result } = renderHook(() => useAccessEditor({ open: true, scopes: [], ownerScopes }));
     await waitFor(() => expect(result.current.lines).toEqual([]));
     const operatorEverywhere: AccessLine = {
       kind: "resources",

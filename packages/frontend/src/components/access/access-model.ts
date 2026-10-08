@@ -932,41 +932,14 @@ export function boundAccessScopes(
 }
 
 /**
- * What a new token gains for older scripts (backend `withDelegableCleanupAdditions`: migration
- * 0200's `SCOPE_CLEANUP_MIGRATION_ADDITIONS` without the manual-approval scopes), when its owner
- * holds them. A test keeps this table equal to the backend's.
- */
-const NEW_TOKEN_ADDITIONS: Readonly<Record<string, readonly string[]>> = {
-  "pki:ca:create:root": ["pki:ca:edit"],
-  "integrations:github:view": ["integrations:github:repo:read"],
-  "integrations:github:manage": ["integrations:github:repo:read"],
-  "integrations:git:view": ["integrations:git:repo:read"],
-  "integrations:git:manage": ["integrations:git:repo:read"],
-  "docker:volumes:create": ["docker:volumes:edit"],
-};
-
-/** Backend `scopeCleanupAdditions` over NEW_TOKEN_ADDITIONS. */
-function newTokenAdditions(scope: string): string[] {
-  for (const [trigger, additions] of Object.entries(NEW_TOKEN_ADDITIONS)) {
-    if (scope === trigger) return [...additions];
-    if (!scope.startsWith(`${trigger}:`)) continue;
-    const qualifier = scope.slice(trigger.length + 1);
-    if (!qualifier || qualifier.startsWith("folder/") || qualifier.startsWith("node/")) return [];
-    return additions.map((addition) => `${addition}:${qualifier}`);
-  }
-  return [];
-}
-
-/**
  * The scopes a token saves as: its lines' scopes the owner holds, a wider line narrowed to the
- * owner's part (the backend refuses scopes the owner lacks), in stored form, and for a new token
- * with the grants Gateway adds for older scripts.
+ * owner's part (the backend refuses scopes the owner lacks), in stored form. The token dialog asks
+ * Gateway to store exactly these (`exactScopes`), so nothing is added for older scripts.
  */
 export function tokenStoredScopes(
   scopes: readonly string[],
   ownerScopes: readonly string[],
-  ctx: AccessContext,
-  { newToken = false }: { newToken?: boolean } = {}
+  ctx: AccessContext
 ): string[] {
   const holds = (scope: string) => principalHolds(ownerScopes, scope, ctx);
   const held = scopes.filter(holds);
@@ -979,10 +952,7 @@ export function tokenStoredScopes(
           ownerScopes,
           ctx
         ).filter(holds);
-  const kept = canonicalizeScopeSelection([...held, ...narrowed]);
-  if (!newToken) return kept;
-  const additions = kept.flatMap(newTokenAdditions).filter(holds);
-  return additions.length === 0 ? kept : canonicalizeScopeSelection([...kept, ...additions]);
+  return canonicalizeScopeSelection([...held, ...narrowed]);
 }
 
 function shortWhere(where: AccessWhere) {

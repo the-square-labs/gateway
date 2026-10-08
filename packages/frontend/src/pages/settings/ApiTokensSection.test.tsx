@@ -94,6 +94,7 @@ describe("token internal registry access", () => {
     expect(api.createToken).toHaveBeenCalledWith({
       name: "pusher",
       scopes: [],
+      exactScopes: true,
       registryAccess: { pull: "all", push: "all" },
     });
   });
@@ -117,5 +118,36 @@ describe("token internal registry access", () => {
     await waitFor(() => expect(api.updateToken).toHaveBeenCalledTimes(1));
     // Only the name: the stored registry access is neither cleared nor rewritten.
     expect(api.updateToken).toHaveBeenCalledWith("token-1", { name: "ci-renamed" });
+  });
+});
+
+describe("token scopes", () => {
+  it("asks Gateway to store exactly the counted scopes, so a Git Use line reopens as Use", async () => {
+    const connector = "0b8f2a8e-6f1c-4a57-9a51-3f9d7f1b2c01";
+    const use = [
+      `integrations:github:use:${connector}/repo/7`,
+      `integrations:github:view:${connector}/repo/7`,
+    ];
+    const owner = {
+      id: "user-1",
+      scopes: [
+        "integrations:github:view",
+        "integrations:github:use",
+        "integrations:github:repo:read",
+      ],
+    } as User;
+    api.listTokens.mockResolvedValue([{ ...pullToken, scopes: use, registryAccess: {} }]);
+    render(
+      <ApiTokensSection
+        user={owner}
+        nodesList={[]}
+        proxyHostsList={[]}
+        databasesList={[]}
+        loggingSchemasList={[]}
+      />
+    );
+    await userEvent.click(await screen.findByText("ci"));
+    expect(await screen.findByText("Use repository 7")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review 2 scopes" })).toBeInTheDocument();
   });
 });

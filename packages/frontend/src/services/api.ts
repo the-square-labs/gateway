@@ -436,6 +436,8 @@ class ApiClient extends withIngressGroupsApi(
     name: string;
     scopes: string[];
     registryAccess?: TokenRegistryAccess;
+    /** Store exactly these scopes, without the grants Gateway adds for older scripts. */
+    exactScopes?: boolean;
   }): Promise<ApiToken & { token: string }> {
     return this.request(`/tokens`, {
       method: "POST",

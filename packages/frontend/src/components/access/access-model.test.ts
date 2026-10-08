@@ -13,7 +13,6 @@ import {
   canonicalizeInboundScopes,
   canonicalizeScopes,
   MANUAL_APPROVAL_SCOPE_SET,
-  SCOPE_CLEANUP_MIGRATION_ADDITIONS,
   scopeCleanupAdditions,
 } from "../../../../backend/src/lib/scopes";
 import {
@@ -30,6 +29,7 @@ import {
   boundAccessScopes,
   describeLine,
   GIT_LEVELS,
+  type GitAccessLine,
   gitLevelScopes,
   lineScopes,
   linesAddingNothing,
@@ -461,28 +461,35 @@ describe("token narrowing", () => {
     mayDelete: false,
   };
 
-  /** Backend token create: canonicalizeInboundScopes, withDelegableCleanupAdditions, canonicalizeScopes. */
-  function backendStoredTokenScopes(sent: readonly string[], ownerScopes: readonly string[]) {
+  /**
+   * Backend token create: canonicalizeInboundScopes, withDelegableCleanupAdditions unless the client
+   * sends `exactScopes` (the token dialog does), canonicalizeScopes.
+   */
+  function backendStoredTokenScopes(
+    sent: readonly string[],
+    ownerScopes: readonly string[],
+    { exact }: { exact: boolean }
+  ) {
     const canonical = canonicalizeInboundScopes(sent);
-    const additions = canonical
-      .flatMap(scopeCleanupAdditions)
-      .filter(
-        (scope) =>
-          !MANUAL_APPROVAL_SCOPE_SET.has(backendBaseScope(scope)) &&
-          principalHolds(ownerScopes, scope, ctx)
-      );
+    const additions = exact
+      ? []
+      : canonical
+          .flatMap(scopeCleanupAdditions)
+          .filter(
+            (scope) =>
+              !MANUAL_APPROVAL_SCOPE_SET.has(backendBaseScope(scope)) &&
+              principalHolds(ownerScopes, scope, ctx)
+          );
     return canonicalizeScopes([...canonical, ...additions]);
   }
 
   it("counts the owner's part a token keeps of a wider line", () => {
     const entered = lineScopes(operatorEverywhere, ctx);
     expect(entered).toHaveLength(9);
-    const kept = tokenStoredScopes(linesToScopes([operatorEverywhere], ctx), owner, ctx, {
-      newToken: true,
-    });
+    const kept = tokenStoredScopes(linesToScopes([operatorEverywhere], ctx), owner, ctx);
     // docker:containers:view, the Developer set in billing and the Operator set on node-1/web.
     expect(kept).toHaveLength(13);
-    expect(backendStoredTokenScopes(kept, owner)).toEqual(kept);
+    expect(backendStoredTokenScopes(kept, owner, { exact: true })).toEqual(kept);
     expect(scopesToLines(kept, ctx)).toEqual([
       { ...operatorEverywhere, role: "viewer" },
       developerInBilling,
@@ -500,21 +507,30 @@ describe("token narrowing", () => {
     const lines: AccessLine[] = [{ ...operatorEverywhere, role: "viewer" }, developerInBilling];
     const kept = tokenStoredScopes(linesToScopes(lines, ctx), owner, ctx);
     expect(kept).not.toContain("docker:containers:view:folder/docker-billing");
-    expect(backendStoredTokenScopes(kept, owner)).toEqual(kept);
+    expect(backendStoredTokenScopes(kept, owner, { exact: true })).toEqual(kept);
     expect(scopesToLines(kept, ctx)).toEqual(lines);
   });
 
-  it("adds what Gateway adds to a new token, as the backend does", () => {
-    const everything = TOKEN_SCOPES.map((scope) => scope.value);
-    for (const trigger of Object.keys(SCOPE_CLEANUP_MIGRATION_ADDITIONS)) {
-      for (const scope of [trigger, `${trigger}:res-1`, `${trigger}:folder/docker-billing`]) {
-        expect(tokenStoredScopes([scope], everything, ctx, { newToken: true }), scope).toEqual(
-          backendStoredTokenScopes([scope], everything)
-        );
-        expect(tokenStoredScopes([scope], everything, ctx), scope).toEqual(
-          canonicalizeScopes([scope])
-        );
-      }
-    }
+  it("keeps a Git Use line as Use on a new token", () => {
+    const use: GitAccessLine = {
+      kind: "git",
+      provider: "github",
+      connectorId: CONNECTOR,
+      repositories: { kind: "some", ids: ["7"] },
+      level: "use",
+    };
+    const githubOwner = [
+      "integrations:github:view",
+      "integrations:github:use",
+      "integrations:github:repo:read",
+    ];
+    const kept = tokenStoredScopes(linesToScopes([use], ctx), githubOwner, ctx);
+    expect(kept).toEqual(lineScopes(use, ctx).sort());
+    expect(backendStoredTokenScopes(kept, githubOwner, { exact: true })).toEqual(kept);
+    expect(scopesToLines(kept, ctx)).toEqual([use]);
+    // Without exactScopes Gateway adds repository reads, and the line would reopen as Read code.
+    expect(
+      scopesToLines(backendStoredTokenScopes(kept, githubOwner, { exact: false }), ctx)
+    ).toEqual([{ ...use, level: "read" }]);
   });
 });

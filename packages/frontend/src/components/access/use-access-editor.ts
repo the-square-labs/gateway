@@ -59,8 +59,6 @@ interface AccessEditorOptions {
    * token saves only the owner's part of them.
    */
   ownerScopes?: readonly string[];
-  /** A token being created: Gateway adds the grants older scripts expect (`tokenStoredScopes`). */
-  newToken?: boolean;
 }
 
 /**
@@ -75,7 +73,6 @@ export function useAccessEditor({
   scopes: initialScopes,
   inherited = NO_INHERITED,
   ownerScopes,
-  newToken = false,
 }: AccessEditorOptions): AccessEditor {
   const catalog = useAccessCatalog(open, [
     ...initialScopes,
@@ -99,8 +96,8 @@ export function useAccessEditor({
   const scopes = useMemo(() => {
     if (!lines) return initialKey ? initialKey.split("\n") : [];
     const own = linesToScopes(lines, ctx);
-    return ownerScopes ? tokenStoredScopes(own, ownerScopes, ctx, { newToken }) : own;
-  }, [ctx, initialKey, lines, newToken, ownerScopes]);
+    return ownerScopes ? tokenStoredScopes(own, ownerScopes, ctx) : own;
+  }, [ctx, initialKey, lines, ownerScopes]);
   const changed = scopes.join("\n") !== initialKey;
 
   const views = useMemo<AccessLineView[]>(() => {

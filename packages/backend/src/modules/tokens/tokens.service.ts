@@ -49,20 +49,22 @@ function hashToken(raw: string): string {
 
 /**
  * Turn client-supplied token scopes into the stored set: retired names are rewritten, and a new token
- * also receives the migration 0200 additions its owner can delegate. A list that ends up empty (only
- * removed scopes) is rejected rather than minting a token without scopes.
+ * also receives the migration 0200 additions its owner can delegate, unless the client asks for exactly
+ * its scopes (the token dialog does). A list that ends up empty (only removed scopes) is rejected rather
+ * than minting a token without scopes.
  */
 export function resolveRequestedTokenScopes(
   requested: readonly string[],
   ownerScopes: readonly string[],
-  purpose: 'create' | 'update'
+  purpose: 'create' | 'update',
+  { exact = false }: { exact?: boolean } = {}
 ): string[] {
   const canonical = canonicalizeInboundScopes(requested);
   // An empty list is a registry-only token (CreateTokenSchema requires registry access then).
   if (canonical.length === 0 && requested.length > 0) {
     throw new AppError(400, 'INVALID_SCOPE', 'None of the requested scopes exist any more');
   }
-  return purpose === 'create' ? withDelegableCleanupAdditions(canonical, ownerScopes) : canonical;
+  return purpose === 'create' && !exact ? withDelegableCleanupAdditions(canonical, ownerScopes) : canonical;
 }
 
 /**

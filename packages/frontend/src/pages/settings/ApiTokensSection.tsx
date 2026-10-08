@@ -93,7 +93,6 @@ export function ApiTokensSection({
     open: createDialogOpen,
     scopes: editingToken?.scopes ?? NO_SCOPES,
     ownerScopes: userScopes,
-    newToken: !editingToken,
   });
   const tokenScopesChanged = !!editingToken && access.changed;
   // Hidden registry access is never sent: a token keeps what it has.
@@ -213,6 +212,8 @@ export function ApiTokensSection({
       const result = await api.createToken({
         name: newTokenName,
         scopes: access.scopes,
+        // Exactly the scopes counted here: no grants added for older scripts.
+        exactScopes: true,
         ...(registryOffered ? { registryAccess: finalRegistryAccess(registryAccess).access } : {}),
       });
       setCreatedSecret(result.token);
@@ -350,7 +351,7 @@ export function ApiTokensSection({
               editor={access}
               subject={newTokenName.trim() || "this token"}
               description="Never more than you can do."
-              mode={{ kind: "token", ownerScopes: userScopes, newToken: !editingToken }}
+              mode={{ kind: "token", ownerScopes: userScopes }}
               scopesOpen={scopesOpen}
               onScopesOpenChange={setScopesOpen}
               picker={{

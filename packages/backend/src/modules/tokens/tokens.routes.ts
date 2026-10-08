@@ -53,7 +53,12 @@ tokensRoutes.openapi(createTokenRoute, async (c) => {
   const user = c.get('user')!;
   const body = await c.req.json();
   const parsedInput = CreateTokenSchema.parse(body);
-  const input = { ...parsedInput, scopes: resolveRequestedTokenScopes(parsedInput.scopes, user.scopes, 'create') };
+  const input = {
+    ...parsedInput,
+    scopes: resolveRequestedTokenScopes(parsedInput.scopes, user.scopes, 'create', {
+      exact: parsedInput.exactScopes === true,
+    }),
+  };
 
   // Registry access comes from the user's workload permissions; every other scope must be one the user holds.
   const userScopes = user.scopes;

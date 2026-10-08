@@ -17,6 +17,12 @@ export const CreateTokenSchema = z
     name: z.string().trim().min(1).max(255),
     scopes: TokenScopeArraySchema.default([]),
     registryAccess: TokenRegistryAccessSchema.optional(),
+    exactScopes: z
+      .boolean()
+      .optional()
+      .describe(
+        'Store exactly the requested scopes. Without it a new token also gets the grants older scripts expect from the scopes they name (for example repository reads with integrations:github:view), where the owner holds them.'
+      ),
   })
   .refine(
     (input) => input.scopes.length > 0 || hasRegistryAccess(input.registryAccess),
