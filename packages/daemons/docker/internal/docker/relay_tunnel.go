@@ -1022,6 +1022,9 @@ func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFram
 	if readChunk <= 0 || readChunk > maxFrame {
 		readChunk = maxFrame
 	}
+	// The frame's message stays within the read size: a few bytes over a gRPC
+	// buffer tier cost a 1 MiB buffer clear per frame.
+	readChunk = relaybridge.DataLimit(readChunk)
 	extendIdle := func() {}
 	if idle > 0 {
 		extendIdle = func() { _ = connection.SetDeadline(time.Now().Add(idle)) }

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 const (
@@ -29,6 +30,19 @@ func init() {
 			return &buffer
 		}
 	}
+}
+
+// DataLimit is the largest Data payload whose TunnelFrame message is at most
+// message bytes. gRPC takes message buffers from size tiers (16 KiB, 32 KiB,
+// 1 MiB) and clears the whole buffer on every use: a 32 KiB read made a
+// 32776-byte message, which took and cleared a 1 MiB buffer for every frame
+// on both daemons. Reads of DataLimit(32 KiB) stay in the 32 KiB tier.
+func DataLimit(message int) int {
+	n := message - 2
+	for n > 0 && n+2+protowire.SizeVarint(uint64(n))+protowire.SizeVarint(uint64(n+1+protowire.SizeVarint(uint64(n)))) > message {
+		n--
+	}
+	return max(n, 1)
 }
 
 type FrameStream interface {
@@ -58,7 +72,8 @@ func BridgeWithChunk(ctx context.Context, connection net.Conn, stream FrameStrea
 	}
 	// A frame never exceeds the relay's limit, also when the default chunk is
 	// above a route's smaller one: the peer ends the tunnel on a bigger frame.
-	readChunk = min(readChunk, maxFrame)
+	// Its message stays within the read size (see DataLimit).
+	readChunk = min(DataLimit(readChunk), maxFrame)
 	completed := make(chan result, 2)
 	go sendLocal(connection, stream, readChunk, completed)
 	go receiveRemote(connection, stream, maxFrame, completed)
