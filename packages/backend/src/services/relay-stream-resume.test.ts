@@ -420,6 +420,29 @@ describe("Gateway's own streams", () => {
       'local-relay-id'
     );
     expect(report).toMatchObject({ migrationsOkTotal: 4, cutTotal: 1, migrationStallP95Ms: 9 });
+    // Only refused resumes and unplanned moves out of time cut a live stream: a planned move that found no path or
+    // no answer kept it, and "rejected" is a stream that ended meanwhile (stand rc.6 O-3).
+    const failedMoves = gatewayStreamReport(
+      {
+        sessions: { resumable: 0, legacy: 0 },
+        byRelay: {},
+        suspended: 0,
+        unackedBytes: 0,
+        migrations: {
+          'drain:no_relay': 2,
+          'return:timeout': 1,
+          'return:rejected': 1,
+          'goaway:resume_rejected': 1,
+          'path_failure:timeout': 1,
+          'path_failure:resume_rejected': 1,
+          'path_failure:rejected': 1,
+        },
+        migrationStallMs: { p50: 0, p95: 0 },
+        retransmittedBytes: 0,
+      },
+      'local-relay-id'
+    );
+    expect(failedMoves).toMatchObject({ migrationsOkTotal: 0, migrationsFailedTotal: 8, cutTotal: 3 });
     expect(relaySessionSplit([{ nodeId: 'gateway', report }], 'local-relay-id')).toEqual({
       resumable: 0,
       legacy: 1,

@@ -867,6 +867,79 @@ describe('RSv1 session simulator', () => {
   });
 });
 
+describe('RSv1 refused moves (stand rc.6 O-3)', () => {
+  /** A source open through a target on the simulator, the request and its FIN delivered at the target. */
+  const openWithRequest = () => {
+    const sim = new Simulator(7, { source: 10, target: 10 });
+    sim.startSource();
+    for (let i = 0; i < 50 && !sim.sourceSide.session!.isOpen; i++) sim.advance();
+    const source = sim.sourceSide.session!;
+    expect(source.isOpen).toBe(true);
+    source.write(sim.sourceStream);
+    source.finish();
+    sim.sourceSide.finSent = true;
+    for (let i = 0; i < 50 && !sim.targetSide.finDelivered; i++) sim.advance();
+    expect(sim.targetSide.finDelivered).toBe(1);
+    return { sim, source, target: sim.targetSide.session! };
+  };
+  /** A planned move whose RESUME the target answers with RESUME_REJ code, ahead of anything on the old path. */
+  const refuse = (source: ResumeSession, code: number) => {
+    const handle: ResumePathHandle = {
+      relayId: 'relay-near',
+      maxFrameBytes: 32 * 1024,
+      send: () => true,
+      close: () => undefined,
+      cancel: () => undefined,
+    };
+    const result = source.resume(handle);
+    source.pathFrame(handle, encodeRecord({ type: RecordType.resumeRej, sessionId: source.sessionId, code }));
+    return result;
+  };
+
+  it('ends a planned move the target refused after its reset as the peer reset heard on the old path', async () => {
+    const { sim, source, target } = openWithRequest();
+    // The target's backend left: it resets, its RST travels on the old (far) path.
+    target.abort(RstCode.local, 'backend connection reset');
+    const result = refuse(source, RejectCode.reset);
+    expect(source.isClosed).toBe(false);
+    expect(source.isOpen).toBe(false);
+    for (let i = 0; i < 50 && !source.isClosed; i++) sim.advance();
+    expect(sim.sourceSide.closeError?.code).toBe('reset');
+    expect(await result).toBe('closed');
+  });
+
+  it('counts the refusal as cut when the old path ends without a word or stays silent', async () => {
+    const ended = openWithRequest();
+    const old = ended.sim.paths[0]!.source;
+    const endedResult = refuse(ended.source, RejectCode.reset);
+    ended.source.pathEnded(old, { error: new Error('relay gone') });
+    expect(ended.sim.sourceSide.closeError?.code).toBe('rejected');
+    expect(await endedResult).toBe('rejected');
+
+    const silent = openWithRequest();
+    const silentResult = refuse(silent.source, RejectCode.reset);
+    // Nothing more arrives on the old path: only the refusal's deadline is left.
+    silent.sim.paths[0]!.source.paused = true;
+    for (let i = 0; i < 50 && !silent.source.isClosed; i++) silent.sim.advance();
+    expect(silent.sim.sourceSide.closeError?.code).toBe('rejected');
+    expect(await silentResult).toBe('rejected');
+  });
+
+  it('finishes a stream whose both directions were complete on any refusal', async () => {
+    for (const code of [RejectCode.unknown, RejectCode.finished, RejectCode.reset]) {
+      const { sim, source, target } = openWithRequest();
+      target.write(sim.targetStream);
+      target.finish();
+      for (let i = 0; i < 50 && !sim.sourceSide.finDelivered; i++) sim.advance();
+      expect(source.complete).toBe(true);
+      const result = refuse(source, code);
+      expect(sim.sourceSide.closed).toBe(true);
+      expect(sim.sourceSide.closeError).toBeUndefined();
+      expect(await result).toBe('closed');
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // The Duplex over real timers: echo through a target session, with a path cut and a planned move.
 // ---------------------------------------------------------------------------------------------------------------------

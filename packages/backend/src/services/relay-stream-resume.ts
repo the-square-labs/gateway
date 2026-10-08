@@ -302,7 +302,10 @@ export interface GatewayRelayResumeStats {
 
 /**
  * Gateway's own streams as one more reporting source. Migration outcomes are keyed "trigger:result": "ok" moved a
- * stream, any other result cut it. Raw streams through a pre-pool relay are keyed "local", which is the local relay.
+ * stream, any other result is a failed move. Only a refused resume, and an unplanned move that ran out of time, cut a
+ * live stream: a planned move that found no path or no answer keeps the stream where it was, and "rejected" is a
+ * stream that had ended meanwhile (stand rc.6 O-3). Raw streams through a pre-pool relay are keyed "local", which is
+ * the local relay.
  */
 export function gatewayStreamReport(
   stats: GatewayRelayResumeStats,
@@ -310,9 +313,11 @@ export function gatewayStreamReport(
 ): NodeRelayStreamReport {
   let moved = 0;
   let failed = 0;
+  let cut = 0;
   for (const [key, count] of Object.entries(stats.migrations ?? {})) {
     if (key.endsWith(':ok')) moved += count;
     else failed += count;
+    if (key.endsWith(':resume_rejected') || key === 'path_failure:timeout') cut += count;
   }
   const byRelay = new Map<string, { resumable: number; legacy: number }>();
   for (const [relay, counts] of Object.entries(stats.byRelay ?? {})) {
@@ -329,7 +334,7 @@ export function gatewayStreamReport(
     suspendedSessions: stats.suspended,
     migrationsOkTotal: moved,
     migrationsFailedTotal: failed,
-    cutTotal: failed,
+    cutTotal: cut,
     retransmittedBytesTotal: stats.retransmittedBytes,
     unackedBytes: stats.unackedBytes,
     migrationStallP50Ms: stats.migrationStallMs.p50,

@@ -671,6 +671,11 @@ export class ResumeSession {
   private current: PathState | null = null;
   /** Source: the path RESUME went out on. */
   private pending: PendingResume | null = null;
+  /**
+   * Source: a planned move the target refused because it reset the stream meanwhile. Its RST travels on the old
+   * path, which the refusal overtook; the stream hears that path out before it counts as cut (stand rc.6 O-3).
+   */
+  private refusal: { settle: (result: ResumeResult) => void; code: number; timer: unknown } | null = null;
   private targetNonce: Buffer;
   private epoch = 0;
   private helloMac: Buffer = ZERO_MAC;
@@ -732,7 +737,7 @@ export class ResumeSession {
   }
 
   get isOpen(): boolean {
-    return this.state === 'open';
+    return this.state === 'open' && !this.refusal;
   }
   get isClosed(): boolean {
     return this.state === 'closed';
@@ -877,7 +882,7 @@ export class ResumeSession {
    */
   resume(handle: ResumePathHandle, timeoutMs = RESUME_ACK_TIMEOUT_MS): Promise<ResumeResult> {
     if (this.role !== 'source') throw new Error('resume on a target');
-    if (this.state === 'closed' || this.state === 'hello') {
+    if (this.state === 'closed' || this.state === 'hello' || this.refusal) {
       handle.cancel();
       return Promise.resolve('closed');
     }
@@ -1069,6 +1074,11 @@ export class ResumeSession {
       return;
     }
     if (path !== this.current) return;
+    if (this.refusal) {
+      // The old path ended without telling how the target ended the stream.
+      this.endRefused();
+      return;
+    }
     if (this.pending) {
       // The target let go of the old path for the RESUME in flight; its answer decides.
       if (this.state !== 'hello') this.state = 'suspended';
@@ -1140,12 +1150,29 @@ export class ResumeSession {
     this.pending = null;
     this.timers.clearTimeout(pending.timer);
     this.retirePath(pending.path, true);
-    pending.settle('rejected');
-    if (reject.code === RejectCode.finished && this.complete) {
+    if (this.complete) {
+      // Both directions were complete: the stream had closed and only the CLOSE exchange was missing; nothing was
+      // lost, whatever the target answers.
+      pending.settle('closed');
       this.terminate(undefined, true);
       return;
     }
+    if (reject.code === RejectCode.reset && pending.planned && this.current?.alive) {
+      // A planned move: the target reset the stream meanwhile (its local connection ended) and sent its RST, after
+      // its last acks, on the old path, which this answer overtook. The old path tells how the stream ended.
+      const timer = this.timers.setTimeout(() => this.endRefused(), RESUME_ACK_TIMEOUT_MS);
+      this.refusal = { settle: pending.settle, code: reject.code, timer };
+      return;
+    }
+    pending.settle('rejected');
     this.terminate(new ResumeSessionError(`resume refused (${reject.code})`, 'rejected', reject.code), true);
+  }
+
+  /** A refused planned move whose old path told nothing (in time): the stream could not move. */
+  private endRefused(): void {
+    const refusal = this.refusal;
+    if (!refusal || this.state === 'closed') return;
+    this.terminate(new ResumeSessionError(`resume refused (${refusal.code})`, 'rejected', refusal.code), true);
   }
 
   private processRecords(path: PathState, records: ResumeRecord[]): void {
@@ -1485,6 +1512,13 @@ export class ResumeSession {
       this.timers.clearTimeout(pending.timer);
       this.retirePath(pending.path, true);
       pending.settle('closed');
+    }
+    const refusal = this.refusal;
+    this.refusal = null;
+    if (refusal) {
+      this.timers.clearTimeout(refusal.timer);
+      // The peer's RST (or a clean end) arrived on the old path: the stream ended, it was not cut.
+      refusal.settle(error?.code === 'rejected' ? 'rejected' : 'closed');
     }
     if (this.current) {
       if (closePaths && this.current.alive) {
@@ -2001,7 +2035,7 @@ export class ResumableRelayDuplex extends Duplex {
           return;
         }
         if (result === 'rejected' || result === 'closed') {
-          this.registry.recordMigration('path_failure', 'resume_rejected');
+          this.registry.recordMigration('path_failure', migrationOutcome(result));
           return;
         }
       }
