@@ -51,8 +51,15 @@ func relayStreamSubject(tag any) (logepisode.Subject, bool) {
 	return logepisode.Subject{Name: name, IDAttr: "link_id", ID: link.linkID}, true
 }
 
-// relayStreamMigrated logs moves per link and state change: a moved stream
-// was served, but its relay path was not healthy.
+// relayStreamMoveUnplanned is a move forced by a broken path. The others (a new generation, the return to the
+// nearest relay, a drain, a relay's GOAWAY, a target's hint) are planned and say nothing about the path's health.
+func relayStreamMoveUnplanned(trigger relayresume.Trigger) bool {
+	return trigger == relayresume.TriggerPathFailure
+}
+
+// relayStreamMigrated logs moves per link and state change: a stream moved off a
+// broken path was served, but its relay path was not healthy. Planned moves log at
+// debug only.
 func (p *NginxPlugin) relayStreamMigrated(event relayresume.MigrationEvent) {
 	subject, ok := relayStreamSubject(event.Session.Tag())
 	if !ok || p.logger == nil {
@@ -61,6 +68,11 @@ func (p *NginxPlugin) relayStreamMigrated(event relayresume.MigrationEvent) {
 	if !event.OK {
 		p.logger.Debug("relay stream did not move", "link_id", subject.ID, "trigger", string(event.Trigger),
 			"relay_instance_id", event.From, "error", errorText(event.Err))
+		return
+	}
+	if !relayStreamMoveUnplanned(event.Trigger) {
+		p.logger.Debug("relay stream moved", "link_id", subject.ID, "trigger", string(event.Trigger),
+			"from_relay", event.From, "to_relay", event.To, "paused", event.Stall.Round(time.Millisecond).String())
 		return
 	}
 	p.relayStreamOutcomes.Retried(p.logger, subject, "trigger", string(event.Trigger), "from_relay", event.From,

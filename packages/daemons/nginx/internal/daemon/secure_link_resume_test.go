@@ -453,3 +453,18 @@ func TestSecureLinkStreamStaysOnItsRelayAcrossAGenerationChange(t *testing.T) {
 		t.Fatalf("moves %d then %d, want one re-path", moves, got)
 	}
 }
+
+// A planned move (ingress-1 logged its 1-ms regrants as retries for 20 minutes, rc.4 O-i) is not a retry.
+func TestOnlyAPathFailureMoveCountsAsARetry(t *testing.T) {
+	for _, trigger := range []relayresume.Trigger{
+		relayresume.TriggerDrain, relayresume.TriggerGoAway, relayresume.TriggerTargetHint,
+		relayresume.TriggerRegrant, relayresume.TriggerReturn,
+	} {
+		if relayStreamMoveUnplanned(trigger) {
+			t.Fatalf("%s move counts as a retry", trigger)
+		}
+	}
+	if !relayStreamMoveUnplanned(relayresume.TriggerPathFailure) {
+		t.Fatal("path failure move does not count as a retry")
+	}
+}
