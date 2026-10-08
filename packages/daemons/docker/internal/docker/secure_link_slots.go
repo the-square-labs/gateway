@@ -79,18 +79,46 @@ func (m *dockerSecureLinkManager) oldestRetiringSlotLocked(found [len(secureLink
 // cutConnectorLocked removes the connector in slot to free the slot and returns how many sessions it still carried.
 func (m *dockerSecureLinkManager) cutConnectorLocked(ctx context.Context, inspect container.InspectResponse, slot int) (int, error) {
 	sessions := m.connectorSessions(inspect.ID, m.adoptedControlSocket(m.slotSocketPath(slot)))
+	return sessions, m.dropConnectorLocked(ctx, inspect.ID)
+}
+
+// dropConnectorLocked removes a connector container and forgets its retirement.
+func (m *dockerSecureLinkManager) dropConnectorLocked(ctx context.Context, id string) error {
 	// Its retirement, if any, must not tell the slot's next connector to drain.
-	m.retiring.stop(inspect.ID)
-	if err := m.removeConnectorContainer(ctx, inspect.ID); err != nil {
-		return 0, err
+	m.retiring.stop(id)
+	if err := m.removeConnectorContainer(ctx, id); err != nil {
+		return err
 	}
-	if m.pendingRetire != nil && m.pendingRetire.id == inspect.ID {
+	if m.pendingRetire != nil && m.pendingRetire.id == id {
 		m.pendingRetire = nil
 	}
-	if err := m.retiring.forget(inspect.ID); err != nil && m.plugin.logger != nil {
+	if err := m.retiring.forget(id); err != nil && m.plugin.logger != nil {
 		m.plugin.logger.Warn("could not record the removal of a retiring secure-link connector", "error", err)
 	}
-	return sessions, nil
+	return nil
+}
+
+// settleLeftoverLocked deals with a connector found next to the one to serve that has no retirement record: the one a
+// replacement kept accepting until every egress listened on its successor (pendingRetire, which a daemon restart
+// forgets), or one an interrupted replacement left. It is told to drain; with sessions it retires in its slot with a
+// fresh deadline and finishes them (kept), without any, or when it does not answer, it goes at once.
+func (m *dockerSecureLinkManager) settleLeftoverLocked(ctx context.Context, inspect container.InspectResponse, slot int) (kept bool, err error) {
+	socketPath := m.adoptedControlSocket(m.slotSocketPath(slot))
+	drainCtx, cancel := context.WithTimeout(ctx, secureLinkConnectorSessionsWait)
+	active, drainErr := securelink.Drain(drainCtx, socketPath)
+	cancel()
+	if drainErr == nil && active > 0 {
+		if m.plugin.logger != nil {
+			m.plugin.logger.Info("a secure-link connector found next to the serving one finishes its sessions before it goes",
+				"connector", inspect.ID, "sessions", active)
+		}
+		m.retireConnector(connectorRuntime{id: inspect.ID, slot: slot, socketPath: socketPath})
+		return true, nil
+	}
+	if drainErr != nil && inspect.State != nil && inspect.State.Running && m.plugin.logger != nil {
+		m.plugin.logger.Info("a leftover secure-link connector did not answer its drain request and is removed", "connector", inspect.ID, "error", drainErr)
+	}
+	return false, m.dropConnectorLocked(ctx, inspect.ID)
 }
 
 // connectorSessions is how many sessions a connector carries: its own count (a drain request answers it; the

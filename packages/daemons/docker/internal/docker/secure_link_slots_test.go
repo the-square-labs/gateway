@@ -2,6 +2,7 @@ package docker
 
 import (
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -201,4 +202,57 @@ func (e *fakeConnectorEngine) byIDOrNameLocked(value string) *fakeConnectorConta
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.byIDOrName(value)
+}
+
+// A daemon restart while a replaced connector still accepted (it waits until every egress listens on its successor,
+// which no record keeps) used to remove it with its sessions as a leftover. A connector found next to the one to
+// serve now drains in its slot when it carries sessions and goes once they ended; one without any, or that does not
+// answer, goes at once.
+func TestDaemonStartRetiresALeftoverThatCarriesSessions(t *testing.T) {
+	withRetireLimit(t, time.Minute)
+	poll := secureLinkConnectorDrainPoll
+	secureLinkConnectorDrainPoll = 20 * time.Millisecond
+	t.Cleanup(func() { secureLinkConnectorDrainPoll = poll })
+	engine := newFakeConnectorEngine(t)
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	anchor := fakeAnchor(replaceTestOldImage, "10.99.0.2")
+	replaced := &fakeConnectorContainer{id: "replaced-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, networkMode: "container:" + anchor.id, active: 2}
+	serving := &fakeConnectorContainer{id: "serving-id", name: secureLinkConnectorSlots[1].name, image: replaceTestNewImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, slot: 1, networkMode: "container:" + anchor.id}
+	// Running, but its control socket is gone: it does not answer.
+	silent := &fakeConnectorContainer{id: "silent-id", name: secureLinkConnectorSlots[2].name, image: replaceTestOldImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, slot: 2, networkMode: "container:" + anchor.id}
+	for _, current := range []*fakeConnectorContainer{anchor, replaced, serving, silent} {
+		engine.containers[current.name] = current
+	}
+	engine.serveControl(replaced)
+	engine.serveControl(serving)
+	manager := &dockerSecureLinkManager{
+		plugin: &DockerPlugin{client: engine.client()}, controlDir: engine.controlDir,
+		socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings:   map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
+	}
+	manager.publishViewLocked()
+
+	if _, err := manager.restore(replaceTestCommand(replaceTestNewImage)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if view := manager.currentView(); view.connectorID != serving.id || manager.slot != 1 {
+		t.Fatalf("restored view %+v slot %d, want the connector running the image", view, manager.slot)
+	}
+	if removed := engine.removedIDs(); len(removed) != 1 || removed[0] != silent.id {
+		t.Fatalf("removed %v, want only the connector that did not answer", removed)
+	}
+	if _, retiring := manager.retiring.deadline(replaced.id); !retiring || !receivedDrain(engine, replaced) {
+		t.Fatal("the connector with sessions does not retire")
+	}
+	if requests := connectorRequests(engine, replaced); !onlyDrains(requests) {
+		t.Fatalf("the retiring connector was synced: %+v", requests)
+	}
+	// Its sessions end: it goes.
+	engine.mu.Lock()
+	replaced.active = 0
+	engine.mu.Unlock()
+	waitRemovedID(t, engine, replaced.id)
 }

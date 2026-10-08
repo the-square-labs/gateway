@@ -749,8 +749,9 @@ func connectorRuntimeOf(inspect container.InspectResponse, anchorNetwork *contai
 
 // findConnector returns the connector to keep using and its slot (nil when
 // there is none: the slot to create it in). The serving connector stays; after
-// a daemon start, the one already running the image wins and any other is left
-// from an interrupted replacement and is removed. A connector being retired
+// a daemon start, the one already running the image wins, and any other is
+// left from a replacement this process did not finish: it retires when it
+// still carries sessions and goes otherwise. A connector being retired
 // (secure_link_retiring.go) is never used again: it drains, so it would refuse
 // every binding and connection. It finishes its sessions in its slot; only
 // when every slot holds one and a new connector must start is the one whose
@@ -801,14 +802,15 @@ func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image strin
 		if slot == chosen || inspect == nil || retiring[slot] || !ownedSecureLinkConnector(*inspect) {
 			continue
 		}
-		sessions, err := m.cutConnectorLocked(ctx, *inspect, slot)
+		kept, err := m.settleLeftoverLocked(ctx, *inspect, slot)
 		if err != nil {
 			return 0, nil, fmt.Errorf("remove leftover secure-link connector: %w", err)
 		}
-		found[slot] = nil
-		if sessions > 0 && m.plugin.logger != nil {
-			m.plugin.logger.Warn("a leftover secure-link connector was removed with the sessions it carried", "connector", inspect.ID, "sessions", sessions)
+		if kept {
+			retiring[slot] = true
+			continue
 		}
+		found[slot] = nil
 	}
 	if chosen < 0 && !slices.Contains(found[:], nil) {
 		// Every slot holds a connector finishing its sessions, and none can serve (the serving one was told to drain
