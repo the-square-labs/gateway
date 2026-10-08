@@ -108,8 +108,7 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 				m.plugin.logger.Warn("the replaced secure-link connector stops accepting at the retire limit although an egress does not listen on the new one",
 					"limit", secureLinkConnectorRetireLimit.String())
 			}
-			m.retireConnector(*m.pendingRetire)
-			m.pendingRetire = nil
+			m.retirePendingLocked()
 		default:
 			if !m.pendingRetireLogged && m.plugin.logger != nil {
 				m.pendingRetireLogged = true
@@ -126,10 +125,18 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 // waiting from an earlier replacement stops accepting now and finishes its sessions: its successor was replaced too.
 func (m *dockerSecureLinkManager) setPendingRetireLocked(previous connectorRuntime) {
 	if m.pendingRetire != nil && m.pendingRetire.id != previous.id {
-		m.retireConnector(*m.pendingRetire)
+		m.retirePendingLocked()
 	}
 	m.pendingRetire = &previous
 	m.pendingRetireSince, m.pendingRetireLogged = time.Now(), false
+}
+
+// retirePendingLocked tells the replaced connector that kept accepting (pendingRetire) to drain. Its retirement counts
+// from its replacement: it finishes its sessions until the retire limit after it was replaced, not after it stopped
+// accepting.
+func (m *dockerSecureLinkManager) retirePendingLocked() {
+	m.retireConnectorUntil(*m.pendingRetire, m.pendingRetireSince.Add(secureLinkConnectorRetireLimit))
+	m.pendingRetire = nil
 }
 
 func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Context) map[string]egressStatus {

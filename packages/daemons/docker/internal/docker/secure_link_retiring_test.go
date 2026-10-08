@@ -178,6 +178,52 @@ func TestDaemonStartResumesARetirement(t *testing.T) {
 	}
 }
 
+// The deadline of a retirement survives a daemon restart: the retirement the next process resumes ends at the
+// recorded deadline (an hour from the replacement), not an hour from the restart. The sessions still open then are
+// cut, and the log says how many.
+func TestDaemonStartKeepsTheRetirementDeadline(t *testing.T) {
+	poll := secureLinkConnectorDrainPoll
+	secureLinkConnectorDrainPoll = 20 * time.Millisecond
+	t.Cleanup(func() { secureLinkConnectorDrainPoll = poll })
+	engine := newFakeConnectorEngine(t)
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	anchor := fakeAnchor(replaceTestOldImage, "10.99.0.2")
+	draining := &fakeConnectorContainer{id: "draining-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, networkMode: "container:" + anchor.id, draining: true, active: 2}
+	serving := &fakeConnectorContainer{id: "serving-id", name: secureLinkConnectorSlots[1].name, image: replaceTestNewImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, slot: 1, networkMode: "container:" + anchor.id}
+	engine.containers[draining.name], engine.containers[serving.name], engine.containers[anchor.name] = draining, serving, anchor
+	engine.serveControl(draining)
+	engine.serveControl(serving)
+	retiringFile := filepath.Join(t.TempDir(), secureLinkRetiringFile)
+	// Recorded by the process that replaced it almost an hour before the restart.
+	until := time.Now().Add(time.Second)
+	recorded := retiringConnectors{file: retiringFile}
+	if _, _, err := recorded.start(draining.id, "", until); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := &lockedBuffer{}
+	manager := &dockerSecureLinkManager{
+		plugin:     &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewTextHandler(logs, nil))},
+		controlDir: engine.controlDir,
+		socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings:   map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
+	}
+	manager.retiring.file = retiringFile
+	manager.publishViewLocked()
+	if _, err := manager.restore(replaceTestCommand(replaceTestNewImage)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if resumed, ok := manager.retiring.deadline(draining.id); !ok || !resumed.Equal(until) {
+		t.Fatalf("resumed retirement until %v (recorded %v), want the recorded %v", resumed, ok, until)
+	}
+	waitRemoved(t, engine, draining.id)
+	if logs.count("reached its retirement limit") != 1 || logs.count("connector="+draining.id+" sessions_cut=2") != 1 {
+		t.Fatalf("the cut at the recorded deadline was not logged with its sessions: %s", logs.String())
+	}
+}
+
 // A connector that refuses a sync because it drains (told to by a retirement nobody recorded) is never used again:
 // the links and the egress go to a new connector at once.
 func TestDrainingConnectorIsReplacedAtOnce(t *testing.T) {

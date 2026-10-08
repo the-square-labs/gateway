@@ -261,10 +261,10 @@ func TestHeldLinkSessionSurvivesReplacement(t *testing.T) {
 	waitRemoved(t, engine, previous.connectorID)
 }
 
-// A replaced connector drains its sessions as long as the relay's drain does: 30 minutes.
-func TestReplacedConnectorDrainsAsLongAsTheRelay(t *testing.T) {
-	if secureLinkConnectorRetireLimit != 30*time.Minute {
-		t.Fatalf("retire limit %s, want 30m", secureLinkConnectorRetireLimit)
+// A replaced connector keeps its sessions at most an hour from its replacement.
+func TestReplacedConnectorKeepsItsSessionsAtMostAnHour(t *testing.T) {
+	if secureLinkConnectorRetireLimit != time.Hour {
+		t.Fatalf("retire limit %s, want 1h", secureLinkConnectorRetireLimit)
 	}
 }
 

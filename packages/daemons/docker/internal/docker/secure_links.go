@@ -35,9 +35,9 @@ const (
 
 // secureLinkConnectorRetireLimit bounds how long a replaced connector keeps
 // the tunnels that are busy (a request in flight, a WebSocket, a held
-// container link session) and the workload sessions of its egress listeners,
-// like the relay's drain; a variable for tests.
-var secureLinkConnectorRetireLimit = 30 * time.Minute
+// container link session) and the workload sessions of its egress listeners:
+// an hour from its replacement; a variable for tests.
+var secureLinkConnectorRetireLimit = time.Hour
 
 const secureLinkConnectorRetireTick = 100 * time.Millisecond
 
@@ -150,9 +150,6 @@ type dockerSecureLinkManager struct {
 	// guarded by mu.
 	pendingRetireSince  time.Time
 	pendingRetireLogged bool
-	// replacementDeferred: a new connector image waits for a slot every other connector still finishing its sessions
-	// holds; the end of a retirement tries it again (secure_link_slots.go). Guarded by mu.
-	replacementDeferred bool
 	// managementGateway is the management network's gateway, the daemon's address towards the connector: the only
 	// peer the ingress listeners accept (guarded by mu).
 	managementGateway string
@@ -490,8 +487,7 @@ func (m *dockerSecureLinkManager) apply(
 	}
 	if m.pendingRetire != nil && !m.egress.wanted() {
 		// No egress: only its tunnels hold the previous connector.
-		m.retireConnector(*m.pendingRetire)
-		m.pendingRetire = nil
+		m.retirePendingLocked()
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
 	return statuses, nil
@@ -816,16 +812,10 @@ func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image strin
 		// Every slot holds a connector finishing its sessions, and none can serve (the serving one was told to drain
 		// while the others retire): the one whose retirement ends first goes to make room for a new one.
 		if oldest := m.oldestRetiringSlotLocked(found, retiring); oldest >= 0 {
-			cut := found[oldest]
-			sessions, err := m.cutConnectorLocked(ctx, *cut, oldest)
-			if err != nil {
+			if err := m.cutOldestRetirementLocked(ctx, *found[oldest], oldest); err != nil {
 				return 0, nil, fmt.Errorf("remove retiring secure-link connector: %w", err)
 			}
 			found[oldest] = nil
-			if m.plugin.logger != nil {
-				m.plugin.logger.Warn("every secure-link connector slot holds a connector finishing its sessions; the oldest was removed for a new one",
-					"connector", cut.ID, "sessions_cut", sessions, "slots", len(secureLinkConnectorSlots))
-			}
 		}
 	}
 	for slot, inspect := range found {
@@ -846,22 +836,17 @@ func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image strin
 }
 
 // startReplacement starts the connector for the image in a free slot. Any
-// failure leaves the serving connector and its links as they were. While every
-// other slot holds a connector finishing its sessions, the serving connector
-// keeps its image (no replacement, no error) until a retirement ends.
+// failure leaves the serving connector and its links as they were. A
+// replacement never waits for a slot: while every other slot holds a connector
+// finishing its sessions, the one whose retirement ends first goes with them.
 func (m *dockerSecureLinkManager) startReplacement(ctx context.Context, image string, slot int) (*connectorReplacement, error) {
 	unchanged := func(err error) (*connectorReplacement, error) {
 		return nil, secureLinkConnectorUnchangedError{err}
 	}
-	next, occupant, free, err := m.replacementSlotLocked(ctx, slot)
+	next, occupant, retiring, err := m.replacementSlotLocked(ctx, slot)
 	if err != nil {
 		return unchanged(err)
 	}
-	if !free {
-		m.deferReplacementLocked(image)
-		return nil, nil
-	}
-	m.replacementDeferred = false
 	if image != developmentSecureLinkImage {
 		// Pulled while the serving connector still forwards every link.
 		if err := m.plugin.client.EnsureImage(ctx, image, ""); err != nil {
@@ -869,12 +854,16 @@ func (m *dockerSecureLinkManager) startReplacement(ctx context.Context, image st
 		}
 	}
 	if occupant != nil {
-		sessions, err := m.cutConnectorLocked(ctx, *occupant, next)
+		if retiring {
+			err = m.cutOldestRetirementLocked(ctx, *occupant, next)
+		} else {
+			var sessions int
+			if sessions, err = m.cutConnectorLocked(ctx, *occupant, next); err == nil && sessions > 0 && m.plugin.logger != nil {
+				m.plugin.logger.Warn("a leftover secure-link connector was removed with the sessions it carried", "connector", occupant.ID, "sessions", sessions)
+			}
+		}
 		if err != nil {
 			return unchanged(fmt.Errorf("remove secure-link connector %s: %w", secureLinkConnectorSlots[next].name, err))
-		}
-		if sessions > 0 && m.plugin.logger != nil {
-			m.plugin.logger.Warn("a leftover secure-link connector was removed with the sessions it carried", "connector", occupant.ID, "sessions", sessions)
 		}
 	}
 	inspect, err := m.createConnector(ctx, image, next)
@@ -997,8 +986,6 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 		}
 		// A connector of the daemon's previous mode used the egress socket of that mode: it is gone now.
 		m.plugin.secureLinkEgressPrevious.retire()
-		// Its slot is free: a replacement that waited for one starts.
-		m.retryDeferredReplacement()
 	}()
 }
 

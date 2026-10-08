@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,7 +14,8 @@ import (
 // A connector slot (secureLinkConnectorSlots) is free for a new connector when it is empty or holds a connector that
 // carries no session: a leftover, or one whose retirement passed its deadline. A connector still finishing its
 // sessions keeps its slot (the rc.1 stand lost 4 container link sessions to a second replacement that took the slot of
-// the connector still retiring with them).
+// the connector still retiring with them). A replacement never waits for a slot: when both other slots hold one, the
+// connector whose retirement ends first goes with its sessions, and the log says how many.
 
 // secureLinkConnectorSessionsWait bounds the question to a connector about to be removed how many sessions it carries.
 const secureLinkConnectorSessionsWait = 2 * time.Second
@@ -28,19 +30,21 @@ func (m *dockerSecureLinkManager) carriesSessionsLocked(id string, now time.Time
 	return ok && now.Before(until)
 }
 
-// replacementSlotLocked picks the slot a replacement of the connector serving in slot starts in: the first other slot
-// that is free, with the connector to remove from it (nil: empty). free is false when every other slot holds a
-// connector finishing its sessions.
+// replacementSlotLocked picks the slot a replacement of the connector serving in slot starts in, with the connector to
+// remove from it (nil: empty): the first other slot that is free, else the one whose connector's retirement ends first
+// (retiring: that connector still finishes sessions, which go with it).
 func (m *dockerSecureLinkManager) replacementSlotLocked(ctx context.Context, serving int) (int, *container.InspectResponse, bool, error) {
 	now := time.Now()
 	var refused error
+	var oldest *container.InspectResponse
+	oldestSlot, oldestUntil := -1, time.Time{}
 	for slot, candidate := range secureLinkConnectorSlots {
 		if slot == serving {
 			continue
 		}
 		inspected, err := m.plugin.client.cli.ContainerInspect(ctx, candidate.name, mobyclient.ContainerInspectOptions{})
 		if isNotFoundErr(err) {
-			return slot, nil, true, nil
+			return slot, nil, false, nil
 		}
 		if err != nil {
 			return 0, nil, false, fmt.Errorf("inspect secure-link connector %s: %w", candidate.name, err)
@@ -50,11 +54,33 @@ func (m *dockerSecureLinkManager) replacementSlotLocked(ctx context.Context, ser
 			continue
 		}
 		if m.carriesSessionsLocked(inspected.Container.ID, now) {
+			if until := m.retirementEndLocked(inspected.Container.ID); oldest == nil || until.Before(oldestUntil) {
+				oldest, oldestSlot, oldestUntil = &inspected.Container, slot, until
+			}
 			continue
 		}
-		return slot, &inspected.Container, true, nil
+		return slot, &inspected.Container, false, nil
+	}
+	if oldest != nil {
+		return oldestSlot, oldest, true, nil
+	}
+	if refused == nil {
+		refused = errors.New("no free secure-link connector slot")
 	}
 	return 0, nil, false, refused
+}
+
+// retirementEndLocked is when a connector that carries sessions is removed at the latest: its recorded deadline, or,
+// for the replaced connector that keeps accepting until every egress listens on its successor (pendingRetire), the
+// retire limit from its replacement.
+func (m *dockerSecureLinkManager) retirementEndLocked(id string) time.Time {
+	if until, ok := m.retiring.deadline(id); ok {
+		return until
+	}
+	if m.pendingRetire != nil && m.pendingRetire.id == id {
+		return m.pendingRetireSince.Add(secureLinkConnectorRetireLimit)
+	}
+	return time.Time{}
 }
 
 // oldestRetiringSlotLocked returns the slot of the connector among the retiring ones in found whose retirement ends
@@ -65,15 +91,25 @@ func (m *dockerSecureLinkManager) oldestRetiringSlotLocked(found [len(secureLink
 		if inspect == nil || !retiring[slot] || !ownedSecureLinkConnector(*inspect) {
 			continue
 		}
-		until, ok := m.retiring.deadline(inspect.ID)
-		if !ok && m.pendingRetire != nil && m.pendingRetire.id == inspect.ID {
-			until = m.pendingRetireSince.Add(secureLinkConnectorRetireLimit)
-		}
-		if oldest < 0 || until.Before(oldestUntil) {
+		if until := m.retirementEndLocked(inspect.ID); oldest < 0 || until.Before(oldestUntil) {
 			oldest, oldestUntil = slot, until
 		}
 	}
 	return oldest
+}
+
+// cutOldestRetirementLocked removes the retiring connector in slot, the one whose retirement ends first, to make room
+// for a new connector, and logs how many sessions that cut.
+func (m *dockerSecureLinkManager) cutOldestRetirementLocked(ctx context.Context, inspect container.InspectResponse, slot int) error {
+	sessions, err := m.cutConnectorLocked(ctx, inspect, slot)
+	if err != nil {
+		return err
+	}
+	if m.plugin.logger != nil {
+		m.plugin.logger.Warn("every secure-link connector slot holds a connector finishing its sessions; the oldest was removed for a new one",
+			"connector", inspect.ID, "sessions_cut", sessions, "slots", len(secureLinkConnectorSlots))
+	}
+	return nil
 }
 
 // cutConnectorLocked removes the connector in slot to free the slot and returns how many sessions it still carried.
@@ -131,32 +167,4 @@ func (m *dockerSecureLinkManager) connectorSessions(id, socketPath string) int {
 		return max(active, tracked)
 	}
 	return tracked
-}
-
-// deferReplacementLocked keeps the serving connector on its image while no slot is free for its replacement.
-func (m *dockerSecureLinkManager) deferReplacementLocked(image string) {
-	if !m.replacementDeferred && m.plugin.logger != nil {
-		m.plugin.logger.Warn("the secure-link connector is replaced once a replaced connector finished its sessions: every other slot holds one",
-			"image", image, "slots", len(secureLinkConnectorSlots))
-	}
-	m.replacementDeferred = true
-}
-
-// retryDeferredReplacement applies the committed connector image again once a retirement freed a slot: the links'
-// restore replaces the connector of a node with ingress bindings, an egress sync the connector of one without.
-func (m *dockerSecureLinkManager) retryDeferredReplacement() {
-	m.mu.Lock()
-	deferred := m.replacementDeferred
-	m.replacementDeferred = false
-	ingress := deferred && m.ingressWantedLocked()
-	m.mu.Unlock()
-	switch {
-	case !deferred:
-	case ingress:
-		if err := m.restoreBindingsCoalesced(true); err != nil && m.plugin.logger != nil {
-			m.plugin.logger.Warn("the waiting secure-link connector replacement failed; the next sync retries it", "error", err)
-		}
-	default:
-		m.resyncEgress()
-	}
 }
