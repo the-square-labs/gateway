@@ -262,7 +262,6 @@ func TestRelayStabilityNeedsAnUnbrokenStreak(t *testing.T) {
 func TestLatencyTrackerReportsHowLongARelayFails(t *testing.T) {
 	now := time.Unix(1000, 0)
 	tracker := NewLatencyTracker(func() time.Time { return now })
-	tracker.Fail(relayNL) // never measured: nothing to report
 	tracker.Observe(relayNL, 298*time.Millisecond)
 	tracker.Fail(relayNL)
 	now = now.Add(20 * time.Second)
@@ -283,6 +282,49 @@ func TestLatencyTrackerReportsHowLongARelayFails(t *testing.T) {
 	tracker.Observe(relayNL, 298*time.Millisecond)
 	if samples := tracker.Samples(); samples[0].GetFailingMs() != 0 {
 		t.Fatalf("a measured relay still fails: %v", samples)
+	}
+}
+
+// The rc.3 stand (F-1): the daemons stopped reporting a relay whose relay port
+// was dead 2.5-3 minutes into the failure, once its last round trip aged out,
+// and Gateway placed it again. A relay the daemon keeps failing to reach stays
+// in the report, its round trip unknown once stale, until the daemon stops
+// trying it or reaches it again.
+func TestLatencyTrackerKeepsReportingARelayItCannotReach(t *testing.T) {
+	now := time.Unix(1000, 0)
+	tracker := NewLatencyTracker(func() time.Time { return now })
+	tracker.Observe(relayNL, 298*time.Millisecond)
+	tracker.Fail(relayNL)
+	for range 20 { // ten minutes of probes every 30 s
+		now = now.Add(LatencySampleInterval)
+		tracker.Fail(relayNL)
+	}
+	samples := tracker.Samples()
+	if len(samples) != 1 || samples[0].GetFailingMs() != 600000 || samples[0].GetRttMicros() != 0 {
+		t.Fatalf("a relay failing for 10 minutes is reported as %v", samples)
+	}
+	if _, ok := tracker.RTT(relayNL); ok {
+		t.Fatal("a round trip measured 10 minutes ago is still used")
+	}
+	// Reached again: reported as reached, with its next round trip.
+	tracker.Observe(relayNL, 297*time.Millisecond)
+	if samples := tracker.Samples(); len(samples) != 1 || samples[0].GetFailingMs() != 0 || samples[0].GetRttMicros() != 297000 {
+		t.Fatalf("a relay reached again is reported as %v", samples)
+	}
+
+	// A relay never measured is reported failing, without a round trip.
+	tracker.Fail(relayUK)
+	now = now.Add(20 * time.Second)
+	tracker.Fail(relayUK)
+	if samples := tracker.Samples(); len(samples) != 2 || samples[1].GetRelayInstanceId() != relayUK ||
+		samples[1].GetFailingMs() != 20000 || samples[1].GetRttMicros() != 0 {
+		t.Fatalf("an unreachable relay never measured is reported as %v", samples)
+	}
+	// No longer tried (it left the assignments and the pool): it ages out.
+	now = now.Add(latencyMaxAge + time.Second)
+	tracker.Observe(relayNL, 297*time.Millisecond)
+	if samples := tracker.Samples(); len(samples) != 1 || samples[0].GetRelayInstanceId() != relayNL {
+		t.Fatalf("a relay the daemon stopped trying is still reported: %v", samples)
 	}
 }
 
