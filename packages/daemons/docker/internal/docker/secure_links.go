@@ -965,16 +965,24 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 		busy := m.plugin.proxyTunnels.drainWhere(func(connection *drainConn) bool {
 			return connectionConnector(connection) == previous.id
 		}, limit, secureLinkConnectorRetireTick, true)
-		if busy > 0 && m.plugin.logger != nil {
-			m.plugin.logger.Info("tunnels still busy on the replaced secure-link connector are cut", "tunnels", busy)
-		}
-		// Workload sessions through its egress listeners end on their own: wait for them within the same limit.
-		for sent && drainErr == nil && time.Now().Before(deadline) {
+		// Workload sessions through its egress listeners end on their own: wait for them within the same limit. The
+		// connector's last answer counts every session it still carries, its tunnels and its egress sessions alike.
+		stopped, carried := !sent, 0
+		for !stopped && drainErr == nil {
 			active, stillRetiring, err := drain()
-			if !stillRetiring || err != nil || active == 0 {
+			if stopped = !stillRetiring; stopped || err != nil {
+				break
+			}
+			if carried = active; active == 0 || !time.Now().Before(deadline) {
 				break
 			}
 			time.Sleep(secureLinkConnectorDrainPoll)
+		}
+		// Past the limit it goes with what it still carries: the log says how many sessions that cut, as the cut of the
+		// oldest slot does. A retirement another path ended (stopped) is that path's to report.
+		if cut := max(carried, busy); cut > 0 && !stopped && m.plugin.logger != nil {
+			m.plugin.logger.Warn("a replaced secure-link connector reached its retirement limit and is removed with the sessions it still carries",
+				"connector", previous.id, "sessions_cut", cut, "limit", secureLinkConnectorRetireLimit)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

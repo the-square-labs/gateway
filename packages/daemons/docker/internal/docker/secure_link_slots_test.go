@@ -198,6 +198,39 @@ func TestFullConnectorSlotsCutTheOldestRetirementWithALog(t *testing.T) {
 	}
 }
 
+// The rc.2 stand: the connector a relay update replaced still carried 4 storage link sessions when its retirement
+// limit came, and it was removed with them without a log line (only busy tunnels were logged, and at Info). The
+// removal now logs the sessions it cut, egress sessions included; a connector whose sessions ended goes quietly.
+func TestRetirementLimitLogsTheSessionsItCuts(t *testing.T) {
+	withRetireLimit(t, 300*time.Millisecond)
+	poll := secureLinkConnectorDrainPoll
+	secureLinkConnectorDrainPoll = 20 * time.Millisecond
+	t.Cleanup(func() { secureLinkConnectorDrainPoll = poll })
+	engine := newFakeConnectorEngine(t)
+	busy := &fakeConnectorContainer{id: "busy-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage,
+		groups: connectorGroupAdd(), ip: "10.99.0.2", running: true, active: 4}
+	idle := &fakeConnectorContainer{id: "idle-id", name: secureLinkConnectorSlots[1].name, image: replaceTestOldImage,
+		groups: connectorGroupAdd(), ip: "10.99.0.3", running: true, slot: 1}
+	for _, current := range []*fakeConnectorContainer{busy, idle} {
+		engine.containers[current.name] = current
+		engine.serveControl(current)
+	}
+	logs := &lockedBuffer{}
+	manager := &dockerSecureLinkManager{
+		plugin:     &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewTextHandler(logs, nil))},
+		controlDir: engine.controlDir,
+	}
+	for _, current := range []*fakeConnectorContainer{busy, idle} {
+		manager.retireConnector(connectorRuntime{id: current.id, slot: current.slot,
+			socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[current.slot].socket)})
+	}
+	waitRemovedID(t, engine, idle.id)
+	waitRemovedID(t, engine, busy.id)
+	if logs.count("reached its retirement limit") != 1 || logs.count("connector="+busy.id+" sessions_cut=4") != 1 {
+		t.Fatalf("the cut at the retirement limit was not logged with its sessions: %s", logs.String())
+	}
+}
+
 func (e *fakeConnectorEngine) byIDOrNameLocked(value string) *fakeConnectorContainer {
 	e.mu.Lock()
 	defer e.mu.Unlock()
