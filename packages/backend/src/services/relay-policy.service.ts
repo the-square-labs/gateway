@@ -89,6 +89,7 @@ import {
   RelayStreamResumeService,
 } from './relay-stream-resume.js';
 import type { RelayAssignmentRole } from './relay-topology.js';
+import { RelayTopologyService } from './relay-topology.service.js';
 import { parseRelayGrantEgressStatuses, type SecureLinkEgressStatus } from './secure-link-egress-status.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
@@ -520,8 +521,17 @@ export class RelayPolicyService {
     this.gatewayRelayPaths?.setLocalRelay(signal);
   }
 
+  /**
+   * Starts measuring Gateway's round trip to every remote relay of the pool, at once and every interval, so its own
+   * streams know each relay's distance whenever they move, however long they ran without a new path (F-3).
+   */
+  measureGatewayRelayPaths(): void {
+    this.gatewayPaths().startMeasuring();
+  }
+
   private gatewayPaths(): GatewayRelayPaths {
     if (!this.gatewayRelayPaths) {
+      const topology = new RelayTopologyService(this.db);
       this.gatewayRelayPaths = new GatewayRelayPaths(
         this.relay.resumeRegistry ?? relayResumeRegistry,
         async (routeId) => {
@@ -531,7 +541,8 @@ export class RelayPolicyService {
             this.grantIssuer.issueGatewayConnectAssignment(routeId, fingerprint)
           );
           return assignment.candidates;
-        }
+        },
+        { poolRelays: () => topology.remoteLatencyTargets() }
       );
       if (this.gatewayLocalRelay) this.gatewayRelayPaths.setLocalRelay(this.gatewayLocalRelay);
     }
@@ -2252,11 +2263,9 @@ export class RelayPolicyService {
         logger.warn('Gateway relay route target is not resume-aware; using raw streams', { routeId });
       }
     }
-    const activeCandidates = this.gatewayPaths().order(
-      routeId,
-      assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active'),
-      null
-    );
+    const active = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
+    await this.gatewayPaths().measure(routeId, active);
+    const activeCandidates = this.gatewayPaths().order(routeId, active, null);
     let lastError: unknown;
     for (const candidate of activeCandidates) {
       try {
@@ -2284,13 +2293,11 @@ export class RelayPolicyService {
     assignment: Awaited<ReturnType<RelayGrantIssuerService['issueGatewayConnectAssignment']>>,
     avoidRelayId: string | null
   ): Promise<AttachablePath> {
-    const candidates = this.gatewayPaths().order(
-      routeId,
-      assignment.candidates.filter(
-        ({ assignmentState }) => assignmentState === 'active' || assignmentState === 'staging'
-      ),
-      avoidRelayId
+    const usable = assignment.candidates.filter(
+      ({ assignmentState }) => assignmentState === 'active' || assignmentState === 'staging'
     );
+    await this.gatewayPaths().measure(routeId, usable);
+    const candidates = this.gatewayPaths().order(routeId, usable, avoidRelayId);
     // A pre-pool assignment has only the local relay: a recovering stream comes back to it.
     if (!candidates.length) return this.relay.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
     let lastError: unknown;

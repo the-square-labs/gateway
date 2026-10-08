@@ -38,19 +38,24 @@ const uk: GatewayRelayCandidate = {
   topology: { role: 'standby' },
 };
 
-function paths(outage: () => LocalRelayOutage | null, now: () => number) {
+function paths(outage: () => LocalRelayOutage | null, now: () => number, pool?: GatewayRelayCandidate[]) {
   const registry = { liveSessions: vi.fn(() => [] as any[]), schedule: vi.fn(), timers: { setTimeout: vi.fn() } };
   const fetchCandidates = vi.fn(async () => [local, nl, uk]);
   // The stand's netem: NL 300 ms, UK 60 ms from Gateway.
   const rtts: Record<string, number> = { '198.51.100.2': 300, '198.51.100.3': 60 };
+  const dials: string[] = [];
   const dial = async (address: string) => {
+    dials.push(address);
     if (!(address in rtts)) throw new Error('connect ECONNREFUSED');
     return rtts[address]!;
   };
-  const instance = new GatewayRelayPaths(registry as never, fetchCandidates, { now, dial });
+  const poolRelays = pool ? async () => pool : undefined;
+  const instance = new GatewayRelayPaths(registry as never, fetchCandidates, { now, dial, poolRelays });
   instance.setLocalRelay({ latestOutage: outage });
-  return { instance, registry, fetchCandidates };
+  return { instance, registry, fetchCandidates, dials };
 }
+
+const ids = (candidates: GatewayRelayCandidate[]) => candidates.map(({ relayInstanceId }) => relayInstanceId);
 
 describe("Gateway's own relayed streams choose relays by distance (O-1)", () => {
   it('takes the nearest standby, not the first listed, while the local relay does not serve', () => {
@@ -120,6 +125,104 @@ describe("Gateway's own relayed streams choose relays by distance (O-1)", () => 
     expect(path.relayId).toBe('relay-uk');
     expect(opened).toEqual(['relay-uk']);
     internals.gatewayPaths().stop();
+  });
+});
+
+describe("Gateway's own relayed streams know every relay's distance after a quiet period (F-3)", () => {
+  it('measures every remote relay of the pool, not only those its recent assignments named', async () => {
+    let now = T0;
+    const t = paths(
+      () => null,
+      () => now,
+      [nl, uk]
+    );
+    // Gateway opened its long-lived streams at T0 and no new path for 31 minutes; the pool was measured meanwhile.
+    t.instance.note('route-1', [local, nl, uk]);
+    for (; now <= T0 + 31 * 60_000; now += 30_000) await t.instance.sample();
+    expect(t.dials.filter((address) => address === '198.51.100.3').length).toBeGreaterThan(60);
+    // The local relay stops gracefully: the streams take UK, not NL listed first.
+    const draining: LocalRelayOutage = { since: now, servingAgainAt: null, planned: true };
+    t.instance.setLocalRelay({ latestOutage: () => draining });
+    expect(ids(t.instance.order('route-1', [local, nl, uk], 'relay-local'))).toEqual([
+      'relay-uk',
+      'relay-nl',
+      'relay-local',
+    ]);
+    t.instance.stop();
+  });
+
+  it('orders by the last round trip it measured until a fresher one exists', () => {
+    let now = T0;
+    const t = paths(
+      () => ({ since: T0, servingAgainAt: null, planned: true }),
+      () => now
+    );
+    t.instance.observe('relay-nl', 300);
+    t.instance.observe('relay-uk', 60);
+    now += 31 * 60_000;
+    expect(ids(t.instance.order('route-1', [local, nl, uk], 'relay-local'))).toEqual([
+      'relay-uk',
+      'relay-nl',
+      'relay-local',
+    ]);
+    // Old round trips make no relay stable for a return.
+    expect(t.instance.place(uk)).toMatchObject({ available: true, rttMs: 60, stable: false });
+    t.instance.stop();
+  });
+
+  it('waits for the first round trip of relays it never measured before ordering a new stream', async () => {
+    const t = paths(
+      () => ({ since: T0, servingAgainAt: null, planned: false }),
+      () => T0
+    );
+    expect(ids(t.instance.order('route-0', [nl, uk], null))).toEqual(['relay-nl', 'relay-uk']);
+    await t.instance.measure('route-1', [local, nl, uk]);
+    expect(ids(t.instance.order('route-1', [local, nl, uk], null))).toEqual(['relay-uk', 'relay-nl', 'relay-local']);
+    // Measured relays cost the next stream nothing.
+    const before = t.dials.length;
+    await t.instance.measure('route-1', [local, nl, uk]);
+    expect(t.dials.length).toBe(before);
+    t.instance.stop();
+  });
+
+  it('gives up waiting for an unreachable relay within the bound', async () => {
+    const t = paths(
+      () => null,
+      () => T0
+    );
+    const silent = { ...uk, relayInstanceId: 'relay-silent', addresses: ['198.51.100.9'] };
+    const instance = new GatewayRelayPaths(t.registry as never, t.fetchCandidates, {
+      now: () => T0,
+      dial: () => new Promise<number>(() => undefined),
+    });
+    const started = Date.now();
+    await instance.measure('route-1', [silent], 50);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    instance.stop();
+    t.instance.stop();
+  });
+
+  it("opens a stream on the nearest relay right after Gateway's start (RelayPolicyService)", async () => {
+    const opened: string[] = [];
+    const relay = {
+      applySnapshot: vi.fn(),
+      resumeRegistry: new RelayResumeRegistry(),
+      openLocalResumePath: vi.fn(async () => {
+        opened.push('relay-local');
+        throw new Error('14 UNAVAILABLE');
+      }),
+      openCandidateResumePath: vi.fn(async (candidate: GatewayRelayCandidate) => {
+        opened.push(candidate.relayInstanceId);
+        return { relayId: candidate.relayInstanceId };
+      }),
+    };
+    const service = new RelayPolicyService({} as never, {} as never, {} as never, relay as never);
+    const t = paths(() => ({ since: Date.now() - 10_000, servingAgainAt: null, planned: false }), Date.now);
+    (service as any).gatewayRelayPaths = t.instance;
+    const path = await (service as any).openGatewayResumePath('route-1', { candidates: [local, nl, uk] }, null);
+    expect(path.relayId).toBe('relay-uk');
+    expect(opened).toEqual(['relay-uk']);
+    t.instance.stop();
   });
 });
 

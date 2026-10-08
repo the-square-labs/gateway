@@ -11,17 +11,27 @@ const logger = createChildLogger('GatewayRelayPaths');
  * back to the nearest relay once it is stable again. Before, they took the assignment's order: during a local relay
  * outage they went to whichever relay came first, a 300-ms one rather than a 60-ms one, and stayed there (stand rc.5,
  * O-1).
+ *
+ * Like the daemons, Gateway measures every remote relay of the pool all the time, not only the relays its recent
+ * assignments named: its long-lived streams open no new path for hours, and a relay measured only around new paths
+ * had no distance left when a quiet period ended in a local relay stop, so its streams took the first listed relay
+ * (stand rc.6, F-3).
  */
 
-/** How often Gateway measures its round trip to each remote relay its streams may use (as daemons). */
+/** How often Gateway measures its round trip to each remote relay of the pool (as daemons). */
 export const GATEWAY_RELAY_SAMPLE_INTERVAL_MS = 30_000;
-/** A round trip older than this is unknown again, not stale (as daemons). */
+/**
+ * A round trip measured longer ago than this no longer averages with a new one and makes no relay stable for a
+ * return; it still orders the relays until a fresher one exists.
+ */
 const LATENCY_MAX_AGE_MS = 3 * 60_000;
 /** The share of a new sample in the moving average (as daemons). */
 const LATENCY_WEIGHT = 0.3;
 const PROBE_TIMEOUT_MS = 3_000;
-/** A relay no assignment named for this long is no longer measured. */
+/** A relay outside the pool that no assignment named for this long is no longer measured. */
 const TARGET_TTL_MS = 10 * 60_000;
+/** How long a new stream waits for the first round trip of a relay never measured before it orders its relays. */
+export const GATEWAY_FIRST_SAMPLE_WAIT_MS = 1_000;
 /** A relay must have been reached without a break this long before streams return to it (ReturnStableFor). */
 export const GATEWAY_RETURN_STABLE_MS = 60_000;
 /** A route's candidates are fetched again for a return judgement once they are this old. */
@@ -45,6 +55,13 @@ export interface GatewayRelayCandidate {
   port: number;
   local?: boolean;
   topology?: { role: 'primary' | 'standby' };
+}
+
+/** A remote relay of the pool for Gateway to measure. */
+export interface GatewayRelayTarget {
+  relayInstanceId: string;
+  addresses: string[];
+  port: number;
 }
 
 /** Where one relay stands for Gateway: reachable now, its measured round trip, reached without a break long enough. */
@@ -169,17 +186,21 @@ export class GatewayRelayPaths {
   private sampler: ReturnType<typeof setInterval> | null = null;
   private returner: ReturnType<typeof setInterval> | null = null;
   private sampling: Promise<void> | null = null;
+  /** The remote relays of the pool at the last measuring pass: measured for as long as they are in it. */
+  private pool = new Set<string>();
   private readonly now: () => number;
   private readonly dial: Dial;
+  private readonly poolRelays?: () => Promise<GatewayRelayTarget[]>;
 
   constructor(
     private readonly registry: Pick<RelayResumeRegistry, 'liveSessions' | 'schedule' | 'timers'>,
     /** A fresh assignment of a Gateway route (its candidates now). */
     private readonly fetchCandidates: (routeId: string) => Promise<GatewayRelayCandidate[]>,
-    options: { now?: () => number; dial?: Dial } = {}
+    options: { now?: () => number; dial?: Dial; poolRelays?: () => Promise<GatewayRelayTarget[]> } = {}
   ) {
     this.now = options.now ?? Date.now;
     this.dial = options.dial ?? dialRoundTrip;
+    this.poolRelays = options.poolRelays;
   }
 
   setLocalRelay(signal: Pick<LocalRelayOutageSignal, 'latestOutage'>): void {
@@ -196,7 +217,11 @@ export class GatewayRelayPaths {
       return { available: serving, rttMs: 0, stable };
     }
     const sample = this.samples.get(candidate.relayInstanceId);
-    if (!sample || now - sample.at > LATENCY_MAX_AGE_MS) return { available: true, stable: false };
+    if (!sample) return { available: true, stable: false };
+    if (now - sample.at > LATENCY_MAX_AGE_MS) {
+      // Not measured lately: its last round trip still orders it until a fresher one exists, but it is not stable.
+      return { available: true, ...(sample.rttMs !== null ? { rttMs: sample.rttMs } : {}), stable: false };
+    }
     return {
       available: sample.reachedSince !== null,
       ...(sample.rttMs !== null ? { rttMs: sample.rttMs } : {}),
@@ -228,7 +253,42 @@ export class GatewayRelayPaths {
     if (unmeasured) void this.sample();
   }
 
-  /** Measures every remote relay of a recent assignment once (concurrent calls share one pass). */
+  /**
+   * Waits, at most maxWaitMs, for a first round trip of the candidates' remote relays that were never measured (a
+   * relay that just joined the pool, or Gateway that just started): ordered without one, a stream would take the
+   * relay listed first.
+   */
+  async measure(
+    routeId: string,
+    candidates: readonly GatewayRelayCandidate[],
+    maxWaitMs = GATEWAY_FIRST_SAMPLE_WAIT_MS
+  ): Promise<void> {
+    const unmeasured = () =>
+      candidates.some(
+        (candidate) =>
+          !candidate.local &&
+          candidate.addresses.length > 0 &&
+          candidate.port > 0 &&
+          !this.samples.has(candidate.relayInstanceId)
+      );
+    if (!unmeasured()) return;
+    this.note(routeId, candidates);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), maxWaitMs);
+      timer.unref?.();
+    });
+    try {
+      // A pass already running may have started before these relays were known: then one more.
+      for (let pass = 0; pass < 2 && unmeasured(); pass += 1) {
+        if (!(await Promise.race([this.sample().then(() => true), timeout]))) return;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Measures every remote relay of the pool and of a recent assignment once (concurrent calls share one pass). */
   sample(): Promise<void> {
     this.sampling ??= this.runSample().finally(() => {
       this.sampling = null;
@@ -237,9 +297,10 @@ export class GatewayRelayPaths {
   }
 
   private async runSample(): Promise<void> {
+    await this.refreshPool();
     const now = this.now();
     for (const [id, target] of this.targets) {
-      if (now - target.seenAt > TARGET_TTL_MS) {
+      if (!this.pool.has(id) && now - target.seenAt > TARGET_TTL_MS) {
         this.targets.delete(id);
         this.samples.delete(id);
       }
@@ -260,13 +321,35 @@ export class GatewayRelayPaths {
     );
   }
 
+  /** Takes the pool's remote relays as targets; on a failed read the last pool stays. */
+  private async refreshPool(): Promise<void> {
+    if (!this.poolRelays) return;
+    let relays: GatewayRelayTarget[];
+    try {
+      relays = await this.poolRelays();
+    } catch (error) {
+      logger.debug('The relay pool was not read for Gateway relay round trips', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    const now = this.now();
+    const pool = new Set<string>();
+    for (const relay of relays) {
+      if (!relay.addresses.length || !relay.port) continue;
+      pool.add(relay.relayInstanceId);
+      this.targets.set(relay.relayInstanceId, { addresses: relay.addresses, port: relay.port, seenAt: now });
+    }
+    this.pool = pool;
+  }
+
   /** Folds one measurement in (null: the relay was not reached; its last round trip stays, as daemons keep it). */
   observe(relayInstanceId: string, rttMs: number | null): void {
     const now = this.now();
     const previous = this.samples.get(relayInstanceId);
     const fresh = previous && now - previous.at <= LATENCY_MAX_AGE_MS ? previous : undefined;
     if (rttMs === null) {
-      this.samples.set(relayInstanceId, { rttMs: fresh?.rttMs ?? null, at: now, reachedSince: null });
+      this.samples.set(relayInstanceId, { rttMs: previous?.rttMs ?? null, at: now, reachedSince: null });
       return;
     }
     const smoothed = fresh && fresh.rttMs !== null ? fresh.rttMs + LATENCY_WEIGHT * (rttMs - fresh.rttMs) : rttMs;
@@ -317,6 +400,12 @@ export class GatewayRelayPaths {
       route = this.routes.get(session.routeId)!;
     }
     return gatewayReturnTarget(route.candidates, place, relayId) !== null;
+  }
+
+  /** Starts measuring the pool at once and every interval, and returning (idempotent). */
+  startMeasuring(): void {
+    this.start();
+    void this.sample();
   }
 
   /** Starts measuring and returning (idempotent); both timers let the process exit. */

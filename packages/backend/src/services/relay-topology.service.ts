@@ -140,4 +140,27 @@ export class RelayTopologyService {
       .map(({ id, addresses, port }) => ({ relayInstanceId: id, addresses, port }))
       .sort((left, right) => left.relayInstanceId.localeCompare(right.relayInstanceId));
   }
+
+  /**
+   * The remote relays of the pool that serve or may serve again, for Gateway to measure its own round trip to (its
+   * local relay runs on its host). Its streams then know every relay's distance whenever they move.
+   */
+  async remoteLatencyTargets(): Promise<RelayLatencyTarget[]> {
+    const rows = await this.db
+      .select({
+        id: relayInstances.id,
+        addresses: relayInstances.advertisedAddresses,
+        port: relayInstances.servicePort,
+      })
+      .from(relayInstances)
+      .where(
+        and(
+          eq(relayInstances.poolId, 'system'),
+          inArray(relayInstances.state, ['ready', 'draining', 'offline']),
+          eq(relayInstances.kind, 'remote'),
+          isNotNull(relayInstances.certificateFingerprint)
+        )
+      );
+    return rows.map(({ id, addresses, port }) => ({ relayInstanceId: id, addresses, port }));
+  }
 }
