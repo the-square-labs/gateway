@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 // fakeConnector answers each control request with answer and records the request versions.
 func fakeConnector(t *testing.T, answer func(SyncRequest) SyncResponse) (string, chan SyncRequest) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "secure-link.sock")
+	path := filepath.Join(sockettest.Dir(t), "secure-link.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)

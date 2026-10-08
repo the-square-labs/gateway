@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 // keepSocketForNextProcess listens at path with mode, hands the listener to the keeper as a stopping daemon process
@@ -61,7 +62,7 @@ func TestNonRootDaemonReplacesAHandedOverRootSocket(t *testing.T) {
 	}
 	defer store.Close()
 	connectKeeper(t, store, nil)
-	path := filepath.Join(t.TempDir(), storageConnectorSocketName)
+	path := filepath.Join(sockettest.Dir(t), storageConnectorSocketName)
 
 	stale := keepSocketForNextProcess(t, store, path, 0o600, uid, gid)
 	connectKeeper(t, store, inheritedFrom(t, store))
@@ -93,7 +94,7 @@ func TestRootDaemonAcceptsOnlyTheRootSocketLayout(t *testing.T) {
 	previousUID := daemonEUID
 	t.Cleanup(func() { daemonEUID = previousUID })
 	daemonEUID = func() int { return 0 }
-	path := filepath.Join(t.TempDir(), storageConnectorSocketName)
+	path := filepath.Join(sockettest.Dir(t), storageConnectorSocketName)
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)

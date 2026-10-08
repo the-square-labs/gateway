@@ -15,6 +15,7 @@ import (
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 // connectKeeper makes this test process a daemon process started by a launcher whose keeper is store, having
@@ -232,31 +233,10 @@ func TestAnnouncedRestartSkipsTheRegistrationHold(t *testing.T) {
 	}
 }
 
-// shortSocketDir is a directory for unix sockets whose paths stay within the 108-byte limit however long TMPDIR and
-// the test name are: as nobody with TMPDIR=/tmp/intnb/t, t.TempDir() paths passed it (the boot handover socket
-// link-listeners/handover.sock, the fake connectors' control sockets).
-func shortSocketDir(t *testing.T) string {
-	t.Helper()
-	socket := len(linkListenerBootPath("", linkListenerHandoverFile))
-	for _, parent := range []string{os.TempDir(), "/tmp"} {
-		if len(parent)+len("/lh-0123456789")+socket >= 100 {
-			continue
-		}
-		dir, err := os.MkdirTemp(parent, "lh-")
-		if err != nil {
-			continue
-		}
-		t.Cleanup(func() { _ = os.RemoveAll(dir) })
-		return dir
-	}
-	t.Fatal("no directory short enough for a unix socket")
-	return ""
-}
-
 // PAAS-06: the boot step opens the listeners the daemon held last before Docker starts the workloads; a connection
 // made before the daemon runs waits in the backlog and is served once the daemon took the socket over.
 func TestBootHeldListenerServesAConnectionMadeBeforeTheDaemon(t *testing.T) {
-	stateDir := shortSocketDir(t)
+	stateDir := sockettest.Dir(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := newListenerHarness(t)
 	h.manager.stateDir = stateDir

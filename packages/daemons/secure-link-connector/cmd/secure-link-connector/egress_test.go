@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 const (
@@ -22,7 +23,7 @@ const (
 // the stream in upper case.
 func fakeEgressDaemon(t *testing.T) (string, chan securelink.RelayRequest) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), egressSocketName)
+	path := filepath.Join(sockettest.Dir(t), egressSocketName)
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)

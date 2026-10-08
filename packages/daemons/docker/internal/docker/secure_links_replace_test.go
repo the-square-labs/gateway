@@ -17,6 +17,7 @@ import (
 	"github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 const (
@@ -82,7 +83,7 @@ func fakeAnchor(image, ip string) *fakeConnectorContainer {
 }
 
 func newFakeConnectorEngine(t *testing.T) *fakeConnectorEngine {
-	engine := &fakeConnectorEngine{t: t, controlDir: shortSocketDir(t), containers: map[string]*fakeConnectorContainer{}}
+	engine := &fakeConnectorEngine{t: t, controlDir: sockettest.Dir(t), containers: map[string]*fakeConnectorContainer{}}
 	t.Cleanup(func() {
 		engine.mu.Lock()
 		defer engine.mu.Unlock()

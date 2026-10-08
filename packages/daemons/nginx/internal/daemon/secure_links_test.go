@@ -22,6 +22,7 @@ import (
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 	"github.com/wiolett-industries/gateway/nginx-daemon/internal/nginx"
 )
 
@@ -31,12 +32,7 @@ func testSourceLinkManager(t *testing.T, opener func(string, net.Conn)) *sourceL
 	t.Helper()
 	manager := newSourceLinkManager(opener, "", nil)
 	manager.authorizeUnixPeer = func(net.Conn) bool { return true }
-	directory, err := os.MkdirTemp("/tmp", "gw-sl-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(directory) })
-	manager.socketDir = directory
+	manager.socketDir = sockettest.Dir(t)
 	return manager
 }
 

@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 // A storage connection the daemon refuses (the link's relay sessions are all in use) is logged with the daemon's
 // reason, once per interval, instead of closing without a trace.
 func TestStorageConnectorLogsTheRelayRefusal(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "relay.sock")
+	socketPath := filepath.Join(sockettest.Dir(t), "relay.sock")
 	daemon, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)

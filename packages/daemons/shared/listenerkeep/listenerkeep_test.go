@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 type notification struct {
@@ -75,7 +77,7 @@ func TestKeeperWithNotifySocketLeavesSystemdToTheLauncher(t *testing.T) {
 	t.Setenv(launcherManagedEnv, "1")
 	t.Setenv(ChannelFDEnv, strconv.Itoa(childEnd))
 	t.Setenv(KeptEnv, "")
-	t.Setenv("NOTIFY_SOCKET", filepath.Join(t.TempDir(), "notify"))
+	t.Setenv("NOTIFY_SOCKET", filepath.Join(sockettest.Dir(t), "notify"))
 	t.Setenv("INVOCATION_ID", "test")
 	if keeper := newClientFromEnvironment(); keeper.send == nil || keeper.mirror != nil {
 		t.Fatalf("keeper client: send %v, mirror %v", keeper.send != nil, keeper.mirror != nil)
@@ -84,7 +86,7 @@ func TestKeeperWithNotifySocketLeavesSystemdToTheLauncher(t *testing.T) {
 
 func listenNotify(t *testing.T) *net.UnixConn {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "notify")
+	path := filepath.Join(sockettest.Dir(t), "notify")
 	connection, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +116,7 @@ func keeperChannel(t *testing.T) (*net.UnixConn, int) {
 
 func listenUnix(t *testing.T, name string) *net.UnixListener {
 	t.Helper()
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(t.TempDir(), name), Net: "unix"})
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(sockettest.Dir(t), name), Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}

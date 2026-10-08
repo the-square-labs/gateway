@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 // A root → non-root switch: the egress socket the root process handed over does not fit the new mode (0600, or set
@@ -34,7 +35,7 @@ func TestModeSwitchPreviousSockets(t *testing.T) {
 	}
 	defer store.Close()
 	connectKeeper(t, store, nil)
-	base := t.TempDir()
+	base := sockettest.Dir(t)
 	// The socket stays where it was with the root mode, and one whose directory is set aside.
 	inPlace := filepath.Join(base, "a", egressSocketName)
 	setAside := filepath.Join(base, "b", egressSocketName)
@@ -117,7 +118,7 @@ func TestModeSwitchToRootPreviousSocket(t *testing.T) {
 	}
 	defer store.Close()
 	connectKeeper(t, store, nil)
-	path := filepath.Join(t.TempDir(), egressSocketName)
+	path := filepath.Join(sockettest.Dir(t), egressSocketName)
 	// Written by a daemon without root, then given to root by the installer.
 	daemonEUID = func() int { return 4242 }
 	keptName := keepSocketForNextProcess(t, store, path, 0o660, 0, 0)
@@ -155,7 +156,7 @@ func TestModeSwitchToRootPreviousSocket(t *testing.T) {
 // user, so a connector of the previous mode keeps its access through the switch (root → non-root reset connections
 // for seconds before).
 func TestConnectorAccessSurvivesAnOwnerChange(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "c")
+	directory := filepath.Join(sockettest.Dir(t), "c")
 	if err := os.Mkdir(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}

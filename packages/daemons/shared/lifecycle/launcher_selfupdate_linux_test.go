@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 // The test binary doubles as the launcher and the daemon of these tests: a
@@ -196,7 +197,7 @@ type launcherInPlaceHarness struct {
 
 func startLauncherInPlaceHarness(t *testing.T) *launcherInPlaceHarness {
 	t.Helper()
-	dir := t.TempDir()
+	dir := sockettest.Dir(t)
 	h := &launcherInPlaceHarness{t: t, dir: dir, stateDir: filepath.Join(dir, "state"), binary: filepath.Join(dir, "bin", "test-daemon")}
 	self, err := os.Executable()
 	if err != nil {
@@ -484,7 +485,7 @@ func writeNextAgain(t *testing.T, h *launcherInPlaceHarness) string {
 // fails leaves the launcher as it was: descriptors close-on-exec again and the
 // keeper reading its channel.
 func TestLauncherExecInPlaceFailureRestoresDescriptors(t *testing.T) {
-	dir := t.TempDir()
+	dir := sockettest.Dir(t)
 	stateDir := filepath.Join(dir, "state")
 	if err := ensurePrivateLauncherDirectory(filepath.Join(stateDir, "launcher")); err != nil {
 		t.Fatal(err)

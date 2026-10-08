@@ -22,6 +22,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 )
 
 const testMemberLinkID = "22222222-2222-4222-8222-222222222222"
@@ -240,7 +242,7 @@ func TestLeaseClosedMemberSocketRefusesInsteadOfVanishing(t *testing.T) {
 // TestRefusedSocketRefusesWhateverProcessHoldsACopy: the listener keeper holds a copy of every kept socket, yet a
 // member the lease gate closes must refuse at once rather than queue connections nobody accepts.
 func TestRefusedSocketRefusesWhateverProcessHoldsACopy(t *testing.T) {
-	path := t.TempDir() + "/member.sock"
+	path := sockettest.Dir(t) + "/member.sock"
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
@@ -630,12 +632,7 @@ func TestHandoverKeepsIdleConnectionsOpenUntilTheSocketsAreHandedOver(t *testing
 }
 
 func TestStaleTemporarySocketsAreRemoved(t *testing.T) {
-	// Short, as testSourceLinkManager's: t.TempDir() under a long TMPDIR passes the 108-byte unix socket path limit.
-	directory, err := os.MkdirTemp("/tmp", "gw-sock-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	directory := sockettest.Dir(t)
 	stale := directory + "/.1.7.tmp"
 	own := directory + "/." + strconv.Itoa(os.Getpid()) + ".8.tmp"
 	kept := directory + "/11111111-1111-4111-8111-111111111111.sock"
@@ -876,7 +873,7 @@ func waitForOpening(t *testing.T, manager *sourceLinkManager, count int) {
 // After the daemon switched between root and its own user, a kept socket that nginx's workers cannot reach (another
 // owner, or not 0600) is created anew instead of adopted.
 func TestSecureLinkSocketFitsOnlyTheWorkerOwnedLayout(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "link.sock")
+	path := filepath.Join(sockettest.Dir(t), "link.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
