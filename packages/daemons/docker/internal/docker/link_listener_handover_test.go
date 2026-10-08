@@ -232,10 +232,31 @@ func TestAnnouncedRestartSkipsTheRegistrationHold(t *testing.T) {
 	}
 }
 
+// shortSocketDir is a directory for unix sockets whose paths stay within the 108-byte limit however long TMPDIR and
+// the test name are: as nobody with TMPDIR=/tmp/intnb/t, t.TempDir() paths passed it (the boot handover socket
+// link-listeners/handover.sock, the fake connectors' control sockets).
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	socket := len(linkListenerBootPath("", linkListenerHandoverFile))
+	for _, parent := range []string{os.TempDir(), "/tmp"} {
+		if len(parent)+len("/lh-0123456789")+socket >= 100 {
+			continue
+		}
+		dir, err := os.MkdirTemp(parent, "lh-")
+		if err != nil {
+			continue
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		return dir
+	}
+	t.Fatal("no directory short enough for a unix socket")
+	return ""
+}
+
 // PAAS-06: the boot step opens the listeners the daemon held last before Docker starts the workloads; a connection
 // made before the daemon runs waits in the backlog and is served once the daemon took the socket over.
 func TestBootHeldListenerServesAConnectionMadeBeforeTheDaemon(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := shortSocketDir(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := newListenerHarness(t)
 	h.manager.stateDir = stateDir
@@ -271,7 +292,14 @@ func TestBootHeldListenerServesAConnectionMadeBeforeTheDaemon(t *testing.T) {
 	go func() {
 		held <- holdLinkListeners(stateDir, []string{name}, []*os.File{file}, 10*time.Second, func() { close(ready) }, logger)
 	}()
-	<-ready
+	// The holder fails before it is ready when it cannot listen (a socket path past the 108-byte limit): fail, not hang.
+	select {
+	case <-ready:
+	case err := <-held:
+		t.Fatalf("the holder ended before it was ready: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the holder never got ready")
+	}
 	early := h.dial()
 	if _, err := early.Write([]byte("startup")); err != nil {
 		t.Fatal(err)
@@ -281,8 +309,13 @@ func TestBootHeldListenerServesAConnectionMadeBeforeTheDaemon(t *testing.T) {
 	if len(boot) != 1 || boot[name] == nil {
 		t.Fatalf("handed over %v", boot)
 	}
-	if err := <-held; err != nil {
-		t.Fatalf("holder: %v", err)
+	select {
+	case err := <-held:
+		if err != nil {
+			t.Fatalf("holder: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the holder did not end after the handover")
 	}
 	h.manager.adoptKeptListeners(boot)
 	if status := h.reconcile(assignment)[testListenerBindingA]; status.State != "ready" {

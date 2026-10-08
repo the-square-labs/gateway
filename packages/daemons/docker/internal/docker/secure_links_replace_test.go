@@ -82,7 +82,7 @@ func fakeAnchor(image, ip string) *fakeConnectorContainer {
 }
 
 func newFakeConnectorEngine(t *testing.T) *fakeConnectorEngine {
-	engine := &fakeConnectorEngine{t: t, controlDir: t.TempDir(), containers: map[string]*fakeConnectorContainer{}}
+	engine := &fakeConnectorEngine{t: t, controlDir: shortSocketDir(t), containers: map[string]*fakeConnectorContainer{}}
 	t.Cleanup(func() {
 		engine.mu.Lock()
 		defer engine.mu.Unlock()

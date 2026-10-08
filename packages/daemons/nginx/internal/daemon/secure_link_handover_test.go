@@ -630,7 +630,12 @@ func TestHandoverKeepsIdleConnectionsOpenUntilTheSocketsAreHandedOver(t *testing
 }
 
 func TestStaleTemporarySocketsAreRemoved(t *testing.T) {
-	directory := t.TempDir()
+	// Short, as testSourceLinkManager's: t.TempDir() under a long TMPDIR passes the 108-byte unix socket path limit.
+	directory, err := os.MkdirTemp("/tmp", "gw-sock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
 	stale := directory + "/.1.7.tmp"
 	own := directory + "/." + strconv.Itoa(os.Getpid()) + ".8.tmp"
 	kept := directory + "/11111111-1111-4111-8111-111111111111.sock"
