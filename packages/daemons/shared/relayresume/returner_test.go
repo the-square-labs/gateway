@@ -228,3 +228,28 @@ func TestReturnerMovesABoundedNumberOfStreamsBack(t *testing.T) {
 		session.Abort(RstAborted, "done")
 	}
 }
+
+// The rc.3 stand (O-a): regrants paced over up to 5 s reported the pacing as their stall (p50 2.4 s, up to 9.9 s)
+// while the applications saw at most 0.38 s. A planned move's stall runs from when the move stops the stream on
+// its path, not from when it was requested.
+func TestPlannedMoveStallLeavesOutItsPacedStart(t *testing.T) {
+	h := newHarness(t, "relay-a", "relay-b")
+	dialer, session := newGenerationStream(t, h)
+	events := make(chan MigrationEvent, 1)
+	h.mgr.OnMigration = func(event MigrationEvent) { events <- event }
+	dialer.generation.Store(2)
+	const pace = 500 * time.Millisecond
+	h.mgr.Repath(session, TriggerRegrant, time.Now().Add(pace))
+	select {
+	case event := <-events:
+		if !event.OK || event.Stall >= pace/2 {
+			t.Fatalf("move %+v: the stall includes the paced start", event)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stream did not move")
+	}
+	if stats := h.mgr.Stats(); stats.MigrationsOK != 1 || stats.StallP50 >= pace/2 {
+		t.Fatalf("stats %+v", stats)
+	}
+	session.Abort(RstAborted, "done")
+}

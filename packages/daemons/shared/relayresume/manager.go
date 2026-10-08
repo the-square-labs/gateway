@@ -123,7 +123,7 @@ type sourceState struct {
 	cfg       SourceConfig
 	migrating bool
 	trigger   Trigger
-	stalled   time.Time // the stream stopped moving (suspend or planned stop)
+	stalled   time.Time // the stream stopped carrying data (its path failed, or a planned move stopped it)
 	movedAt   time.Time // the last move that succeeded
 	ended     bool
 	// deferred is a planned move that arrived while the stream could not
@@ -251,14 +251,25 @@ func (st *sourceState) observeLocked(s *Session) {
 	}
 }
 
-// start hands the session to a migration worker (mu held).
+// start hands the session to a migration worker (mu held). An unplanned
+// move starts when the stream's path failed, so its stall starts now; a
+// planned one keeps carrying data on its path until the move stops it
+// (attempt), after its paced start.
 func (st *sourceState) start(s *Session, trigger Trigger, unplanned bool, move plannedMove, at time.Time) {
 	st.migrating = true
 	st.trigger = trigger
+	if unplanned {
+		st.markStalled()
+	}
+	go st.mgr.migrate(s, trigger, unplanned, move, at)
+}
+
+// markStalled notes when the stream stopped carrying data, unless it already
+// stood still (mu held).
+func (st *sourceState) markStalled() {
 	if st.stalled.IsZero() {
 		st.stalled = time.Now()
 	}
-	go st.mgr.migrate(s, trigger, unplanned, move, at)
 }
 
 func (m *Manager) ended(s *Session, err error, retransmitted uint64) {
@@ -373,6 +384,9 @@ func (m *Manager) attempts(s *Session, unplanned bool, move plannedMove) (bool, 
 				// The old path died meanwhile: carry on unplanned.
 				unplanned = true
 				deadline = time.Now().Add(UnplannedBudget + time.Second)
+				s.mu.Lock()
+				s.source.markStalled()
+				s.mu.Unlock()
 				continue
 			}
 			return false, "", nil // already moved
@@ -443,12 +457,18 @@ func (m *Manager) attempt(s *Session, unplanned bool, request DialRequest) (bool
 	}
 	path := NewPath(nil, op.RelayID, op.MaxFrame)
 	s.attach(path, op)
+	// BeginResume stops a planned move's stream on its path: its stall starts
+	// here, not when the move was requested (the paced wait and the dial
+	// carried data as before). An unplanned one stood still since its path
+	// failed.
+	planned := s.core.Current() != nil
 	if !s.core.BeginResume(path, time.Now()) {
 		s.core.DropPath(path)
 		s.afterLocked(false)
 		s.mu.Unlock()
 		return false, "", errNotResumableNow
 	}
+	s.source.markStalled()
 	s.afterLocked(false)
 	for s.core.Pending() == path && !s.core.State().Terminal() {
 		s.stateCond.Wait()
@@ -459,6 +479,10 @@ func (m *Manager) attempt(s *Session, unplanned bool, request DialRequest) (bool
 		err = s.core.Err()
 		if err == nil {
 			err = errors.New("relayresume: resume attempt failed")
+		}
+		if planned && s.core.State() == StateOpen {
+			// Back on its old path, carrying data again until the next attempt.
+			s.source.stalled = time.Time{}
 		}
 	}
 	s.mu.Unlock()
