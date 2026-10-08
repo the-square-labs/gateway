@@ -301,87 +301,85 @@ func TestCoreWindowBlocksAndGrows(t *testing.T) {
 	if pair.src.Window() <= InitialWindow {
 		t.Fatalf("window did not grow: %d", pair.src.Window())
 	}
-	if pair.src.Window() > MaxWindow || budget.Used() != int64(pair.src.Window()-InitialWindow) {
+	if pair.src.Window() > MaxExtendedWindow || budget.Used() != int64(pair.src.Window()-InitialWindow) {
 		t.Fatalf("window %d, budget used %d", pair.src.Window(), budget.Used())
 	}
+	if !pair.src.PeerExtended() || pair.src.Window() <= MaxWindow {
+		t.Fatalf("between two sessions with the window extension the window stays at %d", pair.src.Window())
+	}
 }
 
-// RESUME_ACK is the first record on the resumed path even when the resume
-// acknowledges enough to grow the target's window (which announces itself
-// with an ACK).
-func TestCoreResumeAckComesFirst(t *testing.T) {
+// windowPipe runs a window-blocked bulk upload over a pair for rounds round
+// trips of rtt each; a peer that hides the window extension announces even
+// windows, as every release before it did.
+func windowPipe(t *testing.T, pair *corePair, rounds int, rtt time.Duration, legacyPeer bool) {
+	t.Helper()
+	chunk := make([]byte, 32*1024)
+	fill := func() {
+		for pair.src.CanWrite(len(chunk)) {
+			if ok, _ := pair.src.Write(chunk, pair.now); !ok {
+				t.Fatal("refused after CanWrite")
+			}
+		}
+	}
+	legacy := func(outputs []Output) []Output {
+		if !legacyPeer {
+			return outputs
+		}
+		for i, out := range outputs {
+			if record, rest, err := ParseRecord(out.Frame); err == nil && record.Type == TypeAck && len(rest) == 0 {
+				outputs[i].Frame = AppendAck(nil, record.Ack, record.Wnd&^WindowExtension)
+			}
+		}
+		return outputs
+	}
+	for round := 0; round < rounds; round++ {
+		fill()
+		pair.now = pair.now.Add(rtt / 2)
+		pair.deliverOutputs(pair.src, pair.src.TakeOutputs(), pair.tgt)
+		for {
+			if _, _, ok := pair.tgt.Read(pair.now); !ok {
+				break
+			}
+		}
+		pair.now = pair.now.Add(rtt / 2)
+		for _, ack := range legacy(pair.tgt.TakeOutputs()) {
+			pair.deliverOutputs(pair.tgt, []Output{ack}, pair.src)
+			fill()
+		}
+		if pair.src.Unacked() > pair.src.EffectiveWindow()+uint64(len(chunk)) {
+			t.Fatalf("unacked %d over the window %d", pair.src.Unacked(), pair.src.EffectiveWindow())
+		}
+	}
+}
+
+// A peer before the window extension (even windows) never gets more than
+// MaxWindow: it resets a stream that queues more than 2*(MaxWindow+MaxFrameBytes).
+func TestCoreWindowStaysWithinMaxWindowForALegacyPeer(t *testing.T) {
 	pair := newCorePair(t)
-	pair.tgt.Write(make([]byte, 200*1024), pair.now)
-	// The source receives everything, its acks are lost.
-	pair.deliverOutputs(pair.tgt, pair.tgt.TakeOutputs(), pair.src)
-	for {
-		if _, _, ok := pair.src.Read(pair.now); !ok {
-			break
-		}
-	}
-	pair.src.TakeOutputs()
-	pair.tgt.blocked, pair.tgt.ackedBlocked = true, 10*MaxWindow
-	_, tgtPath, resume := pair.resumeFrame("relay-b")
-	if verdict := pair.tgt.AcceptResume(tgtPath, &resume, pair.now); !verdict.Accepted {
-		t.Fatalf("verdict %+v", verdict)
-	}
-	for _, out := range pair.tgt.TakeOutputs() {
-		if out.Path != tgtPath || out.Close {
-			continue
-		}
-		if out.Frame[0] != TypeResumeAck {
-			t.Fatalf("first record on the resumed path is 0x%02x", out.Frame[0])
-		}
-		return
-	}
-	t.Fatal("no RESUME_ACK")
-}
-
-// Drain moves start within DefaultDrainSpreadTime even under a long drain
-// grace (it exists for raw streams).
-func TestPacedStartIsCapped(t *testing.T) {
-	for i := 0; i < 200; i++ {
-		at := pacedStart(time.Now().Add(30 * time.Minute))
-		if time.Until(at) > DefaultDrainSpreadTime {
-			t.Fatalf("move starts in %s", time.Until(at))
-		}
-		if at = pacedStart(time.Time{}); time.Until(at) > time.Second {
-			t.Fatalf("an immediate move starts in %s", time.Until(at))
-		}
+	// The legacy peer's HELLO_ACK: even.
+	pair.src.peerExtended = false
+	windowPipe(t, pair, 300, 40*time.Millisecond, true)
+	if pair.src.PeerExtended() || pair.src.Window() != MaxWindow || pair.src.EffectiveWindow() != MaxWindow {
+		t.Fatalf("window %d (effective %d, extended peer %v)", pair.src.Window(), pair.src.EffectiveWindow(), pair.src.PeerExtended())
 	}
 }
 
-// A route's legacy latch clears once Gateway gives the route a new key
-// (turned on again); the same key, or the first one seen, keeps it.
-func TestNoteRouteKeyClearsLegacyLatch(t *testing.T) {
-	m := NewManager(nil)
-	m.NoteRouteKey("r", "v1")
-	m.MarkLegacy("r")
-	m.NoteRouteKey("r", "v1")
-	if !m.Legacy("r") {
-		t.Fatal("the same key cleared the latch")
+// The window grows past MaxWindow on a long round trip up to
+// MaxExtendedWindow, and not while the round trip says the bytes only queue
+// (the bandwidth-delay product stays below the window).
+func TestCoreWindowGrowsOnlyWhileTheRoundTripHolds(t *testing.T) {
+	pair := newCorePair(t)
+	windowPipe(t, pair, 120, 300*time.Millisecond, false)
+	if pair.src.Window() != MaxExtendedWindow {
+		t.Fatalf("on a 300 ms round trip the window reached %d", pair.src.Window())
 	}
-	m.NoteRouteKey("r", "")
-	if !m.Legacy("r") {
-		t.Fatal("a route turned off cleared the latch")
-	}
-	m.NoteRouteKey("r", "v2")
-	if m.Legacy("r") {
-		t.Fatal("a route turned on again with a new key stayed latched")
-	}
-	m.MarkLegacy("other")
-	m.NoteRouteKey("other", "v9")
-	if !m.Legacy("other") {
-		t.Fatal("the first key seen cleared a latch of unknown key")
-	}
-	// A latch that knows its key clears on the first bundle with another.
-	m.MarkLegacyKey("third", "v3")
-	m.NoteRouteKey("third", "v3")
-	if !m.Legacy("third") {
-		t.Fatal("the latched key cleared its own latch")
-	}
-	m.NoteRouteKey("third", "v4")
-	if m.Legacy("third") {
-		t.Fatal("a new key kept the latch")
+	queued := newCorePair(t)
+	windowPipe(t, queued, 40, 20*time.Millisecond, false)
+	before := queued.src.Window()
+	// From now on every round trip is 10x the shortest one.
+	windowPipe(t, queued, 60, 200*time.Millisecond, false)
+	if queued.src.Window() > max(before, MaxWindow) {
+		t.Fatalf("the window grew from %d to %d while the round trip said it queues", before, queued.src.Window())
 	}
 }

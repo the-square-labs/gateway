@@ -51,10 +51,13 @@ type SessionState struct {
 	FinQueued      bool
 	FinOff         uint64
 	Unacked        []byte
-	// Window is this side's send window; PeerDelivered is where it counts
-	// from (the peer's last ack).
-	Window        uint64
-	PeerDelivered uint64
+	// Window is this side's send window, within MaxWindow (the release
+	// before the window extension reads no larger one); ExtendedWindow is a
+	// window above MaxWindow, which a release that knows it takes instead.
+	// PeerDelivered is where it counts from (the peer's last ack).
+	Window         uint64
+	ExtendedWindow uint64
+	PeerDelivered  uint64
 
 	// Receive side: [Delivered, RcvNxt) was received and not handed to the
 	// local socket; Queued holds its data bytes.
@@ -117,6 +120,8 @@ func (st *SessionState) Validate() error {
 		return invalid("frame size %d", st.MaxFrame)
 	case st.Window < MinWindow || st.Window > MaxWindow:
 		return invalid("window %d", st.Window)
+	case st.ExtendedWindow != 0 && (st.ExtendedWindow <= MaxWindow || st.ExtendedWindow > MaxExtendedWindow):
+		return invalid("extended window %d", st.ExtendedWindow)
 	}
 	unacked := uint64(0)
 	if end := st.dataEnd(); st.SndUna < end {
@@ -151,10 +156,13 @@ func (st *SessionState) Validate() error {
 func (c *Core) exportState() SessionState {
 	st := SessionState{
 		Role: c.cfg.Role, RouteID: c.cfg.RouteID, SessionID: c.sessionID, TargetNonce: c.nonce, KeyID: c.keyID, Epoch: c.epoch,
-		SndUna: c.sndUna, SndNxt: c.sndNxt, FinQueued: c.finQueued, FinOff: c.finOff, Window: c.wnd, PeerDelivered: c.peerDelivered,
+		SndUna: c.sndUna, SndNxt: c.sndNxt, FinQueued: c.finQueued, FinOff: c.finOff, Window: min(c.wnd, MaxWindow), PeerDelivered: c.peerDelivered,
 		RcvNxt: c.rcvNxt, Delivered: c.delivered, AckSent: c.ackSent, PeerWindow: c.peerWnd, PeerFin: c.peerFin,
 		PeerFinOff: c.peerFinOff, FinDelivered: c.finDelivered, CloseRecv: c.closeRecv,
 		HalfCloseTimeout: c.cfg.HalfCloseTimeout, Retransmitted: c.Retransmitted, Migrations: c.Migrations,
+	}
+	if c.wnd > MaxWindow {
+		st.ExtendedWindow = c.wnd
 	}
 	end := st.dataEnd()
 	if c.sndUna < end {
@@ -188,6 +196,9 @@ func restoreCore(cfg Config, st *SessionState, now time.Time) (*Core, error) {
 	}
 	c := &Core{cfg: cfg, state: StateSuspended, lastActivity: now}
 	wnd := st.Window
+	if st.ExtendedWindow > wnd {
+		wnd = st.ExtendedWindow
+	}
 	if wnd > MinWindow && cfg.Budget != nil && !cfg.Budget.reserve(wnd-MinWindow) {
 		// The window is this side's own pacing: a smaller one only makes the
 		// next writes wait for acks.
@@ -254,12 +265,13 @@ const (
 	stateFieldMigrations       = 28
 	stateFieldFrozenAt         = 29 // unix milliseconds
 	stateFieldPeerDelivered    = 30
+	stateFieldExtendedWindow   = 31
 )
 
 // stateFieldKinds is the wire type of every known field.
 var stateFieldKinds = func() map[protowire.Number]protowire.Type {
 	kinds := map[protowire.Number]protowire.Type{}
-	for field := protowire.Number(stateFieldRole); field <= stateFieldPeerDelivered; field++ {
+	for field := protowire.Number(stateFieldRole); field <= stateFieldExtendedWindow; field++ {
 		kinds[field] = protowire.VarintType
 	}
 	for _, field := range []protowire.Number{stateFieldRouteID, stateFieldSessionID, stateFieldTargetNonce, stateFieldKeyID,
@@ -322,6 +334,7 @@ func AppendSessionState(buffer []byte, st *SessionState) []byte {
 		varint(stateFieldFrozenAt, uint64(st.FrozenAt.UnixMilli()))
 	}
 	varint(stateFieldPeerDelivered, st.PeerDelivered)
+	varint(stateFieldExtendedWindow, st.ExtendedWindow)
 	return buffer
 }
 
@@ -431,6 +444,8 @@ func ParseSessionState(data []byte) (*SessionState, error) {
 			st.FrozenAt = time.UnixMilli(int64(value))
 		case stateFieldPeerDelivered:
 			st.PeerDelivered = value
+		case stateFieldExtendedWindow:
+			st.ExtendedWindow = value
 		}
 		if err != nil {
 			return nil, err

@@ -14,6 +14,7 @@
     "legacy_latch_ms": 600000,
     "mac_len": 16,
     "magic": "GWRS",
+    "max_extended_window": 33554432,
     "max_frame_bytes": 1048576,
     "max_key_id_len": 64,
     "max_migrations_in_flight": 32,
@@ -68,7 +69,8 @@
     "unplanned_backoff_max_ms": 2000,
     "unplanned_backoff_min_ms": 250,
     "unplanned_budget_ms": 55000,
-    "version": 1
+    "version": 1,
+    "window_extension": 1
   },
   "kdf": [
     {
