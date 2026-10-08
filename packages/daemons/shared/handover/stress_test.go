@@ -241,14 +241,37 @@ type world struct {
 	cut     atomic.Int64
 }
 
+// itemCount counts the bridges and pipes a daemon process started and the
+// ones that returned.
+type itemCount struct{ started, returned atomic.Int64 }
+
+// waitStarted waits until every bridge and pipe started on registry is in it
+// (or returned already): a daemon carries the connections it took over before
+// it can be updated again.
+func waitStarted(t testing.TB, registry *Registry, count *itemCount) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		returned := count.returned.Load() // before the snapshot: an item is never counted twice
+		if int64(len(registry.snapshotItems()))+returned >= count.started.Load() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the connections a daemon took over did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 type sourceDaemon struct {
-	mgr *relayresume.Manager
-	reg *Registry
+	mgr   *relayresume.Manager
+	reg   *Registry
+	items itemCount
 }
 
 type targetDaemon struct {
 	table *relayresume.TargetTable
 	reg   *Registry
+	items itemCount
 	// accepting: the relay passes new tunnels to this process.
 	accepting atomic.Bool
 }
@@ -324,8 +347,8 @@ func (w *world) serveTarget(b *targetDaemon, op relayresume.OpenedPath) {
 			return
 		}
 		local, app := localPair(w.t, rand.IntN(2) == 0, rand.IntN(2) == 0)
+		w.bridge(b.reg, &b.items, local, session)
 		w.pending <- app
-		w.bridge(b.reg, local, session)
 		<-accepted.PathDone
 	case relayresume.AcceptLegacy:
 		w.errs <- errors.New("target saw a raw tunnel")
@@ -336,10 +359,12 @@ func (w *world) serveTarget(b *targetDaemon, op relayresume.OpenedPath) {
 
 // bridge runs a daemon's bridge: like the daemons, it closes its copy of the
 // connection when the bridge returns, handed over or not.
-func (w *world) bridge(registry *Registry, connection net.Conn, session *relayresume.Session) {
+func (w *world) bridge(registry *Registry, count *itemCount, connection net.Conn, session *relayresume.Session) {
 	w.bridges.Add(1)
+	count.started.Add(1)
 	go func() {
 		defer w.bridges.Done()
+		defer count.returned.Add(1)
 		defer connection.Close()
 		err := registry.Bridge(connection, session, BridgeConfig{ReadChunk: 16 * 1024, Labels: Labels{"stream": "x"}})
 		if err != nil && !errors.Is(err, ErrHandedOver) {
@@ -350,10 +375,12 @@ func (w *world) bridge(registry *Registry, connection net.Conn, session *relayre
 
 // pipe runs a daemon's node-local pipe (left, right), or carries a restored
 // one on; like the daemons, it closes its copies when the pipe returns.
-func (w *world) pipe(registry *Registry, restored *RestoredPipe, left, right net.Conn) {
+func (w *world) pipe(registry *Registry, count *itemCount, restored *RestoredPipe, left, right net.Conn) {
 	w.bridges.Add(1)
+	count.started.Add(1)
 	go func() {
 		defer w.bridges.Done()
+		defer count.returned.Add(1)
 		var err error
 		if restored != nil {
 			left, right = restored.Conns[0], restored.Conns[1]
@@ -393,12 +420,13 @@ func (w *world) handOverA(t testing.TB) {
 			if err != nil {
 				t.Fatalf("restore source stream: %v", err)
 			}
-			w.bridge(next.reg, item.Conn, session)
+			w.bridge(next.reg, &next.items, item.Conn, session)
 		}
 		for _, item := range restored.Pipes {
-			w.pipe(next.reg, item, nil, nil)
+			w.pipe(next.reg, &next.items, item, nil, nil)
 		}
 	}
+	waitStarted(t, next.reg, &next.items)
 	w.mu.Lock()
 	w.a = next
 	w.mu.Unlock()
@@ -435,9 +463,10 @@ func (w *world) handOverB(t testing.TB) {
 			if err != nil {
 				t.Fatalf("restore target stream: %v", err)
 			}
-			w.bridge(next.reg, item.Conn, session)
+			w.bridge(next.reg, &next.items, item.Conn, session)
 		}
 	}
+	waitStarted(t, next.reg, &next.items)
 	w.mu.Lock()
 	w.b = next
 	w.mu.Unlock()
@@ -478,7 +507,7 @@ func TestHandoverStressKeepsEveryByte(t *testing.T) {
 			t.Fatal(err)
 		}
 		local, appA := localPair(t, i%2 == 0, i%3 != 0)
-		w.bridge(a.reg, local, session)
+		w.bridge(a.reg, &a.items, local, session)
 		var appB net.Conn
 		select {
 		case appB = <-w.pending:
@@ -513,7 +542,7 @@ func TestHandoverStressKeepsEveryByte(t *testing.T) {
 		workloadSide, appLeft := localPair(t, i == 0, i == 1)
 		targetSide, appRight := localPair(t, i == 1, false)
 		a, _ := w.current()
-		w.pipe(a.reg, nil, workloadSide, targetSide)
+		w.pipe(a.reg, &a.items, nil, workloadSide, targetSide)
 		appConns = append(appConns, appLeft, appRight)
 		up := &direction{name: fmt.Sprintf("pipe %d left->right", i), seed: uint64(100 + i*2), slow: i == 1, done: make(chan error, 2)}
 		down := &direction{name: fmt.Sprintf("pipe %d right->left", i), seed: uint64(101 + i*2), done: make(chan error, 2)}
@@ -531,6 +560,9 @@ func TestHandoverStressKeepsEveryByte(t *testing.T) {
 		go down.check(appLeft, rngs[3])
 	}
 
+	initialA, initialB := w.current()
+	waitStarted(t, initialA.reg, &initialA.items)
+	waitStarted(t, initialB.reg, &initialB.items)
 	rng := rand.New(rand.NewPCG(7, 7))
 	started := time.Now()
 	for i := 0; i < iterations; i++ {
