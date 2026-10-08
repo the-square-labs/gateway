@@ -63,6 +63,17 @@ export function isEngineImageUnavailable(error: unknown): boolean {
   );
 }
 
+/** The code at the front of a managed cluster's `lastError` while its disk is full. */
+export const MANAGED_STORAGE_FULL = "MANAGED_STORAGE_FULL";
+
+/** A serving managed cluster whose disk is full: it serves reads but refuses uploads. */
+export function isManagedStorageFull(storage: Pick<ObjectStorageConnection, "managed">): boolean {
+  const managed = storage.managed;
+  return (
+    managed?.status === "ready" && (managed.lastError?.startsWith(MANAGED_STORAGE_FULL) ?? false)
+  );
+}
+
 /** A stored error message, with the engine-image failure rewritten into guidance. */
 export function formatManagedStorageError(message: string): string {
   return isEngineImageUnavailable(message)

@@ -30,6 +30,7 @@ import { useAuthStore } from "@/stores/auth";
 import { usePinnedStorageStore } from "@/stores/pinned-storage";
 import type { ObjectStorageConnection, ObjectStorageMetricSnapshot } from "@/types";
 import { ManagedObjectStorageSettingsTab } from "./storage-detail/ManagedObjectStorageSettingsTab";
+import { ManagedStorageFullNotice } from "./storage-detail/ManagedStorageFullNotice";
 import { ManagedStorageLegacyEngineBanner } from "./storage-detail/ManagedStorageLegacyEngineBanner";
 import {
   managedStorageEngine,
@@ -388,6 +389,8 @@ function StorageDetailContent({
         />
 
         <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
+
+        <ManagedStorageFullNotice storage={storage} />
 
         <ManagedStorageLegacyEngineBanner storage={storage} />
 

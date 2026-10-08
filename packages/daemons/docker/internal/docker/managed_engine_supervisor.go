@@ -188,6 +188,11 @@ func (r *engineRestarts) schedule(key string, run func()) {
 // runManagedEngineSupervisor follows Docker's container events for the life
 // of the process and starts engines that stopped while they should run.
 func (p *DockerPlugin) runManagedEngineSupervisor(ctx context.Context) {
+	if p.storageManager != nil {
+		// Engines are kept running here; their disks are kept from filling
+		// up with deleted objects alongside.
+		go p.storageManager.runSpaceReclaim(ctx)
+	}
 	restarts := newEngineRestarts()
 	for {
 		p.watchEngineEvents(ctx, restarts)

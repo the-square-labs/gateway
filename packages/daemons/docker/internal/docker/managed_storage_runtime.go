@@ -55,6 +55,8 @@ type managedStorageManager struct {
 	probeReady func(ctx context.Context, record managedStorageRecord) error
 	// runHostCommand overrides the host tools a disk grow runs (tests).
 	runHostCommand func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// execEngine overrides commands run in an engine container (tests).
+	execEngine func(ctx context.Context, containerID string, command []string, stdin string) ([]byte, error)
 }
 
 func (m *managedStorageManager) loopHost() *loopHost {
@@ -670,6 +672,13 @@ func (m *managedStorageManager) marshalManagedStorageDetail(ctx context.Context,
 		}
 		if status == "stopped" && m.engineKeepsExiting(record) {
 			detail["engineExited"] = true
+		}
+		// A serving SeaweedFS storage whose disk is full takes no new
+		// objects; Gateway shows it until space is freed.
+		if status == "ready" && record.engine() == managedStorageEngineSeaweedFS {
+			if full, ok := m.seaweedfsStorageFull(record); ok && full {
+				detail["storageFull"] = true
+			}
 		}
 	}
 	return jsonString(detail)
