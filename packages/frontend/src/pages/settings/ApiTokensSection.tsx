@@ -36,6 +36,7 @@ import {
   hasTokenRegistryAccess,
   LEGACY_REGISTRY_SCOPES,
   RegistryAccessFields,
+  registryAccessOffered,
   registryAccessSummary,
 } from "./RegistryAccessFields";
 
@@ -79,6 +80,8 @@ export function ApiTokensSection({
   const [isUpdating, setIsUpdating] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [editingToken, setEditingToken] = useState<ApiToken | null>(null);
+  // null while loading; read again at each opening of the dialog.
+  const [registryExternalAccess, setRegistryExternalAccess] = useState<boolean | null>(null);
   const userScopes = useMemo(() => user?.scopes ?? [], [user?.scopes]);
   const allowedResourceIdsByScope = useMemo(
     () => deriveAllowedResourceIdsByScope(userScopes),
@@ -93,11 +96,14 @@ export function ApiTokensSection({
     newToken: !editingToken,
   });
   const tokenScopesChanged = !!editingToken && access.changed;
+  // Hidden registry access is never sent: a token keeps what it has.
+  const registryOffered = registryAccessOffered(registryExternalAccess);
   const registryAccessChanged = useMemo(
     () =>
+      registryOffered &&
       !!editingToken &&
       JSON.stringify(editingToken.registryAccess ?? {}) !== JSON.stringify(registryAccess),
-    [editingToken, registryAccess]
+    [editingToken, registryAccess, registryOffered]
   );
   const tokenChanged = useMemo(() => {
     if (!editingToken) return false;
@@ -122,6 +128,25 @@ export function ApiTokensSection({
   useEffect(() => {
     loadTokens();
   }, [loadTokens]);
+
+  useEffect(() => {
+    if (!createDialogOpen) {
+      setRegistryExternalAccess(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getTokenRegistryAccess()
+      .then((result) => {
+        if (!cancelled) setRegistryExternalAccess(result.externalAccessEnabled);
+      })
+      .catch(() => {
+        if (!cancelled) setRegistryExternalAccess(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [createDialogOpen]);
   useRealtime(user?.id ? apiTokenChangedChannel(user.id) : null, () => void loadTokens(), {
     onReconnect: loadTokens,
   });
@@ -188,7 +213,7 @@ export function ApiTokensSection({
       const result = await api.createToken({
         name: newTokenName,
         scopes: access.scopes,
-        registryAccess: finalRegistryAccess(registryAccess).access,
+        ...(registryOffered ? { registryAccess: finalRegistryAccess(registryAccess).access } : {}),
       });
       setCreatedSecret(result.token);
       setCreateDialogOpen(false);
@@ -310,7 +335,7 @@ export function ApiTokensSection({
           </DialogHeader>
 
           <div className="space-y-4">
-            <ReportLoading loading={resourceListsLoading} />
+            <ReportLoading loading={resourceListsLoading || registryExternalAccess === null} />
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -344,11 +369,13 @@ export function ApiTokensSection({
                 allowedResourceIds: allowedResourceIdsByScope,
               }}
             />
-            <RegistryAccessFields
-              value={registryAccess}
-              onChange={setRegistryAccess}
-              userScopes={userScopes}
-            />
+            {registryOffered ? (
+              <RegistryAccessFields
+                value={registryAccess}
+                onChange={setRegistryAccess}
+                userScopes={userScopes}
+              />
+            ) : null}
           </div>
           <AccessDialogFooter
             scopeCount={access.scopes.length}

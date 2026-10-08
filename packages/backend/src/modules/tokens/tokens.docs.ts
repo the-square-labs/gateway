@@ -41,3 +41,13 @@ export const revokeTokenRoute = appRoute({
   request: { params: IdParamSchema },
   responses: { 204: { description: 'No content' } },
 });
+
+export const tokenRegistryAccessRoute = appRoute({
+  method: 'get',
+  path: '/registry-access',
+  tags: ['Tokens'],
+  summary: 'Whether API tokens can be given internal registry access',
+  description:
+    'Internal registry access works through docker login on the external registry endpoint, so it is offered while external access to the internal registry is on.',
+  responses: okJson(z.object({ externalAccessEnabled: z.boolean() })),
+});

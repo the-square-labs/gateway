@@ -462,6 +462,11 @@ class ApiClient extends withIngressGroupsApi(
     return this.request<void>(`/tokens/${id}`, { method: "DELETE" });
   }
 
+  /** Whether Docker clients can reach the internal registry, so tokens may get registry access. */
+  async getTokenRegistryAccess(): Promise<{ externalAccessEnabled: boolean }> {
+    return this.request<{ externalAccessEnabled: boolean }>("/tokens/registry-access");
+  }
+
   // ── Admin ─────────────────────────────────────────────────────────
 
   async listUsers(): Promise<User[]> {

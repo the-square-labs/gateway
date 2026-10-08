@@ -4,8 +4,15 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { isScopeSubset } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import type { AppEnv } from '@/types.js';
-import { createTokenRoute, listTokensRoute, renameTokenRoute, revokeTokenRoute } from './tokens.docs.js';
+import {
+  createTokenRoute,
+  listTokensRoute,
+  renameTokenRoute,
+  revokeTokenRoute,
+  tokenRegistryAccessRoute,
+} from './tokens.docs.js';
 import { CreateTokenSchema, UpdateTokenSchema } from './tokens.schemas.js';
 import { authorizeRequestedRegistryAccess, resolveRequestedTokenScopes, TokensService } from './tokens.service.js';
 
@@ -33,6 +40,12 @@ tokensRoutes.openapi(listTokensRoute, async (c) => {
   const user = c.get('user')!;
   const tokens = await tokensService.listTokens(user.id);
   return c.json(tokens);
+});
+
+// The token dialog offers internal registry access only while Docker clients can reach the registry.
+tokensRoutes.openapi(tokenRegistryAccessRoute, async (c) => {
+  const state = await container.resolve(DockerInternalRegistryService).getState();
+  return c.json({ externalAccessEnabled: state.externalAccessEnabled });
 });
 
 tokensRoutes.openapi(createTokenRoute, async (c) => {

@@ -1,7 +1,13 @@
 import { EditableStringList } from "@/components/common/EditableStringList";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
-import { SegmentedChoice, type SegmentedChoiceOption } from "@/components/ui/segmented-choice";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { hasScopeBase } from "@/lib/scope-utils";
+import { hasLicenseFeature } from "@/stores/license-paywall";
 import type { TokenRegistryAccess } from "@/types";
 
 type RegistryAction = "pull" | "push";
@@ -60,10 +66,20 @@ export function registryAccessSummary(access: TokenRegistryAccess | undefined): 
   return access.push ? "Registry: pull and push" : "Registry: pull";
 }
 
-const SCOPE_OPTIONS: SegmentedChoiceOption<"all" | "selected">[] = [
-  { value: "all", label: "All repositories" },
-  { value: "selected", label: "Selected" },
-];
+/**
+ * Whether a token can be given internal registry access: `docker login` reaches the registry only
+ * through its external endpoint (Settings, Internal registry, external access, Business+). While
+ * that is off the option is hidden and a token's stored access is left as it is.
+ */
+export function registryAccessOffered(externalAccessEnabled: boolean | null): boolean {
+  return externalAccessEnabled === true && hasLicenseFeature("git-push-to-deploy") === true;
+}
+
+const LEVEL_LABELS: Record<RegistryLevel, string> = {
+  none: "None",
+  pull: "Pull",
+  push: "Pull and push",
+};
 
 /**
  * Internal registry access of an API token (`docker login` with the token). Pull is offered to
@@ -84,10 +100,10 @@ export function RegistryAccessFields({
   const canPush = mayGive(userScopes, "push");
   if (!canPull && level === "none") return null;
 
-  const levelOptions: SegmentedChoiceOption<RegistryLevel>[] = [
-    { value: "none", label: "None" },
-    ...(canPull || level !== "none" ? [{ value: "pull" as const, label: "Pull" }] : []),
-    ...(canPush || level === "push" ? [{ value: "push" as const, label: "Pull and push" }] : []),
+  const levels: RegistryLevel[] = [
+    "none",
+    ...(canPull || level !== "none" ? (["pull"] as const) : []),
+    ...(canPush || level === "push" ? (["push"] as const) : []),
   ];
   const changeLevel = (next: RegistryLevel) => {
     if (next === "none") onChange({});
@@ -97,48 +113,59 @@ export function RegistryAccessFields({
   const actions = (["pull", "push"] as const).filter((action) => value[action] !== undefined);
 
   return (
-    <div className="border border-border">
-      <SettingsControlRow
-        title="Internal registry"
-        description="What docker login with this token may do. Pull needs view access to a Docker workload or image; push needs edit or manage on a workload."
-      >
-        <SegmentedChoice
-          size="sm"
-          aria-label="Internal registry access"
-          value={level}
-          options={levelOptions}
-          onChange={changeLevel}
-        />
-      </SettingsControlRow>
+    <div className="space-y-4">
+      <div className="space-y-1.5">
+        <label className="text-sm font-medium">Internal registry</label>
+        <Select value={level} onValueChange={(next) => changeLevel(next as RegistryLevel)}>
+          <SelectTrigger aria-label="Internal registry access">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {levels.map((item) => (
+              <SelectItem key={item} value={item}>
+                {LEVEL_LABELS[item]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          What docker login with this token may do. Pull needs view access to a Docker workload or
+          image; push needs edit or manage on a workload.
+        </p>
+      </div>
       {actions.map((action) => {
         const repositories = value[action];
         const selected = repositories !== "all";
+        const title = action === "pull" ? "Pull from" : "Push to";
         return (
-          <div key={action} className="border-b border-border last:border-b-0">
-            <SettingsControlRow
-              className="border-b-0"
-              title={action === "pull" ? "Pull from" : "Push to"}
-              description="Selected repositories match by exact name, such as team/app."
+          <div key={action} className="space-y-1.5">
+            <label className="text-sm font-medium">{title}</label>
+            <Select
+              value={selected ? "selected" : "all"}
+              onValueChange={(choice) =>
+                onChange({ ...value, [action]: choice === "all" ? "all" : [] })
+              }
             >
-              <SegmentedChoice
-                size="sm"
+              <SelectTrigger
                 aria-label={action === "pull" ? "Pull repositories" : "Push repositories"}
-                value={selected ? "selected" : "all"}
-                options={SCOPE_OPTIONS}
-                onChange={(choice) =>
-                  onChange({ ...value, [action]: choice === "all" ? "all" : [] })
-                }
-              />
-            </SettingsControlRow>
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All repositories</SelectItem>
+                <SelectItem value="selected">Selected repositories</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Selected repositories match by exact name, such as team/app.
+            </p>
             {selected ? (
-              <div className="px-4 pb-3">
-                <EditableStringList
-                  values={repositories ?? []}
-                  onChange={(names) => onChange({ ...value, [action]: names })}
-                  placeholder="team/app"
-                  itemLabel="Repository"
-                />
-              </div>
+              <EditableStringList
+                values={repositories ?? []}
+                onChange={(names) => onChange({ ...value, [action]: names })}
+                placeholder="team/app"
+                itemLabel="Repository"
+              />
             ) : null}
           </div>
         );
