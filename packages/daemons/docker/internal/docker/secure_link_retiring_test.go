@@ -224,6 +224,55 @@ func TestDaemonStartKeepsTheRetirementDeadline(t *testing.T) {
 	}
 }
 
+// A daemon start drops the records of connectors that no longer exist (stand rc.5, O-6: app-node-1 kept records of
+// connectors removed days before), and keeps the one of a connector still retiring in its slot.
+func TestDaemonStartDropsRecordsOfConnectorsThatAreGone(t *testing.T) {
+	engine := newFakeConnectorEngine(t)
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	anchor := fakeAnchor(replaceTestOldImage, "10.99.0.2")
+	draining := &fakeConnectorContainer{id: "draining-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, networkMode: "container:" + anchor.id, draining: true, active: 2}
+	serving := &fakeConnectorContainer{id: "serving-id", name: secureLinkConnectorSlots[1].name, image: replaceTestNewImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, slot: 1, networkMode: "container:" + anchor.id}
+	engine.containers[draining.name], engine.containers[serving.name], engine.containers[anchor.name] = draining, serving, anchor
+	engine.serveControl(draining)
+	engine.serveControl(serving)
+	retiringFile := filepath.Join(t.TempDir(), secureLinkRetiringFile)
+	recorded := retiringConnectors{file: retiringFile}
+	if _, _, err := recorded.start(draining.id, "", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"6bfa59b3-gone", "3828dfd8-gone"} {
+		if err := recorded.record(gone, time.Date(2026, 10, 4, 23, 53, 7, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manager := &dockerSecureLinkManager{
+		plugin:     &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
+		controlDir: engine.controlDir,
+		socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings:   map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
+	}
+	manager.retiring.file = retiringFile
+	manager.publishViewLocked()
+	if _, err := manager.restore(replaceTestCommand(replaceTestNewImage)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for _, gone := range []string{"6bfa59b3-gone", "3828dfd8-gone"} {
+		if _, ok := manager.retiring.deadline(gone); ok {
+			t.Fatalf("the record of %s, gone, was kept", gone)
+		}
+	}
+	if _, ok := manager.retiring.deadline(draining.id); !ok {
+		t.Fatal("the record of the connector still retiring in its slot was dropped")
+	}
+	reread := retiringConnectors{file: retiringFile}
+	if ids := reread.snapshot(); ids["6bfa59b3-gone"] || ids["3828dfd8-gone"] || !ids[draining.id] {
+		t.Fatalf("recorded on disk: %v", ids)
+	}
+}
+
 // A connector that refuses a sync because it drains (told to by a retirement nobody recorded) is never used again:
 // the links and the egress go to a new connector at once.
 func TestDrainingConnectorIsReplacedAtOnce(t *testing.T) {

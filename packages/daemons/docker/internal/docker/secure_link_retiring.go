@@ -199,6 +199,26 @@ func (r *retiringConnectors) forget(ids ...string) error {
 	return r.saveLocked()
 }
 
+// prune drops the records of connectors no slot holds any more (present names every connector found), except the
+// retirements this process carries out. A record outliving its connector (removed by hand, or by a process that could
+// not record it) was otherwise kept for good: only the removal of a connector a slot holds forgets it (stand rc.5, O-6).
+func (r *retiringConnectors) prune(present map[string]bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.loadLocked()
+	changed := false
+	for id := range r.until {
+		if !present[id] && r.running[id] == nil {
+			delete(r.until, id)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return r.saveLocked()
+}
+
 // snapshot returns the connectors being retired. Taken before the slots are inspected, it names every retiring
 // connector an inspect can still find: a retirement forgets its connector only after removing it, and one that ended
 // in between would otherwise make the removed connector look like one to serve through.

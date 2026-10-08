@@ -781,6 +781,17 @@ func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image strin
 	if m.connectorID != "" {
 		return m.slot, found[m.slot], nil
 	}
+	// Every slot was inspected (a daemon start, or the serving connector given up): records of connectors that no
+	// longer exist go.
+	present := map[string]bool{}
+	for _, inspect := range found {
+		if inspect != nil {
+			present[inspect.ID] = true
+		}
+	}
+	if err := m.retiring.prune(present); err != nil && m.plugin.logger != nil {
+		m.plugin.logger.Warn("could not drop the records of secure-link connectors that no longer exist", "error", err)
+	}
 	controlDirectory := m.controlDirectory()
 	retiring := [len(secureLinkConnectorSlots)]bool{}
 	for slot, inspect := range found {
