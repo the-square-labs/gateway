@@ -610,7 +610,7 @@ test('the secured nginx OpenRC service gives the pid directory to the user nginx
       await writeFile(service, content, { mode: 0o755 });
       const result = runShell(
         [
-          source.split('\n').filter((line) => /^NGINX_OPENRC_(STOCK|EARLIER)_LINE=/.test(line)).join('\n'),
+          source.split('\n').filter((line) => /^NGINX_OPENRC_(STOCK|EARLIER|PID_FILE)_LINE=/.test(line)).join('\n'),
           'has_openrc() { return 0; }',
           'die() { echo "$*" >&2; exit 1; }',
           'log() { :; }',
@@ -618,6 +618,7 @@ test('the secured nginx OpenRC service gives the pid directory to the user nginx
           // The service directories are root-owned and not writable by others on a host; the test files are not.
           'stat() { case "$*" in "-c %u"*) echo 0 ;; *) echo 755 ;; esac; }',
           `RUN_USER=${runUser}`,
+          shellFunction(source, 'nginx_openrc_pid_file_line_missing'),
           body,
           'ensure_nginx_openrc_pid_directory',
         ].join('\n')
@@ -625,10 +626,11 @@ test('the secured nginx OpenRC service gives the pid directory to the user nginx
       assert.equal(result.status, 0, result.output);
       return readFileSync(service, 'utf8');
     };
-    // The owner the start and reload steps hand /run/nginx to, with and without command_user.
+    // What the start and reload steps hand to the user nginx runs as, with and without command_user: /run/nginx, then
+    // the pid file, before the service's own nginx -t (run as root) can create it.
     const owners = (content, commandUser) => {
       const lines = content.split('\n').filter((line) => line.includes('checkpath'));
-      assert.equal(lines.length, 2, content);
+      assert.equal(lines.length, 4, content);
       return lines.map((line) => {
         const result = runShell(
           [
@@ -641,18 +643,69 @@ test('the secured nginx OpenRC service gives the pid directory to the user nginx
         return result.output.trim();
       });
     };
+    const pair = (directory, owner) => [directory, `--file --mode 0644 --owner ${owner} /run/nginx/nginx.pid`];
     for (const [content, runUser] of [
       [stock, 'root'],
       [earlier, 'root'],
       [earlier, 'nginx'],
     ]) {
       const secured = await migrate(content, runUser);
-      assert.deepEqual(owners(secured, ''), Array(2).fill('--directory --mode 0755 --owner root:root /run/nginx'));
-      assert.deepEqual(owners(secured, 'nginx:nginx'), Array(2).fill('--directory --mode 0755 --owner nginx:nginx /run/nginx'));
+      assert.deepEqual(owners(secured, ''), [
+        ...pair('--directory --mode 0755 --owner root:root /run/nginx', 'root:root'),
+        ...pair('--directory --mode 0755 --owner root:root /run/nginx', 'root:root'),
+      ]);
+      assert.deepEqual(owners(secured, 'nginx:nginx'), [
+        ...pair('--directory --mode 0755 --owner nginx:nginx /run/nginx', 'nginx:nginx'),
+        ...pair('--directory --mode 0755 --owner nginx:nginx /run/nginx', 'nginx:nginx'),
+      ]);
       assert.equal(await migrate(secured, runUser), secured, 'migrating twice changes nothing');
     }
-    // A non-root daemon next to the stock service leaves the operator's pid directory alone.
-    assert.equal(await migrate(stock, 'nginx'), stock);
+    // A non-root daemon next to the stock service leaves the operator's pid directory alone and adds the pid file.
+    const nonRoot = await migrate(stock, 'nginx');
+    assert.deepEqual(owners(nonRoot, 'nginx:nginx'), [
+      ...pair('--directory --owner nginx:nginx /run/nginx', 'nginx:nginx'),
+      ...pair('--directory --owner nginx:nginx /run/nginx', 'nginx:nginx'),
+    ]);
+    assert.equal(await migrate(nonRoot, 'nginx'), nonRoot, 'migrating twice changes nothing');
+    // The line is the one the nginx daemon's health names when it is missing (and checks for).
+    const line = /^NGINX_OPENRC_PID_FILE_LINE='(.*)'$/m.exec(source)[1];
+    const daemon = readFileSync(path.resolve('packages/daemons/nginx/internal/nginx/pid_repair.go'), 'utf8');
+    assert.ok(daemon.includes(`/a ${line}' /etc/init.d/nginx`), 'the daemon names the installer\'s line');
+
+    // Alpine's own service: the pid file is the run user's before the service's nginx -t runs as root.
+    const alpine = [
+      '#!/sbin/openrc-run',
+      '',
+      'cfgfile=${cfgfile:-/etc/nginx/nginx.conf}',
+      'pidfile=/run/nginx/nginx.pid',
+      'command=${command:-/usr/sbin/nginx}',
+      'command_args="-c $cfgfile"',
+      '',
+      'start_pre() {',
+      '\tcheckpath --directory --mode 0755 --owner "${command_user:-root:root}" ${pidfile%/*}',
+      '\t$command $command_args -t -q',
+      '}',
+      '',
+      'reload() {',
+      '\tstart_pre && start-stop-daemon --signal HUP --pidfile $pidfile',
+      '}',
+      '',
+    ].join('\n');
+    const fixed = await migrate(alpine, 'nginx');
+    const started = runShell(
+      [
+        'checkpath() { echo "checkpath $*"; }',
+        'command=nginx; command_user=nginx:nginx',
+        'nginx() { echo "nginx $*"; }',
+        fixed.replace(/^#!.*\n/, '').replace(/^command=.*$/m, ''),
+        'start_pre',
+      ].join('\n')
+    );
+    assert.deepEqual(started.output.trim().split('\n'), [
+      'checkpath --directory --mode 0755 --owner nginx:nginx /run/nginx',
+      'checkpath --file --mode 0644 --owner nginx:nginx /run/nginx/nginx.pid',
+      'nginx -c /etc/nginx/nginx.conf -t -q',
+    ]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -883,13 +936,13 @@ test('the nginx service repair of a non-root install is planned before the promp
   assert.doesNotMatch(shellFunction(source, 'nginx_openrc_service_repair_needed'), /rc-service nginx (zap|start|restart)/);
   // The summary announces the plan before the prompt; the repair runs in the configuration step after it.
   const prompt = source.indexOf('prompt_yes_no "Proceed with installation?"');
-  assert.ok(source.indexOf('summary_row "Nginx fix:   will update the nginx PID-directory line and start nginx"') < prompt);
+  assert.ok(source.indexOf('summary_row "Nginx fix:   will update the nginx PID lines and start nginx"') < prompt);
   assert.ok(source.indexOf('\npreflight_run_user_nginx\n') < prompt);
   const configure = shellFunction(source, 'configure_nginx');
   assert.ok(configure.indexOf('ensure_nginx_openrc_pid_directory') < configure.indexOf('start_nginx_after_service_repair'));
   const runStart = source.indexOf('\n# ── Run ─');
   assert.ok(runStart > prompt && source.indexOf('\nconfigure_nginx\n') > runStart, 'configure_nginx runs after the prompt');
-  assert.match(source, /dry_run_preview\(\) \{[\s\S]*Would update the nginx OpenRC service's PID-directory line and start nginx \(dry run\)/);
+  assert.match(source, /dry_run_preview\(\) \{[\s\S]*Would update the nginx OpenRC service's PID lines and start nginx \(dry run\)/);
   assert.deepEqual(definedBeforeUseErrors(source), []);
 
   const dir = await mkdtemp(path.join(tmpdir(), 'gateway-nginx-migrate-'));
@@ -905,12 +958,18 @@ test('the nginx service repair of a non-root install is planned before the promp
       '}',
       '',
     ].join('\n');
-    const text = ['ensure_nginx_openrc_pid_directory', 'nginx_openrc_service_repair_needed', 'start_nginx_after_service_repair', 'preflight_run_user_nginx']
+    const text = [
+      'nginx_openrc_pid_file_line_missing',
+      'ensure_nginx_openrc_pid_directory',
+      'nginx_openrc_service_repair_needed',
+      'start_nginx_after_service_repair',
+      'preflight_run_user_nginx',
+    ]
       .map((name) => shellFunction(source, name).replaceAll('/etc/init.d', dir).replaceAll('/etc/conf.d/nginx', confd))
       .join('\n');
     const constants = source
       .split('\n')
-      .filter((line) => /^NGINX_OPENRC_(STOCK|EARLIER)_LINE=|^NGINX_SERVICE_REPAIR_PLANNED=/.test(line))
+      .filter((line) => /^NGINX_OPENRC_(STOCK|EARLIER|PID_FILE)_LINE=|^NGINX_SERVICE_REPAIR_PLANNED=/.test(line))
       .join('\n');
     const stubs = (dryRun) => [
       'RUN_USER=nginx; RUN_GROUP=nginx; NGINX_MODE=integrate; LOG_FILE=/dev/null',
@@ -929,8 +988,8 @@ test('the nginx service repair of a non-root install is planned before the promp
       `nginx_master_pid() { [[ -e '${dir}/up' ]] && echo $$; }`,
       text,
     ];
-    const run = async ({ confdText, dryRun = 0, afterPrompt = false }) => {
-      await writeFile(service, earlier, { mode: 0o755 });
+    const run = async ({ confdText, dryRun = 0, afterPrompt = false, script = earlier }) => {
+      await writeFile(service, script, { mode: 0o755 });
       await writeFile(confd, confdText);
       await writeFile(calls, '');
       runShell(`rm -f '${dir}/up'`);
@@ -950,7 +1009,21 @@ test('the nginx service repair of a non-root install is planned before the promp
     const done = await run({ confdText: prepared, afterPrompt: true });
     assert.equal(done.status, 0, done.output);
     assert.match(done.script, /--owner "\$\{command_user:-root:root\}" \$\{pidfile%\/\*\}/);
+    assert.match(done.script, /\n\tcheckpath --file --mode 0644 --owner "\$\{command_user:-root:root\}" \$\{pidfile\}\n/);
     assert.match(done.calls, /nginx zap\nnginx start\n/);
+    // A service that already gives the directory to the run user but leaves the pid file of its root nginx -t to root:
+    // the same plan (Alpine's own service; nginx failed with "open() /run/nginx/nginx.pid failed (13)").
+    const secured = earlier.replace('--owner root:root', '--owner "${command_user:-root:root}"');
+    const pidFilePlanned = await run({ confdText: prepared, script: secured });
+    assert.match(pidFilePlanned.output, /PLANNED=1/);
+    assert.equal(pidFilePlanned.script, secured, 'the service file is untouched before the prompt');
+    const pidFileDone = await run({ confdText: prepared, script: secured, afterPrompt: true });
+    assert.equal(pidFileDone.status, 0, pidFileDone.output);
+    assert.equal(
+      pidFileDone.script,
+      secured.replace('${pidfile%/*}\n', '${pidfile%/*}\n\tcheckpath --file --mode 0644 --owner "${command_user:-root:root}" ${pidfile}\n')
+    );
+    assert.match(pidFileDone.calls, /nginx zap\nnginx start\n/);
     // A dry run only prints the plan; the repair functions change nothing.
     const dry = await run({ confdText: prepared, dryRun: 1, afterPrompt: true });
     assert.equal(dry.script, earlier);

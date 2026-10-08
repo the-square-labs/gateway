@@ -504,8 +504,19 @@ restore_nginx_config() {
 # unless /etc/conf.d/nginx runs nginx as another user (command_user), which then has to own it to write its pid. An
 # earlier installer wrote root:root there for good; that is replaced even for a non-root daemon, because it takes the
 # directory from the user nginx runs as.
+# The service also tests the configuration as root before every start, and nginx -t creates a missing pid file (after
+# every stop and every reboot): it would belong to root, and an nginx run as command_user could not start. So the
+# service gives the pid file to that user too, before the test. The nginx daemon names the same line when it is missing.
 NGINX_OPENRC_STOCK_LINE='checkpath --directory --owner nginx:nginx '
 NGINX_OPENRC_EARLIER_LINE='checkpath --directory --mode 0755 --owner root:root '
+NGINX_OPENRC_PID_FILE_LINE='checkpath --file --mode 0644 --owner "${command_user:-root:root}" ${pidfile}'
+
+# The service hands nginx its pid directory but not its pid file.
+nginx_openrc_pid_file_line_missing() {
+    grep -Eq '^[[:space:]]*checkpath --directory .*[$][{]pidfile%/[*][}]' "$1" && \
+        ! grep -Eq '^[[:space:]]*checkpath[[:space:]](.*[[:space:]])?(-f|--file)[[:space:]].*[$][{]?pidfile[}]?[[:space:]]*$' "$1"
+}
+
 ensure_nginx_openrc_pid_directory() {
     has_openrc || return 0
     [[ "$DRY_RUN" -eq 0 ]] || return 0
@@ -513,7 +524,8 @@ ensure_nginx_openrc_pid_directory() {
     local stock="$NGINX_OPENRC_STOCK_LINE"
     local earlier="$NGINX_OPENRC_EARLIER_LINE"
     local secured='checkpath --directory --mode 0755 --owner "${command_user:-root:root}" '
-    local replaced
+    local replaced=""
+    local add_pid_file=0
     local mode
     local parent
     local candidate
@@ -523,9 +535,9 @@ ensure_nginx_openrc_pid_directory() {
         replaced="$stock"
     elif grep -Fq "${earlier}"'${pidfile%/*}' "$service"; then
         replaced="$earlier"
-    else
-        return 0
     fi
+    ! nginx_openrc_pid_file_line_missing "$service" || add_pid_file=1
+    [[ -n "$replaced" || "$add_pid_file" -eq 1 ]] || return 0
     [[ "$(head -n 1 "$service")" == '#!/sbin/openrc-run' ]] || return 0
     for parent in /etc /etc/init.d; do
         [[ -d "$parent" && ! -L "$parent" && "$(stat -c %u "$parent")" == 0 ]] || \
@@ -537,25 +549,38 @@ ensure_nginx_openrc_pid_directory() {
     mode=$(stat -c %a "$service")
     (( (8#$mode & 8#022) == 0 )) || die "Untrusted nginx OpenRC service permissions"
     candidate=$(mktemp /etc/init.d/.nginx-gateway-XXXXXX)
-    sed "s/${replaced}/${secured}/" "$service" > "$candidate"
-    if ! grep -Fq "${secured}"'${pidfile%/*}' "$candidate" || ! sh -n "$candidate"; then
+    cat "$service" > "$candidate"
+    if [[ -n "$replaced" ]]; then
+        sed "s/${replaced}/${secured}/" "$service" > "$candidate"
+    fi
+    if [[ "$add_pid_file" -eq 1 ]]; then
+        # After each line that hands over the pid directory, with its indentation.
+        awk -v line="$NGINX_OPENRC_PID_FILE_LINE" '{ print }
+            /checkpath --directory / && index($0, "${pidfile%/*}") { match($0, /^[ \t]*/); print substr($0, 1, RLENGTH) line }' \
+            "$candidate" > "${candidate}.pid" && cat "${candidate}.pid" > "$candidate"
+        rm -f "${candidate}.pid"
+    fi
+    if { [[ -n "$replaced" ]] && ! grep -Fq "${secured}"'${pidfile%/*}' "$candidate"; } || \
+        nginx_openrc_pid_file_line_missing "$candidate" || ! sh -n "$candidate"; then
         rm -f "$candidate"
         die "Invalid nginx OpenRC service after PID-directory migration"
     fi
     chmod "$mode" "$candidate"
     backup_if_exists "$service"
     mv -f "$candidate" "$service"
-    log "Secured nginx OpenRC PID-directory ownership for start and reload"
+    log "Secured nginx OpenRC PID-directory and PID-file ownership for start and reload"
 }
 
 # An operator who prepared nginx for the daemon's user (command_user in /etc/conf.d/nginx) on a host whose nginx service
-# still has the line an earlier installer wrote has an nginx that cannot start: the service hands /run/nginx to root on
-# every start. The preflight only detects this (it changes nothing); the repair is part of the plan the user confirms.
+# still has the line an earlier installer wrote, or no line for the pid file, has an nginx that cannot start: the service
+# hands /run/nginx, or the pid file its own nginx -t creates, to root on every start. The preflight only detects this (it
+# changes nothing); the repair is part of the plan the user confirms.
 NGINX_SERVICE_REPAIR_PLANNED=0
 nginx_openrc_service_repair_needed() {
     has_openrc || return 1
     [[ "$RUN_USER" != "root" && -f /etc/init.d/nginx && ! -L /etc/init.d/nginx ]] || return 1
-    grep -Fq "${NGINX_OPENRC_EARLIER_LINE}"'${pidfile%/*}' /etc/init.d/nginx || return 1
+    grep -Fq "${NGINX_OPENRC_EARLIER_LINE}"'${pidfile%/*}' /etc/init.d/nginx || \
+        nginx_openrc_pid_file_line_missing /etc/init.d/nginx || return 1
     grep -Eq "^[[:space:]]*command_user=[\"']?${RUN_USER}([:\"'[:space:]]|\$)" /etc/conf.d/nginx 2>/dev/null || return 1
     ! rc-service nginx status >/dev/null 2>&1
 }
@@ -566,7 +591,7 @@ start_nginx_after_service_repair() {
     ! rc-service nginx status >/dev/null 2>&1 || return 0
     rc-service nginx zap >> "$LOG_FILE" 2>&1 || true
     rc-service nginx start >> "$LOG_FILE" 2>&1 || die "Could not start nginx as ${RUN_USER} after updating its OpenRC service; see ${LOG_FILE}."
-    log "Started nginx, which could not start with the earlier PID-directory ownership"
+    log "Started nginx, which could not start with the earlier PID ownership"
 }
 
 # The daemon writes /etc/nginx and reloads nginx itself, so a non-root daemon needs an nginx master that runs as the
@@ -1588,7 +1613,7 @@ summary_row "Run as:      ${RUN_USER}:${RUN_GROUP}"
 summary_row "Skip nginx:  $([ "$SKIP_NGINX" -eq 1 ] && echo "yes" || echo "no")"
 summary_row "Nginx min:   ${NGINX_MIN_VERSION}"
 summary_row "Nginx mode:  ${NGINX_MODE}"
-[[ "$NGINX_SERVICE_REPAIR_PLANNED" -eq 0 ]] || summary_row "Nginx fix:   will update the nginx PID-directory line and start nginx"
+[[ "$NGINX_SERVICE_REPAIR_PLANNED" -eq 0 ]] || summary_row "Nginx fix:   will update the nginx PID lines and start nginx"
 summary_row "Updates:     ${ARTIFACT_BASE_URL}"
 summary_end
 
@@ -1725,7 +1750,7 @@ preview_nginx_install() {
 dry_run_preview() {
     preview_run_user_switch
     preview_nginx_install
-    [[ "$NGINX_SERVICE_REPAIR_PLANNED" -eq 0 ]] || log "Would update the nginx OpenRC service's PID-directory line and start nginx (dry run)"
+    [[ "$NGINX_SERVICE_REPAIR_PLANNED" -eq 0 ]] || log "Would update the nginx OpenRC service's PID lines and start nginx (dry run)"
     log "Creating required directories..."
     ok "Directories created (dry run)"
     log "Configuring nginx (${NGINX_MODE} mode)..."
