@@ -62,7 +62,15 @@ export const MigrateReason = { drain: 1, goaway: 2 } as const;
 export const INITIAL_WINDOW = 1024 * 1024;
 export const FALLBACK_WINDOW = 256 * 1024;
 export const MIN_WINDOW = 64 * 1024;
+/** The largest window towards a peer that does not announce the window extension (every release before it). */
 export const MAX_WINDOW = 4 * 1024 * 1024;
+/**
+ * The largest window towards a peer that announces the window extension: a stream through a far relay needs a
+ * window of its whole round trip (both relay legs).
+ */
+export const MAX_EXTENDED_WINDOW = 32 * 1024 * 1024;
+/** The bit a session sets in every window it announces (HELLO, HELLO_ACK, ACK): it takes MAX_EXTENDED_WINDOW. */
+export const WINDOW_EXTENSION = 1;
 export const DEFAULT_PROCESS_BUDGET = 256 * 1024 * 1024;
 export const DELAYED_ACK_MS = 20;
 
@@ -643,7 +651,7 @@ export type ResumeResult = 'resumed' | 'failed' | 'rejected' | 'closed';
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 /** Received but undelivered bytes beyond this mean the peer ignored its window (as relayresume). */
-const MAX_RECEIVE_QUEUE = 2 * (MAX_WINDOW + MAX_FRAME_BYTES);
+const MAX_RECEIVE_QUEUE = 2 * (MAX_EXTENDED_WINDOW + MAX_FRAME_BYTES);
 
 function safeNumber(value: bigint): number {
   if (value > MAX_SAFE) throw new ResumeSessionError('offset out of range', 'protocol', RstCode.protocol);
@@ -688,6 +696,23 @@ export class ResumeSession {
   private sendStopped = false;
   private windowBlockedSince = -1;
   private ackedSinceGrowth = 0;
+  /**
+   * The peer announced the window extension (an odd window) since the stream last resumed: the window may exceed
+   * MAX_WINDOW. A resume forgets it (another process, perhaps an older release, may answer there).
+   */
+  private peerExtended = false;
+  /**
+   * The window's round trip (send to the peer's delivery ack): one timed offset at a time; minRtt is the shortest on
+   * the current path, bdp the largest bandwidth-delay product measured there. A window above MAX_WINDOW grows only
+   * while it is below twice that: on a short path, or while the bytes only wait in a queue, more window would not move
+   * them faster.
+   */
+  private rttOffset = -1;
+  private rttAt = 0;
+  private rttDelivered = 0;
+  private rttFloor = 0;
+  private minRtt = -1;
+  private bdp = 0;
 
   // Receive side.
   /** In-order bytes received (and the peer's FIN unit), queued or delivered: RESUME and RESUME_ACK carry it. */
@@ -721,7 +746,7 @@ export class ResumeSession {
     this.stats = options.stats;
     this.halfCloseTimeoutMs = options.halfCloseTimeoutMs ?? 0;
     this.targetNonce = options.targetNonce ?? ZERO_ID;
-    const initial = Math.max(MIN_WINDOW, Math.min(MAX_WINDOW, options.initialWindow ?? INITIAL_WINDOW));
+    const initial = Math.max(MIN_WINDOW, Math.min(MAX_EXTENDED_WINDOW, options.initialWindow ?? INITIAL_WINDOW));
     this.window = MIN_WINDOW;
     for (const target of [initial, Math.min(initial, FALLBACK_WINDOW)]) {
       if (target > MIN_WINDOW && this.budget.tryTake(target - MIN_WINDOW)) {
@@ -752,6 +777,13 @@ export class ResumeSession {
   get sendWindow(): number {
     return this.window;
   }
+  /** The window the session sends with: within MAX_WINDOW unless the peer announced the window extension. */
+  get effectiveWindow(): number {
+    return this.peerExtended ? this.window : Math.min(this.window, MAX_WINDOW);
+  }
+  get peerAnnouncedExtension(): boolean {
+    return this.peerExtended;
+  }
   get receivedOffset(): number {
     return this.rcvNxt;
   }
@@ -773,7 +805,7 @@ export class ResumeSession {
     if (this.role !== 'source' || this.current) throw new Error('startSource on a started session');
     this.current = this.newPath(handle, 0, 0);
     const context = this.macContext(handle.relayId);
-    this.helloMac = computeMac(this.key, helloTranscript(context, this.window));
+    this.helloMac = computeMac(this.key, helloTranscript(context, this.announcedWindow()));
     this.helloTimer = this.timers.setTimeout(() => {
       this.helloTimer = null;
       // An old target forwards the HELLO to its backend and never answers it.
@@ -785,7 +817,7 @@ export class ResumeSession {
         type: RecordType.hello,
         keyId: this.keyId,
         sessionId: this.sessionId,
-        wnd: BigInt(this.window),
+        wnd: this.announcedWindow(),
         mac: this.helloMac,
       })
     );
@@ -798,10 +830,10 @@ export class ResumeSession {
     if (this.role !== 'target' || this.current) throw new Error('acceptHello on a started session');
     this.current = this.newPath(handle, 0, 0);
     this.state = 'open';
-    this.peerWindow = clampWindow(hello.wnd);
+    this.notePeerWindow(hello.wnd);
     this.helloMac = hello.mac;
     const context = this.macContext(handle.relayId);
-    const wnd = BigInt(this.window);
+    const wnd = this.announcedWindow();
     const mac = computeMac(this.key, helloAckTranscript(context, hello.mac, this.targetNonce, wnd));
     this.rawSend(
       this.current,
@@ -837,9 +869,10 @@ export class ResumeSession {
     const old = this.current;
     if (old && old !== null) this.retirePath(old, true);
     this.epoch = safeNumber(resume.epoch);
-    this.applyAck(sendFrom);
     const path = this.newPath(handle, sendFrom, this.rcvNxt);
     this.current = path;
+    this.newPathTiming();
+    this.applyAck(sendFrom, false);
     this.cancelSuspendTimer();
     this.state = this.closeSent ? 'closing' : 'open';
     const context = this.macContext(handle.relayId);
@@ -967,7 +1000,8 @@ export class ResumeSession {
     path.rcvOffset = safeNumber(ack.sendFrom);
     path.sndOffset = targetRcvNxt;
     this.current = path;
-    this.applyAck(targetRcvNxt);
+    this.newPathTiming();
+    this.applyAck(targetRcvNxt, false);
     if (this.state === 'suspended') this.state = this.closeSent ? 'closing' : 'open';
     this.sendStopped = false;
     this.retransmit(path);
@@ -1118,7 +1152,7 @@ export class ResumeSession {
     if (this.helloTimer) this.timers.clearTimeout(this.helloTimer);
     this.helloTimer = null;
     this.targetNonce = Buffer.from(first.nonce);
-    this.peerWindow = clampWindow(first.wnd);
+    this.notePeerWindow(first.wnd);
     this.state = 'open';
     this.hooks.opened();
     this.flush();
@@ -1168,7 +1202,7 @@ export class ResumeSession {
           break;
         }
         case RecordType.ack:
-          this.peerWindow = clampWindow(record.wnd);
+          this.notePeerWindow(record.wnd);
           this.onAck(record.ack);
           break;
         case RecordType.fin:
@@ -1255,10 +1289,17 @@ export class ResumeSession {
   private onAck(value: bigint): void {
     const ack = safeNumber(value);
     if (ack > this.sndNxt) throw new ResumeSessionError('ack beyond snd_nxt', 'protocol', RstCode.protocol);
-    this.applyAck(ack);
+    if (this.rttOffset >= 0 && ack >= this.rttOffset) {
+      this.sampleRtt(this.timers.now() - this.rttAt, ack - Math.min(this.rttDelivered, ack));
+      this.rttOffset = -1;
+    }
+    this.applyAck(ack, true);
+    // The window moved: what it held back leaves now.
+    this.flush();
   }
 
-  private applyAck(ack: number): void {
+  /** peerAck: the peer's ack (bytes handed to its socket), not what a resume says it received. */
+  private applyAck(ack: number, peerAck: boolean): void {
     if (ack <= this.sndUna) return;
     const freed = ack - this.sndUna;
     const wasBlocked = !this.windowOpen();
@@ -1269,11 +1310,17 @@ export class ResumeSession {
       this.maybeClose();
     }
     if (wasBlocked) {
-      this.ackedSinceGrowth += freed;
-      // Window-blocked while acks arrive: the window is below the path's bandwidth-delay product.
-      if (this.ackedSinceGrowth >= this.window && this.window < MAX_WINDOW) {
-        this.growWindow(Math.min(this.window, MAX_WINDOW - this.window));
-        this.ackedSinceGrowth = 0;
+      if (peerAck) {
+        this.ackedSinceGrowth += freed;
+        // Window-blocked while a whole window came back: up to MAX_WINDOW as before the window extension, beyond it
+        // while the window is below twice the measured bandwidth-delay product (and the peer takes it).
+        const limit = this.peerExtended ? MAX_EXTENDED_WINDOW : MAX_WINDOW;
+        if (this.ackedSinceGrowth >= this.window && this.window < limit) {
+          if (this.window < MAX_WINDOW || this.window < 2 * this.bdp) {
+            this.growWindow(Math.min(this.window, limit - this.window));
+          }
+          this.ackedSinceGrowth = 0;
+        }
       }
       if (this.windowOpen()) {
         if (this.windowBlockedSince >= 0 && this.stats) {
@@ -1285,11 +1332,17 @@ export class ResumeSession {
     }
   }
 
-  /** Drops retained bytes below `ack`. */
+  /**
+   * Drops retained bytes below `ack` that the current path sent. The peer may acknowledge bytes this path did not
+   * carry yet (a planned move keeps receiving on the path it leaves, and the window holds back the retransmission on
+   * the new one); a path's offsets are implicit, so it still carries them, and they stay until it did.
+   */
   private release(ack: number): void {
-    if (ack <= this.sndUna) return;
-    this.sndUna = ack;
-    const dataEnd = this.finOffset >= 0 ? Math.min(ack, this.finOffset) : ack;
+    if (ack > this.sndUna) this.sndUna = ack;
+    let free = this.sndUna;
+    const path = this.current;
+    if (path?.alive && path.sndOffset >= 0 && path.sndOffset < free) free = path.sndOffset;
+    const dataEnd = this.finOffset >= 0 ? Math.min(free, this.finOffset) : free;
     while (this.retained.length) {
       const head = this.retained[0]!;
       const end = this.retainedOffset + head.length;
@@ -1307,7 +1360,33 @@ export class ResumeSession {
   }
 
   private windowOpen(): boolean {
-    return this.sndNxt - this.sndUna < this.window;
+    return this.sndNxt - this.sndUna < this.effectiveWindow;
+  }
+
+  /** The window as this side announces it: with the extension bit. */
+  private announcedWindow(): bigint {
+    return BigInt(this.window) | BigInt(WINDOW_EXTENSION);
+  }
+
+  private notePeerWindow(wnd: bigint): void {
+    this.peerExtended = (wnd & BigInt(WINDOW_EXTENSION)) !== 0n;
+    this.peerWindow = clampWindow(wnd);
+  }
+
+  /** A timed round trip and what the peer delivered meanwhile. */
+  private sampleRtt(rtt: number, delivered: number): void {
+    const value = Math.max(rtt, 0.001);
+    if (this.minRtt < 0 || value < this.minRtt) this.minRtt = value;
+    this.bdp = Math.max(this.bdp, Math.floor((delivered * this.minRtt) / value));
+  }
+
+  /** A resume: the peer's extension and the last path's round trip are unknown again. */
+  private newPathTiming(): void {
+    this.peerExtended = false;
+    this.rttOffset = -1;
+    this.minRtt = -1;
+    this.bdp = 0;
+    this.rttFloor = this.sndNxt;
   }
 
   private growWindow(bytes: number): void {
@@ -1322,6 +1401,9 @@ export class ResumeSession {
     if (!path?.alive || path.blocked || this.sendStopped) return;
     if (this.state !== 'open' && this.state !== 'closing') return;
     const maxPayload = Math.min(path.handle.maxFrameBytes, MAX_FRAME_BYTES) - MAX_RECORD_HEADER;
+    // At most the effective window beyond what the peer acknowledged: a retransmission after a resume leaves as
+    // acks come (the peer there may be an older release, which resets a stream that queues too much).
+    const limit = this.sndUna + this.effectiveWindow;
     while (path.sndOffset < this.sndNxt && !path.blocked) {
       if (this.finOffset >= 0 && path.sndOffset === this.finOffset) {
         this.lastAckSent = this.delivered;
@@ -1330,13 +1412,20 @@ export class ResumeSession {
         this.rawSend(path, encodeRecord({ type: RecordType.fin, ack: BigInt(this.delivered) }));
         continue;
       }
+      if (path.sndOffset >= limit) break;
       const chunk = this.sliceRetained(path.sndOffset, maxPayload);
       if (!chunk.length) break;
+      if (this.rttOffset < 0 && path.sndOffset >= this.rttFloor) {
+        this.rttOffset = path.sndOffset + chunk.length;
+        this.rttAt = this.timers.now();
+        this.rttDelivered = this.sndUna;
+      }
       path.sndOffset += chunk.length;
       this.lastAckSent = this.delivered;
       this.cancelAckTimer();
       this.rawSend(path, Buffer.concat([encodeDataHeader(this.delivered), chunk]));
     }
+    if (this.retainedOffset < this.sndUna) this.release(this.sndUna);
   }
 
   /** Resends everything the peer has not received on a fresh path. */
@@ -1385,7 +1474,10 @@ export class ResumeSession {
   private sendAck(path: PathState): void {
     this.cancelAckTimer();
     this.lastAckSent = this.delivered;
-    this.rawSend(path, encodeRecord({ type: RecordType.ack, ack: BigInt(this.delivered), wnd: BigInt(this.window) }));
+    this.rawSend(
+      path,
+      encodeRecord({ type: RecordType.ack, ack: BigInt(this.delivered), wnd: this.announcedWindow() })
+    );
   }
 
   private cancelAckTimer(): void {
@@ -1548,9 +1640,10 @@ export class ResumeSession {
   }
 }
 
-function clampWindow(value: bigint): number {
+function clampWindow(announced: bigint): number {
+  const value = announced & ~BigInt(WINDOW_EXTENSION);
   if (value < BigInt(MIN_WINDOW)) return MIN_WINDOW;
-  if (value > BigInt(MAX_WINDOW)) return MAX_WINDOW;
+  if (value > BigInt(MAX_EXTENDED_WINDOW)) return MAX_EXTENDED_WINDOW;
   return Number(value);
 }
 

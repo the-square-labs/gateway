@@ -16,6 +16,7 @@ import {
   helloTranscript,
   INITIAL_WINDOW,
   LEGACY_LATCH_MS,
+  MAX_EXTENDED_WINDOW,
   MAX_FRAME_BYTES,
   MAX_WINDOW,
   MIN_WINDOW,
@@ -110,6 +111,8 @@ describe('RSv1 vectors (proto/testdata/relay-resume-v1.json)', () => {
     expect(c.fallback_window).toBe(FALLBACK_WINDOW);
     expect(c.min_window).toBe(MIN_WINDOW);
     expect(c.max_window).toBe(MAX_WINDOW);
+    expect(c.max_extended_window).toBe(MAX_EXTENDED_WINDOW);
+    expect(c.window_extension).toBe(1);
     expect(c.max_frame_bytes).toBe(MAX_FRAME_BYTES);
     expect(c.process_budget).toBe(DEFAULT_PROCESS_BUDGET);
     expect(c.delayed_ack_ms).toBe(DELAYED_ACK_MS);
@@ -1135,5 +1138,127 @@ describe('ResumableRelayDuplex', () => {
     // Gateway turned the route back on with a new key version: the latch ends at once.
     expect(registry.isLegacy('route-old', 'v2')).toBe(false);
     expect(registry.isLegacy('route-old', 'v1')).toBe(false);
+  });
+});
+
+describe('RSv1 window extension', () => {
+  /**
+   * A bulk upload over one path with a fixed round trip. legacyTarget: the target announces even windows, as every
+   * release before the extension did.
+   */
+  function bulkUpload(legacyTarget: boolean, rttMs: number, bytes: number) {
+    const clock = new VirtualClock();
+    const key = Buffer.alloc(32, 7);
+    const routeId = 'route-wnd';
+    const nonce = Buffer.alloc(16, 9);
+    const events: Array<{ at: number; run: () => void }> = [];
+    const later = (run: () => void) => events.push({ at: clock.now() + rttMs / 2, run });
+    let target: ResumeSession | null = null;
+    let peakSourceWindow = 0;
+    let peakQueued = 0;
+    let delivered = 0;
+    let blocked = false;
+    const handle = (side: 'source' | 'target'): ResumePathHandle => ({
+      relayId: 'relay-0',
+      maxFrameBytes: MAX_FRAME_BYTES,
+      send: (frame) => {
+        const copy = Buffer.from(frame);
+        later(() => (side === 'source' ? deliverToTarget(copy) : source.pathFrame(sourceHandle, copy)));
+        return true;
+      },
+      close: () => undefined,
+      cancel: () => undefined,
+    });
+    const sourceHandle = handle('source');
+    const targetHandle = handle('target');
+    const noHooks = {
+      peerFinished: () => undefined,
+      finAcknowledged: () => undefined,
+      opened: () => undefined,
+      closed: () => undefined,
+    };
+    const deliverToTarget = (frame: Buffer) => {
+      if (!target) {
+        const [hello, ...rest] = parseFrame(frame);
+        target = new ResumeSession({
+          role: 'target',
+          routeId,
+          sessionId: Buffer.from(hello!.sessionId),
+          keyId: 'v1',
+          key,
+          targetNonce: nonce,
+          timers: clock,
+          budget: new WindowBudget(),
+          hooks: {
+            ...noHooks,
+            deliver: (data: Buffer) => {
+              delivered += data.length;
+              return true;
+            },
+            writable: () => undefined,
+          },
+        });
+        if (legacyTarget) {
+          // Every release before the extension announces its window as is.
+          const legacy = target as unknown as { announcedWindow: () => bigint; window: number };
+          legacy.announcedWindow = () => BigInt(legacy.window);
+        }
+        target.acceptHello(targetHandle, hello!, rest);
+        return;
+      }
+      target.pathFrame(targetHandle, frame);
+    };
+    const source = new ResumeSession({
+      role: 'source',
+      routeId,
+      sessionId: Buffer.alloc(16, 3),
+      keyId: 'v1',
+      key,
+      timers: clock,
+      budget: new WindowBudget(),
+      hooks: {
+        ...noHooks,
+        deliver: () => true,
+        writable: () => {
+          blocked = false;
+        },
+      },
+    });
+    source.startSource(sourceHandle);
+    const chunk = Buffer.alloc(32 * 1024, 1);
+    let written = 0;
+    for (let step = 0; step < 2_000_000 && delivered < bytes; step++) {
+      while (!blocked && written < bytes) {
+        written += chunk.length;
+        if (!source.write(chunk)) blocked = true;
+      }
+      peakSourceWindow = Math.max(peakSourceWindow, source.effectiveWindow);
+      peakQueued = Math.max(peakQueued, source.unackedBytes);
+      events.sort((a, b) => a.at - b.at);
+      const next = events.shift();
+      const timerAt = clock.nextAt();
+      if (next && (timerAt === null || next.at <= timerAt)) {
+        clock.advanceTo(next.at);
+        next.run();
+      } else if (!clock.fireNext()) break;
+    }
+    return { delivered, peakSourceWindow, peakQueued, seconds: (clock.now() - 1_000_000) / 1000, source };
+  }
+
+  it('grows past MAX_WINDOW between two sessions that announce it', () => {
+    const run = bulkUpload(false, 300, 256 * 1024 * 1024);
+    expect(run.delivered).toBeGreaterThanOrEqual(256 * 1024 * 1024);
+    expect(run.source.peerAnnouncedExtension).toBe(true);
+    expect(run.peakSourceWindow).toBe(MAX_EXTENDED_WINDOW);
+    // 256 MiB over a 300 ms round trip: well above the 4 MiB window's 14 MB/s.
+    expect(256 / run.seconds).toBeGreaterThan(40);
+  });
+
+  it('keeps a peer before the extension within MAX_WINDOW', () => {
+    const run = bulkUpload(true, 300, 64 * 1024 * 1024);
+    expect(run.delivered).toBeGreaterThanOrEqual(64 * 1024 * 1024);
+    expect(run.source.peerAnnouncedExtension).toBe(false);
+    expect(run.peakSourceWindow).toBeLessThanOrEqual(MAX_WINDOW);
+    expect(run.peakQueued).toBeLessThanOrEqual(MAX_WINDOW + 32 * 1024);
   });
 });
