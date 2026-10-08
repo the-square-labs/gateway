@@ -39,6 +39,9 @@ type Manager struct {
 	reloadPending bool
 	pendingSeq    uint64
 	pendingMarker string
+	// pidProblem is what root has to do for nginx -t to run (pid_repair.go).
+	problemMu  sync.Mutex
+	pidProblem string
 }
 
 var effectivePIDDirectivePattern = regexp.MustCompile(`(?m)^\s*pid\s+(?:"([^"]+)"|'([^']+)'|([^;\s]+))\s*;`)
@@ -92,8 +95,7 @@ func (m *Manager) testConfigIf(shouldRun func() bool) (ran bool, valid bool, out
 	if m.globalCfg != "" {
 		args = append(args, "-c", m.globalCfg)
 	}
-	cmd := exec.Command(m.binary, args...)
-	cmdOutput, err := cmd.CombinedOutput()
+	cmdOutput, err := m.runNginx(args...)
 	valid = err == nil
 	m.configMu.Lock()
 	m.configOK = valid
@@ -315,9 +317,9 @@ func (m *Manager) authoritativePidFile() (string, error) {
 	if m.globalCfg != "" {
 		args = append(args, "-c", m.globalCfg)
 	}
-	effectiveConfig, err := exec.Command(m.binary, args...).CombinedOutput()
+	effectiveConfig, err := m.runNginx(args...)
 	if err != nil {
-		return "", fmt.Errorf("resolve effective nginx configuration: %w", err)
+		return "", fmt.Errorf("resolve effective nginx configuration: %w: %s", err, nginxFailure(effectiveConfig))
 	}
 	configured, err := effectivePIDDirective(effectiveConfig)
 	if err != nil {

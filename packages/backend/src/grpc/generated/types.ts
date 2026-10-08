@@ -244,6 +244,8 @@ export interface HealthReport {
   relayStreams?: RelayStreamStats | null;
   /** Docker and nginx daemons: the connections an update keeps and cuts now, and what the last one did (field 42). */
   updateConnections?: DaemonUpdateConnections | null;
+  /** Nginx daemons: a problem of the host's nginx service only root can fix, with the command that fixes it (field 43). */
+  nginxServiceProblem?: string;
   /** Present when the daemon advertises ingress_group_v1 (field 195). */
   ingressHealth?: IngressHealthReport | null;
 }

@@ -123,6 +123,8 @@ export interface NodeHealthReport {
   gpuDevices?: NodeGpuDevice[];
   /** Docker and nginx daemons: what an update now would keep and cut, and what the last update did. */
   updateConnections?: NodeUpdateConnections;
+  /** Nginx daemons: a problem of the host's nginx service only root can fix, ending with the command that fixes it. */
+  nginxServiceProblem?: string;
 }
 
 /** Connections across a daemon update, as the daemon reports them; cut classes are an open set. */

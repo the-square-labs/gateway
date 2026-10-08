@@ -538,6 +538,7 @@ Daemons report hardware/OS info on registration:
 - **Delete**: removes the node from Gateway. The daemon will fail to reconnect (mTLS cert becomes invalid).
 - **Pin to sidebar**: quick-access link in the sidebar navigation.
 - **Service creation lock**: \`set_node_service_creation_lock\` (\`nodes:lock\`) stops new routes and containers from being placed on a node.
+- **Nginx service problem**: \`lastHealthReport.nginxServiceProblem\` on an nginx node names a problem of the host's nginx service that only root can fix (nginx stopped with its pid directory gone, a pid file left to root, an Alpine nginx service that leaves the pid file to root), ending with the command to run as root. Relay it as it is; Gateway cannot run it.
 
 ## Key Fields
 - id, hostname, displayName, type, status (pending/online/offline/error)

@@ -38,6 +38,7 @@ func (r *Reporter) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 	if valid, _, checked := r.mgr.CachedConfigValidity(); checked {
 		base.ConfigValid = valid
 	}
+	base.NginxServiceProblem = r.mgr.ServiceProblem(base.NginxRunning)
 
 	if uptime, err := r.mgr.GetUptime(); err == nil {
 		base.NginxUptimeSeconds = int64(uptime.Seconds())

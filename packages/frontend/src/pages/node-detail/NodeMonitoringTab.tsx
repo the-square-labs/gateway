@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Notice } from "@/components/common/Notice";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { GpuMonitoringSection } from "@/components/docker/GpuMonitoringSection";
 import { Badge } from "@/components/ui/badge";
@@ -455,6 +456,11 @@ export function NodeMonitoringTab({
           </Badge>
           <Badge variant="secondary">RSS {formatBytes(health.nginxRssBytes)}</Badge>
         </div>
+      )}
+      {nodeType === "nginx" && health?.nginxServiceProblem && (
+        <Notice tone="destructive" title="nginx needs a fix as root on the host">
+          <span className="break-words">{health.nginxServiceProblem}</span>
+        </Notice>
       )}
 
       {/* System Resources */}

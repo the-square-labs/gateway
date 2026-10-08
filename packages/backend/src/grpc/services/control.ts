@@ -1214,6 +1214,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 nginxRssBytes: Number(msg.healthReport.nginxRssBytes ?? 0),
                 errorRate4xx: (msg.healthReport as any).errorRate_4xx ?? msg.healthReport.errorRate4xx ?? 0,
                 errorRate5xx: (msg.healthReport as any).errorRate_5xx ?? msg.healthReport.errorRate5xx ?? 0,
+                ...(msg.healthReport.nginxServiceProblem
+                  ? { nginxServiceProblem: String(msg.healthReport.nginxServiceProblem) }
+                  : {}),
                 // Docker-specific fields
                 ...(msg.healthReport.dockerVersion ? { dockerVersion: msg.healthReport.dockerVersion } : {}),
                 ...(msg.healthReport.containersRunning != null

@@ -1177,6 +1177,10 @@ type HealthReport struct {
 	// Docker and nginx daemons: the connections an update of this daemon keeps
 	// and cuts now, and what its last update kept and cut.
 	UpdateConnections *DaemonUpdateConnections `protobuf:"bytes,42,opt,name=update_connections,json=updateConnections,proto3" json:"update_connections,omitempty"`
+	// Nginx daemons: a problem of the host's nginx service that only root can
+	// fix, as one sentence ending with the command that fixes it; empty when
+	// there is none.
+	NginxServiceProblem string `protobuf:"bytes,43,opt,name=nginx_service_problem,json=nginxServiceProblem,proto3" json:"nginx_service_problem,omitempty"`
 	// Nginx daemons advertising ingress_group_v1: what the reserved endpoint
 	// /.well-known/gateway-ingress-health answers (sf-ingress range 195-199).
 	IngressHealth *IngressHealthReport `protobuf:"bytes,195,opt,name=ingress_health,json=ingressHealth,proto3" json:"ingress_health,omitempty"`
@@ -1492,6 +1496,13 @@ func (x *HealthReport) GetUpdateConnections() *DaemonUpdateConnections {
 		return x.UpdateConnections
 	}
 	return nil
+}
+
+func (x *HealthReport) GetNginxServiceProblem() string {
+	if x != nil {
+		return x.NginxServiceProblem
+	}
+	return ""
 }
 
 func (x *HealthReport) GetIngressHealth() *IngressHealthReport {
@@ -13350,7 +13361,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x12\x16\n" +
 	"\x06detail\x18\x04 \x01(\tR\x06detail\x12\x12\n" +
-	"\x04data\x18\x05 \x01(\fR\x04data\"\x8f\x10\n" +
+	"\x04data\x18\x05 \x01(\fR\x04data\"\xc3\x10\n" +
 	"\fHealthReport\x12#\n" +
 	"\rnginx_running\x18\x01 \x01(\bR\fnginxRunning\x12!\n" +
 	"\fconfig_valid\x18\x02 \x01(\bR\vconfigValid\x120\n" +
@@ -13395,7 +13406,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\rmanaged_links\x18% \x03(\v2\x1e.gateway.v1.ManagedLinkRuntimeR\fmanagedLinks\x12G\n" +
 	"\x0frelay_latencies\x18( \x03(\v2\x1e.gateway.v1.RelayLatencySampleR\x0erelayLatencies\x12A\n" +
 	"\rrelay_streams\x18) \x01(\v2\x1c.gateway.v1.RelayStreamStatsR\frelayStreams\x12R\n" +
-	"\x12update_connections\x18* \x01(\v2#.gateway.v1.DaemonUpdateConnectionsR\x11updateConnections\x12G\n" +
+	"\x12update_connections\x18* \x01(\v2#.gateway.v1.DaemonUpdateConnectionsR\x11updateConnections\x122\n" +
+	"\x15nginx_service_problem\x18+ \x01(\tR\x13nginxServiceProblem\x12G\n" +
 	"\x0eingress_health\x18\xc3\x01 \x01(\v2\x1f.gateway.v1.IngressHealthReportR\ringressHealth\"\x9f\x02\n" +
 	"\x17DaemonUpdateConnections\x12-\n" +
 	"\x12handover_available\x18\x01 \x01(\bR\x11handoverAvailable\x12\x12\n" +

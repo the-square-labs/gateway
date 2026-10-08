@@ -149,6 +149,9 @@ export interface NodeHealthReport {
   relayStreams?: NodeRelayStreamReport;
   // Docker and nginx daemons: the connections an update keeps and cuts now, and what the last update did.
   updateConnections?: NodeUpdateConnectionsReport;
+  // Nginx daemons: a problem of the host's nginx service that only root can fix, as one sentence ending with the
+  // command that fixes it. Absent when there is none.
+  nginxServiceProblem?: string;
 }
 
 /**

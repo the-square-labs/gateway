@@ -198,6 +198,10 @@ message HealthReport {
   // Docker and nginx daemons: the connections an update of this daemon keeps
   // and cuts now, and what its last update kept and cut.
   DaemonUpdateConnections update_connections = 42;
+  // Nginx daemons: a problem of the host's nginx service that only root can
+  // fix, as one sentence ending with the command that fixes it; empty when
+  // there is none.
+  string nginx_service_problem = 43;
   // Nginx daemons advertising ingress_group_v1: what the reserved endpoint
   // /.well-known/gateway-ingress-health answers (sf-ingress range 195-199).
   IngressHealthReport ingress_health = 195;
