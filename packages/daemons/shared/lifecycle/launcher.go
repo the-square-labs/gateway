@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,6 +58,10 @@ type launcherOwner struct {
 	DaemonType      string    `json:"daemonType"`
 	BinaryPath      string    `json:"binaryPath"`
 	ProtocolVersion int       `json:"protocolVersion"`
+	// Version and Features describe the launcher image running now; launchers
+	// that predate them leave them out. The daemon reads them (LauncherFeatures).
+	Version  string   `json:"version,omitempty"`
+	Features []string `json:"features,omitempty"`
 }
 
 type launcherReadinessEvent struct {
@@ -91,6 +96,17 @@ var (
 	launcherAwaitsControl bool
 )
 
+func init() {
+	// A daemon child gets Pdeathsig when the thread that started it exits
+	// (go.dev/issue/27505), and an exec ends every thread but the one that
+	// calls it. The launcher starts its children and execs in place from its
+	// main goroutine only (runLauncher), locked here to the main thread, which
+	// outlives both.
+	if IsLauncherCommand(os.Args) {
+		runtime.LockOSThread()
+	}
+}
+
 func IsLauncherCommand(args []string) bool {
 	return len(args) > 1 && args[1] == LauncherCommand
 }
@@ -99,7 +115,14 @@ func IsLauncherProbeCommand(args []string) bool {
 	return len(args) > 1 && args[1] == LauncherProbeCommand
 }
 
+// PrintLauncherProbe answers `launcher-probe`, and with --features describes
+// the launcher of this binary (set Version first).
 func PrintLauncherProbe() {
+	if len(os.Args) > 2 && os.Args[2] == launcherFeaturesFlag {
+		encoded, _ := json.Marshal(launcherProbeFeatures{Protocol: LauncherProtocolVersion, Version: Version, Features: launcherBinaryFeatures})
+		fmt.Println(string(encoded))
+		return
+	}
 	fmt.Printf("gateway-daemon-launcher %d\n", LauncherProtocolVersion)
 }
 
@@ -199,39 +222,67 @@ func parseLauncherArgs(args []string) (LauncherSpec, error) {
 }
 
 func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) error {
+	// Children start, and the launcher execs in place, from this goroutine on
+	// this thread only (see init).
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	launcherDir := filepath.Join(spec.StateDir, "launcher")
 	if err := ensurePrivateLauncherDirectory(launcherDir); err != nil {
 		return fmt.Errorf("create launcher state directory: %w", err)
 	}
 	signalCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer stopSignals()
-	lock, err := acquireLauncherLock(signalCtx, filepath.Join(launcherDir, "owner.lock"))
+	// A launcher image that execed into this one in place hands over its owner
+	// lock, its keeper and its daemon child (launcher_selfupdate.go).
+	resume, err := takeLauncherResume()
 	if err != nil {
+		return fmt.Errorf("take over from the previous launcher image: %w", err)
+	}
+	var lock *os.File
+	startedAt := time.Now().UTC()
+	if resume != nil {
+		lock = resume.lock
+		if !resume.StartedAt.IsZero() {
+			startedAt = resume.StartedAt
+		}
+	} else if lock, err = acquireLauncherLock(signalCtx, filepath.Join(launcherDir, "owner.lock")); err != nil {
 		return err
 	}
 	defer releaseLauncherLock(lock)
+
+	// Listeners a daemon process keeps outlive it here, and in systemd's file
+	// descriptor store when the unit has one, so the next process takes them
+	// over and a restart or update refuses no connection.
+	var keeper *listenerkeep.Store
+	if resume != nil && resume.Keeper != nil {
+		if keeper, err = listenerkeep.AdoptStore(*resume.Keeper, logger); err != nil {
+			logger.Warn("listener keeper of the previous launcher image could not be taken over; the next daemon process takes over no listeners", "error", err)
+			keeper = nil
+		}
+	}
+	if keeper == nil {
+		if keeper, err = listenerkeep.OpenStore(logger); err != nil {
+			logger.Warn("listener keeper is unavailable; daemon restarts drop listeners", "error", err)
+			keeper = nil
+		}
+	}
+	if keeper != nil {
+		defer keeper.Close()
+	}
+
 	owner := launcherOwner{
 		PID:             os.Getpid(),
-		StartedAt:       time.Now().UTC(),
+		StartedAt:       startedAt,
 		DaemonType:      spec.DaemonType,
 		BinaryPath:      spec.BinaryPath,
 		ProtocolVersion: LauncherProtocolVersion,
+		Version:         Version,
+		Features:        launcherRunningFeatures(keeper != nil),
 	}
 	if err := writeJSONFileAtomic(filepath.Join(launcherDir, "owner.json"), &owner, 0600); err != nil {
 		return fmt.Errorf("write launcher owner metadata: %w", err)
 	}
 	defer os.Remove(filepath.Join(launcherDir, "owner.json"))
-
-	// Listeners a daemon process keeps outlive it here, and in systemd's file
-	// descriptor store when the unit has one, so the next process takes them
-	// over and a restart or update refuses no connection.
-	keeper, err := listenerkeep.OpenStore(logger)
-	if err != nil {
-		logger.Warn("listener keeper is unavailable; daemon restarts drop listeners", "error", err)
-		keeper = nil
-	} else {
-		defer keeper.Close()
-	}
 
 	// A staged launcher on trial replaces the installed copy once a child was
 	// stable under it, and hands over to the installed copy if children keep
@@ -269,20 +320,102 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 		return fallBackFromLauncherTrial(spec, trial, logger)
 	}
 
+	// A proven launcher execs into a staged launcher in place once one is due
+	// and the moment is safe; see launcher_selfupdate.go.
+	launcherPath := canonicalLauncherPath(spec.StateDir, spec.BinaryPath)
+	cannotResume := map[string]bool{}
+	var respawn launcherServiceManager
+	var respawnCheckedAt time.Time
+	lastSelfUpdateSkip := ""
+	skipSelfUpdate := func(reason string, attrs ...any) {
+		// Checked every few seconds: say it once until the reason changes.
+		if key := fmt.Sprint(append([]any{reason}, attrs...)...); key != lastSelfUpdateSkip {
+			lastSelfUpdateSkip = key
+			logger.Info(reason, attrs...)
+		}
+	}
+	selfUpdate := func(childPID int, childVersion string) {
+		if trial != nil || signalCtx.Err() != nil {
+			return
+		}
+		if due, err := launcherSelfUpdateDue(spec.StateDir, launcherPath, cannotResume); err != nil || !due {
+			if err != nil {
+				skipSelfUpdate("launcher update in place skipped", "error", err)
+			}
+			return
+		}
+		if !respawn.respawns() && time.Since(respawnCheckedAt) >= launcherRespawnRecheck {
+			respawn, respawnCheckedAt = launcherServiceManagerOf(os.Getpid()), time.Now()
+		}
+		if !respawn.respawns() {
+			// Nothing would start the service again if the new image failed:
+			// the next start of the service tries the staged launcher instead.
+			skipSelfUpdate("launcher update in place skipped; the refreshed launcher starts with the service", "service_manager", respawn.String())
+			return
+		}
+		target, err := claimLauncherSelfUpdate(spec.StateDir, launcherPath, cannotResume)
+		if err != nil {
+			skipSelfUpdate("launcher update in place skipped", "error", err)
+			return
+		}
+		if target == "" {
+			return
+		}
+		logger.Info("updating the launcher in place", "launcher", target, "child_pid", childPID)
+		err = execLauncherInPlace(signalCtx, spec, target, lock, keeper, startedAt, childPID, childVersion)
+		if errors.Is(err, errLauncherExecAborted) {
+			return
+		}
+		logger.Error("launcher update in place failed; the running launcher stays", "error", err, "launcher", target)
+		if abandonErr := withLauncherRefreshLock(spec.StateDir, func() error {
+			state, readErr := readLauncherRefreshState(spec.StateDir)
+			if readErr != nil || state == nil || state.Phase != launcherRefreshPhaseTrial {
+				return readErr
+			}
+			return abandonLauncherRefresh(spec.StateDir, state, "exec in place failed: "+err.Error())
+		}); abandonErr != nil {
+			logger.Error("could not record the abandoned launcher refresh", "error", abandonErr)
+		}
+	}
+
+	var adopted *launcherResume
+	if resume != nil && resume.ChildPID > 0 {
+		adopted = resume
+		logger.Info("launcher updated in place; supervising the running daemon", "from_version", resume.FromVersion, "version", Version, "child_pid", resume.ChildPID)
+	}
 	backoff := launcherRestartBackoff
 	for {
 		if signalCtx.Err() != nil {
 			return nil
 		}
-		state, err := prepareLauncherCandidate(spec)
-		if err != nil {
-			return err
+		var (
+			state  *launcherUpdateState
+			child  *exec.Cmd
+			events <-chan launcherReadinessEvent
+			done   <-chan error
+			err    error
+			hooks  = launcherChildHooks{selfUpdate: selfUpdate}
+		)
+		if adopted != nil {
+			// The daemon the previous image started: no update was pending for
+			// it (a safe moment), and it was ready. A launcher on trial is
+			// confirmed only by a child it started itself.
+			child, done = adoptLauncherChild(adopted.ChildPID)
+			hooks.ready, hooks.version = true, adopted.ChildVersion
+			adopted = nil
+		} else {
+			if state, err = prepareLauncherCandidate(spec); err != nil {
+				return err
+			}
+			if keeper != nil {
+				// Apply what the previous process kept or dropped last.
+				keeper.Settle(launcherKeeperSettle)
+			}
+			if trial != nil {
+				hooks.onStable = promoteTrial
+			}
+			child, events, done, err = startLauncherChild(spec, lock, keeper)
 		}
-		if keeper != nil {
-			// Apply what the previous process kept or dropped last.
-			keeper.Settle(launcherKeeperSettle)
-		}
-		child, events, done, err := startLauncherChild(spec, lock, keeper)
 		if err != nil {
 			if state != nil {
 				if rollbackErr := rollbackLauncherUpdate(spec.StateDir, state, "candidate exec failed"); rollbackErr != nil {
@@ -312,15 +445,11 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 			continue
 		}
 		childStatusPath := filepath.Join(launcherDir, "child.json")
-		if err := writeJSONFileAtomic(childStatusPath, &launcherChildStatus{PID: child.Process.Pid, Ready: false, UpdatedAt: time.Now().UTC()}, 0600); err != nil {
+		if err := writeJSONFileAtomic(childStatusPath, &launcherChildStatus{PID: child.Process.Pid, Version: hooks.version, Ready: hooks.ready, UpdatedAt: time.Now().UTC()}, 0600); err != nil {
 			logger.Warn("launcher child status is unavailable", "error", err)
 		}
 
-		var onStable func()
-		if trial != nil {
-			onStable = promoteTrial
-		}
-		outcome := superviseLauncherChild(signalCtx, spec, state, child, events, done, onStable, logger)
+		outcome := superviseLauncherChild(signalCtx, spec, state, child, events, done, hooks, logger)
 		_ = os.Remove(childStatusPath)
 		if outcome.stop {
 			return outcome.err
@@ -434,10 +563,30 @@ func startLauncherChild(spec LauncherSpec, ownerLock *os.File, keeper *listenerk
 	return cmd, events, done, nil
 }
 
-// onStable, when set, runs once this child was locally ready for the
-// stability window, independently of any pending update.
-func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState *launcherUpdateState, child *exec.Cmd, events <-chan launcherReadinessEvent, done <-chan error, onStable func(), logger *slog.Logger) launcherChildOutcome {
+// launcherChildHooks lets the launcher act on a supervised child.
+type launcherChildHooks struct {
+	// onStable, when set, runs once this child was locally ready for the
+	// stability window, independently of any pending update.
+	onStable func()
+	// selfUpdate, when set, is offered every launcherSelfUpdateCheck while no
+	// update is pending and the child is ready. It returns only when the
+	// launcher did not exec in place.
+	selfUpdate func(childPID int, childVersion string)
+	// ready and version describe a child taken over already ready from the
+	// previous launcher image.
+	ready   bool
+	version string
+}
+
+func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState *launcherUpdateState, child *exec.Cmd, events <-chan launcherReadinessEvent, done <-chan error, hooks launcherChildHooks, logger *slog.Logger) launcherChildOutcome {
 	state := initialState
+	childReady, childVersion := hooks.ready, hooks.version
+	var selfUpdateTick <-chan time.Time
+	if hooks.selfUpdate != nil {
+		ticker := time.NewTicker(launcherSelfUpdateCheck)
+		defer ticker.Stop()
+		selfUpdateTick = ticker.C
+	}
 	var readyTimer *time.Timer
 	var readyTimeout <-chan time.Time
 	var controlTimer *time.Timer
@@ -489,7 +638,11 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 			return launcherChildOutcome{err: fmt.Errorf("candidate %s did not reach gateway control readiness within %s", state.TargetVersion, launcherControlReadyLimit)}
 		case <-onStableTimeout:
 			onStableTimeout = nil
-			onStable()
+			hooks.onStable()
+		case <-selfUpdateTick:
+			if state == nil && childReady {
+				hooks.selfUpdate(child.Process.Pid, childVersion)
+			}
 		case <-stabilityTimeout:
 			if state != nil {
 				if err := removeLauncherUpdateState(spec.StateDir); err != nil {
@@ -527,6 +680,7 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 			if event.Type != launcherEventLocalReady {
 				continue
 			}
+			childReady, childVersion = true, event.Version
 			if err := writeJSONFileAtomic(filepath.Join(spec.StateDir, "launcher", "child.json"), &launcherChildStatus{
 				PID:       child.Process.Pid,
 				Version:   event.Version,
@@ -535,7 +689,7 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 			}, 0600); err != nil {
 				logger.Warn("launcher child status is unavailable", "error", err)
 			}
-			if onStable != nil && onStableTimer == nil {
+			if hooks.onStable != nil && onStableTimer == nil {
 				onStableTimer = time.NewTimer(launcherStabilityWindow)
 				onStableTimeout = onStableTimer.C
 			}

@@ -886,8 +886,12 @@ type RegisterMessage struct {
 	DockerRuntimeStatus *DockerRuntimeStatus `protobuf:"bytes,14,opt,name=docker_runtime_status,json=dockerRuntimeStatus,proto3" json:"docker_runtime_status,omitempty"`
 	HostIdentityId      string               `protobuf:"bytes,15,opt,name=host_identity_id,json=hostIdentityId,proto3" json:"host_identity_id,omitempty"`
 	RelayInstanceId     string               `protobuf:"bytes,16,opt,name=relay_instance_id,json=relayInstanceId,proto3" json:"relay_instance_id,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// The version of the launcher process the daemon runs under; empty for a
+	// launcher that predates reporting it. Its features are capabilities
+	// (launcher_listener_keep_v1, launcher_self_update_v1).
+	LauncherVersion string `protobuf:"bytes,18,opt,name=launcher_version,json=launcherVersion,proto3" json:"launcher_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RegisterMessage) Reset() {
@@ -1028,6 +1032,13 @@ func (x *RegisterMessage) GetHostIdentityId() string {
 func (x *RegisterMessage) GetRelayInstanceId() string {
 	if x != nil {
 		return x.RelayInstanceId
+	}
+	return ""
+}
+
+func (x *RegisterMessage) GetLauncherVersion() string {
+	if x != nil {
+		return x.LauncherVersion
 	}
 	return ""
 }
@@ -13310,7 +13321,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x06fields\x18\x05 \x03(\v2&.gateway.v1.DaemonLogEntry.FieldsEntryR\x06fields\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x94\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbf\x05\n" +
 	"\x0fRegisterMessage\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12#\n" +
@@ -13329,7 +13340,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\fcapabilities\x18\r \x03(\tR\fcapabilities\x12S\n" +
 	"\x15docker_runtime_status\x18\x0e \x01(\v2\x1f.gateway.v1.DockerRuntimeStatusR\x13dockerRuntimeStatus\x12(\n" +
 	"\x10host_identity_id\x18\x0f \x01(\tR\x0ehostIdentityId\x12*\n" +
-	"\x11relay_instance_id\x18\x10 \x01(\tR\x0frelayInstanceIdJ\x04\b\x11\x10\x12\"\x8a\x01\n" +
+	"\x11relay_instance_id\x18\x10 \x01(\tR\x0frelayInstanceId\x12)\n" +
+	"\x10launcher_version\x18\x12 \x01(\tR\x0flauncherVersionJ\x04\b\x11\x10\x12\"\x8a\x01\n" +
 	"\rCommandResult\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x18\n" +

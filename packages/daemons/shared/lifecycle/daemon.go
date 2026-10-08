@@ -51,6 +51,9 @@ type DaemonBase struct {
 	// command, i.e. accepted the registration. Only the Run loop reads it.
 	sessionReceivedCommand bool
 	prepareShutdownOnce    sync.Once
+	// launcherChanged reconnects the control session once the launcher
+	// updated itself in place, so the gateway sees its version and features.
+	launcherChanged chan struct{}
 	// consoleUserRefusal is set at startup when console.user names a user
 	// this daemon cannot switch to; console sessions are refused with it.
 	consoleUserRefusal string
@@ -80,6 +83,7 @@ func NewDaemonBase(cfg *BaseConfig, cfgPath string, plugin DaemonPlugin, logger 
 		baseHandler:           logger.Handler(), // original handler without startup buffer
 		tunnelIdentityChanged: make(chan struct{}, 1),
 		controlReconnect:      make(chan struct{}, 1),
+		launcherChanged:       make(chan struct{}, 1),
 		consoleUserRefusal:    checkConsoleUser(cfg, startupLogger),
 	}, nil
 }
@@ -106,6 +110,7 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 	// Step 3: Start background cert renewal
 	go runCertRenewal(ctx, d)
 	go d.sysReporter.RunPublicIPDiscovery(ctx)
+	go d.watchLauncher(ctx)
 	if relayTunnel, ok := d.plugin.(RelayTunnelPlugin); ok {
 		// The tunnel owns one process-lifetime ClientConn. It is intentionally
 		// outside runSessionCycle: control reconnects must not cancel tunnel
@@ -143,6 +148,7 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			d.logger.Info(restart.Message, "action", "restarting")
 			exitingForUpdate.Store(true)
 			d.PrepareShutdown()
+			restart.serviceRestart.run(d.logger)
 			return restart
 		}
 		var delay time.Duration
@@ -351,6 +357,35 @@ func (d *DaemonBase) requestControlReconnect() {
 	select {
 	case d.controlReconnect <- struct{}{}:
 	default:
+	}
+}
+
+// launcherWatchInterval is how often a daemon checks whether its launcher
+// updated itself in place.
+var launcherWatchInterval = 30 * time.Second
+
+func (d *DaemonBase) watchLauncher(ctx context.Context) {
+	last := LauncherFeatures()
+	if !last.Managed {
+		return
+	}
+	ticker := time.NewTicker(launcherWatchInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		current := LauncherFeatures()
+		if current.equal(last) {
+			continue
+		}
+		last = current
+		select {
+		case d.launcherChanged <- struct{}{}:
+		default:
+		}
 	}
 }
 

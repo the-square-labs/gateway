@@ -18,6 +18,8 @@ import (
 var gatewayCertSHA256Pattern = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
 
 func main() {
+	// The launcher and its probe report this version too.
+	lifecycle.Version = daemon.Version
 	if lifecycle.IsLauncherProbeCommand(os.Args) {
 		lifecycle.PrintLauncherProbe()
 		return

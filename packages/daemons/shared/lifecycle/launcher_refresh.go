@@ -9,9 +9,10 @@ package lifecycle
 //  1. stage: once the gateway accepted a committed daemon, the daemon copies
 //     its own binary to <launcher>.next and journals a trial. The launcher copy
 //     itself is untouched, and nothing is staged while an update is pending.
-//  2. trial: the next BootstrapLauncher execs <launcher>.next instead of the
-//     copy and counts the attempt. Binaries that predate the refresh never look
-//     at .next and keep using the known-good copy.
+//  2. trial: the running launcher execs <launcher>.next in place at a safe
+//     moment (launcher_selfupdate.go), or the next BootstrapLauncher execs it
+//     instead of the copy; either counts the attempt. Binaries that predate
+//     the refresh never look at .next and keep using the known-good copy.
 //  3. promote: the trial launcher replaces the copy once one of its children
 //     was locally ready and stayed up for the stability window. The replaced
 //     copy is kept as <launcher>.previous.
@@ -19,8 +20,9 @@ package lifecycle
 //     starts, whose children kept failing, or whose staged file changed is
 //     abandoned. The copy is used again and the same binary is never retried.
 //
-// The running launcher process is never replaced in place: a refreshed
-// launcher takes effect when the launcher process next starts.
+// A launcher process that predates the exec in place takes a refreshed
+// launcher only when it next starts; a daemon under it turns its next update
+// into one restart of the whole service for that (launcher_service_restart.go).
 
 import (
 	"context"
@@ -283,30 +285,15 @@ func selectLauncherForStart(stateDir, launcherPath string) string {
 		if state == nil || state.Phase != launcherRefreshPhaseTrial || filepath.Clean(state.LauncherPath) != filepath.Clean(launcherPath) {
 			return nil
 		}
-		// A pending daemon update stays with the launcher it was staged under.
-		if pending, err := readLauncherUpdateState(stateDir); err != nil || pending != nil {
+		// A pending daemon update stays with the launcher it was staged under,
+		// unless the update restarts the service to start this trial
+		// (launcher_service_restart.go).
+		if pending, err := readLauncherUpdateState(stateDir); err != nil || (pending != nil && !pending.ServiceRestart) {
 			return err
 		}
-		next := stagedLauncherPath(launcherPath)
-		exists, err := regularFileExists(next)
-		if err != nil {
-			return abandonLauncherRefresh(stateDir, state, err.Error())
-		}
-		if !exists {
-			if sum, sumErr := executableChecksum(launcherPath); sumErr == nil && sum == state.TargetSHA256 {
-				// Promotion replaced the copy but did not clear the journal.
-				return removeLauncherRefreshState(stateDir)
-			}
-			return abandonLauncherRefresh(stateDir, state, "staged launcher is missing")
-		}
-		if state.Attempts >= launcherRefreshAttemptLimit {
-			return abandonLauncherRefresh(stateDir, state, fmt.Sprintf("staged launcher did not confirm after %d starts", state.Attempts))
-		}
-		if sum, err := executableChecksum(next); err != nil || sum != state.TargetSHA256 {
-			return abandonLauncherRefresh(stateDir, state, "staged launcher checksum mismatch")
-		}
-		if err := probeLauncher(next); err != nil {
-			return abandonLauncherRefresh(stateDir, state, "staged launcher probe failed: "+err.Error())
+		next, err := validateStagedLauncher(stateDir, state, launcherPath)
+		if err != nil || next == "" {
+			return err
 		}
 		// Count the attempt before exec so a crash-looping trial runs out.
 		state.Attempts++
@@ -321,6 +308,34 @@ func selectLauncherForStart(stateDir, launcherPath string) string {
 		return launcherPath
 	}
 	return selected
+}
+
+// validateStagedLauncher returns the staged launcher of a due trial, or
+// abandons a trial whose staged launcher cannot run and returns "". The
+// caller holds the refresh lock.
+func validateStagedLauncher(stateDir string, state *launcherRefreshState, launcherPath string) (string, error) {
+	next := stagedLauncherPath(launcherPath)
+	exists, err := regularFileExists(next)
+	if err != nil {
+		return "", abandonLauncherRefresh(stateDir, state, err.Error())
+	}
+	if !exists {
+		if sum, sumErr := executableChecksum(launcherPath); sumErr == nil && sum == state.TargetSHA256 {
+			// Promotion replaced the copy but did not clear the journal.
+			return "", removeLauncherRefreshState(stateDir)
+		}
+		return "", abandonLauncherRefresh(stateDir, state, "staged launcher is missing")
+	}
+	if state.Attempts >= launcherRefreshAttemptLimit {
+		return "", abandonLauncherRefresh(stateDir, state, fmt.Sprintf("staged launcher did not confirm after %d starts", state.Attempts))
+	}
+	if sum, err := executableChecksum(next); err != nil || sum != state.TargetSHA256 {
+		return "", abandonLauncherRefresh(stateDir, state, "staged launcher checksum mismatch")
+	}
+	if err := probeLauncher(next); err != nil {
+		return "", abandonLauncherRefresh(stateDir, state, "staged launcher probe failed: "+err.Error())
+	}
+	return next, nil
 }
 
 // abandonLauncherRefresh removes the staged launcher and records the target
@@ -470,7 +485,7 @@ func scheduleLauncherRefresh(version string, logger *slog.Logger) {
 			return
 		}
 		if staged {
-			logger.Info("staged launcher refresh; it is tried on the next launcher start", "version", version, "launcher", launcherPath)
+			logger.Info("staged launcher refresh; the launcher takes it over in place, or on its next start", "version", version, "launcher", launcherPath)
 		}
 	}()
 }

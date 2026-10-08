@@ -31,6 +31,11 @@ type Store struct {
 	syncWait  map[uint64]chan struct{}
 	closeOnce sync.Once
 	done      chan struct{}
+
+	// frozen stops the receive loop before the launcher execs in place
+	// (PrepareExec); receiving is closed when the loop returned.
+	frozen    bool
+	receiving chan struct{}
 }
 
 // OpenStore creates the launcher's keeper. It adopts the listeners systemd
@@ -76,8 +81,13 @@ func OpenStore(logger *slog.Logger) (*Store, error) {
 	if store.files == nil {
 		store.files = map[string]*os.File{}
 	}
-	go store.receive()
+	store.startReceiving()
 	return store, nil
+}
+
+func (s *Store) startReceiving() {
+	s.receiving = make(chan struct{})
+	go s.receive(s.receiving)
 }
 
 // Close stops the keeper. The kept descriptors stay open until the process
@@ -186,7 +196,8 @@ func (s *Store) Names() []string {
 	return names
 }
 
-func (s *Store) receive() {
+func (s *Store) receive(receiving chan struct{}) {
+	defer close(receiving)
 	buffer := make([]byte, maxMessage)
 	oob := make([]byte, syscall.CmsgSpace(4*4))
 	for {
@@ -198,6 +209,13 @@ func (s *Store) receive() {
 			default:
 			}
 			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			s.mu.Lock()
+			frozen := s.frozen
+			s.mu.Unlock()
+			if frozen {
+				// Unread messages wait in the channel for the next image.
 				return
 			}
 			s.logger.Warn("listener keeper channel read failed", "error", err)

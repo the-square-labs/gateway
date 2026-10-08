@@ -144,6 +144,9 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	if d.consoleUserRefusal != "" {
 		regMsg.Capabilities = append(regMsg.Capabilities, NodeConsoleUserUnavailableCapability)
 	}
+	launcher := LauncherFeatures()
+	regMsg.Capabilities = append(regMsg.Capabilities, launcher.Capabilities()...)
+	regMsg.LauncherVersion = launcher.Version
 	if err := writer.Send(&pb.DaemonMessage{
 		Payload: &pb.DaemonMessage_Register{Register: regMsg},
 	}); err != nil {
@@ -173,6 +176,9 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			_ = conn.Close()
 		case <-registrationChanged:
 			d.logger.Info("reconnecting control session to refresh the node capabilities")
+			_ = conn.Close()
+		case <-d.launcherChanged:
+			d.logger.Info("reconnecting control session to report the launcher that updated itself")
 			_ = conn.Close()
 		}
 	}()
@@ -472,6 +478,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			// command to the gateway, then exit so systemd restarts the daemon.
 			updateCmd := cmd.GetUpdateDaemon()
 			result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+			var serviceRestart *launcherServiceRestart
 			if err := SelfUpdate(
 				updateCmd.DownloadUrl,
 				updateCmd.TargetVersion,
@@ -482,6 +489,11 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			); err != nil {
 				result.Success = false
 				result.Error = err.Error()
+			} else if serviceRestart = planUpdateRestart(); serviceRestart != nil {
+				// A launcher that predates self-update: the update restarts the
+				// whole service once, or says why it cannot.
+				result.Detail = serviceRestart.detail
+				d.logger.Info(serviceRestart.detail, "target_version", updateCmd.TargetVersion)
 			}
 			sendErr := writer.Send(&pb.DaemonMessage{
 				Payload: &pb.DaemonMessage_CommandResult{CommandResult: result},
@@ -496,7 +508,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 				} else {
 					d.logger.Info("self-update staged successfully, exiting for restart", "target_version", updateCmd.TargetVersion)
 				}
-				return &RestartRequestedError{Message: "self-update staged successfully"}
+				return &RestartRequestedError{Message: "self-update staged successfully", serviceRestart: serviceRestart}
 			}
 			if sendErr != nil {
 				return sendErr

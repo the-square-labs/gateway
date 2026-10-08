@@ -36,6 +36,10 @@ type launcherUpdateState struct {
 	CandidateAt   *time.Time              `json:"candidateStartedAt,omitempty"`
 	LocalReadyAt  *time.Time              `json:"localReadyAt,omitempty"`
 	Failures      []launcherUpdateFailure `json:"failures,omitempty"`
+	// ServiceRestart marks an update that restarts the whole service, so its
+	// start may try a staged launcher together with the candidate
+	// (launcher_service_restart.go). Launchers that predate it drop it.
+	ServiceRestart bool `json:"serviceRestart,omitempty"`
 }
 
 type launcherUpdateOutcome struct {

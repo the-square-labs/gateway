@@ -16,6 +16,8 @@ import (
 var Version = "dev"
 
 func main() {
+	// The launcher and its probe report this version too.
+	lifecycle.Version = Version
 	if lifecycle.IsLauncherProbeCommand(os.Args) {
 		lifecycle.PrintLauncherProbe()
 		return
@@ -57,7 +59,6 @@ func main() {
 		os.Exit(1)
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}))
-	lifecycle.Version = Version
 	if err := supervisor.RecoverWorkerIdentity(cfg.Worker.IdentityDir); err != nil {
 		logger.Error("repair the relay worker identity", "error", err)
 	}

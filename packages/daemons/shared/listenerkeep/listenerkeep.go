@@ -99,6 +99,9 @@ type client struct {
 	// mirror stores what the launcher keeps in systemd's store as well, when
 	// the launcher cannot (see newClientFromEnvironment).
 	mirror *notifySocket
+	// fromLauncher is set when the launcher handed this process its keeper
+	// channel.
+	fromLauncher bool
 }
 
 var (
@@ -140,6 +143,15 @@ func current() *client {
 
 // Available reports whether a listener handed to Keep survives a restart.
 func Available() bool { return current().available() }
+
+// FromLauncher reports whether this process runs under a launcher that keeps
+// what it is handed (a launcher started before 2.11 has no keeper).
+func FromLauncher() bool {
+	keeper := current()
+	keeper.mu.Lock()
+	defer keeper.mu.Unlock()
+	return keeper.fromLauncher
+}
 
 // Take returns the descriptor a previous process kept under name, which the
 // caller now owns, and forgets it.
@@ -370,6 +382,7 @@ func newClientFromEnvironment() *client {
 		connection, err := net.FileConn(file)
 		_ = file.Close()
 		if unixConnection, ok := connection.(*net.UnixConn); err == nil && ok {
+			current.fromLauncher = true
 			// The launcher stores what it keeps in systemd's store through the
 			// NOTIFY_SOCKET systemd gave it when the unit started. A unit that
 			// had no store and NotifyAccess then (the drop-in

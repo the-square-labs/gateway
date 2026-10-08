@@ -160,6 +160,14 @@
       "doc": "docs/nodes.md#daemon-updates",
       "os": []
     },
+    "node.launcher-self-update": {
+      "description": "A launcher updates itself in place to the launcher of a committed daemon and keeps its process, its daemon and the sockets it holds; a launcher process that predates this takes the next daemon update as one restart of the whole service.",
+      "doc": "docs/nodes.md#daemon-updates",
+      "os": [
+        "debian",
+        "alpine"
+      ]
+    },
     "node.service-address": {
       "description": "An explicit Docker service address on the node page is the endpoint of managed database links and published storage; proxy routes to Docker workloads go through a Secure Link and do not use it.",
       "doc": "docs/nodes.md#relay-nodes",
@@ -1177,16 +1185,18 @@
       "where": "static",
       "ci": "test:light:go",
       "covers": [
-        "feature node.launcher-rollback"
+        "feature node.launcher-rollback",
+        "feature node.launcher-self-update"
       ],
       "preconditions": [
         "CI runs the Go tests as a non-root user."
       ],
       "steps": [
-        "pnpm test:light:go runs shared/lifecycle (launcher, candidate directories, rollback, gateway-session.json), the lease watchdog and the host access refusal tests."
+        "pnpm test:light:go runs shared/lifecycle (launcher, candidate directories, rollback, launcher update in place and service restart, gateway-session.json), the lease watchdog and the host access refusal tests."
       ],
       "expect": [
-        "All packages pass; a candidate that does not stay ready is rolled back to the preserved binary."
+        "All packages pass; a candidate that does not stay ready is rolled back to the preserved binary.",
+        "A launcher with a daemon and a kept listener execs into the staged launcher with the same PID, the daemon and the listener survive; an update under a launcher without self-update plans one service restart under systemd and OpenRC and none in manual mode."
       ]
     },
     {
@@ -2318,6 +2328,36 @@
         "The resumed run updates only the worker of the relay left after its supervisor update; a relay it finds already on the target is marked ready without draining.",
         "Starting a run with every relay already on the target is refused with NO_UPDATE; no relay is drained or restarted.",
         "With another ready relay that can serve the local relay's workloads and a local relay that already runs this release (in GET /api/system/relay the local instance's capabilities.features include drain_keeps_local_services_v1), the local relay's step drains it first (audit relay.instance.drain on the local instance, its workloads move, image pulls through the internal registry keep working during the drain, the drain waits as for a remote relay and Force disconnect works on it), then recreates, verifies and resumes it (relay.instance.resume); held connections move instead of dropping, a pull cut by the recreate is retried by the Docker daemon, and abandon is refused with 409 RELAY_UPDATE_COMMITTED only once the recreate began. Without such a relay, or on the update from a local relay older than this release, the local relay is recreated at once, connections drop once and reconnect, and relay_pool_update_steps.error of the local step names why."
+      ]
+    },
+    {
+      "id": "UPD-04",
+      "area": "daemon",
+      "title": "Launchers update themselves; an older launcher process gets one service restart",
+      "where": "stand",
+      "os": [
+        "debian",
+        "alpine"
+      ],
+      "covers": [
+        "feature node.launcher-self-update"
+      ],
+      "preconditions": [
+        "<newer> is published on the preview channel and the update channel is preview.",
+        "Docker and nginx nodes, root and non-root (--user gwsvc), run <previous>, and their launcher processes started on <previous> or earlier: no service restart since.",
+        "On those nodes database link pools, a storage link and a Route Secure Link WebSocket stay open, with probes that count dropped and refused connections."
+      ],
+      "steps": [
+        "Update every node to <candidate>; wait until launcher/launcher-refresh.json on each node shows phase trial.",
+        "Update every node to <newer>; once the node is online, note the launcher PID (launcher/owner.json) and the daemon PID (launcher/child.json).",
+        "Wait 2 minutes and note both PIDs again.",
+        "Update the nodes once more, to a build of <newer> with another version, and wait 2 minutes."
+      ],
+      "expect": [
+        "The update to <candidate> restarts the daemon under its launcher, as before; the node details show the launcher version Unknown.",
+        "The update to <newer> restarts the whole service once: under systemd as root at once, as gwsvc after RestartSec, under OpenRC after respawn_delay; the update result (Gateway log: Daemon update staged) and the daemon log say so; the probes count one cut, as for any update. The node comes back on <newer> with the capabilities launcher_listener_keep_v1 and launcher_self_update_v1.",
+        "Within 2 minutes after the <newer> daemon connected, the launcher execs into the launcher of <newer>: launcher and daemon PIDs unchanged, /proc/<launcher pid>/exe names <launcher>.next and launcher-refresh.json shows attempts 1, no probe counts a drop or a refused connection, the daemon reconnects its control session once and the node details show the launcher version <newer>.",
+        "The last update restarts only the daemon under the launcher (launcher PID unchanged, no service restart in the journal or the OpenRC log); that daemon confirms the launcher (the launcher copy replaced, launcher-refresh.json gone until the new daemon stages itself), then the launcher updates itself in place again."
       ]
     },
     {

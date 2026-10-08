@@ -20,6 +20,8 @@ var gatewayCertSHA256Pattern = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
 var Version = "dev"
 
 func main() {
+	// The launcher and its probe report this version too.
+	lifecycle.Version = Version
 	if lifecycle.IsLauncherProbeCommand(os.Args) {
 		lifecycle.PrintLauncherProbe()
 		return
@@ -70,9 +72,6 @@ func main() {
 	}
 	logger = setupLogger(cfg.LogLevel, cfg.LogFormat)
 	logger.Info("starting monitoring-daemon", "version", Version, "config", configPath)
-
-	// Set shared lifecycle version
-	lifecycle.Version = Version
 
 	plugin := monitoring.NewMonitoringPlugin()
 

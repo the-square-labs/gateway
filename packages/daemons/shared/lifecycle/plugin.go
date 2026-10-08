@@ -23,6 +23,9 @@ func (e *FatalError) Error() string {
 // so its supervisor can restart it (e.g. after a successful self-update).
 type RestartRequestedError struct {
 	Message string
+	// serviceRestart, when set, restarts the whole service for the update
+	// (launcher_service_restart.go).
+	serviceRestart *launcherServiceRestart
 }
 
 func (e *RestartRequestedError) Error() string {

@@ -72,6 +72,14 @@ func ensureSystemdStore(runtimeDir, cgroupPath, unitDir string, systemctl func(.
 	return true, nil
 }
 
+// SystemdUnit names the systemd service unit this process runs in, or "".
+func SystemdUnit() (string, error) {
+	if _, err := os.Stat("/run/systemd/system"); err != nil {
+		return "", nil
+	}
+	return systemdUnitOf("/proc/self/cgroup")
+}
+
 // systemdUnitOf names the service unit whose cgroup the process is in.
 func systemdUnitOf(cgroupPath string) (string, error) {
 	file, err := os.Open(cgroupPath)

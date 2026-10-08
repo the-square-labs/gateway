@@ -127,6 +127,10 @@ message RegisterMessage {
   string host_identity_id = 15;
   string relay_instance_id = 16;
   reserved 17;
+  // The version of the launcher process the daemon runs under; empty for a
+  // launcher that predates reporting it. Its features are capabilities
+  // (launcher_listener_keep_v1, launcher_self_update_v1).
+  string launcher_version = 18;
 }
 
 message CommandResult {
