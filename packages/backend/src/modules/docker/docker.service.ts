@@ -61,6 +61,7 @@ import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker
 import { dockerDaemonUserError } from './docker-daemon-errors.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { DOCKER_DEPLOYMENT_ID_LABEL, DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
+import { runKeptEnvFollowUps } from './docker-env-follow-ups.js';
 import { getContainerEnv as getDockerContainerEnv } from './docker-env-operations.js';
 import type { DockerEnvironmentService } from './docker-environment.service.js';
 import type { DockerFolderService } from './docker-folder.service.js';
@@ -623,6 +624,7 @@ export class DockerManagementService {
       ...this.lifecycleWatchContext(),
       taskService: this.taskService,
       finishPull: (nodeId, tracking) => this.finishReconciledPull(nodeId, tracking),
+      runFollowUps: (task, trigger) => runKeptEnvFollowUps(this.containerMutationContext(), task, trigger),
     };
   }
 

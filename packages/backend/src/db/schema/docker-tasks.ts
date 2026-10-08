@@ -44,6 +44,22 @@ export type DockerTaskTracking =
       containerId: string;
     };
 
+/**
+ * What an update or recreate still owes once it is settled with the node, kept only until then so that it is done also
+ * when Gateway lost track of the task (it restarted, or the node's control stream dropped). The env values it needs
+ * are sealed like stored container env (the same key and envelope); the API never shows them.
+ */
+export interface DockerTaskFollowUps {
+  /** The container whose stored env the follow-ups write. */
+  containerName: string;
+  /** Once the replacement succeeded: align stored env entries that only mirrored the replaced image's defaults. */
+  reconcileEnvAfterImageChange?: boolean;
+  /** Once the daemon reports that the update failed: put back the stored env the update saved before it ran. */
+  restoreEnvAfterFailedUpdate?: boolean;
+  /** The env the follow-ups need (see DockerEnvFollowUpPayload), sealed with the stored env's key. */
+  sealed: { encryptedKey: string; encryptedDek: string };
+}
+
 export const dockerTasks = pgTable('docker_tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
   nodeId: uuid('node_id')
@@ -62,4 +78,6 @@ export const dockerTasks = pgTable('docker_tasks', {
   tracking: jsonb('tracking').$type<DockerTaskTracking>(),
   /** Since when Gateway has lost track of the active task; it is settled with the node once that is connected. */
   detachedAt: timestamp('detached_at', { withTimezone: true }),
+  /** What the task still owes once settled; cleared when it ran or the task ended. */
+  followUps: jsonb('follow_ups').$type<DockerTaskFollowUps>(),
 });

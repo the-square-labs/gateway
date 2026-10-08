@@ -1,7 +1,13 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
+import type { DockerTaskFollowUps } from '@/db/schema/index.js';
 import { dockerEnvVars } from '@/db/schema/index.js';
 import type { CryptoService } from '@/services/crypto.service.js';
+import {
+  type DockerEnvFollowUpPayload,
+  openEnvFollowUpPayload,
+  sealEnvFollowUpPayload,
+} from './docker-env-follow-ups.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
 
 export class DockerEnvironmentService {
@@ -96,6 +102,15 @@ export class DockerEnvironmentService {
       return;
     }
     await this.replace(nodeId, toName, env);
+  }
+
+  /** Seals the env an update's or recreate's follow-ups need with the key and envelope of stored env. */
+  sealFollowUpPayload(payload: DockerEnvFollowUpPayload): DockerTaskFollowUps['sealed'] {
+    return sealEnvFollowUpPayload(this.cryptoService, payload);
+  }
+
+  openFollowUpPayload(sealed: DockerTaskFollowUps['sealed']): DockerEnvFollowUpPayload {
+    return openEnvFollowUpPayload(this.cryptoService, sealed);
   }
 
   private decrypt(encryptedJson: string): string {

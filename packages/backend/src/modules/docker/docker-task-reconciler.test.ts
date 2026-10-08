@@ -66,6 +66,7 @@ function row(
     commandId: null,
     tracking,
     detachedAt: new Date(T0 + 30_000),
+    followUps: null,
     ...extra,
   };
 }

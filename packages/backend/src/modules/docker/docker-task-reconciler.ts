@@ -1,6 +1,7 @@
 import type { DockerTaskTracking } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { DockerTaskFollowUpTrigger } from './docker-env-follow-ups.js';
 import { resolveDockerImageByIdentifier } from './docker-internal-images.js';
 import type { ContainerAction, DockerLifecycleWatchContext } from './docker-lifecycle-watch.js';
 import { getReplacementContainerFailureMessage } from './docker-recreate-watch.js';
@@ -29,6 +30,12 @@ export interface DockerTaskReconcileContext extends DockerLifecycleWatchContext 
   taskService: DockerTaskService;
   /** What a live pull does once it succeeded: places the image for its user, remembers its registry, tells the UI. */
   finishPull(nodeId: string, tracking: Extract<DockerTaskTracking, { kind: 'pull' }>): Promise<void>;
+  /**
+   * Runs what an update or recreate keeps for once it is settled (its env follow-ups, see runKeptEnvFollowUps), before
+   * its task is settled. Throws when it cannot run yet (the container is held by another operation): the task is then
+   * settled at a later pass.
+   */
+  runFollowUps?(task: DockerTaskRow, trigger: DockerTaskFollowUpTrigger): Promise<void>;
 }
 
 type Outcome =
@@ -40,8 +47,9 @@ type Outcome =
  * Settles the Docker tasks Gateway lost track of with their nodes (F-1). Gateway restarted, or a node's control
  * stream dropped, while an image pull or a container stop, restart, kill, update or recreate ran on the node: the
  * work goes on there, so the task stays active (and a daemon update waiting for the node's tasks keeps waiting) until
- * the connected node tells how it ended. Runs at every node connect and every few seconds while detached tasks are
- * left; the deadline of the task's own watch bounds what cannot be told.
+ * the connected node tells how it ended. An update or recreate also gets the env follow-ups its watch would have run.
+ * Runs at every node connect and every few seconds while detached tasks are left; the deadline of the task's own watch
+ * bounds what cannot be told.
  */
 export class DockerTaskReconciler {
   private readonly inFlight = new Set<string>();
@@ -240,6 +248,8 @@ export class DockerTaskReconciler {
         const daemonTask = ctx.parseResult(result) as Record<string, any> | null;
         const daemonStatus = String(daemonTask?.status ?? '');
         if (daemonStatus === 'failed') {
+          // The update did not apply: what it saved beforehand is put back first, as its watch does.
+          await this.runFollowUps(ctx, task, { kind: 'daemon-task-failed' });
           return { status: 'failed', error: String(daemonTask?.error || 'Docker daemon task failed') };
         }
         daemonTaskRunning = daemonStatus === 'running' || daemonStatus === 'pending';
@@ -266,6 +276,7 @@ export class DockerTaskReconciler {
         state === tracking.expectedState || (tracking.expectedState === 'running' && state === 'restarting');
       if (newId && newId !== tracking.oldContainerId && reached) {
         await ctx.preserveContainerIdentity?.(task.nodeId, tracking.containerName, newId);
+        await this.runFollowUps(ctx, task, { kind: 'replaced', newContainerId: newId });
         return {
           status: 'succeeded',
           progress: tracking.progress,
@@ -306,6 +317,14 @@ export class DockerTaskReconciler {
       throw error;
     }
     return { status: 'failed', error: 'Gateway restarted before it removed the container; remove it again' };
+  }
+
+  private async runFollowUps(
+    ctx: DockerTaskReconcileContext,
+    task: DockerTaskRow,
+    trigger: DockerTaskFollowUpTrigger
+  ): Promise<void> {
+    if (task.followUps && ctx.runFollowUps) await ctx.runFollowUps(task, trigger);
   }
 
   private emit(ctx: DockerTaskReconcileContext, task: DockerTaskRow, name: string, action: ContainerAction) {

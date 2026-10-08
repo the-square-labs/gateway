@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  type DockerTaskFollowUps,
   dockerSourceBindings,
   dockerWebhooks,
   managedDatabaseBindings,
@@ -19,6 +20,12 @@ import { type ContainerOperationAnswer, waitForStopInFlight } from './docker-con
 import { detachRemovedContainerSource } from './docker-container-source-detach.js';
 import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
 import { placeCreatedDockerResource } from './docker-creation-access.js';
+import {
+  type DockerEnvFollowUpPayload,
+  keepEnvFollowUps,
+  MASKED_ENV_VALUE,
+  reconcileStoredEnvAfterImageChange,
+} from './docker-env-follow-ups.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
@@ -52,9 +59,6 @@ import { type DockerTaskService, trackDockerTask } from './docker-task.service.j
 import { resolveNetworkIdentity } from './docker-volume-network-operations.js';
 
 const logger = createChildLogger('DockerContainerMutationOperations');
-
-/** Placeholder that inspect returns for secret-backed env values. */
-const MASKED_ENV_VALUE = '********';
 
 /**
  * Run once a mutation holds its names in this process, before it changes
@@ -125,6 +129,9 @@ export interface DockerContainerMutationContext {
     rename(nodeId: string, oldName: string, newName: string): Promise<unknown>;
     copy(nodeId: string, sourceName: string, targetName: string): Promise<unknown>;
     getDecryptedMap(nodeId: string, containerName: string): Promise<Record<string, string>>;
+    /** Seals what an operation's follow-ups need (see keepEnvFollowUps) like stored env. */
+    sealFollowUpPayload(payload: DockerEnvFollowUpPayload): DockerTaskFollowUps['sealed'];
+    openFollowUpPayload(sealed: DockerTaskFollowUps['sealed']): DockerEnvFollowUpPayload;
   };
   runtimeSettingsService?: DockerRuntimeSettingsService;
   secretService?: DockerSecretService;
@@ -466,36 +473,6 @@ function persistableUserEnv(env: Record<string, string>, secretKeys: ReadonlySet
   return Object.fromEntries(
     Object.entries(env).filter(([key, value]) => !secretKeys.has(key) && value !== MASKED_ENV_VALUE)
   );
-}
-
-/**
- * After an image change the daemon drops env values inherited from the
- * previous image. Stored env entries that only mirrored such an inherited
- * value would otherwise pin the old image default on the next env edit, so
- * align them with the new runtime.
- */
-async function reconcileStoredEnvAfterImageChange(
-  ctx: DockerContainerMutationContext,
-  nodeId: string,
-  name: string,
-  previousRuntimeEnv: Record<string, string>,
-  newContainerId: string
-): Promise<void> {
-  if (!ctx.environmentService) return;
-  const stored = await ctx.environmentService.getDecryptedMap(nodeId, name);
-  if (Object.keys(stored).length === 0) return;
-  const inspect = await ctx.inspectContainer(nodeId, newContainerId);
-  const nextRuntimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
-  const next = { ...stored };
-  let changed = false;
-  for (const [key, value] of Object.entries(stored)) {
-    if (previousRuntimeEnv[key] !== value || nextRuntimeEnv[key] === value) continue;
-    changed = true;
-    if (Object.hasOwn(nextRuntimeEnv, key) && nextRuntimeEnv[key] !== MASKED_ENV_VALUE)
-      next[key] = nextRuntimeEnv[key]!;
-    else delete next[key];
-  }
-  if (changed) await ctx.environmentService.replace(nodeId, name, next);
 }
 
 /** The full runtime ID of an inspected container (a request may name it by name or short ID). */
@@ -1153,6 +1130,12 @@ export async function updateContainer(
     throw err;
   }
   const daemonTaskId = asyncDaemonTaskId(data, 'update');
+  // Kept with the task, so they still run should Gateway lose track of it; the watch below runs them otherwise.
+  const followUps = await keepEnvFollowUps(ctx, task?.id, name, {
+    expectedEnv: hasEnvChange ? desiredUserEnv : storedEnv,
+    ...(hasImageChange ? { previousRuntimeEnv } : {}),
+    ...(hasEnvChange && daemonTaskId ? { restoreEnv: storedEnv } : {}),
+  });
   ctx.watchRecreateByName(
     nodeId,
     name,
@@ -1164,8 +1147,16 @@ export async function updateContainer(
     daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : updateTimeoutMs,
     hasImageChange
       ? (newContainerId) =>
-          whileHeldAcrossProcesses(ctx, nodeId, name, 'the stored env reconciliation after an image update', () =>
-            reconcileStoredEnvAfterImageChange(ctx, nodeId, name, previousRuntimeEnv, newContainerId)
+          whileHeldAcrossProcesses(
+            ctx,
+            nodeId,
+            name,
+            'the stored env reconciliation after an image update',
+            async () => {
+              if (await followUps.take()) {
+                await reconcileStoredEnvAfterImageChange(ctx, nodeId, name, previousRuntimeEnv, newContainerId);
+              }
+            }
           ).catch((error) => {
             logger.warn('Failed to reconcile stored env after image update', { nodeId, name, error });
           })
@@ -1175,7 +1166,7 @@ export async function updateContainer(
     hasEnvChange
       ? () =>
           whileHeldAcrossProcesses(ctx, nodeId, name, 'restoring the stored env after a failed update', async () => {
-            await ctx.environmentService?.replace(nodeId, name, storedEnv);
+            if (await followUps.take()) await ctx.environmentService?.replace(nodeId, name, storedEnv);
           })
       : undefined
   );
@@ -1320,10 +1311,12 @@ export async function recreateWithConfig(
   const task = await ctx.createTask(nodeId, containerRuntimeId(inspect, containerId), name, 'recreate');
 
   const executeRecreate = async () => {
+    // The stored env the recreate finds; it does not change it.
+    let storedEnv: Record<string, string> = {};
     try {
       // Inject decrypted values in the task so image-changing requests can return immediately.
       if (ctx.environmentService) {
-        const storedEnv = await ctx.environmentService.getDecryptedMap(nodeId, name);
+        storedEnv = await ctx.environmentService.getDecryptedMap(nodeId, name);
         const userEnv = persistableUserEnv(storedEnv, new Set());
         if (Object.keys(userEnv).length > 0) {
           const existingEnv = normalizeEnvRecord(config.env) || {};
@@ -1376,6 +1369,10 @@ export async function recreateWithConfig(
         ctx.imageCleanupService?.scheduleCleanupForContainer(nodeId, name, config.image).catch(() => {});
       }
 
+      // Kept with the task, so it still runs should Gateway lose track of it; the watch below runs it otherwise.
+      const followUps = hasRequestedImage
+        ? await keepEnvFollowUps(ctx, task?.id, name, { expectedEnv: storedEnv, previousRuntimeEnv })
+        : undefined;
       ctx.watchRecreateByName(
         nodeId,
         name,
@@ -1385,11 +1382,18 @@ export async function recreateWithConfig(
         'Container recreated',
         expectedState,
         daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60),
-        hasRequestedImage
+        followUps
           ? async (newContainerId) => {
-              await reconcileStoredEnvAfterImageChange(ctx, nodeId, name, previousRuntimeEnv, newContainerId).catch(
-                (error) => logger.warn('Failed to reconcile stored env after image change', { nodeId, name, error })
-              );
+              await followUps
+                .take()
+                .then((mayRun) =>
+                  mayRun
+                    ? reconcileStoredEnvAfterImageChange(ctx, nodeId, name, previousRuntimeEnv, newContainerId)
+                    : undefined
+                )
+                .catch((error) =>
+                  logger.warn('Failed to reconcile stored env after image change', { nodeId, name, error })
+                );
               await options?.onComplete?.(newContainerId);
             }
           : options?.onComplete,
@@ -1608,6 +1612,11 @@ export async function updateContainerEnv(
     throw err;
   }
   const daemonTaskId = asyncDaemonTaskId(data, 'update');
+  // Kept with the task, so it still runs should Gateway lose track of it; the watch below runs it otherwise.
+  const followUps = await keepEnvFollowUps(ctx, task?.id, name, {
+    expectedEnv: desiredUserEnv,
+    ...(daemonTaskId ? { restoreEnv: storedEnv } : {}),
+  });
   ctx.watchRecreateByName(
     nodeId,
     name,
@@ -1621,7 +1630,7 @@ export async function updateContainerEnv(
     daemonTaskId,
     // The env was saved before dispatch; a failed async update did not apply it.
     async () => {
-      await ctx.environmentService?.replace(nodeId, name, storedEnv);
+      if (await followUps.take()) await ctx.environmentService?.replace(nodeId, name, storedEnv);
     }
   );
   await ctx.auditService.log({

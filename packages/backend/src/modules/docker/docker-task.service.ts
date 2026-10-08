@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { type DockerTaskTracking, dockerTasks } from '@/db/schema/index.js';
+import { type DockerTaskFollowUps, type DockerTaskTracking, dockerTasks } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -15,8 +15,8 @@ const LOST_STARTUP_TRACKING_ERROR = 'Task tracking interrupted by backend restar
 export const DETACHED_TASK_PROGRESS = 'Gateway lost track of it; checks with the node once it is connected';
 
 export type DockerTaskRow = typeof dockerTasks.$inferSelect;
-/** A task as the API shows it: without what Gateway keeps to settle it with its node. */
-export type PublicDockerTask = Omit<DockerTaskRow, 'tracking' | 'commandId'>;
+/** A task as the API shows it: without what Gateway keeps to settle it with its node and what it still owes then. */
+export type PublicDockerTask = Omit<DockerTaskRow, 'tracking' | 'commandId' | 'followUps'>;
 
 /**
  * Records a task's tracking without ever failing the operation it belongs to: tracking only lets Gateway settle the
@@ -53,8 +53,17 @@ export function detachDockerTask(
 }
 
 export function publicDockerTask(row: DockerTaskRow): PublicDockerTask {
-  const { tracking: _tracking, commandId: _commandId, ...task } = row;
+  const { tracking: _tracking, commandId: _commandId, followUps: _followUps, ...task } = row;
   return task;
+}
+
+function isCompletedTaskStatus(status: string | undefined): boolean {
+  return COMPLETED_TASK_STATUSES.includes(status as (typeof COMPLETED_TASK_STATUSES)[number]);
+}
+
+/** A status that ends the task: whatever it is set to besides pending or running. */
+function endsTask(status: string | undefined): boolean {
+  return status !== undefined && !ACTIVE_TASK_STATUSES.includes(status as (typeof ACTIVE_TASK_STATUSES)[number]);
 }
 
 export class DockerTaskService {
@@ -167,6 +176,7 @@ export class DockerTaskService {
         status: 'failed',
         error: 'Timed out after backend restart or lost task watcher',
         completedAt: now,
+        followUps: null,
       })
       .where(and(inArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES]), lt(dockerTasks.createdAt, cutoff)))
       .returning();
@@ -204,6 +214,7 @@ export class DockerTaskService {
         status: 'failed',
         error: LOST_STARTUP_TRACKING_ERROR,
         completedAt: now,
+        followUps: null,
       })
       .where(and(inArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES]), isNull(dockerTasks.tracking)))
       .returning();
@@ -220,6 +231,7 @@ export class DockerTaskService {
     if (rows.length > 0) {
       logger.warn(`Marked ${rows.length} active docker task(s) as failed after backend startup`);
     }
+    await this.expireFollowUps();
     return { detached: detached.length, failed: rows.length };
   }
 
@@ -301,6 +313,7 @@ export class DockerTaskService {
         ...(outcome.status === 'succeeded' ? { progress: outcome.progress } : { error: outcome.error }),
         completedAt: now,
         detachedAt: null,
+        followUps: null,
       })
       .where(and(eq(dockerTasks.id, id), inArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES])))
       .returning();
@@ -308,6 +321,55 @@ export class DockerTaskService {
     this.emit(row);
     await this.handleContainerTaskTerminal(row);
     return true;
+  }
+
+  /**
+   * Keeps what an active task still owes once it is settled (an update's or recreate's env follow-ups), until it ran
+   * or the task ended. Returns whether it was kept: a task that already ended owes nothing.
+   */
+  async recordFollowUps(id: string, followUps: DockerTaskFollowUps): Promise<boolean> {
+    const rows = await this.db
+      .update(dockerTasks)
+      .set({ followUps })
+      .where(and(eq(dockerTasks.id, id), inArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES])))
+      .returning({ id: dockerTasks.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * Takes what an active task still owes, so that it runs once: the first caller gets it and it is gone for every
+   * later one (also across backend processes). Null when nothing is owed, it was taken already, or the task ended.
+   */
+  async takeFollowUps(id: string): Promise<DockerTaskFollowUps | null> {
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ followUps: dockerTasks.followUps })
+        .from(dockerTasks)
+        .where(
+          and(
+            eq(dockerTasks.id, id),
+            inArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES]),
+            isNotNull(dockerTasks.followUps)
+          )
+        )
+        .for('update');
+      if (!row?.followUps) return null;
+      await tx.update(dockerTasks).set({ followUps: null }).where(eq(dockerTasks.id, id));
+      return row.followUps;
+    });
+  }
+
+  /**
+   * Drops what ended tasks still kept (each end clears it; this also covers rows an earlier release ended, which
+   * does not know the column). Active tasks keep theirs until they end; one stale for an hour ends then.
+   */
+  async expireFollowUps(): Promise<number> {
+    const rows = await this.db
+      .update(dockerTasks)
+      .set({ followUps: null })
+      .where(and(isNotNull(dockerTasks.followUps), notInArray(dockerTasks.status, [...ACTIVE_TASK_STATUSES])))
+      .returning({ id: dockerTasks.id });
+    return rows.length;
   }
 
   async update(
@@ -324,12 +386,14 @@ export class DockerTaskService {
     if (updates.progress !== undefined) values.progress = updates.progress;
     if (updates.error !== undefined) values.error = updates.error;
     if (updates.completedAt !== undefined) values.completedAt = updates.completedAt;
+    // An ended task owes nothing more: what it still owed is dropped with its end.
+    if (endsTask(updates.status)) values.followUps = null;
 
     const [row] = await this.db.update(dockerTasks).set(values).where(eq(dockerTasks.id, id)).returning();
 
     if (!row) throw new AppError(404, 'NOT_FOUND', 'Docker task not found');
     this.emit(row);
-    if (COMPLETED_TASK_STATUSES.includes(row.status as (typeof COMPLETED_TASK_STATUSES)[number])) {
+    if (isCompletedTaskStatus(row.status)) {
       await this.handleContainerTaskTerminal(row);
     }
     return row;
@@ -360,6 +424,7 @@ export class DockerTaskService {
         if (data.status === 'completed' || data.status === 'failed') {
           updates.completedAt = new Date();
         }
+        if (endsTask(data.status)) updates.followUps = null;
 
         await this.db
           .update(dockerTasks)
@@ -384,6 +449,7 @@ export class DockerTaskService {
    */
   async cleanup() {
     await this.markStaleActiveTasksFailed();
+    await this.expireFollowUps();
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const result = await this.db
       .delete(dockerTasks)
