@@ -129,6 +129,10 @@ func (m *dockerSecureLinkManager) setPendingRetireLocked(previous connectorRunti
 	}
 	m.pendingRetire = &previous
 	m.pendingRetireSince, m.pendingRetireLogged = time.Now(), false
+	// Recorded, so that a daemon start meanwhile counts its retirement from this replacement too (settleLeftoverLocked).
+	if err := m.replaced.record(previous.id, m.pendingRetireSince.Add(secureLinkConnectorRetireLimit)); err != nil && m.plugin.logger != nil {
+		m.plugin.logger.Warn("could not record the replaced secure-link connector", "error", err)
+	}
 }
 
 // retirePendingLocked tells the replaced connector that kept accepting (pendingRetire) to drain. Its retirement counts
@@ -136,7 +140,27 @@ func (m *dockerSecureLinkManager) setPendingRetireLocked(previous connectorRunti
 // accepting.
 func (m *dockerSecureLinkManager) retirePendingLocked() {
 	m.retireConnectorUntil(*m.pendingRetire, m.pendingRetireSince.Add(secureLinkConnectorRetireLimit))
+	m.clearPendingRetireLocked()
+}
+
+// clearPendingRetireLocked forgets pendingRetire, and every record of a replaced connector but the one still accepting.
+func (m *dockerSecureLinkManager) clearPendingRetireLocked() {
 	m.pendingRetire = nil
+	m.forgetReplacedLocked()
+}
+
+// forgetReplacedLocked drops the records of replaced connectors other than pendingRetire: retired, removed, or settled
+// at a daemon start.
+func (m *dockerSecureLinkManager) forgetReplacedLocked() {
+	var stale []string
+	for id := range m.replaced.snapshot() {
+		if m.pendingRetire == nil || m.pendingRetire.id != id {
+			stale = append(stale, id)
+		}
+	}
+	if err := m.replaced.forget(stale...); err != nil && m.plugin != nil && m.plugin.logger != nil {
+		m.plugin.logger.Warn("could not record the end of a replaced secure-link connector's wait", "error", err)
+	}
 }
 
 func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Context) map[string]egressStatus {
@@ -322,14 +346,16 @@ func (m *dockerSecureLinkManager) egressConnectorLocked(ctx context.Context) (ma
 		}
 		return networks, image, nil, nil
 	}
-	replacement, err := m.ensureConnector(ctx, image)
+	// A replacement this sync would not keep is not started: the ingress bindings of a node with ingress must move with
+	// it (the next proxy secure-link sync replaces it), and the egress needs an image with the anchor. Starting it could
+	// cut a retiring connector for nothing.
+	supported, err := m.anchorSupported(ctx, image)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("start the secure-link connector: %w", err)
 	}
-	if replacement != nil && (ingress || m.anchorID == "") {
-		// Its ingress bindings must move with it: the next proxy secure-link sync replaces it.
-		m.abortReplacement(replacement)
-		replacement = nil
+	replacement, err := m.ensureConnector(ctx, image, !ingress && supported)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("start the secure-link connector: %w", err)
 	}
 	if ingress && (running == nil || running.ID != m.connectorID) {
 		// A connector started here holds none of the ingress bindings: bind them again once this sync is done.

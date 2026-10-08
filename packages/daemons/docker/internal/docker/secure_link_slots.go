@@ -126,7 +126,7 @@ func (m *dockerSecureLinkManager) dropConnectorLocked(ctx context.Context, id st
 		return err
 	}
 	if m.pendingRetire != nil && m.pendingRetire.id == id {
-		m.pendingRetire = nil
+		m.clearPendingRetireLocked()
 	}
 	if err := m.retiring.forget(id); err != nil && m.plugin.logger != nil {
 		m.plugin.logger.Warn("could not record the removal of a retiring secure-link connector", "error", err)
@@ -135,9 +135,10 @@ func (m *dockerSecureLinkManager) dropConnectorLocked(ctx context.Context, id st
 }
 
 // settleLeftoverLocked deals with a connector found next to the one to serve that has no retirement record: the one a
-// replacement kept accepting until every egress listened on its successor (pendingRetire, which a daemon restart
-// forgets), or one an interrupted replacement left. It is told to drain; with sessions it retires in its slot with a
-// fresh deadline and finishes them (kept), without any, or when it does not answer, it goes at once.
+// replacement kept accepting until every egress listened on its successor (pendingRetire, which the replaced record
+// keeps across a daemon restart), or one an interrupted replacement left. It is told to drain; with sessions it
+// retires in its slot (kept) and finishes them, by the recorded deadline (the retire limit from its replacement) or
+// else a fresh one; without any, or when it does not answer, it goes at once.
 func (m *dockerSecureLinkManager) settleLeftoverLocked(ctx context.Context, inspect container.InspectResponse, slot int) (kept bool, err error) {
 	socketPath := m.adoptedControlSocket(m.slotSocketPath(slot))
 	drainCtx, cancel := context.WithTimeout(ctx, secureLinkConnectorSessionsWait)
@@ -148,7 +149,11 @@ func (m *dockerSecureLinkManager) settleLeftoverLocked(ctx context.Context, insp
 			m.plugin.logger.Info("a secure-link connector found next to the serving one finishes its sessions before it goes",
 				"connector", inspect.ID, "sessions", active)
 		}
-		m.retireConnector(connectorRuntime{id: inspect.ID, slot: slot, socketPath: socketPath})
+		until, recorded := m.replaced.deadline(inspect.ID)
+		if !recorded {
+			until = time.Now().Add(secureLinkConnectorRetireLimit)
+		}
+		m.retireConnectorUntil(connectorRuntime{id: inspect.ID, slot: slot, socketPath: socketPath}, until)
 		return true, nil
 	}
 	if drainErr != nil && inspect.State != nil && inspect.State.Running && m.plugin.logger != nil {

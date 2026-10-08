@@ -150,6 +150,8 @@ type dockerSecureLinkManager struct {
 	// guarded by mu.
 	pendingRetireSince  time.Time
 	pendingRetireLogged bool
+	// replaced records pendingRetire with the end of its retirement across daemon starts (secureLinkReplacedFile).
+	replaced retiringConnectors
 	// managementGateway is the management network's gateway, the daemon's address towards the connector: the only
 	// peer the ingress listeners accept (guarded by mu).
 	managementGateway string
@@ -269,6 +271,7 @@ func newDockerSecureLinkManager(plugin *DockerPlugin) (*dockerSecureLinkManager,
 		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
 	}
 	manager.retiring.file = filepath.Join(plugin.cfg.StateDir, secureLinkRetiringFile)
+	manager.replaced.file = filepath.Join(plugin.cfg.StateDir, secureLinkReplacedFile)
 	manager.loadEgressAddresses(plugin.cfg.StateDir)
 	manager.publishViewLocked()
 	return manager, nil
@@ -381,7 +384,7 @@ func (m *dockerSecureLinkManager) apply(
 			return nil, err
 		}
 	}
-	replacement, err := m.ensureConnector(ctx, image)
+	replacement, err := m.ensureConnector(ctx, image, true)
 	if err != nil {
 		var unchanged secureLinkConnectorUnchangedError
 		if !errors.As(err, &unchanged) {
@@ -428,7 +431,7 @@ func (m *dockerSecureLinkManager) apply(
 	if replacement == nil && securelink.IsShuttingDown(err) {
 		// The connector was told to drain: it never serves again. The links go to a new one at once.
 		m.abandonDrainingConnectorLocked()
-		if replacement, err = m.ensureConnector(ctx, image); err == nil {
+		if replacement, err = m.ensureConnector(ctx, image, true); err == nil {
 			response, err = bind()
 		}
 	}
@@ -582,8 +585,10 @@ func (m *dockerSecureLinkManager) failClosed(ctx context.Context) {
 // of failed requests on every route). The new connector starts
 // in a free slot next to it instead; the returned replacement is switched
 // to by apply once its links are bound, and the previous connector is retired
-// after its tunnels drained.
-func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image string) (*connectorReplacement, error) {
+// after its tunnels drained. Without replace (a caller that would discard the
+// replacement) the running connector stays as it is: a replacement may free its
+// slot by cutting a retiring connector, which must not happen for nothing.
+func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image string, replace bool) (*connectorReplacement, error) {
 	managementNetwork, err := m.plugin.client.cli.NetworkInspect(ctx, secureLinkManagementNetwork, mobyclient.NetworkInspectOptions{})
 	if err == nil && !validSecureLinkManagementNetwork(managementNetwork.Network) {
 		return nil, errors.New("refusing to use a non-managed or externally reachable secure-link management network")
@@ -638,6 +643,10 @@ func (m *dockerSecureLinkManager) ensureConnector(ctx context.Context, image str
 			}
 		}
 		if inspect.ID == m.connectorID {
+			if !replace {
+				m.publishViewLocked()
+				return nil, nil
+			}
 			return m.startReplacement(ctx, image, slot)
 		}
 	}
@@ -823,6 +832,9 @@ func (m *dockerSecureLinkManager) findConnector(ctx context.Context, image strin
 			m.resumeRetirementLocked(*inspect, slot)
 		}
 	}
+	// A replaced connector the record names was settled above (it retires by its recorded deadline or is gone), serves,
+	// or no longer exists: only the one this process still keeps accepting needs its record.
+	m.forgetReplacedLocked()
 	if chosen < 0 {
 		// None to keep: a new one starts in a slot no retiring connector holds.
 		for slot, inspect := range found {
@@ -1458,7 +1470,7 @@ func (m *dockerSecureLinkManager) removeConnector(ctx context.Context) error {
 	m.egress.configs, m.egress.configsFor = nil, ""
 	m.egress.ingressConfigs, m.egress.ingressFor = nil, ""
 	m.egress.networks = nil
-	m.pendingRetire = nil
+	m.clearPendingRetireLocked()
 	return nil
 }
 

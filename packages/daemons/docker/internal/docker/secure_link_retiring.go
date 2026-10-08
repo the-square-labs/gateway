@@ -19,6 +19,11 @@ import (
 // removed as a leftover.
 const secureLinkRetiringFile = "secure-link-connector-retiring.json"
 
+// secureLinkReplacedFile records the replaced connector that keeps accepting until every egress listens on its
+// successor (pendingRetire) with the end of its retirement, the retire limit from its replacement. A daemon that starts
+// meanwhile finds it next to the serving connector and retires it by that deadline, not by the limit from its start.
+const secureLinkReplacedFile = "secure-link-connector-replaced.json"
+
 // retiringConnectors are the connectors being retired (container id to the time it is removed at the latest),
 // recorded in file when it is set. Guarded by its own lock: retirements end outside the manager's.
 type retiringConnectors struct {
@@ -111,6 +116,15 @@ func (r *retiringConnectors) start(id, socketPath string, until time.Time) (*ret
 	handle := &retirement{socketPath: socketPath}
 	r.running[id] = handle
 	return handle, r.until[id], r.saveLocked()
+}
+
+// record keeps the deadline of a connector without retiring it (the replaced connector that still accepts).
+func (r *retiringConnectors) record(id string, until time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.loadLocked()
+	r.until[id] = until
+	return r.saveLocked()
 }
 
 // stop ends the drain requests of a connector's retirement before the connector is removed.
@@ -223,7 +237,7 @@ func (m *dockerSecureLinkManager) abandonDrainingConnectorLocked() {
 	}
 	previous := connectorRuntime{id: m.connectorID, managementIP: m.managementIP, socketPath: m.socketPath, slot: m.slot, attached: m.attached}
 	if m.pendingRetire != nil && m.pendingRetire.id == previous.id {
-		m.pendingRetire = nil
+		m.clearPendingRetireLocked()
 	}
 	m.retireConnector(previous)
 	m.connectorID = ""

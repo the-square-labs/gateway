@@ -2,6 +2,7 @@ package docker
 
 import (
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -152,17 +153,127 @@ func TestReplacedConnectorWithoutSessionsGoesAtOnce(t *testing.T) {
 // its replacement, not from the moment it stopped accepting: it is gone an hour after it was replaced at the latest.
 func TestPendingRetirementEndsAnHourFromTheReplacement(t *testing.T) {
 	manager, _ := replaceTestManager(t)
+	replacedFile := filepath.Join(t.TempDir(), secureLinkReplacedFile)
+	manager.replaced.file = replacedFile
 	previous := manager.currentView().connectorID
 	release, _ := holdSession(manager, previous)
 	defer release()
+	manager.mu.Lock()
+	manager.setPendingRetireLocked(connectorRuntime{id: previous, slot: manager.slot, socketPath: manager.socketPath})
+	since := manager.pendingRetireSince
+	manager.mu.Unlock()
+	// Recorded for a daemon start while it still accepts.
+	if until, ok := (&retiringConnectors{file: replacedFile}).deadline(previous); !ok || !until.Equal(since.Add(time.Hour)) {
+		t.Fatalf("replaced connector recorded until %v (%v), want an hour from its replacement", until, ok)
+	}
+
 	replacedAt := time.Now().Add(-40 * time.Minute)
 	manager.mu.Lock()
-	manager.pendingRetire = &connectorRuntime{id: previous, slot: manager.slot, socketPath: manager.socketPath}
 	manager.pendingRetireSince = replacedAt
 	manager.retirePendingLocked()
 	manager.mu.Unlock()
 	if until, ok := manager.retiring.deadline(previous); !ok || !until.Equal(replacedAt.Add(time.Hour)) {
 		t.Fatalf("retirement until %v (recorded %v), want an hour from the replacement", until, ok)
+	}
+	if _, err := os.Stat(replacedFile); !os.IsNotExist(err) {
+		t.Fatalf("the replaced record outlived the wait: %v", err)
+	}
+}
+
+// A daemon restart while a replaced connector still accepted (it waits until every egress listens on its successor)
+// used to give it a fresh hour from the daemon start. It retires by the deadline recorded at its replacement instead:
+// the sessions still open then are cut with a log, and the record goes.
+func TestDaemonStartRetiresAReplacedConnectorFromItsReplacement(t *testing.T) {
+	poll := secureLinkConnectorDrainPoll
+	secureLinkConnectorDrainPoll = 20 * time.Millisecond
+	t.Cleanup(func() { secureLinkConnectorDrainPoll = poll })
+	engine := newFakeConnectorEngine(t)
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	anchor := fakeAnchor(replaceTestOldImage, "10.99.0.2")
+	replaced := &fakeConnectorContainer{id: "replaced-id", name: secureLinkConnectorSlots[0].name, image: replaceTestOldImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, networkMode: "container:" + anchor.id, active: 2}
+	serving := &fakeConnectorContainer{id: "serving-id", name: secureLinkConnectorSlots[1].name, image: replaceTestNewImage,
+		groups: connectorGroupAdd(), ip: anchor.ip, running: true, slot: 1, networkMode: "container:" + anchor.id}
+	for _, current := range []*fakeConnectorContainer{anchor, replaced, serving} {
+		engine.containers[current.name] = current
+	}
+	engine.serveControl(replaced)
+	engine.serveControl(serving)
+	replacedFile := filepath.Join(t.TempDir(), secureLinkReplacedFile)
+	// Recorded by the process that replaced it almost an hour before the restart.
+	until := time.Now().Add(time.Second)
+	if err := (&retiringConnectors{file: replacedFile}).record(replaced.id, until); err != nil {
+		t.Fatal(err)
+	}
+	logs := &lockedBuffer{}
+	manager := &dockerSecureLinkManager{
+		plugin:     &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewTextHandler(logs, nil))},
+		controlDir: engine.controlDir,
+		socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings:   map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
+	}
+	manager.replaced.file = replacedFile
+	manager.publishViewLocked()
+
+	if _, err := manager.restore(replaceTestCommand(replaceTestNewImage)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if view := manager.currentView(); view.connectorID != serving.id || manager.slot != 1 {
+		t.Fatalf("restored view %+v slot %d, want the connector running the image", view, manager.slot)
+	}
+	if retiring, ok := manager.retiring.deadline(replaced.id); !ok || !retiring.Equal(until) {
+		t.Fatalf("replaced connector retires until %v (%v), want the deadline recorded at its replacement %v", retiring, ok, until)
+	}
+	if _, err := os.Stat(replacedFile); !os.IsNotExist(err) {
+		t.Fatalf("the replaced record was kept after the start settled it: %v", err)
+	}
+	waitRemoved(t, engine, replaced.id)
+	if logs.count("reached its retirement limit") != 1 || logs.count("connector="+replaced.id+" sessions_cut=2") != 1 {
+		t.Fatalf("the cut at the recorded deadline was not logged with its sessions: %s", logs.String())
+	}
+}
+
+// An egress sync that sends a connector image without the anchor (an earlier release) to a node whose serving
+// connector runs in one, while both other slots hold a connector finishing its sessions: the sync would discard the
+// replacement, so none starts, and no retiring connector is cut for it.
+func TestDiscardedReplacementLeavesTheRetiringConnectorsAlone(t *testing.T) {
+	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
+	engine.legacyImages = map[string]bool{replaceTestOldImage: true}
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	plugin := &DockerPlugin{client: engine.client()}
+	manager := &dockerSecureLinkManager{plugin: plugin, socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{}}
+	manager.publishViewLocked()
+	plugin.secureLinks = manager
+	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
+		t.Fatalf("egress on the first connector %+v", status)
+	}
+	anchor := engine.container(secureLinkAnchorName)
+	for slot, id := range map[int]string{1: "retiring-1", 2: "retiring-2"} {
+		retiring := &fakeConnectorContainer{id: id, name: secureLinkConnectorSlots[slot].name, image: replaceTestNewImage,
+			groups: connectorGroupAdd(), ip: anchor.ip, running: true, slot: slot, networkMode: "container:" + anchor.id, draining: true, active: 1}
+		engine.mu.Lock()
+		engine.containers[retiring.name] = retiring
+		engine.mu.Unlock()
+		engine.serveControl(retiring)
+		if _, _, err := manager.retiring.start(id, filepath.Join(engine.controlDir, secureLinkConnectorSlots[slot].socket), time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine.mu.Lock()
+	created := engine.created
+	engine.mu.Unlock()
+
+	legacy := egressTestAssignment(egressTestLinkID, egressTestNetwork)
+	legacy.SecureLinkEgress.ConnectorImage = replaceTestOldImage
+	if status := manager.syncEgress(egressTestBundle(legacy))[egressTestLinkID]; status.State != egressStatePending || status.Error != connectorImageTooOld {
+		t.Fatalf("egress with a connector image too old: %+v", status)
+	}
+	engine.mu.Lock()
+	createdAfter := engine.created
+	engine.mu.Unlock()
+	if removed := engine.removedIDs(); len(removed) != 0 || createdAfter != created {
+		t.Fatalf("removed %v and created %d connectors for a replacement the sync discards", removed, createdAfter-created)
 	}
 }
 
