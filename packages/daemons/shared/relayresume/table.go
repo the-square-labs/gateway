@@ -158,15 +158,21 @@ func (t *TargetTable) Accept(op OpenedPath, req AcceptRequest) *Accepted {
 		}
 		if t.handedOver.Load() {
 			// Neither unknown nor refused: the stream lives on in the next
-			// process. A dropped tunnel is a failed attempt for the source.
-			if op.Cancel != nil {
-				op.Cancel()
-			}
-			return &Accepted{Kind: AcceptRefused, PathDone: closedChan()}
+			// process.
+			return dropResume(op)
 		}
 		return t.resume(op, req, &record)
 	}
 	return legacy
+}
+
+// dropResume ends a RESUME's tunnel without an answer: a failed attempt, so
+// the source tries again.
+func dropResume(op OpenedPath) *Accepted {
+	if op.Cancel != nil {
+		op.Cancel()
+	}
+	return &Accepted{Kind: AcceptRefused, PathDone: closedChan()}
 }
 
 func (t *TargetTable) resume(op OpenedPath, req AcceptRequest, record *Record) *Accepted {
@@ -175,7 +181,13 @@ func (t *TargetTable) resume(op OpenedPath, req AcceptRequest, record *Record) *
 	t.sweepLocked(time.Now())
 	session := t.sessions[key]
 	tomb, tombed := t.tombs[key]
+	// Handed over since Accept looked: the stream may have left the table
+	// already, and the next process answers for it.
+	handedOver := t.handedOver.Load()
 	t.mu.Unlock()
+	if handedOver {
+		return dropResume(op)
+	}
 	if session == nil {
 		code := RejectUnknown
 		if tombed {
@@ -185,6 +197,12 @@ func (t *TargetTable) resume(op OpenedPath, req AcceptRequest, record *Record) *
 		return &Accepted{Kind: AcceptRefused, Reject: code, PathDone: rejectPath(op, record.SessionID, code)}
 	}
 	session.mu.Lock()
+	if session.sealed || session.detached {
+		// Read out for a handover: the answer would carry this process's
+		// offsets, which the next one may not have (Session.sealed).
+		session.mu.Unlock()
+		return dropResume(op)
+	}
 	session.core.cfg.Keys = req.Keys
 	session.core.cfg.Authorize = req.Authorize
 	path := NewPath(nil, req.RelayID, op.MaxFrame)

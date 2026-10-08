@@ -62,6 +62,16 @@ type pathRun struct {
 	// the send could drop those records in the transport.
 	lingering bool
 	ended     bool
+	// held: what the path read while the session was sealed, in order;
+	// heldEnd: the path ended among it, so its reader stops.
+	held    []heldFrame
+	heldEnd bool
+}
+
+// heldFrame is a path read a sealed session keeps for later.
+type heldFrame struct {
+	frame *relayv1.TunnelFrame
+	err   error
 }
 
 // Session drives a Core over real relay streams. It implements the
@@ -115,6 +125,14 @@ type Session struct {
 	detached         bool
 	restoredFrozenAt time.Time
 	resumedAt        time.Time
+	// sealed: the stream's state was read out (HandoverState), and the next
+	// process may carry it on from exactly that state. Until it thaws, this
+	// process tells the peer nothing beyond it: what the peer sends is kept
+	// unprocessed (Thaw processes it, Detach drops it), and no RESUME is
+	// answered or begun. Otherwise an offset learnt after the read-out (a
+	// RESUME_ACK's rcv_nxt) lets the peer free bytes the next process never
+	// got, or a CLOSE exchange finishes the stream behind its back.
+	sealed bool
 }
 
 func newSession(core *Core, routeID string, recvMax int) *Session {
@@ -181,7 +199,7 @@ func (s *Session) readerDone(run *pathRun) bool {
 
 // backgroundMayRead: the path is free and the bridge is not about to read it.
 func (s *Session) backgroundMayRead(run *pathRun) bool {
-	if run.readerBusy {
+	if run.readerBusy || run.heldEnd {
 		return false
 	}
 	if run.path != s.core.Current() || s.recvGone {
@@ -197,6 +215,16 @@ func (s *Session) handleFrameLocked(run *pathRun, frame *relayv1.TunnelFrame, er
 	}
 	if run.path.Closed() || s.detached {
 		s.bgCond.Broadcast()
+		return
+	}
+	if s.sealed {
+		// Read out for a handover: it waits (see sealed). The path is still
+		// read, so the peer's sends never block on this process, until it ends.
+		run.held = append(run.held, heldFrame{frame: frame, err: err})
+		run.heldEnd = run.heldEnd || err != nil || frame.GetData() == nil
+		if run.bgWaiting && s.backgroundMayRead(run) {
+			s.bgCond.Broadcast()
+		}
 		return
 	}
 	now := time.Now()
@@ -803,7 +831,8 @@ var ErrFrozen = errors.New("relayresume: stream is frozen for a handover")
 // Freeze stops the stream at the local socket for a handover: Recv hands out
 // nothing more (ErrFrozen) and Write takes whatever the bridge read, whatever
 // the window. The paths keep running: acks and data from the peer still
-// arrive. Thaw undoes it; Detach ends it once another process took the
+// arrive, until HandoverState reads the stream out (from then on they wait,
+// see sealed). Thaw undoes it; Detach ends it once another process took the
 // stream over.
 func (s *Session) Freeze() {
 	s.mu.Lock()
@@ -816,7 +845,8 @@ func (s *Session) Freeze() {
 	s.writeCond.Broadcast()
 }
 
-// Thaw lets a frozen stream carry on in this process.
+// Thaw lets a frozen stream carry on in this process, starting with what the
+// peer sent since it was read out.
 func (s *Session) Thaw() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -824,6 +854,18 @@ func (s *Session) Thaw() {
 		return
 	}
 	s.frozen = false
+	if s.sealed {
+		s.sealed = false
+		for _, run := range s.paths {
+			held := run.held
+			run.held, run.heldEnd = nil, false
+			for _, item := range held {
+				s.handleFrameLocked(run, item.frame, item.err)
+			}
+		}
+		s.stateCond.Broadcast()
+		s.bgCond.Broadcast()
+	}
 	s.readCond.Broadcast()
 	s.writeCond.Broadcast()
 }
@@ -851,7 +893,8 @@ func (s *Session) RecvBlocked() bool {
 // HandoverState reads a frozen stream out for another process. The bridge
 // must have stopped (no byte moves between the session and the local socket
 // any more). A stream still in its handshake, or one that ended, cannot be
-// handed over. frozenAt is when the stream stopped carrying data.
+// handed over. frozenAt is when the stream stopped carrying data. From now on
+// the stream is sealed: it stays at the state read out until Thaw or Detach.
 func (s *Session) HandoverState(frozenAt time.Time) (*SessionState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -868,6 +911,7 @@ func (s *Session) HandoverState(frozenAt time.Time) (*SessionState, error) {
 		// Taken over and not resumed yet: its pause started at the first freeze.
 		st.FrozenAt = s.restoredFrozenAt
 	}
+	s.sealed = true
 	return &st, nil
 }
 
@@ -902,7 +946,7 @@ func (s *Session) Detach() {
 				ReleaseFrame(item.frame)
 			}
 		}
-		run.queue = nil
+		run.queue, run.held = nil, nil
 		if run.closing {
 			continue // closeRun ends it
 		}

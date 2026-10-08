@@ -13,7 +13,9 @@ import (
 // either in its session or in the local socket (Session.Freeze), its state is
 // read out (Session.HandoverState) and the next process carries on with it
 // (Manager.RestoreSource, TargetTable.Restore): for the peer, the update looks
-// like the loss of the stream's path, which RESUME already covers.
+// like the loss of the stream's path, which RESUME already covers. From the
+// read-out on, the old process tells the peer nothing beyond that state (see
+// Session.sealed) until it thaws or lets the stream go.
 //
 // SessionState is that state. It holds no key: the next process takes the
 // route keys from its grant bundle. Its encoding (MarshalSessionState) is

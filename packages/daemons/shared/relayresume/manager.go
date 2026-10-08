@@ -410,6 +410,11 @@ func (m *Manager) attempts(s *Session, unplanned bool, move plannedMove) (bool, 
 	var lastErr error
 	for time.Now().Before(deadline) {
 		s.mu.Lock()
+		// A stream read out for a handover begins no move (Session.sealed):
+		// the next process resumes it, or this one once it thaws.
+		for s.sealed && !s.detached && !s.core.State().Terminal() {
+			s.stateCond.Wait()
+		}
 		state := s.core.State()
 		canResume := s.core.CanResume() && !s.detached
 		current := s.core.Current()
@@ -491,7 +496,7 @@ func (m *Manager) attempt(s *Session, unplanned bool, request DialRequest) (bool
 		return false, "", err
 	}
 	s.mu.Lock()
-	if s.detached || !s.core.CanResume() || (!unplanned && s.core.Current() == nil && s.core.State() == StateOpen) {
+	if s.detached || s.sealed || !s.core.CanResume() || (!unplanned && s.core.Current() == nil && s.core.State() == StateOpen) {
 		s.mu.Unlock()
 		if op.Cancel != nil {
 			op.Cancel()
