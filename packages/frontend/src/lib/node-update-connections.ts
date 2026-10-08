@@ -18,6 +18,23 @@ const CUT_CLASS_LABELS: Record<string, string> = {
   revoked: "connections of removed routes",
 };
 
+/** Monitoring and relay daemons carry no connections an update could keep or cut. */
+export function carriesUpdateConnections(nodeType: string): boolean {
+  return nodeType !== "monitoring" && nodeType !== "relay";
+}
+
+/**
+ * Where the node page says what the next daemon update does to open connections: in the Update Available or Update
+ * Waiting panel while one is shown, otherwise in the Runtime panel (also with no update available).
+ */
+export function updateConnectionsPlacement(
+  nodeType: string,
+  updatePanelShown: boolean
+): "update-panel" | "runtime" | null {
+  if (!carriesUpdateConnections(nodeType)) return null;
+  return updatePanelShown ? "update-panel" : "runtime";
+}
+
 export function cutClassLabel(connectionClass: string): string {
   return CUT_CLASS_LABELS[connectionClass] ?? connectionClass.replace(/_/g, " ");
 }
@@ -39,18 +56,34 @@ export function describeCut(cut: Record<string, number> | undefined): string {
 }
 
 /**
- * What an update of the node now does to its open connections: kept when the daemon hands them over and nothing
- * would be cut, otherwise how many are cut and why (classes on a second line).
+ * What an update of the node now does to its open connections, with the reason: kept when the daemon hands them
+ * over and nothing would be cut, otherwise how many are cut and why (classes on a second line). Shown also when no
+ * update is available, so it always says what the next one will do.
  */
 export function updateConnectionsSummary(
   handoverCapable: boolean,
   report: NodeUpdateConnections | null | undefined
 ): { text: string; detail: string | null } {
-  if (!handoverCapable || !report?.handoverAvailable) {
-    const serviceRestart = handoverCapable && (report?.cut?.service_restart ?? 0) > 0;
+  if (!handoverCapable) {
     return {
       text: "Open connections are cut once",
-      detail: serviceRestart ? "The whole service restarts once to start the newer launcher" : null,
+      detail: "This daemon version cannot hand connections over",
+    };
+  }
+  if (!report) {
+    return { text: "Not reported yet", detail: "The node reports it while it is connected" };
+  }
+  if (!report.handoverAvailable) {
+    if ((report.cut?.service_restart ?? 0) > 0) {
+      return {
+        text: "Open connections are cut once",
+        detail: "The whole service restarts once to start the newer launcher",
+      };
+    }
+    const reasons = describeCut(report.cut);
+    return {
+      text: "Open connections are cut once",
+      detail: reasons || "The launcher running now cannot keep them",
     };
   }
   const total = cutTotal(report.cut);

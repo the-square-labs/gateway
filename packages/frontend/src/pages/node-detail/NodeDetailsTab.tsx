@@ -17,7 +17,13 @@ import { ProgressBar } from "@/components/ui/progress-bar";
 import { useRealtime } from "@/hooks/use-realtime";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
 import { nodeTypeLabel } from "@/lib/node-appearance";
-import { cutTotal, describeCut, updateConnectionsSummary } from "@/lib/node-update-connections";
+import {
+  carriesUpdateConnections,
+  cutTotal,
+  describeCut,
+  updateConnectionsPlacement,
+  updateConnectionsSummary,
+} from "@/lib/node-update-connections";
 import { dockerNodeListRoute, proxyHostRoute } from "@/lib/resource-routes";
 import { deriveAllowedResourceIdsByScope, scopeMatches } from "@/lib/scope-utils";
 import { cn, formatBytes, formatDateTime, formatUptime } from "@/lib/utils";
@@ -256,14 +262,14 @@ export function NodeDetailsTab({
   const canTriggerDaemonUpdate = node.status === "online" && node.isConnected;
   const updateTargetVersion = getNodeUpdateTargetVersion(node);
   // What an update does to the connections through the daemon; monitoring daemons carry none.
-  const showsUpdateConnections = node.type !== "monitoring" && node.type !== "relay";
+  const showsUpdateConnections = carriesUpdateConnections(node.type);
   const updateConnections = updateConnectionsSummary(
     hasDaemonCapability(node, DAEMON_STREAM_HANDOVER_CAPABILITY),
     h?.updateConnections
   );
-  const updateConnectionsRow = showsUpdateConnections ? (
+  const updateConnectionsRow = (label: string) => (
     <DetailRow
-      label="Connections"
+      label={label}
       value={
         <span className="flex flex-col items-end gap-0.5">
           <span>{updateConnections.text}</span>
@@ -273,7 +279,7 @@ export function NodeDetailsTab({
         </span>
       }
     />
-  ) : null;
+  );
   const localIpAddresses = Array.from(new Set(h?.localIpAddresses ?? [])).sort();
   const publicIpAddresses = Array.from(new Set(h?.publicIpAddresses ?? [])).sort();
   const ipAddressCount = new Set([...localIpAddresses, ...publicIpAddresses]).size;
@@ -587,7 +593,7 @@ export function NodeDetailsTab({
           <div className="divide-y divide-border">
             <DetailRow label="Current version" value={node.daemonVersion ?? "Unknown"} />
             <DetailRow label="New version" value={daemonUpdate.latestVersion ?? "Unknown"} />
-            {updateConnectionsRow}
+            {showsUpdateConnections && updateConnectionsRow("Connections")}
             {lastUpdateError && (
               <DetailRow
                 label="Last attempt"
@@ -632,7 +638,7 @@ export function NodeDetailsTab({
                 value={formatDateTime(new Date(updateTaskWaitStartedAt + UPDATE_TASK_WAIT_MS))}
               />
             )}
-            {updateConnectionsRow}
+            {showsUpdateConnections && updateConnectionsRow("Connections")}
           </div>
         </PanelShell>
       )}
@@ -791,6 +797,12 @@ export function NodeDetailsTab({
               }
             />
           )}
+          {/* What the next daemon update does to open connections, also with no update available. The Update
+              Available and Update Waiting panels show it themselves. */}
+          {updateConnectionsPlacement(
+            node.type,
+            (!nodeUpdating && daemonUpdate.available && !pendingUpdate) || updateWaitsForTasks
+          ) === "runtime" && updateConnectionsRow("Next Update")}
           {node.type === "nginx" && (
             <DetailRow label="Nginx Version" value={String(caps.nginxVersion ?? "Unknown")} />
           )}
