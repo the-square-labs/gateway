@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fixed native Gateway backup runner. It accepts no caller-provided commands or paths."""
 import base64
+import contextlib
 import ftplib
 import hashlib
 import hmac
@@ -129,6 +130,22 @@ def run(args, env=None, input_text=None):
     if completed.returncode:
         raise BackupError(command_failure(args[0], completed.stderr or completed.stdout))
     return completed.stdout
+
+
+@contextlib.contextmanager
+def cleanup_after(cleanup):
+    """Runs `cleanup` when the block ends. When the block failed, the run reports that failure: the cleanup then often
+    finds nothing to remove (rclone: `... is a directory or doesn't exist`), and its own error must not replace the cause,
+    such as a full storage that refused the write (stand rc.6, O-2)."""
+    try:
+        yield
+    except BaseException:
+        try:
+            cleanup()
+        except Exception:
+            pass
+        raise
+    cleanup()
 
 
 def command_failure(program, output):
@@ -262,25 +279,28 @@ def preflight(config):
             stage = config.get("staging") or config["destination"]
             if stage.get("provider") != "s3": raise BackupError("clickhouse requires an S3 native staging destination")
             probe_prefix = safe_part(stage.get("prefix", "database-backups")) + "/probe/" + config["runId"]
-            try:
+            with cleanup_after(lambda: delete_prefix(stage, probe_prefix)):
                 # Preflight has seconds, not the run's time limit: prove the server itself can write to the
                 # staging bucket with a one-row object instead of backing the whole database up twice.
                 clickhouse_query(source, f"INSERT INTO FUNCTION {clickhouse_s3(stage, 'probe/' + config['runId'] + '/probe.csv', ['CSV', 'probe UInt8'])} SELECT 1")
                 if not list_objects(stage, probe_prefix):
                     raise BackupError("clickhouse native staging probe produced no objects")
-            finally:
-                delete_prefix(stage, probe_prefix)
     else:
         assert_empty_target(engine, config["restoreTarget"])
     probe = WORK / "probe"; probe.write_bytes(b"gateway-backup-probe")
     remote = remote_key(config["destination"], f"{config['runId']}/.probe")
-    try:
-        upload(config["destination"], probe, remote)
-        copied = WORK / "probe-copy"; download(config["destination"], remote, copied)
-        if copied.read_bytes() != probe.read_bytes():
+    with cleanup_after(lambda: delete_object(config["destination"], remote)):
+        try:
+            upload(config["destination"], probe, remote)
+        except Exception as error:
+            raise BackupError(f"writing a test file to the backup storage failed: {error}") from error
+        copied = WORK / "probe-copy"
+        try:
+            download(config["destination"], remote, copied)
+        except Exception as error:
+            raise BackupError(f"reading the test file back from the backup storage failed: {error}") from error
+        if not copied.is_file() or copied.read_bytes() != probe.read_bytes():
             raise BackupError("destination probe read did not match write")
-    finally:
-        delete_object(config["destination"], remote)
 
 
 def backup(config):
@@ -477,7 +497,7 @@ def clickhouse_backup(config):
     if stage.get("provider") != "s3": raise BackupError("clickhouse native backup requires S3 staging")
     database = quote_identifier(config["source"].get("database", "default")); stage_prefix = "native/" + config["runId"]
     stage_root = safe_part(stage.get("prefix", "database-backups")) + "/" + stage_prefix
-    try:
+    with cleanup_after(lambda: delete_prefix(stage, stage_root)):
         # BACKUP is synchronous and runs for as long as the data takes; the run's own limit bounds it.
         clickhouse_query(config["source"], f"BACKUP DATABASE {database} TO {clickhouse_s3(stage, stage_prefix)}", timeout=config["limits"]["timeoutSeconds"])
         entries = list_objects(stage, stage_root)
@@ -499,8 +519,6 @@ def clickhouse_backup(config):
         manifest_path = transfer_dir / "manifest.json"; manifest_path.write_text(json.dumps(manifest, sort_keys=True)); os.chmod(manifest_path, 0o600)
         upload(config["destination"], manifest_path, remote_key(config["destination"], f"{owned_prefix}/manifest.json"))
         return manifest
-    finally:
-        delete_prefix(stage, stage_root)
 
 
 def restore_clickhouse(config, manifest):
@@ -511,7 +529,7 @@ def restore_clickhouse(config, manifest):
     restore_prefix = safe_part(stage.get("prefix", "database-backups")) + "/native-restore/" + config["runId"]
     transfer_dir = WORK / "clickhouse-restore"; transfer_dir.mkdir(mode=0o700, exist_ok=True)
     source_prefix = safe_part(manifest["ownedPrefix"])
-    try:
+    with cleanup_after(lambda: delete_prefix(stage, restore_prefix)):
         for source_key in manifest["artifactKeys"]:
             relative = source_key.removeprefix(source_prefix + "/")
             local = transfer_dir / pathlib.PurePosixPath(relative)
@@ -525,8 +543,6 @@ def restore_clickhouse(config, manifest):
             raise BackupError("clickhouse artifact source database is missing")
         target_database = quote_identifier(target.get("database", "default"))
         clickhouse_query(target, f"RESTORE DATABASE {quote_source_identifier(source_database)} AS {target_database} FROM {clickhouse_s3(stage, restore_prefix.removeprefix(safe_part(stage.get('prefix', 'database-backups')) + '/'))}", timeout=config["limits"]["timeoutSeconds"])
-    finally:
-        delete_prefix(stage, restore_prefix)
 
 
 def restore_redis(config, artifact):

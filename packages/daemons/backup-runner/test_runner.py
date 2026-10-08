@@ -347,6 +347,63 @@ class RunnerDiagnosticsTests(unittest.TestCase):
             runner.assert_redis_replication_access(source)
 
 
+class PreflightProbeFailureTests(unittest.TestCase):
+    """The preflight reports the probe step that failed, not the cleanup of the probe it never wrote (stand rc.6, O-2)."""
+
+    FULL = "rclone failed: Failed to copyto: InternalError: No writable volumes status code: 500"
+    GONE = "rclone failed: Failed to deletefile: target:scn-rc6-probe/run-1/.probe is a directory or doesn't exist"
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.original_work = runner.WORK
+        runner.WORK = pathlib.Path(self.directory.name)
+        self.destination = {"provider": "s3", "endpoint": "https://storage.example.test", "bucket": "scn-rc6-probe"}
+        self.config = {"runId": "run-1", "engine": "postgres", "direction": "backup", "source": {"host": "db.example.test", "port": 5432, "database": "app"}, "destination": self.destination}
+
+    def tearDown(self):
+        runner.WORK = self.original_work
+        self.directory.cleanup()
+
+    def test_a_full_storage_is_reported_instead_of_the_missing_probe(self):
+        with patch.object(runner, "run", return_value="1"), patch.object(runner, "upload", side_effect=runner.BackupError(self.FULL)), patch.object(runner, "download") as downloaded, patch.object(runner, "delete_object", side_effect=runner.BackupError(self.GONE)) as deleted:
+            with self.assertRaises(runner.BackupError) as raised:
+                runner.preflight(self.config)
+        self.assertEqual(str(raised.exception), f"writing a test file to the backup storage failed: {self.FULL}")
+        downloaded.assert_not_called()
+        deleted.assert_called_once_with(self.destination, "run-1/.probe")
+
+    def test_a_probe_that_cannot_be_read_back_names_the_read(self):
+        with patch.object(runner, "run", return_value="1"), patch.object(runner, "upload"), patch.object(runner, "download", side_effect=runner.BackupError("rclone failed: AccessDenied")), patch.object(runner, "delete_object") as deleted:
+            with self.assertRaises(runner.BackupError) as raised:
+                runner.preflight(self.config)
+        self.assertEqual(str(raised.exception), "reading the test file back from the backup storage failed: rclone failed: AccessDenied")
+        deleted.assert_called_once()
+
+    def test_a_probe_that_cannot_be_removed_after_it_passed_still_fails(self):
+        def download(_, __, local):
+            local.write_bytes(b"gateway-backup-probe")
+
+        with patch.object(runner, "run", return_value="1"), patch.object(runner, "upload"), patch.object(runner, "download", side_effect=download), patch.object(runner, "delete_object", side_effect=runner.BackupError("rclone failed: AccessDenied")):
+            with self.assertRaises(runner.BackupError) as raised:
+                runner.preflight(self.config)
+        self.assertEqual(str(raised.exception), "rclone failed: AccessDenied")
+
+    def test_a_full_clickhouse_staging_is_reported_instead_of_its_cleanup(self):
+        config = {**self.config, "engine": "clickhouse", "source": {"host": "ch.example.test", "port": 8123, "database": "app"}, "destination": {**self.destination, "accessKeyId": "key", "secretAccessKey": "secret"}}
+
+        def query(_, statement, **__):
+            if statement.startswith("INSERT"):
+                raise runner.BackupError("clickhouse native command failed: No writable volumes")
+            return "1"
+
+        with patch.object(runner, "clickhouse_query", side_effect=query), patch.object(runner, "delete_prefix", side_effect=runner.BackupError("rclone failed: directory not found")) as deleted, patch.object(runner, "upload") as uploaded:
+            with self.assertRaises(runner.BackupError) as raised:
+                runner.preflight(config)
+        self.assertEqual(str(raised.exception), "clickhouse native command failed: No writable volumes")
+        deleted.assert_called_once_with(config["destination"], "database-backups/probe/run-1")
+        uploaded.assert_not_called()
+
+
 CA_PEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
 
 
