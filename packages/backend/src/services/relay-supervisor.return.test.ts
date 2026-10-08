@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { logger } from '@/lib/logger.js';
 import { RelaySupervisorService } from './relay-supervisor.service.js';
 
 const T0 = Date.UTC(2026, 9, 8, 14, 0);
@@ -60,6 +61,7 @@ function setup(persisted: unknown = null) {
 
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('relay supervisor: a local relay that comes back', () => {
@@ -97,6 +99,24 @@ describe('relay supervisor: a local relay that comes back', () => {
     expect(t.supervisor.getSnapshot(true)?.state).toBe('healthy');
     // Once for the check, once when the outage ended: the tunnel broker and policy channels reconnect now.
     expect(t.reconnectIfDown.mock.calls.length - before).toBe(2);
+  });
+
+  it('logs the reconnect of its channels at every return, also when the return watch had replaced them (O-6)', async () => {
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => logger);
+    const t = setup();
+    await t.supervisor.probeNow();
+    t.relay(false);
+    await t.supervisor.probeNow();
+    await t.supervisor.probeNow();
+    t.relay(true);
+    // The return check replaces the failed channel and finds the relay serving: at serving-again no channel is down.
+    await t.supervisor.watchReturn();
+    expect(t.supervisor.getSnapshot(true)?.state).toBe('healthy');
+    const lines = info.mock.calls.filter(
+      ([message]) => message === 'Gateway reconnected its channels to the local relay'
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.[1]).toMatchObject({ replacedNow: false });
   });
 
   it('checks nothing while the relay serves or an update recreates it', async () => {

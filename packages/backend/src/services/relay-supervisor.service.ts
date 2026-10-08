@@ -594,11 +594,17 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
   /**
    * The relay serves again: Gateway's other channels to it (tunnels, policy, link reconciliation) reconnect now
    * rather than after their reconnect backoff, during which they failed with UNAVAILABLE for up to 24 s while the
-   * nodes were already back (F-2).
+   * nodes were already back (F-2). Logged every time, also when the return watch had already replaced the channels
+   * during the outage, so each recovery shows in the log.
    */
   private reconnectChannels(): void {
+    if (!this.relayClient?.reconnectIfDown) return;
     try {
-      if (this.relayClient?.reconnectIfDown?.()) logger.info('Gateway reconnected its channels to the local relay');
+      const replacedNow = this.relayClient.reconnectIfDown();
+      logger.info('Gateway reconnected its channels to the local relay', {
+        replacedNow,
+        ...(replacedNow ? {} : { detail: 'reconnected while the relay was down' }),
+      });
     } catch (error) {
       logger.warn('Gateway channels to the local relay were not reconnected', {
         error: error instanceof Error ? error.message : String(error),
