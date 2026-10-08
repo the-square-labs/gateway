@@ -122,8 +122,12 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 	return ready
 }
 
-// setPendingRetireLocked keeps a replaced connector accepting until every egress listens on its replacement.
+// setPendingRetireLocked keeps a replaced connector accepting until every egress listens on its replacement. One still
+// waiting from an earlier replacement stops accepting now and finishes its sessions: its successor was replaced too.
 func (m *dockerSecureLinkManager) setPendingRetireLocked(previous connectorRuntime) {
+	if m.pendingRetire != nil && m.pendingRetire.id != previous.id {
+		m.retireConnector(*m.pendingRetire)
+	}
 	m.pendingRetire = &previous
 	m.pendingRetireSince, m.pendingRetireLogged = time.Now(), false
 }

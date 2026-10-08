@@ -67,6 +67,8 @@ type fakeConnectorContainer struct {
 	signals []string
 	// draining: told to drain (a drain request or the drain signal), the connector refuses every sync.
 	draining bool
+	// active is the sessions the connector answers a drain request with.
+	active int
 	// removing: another removal of the container runs; a remove request is refused with "already in progress" and
 	// the container goes shortly after.
 	removing bool
@@ -121,14 +123,14 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 			if securelink.ReadJSON(connection, &request) == nil {
 				e.mu.Lock()
 				current.requests = append(current.requests, request)
-				egressFails, drainFails := current.egressFails, current.drainFails
+				egressFails, drainFails, active := current.egressFails, current.drainFails, current.active
 				if request.Drain && !drainFails {
 					current.draining = true
 				}
 				draining := current.draining
 				e.mu.Unlock()
 				if request.Drain {
-					response := securelink.SyncResponse{Version: securelink.ProtocolVersion}
+					response := securelink.SyncResponse{Version: securelink.ProtocolVersion, Active: active}
 					if drainFails {
 						response.Error = "control socket out of reach"
 					}
@@ -275,8 +277,10 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		e.created++
 		slot := 0
-		if name == secureLinkConnectorSlots[1].name {
-			slot = 1
+		for index, candidate := range secureLinkConnectorSlots {
+			if name == candidate.name {
+				slot = index
+			}
 		}
 		created := &fakeConnectorContainer{
 			id: fmt.Sprintf("created-%d", e.created), name: name, image: body.Image, groups: body.HostConfig.GroupAdd, slot: slot,

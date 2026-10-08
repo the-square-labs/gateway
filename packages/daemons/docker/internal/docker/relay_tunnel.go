@@ -27,10 +27,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	databaseTunnelIdleTimeout   = 5 * time.Minute
-	databaseTunnelMaxChunkBytes = 1024 * 1024
-)
+const databaseTunnelMaxChunkBytes = 1024 * 1024
 
 // writeDatabaseTunnelBytes writes all of data.
 func writeDatabaseTunnelBytes(w io.Writer, data []byte) error {
@@ -577,7 +574,10 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		_ = relaybridge.BridgeWithChunk(tunnelCtx, connection, tunnel, int(first.GetReady().MaxFrameBytes), readChunk, cancel)
 		return
 	}
-	_ = bridgeRelayConnection(connection, tunnel, int(first.GetReady().MaxFrameBytes), r.plugin.relayReadChunk(), cancel)
+	// No idle limit of its own: the endpoint serves link routes, whose pooled connections stay open while idle, and
+	// Gateway's own and backup routes, whose idle tunnels the relay ends by their route policy. Only the relay knows
+	// which route a tunnel is for.
+	_ = bridgeRelayConnection(connection, tunnel, int(first.GetReady().MaxFrameBytes), r.plugin.relayReadChunk(), 0, cancel)
 }
 
 // errEndpointNotServed: this daemon does not serve the endpoint kind (no
@@ -797,6 +797,7 @@ func (r *relayTunnelRouter) openSourceTunnel(connection net.Conn, grant *pb.Rela
 		// resumable, so they are not counted as raw streams either.
 		tunnel.localService = true
 	} else {
+		tunnel.idle = relaySourceIdleLimit(assignment.GetOwnerKind())
 		r.plugin.makeResumable(tunnel, assignment)
 	}
 	tunnel.bridge(connection)
@@ -816,6 +817,8 @@ type relaySourceTunnel struct {
 	session *relayresume.Session
 	// localService: a stream to a service of the local relay (the registry).
 	localService bool
+	// idle ends the tunnel once its connection carried no byte for that long (relaySourceIdleLimit); 0: never.
+	idle time.Duration
 }
 
 // openSource opens a source tunnel with grant and waits until the relay admits it, at most relaySourceOpenTimeout.
@@ -855,7 +858,8 @@ func (r *relayTunnelRouter) openSourceWithin(grant *pb.RelaySignedGrant, timeout
 		cancel()
 		return nil, err
 	}
-	return &relaySourceTunnel{router: r, stream: stream, closeSend: stream.CloseSend, cancel: cancel, maxFrame: int(first.GetReady().MaxFrameBytes)}, nil
+	return &relaySourceTunnel{router: r, stream: stream, closeSend: stream.CloseSend, cancel: cancel, maxFrame: int(first.GetReady().MaxFrameBytes),
+		idle: relayTunnelIdleLimit}, nil
 }
 
 // bridge carries connection over the tunnel until either side ends it.
@@ -866,7 +870,7 @@ func (t *relaySourceTunnel) bridge(connection net.Conn) {
 	readChunk := t.router.plugin.relayReadChunk()
 	if t.session != nil {
 		maxFrame := t.session.MaxFrame()
-		_ = bridgeRelayConnection(connection, t.session, maxFrame, relayresume.ReadChunk(min(readChunk, maxFrame)), t.session.Cancel)
+		_ = bridgeRelayConnection(connection, t.session, maxFrame, relayresume.ReadChunk(min(readChunk, maxFrame)), t.idle, t.session.Cancel)
 		t.session.Cancel()
 		return
 	}
@@ -875,7 +879,7 @@ func (t *relaySourceTunnel) bridge(connection net.Conn) {
 		// long drain grace.
 		defer t.router.plugin.relayStreams().sources.TrackLegacy(t.router.targetID)()
 	}
-	_ = bridgeRelayConnection(connection, t.stream, t.maxFrame, readChunk, t.cancel)
+	_ = bridgeRelayConnection(connection, t.stream, t.maxFrame, readChunk, t.idle, t.cancel)
 }
 
 // close abandons a tunnel that was never bridged.
@@ -964,13 +968,21 @@ type relayBridgeResult struct {
 
 // bridgeRelayConnection carries connection over stream, reading at most readChunk bytes per frame (Gateway's relay
 // read chunk; 0: the frame limit): a 1 MiB buffer per connection and 1 MiB frames on a lane shared with small requests
-// were the old default.
-func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFrame, readChunk int, cancel context.CancelFunc) error {
+// were the old default. idle ends the tunnel once the connection carried no byte for that long. With 0 an idle
+// tunnel stays open, and a peer that is gone still ends it: the relay ends the stream when the other side's lane
+// drops, and TCP keepalive (keepLocalAlive) a local peer that vanished.
+func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFrame, readChunk int, idle time.Duration, cancel context.CancelFunc) error {
 	if maxFrame <= 0 || maxFrame > databaseTunnelMaxChunkBytes {
 		maxFrame = databaseTunnelMaxChunkBytes
 	}
 	if readChunk <= 0 || readChunk > maxFrame {
 		readChunk = maxFrame
+	}
+	extendIdle := func() {}
+	if idle > 0 {
+		extendIdle = func() { _ = connection.SetDeadline(time.Now().Add(idle)) }
+	} else {
+		keepLocalAlive(connection)
 	}
 	result := make(chan relayBridgeResult, 2)
 	go func() {
@@ -978,7 +990,7 @@ func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFram
 		for {
 			n, err := connection.Read(buffer)
 			if n > 0 {
-				_ = connection.SetDeadline(time.Now().Add(databaseTunnelIdleTimeout))
+				extendIdle()
 				if sendErr := stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: append([]byte(nil), buffer[:n]...)}}}); sendErr != nil {
 					result <- relayBridgeResult{local: true, terminal: true, err: sendErr}
 					return
@@ -1016,7 +1028,7 @@ func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFram
 					result <- relayBridgeResult{terminal: true, err: err}
 					return
 				}
-				_ = connection.SetDeadline(time.Now().Add(databaseTunnelIdleTimeout))
+				extendIdle()
 			case frame.GetHalfClose() != nil:
 				// *net.TCPConn, or *tls.Conn for a TLS-enabled PostgreSQL link.
 				if half, ok := connection.(interface{ CloseWrite() error }); ok {

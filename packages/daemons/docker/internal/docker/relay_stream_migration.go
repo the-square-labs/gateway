@@ -321,7 +321,8 @@ func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, 
 		session.Cancel()
 		return
 	}
-	_ = bridgeRelayConnection(connection, session, session.MaxFrame(), relayresume.ReadChunk(min(p.relayReadChunk(), session.MaxFrame())), session.Cancel)
+	// No idle limit of its own, as acceptIncoming: the relay ends the idle tunnels of a route that has one.
+	_ = bridgeRelayConnection(connection, session, session.MaxFrame(), relayresume.ReadChunk(min(p.relayReadChunk(), session.MaxFrame())), 0, session.Cancel)
 	session.Cancel()
 }
 
