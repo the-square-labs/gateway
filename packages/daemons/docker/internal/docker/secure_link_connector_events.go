@@ -2,6 +2,9 @@ package docker
 
 import (
 	"context"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/moby/moby/api/types/events"
@@ -15,12 +18,17 @@ const (
 	connectorEventsRetry = 2 * time.Second
 	// connectorResyncSpacing is the least time between two resyncs started by connector events.
 	connectorResyncSpacing = 5 * time.Second
+	// connectorDrainSettle gives a connector told to drain by its signal the moment it takes to act on it: the
+	// resync then finds it refusing and replaces it.
+	connectorDrainSettle = 200 * time.Millisecond
 )
 
 // followConnectorStarts resyncs the connector as soon as its container starts again (D5): a connector that crashed
 // and was restarted by its restart policy, or that dockerd started after its own restart, holds no listener, and
 // workloads reach the egress listeners directly, without a dial through the daemon that would restore them. After
-// the event stream broke (dockerd restarted) it resyncs as well: a start may have been missed.
+// the event stream broke (dockerd restarted) it resyncs as well: a start may have been missed. A connector told to
+// drain by its signal (docker kill -s USR1) closes its listeners at once for the same workloads: the resync that
+// follows replaces it (abandonDrainingConnectorLocked) instead of the next sync, which waited for a grant bundle.
 func (m *dockerSecureLinkManager) followConnectorStarts(ctx context.Context) {
 	if m.plugin == nil || m.plugin.client == nil {
 		return
@@ -47,10 +55,11 @@ func (m *dockerSecureLinkManager) watchConnectorStarts(ctx context.Context) bool
 		Add("type", string(events.ContainerEventType)).
 		Add("label", "wiolett.gateway.managed=secure-link-connector").
 		Add("event", string(events.ActionStart)).
-		Add("event", string(events.ActionRestart))
+		Add("event", string(events.ActionRestart)).
+		Add("event", string(events.ActionKill))
 	stream := m.plugin.client.cli.Events(streamCtx, mobyclient.EventsListOptions{Filters: filters})
 	var settle <-chan time.Time
-	var resynced time.Time
+	var settleAt, resynced time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -61,10 +70,17 @@ func (m *dockerSecureLinkManager) watchConnectorStarts(ctx context.Context) bool
 			if !isSecureLinkConnectorName(message.Actor.Attributes["name"]) {
 				continue
 			}
-			if settle == nil {
-				// A resync starts the connector itself when it had to replace it: that start is not resynced again
-				// before connectorResyncSpacing.
-				settle = time.After(max(connectorEventSettle, time.Until(resynced.Add(connectorResyncSpacing))))
+			// A resync starts the connector itself when it had to replace it: that start is not resynced again
+			// before connectorResyncSpacing. A drain signal is answered at once.
+			wait := max(connectorEventSettle, time.Until(resynced.Add(connectorResyncSpacing)))
+			if message.Action == events.ActionKill {
+				if !m.drainSignalled(message) {
+					continue
+				}
+				wait = connectorDrainSettle
+			}
+			if at := time.Now().Add(wait); settle == nil || at.Before(settleAt) {
+				settle, settleAt = time.After(wait), at
 			}
 		case <-settle:
 			settle = nil
@@ -74,7 +90,24 @@ func (m *dockerSecureLinkManager) watchConnectorStarts(ctx context.Context) bool
 	}
 }
 
-// resyncAfterConnectorStart binds the committed ingress bindings and the egress listeners again.
+// drainSignalled reports a drain signal to a connector this daemon does not retire: an operator's (or another
+// tool's) docker kill -s USR1 to the serving connector. The daemon's own drain signal goes to a connector it
+// recorded as retiring first (retireConnectorUntil).
+func (m *dockerSecureLinkManager) drainSignalled(message events.Message) bool {
+	if message.Action != events.ActionKill || !isDrainSignal(message.Actor.Attributes["signal"]) {
+		return false
+	}
+	return !m.retiring.snapshot()[message.Actor.ID]
+}
+
+// isDrainSignal reads the signal of a kill event: dockerd reports its number.
+func isDrainSignal(signal string) bool {
+	name := strings.TrimPrefix(strings.ToUpper(signal), "SIG")
+	return signal == strconv.Itoa(int(syscall.SIGUSR1)) || name == strings.TrimPrefix(secureLinkDrainSignal, "SIG")
+}
+
+// resyncAfterConnectorStart binds the committed ingress bindings and the egress listeners again. A serving connector
+// that drains refuses that sync and is replaced by a new one.
 func (m *dockerSecureLinkManager) resyncAfterConnectorStart() {
 	ingress := m.plugin.secureLinkState != nil && len(m.plugin.secureLinkState.Get().Bindings) > 0
 	if ingress {

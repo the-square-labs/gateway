@@ -2,11 +2,16 @@ package docker
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -222,6 +227,75 @@ func TestEgressLeavesADrainingConnector(t *testing.T) {
 	}
 	if request := engine.lastRequest(next.name); len(request.Egress) != 1 || request.Egress[0].Generation != 4 {
 		t.Fatalf("egress sent to the new connector %+v", request.Egress)
+	}
+}
+
+// The rc.3 stand (O-e): docker kill -s USR1 to the serving connector of a node whose workloads use it only for egress
+// closed its listeners, and the daemon replaced it only at its next sync, 27 s later; the workloads' connections were
+// refused meanwhile. The drain signal is followed now: the connector is replaced at once, without a sync from Gateway.
+func TestDrainSignalReplacesTheServingConnectorAtOnce(t *testing.T) {
+	withRetireLimit(t, time.Minute)
+	events, stream := io.Pipe()
+	t.Cleanup(func() { _ = stream.Close() })
+	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
+	engine.events = events
+	plugin := &DockerPlugin{client: engine.client()}
+	manager := &dockerSecureLinkManager{plugin: plugin, socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
+		bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{}}
+	manager.publishViewLocked()
+	plugin.secureLinks = manager
+	if status := manager.syncEgress(egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork)))[egressTestLinkID]; status.State != egressStateReady {
+		t.Fatalf("egress status %+v", status)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go manager.watchConnectorStarts(ctx)
+	kill := func(id, name, signal string) {
+		t.Helper()
+		event := fmt.Sprintf(`{"Type":"container","Action":"kill","Actor":{"ID":%q,"Attributes":{"name":%q,"signal":%q}},"time":1700000000}`,
+			id, name, signal)
+		if _, err := stream.Write([]byte(event + "\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	servingID := func() string {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		return manager.connectorID
+	}
+
+	// A stop's SIGTERM is not a drain.
+	previous := engine.container(secureLinkConnectorSlots[0].name)
+	kill(previous.id, previous.name, strconv.Itoa(int(syscall.SIGTERM)))
+	time.Sleep(3 * connectorDrainSettle)
+	if servingID() != previous.id {
+		t.Fatal("a connector was replaced for a signal other than the drain signal")
+	}
+
+	engine.mu.Lock()
+	previous.draining, previous.active = true, 4 // it stops accepting at the signal; its sessions go on
+	engine.mu.Unlock()
+	kill(previous.id, previous.name, strconv.Itoa(int(syscall.SIGUSR1)))
+	deadline := time.Now().Add(5 * time.Second)
+	for servingID() == previous.id && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	next := servingID()
+	if next == "" || next == previous.id {
+		t.Fatalf("the drained connector still serves (%q)", next)
+	}
+	if status := manager.egress.currentStatuses()[egressTestLinkID]; status.State != egressStateReady {
+		t.Fatalf("egress status %+v after the replacement", status)
+	}
+	if _, retiring := manager.retiring.deadline(previous.id); !retiring {
+		t.Fatal("the drained connector does not finish its sessions")
+	}
+
+	// The daemon's own drain signal to the connector it retires replaces nothing more.
+	kill(previous.id, previous.name, strconv.Itoa(int(syscall.SIGUSR1)))
+	time.Sleep(3 * connectorDrainSettle)
+	if servingID() != next {
+		t.Fatal("the drain signal of a retiring connector replaced the serving one")
 	}
 }
 

@@ -43,6 +43,8 @@ type fakeConnectorEngine struct {
 	egressFails bool
 	// legacyImages are connector images of an earlier release: no anchor label.
 	legacyImages map[string]bool
+	// events is the event stream the engine serves (nil: none).
+	events io.Reader
 }
 
 type fakeConnectorContainer struct {
@@ -246,6 +248,9 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 	defer e.mu.Unlock()
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	switch {
+	case path == "/events" && e.events != nil:
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(e.events), Request: request}, nil
 	case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
 		image := strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json")
 		e.pulled = append(e.pulled, image)
