@@ -191,9 +191,52 @@ message HealthReport {
   repeated RelayLatencySample relay_latencies = 40;
   // Daemons advertising relay_stream_resume_v1: their relay stream sessions.
   RelayStreamStats relay_streams = 41;
+  // Docker and nginx daemons: the connections an update of this daemon keeps
+  // and cuts now, and what its last update kept and cut.
+  DaemonUpdateConnections update_connections = 42;
   // Nginx daemons advertising ingress_group_v1: what the reserved endpoint
   // /.well-known/gateway-ingress-health answers (sf-ingress range 195-199).
   IngressHealthReport ingress_health = 195;
+}
+
+// Connections across an update of the daemon. A daemon advertising
+// daemon_stream_handover_v1 hands its relay stream sessions (RSv1) and its
+// node-local link connections to the next daemon process (live handover);
+// what it cannot hand over is cut, as before.
+message DaemonUpdateConnections {
+  // An update now hands connections over: the running launcher keeps them.
+  bool handover_available = 1;
+  // Live connections an update now would keep.
+  uint32 kept = 2;
+  // Live connections an update now would cut, by class (raw_stream,
+  // postgres_tls, registry, backup, no_handover, ...).
+  map<string, uint32> cut = 3;
+  // The last update of this daemon, once its counts are final.
+  DaemonUpdateConnectionReport last_update = 4;
+}
+
+// What one update of the daemon did to the connections it carried.
+message DaemonUpdateConnectionReport {
+  string from_version = 1;
+  string to_version = 2;
+  // When the previous process began to stop.
+  int64 started_at_unix_ms = 3;
+  // When the counts became final (every handed over session resumed or ended).
+  int64 finished_at_unix_ms = 4;
+  // The update handed connections over (live handover).
+  bool handover = 5;
+  // Connections the previous process handed over.
+  uint32 handed_over = 6;
+  // Of those, the ones that carry on after the update.
+  uint32 kept = 7;
+  // Connections the update cut, by class (the classes of
+  // DaemonUpdateConnections.cut, plus handshake, over_limit, resume_failed,
+  // busy).
+  map<string, uint32> cut = 8;
+  // Pause of the handed over sessions, from the freeze to their resume.
+  uint32 pause_p50_ms = 9;
+  uint32 pause_p99_ms = 10;
+  uint32 pause_max_ms = 11;
 }
 
 // Relay stream sessions of one daemon (RSv1). Totals count since the daemon

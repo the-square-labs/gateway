@@ -1,4 +1,5 @@
 import type {
+  DaemonNodeUpdateResult,
   DaemonUpdateStatus,
   DashboardRelaySnapshot,
   HousekeepingConfig,
@@ -170,13 +171,16 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    /** `now` updates without waiting for the node's running tasks, also an update already waiting for them. */
     async triggerDaemonUpdate(
-      nodeId: string
-    ): Promise<{ scheduled: boolean; targetVersion: string; leaseSequenced?: boolean }> {
+      nodeId: string,
+      options: { now?: boolean } = {}
+    ): Promise<DaemonNodeUpdateResult> {
       return this.unwrapData(
-        this.request<{
-          data: { scheduled: boolean; targetVersion: string; leaseSequenced?: boolean };
-        }>(`/system/daemon-updates/${nodeId}`, { method: "POST" })
+        this.request<{ data: DaemonNodeUpdateResult }>(`/system/daemon-updates/${nodeId}`, {
+          method: "POST",
+          ...(options.now ? { body: JSON.stringify({ now: true }) } : {}),
+        })
       );
     }
 

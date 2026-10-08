@@ -29,6 +29,7 @@ import (
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 )
 
@@ -60,6 +61,12 @@ type dockerRegistryProxyManager struct {
 	bindings  map[string]*registryProxyBinding
 	listener  net.Listener
 	server    *http.Server
+	// keptName names the listening socket's copy in the listener keeper; adopted is the socket the previous process
+	// kept, until startListener claims it; handingOver is set once the socket went to the next process
+	// (registry_proxy_handover.go).
+	keptName    string
+	adopted     *os.File
+	handingOver bool
 	// identityMu serializes identity checks; identity is read lock-free by
 	// the TLS handshake so a reissued leaf is served without a restart.
 	identityMu sync.Mutex
@@ -97,6 +104,7 @@ func newDockerRegistryProxyManager(plugin *DockerPlugin) (*dockerRegistryProxyMa
 	if err := manager.loadOrCreateIdentity(); err != nil {
 		return nil, err
 	}
+	manager.adoptKeptListener()
 	return manager, nil
 }
 
@@ -152,7 +160,7 @@ func (m *dockerRegistryProxyManager) sync(command *pb.SyncDockerRegistryBindings
 		}
 	}
 	m.bindings = next
-	shouldStart := len(next) > 0 && m.listener == nil
+	shouldStart := len(next) > 0 && m.listener == nil && !m.handingOver
 	shouldStop := len(next) == 0 && m.listener != nil
 	m.mu.Unlock()
 
@@ -211,23 +219,33 @@ func (m *dockerRegistryProxyManager) currentBinding(id string) *registryProxyBin
 }
 
 func (m *dockerRegistryProxyManager) startListener() error {
-	listener, err := net.Listen("tcp4", fmt.Sprintf("%s:%d", registryProxyAddress, registryProxyPort))
+	listener, keptName, err := m.listenKept()
 	if err != nil {
 		return fmt.Errorf("listen for registry proxy: %w", err)
 	}
 	tlsListener := tls.NewListener(listener, &tls.Config{GetCertificate: m.getCertificate, MinVersion: tls.VersionTLS13})
 	server := &http.Server{Handler: http.HandlerFunc(m.serveHTTP), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	m.mu.Lock()
-	if m.listener != nil || len(m.bindings) == 0 {
+	if m.listener != nil || len(m.bindings) == 0 || m.handingOver {
 		m.mu.Unlock()
 		_ = tlsListener.Close()
+		if keptName != "" {
+			_ = listenerkeep.Drop(keptName)
+		}
 		return nil
 	}
 	m.listener = tlsListener
+	m.keptName = keptName
 	m.server = server
 	m.mu.Unlock()
 	go func() {
 		if err := server.Serve(tlsListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			m.mu.RLock()
+			handingOver := m.handingOver
+			m.mu.RUnlock()
+			if handingOver {
+				return // the socket went to the next process
+			}
 			m.plugin.logger.Error("registry proxy stopped", "error", err)
 			m.failClosed()
 		}
@@ -237,9 +255,12 @@ func (m *dockerRegistryProxyManager) startListener() error {
 
 func (m *dockerRegistryProxyManager) stopListener() {
 	m.mu.Lock()
-	server, listener := m.server, m.listener
-	m.server, m.listener = nil, nil
+	server, listener, keptName := m.server, m.listener, m.keptName
+	m.server, m.listener, m.keptName = nil, nil, ""
 	m.mu.Unlock()
+	if keptName != "" {
+		_ = listenerkeep.Drop(keptName)
+	}
 	if server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = server.Shutdown(ctx)

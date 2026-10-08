@@ -145,6 +145,41 @@ export interface NodeHealthReport {
   managedLinks?: NodeManagedLinkReport[];
   // Daemons with relay_stream_resume_v1: their relay stream sessions (RSv1).
   relayStreams?: NodeRelayStreamReport;
+  // Docker and nginx daemons: the connections an update keeps and cuts now, and what the last update did.
+  updateConnections?: NodeUpdateConnectionsReport;
+}
+
+/**
+ * The connections across an update of a docker or nginx daemon. With daemon_stream_handover_v1 the daemon hands its
+ * relay stream sessions over to the next process; what it cannot hand over is cut, by class (an open set: raw_stream,
+ * postgres_tls, registry, backup, no_handover, handshake, over_limit, resume_failed, busy, idle_closed, ...).
+ */
+export interface NodeUpdateConnectionsReport {
+  /** An update now hands connections over (the running launcher keeps them). */
+  handoverAvailable: boolean;
+  /** Live connections an update now would keep. */
+  kept: number;
+  /** Live connections an update now would cut, by class. */
+  cut: Record<string, number>;
+  /** The last update of the daemon, once its counts are final. */
+  lastUpdate?: NodeUpdateConnectionResult;
+}
+
+/** What one update of the daemon did to the connections it carried. */
+export interface NodeUpdateConnectionResult {
+  fromVersion: string;
+  toVersion: string;
+  startedAtUnixMs: number;
+  /** When the counts became final; identifies the report. */
+  finishedAtUnixMs: number;
+  /** The update handed connections over (live handover). */
+  handover: boolean;
+  handedOver: number;
+  kept: number;
+  cut: Record<string, number>;
+  pauseP50Ms: number;
+  pauseP99Ms: number;
+  pauseMaxMs: number;
 }
 
 /** A daemon's relay stream sessions (RSv1). Totals count since the daemon started. */

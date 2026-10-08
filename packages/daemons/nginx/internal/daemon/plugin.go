@@ -586,7 +586,7 @@ func (p *NginxPlugin) OnSessionStart(ctx context.Context, _ *stream.Writer) erro
 }
 
 func (p *NginxPlugin) OnSessionEnd() {
-	p.maintenanceAccess.close()
+	p.maintenanceAccess.close(p.socketsHandedOver())
 	p.maintenanceAccess = nil
 	if p.conn != nil {
 		_ = p.conn.Close()

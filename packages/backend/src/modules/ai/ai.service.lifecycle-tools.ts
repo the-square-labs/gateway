@@ -181,12 +181,17 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
           case 'update_daemon': {
             const nodeId = String(a.nodeId ?? '');
             if (!nodeId) throw new Error('nodeId is required');
-            return dispatchNodeDaemonUpdate(nodeId, {
-              db: container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
-              daemonUpdateService: container.resolve(DaemonUpdateService),
-              dispatch: container.resolve(NodeDispatchService),
-              rollout: container.resolve(DaemonUpdateRollout),
-            });
+            // Same as POST /system/daemon-updates/:nodeId: `now` skips (or ends) the wait for the node's long tasks.
+            return dispatchNodeDaemonUpdate(
+              nodeId,
+              {
+                db: container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
+                daemonUpdateService: container.resolve(DaemonUpdateService),
+                dispatch: container.resolve(NodeDispatchService),
+                rollout: container.resolve(DaemonUpdateRollout),
+              },
+              { now: a.now === true }
+            );
           }
           default:
             throw new Error('Unsupported system update operation');

@@ -2,6 +2,7 @@ import { ArrowRight, ArrowUpCircle, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -16,18 +17,24 @@ import { ProgressBar } from "@/components/ui/progress-bar";
 import { useRealtime } from "@/hooks/use-realtime";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
 import { nodeTypeLabel } from "@/lib/node-appearance";
+import { cutTotal, describeCut, updateConnectionsSummary } from "@/lib/node-update-connections";
 import { dockerNodeListRoute, proxyHostRoute } from "@/lib/resource-routes";
 import { deriveAllowedResourceIdsByScope, scopeMatches } from "@/lib/scope-utils";
-import { cn, formatBytes, formatUptime } from "@/lib/utils";
+import { cn, formatBytes, formatDateTime, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
+  DAEMON_STREAM_HANDOVER_CAPABILITY,
   type DockerRuntimeStatus,
+  getNodeLastUpdate,
   getNodeUpdateLastError,
   getNodeUpdateTargetVersion,
   getNodeUpdateWaitingFor,
+  getNodeUpdateWaitingForTasks,
+  hasDaemonCapability,
   isNodeUpdateQueued,
+  isNodeUpdateWaitingForTasks,
   isNodeUpdating,
   type NodeDetail,
   type NodeHealthReport,
@@ -80,6 +87,19 @@ function normalizeVersion(version: string | null | undefined): string {
   return (version ?? "").replace(/^v/, "");
 }
 
+/** An update waits this long at most for the running tasks of its node (Gateway's limit). */
+const UPDATE_TASK_WAIT_MS = 30 * 60_000;
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** "Backup of orders, Build of acme/web and 2 more" */
+function taskList(labels: string[]): string {
+  const shown = labels.slice(0, 3).join(", ");
+  return labels.length > 3 ? `${shown} and ${labels.length - 3} more` : shown;
+}
+
 function IPAddressPanel({ title, addresses }: { title: string; addresses: string[] }) {
   return (
     <PanelShell title={title} bodyClassName="divide-y divide-border">
@@ -110,6 +130,7 @@ export function NodeDetailsTab({
     node.type === "nginx" && node.status === "online" && node.isConnected
   );
   const user = useAuthStore((state) => state.user);
+  const canUpdateDaemon = useAuthStore((state) => state.hasScope("admin:update"));
   const authKey = accessContextKey(useAuthStore.getState());
   const dockerResources = useMemo(() => {
     const scopes = user?.scopes ?? [];
@@ -225,11 +246,34 @@ export function NodeDetailsTab({
   const nodeUpdating = isNodeUpdating(node);
   const updateQueued = isNodeUpdateQueued(node);
   const updateWaitingFor = getNodeUpdateWaitingFor(node);
+  const updateWaitsForTasks = isNodeUpdateWaitingForTasks(node);
+  const updateWaitingForTasks = getNodeUpdateWaitingForTasks(node);
+  const updateTaskWaitStartedAt = Date.parse(String(node.metadata?.updateTaskWaitStartedAt ?? ""));
+  const lastUpdate = getNodeLastUpdate(node);
   const lastUpdateError = getNodeUpdateLastError(node);
   // A live NodeControl stream is sufficient to deliver the update even when
   // the daemon and the new generic tunnel protocol do not match yet.
   const canTriggerDaemonUpdate = node.status === "online" && node.isConnected;
   const updateTargetVersion = getNodeUpdateTargetVersion(node);
+  // What an update does to the connections through the daemon; monitoring daemons carry none.
+  const showsUpdateConnections = node.type !== "monitoring" && node.type !== "relay";
+  const updateConnections = updateConnectionsSummary(
+    hasDaemonCapability(node, DAEMON_STREAM_HANDOVER_CAPABILITY),
+    h?.updateConnections
+  );
+  const updateConnectionsRow = showsUpdateConnections ? (
+    <DetailRow
+      label="Connections"
+      value={
+        <span className="flex flex-col items-end gap-0.5">
+          <span>{updateConnections.text}</span>
+          {updateConnections.detail && (
+            <span className="text-xs text-muted-foreground">{updateConnections.detail}</span>
+          )}
+        </span>
+      }
+    />
+  ) : null;
   const localIpAddresses = Array.from(new Set(h?.localIpAddresses ?? [])).sort();
   const publicIpAddresses = Array.from(new Set(h?.publicIpAddresses ?? [])).sort();
   const ipAddressCount = new Set([...localIpAddresses, ...publicIpAddresses]).size;
@@ -325,9 +369,11 @@ export function NodeDetailsTab({
       });
     }
     toast.success(
-      result.leaseSequenced
-        ? "Daemon update queued — the node restarts once the other members of its availability lease have settled"
-        : "Daemon update triggered — the node will restart shortly"
+      result.waitingForTasks
+        ? `Daemon update queued — it starts once ${plural(result.waitingForTasks, "running task")} on the node finish, at the latest in 30 minutes`
+        : result.leaseSequenced
+          ? "Daemon update queued — the node restarts once the other members of its availability lease have settled"
+          : "Daemon update triggered — the node will restart shortly"
     );
     // The update runs regardless of whether this refresh succeeds; realtime events refresh the page too.
     await Promise.all([refreshNode(), refreshDaemonUpdateStatus({ force: true })]).catch(
@@ -335,6 +381,29 @@ export function NodeDetailsTab({
     );
     setIsUpdating(false);
   };
+
+  // The confirmed "Update now" of an update that waits for the running tasks of the node.
+  const handleUpdateNow = () =>
+    void confirmAction(
+      {
+        title: "Update now?",
+        description: `The daemon restarts without waiting for the running tasks on this node: ${taskList(
+          updateWaitingForTasks.map((task) => task.label)
+        )}. They may fail.`,
+        confirmLabel: "Update now",
+        variant: "destructive",
+      },
+      async () => {
+        try {
+          await api.triggerDaemonUpdate(node.id, { now: true });
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Failed to update now");
+          throw err;
+        }
+        toast.success("Daemon update starts now");
+        await refreshNode().catch(() => undefined);
+      }
+    );
 
   const handleRuntimeAction = async (action: "preflight" | "install") => {
     if (!requireLicenseFeature("secure-runtime", "Secure Runtime setup")) return;
@@ -518,6 +587,7 @@ export function NodeDetailsTab({
           <div className="divide-y divide-border">
             <DetailRow label="Current version" value={node.daemonVersion ?? "Unknown"} />
             <DetailRow label="New version" value={daemonUpdate.latestVersion ?? "Unknown"} />
+            {updateConnectionsRow}
             {lastUpdateError && (
               <DetailRow
                 label="Last attempt"
@@ -534,6 +604,35 @@ export function NodeDetailsTab({
                 }
               />
             )}
+          </div>
+        </PanelShell>
+      )}
+
+      {updateWaitsForTasks && (
+        <PanelShell
+          title={<span className="text-warning-text">Update Waiting</span>}
+          description={`Waits for ${plural(updateWaitingForTasks.length, "running task")}: ${taskList(
+            updateWaitingForTasks.map((task) => task.label)
+          )}`}
+          dirty
+          actions={
+            canUpdateDaemon ? (
+              <Button variant="warning" onClick={handleUpdateNow}>
+                <ArrowUpCircle />
+                Update now
+              </Button>
+            ) : null
+          }
+        >
+          <div className="divide-y divide-border">
+            <DetailRow label="New version" value={updateTargetVersion ?? "Unknown"} />
+            {Number.isFinite(updateTaskWaitStartedAt) && (
+              <DetailRow
+                label="Starts by"
+                value={formatDateTime(new Date(updateTaskWaitStartedAt + UPDATE_TASK_WAIT_MS))}
+              />
+            )}
+            {updateConnectionsRow}
           </div>
         </PanelShell>
       )}
@@ -664,9 +763,11 @@ export function NodeDetailsTab({
                   <Badge
                     variant="warning"
                     title={
-                      updateQueued && updateWaitingFor.length > 0
-                        ? `Waits for ${updateWaitingFor.length} lease member${updateWaitingFor.length === 1 ? "" : "s"}: ${updateWaitingFor.map((entry) => entry.reason).join(", ")}`
-                        : undefined
+                      updateWaitsForTasks
+                        ? `Waits for ${plural(updateWaitingForTasks.length, "running task")}`
+                        : updateQueued && updateWaitingFor.length > 0
+                          ? `Waits for ${updateWaitingFor.length} lease member${updateWaitingFor.length === 1 ? "" : "s"}: ${updateWaitingFor.map((entry) => entry.reason).join(", ")}`
+                          : undefined
                     }
                   >
                     {updateQueued ? "Queued" : "Updating"}
@@ -705,6 +806,37 @@ export function NodeDetailsTab({
                     <Badge variant="secondary">{runtimeStatus.installedVersion}</Badge>
                   )}
                 </div>
+              }
+            />
+          )}
+          {lastUpdate && (
+            <DetailRow
+              label="Last Update"
+              value={
+                <span className="flex flex-col items-end gap-0.5">
+                  <span>
+                    {lastUpdate.targetVersion}
+                    {lastUpdate.completedAt ? (
+                      <>
+                        {" "}
+                        (<RelativeTime value={lastUpdate.completedAt} />)
+                      </>
+                    ) : null}
+                  </span>
+                  {lastUpdate.connections && (
+                    <span className="text-xs text-muted-foreground">
+                      Kept {lastUpdate.connections.kept}, cut {cutTotal(lastUpdate.connections.cut)}
+                      {cutTotal(lastUpdate.connections.cut) > 0
+                        ? ` (${describeCut(lastUpdate.connections.cut)})`
+                        : ""}
+                    </span>
+                  )}
+                  {lastUpdate.warnings.map((warning) => (
+                    <span key={warning} className="text-xs text-warning-text">
+                      {warning}
+                    </span>
+                  ))}
+                </span>
               }
             />
           )}

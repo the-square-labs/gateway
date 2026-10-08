@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { managedLinkHealth, relayStreamHealth } from './health-report.js';
+import { managedLinkHealth, relayStreamHealth, updateConnectionsHealth } from './health-report.js';
 
 describe('managedLinkHealth', () => {
   it('decodes the managed links a docker daemon reports and leaves the field out without any', () => {
@@ -117,5 +117,60 @@ describe('relayStreamHealth', () => {
         byRelay: [{ relayInstanceId: 'relay-1', resumable: 12, legacy: 1 }],
       },
     });
+  });
+});
+
+describe('updateConnectionsHealth', () => {
+  it('decodes what an update keeps and cuts, with the last update once it is final', () => {
+    // proto-loader with defaults: an absent message is null.
+    expect(updateConnectionsHealth(null)).toEqual({});
+    expect(
+      updateConnectionsHealth({
+        handoverAvailable: true,
+        kept: 40,
+        cut: { raw_stream: 2, registry: 0 },
+        lastUpdate: {
+          fromVersion: 'v2.12.0',
+          toVersion: 'v2.12.1',
+          startedAtUnixMs: '1800000000000',
+          finishedAtUnixMs: '1800000004000',
+          handover: true,
+          handedOver: 38,
+          kept: 37,
+          cut: { resume_failed: 1 },
+          pauseP50Ms: 900,
+          pauseP99Ms: 1800,
+          pauseMaxMs: 2100,
+        },
+      })
+    ).toEqual({
+      updateConnections: {
+        handoverAvailable: true,
+        kept: 40,
+        cut: { raw_stream: 2 },
+        lastUpdate: {
+          fromVersion: 'v2.12.0',
+          toVersion: 'v2.12.1',
+          startedAtUnixMs: 1_800_000_000_000,
+          finishedAtUnixMs: 1_800_000_004_000,
+          handover: true,
+          handedOver: 38,
+          kept: 37,
+          cut: { resume_failed: 1 },
+          pauseP50Ms: 900,
+          pauseP99Ms: 1800,
+          pauseMaxMs: 2100,
+        },
+      },
+    });
+    // A last update without counts yet (defaults) is left out.
+    expect(
+      updateConnectionsHealth({
+        handoverAvailable: false,
+        kept: 0,
+        cut: {},
+        lastUpdate: { toVersion: '', finishedAtUnixMs: '0' },
+      })
+    ).toEqual({ updateConnections: { handoverAvailable: false, kept: 0, cut: {} } });
   });
 });

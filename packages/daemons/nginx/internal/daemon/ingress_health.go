@@ -93,6 +93,7 @@ type ingressHealthResponder struct {
 	plugin   *NginxPlugin
 	logger   *slog.Logger
 	listener net.Listener
+	keptName string
 	server   *http.Server
 	cancel   context.CancelFunc
 
@@ -112,28 +113,14 @@ func startIngressHealthResponder(plugin *NginxPlugin, logger *slog.Logger) (*ing
 	if err := os.MkdirAll(nginx.IngressHealthSocketDir, 0o755); err != nil {
 		return nil, err
 	}
-	if info, err := os.Lstat(nginx.IngressHealthSocketPath); err == nil {
-		if info.Mode()&os.ModeSocket == 0 {
-			return nil, errors.New("refusing to replace a non-socket ingress health path")
-		}
-		if err := os.Remove(nginx.IngressHealthSocketPath); err != nil {
-			return nil, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	listener, err := net.Listen("unix", nginx.IngressHealthSocketPath)
+	// The endpoint only reports health; any local process (nginx workers run as another user) may read it. The
+	// socket the previous process kept is taken over (service_sockets.go).
+	listener, keptName, err := listenServiceSocket(nginx.IngressHealthSocketPath)
 	if err != nil {
 		return nil, err
 	}
-	// The endpoint only reports health; any local process (nginx workers run as another user) may read it.
-	if err := os.Chmod(nginx.IngressHealthSocketPath, 0o666); err != nil {
-		_ = listener.Close()
-		_ = os.Remove(nginx.IngressHealthSocketPath)
-		return nil, err
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	responder := &ingressHealthResponder{plugin: plugin, logger: logger, listener: listener, cancel: cancel}
+	responder := &ingressHealthResponder{plugin: plugin, logger: logger, listener: listener, keptName: keptName, cancel: cancel}
 	responder.inputs = responder.pluginInputs
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", responder.serveHealth)
@@ -152,9 +139,11 @@ func (r *ingressHealthResponder) close() {
 		return
 	}
 	r.cancel()
+	// Once the daemon handed its sockets to the next process, so does the responder.
+	remove := releaseServiceSocket(r.listener, nginx.IngressHealthSocketPath, r.keptName, r.plugin.socketsHandedOver())
 	_ = r.server.Close()
 	_ = r.listener.Close()
-	_ = os.Remove(nginx.IngressHealthSocketPath)
+	remove()
 }
 
 func (r *ingressHealthResponder) pluginInputs(now time.Time) ingressHealthInputs {

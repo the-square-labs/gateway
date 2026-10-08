@@ -1,4 +1,9 @@
-import type { NodeManagedLinkReport, NodeRelayStreamReport } from '@/db/schema/nodes.js';
+import type {
+  NodeManagedLinkReport,
+  NodeRelayStreamReport,
+  NodeUpdateConnectionResult,
+  NodeUpdateConnectionsReport,
+} from '@/db/schema/nodes.js';
 
 const managedStorageRootFilesystem = 'gateway-managed-storage-root';
 
@@ -141,6 +146,61 @@ export function relayStreamHealth(raw: unknown): { relayStreams?: NodeRelayStrea
       migrationStallP95Ms: count(value.migrationStallP95Ms),
       resumeRefusedTotal: count(value.resumeRefusedTotal),
       byRelay,
+    },
+  };
+}
+
+function healthCount(field: unknown): number {
+  const parsed = Number(field ?? 0);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+}
+
+/** Connections by cut class; classes are an open set, empty and zero entries are dropped. */
+function cutByClass(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const cut: Record<string, number> = {};
+  for (const [connectionClass, value] of Object.entries(raw as Record<string, unknown>)) {
+    const count = healthCount(value);
+    if (connectionClass && count > 0) cut[connectionClass] = count;
+  }
+  return cut;
+}
+
+function updateConnectionResult(raw: unknown): NodeUpdateConnectionResult | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  const toVersion = typeof value.toVersion === 'string' ? value.toVersion : '';
+  const finishedAtUnixMs = healthCount(value.finishedAtUnixMs);
+  if (!toVersion || finishedAtUnixMs === 0) return undefined;
+  return {
+    fromVersion: typeof value.fromVersion === 'string' ? value.fromVersion : '',
+    toVersion,
+    startedAtUnixMs: healthCount(value.startedAtUnixMs),
+    finishedAtUnixMs,
+    handover: value.handover === true,
+    handedOver: healthCount(value.handedOver),
+    kept: healthCount(value.kept),
+    cut: cutByClass(value.cut),
+    pauseP50Ms: healthCount(value.pauseP50Ms),
+    pauseP99Ms: healthCount(value.pauseP99Ms),
+    pauseMaxMs: healthCount(value.pauseMaxMs),
+  };
+}
+
+/**
+ * What an update of a docker or nginx daemon keeps and cuts (HealthReport.update_connections). Absent when the daemon
+ * does not report it, so reports of older daemons keep their shape.
+ */
+export function updateConnectionsHealth(raw: unknown): { updateConnections?: NodeUpdateConnectionsReport } {
+  if (!raw || typeof raw !== 'object') return {};
+  const value = raw as Record<string, unknown>;
+  const lastUpdate = updateConnectionResult(value.lastUpdate);
+  return {
+    updateConnections: {
+      handoverAvailable: value.handoverAvailable === true,
+      kept: healthCount(value.kept),
+      cut: cutByClass(value.cut),
+      ...(lastUpdate ? { lastUpdate } : {}),
     },
   };
 }

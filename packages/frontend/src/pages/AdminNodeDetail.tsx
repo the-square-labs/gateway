@@ -94,6 +94,7 @@ import {
   effectiveNodeStatus,
   getNodeUpdateTargetVersion,
   isNodeIncompatible,
+  isNodeUpdateWaitingForTasks,
   isNodeUpdating,
 } from "@/types";
 import type {
@@ -410,7 +411,8 @@ export function AdminNodeDetail({
   const clearReissueNode = useCallback(() => setReissueNode(null), []);
   const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } =
     usePinnedNodesStore();
-  const nodeUpdating = node ? isNodeUpdating(node) : false;
+  // An update that waits for the node's running tasks has restarted nothing: the node page stays usable.
+  const nodeUpdating = node ? isNodeUpdating(node) && !isNodeUpdateWaitingForTasks(node) : false;
   const nodeUnavailable =
     node?.status === "pending" ||
     (hostingOperationPending(hosting?.operation) &&

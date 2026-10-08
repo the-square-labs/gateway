@@ -24,6 +24,7 @@ var maintenanceAccessHostID = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
 
 type maintenanceAccessServer struct {
 	listener net.Listener
+	keptName string
 	server   *http.Server
 }
 
@@ -31,24 +32,9 @@ func startMaintenanceAccessServer(conn *grpc.ClientConn, logger interface{ Warn(
 	if err := os.MkdirAll(filepath.Dir(maintenanceAccessSocketPath), 0o755); err != nil {
 		return nil, err
 	}
-	if info, err := os.Lstat(maintenanceAccessSocketPath); err == nil {
-		if info.Mode()&os.ModeSocket == 0 {
-			return nil, errors.New("refusing to replace non-socket maintenance access path")
-		}
-		if err := os.Remove(maintenanceAccessSocketPath); err != nil {
-			return nil, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-
-	listener, err := net.Listen("unix", maintenanceAccessSocketPath)
+	// The socket the previous process kept is taken over (service_sockets.go).
+	listener, keptName, err := listenServiceSocket(maintenanceAccessSocketPath)
 	if err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(maintenanceAccessSocketPath, 0o666); err != nil {
-		_ = listener.Close()
-		_ = os.Remove(maintenanceAccessSocketPath)
 		return nil, err
 	}
 
@@ -59,16 +45,19 @@ func startMaintenanceAccessServer(conn *grpc.ClientConn, logger interface{ Warn(
 			logger.Warn("maintenance access socket stopped", "error", err)
 		}
 	}()
-	return &maintenanceAccessServer{listener: listener, server: server}, nil
+	return &maintenanceAccessServer{listener: listener, keptName: keptName, server: server}, nil
 }
 
-func (s *maintenanceAccessServer) close() {
+// close ends the server: for good, or, once the daemon handed its sockets to the next process (handedOver), only
+// this process's part of the socket.
+func (s *maintenanceAccessServer) close(handedOver bool) {
 	if s == nil {
 		return
 	}
+	remove := releaseServiceSocket(s.listener, maintenanceAccessSocketPath, s.keptName, handedOver)
 	_ = s.server.Close()
 	_ = s.listener.Close()
-	_ = os.Remove(maintenanceAccessSocketPath)
+	remove()
 }
 
 // maintenanceAccessHandler redeems an access code the maintenance page posts. 204 sets the access cookies; 403 means

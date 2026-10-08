@@ -230,7 +230,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_system_updates',
     description:
-      'Read or manage Gateway, Relay Pool, and daemon updates. Operations: get_gateway_status, check_gateway, get_gateway_release_notes, list_gateway_release_notes (every release between the current and the available version), perform_gateway_update, proceed_gateway_update (stop waiting for running operations), acknowledge_gateway_update_failure, perform_relay_update, abandon_relay_update (end a stuck or paused Relay Pool update), list_daemon_updates, check_daemon_updates, update_daemon. Mutating operations require explicit approval unless the user bypass mode allows it.',
+      'Read or manage Gateway, Relay Pool, and daemon updates. Operations: get_gateway_status, check_gateway, get_gateway_release_notes, list_gateway_release_notes (every release between the current and the available version), perform_gateway_update, proceed_gateway_update (stop waiting for running operations), acknowledge_gateway_update_failure, perform_relay_update, abandon_relay_update (end a stuck or paused Relay Pool update), list_daemon_updates, check_daemon_updates, update_daemon (waits up to 30 minutes for long tasks running on the node unless now is true). Mutating operations require explicit approval unless the user bypass mode allows it.',
     parameters: {
       type: 'object',
       properties: {
@@ -257,6 +257,11 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
           description: 'Version for get_gateway_release_notes, perform_gateway_update, or perform_relay_update.',
         },
         nodeId: { type: 'string', description: 'Daemon node UUID for update_daemon.' },
+        now: {
+          type: 'boolean',
+          description:
+            'update_daemon: update without waiting for the long tasks running on the node (backups, image builds, Docker migrations, image pulls, container actions, storage copies, container archive transfers); they may fail. Also ends the wait of an update that already waits for them. Only after the user confirmed it.',
+        },
       },
       required: ['operation'],
     },

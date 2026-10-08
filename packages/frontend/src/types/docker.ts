@@ -674,6 +674,18 @@ export interface DaemonUpdateStatus {
   nodes: DaemonNodeUpdateStatus[];
 }
 
+/** POST /system/daemon-updates/:nodeId */
+export interface DaemonNodeUpdateResult {
+  scheduled: boolean;
+  targetVersion: string;
+  /** The node restarts once the other members of its availability lease settled. */
+  leaseSequenced?: boolean;
+  /** The update first waits for this many long tasks running on the node (at most 30 minutes). */
+  waitingForTasks?: number;
+  /** "Update now" ended the wait of an update that was already waiting for tasks. */
+  waitSkipped?: boolean;
+}
+
 /** A build rollout that owns a container or deployment until it finishes. */
 export interface DockerBuildRolloutOwner {
   buildId: string;

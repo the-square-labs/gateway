@@ -121,7 +121,45 @@ export interface NodeHealthReport {
   errorRate4xx: number;
   errorRate5xx: number;
   gpuDevices?: NodeGpuDevice[];
+  /** Docker and nginx daemons: what an update now would keep and cut, and what the last update did. */
+  updateConnections?: NodeUpdateConnections;
 }
+
+/** Connections across a daemon update, as the daemon reports them; cut classes are an open set. */
+export interface NodeUpdateConnections {
+  /** An update now hands connections over to the next daemon process. */
+  handoverAvailable: boolean;
+  kept: number;
+  /** Connections an update now would cut, by class (raw_stream, postgres_tls, registry, backup, ...). */
+  cut: Record<string, number>;
+}
+
+/** A long task on the node that a waiting daemon update waits for. */
+export interface NodeUpdateTask {
+  kind: string;
+  id: string;
+  label: string;
+}
+
+/** The result of the node's last completed daemon update (metadata.lastUpdate). */
+export interface NodeLastUpdate {
+  targetVersion: string;
+  completedAt: string | null;
+  warnings: string[];
+  /** The daemon's own counts, once it reports them final. */
+  connections: {
+    handover: boolean;
+    handedOver: number;
+    kept: number;
+    cut: Record<string, number>;
+    pauseP50Ms: number;
+    pauseP99Ms: number;
+    pauseMaxMs: number;
+  } | null;
+}
+
+/** Daemons whose update hands relay stream sessions over to the next process (live handover). */
+export const DAEMON_STREAM_HANDOVER_CAPABILITY = "daemon_stream_handover_v1";
 
 export interface NodeStatsReport {
   activeConnections: number;
@@ -240,9 +278,74 @@ export function isNodeUpdating(node: Node | NodeDetail): boolean {
   return !(Number.isFinite(deadlineAt) && Date.now() >= deadlineAt);
 }
 
-/** The update waits until the other members of the node's availability leases settled. */
+/**
+ * The update has restarted nothing yet: it waits for the long tasks of the node, or until the other members of the
+ * node's availability leases settled.
+ */
 export function isNodeUpdateQueued(node: Node | NodeDetail): boolean {
-  return isNodeUpdating(node) && nodeUpdateMetadata(node).updatePhase === "waiting_for_lease_peers";
+  const phase = nodeUpdateMetadata(node).updatePhase;
+  return (
+    isNodeUpdating(node) && (phase === "waiting_for_lease_peers" || phase === "waiting_for_tasks")
+  );
+}
+
+/** The update waits for the long tasks running on the node (at most 30 minutes, or until "Update now"). */
+export function isNodeUpdateWaitingForTasks(node: Node | NodeDetail): boolean {
+  return isNodeUpdating(node) && nodeUpdateMetadata(node).updatePhase === "waiting_for_tasks";
+}
+
+/** The long tasks a waiting update waits for. */
+export function getNodeUpdateWaitingForTasks(node: Node | NodeDetail): NodeUpdateTask[] {
+  const tasks = nodeUpdateMetadata(node).updateWaitingForTasks;
+  if (!Array.isArray(tasks)) return [];
+  return tasks.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const task = entry as Record<string, unknown>;
+    return typeof task.id === "string" && typeof task.label === "string"
+      ? [{ kind: String(task.kind ?? ""), id: task.id, label: task.label }]
+      : [];
+  });
+}
+
+/** The result of the node's last completed daemon update, if Gateway kept one. */
+export function getNodeLastUpdate(node: Node | NodeDetail): NodeLastUpdate | null {
+  const value = nodeUpdateMetadata(node).lastUpdate;
+  if (!value || typeof value !== "object") return null;
+  const lastUpdate = value as Record<string, unknown>;
+  if (typeof lastUpdate.targetVersion !== "string") return null;
+  const count = (field: unknown) => (typeof field === "number" && field > 0 ? field : 0);
+  const connections =
+    lastUpdate.connections && typeof lastUpdate.connections === "object"
+      ? (lastUpdate.connections as Record<string, unknown>)
+      : null;
+  return {
+    targetVersion: lastUpdate.targetVersion,
+    completedAt: typeof lastUpdate.completedAt === "string" ? lastUpdate.completedAt : null,
+    warnings: Array.isArray(lastUpdate.warnings)
+      ? lastUpdate.warnings.filter((warning): warning is string => typeof warning === "string")
+      : [],
+    connections: connections
+      ? {
+          handover: connections.handover === true,
+          handedOver: count(connections.handedOver),
+          kept: count(connections.kept),
+          cut: Object.fromEntries(
+            Object.entries(
+              connections.cut && typeof connections.cut === "object" ? connections.cut : {}
+            ).filter((entry): entry is [string, number] => count(entry[1]) > 0)
+          ),
+          pauseP50Ms: count(connections.pauseP50Ms),
+          pauseP99Ms: count(connections.pauseP99Ms),
+          pauseMaxMs: count(connections.pauseMaxMs),
+        }
+      : null,
+  };
+}
+
+/** Whether the node's daemon advertised a capability when it registered. */
+export function hasDaemonCapability(node: Node | NodeDetail, capability: string): boolean {
+  const advertised = (node.capabilities as Record<string, unknown> | undefined)?.capabilities;
+  return Array.isArray(advertised) && advertised.includes(capability);
 }
 
 /** Lease members a queued update waits for, with the reason each one blocks it. */

@@ -36,8 +36,9 @@ function hasUpdateInProgress(metadata: unknown): boolean {
   if (!metadata || typeof metadata !== 'object') return false;
   const value = metadata as Record<string, unknown>;
   if (value.updateInProgress !== true) return false;
-  // A queued update of a lease member has restarted nothing yet: the node's connection problems are real ones.
-  if (value.updatePhase === 'waiting_for_lease_peers') return false;
+  // A queued update (waiting for lease peers or for the node's long tasks) has restarted nothing yet: the node's
+  // connection problems are real ones.
+  if (value.updatePhase === 'waiting_for_lease_peers' || value.updatePhase === 'waiting_for_tasks') return false;
   if (typeof value.updateDeadlineAt !== 'string') return true;
   const deadlineAt = Date.parse(value.updateDeadlineAt);
   return !Number.isFinite(deadlineAt) || Date.now() < deadlineAt;

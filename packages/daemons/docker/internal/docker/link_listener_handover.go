@@ -277,6 +277,9 @@ func (p *DockerPlugin) suspendLinkListeners() int {
 	if p.secureLinkEgressKept.suspend() {
 		handed++
 	}
+	if p.registryProxy.suspendForHandover() {
+		handed++
+	}
 	return handed
 }
 

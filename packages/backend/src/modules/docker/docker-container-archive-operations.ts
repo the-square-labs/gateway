@@ -6,6 +6,7 @@ import { hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permis
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
+import { beginNodeArchiveTransfer, releaseWhenStreamEnds } from '@/services/node-long-tasks.js';
 import type {
   ContainerArchiveExportQuerySchema,
   ContainerArchivePlanSchema,
@@ -13,7 +14,7 @@ import type {
 } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
 import { assertContainerNameNotReserved, hasDockerResourceScope } from './docker-access-resource.service.js';
-import { dockerArchiveCommercialRuntime } from './docker-archive-commercial-runtime.js';
+import { type DockerArchiveOperations, dockerArchiveCommercialRuntime } from './docker-archive-commercial-runtime.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { envListToMap } from './docker-env-operations.js';
 import { DockerEnvironmentService } from './docker-environment.service.js';
@@ -225,22 +226,34 @@ export async function openDockerContainerArchiveExport(args: {
     }
   }
   const dispatch = container.resolve(DockerMigrationDispatchAdapter);
-  const archive = await container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).executeDockerArchive(
-    'openGwcaExport',
-    {
-      dispatch,
-      nodeId,
-      containerId,
-      includeWritableLayer: query.includeWritableLayer,
-      imageMode: query.imageMode,
-      environment,
-      secrets,
-      secretKeys,
-      includeEnvironment: query.includeEnvironment,
-      includeSecrets: query.includeSecrets,
-    },
-    dockerArchiveCommercialRuntime
+  // A daemon update of the node waits for the export until its stream ends.
+  const release = beginNodeArchiveTransfer(
+    nodeId,
+    'archive_export',
+    `Export of container ${String(inspected?.Name ?? containerId).replace(/^\/+/, '')}`
   );
+  let archive: Awaited<ReturnType<DockerArchiveOperations['openGwcaExport']>>;
+  try {
+    archive = await container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).executeDockerArchive(
+      'openGwcaExport',
+      {
+        dispatch,
+        nodeId,
+        containerId,
+        includeWritableLayer: query.includeWritableLayer,
+        imageMode: query.imageMode,
+        environment,
+        secrets,
+        secretKeys,
+        includeEnvironment: query.includeEnvironment,
+        includeSecrets: query.includeSecrets,
+      },
+      dockerArchiveCommercialRuntime
+    );
+  } catch (error) {
+    release();
+    throw error;
+  }
   await container.resolve(AuditService).log({
     action: 'docker.container.archive.export',
     userId: args.userId,
@@ -254,15 +267,10 @@ export async function openDockerContainerArchiveExport(args: {
       imageMode: query.imageMode,
     },
   });
-  return { filename: archive.filename, stream: archive.stream };
+  return { filename: archive.filename, stream: releaseWhenStreamEnds(archive.stream, release) };
 }
 
-/**
- * Import a container archive stream as a new container. The caller already
- * checked docker:containers:create for the node or folder, the service
- * creation lock, and parsed the resolution.
- */
-export async function importDockerContainerArchive(args: {
+interface ContainerArchiveImportArgs {
   nodeId: string;
   name: string;
   folderId?: string;
@@ -270,7 +278,28 @@ export async function importDockerContainerArchive(args: {
   body: ReadableStream<Uint8Array>;
   actorScopes: readonly string[];
   userId: string;
-}): Promise<{ containerId: string; containerName: string; imageId: string }> {
+}
+
+/**
+ * Import a container archive stream as a new container. The caller already
+ * checked docker:containers:create for the node or folder, the service
+ * creation lock, and parsed the resolution.
+ */
+export async function importDockerContainerArchive(
+  args: ContainerArchiveImportArgs
+): Promise<{ containerId: string; containerName: string; imageId: string }> {
+  // A daemon update of the node waits for the import to finish.
+  const release = beginNodeArchiveTransfer(args.nodeId, 'archive_import', `Import of container ${args.name}`);
+  try {
+    return await importArchive(args);
+  } finally {
+    release();
+  }
+}
+
+async function importArchive(
+  args: ContainerArchiveImportArgs
+): Promise<{ containerId: string; containerName: string; imageId: string }> {
   const { nodeId, resolution, userId } = args;
   const actorScopes = [...args.actorScopes];
   // The routes check this before streaming; repeat it here so no caller can import into an unauthorized folder.

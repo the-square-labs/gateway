@@ -27,7 +27,13 @@ import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate, promotePendingNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
-import { decodeHealthDiskMounts, managedLinkHealth, relayLatencyHealth, relayStreamHealth } from './health-report.js';
+import {
+  decodeHealthDiskMounts,
+  managedLinkHealth,
+  relayLatencyHealth,
+  relayStreamHealth,
+  updateConnectionsHealth,
+} from './health-report.js';
 
 const logger = createChildLogger('GrpcControl');
 /**
@@ -1243,6 +1249,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 ...relayLatencyHealth(msg.healthReport.relayLatencies),
                 ...managedLinkHealth(msg.healthReport.managedLinks),
                 ...relayStreamHealth(msg.healthReport.relayStreams),
+                ...updateConnectionsHealth(msg.healthReport.updateConnections),
                 ...ingressHealthFromProto((msg.healthReport as { ingressHealth?: unknown }).ingressHealth),
               };
 
@@ -1289,6 +1296,23 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               }
 
               deps.registry.updateHealthReport(activeNodeId, healthData);
+
+              // The counts of the daemon's last update land in the node's update result once, not on every report.
+              const lastUpdateConnections = healthData.updateConnections?.lastUpdate;
+              if (lastUpdateConnections) {
+                void import('@/services/daemon-update.service.js')
+                  .then(({ DaemonUpdateService }) =>
+                    container
+                      .resolve(DaemonUpdateService)
+                      .recordLastUpdateConnections(activeNodeId, lastUpdateConnections)
+                  )
+                  .catch((err) => {
+                    logger.warn('Failed to record the connections of the last daemon update', {
+                      nodeId: activeNodeId,
+                      error: err instanceof Error ? err.message : String(err),
+                    });
+                  });
+              }
 
               // Evaluate notification alert rules (fire-and-forget, don't block health persistence)
               try {

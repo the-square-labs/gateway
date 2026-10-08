@@ -24,6 +24,7 @@ import {
   acknowledgeSystemUpdateFailureRoute,
   checkDaemonUpdatesRoute,
   checkSystemUpdateRoute,
+  DaemonUpdateRequestSchema,
   daemonUpdatesRoute,
   performRelayUpdateRoute,
   performSystemUpdateRoute,
@@ -375,11 +376,16 @@ systemRoutes.openapi(updateDaemonRoute, async (c) => {
   if (forbidden) return forbidden;
   const { NodeDispatchService } = await import('@/services/node-dispatch.service.js');
   const { TOKENS } = await import('@/container.js');
-  const data = await dispatchNodeDaemonUpdate(c.req.param('nodeId')!, {
-    db: container.resolve(TOKENS.DrizzleClient),
-    daemonUpdateService: container.resolve(DaemonUpdateService),
-    dispatch: container.resolve(NodeDispatchService),
-    rollout: container.resolve(DaemonUpdateRollout),
-  });
+  const { now } = DaemonUpdateRequestSchema.parse((await c.req.json().catch(() => null)) ?? {});
+  const data = await dispatchNodeDaemonUpdate(
+    c.req.param('nodeId')!,
+    {
+      db: container.resolve(TOKENS.DrizzleClient),
+      daemonUpdateService: container.resolve(DaemonUpdateService),
+      dispatch: container.resolve(NodeDispatchService),
+      rollout: container.resolve(DaemonUpdateRollout),
+    },
+    { now: now === true }
+  );
   return c.json({ data });
 });

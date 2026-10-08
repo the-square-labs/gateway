@@ -72,10 +72,12 @@ After the update:
 
 From a node detail page, click **Update** when an update is available, or update several nodes together with **Nodes > Update Nodes**. Relay nodes update with the Relay Pool instead (**Settings > General**, **Update Relay Pool**). Gateway refuses daemon updates for disconnected nodes, relay nodes, and nodes that already run the release. Nodes that share a lease-mode Availability policy restart one after another: an update waits in the `waiting_for_lease_peers` phase until the policy's other voters and candidates are back and voting (see [Daemon Updates](nodes.md#daemon-updates) in the nodes guide).
 
+Before it is sent, an update waits in the `waiting_for_tasks` phase for the long tasks running on the node (backups, image builds, Docker migrations, image pulls, storage copies, container archive transfers), at most 30 minutes; then it goes ahead and keeps a warning. **Update now** starts it at once; the running tasks may fail. An update of a Docker or nginx node whose daemon supports live handover keeps relay stream sessions, with a pause of a second or two; raw streams of older peers, PostgreSQL links where the daemon opens TLS, registry pulls and pushes, and backup runs are cut as before. The first update onto such a daemon, and a rollback below it, cut open connections once.
+
 The update flow:
 
 1. Gateway fetches and verifies the signed daemon update manifest.
-2. Gateway dispatches the signed manifest, download URL, and verified SHA256 checksum to the daemon.
+2. Gateway waits for the long tasks running on the node (at most 30 minutes) and, for lease members, for their lease peers, then dispatches the signed manifest, download URL, and verified SHA256 checksum to the daemon.
 3. New daemons verify the signed manifest locally before downloading.
 4. The daemon verifies the downloaded binary checksum, replaces the binary atomically, and exits for systemd restart.
 5. The daemon reconnects and reports its new version.

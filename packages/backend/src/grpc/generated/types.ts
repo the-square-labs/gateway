@@ -240,8 +240,41 @@ export interface HealthReport {
   managedLinks?: ManagedLinkRuntime[];
   /** Daemons advertising relay_stream_resume_v1: their relay stream sessions (field 41). */
   relayStreams?: RelayStreamStats | null;
+  /** Docker and nginx daemons: the connections an update keeps and cuts now, and what the last one did (field 42). */
+  updateConnections?: DaemonUpdateConnections | null;
   /** Present when the daemon advertises ingress_group_v1 (field 195). */
   ingressHealth?: IngressHealthReport | null;
+}
+
+/**
+ * Connections across an update of the daemon. A daemon advertising daemon_stream_handover_v1 hands its relay stream
+ * sessions over to the next daemon process; what it cannot hand over is cut. Cut classes are an open set (raw_stream,
+ * postgres_tls, registry, backup, no_handover, ...); maps decode to plain objects.
+ */
+export interface DaemonUpdateConnections {
+  handoverAvailable?: boolean;
+  kept?: number;
+  cut?: Record<string, number>;
+  /** Present once the counts of the last update are final. */
+  lastUpdate?: DaemonUpdateConnectionReport | null;
+}
+
+/** What one update of the daemon did to the connections it carried. */
+export interface DaemonUpdateConnectionReport {
+  fromVersion?: string;
+  toVersion?: string;
+  /** int64 as string (proto-loader). */
+  startedAtUnixMs?: string;
+  /** int64 as string (proto-loader). */
+  finishedAtUnixMs?: string;
+  handover?: boolean;
+  handedOver?: number;
+  kept?: number;
+  /** Also handshake, over_limit, resume_failed, busy. */
+  cut?: Record<string, number>;
+  pauseP50Ms?: number;
+  pauseP99Ms?: number;
+  pauseMaxMs?: number;
 }
 
 /** Relay stream sessions of one daemon (RSv1). Totals count since the daemon started. uint64 values may be strings. */

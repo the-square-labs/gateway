@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { nodes } from '@/db/schema/nodes.js';
+import { type NodeUpdateConnectionResult, nodes } from '@/db/schema/nodes.js';
 import { settings } from '@/db/schema/settings.js';
 import type { CommandResult } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -23,6 +23,7 @@ import { type TrustedDaemonUpdateArtifact, verifyDaemonUpdateManifest } from '@/
 import { AppError } from '@/middleware/error-handler.js';
 import type { GeneralSettingsService, UpdateChannel } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { NodeLongTask } from '@/services/node-long-tasks.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 
 const logger = createChildLogger('DaemonUpdateService');
@@ -35,6 +36,12 @@ const INSTALL_VERSION_TIMEOUT_MS = 5_000;
 const INSTALL_VERSION_TTL_MS = 10 * 60 * 1000;
 /** Update phase of a lease member whose update waits for other members of its availability policies. */
 export const NODE_UPDATE_WAITING_PHASE = 'waiting_for_lease_peers';
+/** Update phase of an update that waits for the long tasks of its node (backups, builds, migrations, transfers). */
+export const NODE_UPDATE_TASK_WAIT_PHASE = 'waiting_for_tasks';
+/** An update waits this long at most for the long tasks of its node, then it is sent anyway with a warning. */
+export const NODE_UPDATE_TASK_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
+/** The task wait ends the wait itself; its metadata deadline only ends an update that nothing waits for any more. */
+const NODE_UPDATE_TASK_WAIT_DEADLINE_MARGIN_MS = 2 * 60 * 1000;
 const NODE_UPDATE_METADATA_KEYS = [
   'updateInProgress',
   'updateTargetVersion',
@@ -44,7 +51,76 @@ const NODE_UPDATE_METADATA_KEYS = [
   'updateDeadlineAt',
   'updateReconnectStartedAt',
   'updateWaitingFor',
+  'updateWaitingForTasks',
+  'updateTaskWaitStartedAt',
+  'updateNow',
+  'updateWarnings',
 ] as const;
+
+/** What the node keeps of its last completed daemon update (metadata.lastUpdate). */
+export interface NodeLastUpdate {
+  targetVersion: string;
+  completedAt: string;
+  /** The update went ahead while long tasks of the node ran (wait timed out, or "update now"). */
+  warnings: string[];
+  /** The daemon's own counts of the connections the update kept and cut, once it reports them final. */
+  connections?: NodeLastUpdateConnections;
+}
+
+export interface NodeLastUpdateConnections {
+  fromVersion: string;
+  /** Identifies the daemon's report. */
+  finishedAtUnixMs: number;
+  handover: boolean;
+  handedOver: number;
+  kept: number;
+  cut: Record<string, number>;
+  pauseP50Ms: number;
+  pauseP99Ms: number;
+  pauseMaxMs: number;
+}
+
+function sameVersion(a: unknown, b: unknown): boolean {
+  return typeof a === 'string' && typeof b === 'string' && a.replace(/^v/, '') === b.replace(/^v/, '');
+}
+
+function updateWarnings(metadata: Record<string, unknown>): string[] {
+  return Array.isArray(metadata.updateWarnings)
+    ? metadata.updateWarnings.filter((warning): warning is string => typeof warning === 'string')
+    : [];
+}
+
+/**
+ * The connections of a daemon's last update to keep in the node's update result (metadata.lastUpdate.connections).
+ * 'pending' while the update the report belongs to has not completed on Gateway's side yet; 'skip' when the result
+ * already holds this report or belongs to another update.
+ */
+export function lastUpdateConnectionsToRecord(
+  metadata: Record<string, unknown>,
+  report: NodeUpdateConnectionResult
+): NodeLastUpdateConnections | 'pending' | 'skip' {
+  const lastUpdate =
+    metadata.lastUpdate && typeof metadata.lastUpdate === 'object'
+      ? (metadata.lastUpdate as Partial<NodeLastUpdate>)
+      : null;
+  if (!lastUpdate || !sameVersion(lastUpdate.targetVersion, report.toVersion)) {
+    return metadata.updateInProgress === true && sameVersion(metadata.updateTargetVersion, report.toVersion)
+      ? 'pending'
+      : 'skip';
+  }
+  if (lastUpdate.connections?.finishedAtUnixMs === report.finishedAtUnixMs) return 'skip';
+  return {
+    fromVersion: report.fromVersion,
+    finishedAtUnixMs: report.finishedAtUnixMs,
+    handover: report.handover,
+    handedOver: report.handedOver,
+    kept: report.kept,
+    cut: report.cut,
+    pauseP50Ms: report.pauseP50Ms,
+    pauseP99Ms: report.pauseP99Ms,
+    pauseMaxMs: report.pauseMaxMs,
+  };
+}
 
 export type DaemonType = 'nginx' | 'docker' | 'monitoring' | 'relay' | 'relay-worker';
 
@@ -118,6 +194,8 @@ export interface DaemonUpdateStatus {
 export class DaemonUpdateService {
   private readonly releasesUrl: string;
   private readonly installVersions = new Map<string, { version: string | null; expiresAt: number }>();
+  /** The last update report of each node already settled (`toVersion@finishedAtUnixMs`); spares a read per report. */
+  private readonly settledUpdateReports = new Map<string, string>();
   private eventBus?: EventBusService;
   private nodeRegistry?: NodeRegistryService;
 
@@ -302,13 +380,23 @@ export class DaemonUpdateService {
     if (await this.expireNodeUpdateIfDue(nodeId, metadata)) {
       return false;
     }
-    return metadata.updateInProgress === true;
+    // An update that waits for the long tasks of the node has restarted nothing: the node takes commands as usual,
+    // which those tasks need.
+    return metadata.updateInProgress === true && metadata.updatePhase !== NODE_UPDATE_TASK_WAIT_PHASE;
   }
 
   async markNodeUpdateInProgress(
     nodeId: string,
     targetVersion: string,
-    options: { waitForLeasePeers?: boolean } = {}
+    options: {
+      waitForLeasePeers?: boolean;
+      /** Long tasks of the node the update waits for first (phase waiting_for_tasks), before its lease peers. */
+      waitForTasks?: NodeLongTask[];
+      /** When the task wait began, kept across a Gateway restart so the wait stays bounded. */
+      taskWaitStartedAt?: number;
+      /** Warnings the update carries into its result, kept across a Gateway restart. */
+      warnings?: string[];
+    } = {}
   ): Promise<string> {
     let [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) throw new AppError(404, 'NOT_FOUND', 'Node not found');
@@ -325,16 +413,35 @@ export class DaemonUpdateService {
 
     const now = Date.now();
     const operationId = randomUUID();
-    const deadlineMs = options.waitForLeasePeers ? NODE_UPDATE_QUEUE_TIMEOUT_MS : NODE_UPDATE_EXECUTION_TIMEOUT_MS;
+    const waitForTasks = options.waitForTasks ?? [];
+    const taskWaitStartedAt = Math.min(options.taskWaitStartedAt ?? now, now);
+    const phase =
+      waitForTasks.length > 0
+        ? NODE_UPDATE_TASK_WAIT_PHASE
+        : options.waitForLeasePeers
+          ? NODE_UPDATE_WAITING_PHASE
+          : 'executing';
+    const deadlineMs =
+      phase === NODE_UPDATE_TASK_WAIT_PHASE
+        ? Math.max(taskWaitStartedAt + NODE_UPDATE_TASK_WAIT_TIMEOUT_MS - now, 0) +
+          NODE_UPDATE_TASK_WAIT_DEADLINE_MARGIN_MS
+        : phase === NODE_UPDATE_WAITING_PHASE
+          ? NODE_UPDATE_QUEUE_TIMEOUT_MS
+          : NODE_UPDATE_EXECUTION_TIMEOUT_MS;
     delete metadata.updateLastError;
     delete metadata.updateLastErrorAt;
-    delete metadata.updateWaitingFor;
+    for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
     metadata.updateInProgress = true;
     metadata.updateTargetVersion = targetVersion;
     metadata.updateStartedAt = new Date(now).toISOString();
     metadata.updateOperationId = operationId;
-    metadata.updatePhase = options.waitForLeasePeers ? NODE_UPDATE_WAITING_PHASE : 'executing';
+    metadata.updatePhase = phase;
     metadata.updateDeadlineAt = new Date(now + deadlineMs).toISOString();
+    if (phase === NODE_UPDATE_TASK_WAIT_PHASE) {
+      metadata.updateWaitingForTasks = waitForTasks;
+      metadata.updateTaskWaitStartedAt = new Date(taskWaitStartedAt).toISOString();
+    }
+    if (options.warnings?.length) metadata.updateWarnings = options.warnings;
 
     const updated = await this.db
       .update(nodes)
@@ -346,7 +453,7 @@ export class DaemonUpdateService {
     }
 
     // A queued update has not restarted anything yet; the node counts as updating once it is sent.
-    if (!options.waitForLeasePeers) this.nodeRegistry?.setNodeUpdateInProgress(nodeId, true);
+    if (phase === 'executing') this.nodeRegistry?.setNodeUpdateInProgress(nodeId, true);
     this.emitNodeUpdated(nodeId);
     this.scheduleNodeUpdateExpiry(nodeId, operationId, deadlineMs);
     return operationId;
@@ -382,6 +489,67 @@ export class DaemonUpdateService {
     if (await this.writeUpdateMetadata(nodeId, operationId, metadata)) this.emitNodeUpdated(nodeId);
   }
 
+  /** Shows which long tasks of its node an update waits for. False when the update no longer waits for them. */
+  async recordNodeUpdateTaskWait(nodeId: string, operationId: string, tasks: NodeLongTask[]): Promise<boolean> {
+    const metadata = await this.readQueuedUpdate(nodeId, operationId, NODE_UPDATE_TASK_WAIT_PHASE);
+    if (!metadata) return false;
+    metadata.updateWaitingForTasks = tasks;
+    if (!(await this.writeUpdateMetadata(nodeId, operationId, metadata))) return false;
+    this.emitNodeUpdated(nodeId);
+    return true;
+  }
+
+  /**
+   * Ends the task wait of an update: it goes on to its lease peers or is sent. A warning (the wait ran out, or the
+   * operator updated now while tasks ran) stays with the update and lands in its result. False when the update no
+   * longer waits for tasks (expired, failed, or replaced).
+   */
+  async endNodeUpdateTaskWait(
+    nodeId: string,
+    operationId: string,
+    options: { waitForLeasePeers: boolean; warning?: string }
+  ): Promise<boolean> {
+    const metadata = await this.readQueuedUpdate(nodeId, operationId, NODE_UPDATE_TASK_WAIT_PHASE);
+    if (!metadata) return false;
+    const deadlineMs = options.waitForLeasePeers ? NODE_UPDATE_QUEUE_TIMEOUT_MS : NODE_UPDATE_EXECUTION_TIMEOUT_MS;
+    delete metadata.updateWaitingForTasks;
+    delete metadata.updateTaskWaitStartedAt;
+    delete metadata.updateNow;
+    if (options.warning) metadata.updateWarnings = [...updateWarnings(metadata), options.warning];
+    metadata.updatePhase = options.waitForLeasePeers ? NODE_UPDATE_WAITING_PHASE : 'executing';
+    metadata.updateDeadlineAt = new Date(Date.now() + deadlineMs).toISOString();
+    if (!(await this.writeUpdateMetadata(nodeId, operationId, metadata))) return false;
+    if (!options.waitForLeasePeers) this.nodeRegistry?.setNodeUpdateInProgress(nodeId, true);
+    this.emitNodeUpdated(nodeId);
+    this.scheduleNodeUpdateExpiry(nodeId, operationId, deadlineMs);
+    return true;
+  }
+
+  /**
+   * The operator's "update now" for an update that waits for the long tasks of its node: marks it so that it stops
+   * waiting, also when it is taken up again after a Gateway restart. Null when no update of the node waits for tasks.
+   */
+  async requestNodeUpdateNow(nodeId: string): Promise<{ operationId: string; targetVersion: string } | null> {
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return null;
+    const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
+    const operationId = metadata.updateOperationId;
+    if (
+      metadata.updateInProgress !== true ||
+      metadata.updatePhase !== NODE_UPDATE_TASK_WAIT_PHASE ||
+      typeof operationId !== 'string'
+    ) {
+      return null;
+    }
+    metadata.updateNow = true;
+    if (!(await this.writeUpdateMetadata(nodeId, operationId, metadata))) return null;
+    this.emitNodeUpdated(nodeId);
+    return {
+      operationId,
+      targetVersion: typeof metadata.updateTargetVersion === 'string' ? metadata.updateTargetVersion : '',
+    };
+  }
+
   /** Ends a queued or running update that could not complete and keeps the reason on the node. */
   async failNodeUpdate(nodeId: string, operationId: string, error: string): Promise<boolean> {
     const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
@@ -402,34 +570,60 @@ export class DaemonUpdateService {
     return true;
   }
 
-  /** Queued updates of lease members, for a Gateway restart to take up again. */
-  async listQueuedNodeUpdates(): Promise<Array<{ nodeId: string; operationId: string; startedAt: Date | null }>> {
+  /**
+   * Updates that wait (for the long tasks of their node or for lease peers), for a Gateway restart to take up again
+   * with what they carry: an operator's "update now", when their task wait began, their warnings.
+   */
+  async listQueuedNodeUpdates(): Promise<
+    Array<{
+      nodeId: string;
+      operationId: string;
+      startedAt: Date | null;
+      phase: typeof NODE_UPDATE_WAITING_PHASE | typeof NODE_UPDATE_TASK_WAIT_PHASE;
+      now: boolean;
+      taskWaitStartedAt: number | null;
+      warnings: string[];
+    }>
+  > {
     const rows = await this.db.select({ id: nodes.id, metadata: nodes.metadata }).from(nodes);
     return rows.flatMap((row) => {
       const metadata = (row.metadata ?? {}) as Record<string, unknown>;
       const startedAt = typeof metadata.updateStartedAt === 'string' ? new Date(metadata.updateStartedAt) : null;
+      const taskWaitStartedAt =
+        typeof metadata.updateTaskWaitStartedAt === 'string'
+          ? Date.parse(metadata.updateTaskWaitStartedAt)
+          : Number.NaN;
+      const phase = metadata.updatePhase;
       return metadata.updateInProgress === true &&
-        metadata.updatePhase === NODE_UPDATE_WAITING_PHASE &&
+        (phase === NODE_UPDATE_WAITING_PHASE || phase === NODE_UPDATE_TASK_WAIT_PHASE) &&
         typeof metadata.updateOperationId === 'string'
         ? [
             {
               nodeId: row.id,
               operationId: metadata.updateOperationId,
               startedAt: startedAt && Number.isFinite(startedAt.getTime()) ? startedAt : null,
+              phase,
+              now: metadata.updateNow === true,
+              taskWaitStartedAt: Number.isFinite(taskWaitStartedAt) ? taskWaitStartedAt : null,
+              warnings: updateWarnings(metadata),
             },
           ]
         : [];
     });
   }
 
-  private async readQueuedUpdate(nodeId: string, operationId: string): Promise<Record<string, unknown> | null> {
+  private async readQueuedUpdate(
+    nodeId: string,
+    operationId: string,
+    phase: string = NODE_UPDATE_WAITING_PHASE
+  ): Promise<Record<string, unknown> | null> {
     const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) return null;
     const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
     if (
       metadata.updateInProgress !== true ||
       metadata.updateOperationId !== operationId ||
-      metadata.updatePhase !== NODE_UPDATE_WAITING_PHASE
+      metadata.updatePhase !== phase
     ) {
       return null;
     }
@@ -482,9 +676,11 @@ export class DaemonUpdateService {
     const reason =
       metadata.updatePhase === NODE_UPDATE_WAITING_PHASE
         ? 'The update waited too long for the other members of its availability lease'
-        : metadata.updatePhase === 'reconnecting'
-          ? `The daemon did not come back on ${target} in time`
-          : `The update to ${target} did not finish in time`;
+        : metadata.updatePhase === NODE_UPDATE_TASK_WAIT_PHASE
+          ? 'The update waited too long for the running tasks of the node'
+          : metadata.updatePhase === 'reconnecting'
+            ? `The daemon did not come back on ${target} in time`
+            : `The update to ${target} did not finish in time`;
     if (!(await this.failNodeUpdate(nodeId, operationId, reason))) return false;
     // A node that is still away is offline now that its update no longer covers it.
     await this.nodeRegistry?.markOfflineAfterUpdate(nodeId);
@@ -499,14 +695,7 @@ export class DaemonUpdateService {
     const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
     if (metadata.updateInProgress !== true || metadata.updateOperationId !== operationId) return false;
 
-    delete metadata.updateInProgress;
-    delete metadata.updateTargetVersion;
-    delete metadata.updateStartedAt;
-    delete metadata.updateOperationId;
-    delete metadata.updatePhase;
-    delete metadata.updateDeadlineAt;
-    delete metadata.updateReconnectStartedAt;
-    delete metadata.updateWaitingFor;
+    for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
 
     const updated = await this.db
       .update(nodes)
@@ -634,7 +823,14 @@ export class DaemonUpdateService {
     }
     if (Number.isFinite(startedAt) && observedAt < startedAt) return false;
 
+    // The update's result: its target and warnings now, the daemon's connection counts once it reports them final.
+    const lastUpdate: NodeLastUpdate = {
+      targetVersion: targetVersion || reportedVersion,
+      completedAt: registrationObservedAt.toISOString(),
+      warnings: updateWarnings(metadata),
+    };
     for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
+    metadata.lastUpdate = lastUpdate;
     const updated = await this.db
       .update(nodes)
       .set({ metadata, updatedAt: new Date() })
@@ -676,6 +872,41 @@ export class DaemonUpdateService {
       resumed += 1;
     }
     return resumed;
+  }
+
+  /**
+   * Keeps the daemon's counts of the connections its last update kept and cut in the node's update result, once per
+   * report (metadata.lastUpdate.connections). Most health reports repeat a report already settled and cost no read.
+   */
+  async recordLastUpdateConnections(nodeId: string, report: NodeUpdateConnectionResult): Promise<boolean> {
+    const reportKey = `${report.toVersion}@${report.finishedAtUnixMs}`;
+    if (this.settledUpdateReports.get(nodeId) === reportKey) return false;
+    const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    if (!node) return false;
+    const metadata = (node.metadata ?? {}) as Record<string, unknown>;
+    const connections = lastUpdateConnectionsToRecord(metadata, report);
+    // The update completes on Gateway's side when the daemon registers on its target; the next report tries again.
+    if (connections === 'pending') return false;
+    this.settledUpdateReports.set(nodeId, reportKey);
+    if (connections === 'skip') return false;
+    const targetVersion = (metadata.lastUpdate as NodeLastUpdate).targetVersion;
+    // Only the result's own key changes: an update that starts meanwhile keeps its metadata.
+    const updated = await this.db
+      .update(nodes)
+      .set({
+        metadata: sql`jsonb_set(
+          coalesce(${nodes.metadata}, '{}'::jsonb),
+          '{lastUpdate,connections}',
+          ${JSON.stringify(connections)}::jsonb,
+          true
+        )`,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->'lastUpdate'->>'targetVersion' = ${targetVersion}`))
+      .returning({ id: nodes.id });
+    if (updated.length === 0) return false;
+    this.emitNodeUpdated(nodeId);
+    return true;
   }
 
   /** Keeps why an update that is no longer running could not start again (for example after a Gateway restart). */

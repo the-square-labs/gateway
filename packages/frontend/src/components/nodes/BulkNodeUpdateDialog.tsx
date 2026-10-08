@@ -14,7 +14,7 @@ import {
 import { daemonTypeForNode, isDaemonUpdateAvailable, nodeTypeLabel } from "@/lib/node-appearance";
 import { api } from "@/services/api";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
-import { isNodeUpdating, type Node } from "@/types";
+import { isNodeUpdateQueued, isNodeUpdating, type Node } from "@/types";
 
 interface Candidate {
   node: Node;
@@ -43,7 +43,9 @@ export function nodeUpdateCandidates(
     const targetVersion = latestByType.get(daemonTypeForNode(node.type));
     if (!isDaemonUpdateAvailable(node.daemonVersion, targetVersion)) return [];
     const blockedReason = isNodeUpdating(node)
-      ? "Updating"
+      ? isNodeUpdateQueued(node)
+        ? "Queued"
+        : "Updating"
       : node.status !== "online" || !node.isConnected
         ? "Offline"
         : null;
@@ -178,9 +180,15 @@ export function BulkNodeUpdateDialog({
         : []
     );
     const started = chosen.length - failed.length;
+    // Each node waits for its own running tasks first (at most 30 minutes), as a single update does.
+    const waiting = results.filter(
+      (result) => result.status === "fulfilled" && (result.value.waitingForTasks ?? 0) > 0
+    ).length;
     if (started > 0) {
       toast.success(
-        `Updating ${started} node${started === 1 ? "" : "s"}; each one restarts its daemon shortly`
+        waiting > 0
+          ? `Updating ${started} node${started === 1 ? "" : "s"}; ${waiting} of them wait${waiting === 1 ? "s" : ""} for running tasks first, at most 30 minutes`
+          : `Updating ${started} node${started === 1 ? "" : "s"}; each one restarts its daemon shortly`
       );
     }
     if (failed.length > 0) {
@@ -213,7 +221,7 @@ export function BulkNodeUpdateDialog({
           <DialogTitle>Update Nodes</DialogTitle>
           <DialogDescription>
             The selected nodes update together; nodes that share an availability lease restart one
-            after another.
+            after another, and a node with running tasks waits for them first.
           </DialogDescription>
         </DialogHeader>
         <CandidateList
