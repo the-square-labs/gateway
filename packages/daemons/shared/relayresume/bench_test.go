@@ -134,7 +134,7 @@ func (r *benchRig) run(tb testing.TB, resumable bool, payload []byte) {
 	maxFrame, readChunk, bridgeCancel := MaxFrameBytes, benchRawChunk(), context.CancelFunc(cancel)
 	if resumable {
 		session, err := r.mgr.NewSource(SourceConfig{RouteID: "route-1", Key: func() (string, []byte, bool) { return "v1", benchKey, true },
-			Dial: func(context.Context, string) (OpenedPath, error) { return OpenedPath{}, io.EOF }},
+			Dial: func(context.Context, DialRequest) (OpenedPath, error) { return OpenedPath{}, io.EOF }},
 			OpenedPath{Stream: stream, Cancel: cancel, CloseSend: stream.CloseSend, RelayID: "bench", MaxFrame: MaxFrameBytes})
 		if err != nil {
 			tb.Fatal(err)

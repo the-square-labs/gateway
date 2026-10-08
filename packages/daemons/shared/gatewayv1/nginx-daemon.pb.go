@@ -1924,9 +1924,15 @@ func (x *ManagedLinkRuntime) GetCompletedTotal() uint64 {
 type RelayLatencySample struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	RelayInstanceId string                 `protobuf:"bytes,1,opt,name=relay_instance_id,json=relayInstanceId,proto3" json:"relay_instance_id,omitempty"`
-	RttMicros       uint32                 `protobuf:"varint,2,opt,name=rtt_micros,json=rttMicros,proto3" json:"rtt_micros,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The smoothed round trip of the last successful measurements.
+	RttMicros uint32 `protobuf:"varint,2,opt,name=rtt_micros,json=rttMicros,proto3" json:"rtt_micros,omitempty"`
+	// How long this daemon has failed to reach the relay (its lanes are down,
+	// or its probes go unanswered), in milliseconds; 0 while it reaches it.
+	// Gateway takes a relay whose control stream ended out of placement at
+	// once when the daemons that measure it all fail to reach it.
+	FailingMs     uint32 `protobuf:"varint,3,opt,name=failing_ms,json=failingMs,proto3" json:"failing_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RelayLatencySample) Reset() {
@@ -1969,6 +1975,13 @@ func (x *RelayLatencySample) GetRelayInstanceId() string {
 func (x *RelayLatencySample) GetRttMicros() uint32 {
 	if x != nil {
 		return x.RttMicros
+	}
+	return 0
+}
+
+func (x *RelayLatencySample) GetFailingMs() uint32 {
+	if x != nil {
+		return x.FailingMs
 	}
 	return 0
 }
@@ -13188,11 +13201,13 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x16source_to_target_bytes\x18\t \x01(\x04R\x13sourceToTargetBytes\x123\n" +
 	"\x16target_to_source_bytes\x18\n" +
 	" \x01(\x04R\x13targetToSourceBytes\x12'\n" +
-	"\x0fcompleted_total\x18\v \x01(\x04R\x0ecompletedTotal\"_\n" +
+	"\x0fcompleted_total\x18\v \x01(\x04R\x0ecompletedTotal\"~\n" +
 	"\x12RelayLatencySample\x12*\n" +
 	"\x11relay_instance_id\x18\x01 \x01(\tR\x0frelayInstanceId\x12\x1d\n" +
 	"\n" +
-	"rtt_micros\x18\x02 \x01(\rR\trttMicros\"\xf8\x01\n" +
+	"rtt_micros\x18\x02 \x01(\rR\trttMicros\x12\x1d\n" +
+	"\n" +
+	"failing_ms\x18\x03 \x01(\rR\tfailingMs\"\xf8\x01\n" +
 	"\vStatsReport\x12-\n" +
 	"\x12active_connections\x18\x01 \x01(\x03R\x11activeConnections\x12\x18\n" +
 	"\aaccepts\x18\x02 \x01(\x03R\aaccepts\x12\x18\n" +

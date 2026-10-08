@@ -403,3 +403,53 @@ func TestNginxAdvertisesResumableStreams(t *testing.T) {
 		t.Fatal("nginx does not advertise relay_stream_resume_v1")
 	}
 }
+
+// generationBundle is resumeBundle with every relay in generation next active and generation next-1 draining.
+func generationBundle(revision, next uint64) *pb.SyncRelayGrantsCommand {
+	bundle := resumeBundle(revision, nil, true)
+	assignment := bundle.Grants[0]
+	var candidates []*pb.RelayDataCandidate
+	for _, candidate := range assignment.Candidates {
+		active := proto.Clone(candidate).(*pb.RelayDataCandidate)
+		active.AssignmentGeneration = next
+		draining := proto.Clone(candidate).(*pb.RelayDataCandidate)
+		draining.AssignmentGeneration = next - 1
+		draining.AssignmentState = "draining"
+		candidates = append(candidates, active, draining)
+	}
+	assignment.Candidates = candidates
+	return bundle
+}
+
+// A new assignment generation on the same relays keeps the stream on its relay: it re-paths there under the new
+// grant (the old generation's tunnel ends), never onto the other relay, and bundles sent again move nothing.
+func TestSecureLinkStreamStaysOnItsRelayAcrossAGenerationChange(t *testing.T) {
+	fixture := newResumeFixture(t, true)
+	connection := openLinkConnection(t, fixture.plugin)
+	connection.roundTrip(32 * 1024)
+	session := onlySession(t, fixture.plugin)
+	if relay, generation, _ := session.CurrentPath(); relay != "relay-near" || generation != 1 {
+		t.Fatalf("stream runs through %s generation %d", relay, generation)
+	}
+	if _, err := fixture.plugin.SyncRelayGrants(generationBundle(2, 2)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the stream to re-path under the new grant", func() bool {
+		relay, generation, _ := session.CurrentPath()
+		return relay == "relay-near" && generation == 2
+	})
+	moves := fixture.plugin.relayStreams.Stats().MigrationsOK
+	for revision := uint64(3); revision < 5; revision++ {
+		if _, err := fixture.plugin.SyncRelayGrants(generationBundle(revision, 2)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(time.Second)
+	connection.roundTrip(64 * 1024)
+	if relay, _, _ := session.CurrentPath(); relay != "relay-near" || fixture.far.opened.Load() != 0 {
+		t.Fatalf("stream on %s, far relay opened %d tunnels", relay, fixture.far.opened.Load())
+	}
+	if got := fixture.plugin.relayStreams.Stats().MigrationsOK; got != moves || moves != 1 {
+		t.Fatalf("moves %d then %d, want one re-path", moves, got)
+	}
+}

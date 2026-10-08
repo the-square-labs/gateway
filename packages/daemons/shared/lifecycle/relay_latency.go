@@ -16,7 +16,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const relayLatencyProbeTimeout = 5 * time.Second
+const (
+	relayLatencyProbeTimeout = 5 * time.Second
+	// relayLatencyTick is how often the prober looks for relays to measure. A
+	// relay is measured every relaybridge.LatencySampleInterval, but a relay
+	// it has not measured yet (a relay that joined or came back, a new
+	// assignment) within a tick: tunnel selection and Gateway's placement
+	// need its distance before they can prefer it over a farther one.
+	relayLatencyTick = 5 * time.Second
+)
 
 // RelayLatencyTargetPlugin names the pool relays to measure beyond those the
 // daemon holds transports to, so Gateway learns about nearer relays it has
@@ -62,8 +70,9 @@ func (t *relayTransports) get(relayInstanceID string) []*grpc.ClientConn {
 // interval and feeds relaybridge.Latency, which tunnel selection and the
 // health report read.
 func runRelayLatencyProbes(ctx context.Context, conn *connector.Connector, plugin RelayPoolTunnelPlugin) {
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(relayLatencyTick)
 	defer timer.Stop()
+	probed := map[string]time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -71,9 +80,34 @@ func runRelayLatencyProbes(ctx context.Context, conn *connector.Connector, plugi
 		case <-timer.C:
 		}
 		targets, laneTargets := relayLatencyTargets(plugin)
-		probeRelayLatencies(ctx, targets, laneTargets, liveRelayTransports, conn.Address, relaybridge.Latency)
-		timer.Reset(relaybridge.LatencySampleInterval)
+		due := dueRelayLatencyTargets(targets, probed, time.Now(), relaybridge.LatencySampleInterval)
+		if len(due) > 0 {
+			probeRelayLatencies(ctx, due, laneTargets, liveRelayTransports, conn.Address, relaybridge.Latency)
+		}
+		timer.Reset(relayLatencyTick)
 	}
+}
+
+// dueRelayLatencyTargets picks the targets to measure now: those never
+// measured, and those last measured interval ago or earlier. probed records
+// each pick and forgets targets no longer listed.
+func dueRelayLatencyTargets(targets []RelayTunnelTarget, probed map[string]time.Time, now time.Time, interval time.Duration) []RelayTunnelTarget {
+	listed := make(map[string]bool, len(targets))
+	due := make([]RelayTunnelTarget, 0, len(targets))
+	for _, target := range targets {
+		listed[target.ID] = true
+		if last, ok := probed[target.ID]; ok && now.Sub(last) < interval {
+			continue
+		}
+		probed[target.ID] = now
+		due = append(due, target)
+	}
+	for id := range probed {
+		if !listed[id] {
+			delete(probed, id)
+		}
+	}
+	return due
 }
 
 // relayLatencyTargets lists the relays to measure and, apart, the ones this daemon keeps lanes to.
@@ -117,6 +151,8 @@ func probeRelayLatencies(ctx context.Context, targets []RelayTunnelTarget, laneT
 			if lanes := transports.get(target.ID); len(lanes) > 0 || laneTargets[target.ID] {
 				if rtt, ok := lanesRoundTrip(probeCtx, lanes); ok {
 					tracker.Observe(target.ID, rtt)
+				} else {
+					tracker.Fail(target.ID)
 				}
 				return
 			}
@@ -130,6 +166,7 @@ func probeRelayLatencies(ctx context.Context, targets []RelayTunnelTarget, laneT
 					return
 				}
 			}
+			tracker.Fail(target.ID)
 		}(target)
 	}
 	wg.Wait()

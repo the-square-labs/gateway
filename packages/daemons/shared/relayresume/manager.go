@@ -12,9 +12,28 @@ import (
 )
 
 // Dialer opens a new tunnel for a source session's route: on the best
-// active candidate other than avoidRelayID when one exists (the same relay
-// is fine when it is the only one), each candidate within OpenTimeout.
-type Dialer func(ctx context.Context, avoidRelayID string) (OpenedPath, error)
+// candidate of the route's current assignment, each within OpenTimeout.
+type Dialer func(ctx context.Context, request DialRequest) (OpenedPath, error)
+
+// DialRequest is what a new path is for.
+type DialRequest struct {
+	// Avoid is a relay the stream has to leave: it failed the stream's path,
+	// its lane got GOAWAY, or it left (or drains in) the assignment. The
+	// dialer tries it last, only when no other relay takes the stream. ""
+	// when the stream may stay on its relay: a planned move to the best path
+	// (a new assignment generation, a target's drain hint, the return to the
+	// nearest relay).
+	Avoid string
+	// FromRelay and FromGeneration name the path a planned move leaves (the
+	// generation is the driver's label, OpenedPath.Generation; 0 unknown).
+	// A dialer whose best path is that same path answers ErrStay.
+	FromRelay      string
+	FromGeneration uint64
+}
+
+// ErrStay is a dialer's answer to a planned move when the stream's current
+// path is already the best one: the move ends and the stream stays.
+var ErrStay = errors.New("relayresume: the current path is the best one")
 
 // SourceConfig configures a source session.
 type SourceConfig struct {
@@ -36,6 +55,13 @@ const (
 	TriggerGoAway      Trigger = "goaway"
 	TriggerPathFailure Trigger = "path_failure"
 	TriggerTargetHint  Trigger = "target_hint"
+	// TriggerRegrant re-paths a stream whose assignment generation drains
+	// while its relay stays in the new one: onto the same relay under the
+	// new grant, unless another relay is now the better path.
+	TriggerRegrant Trigger = "regrant"
+	// TriggerReturn moves a stream from a standby or farther relay back to
+	// the nearest one.
+	TriggerReturn Trigger = "return"
 )
 
 // MigrationEvent reports one finished migration attempt series (logs,
@@ -98,33 +124,54 @@ type sourceState struct {
 	migrating bool
 	trigger   Trigger
 	stalled   time.Time // the stream stopped moving (suspend or planned stop)
+	movedAt   time.Time // the last move that succeeded
 	ended     bool
 	// deferred is a planned move that arrived while the stream could not
 	// start one (handshake, a migration running): it starts once it can,
-	// unless the stream left that relay meanwhile.
+	// unless the stream left that relay (or that path) meanwhile.
 	deferred *plannedMove
 }
 
+// plannedMove is a move off the relay avoid (it has to be left), or, with
+// avoid empty, off the path from to the best path of the assignment, which
+// may be the same relay under a newer grant.
 type plannedMove struct {
 	trigger Trigger
 	avoid   string
+	from    *Path
 	at      time.Time
 }
 
-// requestLocked starts a planned move off avoid at at, or keeps it for
-// later (mu held).
-func (st *sourceState) requestLocked(s *Session, trigger Trigger, avoid string, at time.Time) {
+// stale reports a move whose stream already left what it was asked to leave.
+func (move plannedMove) stale(current *Path) bool {
+	if current == nil {
+		return false
+	}
+	if move.avoid != "" {
+		return current.RelayID() != move.avoid
+	}
+	return move.from != nil && current != move.from
+}
+
+// requestLocked starts a planned move at at, or keeps it for later (mu
+// held). A move off a relay outranks a move to the best path.
+func (st *sourceState) requestLocked(s *Session, move plannedMove) {
 	c := s.core
+	if move.avoid == "" && move.from == nil {
+		return
+	}
 	if st.migrating || !c.CanResume() || c.Current() == nil {
-		if avoid != "" && (st.deferred == nil || at.Before(st.deferred.at)) {
-			st.deferred = &plannedMove{trigger: trigger, avoid: avoid, at: at}
+		deferred := st.deferred
+		if deferred == nil || (move.avoid != "" && deferred.avoid == "") ||
+			((move.avoid == "") == (deferred.avoid == "") && move.at.Before(deferred.at)) {
+			st.deferred = &move
 		}
 		return
 	}
-	if c.Current().RelayID() != avoid {
+	if move.stale(c.Current()) {
 		return // already elsewhere
 	}
-	st.start(s, trigger, false, avoid, at)
+	st.start(s, move.trigger, false, move, move.at)
 }
 
 // NewSource starts a resumable stream on first (HELLO, then data at once).
@@ -179,32 +226,39 @@ func (st *sourceState) observeLocked(s *Session) {
 		return
 	}
 	if reason, ok := c.TakeMigrateRequest(); ok && c.Current() != nil {
-		at := time.Now()
-		if hook := st.mgr.MigrateRequestDeadline; hook != nil && reason == MigrateDrain {
-			// A drain hint is paced like the source's own drain.
-			at = pacedStart(hook(c.Current().RelayID(), st.cfg.Tag))
+		if reason == MigrateDrain {
+			// The target's candidate drains: the source moves to the best
+			// path of its own assignment, which leaves a relay that drains
+			// and keeps one that stays (under its newer grant). A drain hint
+			// is paced like the source's own drain.
+			at := time.Now()
+			if hook := st.mgr.MigrateRequestDeadline; hook != nil {
+				at = pacedStart(hook(c.Current().RelayID(), st.cfg.Tag))
+			}
+			st.requestLocked(s, plannedMove{trigger: TriggerTargetHint, from: c.Current(), at: at})
+			return
 		}
-		st.requestLocked(s, TriggerTargetHint, c.Current().RelayID(), at)
+		st.requestLocked(s, plannedMove{trigger: TriggerTargetHint, avoid: c.Current().RelayID(), at: time.Now()})
 		return
 	}
 	if c.NeedsPath() && !st.migrating {
-		st.start(s, TriggerPathFailure, true, "", time.Time{})
+		st.start(s, TriggerPathFailure, true, plannedMove{}, time.Time{})
 		return
 	}
 	if d := st.deferred; d != nil && !st.migrating && c.CanResume() && c.Current() != nil {
 		st.deferred = nil
-		st.requestLocked(s, d.trigger, d.avoid, d.at)
+		st.requestLocked(s, *d)
 	}
 }
 
 // start hands the session to a migration worker (mu held).
-func (st *sourceState) start(s *Session, trigger Trigger, unplanned bool, avoid string, at time.Time) {
+func (st *sourceState) start(s *Session, trigger Trigger, unplanned bool, move plannedMove, at time.Time) {
 	st.migrating = true
 	st.trigger = trigger
 	if st.stalled.IsZero() {
 		st.stalled = time.Now()
 	}
-	go st.mgr.migrate(s, trigger, unplanned, avoid, at)
+	go st.mgr.migrate(s, trigger, unplanned, move, at)
 }
 
 func (m *Manager) ended(s *Session, err error, retransmitted uint64) {
@@ -237,7 +291,7 @@ func isCut(err error) bool {
 }
 
 // migrate is one migration worker run for s.
-func (m *Manager) migrate(s *Session, trigger Trigger, unplanned bool, avoid string, at time.Time) {
+func (m *Manager) migrate(s *Session, trigger Trigger, unplanned bool, move plannedMove, at time.Time) {
 	if wait := time.Until(at); wait > 0 {
 		timer := time.NewTimer(wait)
 		select {
@@ -257,7 +311,7 @@ func (m *Manager) migrate(s *Session, trigger Trigger, unplanned bool, avoid str
 		}
 	}()
 	from := s.RelayID()
-	ok, to, err := m.attempts(s, unplanned, avoid)
+	ok, to, err := m.attempts(s, unplanned, move)
 	s.mu.Lock()
 	st := s.source
 	stall := time.Duration(0)
@@ -266,6 +320,9 @@ func (m *Manager) migrate(s *Session, trigger Trigger, unplanned bool, avoid str
 	}
 	if ok || s.core.State() == StateOpen {
 		st.stalled = time.Time{}
+	}
+	if ok {
+		st.movedAt = time.Now()
 	}
 	st.migrating = false
 	// A planned move that left the stream without a path: the unplanned
@@ -284,9 +341,10 @@ func (m *Manager) migrate(s *Session, trigger Trigger, unplanned bool, avoid str
 }
 
 // attempts tries until the stream moved, the budget ran out or the stream
-// ended. Planned: within PlannedBudget, staying on the old path on failure.
-// Unplanned: until the core's suspend deadline (UnplannedBudget).
-func (m *Manager) attempts(s *Session, unplanned bool, avoid string) (bool, string, error) {
+// ended. Planned: within PlannedBudget, staying on the old path on failure
+// (or when the dialer finds it is the best one, ErrStay). Unplanned: until
+// the core's suspend deadline (UnplannedBudget).
+func (m *Manager) attempts(s *Session, unplanned bool, move plannedMove) (bool, string, error) {
 	deadline := time.Now().Add(PlannedBudget)
 	if unplanned {
 		deadline = time.Now().Add(UnplannedBudget + time.Second)
@@ -299,6 +357,10 @@ func (m *Manager) attempts(s *Session, unplanned bool, avoid string) (bool, stri
 		canResume := s.core.CanResume()
 		current := s.core.Current()
 		lost := s.core.LostRelay()
+		var currentGeneration uint64
+		if run := s.runOf(current); current != nil && run != nil {
+			currentGeneration = run.op.Generation
+		}
 		s.mu.Unlock()
 		if state.Terminal() {
 			return false, "", lastErr
@@ -306,7 +368,7 @@ func (m *Manager) attempts(s *Session, unplanned bool, avoid string) (bool, stri
 		if !canResume {
 			return false, "", lastErr
 		}
-		if !unplanned && (current == nil || (avoid != "" && current.RelayID() != avoid)) {
+		if !unplanned && (current == nil || move.stale(current)) {
 			if current == nil {
 				// The old path died meanwhile: carry on unplanned.
 				unplanned = true
@@ -315,19 +377,25 @@ func (m *Manager) attempts(s *Session, unplanned bool, avoid string) (bool, stri
 			}
 			return false, "", nil // already moved
 		}
-		pathAvoid := avoid
+		request := DialRequest{Avoid: move.avoid}
 		switch {
-		case pathAvoid != "":
-		case current != nil:
-			pathAvoid = current.RelayID()
-		default:
+		case request.Avoid != "":
+		case current == nil:
 			// Unplanned: the relay that just failed goes last (the dialers
 			// still try it when nothing else takes the stream).
-			pathAvoid = lost
+			request.Avoid = lost
+		case move.from == nil:
+			request.Avoid = current.RelayID()
 		}
-		ok, to, err := m.attempt(s, unplanned, pathAvoid)
+		if !unplanned && current != nil {
+			request.FromRelay, request.FromGeneration = current.RelayID(), currentGeneration
+		}
+		ok, to, err := m.attempt(s, unplanned, request)
 		if ok {
 			return true, to, nil
+		}
+		if errors.Is(err, ErrStay) && !unplanned {
+			return false, "", nil
 		}
 		lastErr = err
 		timer := time.NewTimer(backoff + time.Duration(rand.Int64N(int64(backoff/4)+1)))
@@ -348,7 +416,7 @@ func (m *Manager) attempts(s *Session, unplanned bool, avoid string) (bool, stri
 var errNotResumableNow = errors.New("relayresume: stream cannot resume now")
 
 // attempt opens one path and runs one RESUME exchange on it.
-func (m *Manager) attempt(s *Session, unplanned bool, avoid string) (bool, string, error) {
+func (m *Manager) attempt(s *Session, unplanned bool, request DialRequest) (bool, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), OpenTimeout*3)
 	defer cancel()
 	go func() {
@@ -358,7 +426,7 @@ func (m *Manager) attempt(s *Session, unplanned bool, avoid string) (bool, strin
 		case <-ctx.Done():
 		}
 	}()
-	op, err := s.source.cfg.Dial(ctx, avoid)
+	op, err := s.source.cfg.Dial(ctx, request)
 	if err != nil {
 		return false, "", err
 	}
@@ -419,7 +487,20 @@ func (m *Manager) Migrate(s *Session, trigger Trigger, deadline time.Time) {
 	if s.source == nil || s.core.Current() == nil {
 		return // suspended: the unplanned loop picks a relay anyway
 	}
-	s.source.requestLocked(s, trigger, s.core.Current().RelayID(), at)
+	s.source.requestLocked(s, plannedMove{trigger: trigger, avoid: s.core.Current().RelayID(), at: at})
+}
+
+// Repath moves s off its current path to the best path of its assignment at
+// at: the same relay under a newer grant when that relay stays, a nearer
+// relay for TriggerReturn. Planned: the stream stays where it is when the
+// dialer finds nothing better (ErrStay) or no path opens.
+func (m *Manager) Repath(s *Session, trigger Trigger, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.source == nil || s.core.Current() == nil {
+		return
+	}
+	s.source.requestLocked(s, plannedMove{trigger: trigger, from: s.core.Current(), at: at})
 }
 
 // DrainRelay moves every resumable stream off relayID, spread until
@@ -441,7 +522,8 @@ func (m *Manager) RelayLost(relayID string) {
 		}
 		s.mu.Lock()
 		if s.source != nil {
-			s.source.requestLocked(s, TriggerGoAway, relayID, time.Now().Add(time.Duration(rand.Int64N(int64(100*time.Millisecond)))))
+			s.source.requestLocked(s, plannedMove{trigger: TriggerGoAway, avoid: relayID,
+				at: time.Now().Add(time.Duration(rand.Int64N(int64(100 * time.Millisecond))))})
 		}
 		s.mu.Unlock()
 	}

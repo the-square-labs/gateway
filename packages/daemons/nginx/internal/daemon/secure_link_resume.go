@@ -117,8 +117,8 @@ func (p *NginxPlugin) resumeConfig(ownerKind, linkID string, assignment *pb.Rela
 			return resume.GetKeyId(), resume.GetKey(), true
 		},
 		HalfCloseTimeout: time.Duration(resume.GetHalfCloseTimeoutMs()) * time.Millisecond,
-		Dial: func(ctx context.Context, avoidRelayID string) (relayresume.OpenedPath, error) {
-			return p.dialRelayStreamPath(ctx, ownerKind, linkID, avoidRelayID)
+		Dial: func(ctx context.Context, request relayresume.DialRequest) (relayresume.OpenedPath, error) {
+			return p.dialRelayStreamPath(ctx, ownerKind, linkID, request)
 		},
 		Tag: relayStreamTag{ownerKind: ownerKind, linkID: linkID},
 	}, true
@@ -130,10 +130,14 @@ func usableStreamResume(resume *pb.RelayStreamResume) bool {
 }
 
 // dialRelayStreamPath opens a fresh tunnel for a moving stream on the link's
-// current assignment: active candidates first, then staging ones (registered
-// on both ends: when the only active relay drains or was force-disconnected
-// the stream moves there instead of being cut), the relay it leaves last.
-func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID, avoidRelayID string) (relayresume.OpenedPath, error) {
+// current assignment, in tunnel order (distance first): active candidates
+// first, then staging ones (registered on both ends: when the only active
+// relay drains or was force-disconnected the stream moves there instead of
+// being cut), a relay the stream has to leave (request.Avoid) last. A relay
+// that stays in the assignment is not avoided: a stream whose grant
+// generation drains re-paths onto it under the new grant. When the best path
+// is the one the stream is on, it answers relayresume.ErrStay.
+func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID string, request relayresume.DialRequest) (relayresume.OpenedPath, error) {
 	assignment := p.relayGrants.lookup("connect", ownerKind, linkID)
 	if assignment == nil {
 		return relayresume.OpenedPath{}, errors.New("the link has no relay grant")
@@ -143,11 +147,15 @@ func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID
 		candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.Grant}}
 	}
 	route := secureLinkRouteKey(ownerKind, linkID)
-	ordered := relayStreamDialOrder(p.orderRelayCandidates(route, candidates), avoidRelayID, p.relayLaneConnected)
+	ordered := relayStreamDialOrder(p.orderRelayCandidates(route, candidates), request.Avoid, p.relayLaneConnected)
 	lastErr := errors.New("no relay lane is ready")
 	for _, candidate := range ordered {
 		if ctx.Err() != nil {
 			return relayresume.OpenedPath{}, ctx.Err()
+		}
+		if request.Avoid == "" && request.FromGeneration != 0 && candidate.GetRelayInstanceId() == request.FromRelay &&
+			candidate.GetAssignmentGeneration() == request.FromGeneration && p.relayLaneConnected(request.FromRelay) {
+			return relayresume.OpenedPath{}, relayresume.ErrStay
 		}
 		tunnel := p.selectRelayTunnel(candidate.GetRelayInstanceId())
 		if tunnel == nil {
@@ -161,6 +169,7 @@ func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID
 		path, err := openRelayStreamPath(ctx, tunnel, grant)
 		if err == nil {
 			p.relayPenalties.Succeeded(tunnel.targetID, route)
+			path.Generation = candidate.GetAssignmentGeneration()
 			return path, nil
 		}
 		if relaybridge.PenalizesRelay(err) && ctx.Err() == nil {
@@ -260,7 +269,7 @@ func relayStreamPathRelease(tunnel *nginxRelayTunnel, cancel context.CancelFunc)
 // bridgeRelayStream serves a connection over a resumable stream whose first
 // path is the tunnel just opened. It reports false when the link's streams
 // stay raw (the caller bridges the tunnel itself).
-func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, stream relayv1.TunnelBroker_OpenTunnelClient, cancel context.CancelFunc, maxFrame, readChunk int) bool {
+func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, stream relayv1.TunnelBroker_OpenTunnelClient, cancel context.CancelFunc, maxFrame, readChunk int, generation uint64) bool {
 	assignment := p.relayGrants.lookup("connect", ownerKind, linkID)
 	config, ok := p.resumeConfig(ownerKind, linkID, assignment)
 	if !ok {
@@ -268,7 +277,7 @@ func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net
 	}
 	first := relayresume.OpenedPath{
 		Stream: stream, Cancel: relayStreamPathRelease(tunnel, cancel), CloseSend: stream.CloseSend,
-		RelayID: tunnel.targetID, MaxFrame: maxFrame,
+		RelayID: tunnel.targetID, MaxFrame: maxFrame, Generation: generation,
 	}
 	session, err := p.relayStreams.NewSource(config, first)
 	if err != nil {
@@ -281,8 +290,10 @@ func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net
 }
 
 // moveRelayStreams answers a grant bundle change: a resumable stream whose
-// relay candidate turned draining (or left its assignment) moves, paced to
-// the drain deadline Gateway set.
+// relay stays in the link's assignment stays on it, re-pathing under the new
+// grant when the generation its grant belongs to drains
+// (relaybridge.PlaceStream); a stream whose relay leaves the assignment or
+// drains as a whole moves, paced to the drain deadline Gateway set.
 func (p *NginxPlugin) moveRelayStreams() {
 	if p.relayStreams == nil || p.relayGrants == nil {
 		return
@@ -305,8 +316,11 @@ func (p *NginxPlugin) moveRelayStreams() {
 	p.relayStreams.ForgetRoutes(func(routeID string) bool { return routes[routeID] })
 	for _, session := range p.relayStreams.Sessions() {
 		link, ok := session.Tag().(relayStreamTag)
-		relayID := session.RelayID()
-		if !ok || relayID == "" {
+		if !ok {
+			continue
+		}
+		relayID, generation, ok := session.CurrentPath()
+		if !ok {
 			continue
 		}
 		assignment := p.relayGrants.lookup("connect", link.ownerKind, link.linkID)
@@ -314,33 +328,64 @@ func (p *NginxPlugin) moveRelayStreams() {
 			// The link is gone: closeActive ends its connections.
 			continue
 		}
-		state, deadline := relayCandidateState(assignment, relayID)
-		// A stream on a staging relay (moved there when no active one took it) stays.
-		if state == "active" || state == "staging" {
+		if len(assignment.GetCandidates()) == 0 {
+			if relayID != relaybridge.LegacyTargetID {
+				// The link went back to its legacy grant, which only the local relay serves.
+				p.relayStreams.Migrate(session, relayresume.TriggerDrain, time.Time{})
+			}
 			continue
 		}
-		p.relayStreams.Migrate(session, relayresume.TriggerDrain, deadline)
+		action, deadline := relaybridge.PlaceStream(assignment, relayID, generation)
+		switch action {
+		case relaybridge.StreamRegrants:
+			p.relayStreams.Repath(session, relayresume.TriggerRegrant, relaybridge.RegrantAt(deadline))
+		case relaybridge.StreamLeaves:
+			// A planned move that finds no other relay keeps the stream where it is.
+			p.relayStreams.Migrate(session, relayresume.TriggerDrain, deadline)
+		}
 	}
 }
 
-// relayCandidateState is the assignment state of relayID for the link and
-// its drain deadline ("" when the relay is no longer a candidate).
-func relayCandidateState(assignment *pb.RelayGrantAssignment, relayID string) (string, time.Time) {
-	candidates := assignment.GetCandidates()
-	if len(candidates) == 0 && relayID == relaybridge.LegacyTargetID {
-		return "active", time.Time{}
+// startRelayStreamReturner moves resumable streams back to the nearest relay
+// of their link once it has been stable for a while (relayresume.Returner).
+func (p *NginxPlugin) startRelayStreamReturner(ctx context.Context) {
+	if p.relayStreams == nil {
+		return
 	}
-	for _, candidate := range candidates {
-		if candidate.GetRelayInstanceId() != relayID {
-			continue
-		}
-		var deadline time.Time
-		if ms := candidate.GetDrainDeadlineUnixMs(); ms > 0 {
-			deadline = time.UnixMilli(ms)
-		}
-		return candidate.GetAssignmentState(), deadline
+	returner := &relayresume.Returner{Manager: p.relayStreams, Nearer: p.relayStreamNearer, Prepare: p.observeRelayStability}
+	go returner.Run(ctx)
+}
+
+// relayStreamNearer reports a stream on relayID whose link has a clearly
+// nearer relay that has been stable for relaybridge.ReturnStableFor
+// (relaybridge.ReturnTarget).
+func (p *NginxPlugin) relayStreamNearer(session *relayresume.Session, relayID string) bool {
+	link, ok := session.Tag().(relayStreamTag)
+	if !ok {
+		return false
 	}
-	return "", time.Time{}
+	assignment := p.relayGrants.lookup("connect", link.ownerKind, link.linkID)
+	if assignment == nil {
+		return false
+	}
+	candidates := relaybridge.PoolCandidates(assignment, false)
+	transports := relaybridge.StableTransports(p.relayTransportLoads(secureLinkRouteKey(link.ownerKind, link.linkID)), &p.relayStability, relayID)
+	_, nearer := relaybridge.ReturnTarget(candidates, transports, p.relayRTTFunc(), relayID)
+	return nearer
+}
+
+// observeRelayStability samples whether each relay has a connected lane, before a return pass.
+func (p *NginxPlugin) observeRelayStability() {
+	p.relayTunnelMu.Lock()
+	connected := map[string]bool{}
+	for _, tunnel := range p.relayTunnels {
+		connected[tunnel.targetID] = connected[tunnel.targetID] || tunnel.connected()
+	}
+	p.relayTunnelMu.Unlock()
+	for id, up := range connected {
+		p.relayStability.Observe(id, up)
+	}
+	p.relayStability.Forget(func(id string) bool { _, ok := connected[id]; return ok })
 }
 
 var _ lifecycle.RelayLaneStatePlugin = (*NginxPlugin)(nil)
@@ -351,6 +396,8 @@ var _ lifecycle.RelayLaneStatePlugin = (*NginxPlugin)(nil)
 // it, so the whole relay is left; a planned move that finds no other relay
 // keeps the stream where it is.
 func (p *NginxPlugin) RelayLaneLeftReady(relayInstanceID string, _ *grpc.ClientConn) {
+	// A relay whose lane dropped takes no returning stream until it was stable again for a while.
+	p.relayStability.Broke(relayInstanceID)
 	if p.relayStreams != nil {
 		p.relayStreams.RelayLost(relayInstanceID)
 	}
@@ -366,6 +413,7 @@ func (p *NginxPlugin) watchRelayLane(ctx context.Context, conn *grpc.ClientConn,
 	for conn.WaitForStateChange(ctx, state) {
 		next := conn.GetState()
 		if state == connectivity.Ready && next != connectivity.Ready {
+			p.relayStability.Broke(relayID)
 			p.relayStreams.RelayLost(relayID)
 		}
 		state = next

@@ -57,8 +57,14 @@ func (p *DockerPlugin) relayStreams() *relayStreamSides {
 		return p.relayDrainDeadline(source, relayID)
 	}
 	p.resumable = sides
+	returner := &relayresume.Returner{Manager: sides.sources, Interval: relayStreamReturnInterval,
+		Nearer: p.relayStreamNearer, Prepare: p.observeRelayStability}
+	go returner.Run(context.Background())
 	return sides
 }
+
+// relayStreamReturnInterval spaces the passes that move streams back to the nearest relay (relayresume.Returner).
+var relayStreamReturnInterval = relayresume.DefaultReturnInterval
 
 // relayStreamsIfAny is the RSv1 state when any stream used it.
 func (p *DockerPlugin) relayStreamsIfAny() *relayStreamSides {
@@ -131,7 +137,7 @@ func (p *DockerPlugin) makeResumable(tunnel *relaySourceTunnel, assignment *pb.R
 		Dial:             p.relaySourceDialer(tag),
 		Tag:              tag,
 	}, relayresume.OpenedPath{Stream: tunnel.stream, Cancel: tunnel.cancel, CloseSend: tunnel.closeSend,
-		RelayID: tunnel.router.targetID, MaxFrame: tunnel.maxFrame})
+		RelayID: tunnel.router.targetID, MaxFrame: tunnel.maxFrame, Generation: tunnel.generation})
 	if err != nil {
 		p.logger.Warn("relay stream could not be made resumable", "owner_kind", tag.ownerKind, "owner_id", tag.ownerID, "error", err)
 		return
@@ -140,11 +146,16 @@ func (p *DockerPlugin) makeResumable(tunnel *relaySourceTunnel, assignment *pb.R
 }
 
 // relaySourceDialer opens a new tunnel for a resumable source stream on the
-// route's current connect assignment: active candidates in load and latency
-// order, the relay it leaves last, each within relayresume.OpenTimeout. A
-// route Gateway no longer assigns opens nothing: its streams end.
+// route's current connect assignment, in tunnel order (distance first), each
+// candidate within relayresume.OpenTimeout. Active candidates come before
+// staging ones, and a relay the stream has to leave (request.Avoid: it failed,
+// stops or leaves the assignment) comes last. A relay that stays in the
+// assignment is not avoided: a stream whose grant generation drains re-paths
+// onto it under the new grant. When the best path is the one the stream is on,
+// the dialer answers relayresume.ErrStay. A route Gateway no longer assigns
+// opens nothing: its streams end.
 func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer {
-	return func(ctx context.Context, avoid string) (relayresume.OpenedPath, error) {
+	return func(ctx context.Context, request relayresume.DialRequest) (relayresume.OpenedPath, error) {
 		current := p.relayGrants.lookup("connect", tag.ownerKind, tag.ownerID)
 		if current == nil || current.GetRouteId() != tag.routeID {
 			return relayresume.OpenedPath{}, errors.New("relay route is no longer assigned")
@@ -161,7 +172,7 @@ func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer 
 		ordered := p.orderRelayCandidates(route, candidates)
 		rank := func(candidate *pb.RelayDataCandidate) int {
 			switch {
-			case candidate.GetRelayInstanceId() == avoid:
+			case request.Avoid != "" && candidate.GetRelayInstanceId() == request.Avoid:
 				return 2
 			case candidate.GetAssignmentState() == "staging":
 				return 1
@@ -178,6 +189,10 @@ func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer 
 			if router == nil || !router.connected() {
 				continue
 			}
+			if request.Avoid == "" && request.FromGeneration != 0 && candidate.GetRelayInstanceId() == request.FromRelay &&
+				candidate.GetAssignmentGeneration() == request.FromGeneration {
+				return relayresume.OpenedPath{}, relayresume.ErrStay
+			}
 			tunnel, openErr := router.openSourceWithin(candidate.GetGrant(), relayresume.OpenTimeout)
 			p.recordRelayOpen(router.targetID, route, openErr)
 			if openErr != nil {
@@ -185,10 +200,39 @@ func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer 
 				continue
 			}
 			return relayresume.OpenedPath{Stream: tunnel.stream, Cancel: tunnel.cancel, CloseSend: tunnel.closeSend,
-				RelayID: router.targetID, MaxFrame: tunnel.maxFrame}, nil
+				RelayID: router.targetID, MaxFrame: tunnel.maxFrame, Generation: candidate.GetAssignmentGeneration()}, nil
 		}
 		return relayresume.OpenedPath{}, err
 	}
+}
+
+// relayStreamNearer reports a source stream on relayID whose route has a
+// clearly nearer relay that has been connected and stable for
+// relaybridge.ReturnStableFor (relaybridge.ReturnTarget).
+func (p *DockerPlugin) relayStreamNearer(session *relayresume.Session, relayID string) bool {
+	tag, _ := session.Tag().(relaySourceTag)
+	assignment := p.relayGrants.lookup("connect", tag.ownerKind, tag.ownerID)
+	if assignment == nil || assignment.GetRouteId() != tag.routeID {
+		return false
+	}
+	candidates := relaybridge.PoolCandidates(assignment, false)
+	transports := relaybridge.StableTransports(p.relayTransportLoads(relayRouteKey(tag.ownerKind, tag.ownerID)), &p.relayStability, relayID)
+	_, ok := relaybridge.ReturnTarget(candidates, transports, p.relayRTTFunc(), relayID)
+	return ok
+}
+
+// observeRelayStability samples whether each relay's transport is up, before a return pass.
+func (p *DockerPlugin) observeRelayStability() {
+	p.relayTunnelMu.Lock()
+	connected := make(map[string]bool, len(p.relayTunnels))
+	for id, router := range p.relayTunnels {
+		connected[id] = router.connected()
+	}
+	p.relayTunnelMu.Unlock()
+	for id, up := range connected {
+		p.relayStability.Observe(id, up)
+	}
+	p.relayStability.Forget(func(id string) bool { _, ok := connected[id]; return ok })
 }
 
 // relayDrainDeadline is when a source stream of tag must have left relayID:
@@ -326,10 +370,14 @@ func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, 
 	session.Cancel()
 }
 
-// relayStreamsOnBundle applies a new grant bundle to the resumable streams:
-// sources whose relay is draining or gone move (paced to the drain
-// deadline), sources and targets whose route or endpoint Gateway no longer
-// assigns end, and targets ask their sources to move off draining relays.
+// relayStreamsOnBundle applies a new grant bundle to the resumable streams.
+// A source whose relay stays in the assignment stays on it: when the
+// generation its grant belongs to drains, it re-paths onto the same relay
+// under the new grant (relaybridge.PlaceStream), spread over a few seconds.
+// Sources whose relay leaves the assignment or drains as a whole move (paced
+// to the drain deadline), sources and targets whose route or endpoint Gateway
+// no longer assigns end, and targets ask their sources to move off relays
+// that leave.
 func (p *DockerPlugin) relayStreamsOnBundle() {
 	sides := p.relayStreams()
 	bundle := p.relayGrants.get()
@@ -352,36 +400,23 @@ func (p *DockerPlugin) relayStreamsOnBundle() {
 			session.Abort(relayresume.RstRevoked, "route is no longer assigned")
 			continue
 		}
-		relayID := session.RelayID()
-		if relayID == "" || len(assignment.GetCandidates()) == 0 {
+		relayID, generation, ok := session.CurrentPath()
+		if !ok {
+			// Suspended: the unplanned loop picks a relay of the new bundle anyway.
 			continue
 		}
-		var current *pb.RelayDataCandidate
-		otherActive := false
-		for _, candidate := range relaybridge.PreparedCandidates(assignment) {
-			if candidate.GetRelayInstanceId() == relayID {
-				current = candidate
-			} else if state := candidate.GetAssignmentState(); state == "active" || state == "staging" {
-				// A staging relay serves too: better than staying until the
-				// drain is forced.
-				if router := p.relayRouter(candidate.GetRelayInstanceId()); router != nil && router.connected() {
-					otherActive = true
-				}
+		action, deadline := relaybridge.PlaceStream(assignment, relayID, generation)
+		switch action {
+		case relaybridge.StreamRegrants:
+			sides.sources.Repath(session, relayresume.TriggerRegrant, relaybridge.RegrantAt(deadline))
+		case relaybridge.StreamLeaves:
+			if !p.otherRelayServes(assignment, relayID) {
+				// Nowhere to go yet: the stream stays; a later bundle, the
+				// relay's GOAWAY or its loss moves it.
+				continue
 			}
+			sides.sources.Migrate(session, relayresume.TriggerDrain, deadline)
 		}
-		if current != nil && current.GetAssignmentState() != "draining" {
-			continue
-		}
-		if !otherActive {
-			// Nowhere to go yet: the stream stays; a later bundle, the relay's
-			// GOAWAY or its loss moves it.
-			continue
-		}
-		deadline := time.Time{}
-		if current != nil && current.GetDrainDeadlineUnixMs() > 0 {
-			deadline = time.UnixMilli(current.GetDrainDeadlineUnixMs())
-		}
-		sides.sources.Migrate(session, relayresume.TriggerDrain, deadline)
 	}
 	sides.targets.Prune(func(_ relayresume.TargetKey, session *relayresume.Session) bool {
 		tag, _ := session.Tag().(relayTargetTag)
@@ -391,12 +426,35 @@ func (p *DockerPlugin) relayStreamsOnBundle() {
 		tag, _ := session.Tag().(relayTargetTag)
 		relayID := session.RelayID()
 		assignment := findRelayAssignment(bundle, "endpoint", tag.ownerKind, tag.ownerID)
+		// A relay that stays in the endpoint's assignment keeps its streams:
+		// the sources re-path under their own new grant.
+		if relayID == "" || relaybridge.RelayStays(assignment, relayID) {
+			continue
+		}
 		for _, candidate := range assignment.GetCandidates() {
 			if candidate.GetRelayInstanceId() == relayID && candidate.GetAssignmentState() == "draining" {
 				session.RequestMigrate(relayresume.MigrateDrain)
+				break
 			}
 		}
 	}
+}
+
+// otherRelayServes reports another active or staging relay of assignment with a transport that is up: a stream
+// leaving relayID has somewhere to go. A staging relay serves too: better than staying until the drain is forced.
+func (p *DockerPlugin) otherRelayServes(assignment *pb.RelayGrantAssignment, relayID string) bool {
+	for _, candidate := range relaybridge.PreparedCandidates(assignment) {
+		if candidate.GetRelayInstanceId() == relayID {
+			continue
+		}
+		if state := candidate.GetAssignmentState(); state != "active" && state != "staging" {
+			continue
+		}
+		if router := p.relayRouter(candidate.GetRelayInstanceId()); router != nil && router.connected() {
+			return true
+		}
+	}
+	return false
 }
 
 var _ lifecycle.RelayLaneStatePlugin = (*DockerPlugin)(nil)
@@ -406,6 +464,10 @@ var _ lifecycle.RelayLaneStatePlugin = (*DockerPlugin)(nil)
 // streams for seconds only. Sources move themselves; targets ask theirs.
 func (p *DockerPlugin) RelayLaneLeftReady(relayInstanceID string, conn *grpc.ClientConn) {
 	router := p.relayRouter(relayInstanceID)
+	if router != nil && router.conn == conn {
+		// A relay whose lane dropped takes no returning stream until it was stable again for a while.
+		p.relayStability.Broke(relayInstanceID)
+	}
 	sides := p.relayStreamsIfAny()
 	if router == nil || router.conn != conn || sides == nil {
 		return

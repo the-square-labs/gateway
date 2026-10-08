@@ -188,6 +188,11 @@ func (h *harness) keys(keyID string) []byte {
 	return nil
 }
 
+// dialer is the sessions' Dialer: dial with the request's relay to avoid.
+func (h *harness) dialer(ctx context.Context, request DialRequest) (OpenedPath, error) {
+	return h.dial(ctx, request.Avoid)
+}
+
 // dial opens a tunnel on the first live relay other than avoid (or avoid
 // itself when it is the only one) and serves its target end.
 func (h *harness) dial(_ context.Context, avoid string) (OpenedPath, error) {
@@ -271,7 +276,7 @@ func (h *harness) stream() (net.Conn, *Session) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Dial: h.dial,
+	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Dial: h.dialer,
 		Key: func() (string, []byte, bool) { return "v1", h.key, true }}, first)
 	if err != nil {
 		h.t.Fatal(err)
@@ -542,7 +547,7 @@ func TestSessionWithoutRecv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Dial: h.dial,
+	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Dial: h.dialer,
 		Key: func() (string, []byte, bool) { return "v1", h.key, true }}, first)
 	if err != nil {
 		t.Fatal(err)
@@ -687,11 +692,11 @@ func TestUnplannedResumeTriesTheFailedRelayLast(t *testing.T) {
 	}
 	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1",
 		Key: func() (string, []byte, bool) { return "v1", h.key, true },
-		Dial: func(ctx context.Context, avoid string) (OpenedPath, error) {
+		Dial: func(ctx context.Context, request DialRequest) (OpenedPath, error) {
 			mu.Lock()
-			avoided = append(avoided, avoid)
+			avoided = append(avoided, request.Avoid)
 			mu.Unlock()
-			return h.dial(ctx, avoid)
+			return h.dial(ctx, request.Avoid)
 		}}, first)
 	if err != nil {
 		t.Fatal(err)

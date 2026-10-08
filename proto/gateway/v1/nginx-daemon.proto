@@ -269,7 +269,13 @@ message ManagedLinkRuntime {
 
 message RelayLatencySample {
   string relay_instance_id = 1;
+  // The smoothed round trip of the last successful measurements.
   uint32 rtt_micros = 2;
+  // How long this daemon has failed to reach the relay (its lanes are down,
+  // or its probes go unanswered), in milliseconds; 0 while it reaches it.
+  // Gateway takes a relay whose control stream ended out of placement at
+  // once when the daemons that measure it all fail to reach it.
+  uint32 failing_ms = 3;
 }
 
 message StatsReport {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 )
@@ -185,7 +186,7 @@ func runRelayPoolTarget(
 				}
 				liveRelayTransports.add(target.ID, conn)
 				connections = append(connections, conn)
-				go keepRelayLaneConnected(targetCtx, conn, laneDropped, laneLeftReady(plugin, target.ID, conn))
+				go keepRelayLaneConnected(targetCtx, conn, laneDropped, laneLeftReady(plugin, target.ID, conn), laneReached(target.ID))
 				go func() {
 					plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
 					laneEnded <- struct{}{}
@@ -305,12 +306,26 @@ type RelayLaneStatePlugin interface {
 	RelayLaneLeftReady(relayInstanceID string, conn *grpc.ClientConn)
 }
 
+// laneLeftReady is what a lane leaving the connected state does: the plugin
+// moves its streams, and once every lane of the relay is down the relay is
+// failing for this daemon (relaybridge.LatencyTracker.Fail), which the next
+// health report tells Gateway.
 func laneLeftReady(plugin RelayPoolTunnelPlugin, relayInstanceID string, conn *grpc.ClientConn) func() {
-	hook, ok := plugin.(RelayLaneStatePlugin)
-	if !ok {
-		return nil
+	hook, _ := plugin.(RelayLaneStatePlugin)
+	return func() {
+		if hook != nil {
+			hook.RelayLaneLeftReady(relayInstanceID, conn)
+		}
+		if relayLanesDown(liveRelayTransports.get(relayInstanceID)) {
+			relaybridge.Latency.Fail(relayInstanceID)
+		}
 	}
-	return func() { hook.RelayLaneLeftReady(relayInstanceID, conn) }
+}
+
+// laneReached clears the relay's failure once one of its lanes is connected
+// again, ahead of the next measurement.
+func laneReached(relayInstanceID string) func() {
+	return func() { relaybridge.Latency.Reached(relayInstanceID) }
 }
 
 // keepRelayLaneConnected reconnects a lane whose transport dropped. gRPC
@@ -319,8 +334,8 @@ func laneLeftReady(plugin RelayPoolTunnelPlugin, relayInstanceID string, conn *g
 // while would stay out of use after it came back. Each time the lane leaves
 // the connected state it is signalled on dropped (nil for none), even when it
 // is connected again by the time the signal is read, and leftReady runs (nil
-// for none).
-func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn, dropped chan<- struct{}, leftReady func()) {
+// for none); reached runs each time it is connected again (nil for none).
+func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn, dropped chan<- struct{}, leftReady, reached func()) {
 	for {
 		state := conn.GetState()
 		if state == connectivity.Idle {
@@ -334,6 +349,8 @@ func keepRelayLaneConnected(ctx context.Context, conn *grpc.ClientConn, dropped 
 			if leftReady != nil {
 				leftReady()
 			}
+		} else if reached != nil && conn.GetState() == connectivity.Ready {
+			reached()
 		}
 	}
 }

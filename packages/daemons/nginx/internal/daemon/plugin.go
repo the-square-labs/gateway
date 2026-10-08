@@ -65,6 +65,11 @@ type NginxPlugin struct {
 	secureLinkOutcomes logepisode.Tracker
 	// relayPenalties orders relays that failed a link's tunnel recently after the others.
 	relayPenalties relaybridge.RelayPenalties
+	// relayStability is since when each relay has had a connected lane without a break: resumable streams return
+	// to a nearer relay only once it was stable for a while (relayresume.Returner).
+	relayStability relaybridge.RelayStability
+	// relayRTT replaces relaybridge.Latency.RTT in tests.
+	relayRTT func(string) (time.Duration, bool)
 	// relayStreams is the source side of resumable relay streams (RSv1); relayStreamOutcomes logs their moves
 	// and cuts per link and state change.
 	relayStreams        *relayresume.Manager
@@ -184,6 +189,7 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
 	p.relayStreams = newRelayStreamManager(p)
+	p.startRelayStreamReturner(context.Background())
 	// Secure Link peers are authorized against the cached master PID: no
 	// subprocess per connection (B-22). Resolve it now, off the first
 	// connection's path.

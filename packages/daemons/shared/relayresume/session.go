@@ -27,6 +27,10 @@ type OpenedPath struct {
 	CloseSend func() error
 	RelayID   string
 	MaxFrame  int
+	// Generation is the driver's label of the path: the assignment generation
+	// of the grant it was opened with (0 unknown). Planned moves pass it back
+	// in DialRequest.FromGeneration.
+	Generation uint64
 }
 
 type queued struct {
@@ -645,6 +649,45 @@ func (s *Session) RelayID() string {
 		return p.RelayID()
 	}
 	return ""
+}
+
+// CurrentPath is the relay and generation label (OpenedPath.Generation) of
+// the path the stream runs on; ok=false while it has none.
+func (s *Session) CurrentPath() (relayID string, generation uint64, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.core.Current()
+	if current == nil {
+		return "", 0, false
+	}
+	if run := s.runOf(current); run != nil {
+		generation = run.op.Generation
+	}
+	return current.RelayID(), generation, true
+}
+
+// LastMove is when the stream last moved to another path (zero: never; only
+// source streams move).
+func (s *Session) LastMove() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.source == nil {
+		return time.Time{}
+	}
+	return s.source.movedAt
+}
+
+// Moving reports a source stream with a move running (or suspended, waiting
+// for a path).
+func (s *Session) Moving() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.source != nil && (s.source.migrating || s.core.Current() == nil)
+}
+
+// runOf is the driver state of path (mu held).
+func (s *Session) runOf(path *Path) *pathRun {
+	return s.paths[path]
 }
 
 // RouteID is the route the stream belongs to.

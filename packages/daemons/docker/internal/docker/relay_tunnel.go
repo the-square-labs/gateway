@@ -819,6 +819,8 @@ type relaySourceTunnel struct {
 	localService bool
 	// idle ends the tunnel once its connection carried no byte for that long (relaySourceIdleLimit); 0: never.
 	idle time.Duration
+	// generation is the assignment generation of the candidate grant the tunnel was opened with (0: legacy grant).
+	generation uint64
 }
 
 // openSource opens a source tunnel with grant and waits until the relay admits it, at most relaySourceOpenTimeout.

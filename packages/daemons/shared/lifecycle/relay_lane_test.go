@@ -40,7 +40,7 @@ func TestRelayLaneReconnectsAfterItsConnectionDropped(t *testing.T) {
 			t.Fatal("lane did not connect")
 		}
 	}
-	go keepRelayLaneConnected(ctx, conn, nil, nil)
+	go keepRelayLaneConnected(ctx, conn, nil, nil, nil)
 
 	path.drop()
 	for conn.GetState() != connectivity.Ready || path.connections() < 2 {

@@ -82,6 +82,11 @@ type DockerPlugin struct {
 	healthRefresh chan struct{}
 	// relayPenalties orders relays that failed a route's tunnel recently after the others.
 	relayPenalties relaybridge.RelayPenalties
+	// relayStability is since when each relay's transport has been up without a break: resumable streams return
+	// to a nearer relay only once it was stable for a while (relayresume.Returner).
+	relayStability relaybridge.RelayStability
+	// relayRTT replaces relaybridge.Latency.RTT in tests.
+	relayRTT func(string) (time.Duration, bool)
 	// memberReadiness gates availability member endpoints on their workload
 	// (D6); memberProbe replaces its probe in tests.
 	memberReadiness *memberReadiness

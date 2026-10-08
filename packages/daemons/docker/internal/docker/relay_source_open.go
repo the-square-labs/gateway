@@ -77,6 +77,7 @@ func (p *DockerPlugin) openRelaySourceOnce(assignment *pb.RelayGrantAssignment, 
 		tunnel, err := router.openSourceWithin(candidate.GetGrant(), timeout)
 		p.recordRelayOpen(candidate.GetRelayInstanceId(), route, err)
 		if err == nil {
+			tunnel.generation = candidate.GetAssignmentGeneration()
 			tunnel.idle = relaySourceIdleLimit(assignment.GetOwnerKind())
 			p.makeResumable(tunnel, assignment)
 			return tunnel, nil
@@ -108,16 +109,32 @@ func (p *DockerPlugin) orderRelayCandidates(route string, candidates []*pb.Relay
 	if len(candidates) < 2 {
 		return append([]*pb.RelayDataCandidate(nil), candidates...)
 	}
+	transports := p.relayTransportLoads(route)
 	p.relayTunnelMu.Lock()
+	rotation := p.relaySelection
+	p.relaySelection++
+	p.relayTunnelMu.Unlock()
+	return relaybridge.OrderCandidates(candidates, transports, rotation, p.relayRTTFunc())
+}
+
+// relayTransportLoads is what this daemon knows about its transport to each relay, for route.
+func (p *DockerPlugin) relayTransportLoads(route string) map[string]relaybridge.TransportLoad {
+	p.relayTunnelMu.Lock()
+	defer p.relayTunnelMu.Unlock()
 	transports := make(map[string]relaybridge.TransportLoad, len(p.relayTunnels))
 	for targetID, router := range p.relayTunnels {
 		transports[targetID] = relaybridge.TransportLoad{Available: router.connected(), Active: router.active.Load(),
 			Penalized: p.relayPenalties.Penalized(targetID, route)}
 	}
-	rotation := p.relaySelection
-	p.relaySelection++
-	p.relayTunnelMu.Unlock()
-	return relaybridge.OrderCandidates(candidates, transports, rotation, relaybridge.Latency.RTT)
+	return transports
+}
+
+// relayRTTFunc is this node's measured round trip to a relay (relaybridge.Latency; replaced in tests).
+func (p *DockerPlugin) relayRTTFunc() func(string) (time.Duration, bool) {
+	if p.relayRTT != nil {
+		return p.relayRTT
+	}
+	return relaybridge.Latency.RTT
 }
 
 func (p *DockerPlugin) relayRouter(targetID string) *relayTunnelRouter {

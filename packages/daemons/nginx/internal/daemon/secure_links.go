@@ -1199,7 +1199,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 					break
 				}
 			}
-			result, failure := p.openProxySecureLinkOnTunnel(ownerKind, linkID, connection, tunnel, grant, setup, opened)
+			result, failure := p.openProxySecureLinkOnTunnel(ownerKind, linkID, connection, tunnel, grant, candidate.GetAssignmentGeneration(), setup, opened)
 			if result == secureLinkOpened {
 				return
 			}
@@ -1264,7 +1264,18 @@ func (p *NginxPlugin) orderRelayCandidates(route string, candidates []*pb.RelayD
 	if len(candidates) < 2 {
 		return append([]*pb.RelayDataCandidate(nil), candidates...)
 	}
+	transports := p.relayTransportLoads(route)
 	p.relayTunnelMu.Lock()
+	rotation := p.relaySelection
+	p.relaySelection++
+	p.relayTunnelMu.Unlock()
+	return relaybridge.OrderCandidates(candidates, transports, rotation, p.relayRTTFunc())
+}
+
+// relayTransportLoads is what this daemon knows about its lanes to each relay, for route.
+func (p *NginxPlugin) relayTransportLoads(route string) map[string]relaybridge.TransportLoad {
+	p.relayTunnelMu.Lock()
+	defer p.relayTunnelMu.Unlock()
 	transports := make(map[string]relaybridge.TransportLoad, len(p.relayTunnels))
 	for _, tunnel := range p.relayTunnels {
 		load := transports[tunnel.targetID]
@@ -1273,10 +1284,15 @@ func (p *NginxPlugin) orderRelayCandidates(route string, candidates []*pb.RelayD
 			Penalized: p.relayPenalties.Penalized(tunnel.targetID, route),
 		}
 	}
-	rotation := p.relaySelection
-	p.relaySelection++
-	p.relayTunnelMu.Unlock()
-	return relaybridge.OrderCandidates(candidates, transports, rotation, relaybridge.Latency.RTT)
+	return transports
+}
+
+// relayRTTFunc is this node's measured round trip to a relay (relaybridge.Latency; replaced in tests).
+func (p *NginxPlugin) relayRTTFunc() func(string) (time.Duration, bool) {
+	if p.relayRTT != nil {
+		return p.relayRTT
+	}
+	return relaybridge.Latency.RTT
 }
 
 // selectRelayTunnel picks the least busy connected lane to the relay, or the
@@ -1304,7 +1320,7 @@ func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
 
 // openProxySecureLinkOnTunnel opens and bridges one connection through a relay lane. A failed attempt is logged at
 // debug only; openSecureLink reports the connection's outcome per link and state change (L-1).
-func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, setupTimeout time.Duration, opened func()) (secureLinkOpenResult, *secureLinkAttemptFailure) {
+func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, generation uint64, setupTimeout time.Duration, opened func()) (secureLinkOpenResult, *secureLinkAttemptFailure) {
 	// A resumable stream takes the lane slot over with its first path.
 	handedOver := false
 	defer func() {
@@ -1361,7 +1377,7 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 	}
 	maxFrame := int(first.GetReady().MaxFrameBytes)
 	handedOver = true
-	if p.bridgeRelayStream(ownerKind, linkID, connection, tunnel, stream, cancel, maxFrame, readChunk) {
+	if p.bridgeRelayStream(ownerKind, linkID, connection, tunnel, stream, cancel, maxFrame, readChunk, generation) {
 		return secureLinkOpened, nil
 	}
 	handedOver = false

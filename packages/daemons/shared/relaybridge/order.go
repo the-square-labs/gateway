@@ -35,7 +35,11 @@ type TransportLoad struct {
 // standbys, then relays that did not fail the route recently, then the nearer
 // path (this node's own measured round trip plus the relay's round trip to
 // the endpoint), then fewer active tunnels, then round-robin from rotation.
-// Candidates without a Gateway role get today's order.
+//
+// Distance decides before load: a relay whose distance is unknown comes after
+// every measured relay of its role, and an empty relay never beats a nearer
+// one. Active tunnels only share load between relays in one cost tier (within
+// the band of the nearest), and among relays whose distance is unknown.
 func OrderCandidates(
 	candidates []*pb.RelayDataCandidate,
 	transports map[string]TransportLoad,
@@ -51,30 +55,24 @@ func OrderCandidates(
 	for offset := range ordered {
 		rank[ordered[(start+offset)%len(ordered)].GetRelayInstanceId()] = offset
 	}
-	costs := make(map[string]time.Duration, len(ordered))
-	for _, candidate := range ordered {
-		if cost, ok := pathCost(candidate, rtt); ok {
-			costs[candidate.GetRelayInstanceId()] = cost
-		}
-	}
-	tiers := costTiers(ordered, transports, costs)
+	places := placeCandidates(ordered, transports, rtt)
 	sort.SliceStable(ordered, func(i, j int) bool {
-		left, right := ordered[i], ordered[j]
-		leftID, rightID := left.GetRelayInstanceId(), right.GetRelayInstanceId()
-		if transports[leftID].Available != transports[rightID].Available {
-			return transports[leftID].Available
+		leftID, rightID := ordered[i].GetRelayInstanceId(), ordered[j].GetRelayInstanceId()
+		left, right := places[leftID], places[rightID]
+		if left.available != right.available {
+			return left.available
 		}
-		if roleRank(left) != roleRank(right) {
-			return roleRank(left) < roleRank(right)
+		if left.role != right.role {
+			return left.role < right.role
 		}
 		if transports[leftID].Penalized != transports[rightID].Penalized {
 			return !transports[leftID].Penalized
 		}
-		if tiers[leftID] != tiers[rightID] {
-			return tiers[leftID] < tiers[rightID]
+		if left.tier != right.tier {
+			return left.tier < right.tier
 		}
-		if tiers[leftID] == tierFar && costs[leftID] != costs[rightID] {
-			return costs[leftID] < costs[rightID]
+		if left.tier == tierFar && left.cost != right.cost {
+			return left.cost < right.cost
 		}
 		if transports[leftID].Active != transports[rightID].Active {
 			return transports[leftID].Active < transports[rightID].Active
@@ -89,6 +87,45 @@ const (
 	tierFar
 	tierUnknown
 )
+
+// candidatePlace is where one relay stands for a route: whether its transport
+// is up, Gateway's role for it, and its measured distance.
+type candidatePlace struct {
+	available bool
+	role      int
+	tier      int
+	cost      time.Duration
+	known     bool
+}
+
+// placeCandidates places every candidate. The cost is the full path cost
+// (pathCost) where Gateway reported the endpoint side; when it reported it for
+// no candidate at all (an endpoint Gateway has no latency data for), this
+// node's own round trip orders the relays instead, so the route still prefers
+// the nearer relay over the emptier one.
+func placeCandidates(candidates []*pb.RelayDataCandidate, transports map[string]TransportLoad, rtt func(string) (time.Duration, bool)) map[string]candidatePlace {
+	costs := make(map[string]time.Duration, len(candidates))
+	for _, candidate := range candidates {
+		if cost, ok := pathCost(candidate, rtt); ok {
+			costs[candidate.GetRelayInstanceId()] = cost
+		}
+	}
+	if len(costs) == 0 && rtt != nil {
+		for _, candidate := range candidates {
+			if own, ok := rtt(candidate.GetRelayInstanceId()); ok {
+				costs[candidate.GetRelayInstanceId()] = own
+			}
+		}
+	}
+	tiers := costTiers(candidates, transports, costs)
+	places := make(map[string]candidatePlace, len(candidates))
+	for _, candidate := range candidates {
+		id := candidate.GetRelayInstanceId()
+		cost, known := costs[id]
+		places[id] = candidatePlace{available: transports[id].Available, role: roleRank(candidate), tier: tiers[id], cost: cost, known: known}
+	}
+	return places
+}
 
 // costTiers puts every relay of a role whose cost is within the band of the
 // nearest available relay of that role in one tier, so equally near relays
@@ -133,18 +170,18 @@ func costBand(nearest time.Duration) time.Duration {
 }
 
 // pathCost is this node's round trip to the relay plus the relay's round trip
-// to the endpoint. It is known only when Gateway placed the endpoint by
-// latency and reported the endpoint side, and this node measured its side.
+// to the endpoint. It is known only when Gateway reported the endpoint side
+// and this node measured its side.
 func pathCost(candidate *pb.RelayDataCandidate, rtt func(string) (time.Duration, bool)) (time.Duration, bool) {
-	topology := candidate.GetTopology()
-	if topology.GetRole() == "" || topology.GetEndpointRttMicros() == 0 || rtt == nil {
+	endpoint := candidate.GetTopology().GetEndpointRttMicros()
+	if endpoint == 0 || rtt == nil {
 		return 0, false
 	}
 	own, ok := rtt(candidate.GetRelayInstanceId())
 	if !ok {
 		return 0, false
 	}
-	return own + time.Duration(topology.GetEndpointRttMicros())*time.Microsecond, true
+	return own + time.Duration(endpoint)*time.Microsecond, true
 }
 
 // roleRank puts primaries (and candidates Gateway gave no role) before standbys.

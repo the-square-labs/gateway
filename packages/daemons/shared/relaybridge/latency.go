@@ -30,6 +30,9 @@ type LatencyTracker struct {
 type latencySample struct {
 	micros float64
 	at     time.Time
+	// failingSince is when this daemon stopped reaching the relay (its lanes
+	// went down, or a probe went unanswered); zero while it reaches it.
+	failingSince time.Time
 }
 
 // Latency is the tracker the daemon lifecycle feeds and tunnel selection reads.
@@ -57,6 +60,32 @@ func (t *LatencyTracker) Observe(relayInstanceID string, rtt time.Duration) {
 	t.samples[relayInstanceID] = latencySample{micros: micros, at: now}
 }
 
+// Fail records that this daemon could not reach the relay: its lanes went
+// down or a probe went unanswered. The round trip measured before stays (the
+// relay's distance did not change), and the health report says for how long
+// the relay has been failing, which Gateway reads as a data-plane failure.
+func (t *LatencyTracker) Fail(relayInstanceID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	sample, ok := t.samples[relayInstanceID]
+	if !ok || !sample.failingSince.IsZero() {
+		return
+	}
+	sample.failingSince = t.now()
+	t.samples[relayInstanceID] = sample
+}
+
+// Reached clears a failure without a new measurement: a lane to the relay is
+// connected again.
+func (t *LatencyTracker) Reached(relayInstanceID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if sample, ok := t.samples[relayInstanceID]; ok && !sample.failingSince.IsZero() {
+		sample.failingSince = time.Time{}
+		t.samples[relayInstanceID] = sample
+	}
+}
+
 // RTT is the relay's smoothed round trip, if it was measured recently.
 func (t *LatencyTracker) RTT(relayInstanceID string) (time.Duration, bool) {
 	t.mu.Lock()
@@ -79,7 +108,11 @@ func (t *LatencyTracker) Samples() []*pb.RelayLatencySample {
 			delete(t.samples, id)
 			continue
 		}
-		result = append(result, &pb.RelayLatencySample{RelayInstanceId: id, RttMicros: uint32(sample.micros + 0.5)})
+		report := &pb.RelayLatencySample{RelayInstanceId: id, RttMicros: uint32(sample.micros + 0.5)}
+		if !sample.failingSince.IsZero() {
+			report.FailingMs = uint32(max(1, now.Sub(sample.failingSince).Milliseconds()))
+		}
+		result = append(result, report)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].RelayInstanceId < result[j].RelayInstanceId })
 	return result
