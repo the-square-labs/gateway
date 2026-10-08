@@ -8,6 +8,7 @@ import (
 	"math/bits"
 	"net"
 	"sync"
+	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -110,10 +111,44 @@ func BridgeWithChunk(ctx context.Context, connection net.Conn, stream FrameStrea
 	}
 	if !terminated {
 		_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}})
+		AwaitEnd(stream, CloseFlushTimeout)
 		cancel()
 		_ = connection.Close()
 	}
 	return bridgeErr
+}
+
+// CloseFlushTimeout bounds how long a finished tunnel waits for the relay to
+// end it before it is cancelled.
+const CloseFlushTimeout = 10 * time.Second
+
+// AwaitEnd lets the last frames of a client stream leave before the caller
+// cancels it: Send only queues a frame, and cancelling the stream drops what
+// HTTP/2 flow control still holds (the tail of a download whose client had
+// half-closed first, and its FIN). The relay ends the tunnel once it read the
+// Close, which ends the stream here. A stream that is not a client stream,
+// or one that does not end within timeout, is left to the caller's cancel.
+func AwaitEnd(stream FrameStream, timeout time.Duration) {
+	closer, ok := stream.(interface{ CloseSend() error })
+	if !ok {
+		return
+	}
+	_ = closer.CloseSend()
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		for {
+			if _, err := stream.Recv(); err != nil {
+				return
+			}
+		}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ended:
+	case <-timer.C:
+	}
 }
 
 func sendLocal(connection net.Conn, stream FrameStream, readChunk int, completed chan<- result) {

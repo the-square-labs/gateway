@@ -1118,6 +1118,9 @@ func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFram
 	}
 	if !terminated {
 		_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}})
+		// The tail of what this side sent may still wait for HTTP/2 window:
+		// cancelling at once dropped it.
+		relaybridge.AwaitEnd(stream, relaybridge.CloseFlushTimeout)
 		cancel()
 		_ = connection.Close()
 	}

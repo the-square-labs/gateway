@@ -506,6 +506,14 @@ type replayStream struct {
 	pending chan firstRead
 }
 
+// CloseSend half-closes the underlying client stream (relaybridge.AwaitEnd).
+func (r *replayStream) CloseSend() error {
+	if closer, ok := r.Stream.(interface{ CloseSend() error }); ok {
+		return closer.CloseSend()
+	}
+	return nil
+}
+
 func (r *replayStream) Recv() (*relayv1.TunnelFrame, error) {
 	r.mu.Lock()
 	if r.pending != nil {
