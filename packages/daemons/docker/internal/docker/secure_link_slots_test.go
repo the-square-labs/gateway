@@ -216,8 +216,9 @@ func TestRetirementLimitLogsTheSessionsItCuts(t *testing.T) {
 		engine.serveControl(current)
 	}
 	logs := &lockedBuffer{}
+	// The daemon's JSON log, which rendered the limit as nanoseconds on the rc.3 stand (O-d).
 	manager := &dockerSecureLinkManager{
-		plugin:     &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewTextHandler(logs, nil))},
+		plugin:     &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewJSONHandler(logs, nil))},
 		controlDir: engine.controlDir,
 	}
 	for _, current := range []*fakeConnectorContainer{busy, idle} {
@@ -226,8 +227,8 @@ func TestRetirementLimitLogsTheSessionsItCuts(t *testing.T) {
 	}
 	waitRemovedID(t, engine, idle.id)
 	waitRemovedID(t, engine, busy.id)
-	if logs.count("reached its retirement limit") != 1 || logs.count("connector="+busy.id+" sessions_cut=4") != 1 {
-		t.Fatalf("the cut at the retirement limit was not logged with its sessions: %s", logs.String())
+	if logs.count("reached its retirement limit") != 1 || logs.count(`"connector":"`+busy.id+`","sessions_cut":4,"limit":"300ms"`) != 1 {
+		t.Fatalf("the cut at the retirement limit was not logged with its sessions and a readable limit: %s", logs.String())
 	}
 }
 

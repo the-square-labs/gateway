@@ -982,7 +982,7 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 		// oldest slot does. A retirement another path ended (stopped) is that path's to report.
 		if cut := max(carried, busy); cut > 0 && !stopped && m.plugin.logger != nil {
 			m.plugin.logger.Warn("a replaced secure-link connector reached its retirement limit and is removed with the sessions it still carries",
-				"connector", previous.id, "sessions_cut", cut, "limit", secureLinkConnectorRetireLimit)
+				"connector", previous.id, "sessions_cut", cut, "limit", secureLinkConnectorRetireLimit.String())
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

@@ -106,7 +106,7 @@ func (m *dockerSecureLinkManager) reconcileEgressLocked(ctx context.Context) boo
 		case ready || time.Since(m.pendingRetireSince) >= secureLinkConnectorRetireLimit:
 			if !ready && m.plugin.logger != nil {
 				m.plugin.logger.Warn("the replaced secure-link connector stops accepting at the retire limit although an egress does not listen on the new one",
-					"limit", secureLinkConnectorRetireLimit)
+					"limit", secureLinkConnectorRetireLimit.String())
 			}
 			m.retireConnector(*m.pendingRetire)
 			m.pendingRetire = nil
