@@ -20,9 +20,10 @@ import (
 // endpoint is here, else through a relay.
 const (
 	egressSocketName = "egress.sock"
-	// egressDatabaseSessions bounds the database link sessions of the node's egress together, as the host listeners
-	// did per binding and node (D9).
-	egressDatabaseSessions    = 128
+	// egressDatabaseSessions bounds the database link sessions of the node's egress together with the host listeners'
+	// node bound (D9): it only stops a runaway node. Each link is held at its own capacity, the session limit of its
+	// grant, which follows the database's max_connections.
+	egressDatabaseSessions    = managedDatabaseHostListenerGlobalConnections
 	egressRequestReadDeadline = 5 * time.Second
 )
 

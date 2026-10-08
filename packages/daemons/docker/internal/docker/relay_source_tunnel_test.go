@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -231,6 +232,47 @@ func TestStorageConnectorRelayHoldsTheLinkAtItsGrantLimit(t *testing.T) {
 		report.GetActiveConnections() != 2 || report.GetConnectionLimit() != 2 || report.GetRejectedTotal() != 1 ||
 		report.GetLastRejectionReason() != linkRejectedLinkLimit || report.GetLastRejectedAtUnixMs() == 0 {
 		t.Fatalf("storage link report %+v", report)
+	}
+}
+
+// A database link carries as many connections through the egress socket as its grant allows (the database's
+// max_connections): the node's own bound is the host listeners' runaway guard, not the 128 that capped every database
+// link of the node together on the rc.1 stand.
+func TestEgressCarriesDatabaseLinkConnectionsUpToTheGrantLimit(t *testing.T) {
+	const linkID, limit = "6a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d", 300
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+	broker := &fakeTunnelBroker{open: func() *fakeSourceStream {
+		return &fakeSourceStream{first: readyFrame(), hold: hold, sent: make(chan *relayv1.TunnelFrame, 4)}
+	}}
+	assignment := connectAssignmentWithSessions(linkKindManagedDatabaseBinding, linkID, limit)
+	assignment.SecureLinkEgress = &pb.SecureLinkEgress{NetworkName: "gateway-db-0123456789abcdef", Alias: "db", ListenPort: 5432}
+	plugin, output := newRelayTestPlugin(t, broker, assignment)
+	plugin.egressDatabaseSlots = make(chan struct{}, egressDatabaseSessions)
+	open := func() securelink.RelayResponse {
+		t.Helper()
+		connector, daemonSide := net.Pipe()
+		t.Cleanup(func() { connector.Close() })
+		go plugin.handleSecureLinkEgress(daemonSide)
+		if err := securelink.WriteJSON(connector, securelink.RelayRequest{Version: securelink.RelayProtocolVersion, OwnerKind: linkKindManagedDatabaseBinding, BindingID: linkID}); err != nil {
+			t.Fatal(err)
+		}
+		var response securelink.RelayResponse
+		if err := securelink.ReadJSON(connector, &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	for opened := range limit {
+		if response := open(); response.Error != "" {
+			t.Fatalf("connection %d of %d refused: %q", opened+1, limit, response.Error)
+		}
+	}
+	if response := open(); response.Error != fmt.Sprintf("link session capacity reached: the link carries its %d concurrent connections", limit) {
+		t.Fatalf("connection over the link limit answered with %q", response.Error)
+	}
+	if lines := output.lines("reason=" + linkRejectedNodeLimit); len(lines) != 0 {
+		t.Fatalf("node limit refused link connections: %q", lines)
 	}
 }
 
