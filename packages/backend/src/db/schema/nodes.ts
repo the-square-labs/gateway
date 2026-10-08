@@ -137,7 +137,7 @@ export interface NodeHealthReport {
   // the daemon explicitly reports the corresponding available metric.
   gpuDevices?: NodeGpuDevice[];
   // Smoothed round trip from this node to each relay it measured recently.
-  relayLatencies?: Array<{ relayInstanceId: string; rttMs: number }>;
+  relayLatencies?: Array<{ relayInstanceId: string; rttMs: number; failingMs?: number }>;
   // Nginx daemons with ingress groups (ingress_group_v1): what the reserved health endpoint answers.
   ingressHealth?: NodeIngressHealth;
   // Docker daemons with managed_link_runtime_v1: the connections of the managed links whose workloads the node runs.

@@ -67,21 +67,26 @@ function byRendezvous(endpointId: string, memberIds?: ReadonlySet<string>) {
 /**
  * Fills the slots left after `taken` from ready relays by rendezvous score, one relay per fault
  * domain, until `desiredCount` relays are placed in total. `memberIds`: the relays of the current
- * placement, which keep their slots within a margin (see MEMBER_SCORE_NUMERATOR).
+ * placement, which keep their slots within a margin (see MEMBER_SCORE_NUMERATOR). `holdBack`: relays
+ * that only fill slots no other relay takes (a relay that just came back must not displace the
+ * relays an endpoint's traffic runs through).
  */
 export function chooseByRendezvous(
   endpointId: string,
   instances: RelayInstanceRow[],
   desiredCount: number,
   taken: RelayInstanceRow[] = [],
-  memberIds?: ReadonlySet<string>
+  memberIds?: ReadonlySet<string>,
+  holdBack?: ReadonlySet<string>
 ): RelayInstanceRow[] {
   const takenIds = new Set(taken.map(({ id }) => id));
   const faultDomains = new Set(taken.map(({ faultDomainId }) => faultDomainId));
   const selected: RelayInstanceRow[] = [];
+  const held = (id: string) => (holdBack?.has(id) && !memberIds?.has(id) ? 1 : 0);
+  const rendezvous = byRendezvous(endpointId, memberIds);
   const ranked = instances
     .filter(({ state, id }) => state === 'ready' && !takenIds.has(id))
-    .sort(byRendezvous(endpointId, memberIds));
+    .sort((left, right) => held(left.id) - held(right.id) || rendezvous(left, right));
   for (const instance of ranked) {
     if (taken.length + selected.length >= desiredCount) break;
     if (faultDomains.has(instance.faultDomainId)) continue;
@@ -133,11 +138,15 @@ export function chooseRelayAssignments(
   instances: RelayInstanceRow[],
   desiredCount: number,
   path: EndpointLatencyPath | undefined,
-  reference: ReadonlyArray<{ relayInstanceId: string; role: string }> = []
+  reference: ReadonlyArray<{ relayInstanceId: string; role: string }> = [],
+  holdBack?: ReadonlySet<string>
 ): PlannedRelayAssignment[] {
   const ready = instances.filter(({ state }) => state === 'ready');
+  const referenceIds = new Set(reference.map(({ relayInstanceId }) => relayInstanceId));
   const costs = new Map<string, number>();
   for (const instance of path ? ready : []) {
+    // A relay that just came back is neither a primary nor the anchor of the group yet.
+    if (holdBack?.has(instance.id) && !referenceIds.has(instance.id)) continue;
     const cost = relayPathCost(path!, instance.id);
     if (cost !== undefined) costs.set(instance.id, cost);
   }
@@ -145,13 +154,12 @@ export function chooseRelayAssignments(
     reference.filter(({ role }) => role === 'primary').map(({ relayInstanceId }) => relayInstanceId)
   );
   const keptPrimaries = ready.filter(({ id }) => referencePrimaryIds.has(id));
-  const referenceIds = new Set(reference.map(({ relayInstanceId }) => relayInstanceId));
   let primaries: RelayInstanceRow[];
   if (!costs.size) {
     // Latency reports lapsed (a daemon restarts, a node goes quiet): keep a latency placement
     // whose primaries all still serve instead of flapping back to hashing and forth again.
     if (!referencePrimaryIds.size || keptPrimaries.length !== referencePrimaryIds.size) {
-      return chooseByRendezvous(endpointId, instances, desiredCount, [], referenceIds).map((instance) => ({
+      return chooseByRendezvous(endpointId, instances, desiredCount, [], referenceIds, holdBack).map((instance) => ({
         instance,
         role: 'active',
       }));
@@ -168,7 +176,7 @@ export function chooseRelayAssignments(
     });
   }
   primaries = primaries.slice(0, desiredCount);
-  const standbys = chooseByRendezvous(endpointId, instances, desiredCount, primaries, referenceIds);
+  const standbys = chooseByRendezvous(endpointId, instances, desiredCount, primaries, referenceIds, holdBack);
   return [
     ...primaries.map((instance) => ({ instance, role: 'primary' as const })),
     ...standbys.map((instance) => ({ instance, role: 'fallback' as const })),
@@ -275,6 +283,88 @@ export function samePlannedAssignments(
   );
 }
 
+/**
+ * A remote relay whose control stream ended stays in placement this long, where it already serves:
+ * otherwise a control stream that drops and comes back moves every endpoint twice, through two
+ * generations. Its data plane is judged apart (relayDataPlaneFailures).
+ */
+export const RELAY_DISCONNECT_GRACE_MS = 3 * 60_000;
+/** A daemon that failed to reach a relay this long (failingMs) reports its data plane failing. */
+export const RELAY_DATA_PLANE_FAILING_MS = 15_000;
+/**
+ * A relay that came back (ready again after it was not) only fills free slots for this long: it
+ * neither becomes a primary nor displaces a relay an endpoint's traffic runs through.
+ */
+export const RELAY_RETURN_HOLD_MS = 2 * 60_000;
+
+/** One node's relay round trips with how long it has failed to reach each relay. */
+export type NodeRelayReachability = ReadonlyArray<{ relayInstanceId: string; failingMs: number }>;
+
+/**
+ * The relays whose data plane fails: at least one node reports failing to reach the relay for
+ * RELAY_DATA_PLANE_FAILING_MS, and no node reports reaching it. Nodes that do not measure a relay
+ * say nothing about it; daemons without failure reports always count as reaching it, so with them
+ * a relay is judged by the disconnect grace alone.
+ */
+export function relayDataPlaneFailures(reports: ReadonlyArray<NodeRelayReachability>): Set<string> {
+  const failing = new Set<string>();
+  const reached = new Set<string>();
+  for (const report of reports) {
+    for (const { relayInstanceId, failingMs } of report) {
+      if (failingMs <= 0) reached.add(relayInstanceId);
+      else if (failingMs >= RELAY_DATA_PLANE_FAILING_MS) failing.add(relayInstanceId);
+    }
+  }
+  for (const id of reached) failing.delete(id);
+  return failing;
+}
+
+/** Parses how long a node failed to reach each relay it measures (relayLatencies of its health report). */
+export function parseNodeRelayReachability(value: unknown): NodeRelayReachability {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((sample) => {
+    const { relayInstanceId, failingMs } = (sample ?? {}) as { relayInstanceId?: unknown; failingMs?: unknown };
+    if (typeof relayInstanceId !== 'string' || !relayInstanceId) return [];
+    const failing = typeof failingMs === 'number' && Number.isFinite(failingMs) && failingMs > 0 ? failingMs : 0;
+    return [{ relayInstanceId, failingMs: failing }];
+  });
+}
+
+/**
+ * Whether a relay counts as serving for placement although its control stream ended: a remote
+ * relay last seen ready (not drained by an operator) within RELAY_DISCONNECT_GRACE_MS whose data
+ * plane is not known to fail.
+ */
+export function inDisconnectGrace(
+  instance: Pick<RelayInstanceRow, 'id' | 'kind' | 'state' | 'manualDrainStartedAt' | 'lastSeenAt' | 'health'>,
+  now: number,
+  failing: ReadonlySet<string>
+): boolean {
+  return (
+    instance.kind === 'remote' &&
+    instance.state === 'offline' &&
+    !instance.manualDrainStartedAt &&
+    instance.health?.admissionState === 'ready' &&
+    Boolean(instance.lastSeenAt) &&
+    now - instance.lastSeenAt!.getTime() < RELAY_DISCONNECT_GRACE_MS &&
+    !failing.has(instance.id)
+  );
+}
+
+/**
+ * The relays placement sees: a relay in its disconnect grace counts as ready where it already
+ * serves (`keep`), so a short control-stream loss changes no plan; elsewhere it stays out.
+ */
+export function placementInstances(
+  instances: RelayInstanceRow[],
+  grace: ReadonlySet<string>,
+  keep: ReadonlySet<string>
+): RelayInstanceRow[] {
+  return instances.map((instance) =>
+    grace.has(instance.id) && keep.has(instance.id) ? { ...instance, state: 'ready' as const } : instance
+  );
+}
+
 /** Parses the relay latencies stored with a node's health report. */
 export function parseNodeRelayLatencies(value: unknown): Map<string, number> {
   const result = new Map<string, number>();
@@ -288,11 +378,16 @@ export function parseNodeRelayLatencies(value: unknown): Map<string, number> {
   return result;
 }
 
-/** The candidate role daemons see: a fallback assignment is a standby. */
+/**
+ * The candidate role daemons see: a fallback assignment is a standby. An endpoint Gateway placed
+ * without latency data (`active`) has only equal relays, each a primary to daemons: its candidates
+ * still carry the relay's round trip to the endpoint (attachEndpointRtts), so daemons order them by
+ * distance rather than by load. Without it an empty far relay won every new tunnel.
+ */
 export function candidateTopology(
   role: string
 ): { role: 'primary' | 'standby'; endpointRttMicros: number } | undefined {
-  if (role === 'primary') return { role: 'primary', endpointRttMicros: 0 };
+  if (role === 'primary' || role === 'active') return { role: 'primary', endpointRttMicros: 0 };
   if (role === 'fallback') return { role: 'standby', endpointRttMicros: 0 };
   return undefined;
 }

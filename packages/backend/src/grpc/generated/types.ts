@@ -285,6 +285,8 @@ export interface IngressHealthReport {
 export interface RelayLatencySample {
   relayInstanceId: string;
   rttMicros: number;
+  /** How long the daemon has failed to reach the relay, in ms; 0 while it reaches it. */
+  failingMs?: number;
 }
 
 /** One managed database or storage link on the node that runs its workloads. */

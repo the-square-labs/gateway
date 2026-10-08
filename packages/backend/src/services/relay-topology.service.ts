@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes, type relayEndpoints, relayInstances, relayRoutes } from '@/db/schema/index.js';
 import {
@@ -7,10 +7,14 @@ import {
   grantEndpointNodeId,
   type NodeRelayLatencies,
   parseNodeRelayLatencies,
+  parseNodeRelayReachability,
+  relayDataPlaneFailures,
 } from './relay-topology.js';
 
 /** Daemons report every 30 s; latencies of a node silent this long are unknown, not stale. */
 const LATENCY_FRESH_MS = 5 * 60_000;
+/** Reachability counts only from reports this recent: three report intervals. */
+const REACHABILITY_FRESH_MS = 90_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface RelayLatencyTarget {
@@ -99,7 +103,24 @@ export class RelayTopologyService {
     return this.latencyTargets();
   }
 
-  /** Every serving relay of the pool, for daemons to measure before any assignment uses it. */
+  /**
+   * The relays whose data plane fails for every node that measures them (relayDataPlaneFailures), from the
+   * health reports of the nodes seen lately.
+   */
+  async relayDataPlaneFailures(now = Date.now()): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ relayLatencies: sql<unknown>`${nodes.lastHealthReport}->'relayLatencies'` })
+      .from(nodes)
+      .where(gte(nodes.lastSeenAt, new Date(now - REACHABILITY_FRESH_MS)));
+    return relayDataPlaneFailures(rows.map(({ relayLatencies }) => parseNodeRelayReachability(relayLatencies)));
+  }
+
+  /**
+   * Every relay of the pool that serves or may serve again, for daemons to measure before any assignment uses
+   * it. A relay whose control stream ended (offline) stays in: daemons keep measuring it, so placement and
+   * tunnel selection know its distance the moment it is back, and the daemons' failure reports tell a data
+   * plane that is gone from a control stream that dropped.
+   */
   async latencyTargets(): Promise<RelayLatencyTarget[]> {
     const rows = await this.db
       .select({
@@ -111,7 +132,7 @@ export class RelayTopologyService {
       .where(
         and(
           eq(relayInstances.poolId, 'system'),
-          inArray(relayInstances.state, ['ready', 'draining']),
+          inArray(relayInstances.state, ['ready', 'draining', 'offline']),
           or(eq(relayInstances.kind, 'local'), isNotNull(relayInstances.certificateFingerprint))
         )
       );

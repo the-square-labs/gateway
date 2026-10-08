@@ -44,7 +44,10 @@ import {
   chooseRelayAssignments,
   type EndpointLatencyPath,
   includeRemoteRelay,
+  inDisconnectGrace,
   type PlannedRelayAssignment,
+  placementInstances,
+  RELAY_RETURN_HOLD_MS,
   type RelayAssignmentRole,
   samePlannedAssignments,
 } from './relay-topology.js';
@@ -158,7 +161,9 @@ export function planRelays(
   reference: ReadonlyArray<{ relayInstanceId: string; role: string }>,
   availabilityMember = false,
   /** Set when the endpoint's node reaches no relay off the Gateway host (see includeRemoteRelay). */
-  notes?: { gatewayHostOnly?: boolean }
+  notes?: { gatewayHostOnly?: boolean },
+  /** Relays that came back lately: they only fill free slots (RELAY_RETURN_HOLD_MS). */
+  holdBack?: ReadonlySet<string>
 ): PlannedRelayAssignment[] {
   if (localOnly) {
     return instances
@@ -171,12 +176,12 @@ export function planRelays(
         instance.state === 'ready' && instance.capabilities?.features?.includes(AVAILABILITY_LEASE_CAPABILITY)
     );
     if (leaseRelays.length) {
-      return chooseRelayAssignments(endpointId, leaseRelays, leaseRelays.length, path, reference);
+      return chooseRelayAssignments(endpointId, leaseRelays, leaseRelays.length, path, reference, holdBack);
     }
   }
   const placed = includeRemoteRelay(
     endpointId,
-    chooseRelayAssignments(endpointId, instances, desiredCount, path, reference),
+    chooseRelayAssignments(endpointId, instances, desiredCount, path, reference, holdBack),
     instances,
     path,
     reference
@@ -210,9 +215,12 @@ export class RelayPoolService {
     RelayCertificateRenewalService,
     'renewDueIfScheduled' | 'describeCertificates' | 'renewInstanceCertificate'
   >;
-  private topology?: Pick<RelayTopologyService, 'endpointPaths'>;
+  private topology?: Pick<RelayTopologyService, 'endpointPaths'> &
+    Partial<Pick<RelayTopologyService, 'relayDataPlaneFailures'>>;
   /** The roles last planned per endpoint; see planEndpoint. */
   private readonly plannedRoles = new Map<string, Array<{ relayInstanceId: string; role: string }>>();
+  /** When placement last saw each relay not serving; a relay ready again since is held back for a while. */
+  private readonly notServingAt = new Map<string, number>();
   constructor(
     private readonly db: DrizzleClient,
     private readonly policy: RelayPolicyService,
@@ -264,8 +272,64 @@ export class RelayPoolService {
   }
 
   /** Enables placement by measured network distance; without it relays are placed by hash. */
-  setTopology(topology: Pick<RelayTopologyService, 'endpointPaths'>): void {
+  setTopology(
+    topology: Pick<RelayTopologyService, 'endpointPaths'> &
+      Partial<Pick<RelayTopologyService, 'relayDataPlaneFailures'>>
+  ): void {
     this.topology = topology;
+  }
+
+  /**
+   * The relays whose data plane the daemons that measure them fail to reach (relayDataPlaneFailures). Only
+   * asked while a remote relay is offline: it cuts that relay's disconnect grace short. Advisory: without
+   * the answer the grace runs its course.
+   */
+  private async dataPlaneFailures(instances: RelayInstanceRow[]): Promise<Set<string>> {
+    if (!this.topology?.relayDataPlaneFailures) return new Set();
+    if (!instances.some(({ kind, state }) => kind === 'remote' && state === 'offline')) return new Set();
+    try {
+      return await this.topology.relayDataPlaneFailures();
+    } catch (error) {
+      logger.debug('Relay data-plane reports are unavailable; offline relays keep their grace', {
+        error: String(error),
+      });
+      return new Set();
+    }
+  }
+
+  /**
+   * How placement sees the relays now. A remote relay whose control stream ended keeps its slots for
+   * RELAY_DISCONNECT_GRACE_MS where it already serves, unless the daemons fail to reach it (`failing`): a
+   * control stream that drops and comes back then changes no plan and starts no generation. A relay
+   * serving again after it was not is held back for RELAY_RETURN_HOLD_MS: it fills free slots only.
+   */
+  private placementView(instances: RelayInstanceRow[], failing: ReadonlySet<string>, now = Date.now()) {
+    const grace = new Set(
+      instances.filter((instance) => inDisconnectGrace(instance, now, failing)).map(({ id }) => id)
+    );
+    const known = new Set(instances.map(({ id }) => id));
+    for (const [id, at] of this.notServingAt) {
+      if (!known.has(id) || now - at >= RELAY_RETURN_HOLD_MS) this.notServingAt.delete(id);
+    }
+    for (const instance of instances) {
+      if (instance.state !== 'ready' && !grace.has(instance.id)) this.notServingAt.set(instance.id, now);
+    }
+    const holdBack = new Set(
+      instances.filter(({ id, state }) => state === 'ready' && this.notServingAt.has(id)).map(({ id }) => id)
+    );
+    const readyFaultDomains = new Set(
+      instances.filter(({ id, state }) => state === 'ready' || grace.has(id)).map(({ faultDomainId }) => faultDomainId)
+    );
+    return {
+      grace,
+      holdBack,
+      readyFaultDomains,
+      /** The relays one endpoint is planned on: its relays in their grace count as ready. */
+      instancesFor: (current: ReadonlyArray<{ relayInstanceId: string }>) =>
+        grace.size
+          ? placementInstances(instances, grace, new Set(current.map(({ relayInstanceId }) => relayInstanceId)))
+          : instances,
+    };
   }
 
   /**
@@ -282,7 +346,8 @@ export class RelayPoolService {
     path: EndpointLatencyPath | undefined,
     active: Array<{ relayInstanceId: string; role: string }>,
     availabilityMember = false,
-    notes?: { gatewayHostOnly?: boolean }
+    notes?: { gatewayHostOnly?: boolean },
+    holdBack?: ReadonlySet<string>
   ): PlannedRelayAssignment[] {
     const reference = this.plannedRoles.get(endpointId) ?? active;
     const planned = planRelays(
@@ -293,7 +358,8 @@ export class RelayPoolService {
       path,
       reference,
       availabilityMember,
-      notes
+      notes,
+      holdBack
     );
     this.plannedRoles.set(
       endpointId,
@@ -974,9 +1040,8 @@ export class RelayPoolService {
       : [];
     const updateStepByInstance = new Map(updateSteps.map((step) => [step.relayInstanceId, step]));
     const attempts = await this.getRecentAttempts();
-    const readyFaultDomains = new Set(
-      instances.filter(({ state }) => state === 'ready').map(({ faultDomainId }) => faultDomainId)
-    );
+    const placement = this.placementView(instances, await this.dataPlaneFailures(instances));
+    const readyFaultDomains = placement.readyFaultDomains;
     const localOnly = await this.poolIncapableEndpoints(
       endpoints.filter(({ ownerKind }) => ownerKind !== 'internal_registry').map(({ id }) => id)
     );
@@ -1001,13 +1066,14 @@ export class RelayPoolService {
             const notes: { gatewayHostOnly?: boolean } = {};
             const planned = this.planEndpoint(
               endpoint.id,
-              instances,
+              placement.instancesFor(current),
               effectiveCount(spread, readyFaultDomains.size),
               localOnly.has(endpoint.id),
               latencyPaths.get(endpoint.id),
               current,
               members.has(endpoint.id),
-              notes
+              notes,
+              placement.holdBack
             );
             if (notes.gatewayHostOnly) gatewayHostOnly.push(endpoint);
             const selectedIds = planned.map(({ instance }) => instance.id);
@@ -1340,6 +1406,11 @@ export class RelayPoolService {
     const localOnly = await this.poolIncapableEndpoints(endpoints.map(({ id }) => id));
     const latencyPaths = await this.latencyPaths(endpoints);
     const members = await this.availabilityMemberEndpointIds(endpoints);
+    const failing = await this.dataPlaneFailures(
+      (await this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'))).filter(
+        isEnrolledRelayInstance
+      )
+    );
     const staged = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-pool-rebalance'))`);
       // An update run pauses automatic placement, but never the evacuation of a relay it drains:
@@ -1355,10 +1426,8 @@ export class RelayPoolService {
         if (update && !PLACEMENT_RUNS_DURING_RUN_STATES.includes(update.state)) return [];
       }
       const candidates = await tx.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'));
-      const readyInstances = candidates.filter(
-        (instance) => instance.state === 'ready' && isEnrolledRelayInstance(instance)
-      );
-      const readyFaultDomains = new Set(readyInstances.map(({ faultDomainId }) => faultDomainId)).size;
+      const placement = this.placementView(candidates.filter(isEnrolledRelayInstance), failing);
+      const readyFaultDomains = placement.readyFaultDomains.size;
       if (readyFaultDomains < 1) {
         throw new AppError(409, 'RELAY_CAPACITY_UNAVAILABLE', 'At least one ready physical relay host is required');
       }
@@ -1413,12 +1482,14 @@ export class RelayPoolService {
         const spread = effectiveSpreads.get(endpoint.id) ?? globalSpread;
         const planned = this.planEndpoint(
           endpoint.id,
-          readyInstances,
+          placement.instancesFor(activeAssignments).filter(({ state }) => state === 'ready'),
           effectiveCount(spread, readyFaultDomains),
           localOnly.has(endpoint.id),
           latencyPaths.get(endpoint.id),
           activeAssignments,
-          members.has(endpoint.id)
+          members.has(endpoint.id),
+          undefined,
+          placement.holdBack
         );
         const selectedIds = planned.map(({ instance }) => instance.id);
         if (!selectedIds.length || samePlannedAssignments(activeAssignments, planned)) continue;

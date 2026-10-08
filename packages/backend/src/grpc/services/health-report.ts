@@ -49,13 +49,21 @@ export function decodeHealthDiskMounts(rawMounts: unknown): {
  * none, so reports of nodes without relays keep their shape.
  */
 export function relayLatencyHealth(rawSamples: unknown): {
-  relayLatencies?: Array<{ relayInstanceId: string; rttMs: number }>;
+  relayLatencies?: Array<{ relayInstanceId: string; rttMs: number; failingMs?: number }>;
 } {
   const relayLatencies = (Array.isArray(rawSamples) ? rawSamples : []).flatMap((sample) => {
     const relayInstanceId = (sample as { relayInstanceId?: unknown })?.relayInstanceId;
     const micros = Number((sample as { rttMicros?: unknown })?.rttMicros);
     if (typeof relayInstanceId !== 'string' || !relayInstanceId || !Number.isFinite(micros) || micros <= 0) return [];
-    return [{ relayInstanceId, rttMs: Math.round(micros) / 1000 }];
+    // How long the daemon has failed to reach the relay (daemons that report it); absent while it reaches it.
+    const failingMs = Number((sample as { failingMs?: unknown })?.failingMs ?? 0);
+    return [
+      {
+        relayInstanceId,
+        rttMs: Math.round(micros) / 1000,
+        ...(Number.isFinite(failingMs) && failingMs > 0 ? { failingMs: Math.trunc(failingMs) } : {}),
+      },
+    ];
   });
   return relayLatencies.length ? { relayLatencies } : {};
 }
