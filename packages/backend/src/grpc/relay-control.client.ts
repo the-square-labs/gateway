@@ -19,6 +19,14 @@ import {
 
 export const RELAY_MAX_FRAME_BYTES = 1024 * 1024;
 
+/**
+ * Tunnel channels advertise a 16 MiB HTTP/2 window (stream and connection) instead of grpc-js's 64 KiB, which it never
+ * grows: every byte from the relay to Gateway (storage browser downloads, query results) moved at most 64 KiB per round
+ * trip, 32-38 MB/s on the local relay and about 1 MB/s through a relay 60 ms away. RSv1 windows still bound what a
+ * stream holds; grpc-go's own windows grow to 16 MiB the same way (BDP estimation).
+ */
+const TUNNEL_CHANNEL_OPTIONS = { 'grpc-node.flow_control_window': 16 * 1024 * 1024 } as const;
+
 export interface SignedRelayGrant {
   keyId: string;
   payload: Buffer;
@@ -469,6 +477,7 @@ export class RelayControlClient {
       // Each channel owns its connection: a channel made by reconnectIfDown must not take over the failed
       // connection (and its backoff) of the one it replaces from the shared subchannel pool.
       'grpc.use_local_subchannel_pool': 1,
+      ...(service === 'TunnelBroker' ? TUNNEL_CHANNEL_OPTIONS : {}),
     });
     // Idle until its first call, which resolves the relay's address anew: nothing to replace before that.
     const channel = channelOf(client);
@@ -817,6 +826,7 @@ export class RelayControlClient {
       'grpc.keepalive_permit_without_calls': 1,
       'grpc.max_send_message_length': 16 * 1024 * 1024,
       'grpc.max_receive_message_length': 16 * 1024 * 1024,
+      ...TUNNEL_CHANNEL_OPTIONS,
     });
   }
 
